@@ -16,6 +16,12 @@ import { runExtract } from '../src/commands/extract.js';
 import { runFetch } from '../src/commands/fetch.js';
 import { runReview } from '../src/commands/review.js';
 import { runChat } from '../src/commands/chat.js';
+import {
+  runMcpServe,
+  runMcpInstall,
+  runMcpUninstall,
+  runMcpStatus,
+} from '../src/commands/mcp.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
@@ -37,7 +43,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.8.0');
+  .version('0.9.0');
 
 program
   .command('init')
@@ -183,6 +189,38 @@ function wrap(fn) {
     }
   };
 }
+
+const mcp = program
+  .command('mcp')
+  .description('MCP server: register Triss as a tool provider for Claude Code (and Codex soon)');
+
+mcp
+  .command('serve', { isDefault: true })
+  .description('Run the stdio MCP server. Claude Code starts this for you — no need to run it directly.')
+  .action(wrap(runMcpServe));
+
+mcp
+  .command('install')
+  .description('Add the triss MCP server to Claude Code config (~/.claude.json by default)')
+  .option('-g, --global', 'install into ~/.claude.json (default)')
+  .option('-l, --local', 'install into <cwd>/.mcp.json (project-only)')
+  .option('--command <cmd>', 'override the executable name (default: triss)')
+  .option('--args <args>', "override args, space-separated (default: 'mcp serve')")
+  .action(wrap(runMcpInstall));
+
+mcp
+  .command('uninstall')
+  .description('Remove the triss MCP entry from the config')
+  .option('-g, --global', 'remove from ~/.claude.json (default)')
+  .option('-l, --local', 'remove from <cwd>/.mcp.json')
+  .action(wrap(runMcpUninstall));
+
+mcp
+  .command('status')
+  .description('Show whether triss is registered and with what command')
+  .option('-g, --global', '(default) check ~/.claude.json')
+  .option('-l, --local', 'check <cwd>/.mcp.json')
+  .action(wrap(runMcpStatus));
 
 // Plugin-style integrations (jira, linear, ...). See docs/extending.md.
 const integrations = await loadIntegrations();

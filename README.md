@@ -118,6 +118,37 @@ After re-sourcing your shell profile, `triss <Tab>` lists all
 top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
 `triss linear <Tab>` list subcommands.
 
+## Wire it into Claude Code
+
+Two complementary paths — pick either, both, or neither.
+
+### Option 1 — `CLAUDE.md` rules (lightweight)
+
+```bash
+cd ~/my-project
+triss init               # writes ./CLAUDE.md, agent uses Bash to call `triss`
+triss init --global      # writes ~/.claude/CLAUDE.md instead — works in every project
+```
+
+Agent reads the rules and invokes Triss via the shell. No special
+setup. Best when you also want the same commands available outside the
+agent (in your own scripts, CI, etc).
+
+### Option 2 — MCP server (deeper integration)
+
+```bash
+triss mcp install            # adds an entry to ~/.claude.json
+triss mcp install --local    # adds it to ./.mcp.json (project-only)
+```
+
+Restart your Claude Code session — `triss` appears in `claude /mcp`
+with the per-tool list. Tools become first-class (faster, per-tool
+permissions, no Bash subprocess overhead). Provider-specific tools
+(`triss_jira_*`, `triss_linear_*`) are exposed **only when their
+credentials are configured**.
+
+Full reference: [docs/mcp.md](docs/mcp.md).
+
 ## Wire it into a project
 
 In any project directory:
@@ -375,6 +406,8 @@ even); see `templates/claude.md` for the rules of thumb.
 - [x] Shell completions (bash, zsh)
 - [x] `--stdin` for universal pipe input (`git diff | triss ask --stdin ...`)
 - [x] `triss review [PR]` (diff + PR metadata + linked Jira/Linear ticket)
+- [x] `triss chat` (bare worker prompt)
+- [x] MCP server (`triss mcp install`) — first-class tools in Claude Code
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)
