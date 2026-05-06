@@ -2,10 +2,16 @@
 # Triss Coworker — bash installer (alternative to `npm i -g triss-coworker`)
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ayleen/triss-coworker/main/install.sh | bash
+#
+# Requires: node >= 18, git, npm (for `npm install --omit=dev`).
+# Does NOT use `npm link` — instead drops a plain symlink in $BIN_DIR.
+# This avoids surprises with nvm / system-Node mixups and never touches
+# your global node_modules.
 set -euo pipefail
 
 REPO="https://github.com/ayleen/triss-coworker.git"
 INSTALL_DIR="${TRISS_HOME:-${HOME}/.local/share/triss-coworker}"
+BIN_DIR="${TRISS_BIN_DIR:-${HOME}/.local/bin}"
 
 echo "=== Triss Coworker installer ==="
 
@@ -43,8 +49,22 @@ fi
 echo "[2/3] Installing dependencies..."
 ( cd "${INSTALL_DIR}" && npm install --omit=dev --silent )
 
-echo "[3/3] Linking the 'triss' command globally..."
-( cd "${INSTALL_DIR}" && npm link --silent )
+echo "[3/3] Linking 'triss' into ${BIN_DIR}..."
+mkdir -p "${BIN_DIR}"
+chmod +x "${INSTALL_DIR}/bin/triss.js"
+ln -sf "${INSTALL_DIR}/bin/triss.js" "${BIN_DIR}/triss"
+
+# Warn if BIN_DIR isn't on PATH, so the user immediately sees why
+# `triss` may appear "missing" right after install.
+case ":$PATH:" in
+  *":${BIN_DIR}:"*) ;;
+  *)
+    echo ""
+    echo "⚠ ${BIN_DIR} is not on your PATH."
+    echo "  Add this line to your shell profile (~/.zshrc, ~/.bashrc):"
+    echo "    export PATH=\"${BIN_DIR}:\$PATH\""
+    ;;
+esac
 
 echo ""
 echo "✓ Installed. Run 'triss --help' to get started."

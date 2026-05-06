@@ -68,8 +68,18 @@ triss --help
 triss config wizard
 ```
 
-Interactive setup — masked prompts for every credential the installed
-integrations need (DeepSeek, Jira, Linear, …). No file editing required.
+The wizard first asks **Standard** vs **Advanced**:
+
+- **Standard** — for most users. Just two prompts: API key + worker model
+  name. Triss writes the model into both `flash` and `pro` presets so
+  `--model pro` works the same as `--model flash`. No questions about
+  Jira/Linear/base URL/etc. *Recommended starting point.*
+- **Advanced** — full control: separate `flash`/`pro` presets, custom
+  base URL, integrations (Jira, Linear, …), default-preset choice.
+
+Skip the prompt with `--standard` or `--advanced`. Add `--local` to save
+into `<project>/.triss.env` instead of the global file (useful when
+different repos use different Jira instances).
 
 Then verify:
 
@@ -93,6 +103,20 @@ echo "$KEY" | triss config set LINEAR_API_KEY -   # from stdin (CI)
 ```
 
 Full reference: [docs/configuration.md](docs/configuration.md).
+
+### Shell completions
+
+```bash
+# bash:
+echo 'eval "$(triss completion bash)"' >> ~/.bashrc
+
+# zsh:
+echo 'eval "$(triss completion zsh)"' >> ~/.zshrc
+```
+
+After re-sourcing your shell profile, `triss <Tab>` lists all
+top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
+`triss linear <Tab>` list subcommands.
 
 ## Wire it into a project
 
@@ -300,6 +324,8 @@ even); see `templates/claude.md` for the rules of thumb.
 - [x] Plugin-style integrations (`triss jira`, `triss linear`)
 - [x] Interactive credential management (`triss config wizard`, per-project overrides)
 - [x] Web fetching (`triss fetch`, `triss ask --urls`)
+- [x] Standard / Advanced wizard modes (cognitive-load reduction for new users)
+- [x] Shell completions (bash, zsh)
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)

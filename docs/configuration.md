@@ -41,25 +41,38 @@ your application's own `.env`.
 
 ### `triss config wizard [target]`
 
-Interactive prompt-driven setup. Steps you through every variable for
-every known target (`deepseek`, `jira`, `linear`, …). Optional `[target]`
-narrows it to one provider.
+Interactive prompt-driven setup.
+
+When invoked **without a target**, the first question is **Standard vs
+Advanced**:
+
+| Mode      | What it asks                                                             | Use when                                  |
+| --------- | ------------------------------------------------------------------------ | ----------------------------------------- |
+| Standard  | API key + one worker-model name (written to both `flash` & `pro`)        | You just want it to work. Default.        |
+| Advanced  | Every variable for every integration, with confirm-before-each provider  | You need Jira/Linear, separate presets, custom base URL |
 
 ```bash
-triss config wizard                       # everything
-triss config wizard linear                # only Linear
-triss config wizard linear --local        # only Linear, project-local
-triss config wizard --force               # also re-prompt for already-set values
+triss config wizard                       # asks Standard / Advanced first
+triss config wizard --standard            # straight into Standard
+triss config wizard --advanced            # straight into Advanced
+triss config wizard linear                # targeted: only Linear, no mode prompt
+triss config wizard linear --local        # targeted, project-local
+triss config wizard --advanced --force    # re-prompt for already-set keys
 ```
 
 Behaviour:
 
 - Asks "Global or Project?" up front (skip with `--global` / `--local`).
+- Standard mode never asks about non-core integrations — run
+  `triss config wizard --advanced` (or a targeted invocation) later when
+  you actually need Jira/Linear.
+- Advanced mode asks "Configure jira? (y/N)" before each non-core
+  provider so you only walk through the ones you use.
 - Skips already-set values unless `--force`.
 - Masks secret inputs (anything matching `*KEY*`, `*TOKEN*`, `*SECRET*`,
   `*PASS*`).
 - Uses every integration's `envVars` declaration — when you add a new
-  integration, the wizard picks up its variables for free.
+  integration, the Advanced wizard picks up its variables for free.
 
 ### `triss config set <KEY> [value]`
 

@@ -59,18 +59,129 @@ function isSecretKey(name) {
 
 // ─── wizard ──────────────────────────────────────────────────────────────────
 
+async function chooseMode() {
+  if (!process.stdin.isTTY) return 'standard'; // safest non-TTY default
+  return promptChoice(
+    'Setup mode?',
+    [
+      {
+        label: 'Standard  — API key + one model. For most users.',
+        value: 'standard',
+      },
+      {
+        label: 'Advanced  — full control: presets, base URL, integrations (Jira, Linear, …).',
+        value: 'advanced',
+      },
+    ],
+    { defaultIndex: 0 },
+  );
+}
+
+function resolveMode(opts) {
+  if (opts.standard && opts.advanced) {
+    throw new Error('Pick one of --standard or --advanced, not both');
+  }
+  if (opts.standard) return 'standard';
+  if (opts.advanced) return 'advanced';
+  return null;
+}
+
 export async function runWizard(target, opts) {
   const manifests = await listManifests();
   const explicit = !!target;
-  const targets = explicit ? [findManifest(target, manifests)] : manifests;
 
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope();
   const path = ensureEnvFile(scope);
   const current = readEnvFile(path).vars;
 
+  // Targeted invocation skips the standard/advanced choice entirely —
+  // the user has already said "configure exactly this".
+  if (explicit) {
+    if (resolveMode(opts)) {
+      throw new Error('--standard / --advanced cannot be combined with a target argument');
+    }
+    process.stdout.write(pc.dim(`\nSaving to ${path}\n`));
+    await runFullWizard([findManifest(target, manifests)], path, current, {
+      explicit: true,
+      force: !!opts.force,
+    });
+    process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
+    if (scope === 'local') maybeAddGitignore();
+    return;
+  }
+
+  const mode = resolveMode(opts) || (await chooseMode());
   process.stdout.write(pc.dim(`\nSaving to ${path}\n`));
 
+  if (mode === 'standard') {
+    await runStandardWizard(path, current);
+  } else {
+    await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force });
+    process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
+  }
+  if (scope === 'local') maybeAddGitignore();
+}
+
+async function runStandardWizard(path, current) {
+  process.stdout.write('\n' + pc.bold('── Standard setup ──') + '\n');
+  process.stdout.write(pc.dim('Just the essentials: API key + worker model.\n'));
+  process.stdout.write(
+    pc.dim('For Jira / Linear / per-preset models, run `triss config wizard --advanced` later.\n'),
+  );
+
+  // 1. API key — required.
+  const existingKey = current['DEEPSEEK_API_KEY'];
+  let proceedKey = true;
+  if (existingKey) {
+    proceedKey = await yesNo(
+      `\nAPI key is already set (${maskValue(existingKey)}). Replace?`,
+      false,
+    );
+  }
+  if (proceedKey) {
+    process.stdout.write('\n  ' + pc.yellow('DEEPSEEK_API_KEY') + ' (required)\n');
+    process.stdout.write(pc.dim('  Get one at https://platform.deepseek.com/\n'));
+    const key = await prompt('  value', { hidden: true, defaultValue: existingKey });
+    if (key) {
+      setVar(path, 'DEEPSEEK_API_KEY', key);
+      process.stdout.write(pc.green('  ✓ saved\n'));
+    } else if (!existingKey) {
+      process.stdout.write(
+        pc.yellow("  ⚠ skipped — set later via 'triss config set DEEPSEEK_API_KEY'\n"),
+      );
+    }
+  }
+
+  // 2. Worker model — optional, single value writes to both presets.
+  const existingFlash = current['DEEPSEEK_FLASH_MODEL'];
+  const existingPro = current['DEEPSEEK_PRO_MODEL'];
+  const existingModel = existingFlash && existingFlash === existingPro ? existingFlash : '';
+  process.stdout.write(
+    '\n  ' + pc.dim('Worker model') + pc.dim(' (optional, Enter for default)\n'),
+  );
+  process.stdout.write(
+    pc.dim('  e.g. deepseek-v4-flash, kimi-k2.5, qwen2.5-coder:14b. Default: deepseek-v4-flash\n'),
+  );
+  const model = await prompt('  value', { defaultValue: existingModel });
+  if (model) {
+    setVar(path, 'DEEPSEEK_FLASH_MODEL', model);
+    setVar(path, 'DEEPSEEK_PRO_MODEL', model);
+    process.stdout.write(pc.green('  ✓ saved as both flash and pro presets\n'));
+  }
+
+  process.stdout.write(
+    '\n' +
+      pc.green('Done.') +
+      ' Run ' +
+      pc.cyan('triss status') +
+      pc.dim(' to verify. Need Jira/Linear or different presets? ') +
+      pc.cyan('triss config wizard --advanced') +
+      '\n',
+  );
+}
+
+async function runFullWizard(targets, path, current, { explicit, force }) {
   for (const m of targets) {
     if (!m.envVars?.length) continue;
 
@@ -81,10 +192,9 @@ export async function runWizard(target, opts) {
         .filter((v) => v.required)
         .every((v) => current[v.name]);
       const verb = readyAlready ? 'Re-enter' : 'Configure';
-      const defaultYes = false;
       const want = await yesNo(
         `\n${verb} ${pc.bold(m.name)}? ${pc.dim(m.description || '')}`,
-        defaultYes,
+        false,
       );
       if (!want) {
         process.stdout.write(pc.dim(`  · skipped\n`));
@@ -98,7 +208,7 @@ export async function runWizard(target, opts) {
     for (const v of m.envVars) {
       const secret = v.secret || isSecretKey(v.name);
       const existing = current[v.name];
-      if (existing && !opts.force) {
+      if (existing && !force) {
         const overwrite = await yesNo(
           `${v.name} is already set (${maskValue(existing)}). Overwrite?`,
           false,
@@ -126,11 +236,6 @@ export async function runWizard(target, opts) {
       process.stdout.write(pc.green(`  ✓ saved\n`));
     }
   }
-
-  if (scope === 'local') maybeAddGitignore();
-  process.stdout.write(
-    '\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n',
-  );
 }
 
 async function yesNo(question, defaultYes) {

@@ -16,6 +16,7 @@ import { runExtract } from '../src/commands/extract.js';
 import { runFetch } from '../src/commands/fetch.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
+import { runCompletion } from '../src/commands/completion.js';
 import {
   runWizard,
   runSet,
@@ -34,7 +35,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.5.3');
+  .version('0.6.0');
 
 program
   .command('init')
@@ -89,6 +90,11 @@ program
   .description('Show current configuration: API key, models, .env sources')
   .action(wrap(runStatus));
 
+program
+  .command('completion <shell>')
+  .description('Print shell completion script (bash | zsh). eval `triss completion bash`')
+  .action((shell) => wrap(runCompletion)(shell, program));
+
 const config = program
   .command('config')
   .description('Manage credentials in ~/.config/triss/.env (global) or ./.triss.env (project)');
@@ -99,6 +105,8 @@ config
   .option('-g, --global', 'save to ~/.config/triss/.env (default if not asked)')
   .option('-l, --local', 'save to ./.triss.env (project-local override)')
   .option('-f, --force', 're-prompt for keys that are already set')
+  .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
+  .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
   .action(wrap(runWizard));
 
 config
