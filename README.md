@@ -226,17 +226,45 @@ triss write --spec   ... --target   ...   --model pro
 ```
 
 If DeepSeek renames the models or you want to point Triss at a different
-provider, override the names without touching code:
-
-```bash
-export DEEPSEEK_FLASH_MODEL=deepseek-chat
-export DEEPSEEK_PRO_MODEL=deepseek-reasoner
-# or use any OpenAI-compatible endpoint:
-export DEEPSEEK_BASE_URL=http://localhost:11434/v1
-export DEEPSEEK_FLASH_MODEL=qwen2.5-coder:14b
-```
+provider, override the names without touching code. Triss only requires
+an OpenAI-compatible chat-completions endpoint.
 
 You can also pass any model id directly: `--model deepseek-chat`.
+
+### Provider recipes
+
+#### DeepSeek (default, recommended)
+```bash
+triss config set DEEPSEEK_API_KEY                     # masked prompt
+# That's it — DEEPSEEK_BASE_URL / FLASH / PRO are auto-defaulted.
+```
+
+#### Kimi / Moonshot
+```bash
+triss config set DEEPSEEK_API_KEY $MOONSHOT_API_KEY
+triss config set DEEPSEEK_BASE_URL https://api.moonshot.ai/v1
+triss config set DEEPSEEK_FLASH_MODEL kimi-k2.5
+triss config set DEEPSEEK_PRO_MODEL kimi-k2.5
+```
+
+#### Ollama (local, free)
+```bash
+triss config set DEEPSEEK_API_KEY ollama
+triss config set DEEPSEEK_BASE_URL http://localhost:11434/v1
+triss config set DEEPSEEK_FLASH_MODEL qwen2.5-coder:14b
+triss config set DEEPSEEK_PRO_MODEL qwen2.5-coder:32b
+```
+
+#### OpenRouter (any model, one key)
+```bash
+triss config set DEEPSEEK_API_KEY $OPENROUTER_API_KEY
+triss config set DEEPSEEK_BASE_URL https://openrouter.ai/api/v1
+triss config set DEEPSEEK_FLASH_MODEL deepseek/deepseek-chat
+triss config set DEEPSEEK_PRO_MODEL anthropic/claude-3.5-sonnet
+```
+
+Add `--local` to scope any of these to the current project only
+(e.g. one repo on Ollama, the rest on cloud DeepSeek).
 
 ## Environment reference
 
@@ -250,6 +278,21 @@ You can also pass any model id directly: `--model deepseek-chat`.
 
 `.env` files are loaded from `~/.config/triss/.env` and the current working
 directory. Real `process.env` always wins.
+
+## Cost in practice
+
+We have not run a multi-week study like the original
+`claude-coworker-model`, so the headline 60–70% savings is sourced from
+their data — but here is one fully-measured run from this codebase:
+
+| Task                                                          | Source bytes | DeepSeek (pro, -75%) | DeepSeek (pro, list price) | Same job in Opus 4.x |
+| ------------------------------------------------------------- | ------------ | -------------------- | -------------------------- | -------------------- |
+| Compare original `claude-coworker-model` README + 12 of our source files (one `triss ask --urls --paths`, 18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.010** | \$0.040 | ≈ \$0.45 |
+
+For this single benchmark `triss` was **~45× cheaper** than letting the
+primary model read those bytes itself. Real savings depend on which
+operations you delegate (bulk reads win the most; tiny lookups break
+even); see `templates/claude.md` for the rules of thumb.
 
 ## Roadmap
 
