@@ -26,6 +26,15 @@ import {
   githubCreateHandler,
   githubUpdateHandler,
   githubCommentHandler,
+  confluenceSearchHandler,
+  confluencePageHandler,
+  confluenceCreateHandler,
+  confluenceUpdateHandler,
+  gitlabSearchHandler,
+  gitlabIssueHandler,
+  gitlabCreateHandler,
+  gitlabUpdateHandler,
+  gitlabCommentHandler,
 } from './handlers.js';
 
 const CORE_TOOLS = [
@@ -378,6 +387,152 @@ const GITHUB_TOOLS = [
   },
 ];
 
+const CONFLUENCE_TOOLS = [
+  {
+    name: 'triss_confluence_search',
+    description: 'CQL search across Confluence; --question summarises the list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cql: { type: 'string', description: 'CQL string, e.g. "type = page AND space = ENG"' },
+        limit: { type: 'number' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+      required: ['cql'],
+    },
+    handler: confluenceSearchHandler,
+  },
+  {
+    name: 'triss_confluence_page',
+    description: 'Read a Confluence page by id (ADF body → readable text).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+      required: ['id'],
+    },
+    handler: confluencePageHandler,
+  },
+  {
+    name: 'triss_confluence_create',
+    description: 'Create a Confluence page in a space.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        space: { type: 'string', description: 'Space key (e.g. ENG) or numeric id' },
+        title: { type: 'string' },
+        body: { type: 'string', description: 'Plain text — paragraphs split on blank lines' },
+        parent: { type: 'string', description: 'Parent page id' },
+      },
+      required: ['space', 'title'],
+    },
+    handler: confluenceCreateHandler,
+  },
+  {
+    name: 'triss_confluence_update',
+    description: 'Update an existing page (title and/or body). Bumps version automatically.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['id'],
+    },
+    handler: confluenceUpdateHandler,
+  },
+];
+
+const GITLAB_TOOLS = [
+  {
+    name: 'triss_gitlab_search',
+    description: 'Search GitLab issues. Pass `project` to narrow to one project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search: { type: 'string' },
+        project: { type: 'string', description: 'namespace/name; auto-detected from origin if omitted' },
+        scope: { type: 'string' },
+        limit: { type: 'number' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+    },
+    handler: gitlabSearchHandler,
+  },
+  {
+    name: 'triss_gitlab_issue',
+    description: 'Read a GitLab issue by IID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        iid: { type: 'number' },
+        project: { type: 'string' },
+        with_comments: { type: 'boolean' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+      required: ['iid'],
+    },
+    handler: gitlabIssueHandler,
+  },
+  {
+    name: 'triss_gitlab_create',
+    description: 'Create a GitLab issue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string' },
+        project: { type: 'string' },
+        labels: { type: 'string', description: 'Comma-separated labels' },
+      },
+      required: ['title'],
+    },
+    handler: gitlabCreateHandler,
+  },
+  {
+    name: 'triss_gitlab_update',
+    description: 'Update title/body/state/labels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        iid: { type: 'number' },
+        project: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        state: { type: 'string', enum: ['open', 'closed'] },
+        labels: { type: 'string' },
+      },
+      required: ['iid'],
+    },
+    handler: gitlabUpdateHandler,
+  },
+  {
+    name: 'triss_gitlab_comment',
+    description: 'Post a note (comment) on an issue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        iid: { type: 'number' },
+        project: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['iid', 'body'],
+    },
+    handler: gitlabCommentHandler,
+  },
+];
+
 export async function listTools() {
   // Defensive: ensure env files are loaded even when listTools is called
   // outside the server lifecycle (e.g. from tests).
@@ -388,6 +543,8 @@ export async function listTools() {
   if (ready.has('jira')) tools.push(...JIRA_TOOLS);
   if (ready.has('linear')) tools.push(...LINEAR_TOOLS);
   if (ready.has('github')) tools.push(...GITHUB_TOOLS);
+  if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
+  if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
   return tools;
 }
 

@@ -399,6 +399,173 @@ export async function githubCommentHandler({ repo, number, body }) {
   return `✓ Comment posted to ${r}#${number}`;
 }
 
+// ─── confluence handlers ────────────────────────────────────────────────────
+
+export async function confluenceSearchHandler({ cql, limit = 25, question, model, max_tokens }) {
+  const { confluence } = await import('../integrations/confluence/client.js');
+  const data = await confluence.search({ cql, limit });
+  const results = data.results || [];
+  const corpus = results
+    .map((r) => {
+      const title = r.title?.replace(/<[^>]+>/g, '') ?? '?';
+      return `${r.content?.id ?? r.id ?? '?'}\t${title}\t${r.url ?? r._links?.webui ?? ''}`;
+    })
+    .join('\n');
+  if (!question) return corpus || '(no results)';
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<confluence-results cql="${cql}">\n${corpus}\n</confluence-results>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function confluencePageHandler({ id, question, model, max_tokens }) {
+  const { confluence } = await import('../integrations/confluence/client.js');
+  const { adfToText } = await import('../integrations/jira/adf.js');
+  const page = await confluence.getPage(id);
+  let body = '(empty)';
+  const adfRaw = page.body?.atlas_doc_format?.value;
+  if (adfRaw) {
+    try {
+      body = adfToText(JSON.parse(adfRaw));
+    } catch {
+      /* keep default */
+    }
+  }
+  const text = [
+    `ID: ${page.id}`,
+    `Title: ${page.title}`,
+    `Space ID: ${page.spaceId}`,
+    `Version: ${page.version?.number}`,
+    `URL: ${page._links?.webui ?? ''}`,
+    '',
+    '--- Body ---',
+    body,
+  ].join('\n');
+  if (!question) return text;
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<confluence-page>\n${text}\n</confluence-page>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function confluenceCreateHandler({ space, title, body, parent }) {
+  const { confluence, textToStorage } = await import('../integrations/confluence/client.js');
+  const spaceId = await confluence.resolveSpaceId(space);
+  const page = await confluence.createPage({
+    spaceId,
+    title,
+    body: textToStorage(body || ''),
+    parentId: parent,
+  });
+  return `✓ Created Confluence page ${page.id}\nURL: ${page._links?.webui ?? ''}`;
+}
+
+export async function confluenceUpdateHandler({ id, title, body }) {
+  const { confluence, textToStorage } = await import('../integrations/confluence/client.js');
+  const updated = await confluence.updatePage(id, {
+    title,
+    body: body !== undefined ? textToStorage(body) : undefined,
+  });
+  return `✓ Updated Confluence page ${id} → v${updated.version?.number}`;
+}
+
+// ─── gitlab handlers ────────────────────────────────────────────────────────
+
+export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, model, max_tokens }) {
+  const { gitlab } = await import('../integrations/gitlab/client.js');
+  const items = await gitlab.search({ projectPath: project, search, scope, limit });
+  const corpus = (Array.isArray(items) ? items : [])
+    .map(
+      (i) =>
+        `${i.references?.full ?? '?'}#${i.iid}\t[${i.state}]\t${i.title}\t(${(i.assignees || []).map((a) => a.username).join(',') || 'unassigned'})`,
+    )
+    .join('\n');
+  if (!question) return corpus || '(no issues)';
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<gitlab-issues search="${search}">\n${corpus}\n</gitlab-issues>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function gitlabIssueHandler({ project, iid, with_comments, question, model, max_tokens }) {
+  const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
+  const p = resolveProject(project);
+  const issue = await gitlab.getIssue(p, iid);
+  const lines = [
+    `URL: ${issue.web_url}`,
+    `Title: ${issue.title}`,
+    `State: ${issue.state}`,
+    `Author: ${issue.author?.username}`,
+    `Assignees: ${(issue.assignees || []).map((a) => a.username).join(', ') || 'unassigned'}`,
+    `Labels: ${(issue.labels || []).join(', ') || '—'}`,
+    '',
+    '--- Description ---',
+    issue.description || '(empty)',
+  ];
+  if (with_comments) {
+    const notes = await gitlab.listNotes(p, iid);
+    lines.push('\n--- Notes ---');
+    for (const n of notes) lines.push(`\n[${n.author?.username} @ ${n.created_at}]\n${n.body || ''}`);
+  }
+  const text = lines.join('\n');
+  if (!question) return text;
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<gitlab-issue>\n${text}\n</gitlab-issue>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function gitlabCreateHandler({ project, title, body, labels }) {
+  const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
+  const p = resolveProject(project);
+  const fields = { title };
+  if (body != null) fields.description = body;
+  if (labels) fields.labels = labels;
+  const issue = await gitlab.createIssue(p, fields);
+  return `✓ Created ${p}#${issue.iid}\nURL: ${issue.web_url}`;
+}
+
+export async function gitlabUpdateHandler({ project, iid, title, body, state, labels }) {
+  const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
+  const p = resolveProject(project);
+  const fields = {};
+  if (title) fields.title = title;
+  if (body != null) fields.description = body;
+  if (labels != null) fields.labels = labels;
+  if (state === 'closed') fields.state_event = 'close';
+  if (state === 'open') fields.state_event = 'reopen';
+  if (!Object.keys(fields).length) throw new Error('Pass at least one field to update');
+  await gitlab.updateIssue(p, iid, fields);
+  return `✓ Updated ${p}#${iid}: ${Object.keys(fields).join(', ')}`;
+}
+
+export async function gitlabCommentHandler({ project, iid, body }) {
+  const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
+  const p = resolveProject(project);
+  await gitlab.addNote(p, iid, body);
+  return `✓ Note posted to ${p}#${iid}`;
+}
+
 // ─── commit-msg ─────────────────────────────────────────────────────────────
 
 export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {

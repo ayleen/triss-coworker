@@ -14,7 +14,8 @@ import {
   addToGitignore,
   readStdin,
 } from '../secrets.js';
-import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
+import { multiSelect } from '../picker.js';
+import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 
 function resolveScope(opts) {
   if (opts.global && opts.local) {
@@ -280,24 +281,44 @@ async function runStandardWizard(path, current) {
 }
 
 async function runFullWizard(targets, path, current, { explicit, force }) {
+  // For non-targeted runs, let the user pick which integrations to walk
+  // through with one multi-select instead of N sequential y/N prompts.
+  let selected = null;
+  if (!explicit) {
+    const integrationItems = targets
+      .filter((m) => !m.isCore && m.envVars?.length)
+      .map((m) => {
+        const ready = m.envVars
+          .filter((v) => v.required)
+          .every((v) => current[v.name]);
+        return {
+          value: m.name,
+          label: m.name,
+          hint: ready ? `${m.description || ''} (already configured)` : m.description || '',
+          checked: false,
+        };
+      });
+    if (integrationItems.length) {
+      try {
+        selected = new Set(
+          await multiSelect(integrationItems, {
+            title: 'Which integrations to configure?',
+          }),
+        );
+      } catch {
+        // user cancelled; treat as empty selection — only core gets walked
+        selected = new Set();
+      }
+    }
+  }
+
   for (const m of targets) {
     if (!m.envVars?.length) continue;
 
-    // For the full wizard (no explicit target), ask before stepping into
-    // each non-core integration — most users only need a subset.
-    if (!explicit && !m.isCore) {
-      const readyAlready = m.envVars
-        .filter((v) => v.required)
-        .every((v) => current[v.name]);
-      const verb = readyAlready ? 'Re-enter' : 'Configure';
-      const want = await yesNo(
-        `\n${verb} ${pc.bold(m.name)}? ${pc.dim(m.description || '')}`,
-        false,
-      );
-      if (!want) {
-        process.stdout.write(pc.dim(`  · skipped\n`));
-        continue;
-      }
+    // For non-targeted runs, only walk integrations the user explicitly
+    // ticked in the multi-select (core is always included).
+    if (selected && !m.isCore && !selected.has(m.name)) {
+      continue;
     }
 
     process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
