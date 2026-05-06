@@ -5,8 +5,13 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { listTools, findTool, toMcpToolList } from './tools.js';
+import { getConfig } from '../config.js';
 
 export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
+  // Loads .env files (project-local first, then global) into process.env
+  // so listTools() can see integration credentials before any tool call.
+  getConfig();
+
   const server = new Server(
     { name, version },
     { capabilities: { tools: {} } },

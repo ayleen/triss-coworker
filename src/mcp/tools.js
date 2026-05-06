@@ -3,6 +3,7 @@
 // credentials don't surface their actions to the agent.
 
 import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
+import { getConfig } from '../config.js';
 import {
   askHandler,
   chatHandler,
@@ -270,6 +271,9 @@ const LINEAR_TOOLS = [
 ];
 
 export async function listTools() {
+  // Defensive: ensure env files are loaded even when listTools is called
+  // outside the server lifecycle (e.g. from tests).
+  getConfig();
   const integrations = await loadIntegrations();
   const ready = new Set(integrations.filter((m) => envReadiness(m).ready).map((m) => m.name));
   const tools = [...CORE_TOOLS];

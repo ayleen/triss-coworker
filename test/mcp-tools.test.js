@@ -85,3 +85,33 @@ test('toMcpToolList strips handler functions', async () => {
     assert.equal(typeof t.inputSchema, 'object');
   }
 });
+
+test('listTools loads project-local .triss.env so per-project credentials work', async () => {
+  // Regression test: previously listTools read process.env without first
+  // loading .env files, so a .triss.env with ATLASSIAN_* in the cwd was
+  // ignored when the MCP server started up.
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const dir = mkdtempSync(join(tmpdir(), 'triss-cwd-'));
+  const originalCwd = process.cwd();
+  const restore = snapshot(JIRA_VARS);
+  for (const v of JIRA_VARS) delete process.env[v];
+
+  writeFileSync(
+    join(dir, '.triss.env'),
+    'ATLASSIAN_BASE_URL=https://test.atlassian.net\nATLASSIAN_EMAIL=a@b.c\nATLASSIAN_API_TOKEN=tok\n',
+  );
+
+  try {
+    process.chdir(dir);
+    const tools = await listTools();
+    const names = tools.map((t) => t.name);
+    assert.ok(names.includes('triss_jira_search'), 'expected jira tools when .triss.env is in cwd');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+    restore();
+  }
+});

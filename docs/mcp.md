@@ -74,6 +74,26 @@ triss mcp status --local    # project
 
 Prints the path Triss would write to and whether the entry is present.
 
+## Per-project credentials work
+
+The MCP server is registered globally in `~/.claude.json`, but it picks
+up credentials from whichever directory Claude Code launches it in:
+
+- `~/.config/triss/.env` — global defaults (your DeepSeek key, etc).
+- `<project>/.triss.env` — overrides global for this project only.
+
+So if you keep one DeepSeek key globally and a project-specific Jira
+token in `<project>/.triss.env`, opening Claude Code in that project
+will expose `triss_jira_*` tools for that session and **only** that
+session. Open Claude Code in a different project with no
+`.triss.env` (or a different one) and the Jira tools either disappear
+or use the other project's credentials.
+
+`.env` files are re-read on every `tools/list` request, so adding a
+new credential to `.triss.env` mid-session means the next time the
+agent (or `claude /mcp`) lists tools, the new ones show up without
+restarting Claude Code.
+
 ## What tools are exposed
 
 The set of MCP tools is **filtered by which integrations are configured**.
@@ -137,14 +157,23 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | triss mcp serve
 ## Troubleshooting
 
 **"Triss not in `claude /mcp`"** — restart the Claude Code session;
-`mcpServers` is read at startup.
+the `mcpServers` table in `~/.claude.json` is read at startup, so a
+fresh `triss mcp install` requires a session restart to take effect.
 
 **"Triss listed but tools/list is empty"** — `triss status` to check
 the API key. The MCP server connects regardless, but the model-using
 tools (`triss_chat`, `triss_ask`, …) need a working DeepSeek key.
 
+**"Jira tools missing in this project"** — Triss couldn't find the
+ATLASSIAN_* triple. Either your global `~/.config/triss/.env` has them
+but the project-local `.triss.env` is overriding with empty values, or
+you forgot to run `triss config wizard jira --local` in this project.
+A re-list of tools (next `claude /mcp` or next agent call) picks the
+new env up — no restart needed.
+
 **"Jira tool calls fail with 401"** — credentials mismatch. Run
-`triss config wizard jira --advanced` and restart the session.
+`triss config wizard jira --advanced --local` (project-scoped) or
+`triss config wizard jira` (global), then trigger any tool call.
 
 **"Add a new integration"** — when you write a new
 `src/integrations/<name>` plugin, its tools are picked up automatically

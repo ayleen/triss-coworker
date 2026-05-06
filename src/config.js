@@ -2,13 +2,13 @@ import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { activeEnvFiles } from './secrets.js';
 
-let loaded = false;
 function loadEnvFiles() {
-  if (loaded) return;
-  loaded = true;
   // Precedence: process.env > project .triss.env > global ~/.config/triss/.env.
   // dotenv with override:false only fills *missing* keys, so the first call
-  // (project) wins over the second (global), and real process env wins over both.
+  // (project) wins over the second (global), and real process env wins over
+  // both. Not cached on purpose — re-loading is cheap (idempotent under
+  // override:false), and skipping cache lets the MCP server pick up a
+  // .triss.env added/edited mid-session as soon as it sees a fresh request.
   for (const f of activeEnvFiles()) {
     if (f.exists) dotenv.config({ path: f.path, override: false });
   }
