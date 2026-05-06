@@ -138,13 +138,15 @@ and writing**.
 
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
-| `triss ask`     | Reads many files (and/or URLs), returns a summary     | The agent reading files itself      |
+| `triss ask`     | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
 | `triss write`   | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
 | `triss extract` | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
 | `triss fetch`   | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
+| `triss review`  | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss init`    | Drops a delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules        |
 | `triss status`  | Shows current model + key + .env sources              | —                                   |
 | `triss config`  | Interactive credential management                     | Manual `.env` editing               |
+| `triss completion` | Shell completion script (bash/zsh)                | Hand-rolled completion              |
 
 ### `triss ask`
 
@@ -170,6 +172,37 @@ triss write --spec "Pytest tests for auth.py covering OAuth2 happy path" \
 ```bash
 triss extract ~/.claude/projects/my-project/session.jsonl -o /tmp/chat.txt
 ```
+
+### `triss ask --stdin`
+
+The universal pipe input — any command's stdout can become the corpus:
+
+```bash
+git diff main..HEAD | triss ask --stdin --question "summarise the changes"
+git log --since=1.week --stat | triss ask --stdin --question "what did I do?"
+kubectl logs my-pod | triss ask --stdin --question "errors?"
+```
+
+Combine with `--paths`/`--urls` to mix sources in one round-trip. Triss
+errors out if `--stdin` is used in a TTY — it always wants piped input.
+
+### `triss review [PR]`
+
+Code review composed from `git diff` (or `gh pr diff`), PR metadata, and
+a linked Jira / Linear ticket auto-detected from the branch name or PR
+title (e.g. `feature/ENG-42-foo` → fetches `ENG-42`).
+
+```bash
+triss review                 # current branch vs auto-detected base
+triss review 123             # GitHub PR #123 (requires `gh` CLI)
+triss review --base develop  # explicit base
+triss review --skip-issue    # don't try ticket lookup
+```
+
+Defaults to the `pro` preset because review needs reasoning. Output is
+a list of concrete issues with file:line citations — not a diff
+summary. Cost: a 25KB diff review on `pro` runs ~$0.005-0.01 with
+prompt caching.
 
 ### `triss fetch` / `triss ask --urls`
 
@@ -326,6 +359,8 @@ even); see `templates/claude.md` for the rules of thumb.
 - [x] Web fetching (`triss fetch`, `triss ask --urls`)
 - [x] Standard / Advanced wizard modes (cognitive-load reduction for new users)
 - [x] Shell completions (bash, zsh)
+- [x] `--stdin` for universal pipe input (`git diff | triss ask --stdin ...`)
+- [x] `triss review [PR]` (diff + PR metadata + linked Jira/Linear ticket)
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)

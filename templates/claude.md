@@ -36,6 +36,37 @@ Pull a human-readable transcript out of Claude Code JSONL session logs.
 triss extract ~/.claude/projects/<project>/<session>.jsonl -o /tmp/chat.txt
 ```
 
+### `triss ask --stdin` — pipe any command into Triss
+**Universal escape hatch.** Anything that prints to stdout can be triaged
+via Triss without writing to a file first:
+
+```bash
+git diff main..HEAD     | triss ask --stdin --question "что критично изменилось?"
+git log --since=1.week  | triss ask --stdin --question "что я сделал на этой неделе?"
+kubectl logs my-pod     | triss ask --stdin --question "найди аномалии в логах"
+docker logs container 2>&1 | triss ask --stdin --question "errors and their causes"
+```
+
+Prefer this over reading the same output yourself when it's >2K tokens.
+
+### `triss review [PR]` — code review via DeepSeek
+For reviewing a branch or PR. Stitches together: the diff (git or `gh pr
+diff`), PR metadata (title + body if PR# given), and a linked Jira/Linear
+issue (auto-detected from `PROJ-NNN` keys in branch name or PR title).
+Defaults to the `pro` preset because review needs reasoning.
+
+```bash
+triss review                 # current branch vs auto-detected base
+triss review 123             # PR #123 in the current GitHub repo
+triss review --base develop  # HEAD vs develop
+triss review --skip-issue    # don't try to look up linked Jira/Linear ticket
+```
+
+**Use over reading diffs yourself** — token savings on diffs are usually
+10-20× since DeepSeek does the inspection and returns concrete bullets
+with file:line citations. If you still need to look at a specific file
+after the review, do so via Read.
+
 ### `triss fetch` / `triss ask --urls` — web pages
 **Default to Triss for any web read. Use the built-in WebFetch tool only
 for the narrow case where you genuinely need raw markup** — e.g. extracting

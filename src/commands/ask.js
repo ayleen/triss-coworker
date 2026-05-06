@@ -3,6 +3,7 @@ import { chat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
+import { readStdin } from '../secrets.js';
 
 const SYSTEM_PROMPT =
   'You are a precise code/document analyst. Read the provided sources and ' +
@@ -11,10 +12,15 @@ const SYSTEM_PROMPT =
   'under 800 words unless asked otherwise.';
 
 export async function runAsk(opts) {
-  const { paths, urls, question, maxTokens, model: modelInput, system } = opts;
+  const { paths, urls, stdin, question, maxTokens, model: modelInput, system } = opts;
   if (!question) throw new Error('--question is required');
-  if (!paths?.length && !urls?.length) {
-    throw new Error('Pass at least one of --paths or --urls');
+  if (!paths?.length && !urls?.length && !stdin) {
+    throw new Error('Pass at least one of --paths, --urls, or --stdin');
+  }
+  if (stdin && process.stdin.isTTY) {
+    throw new Error(
+      '--stdin requires piped input. Try: cmd | triss ask --stdin --question "..."',
+    );
   }
 
   const model = resolveModel(modelInput);
@@ -41,6 +47,16 @@ export async function runAsk(opts) {
     }
     if (parts.length) corpus += (corpus ? '\n\n' : '') + parts.join('\n\n');
     fileCount += urls.length;
+  }
+
+  if (stdin) {
+    process.stderr.write(pc.dim('[triss/ask] reading stdin…\n'));
+    const stdinText = await readStdin();
+    if (stdinText) {
+      corpus += (corpus ? '\n\n' : '') + `<source kind="stdin">\n${stdinText}\n</source>`;
+      totalBytes += stdinText.length;
+      fileCount += 1;
+    }
   }
 
   process.stderr.write(

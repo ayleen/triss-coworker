@@ -14,6 +14,7 @@ import { runAsk } from '../src/commands/ask.js';
 import { runWrite } from '../src/commands/write.js';
 import { runExtract } from '../src/commands/extract.js';
 import { runFetch } from '../src/commands/fetch.js';
+import { runReview } from '../src/commands/review.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
@@ -35,7 +36,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.6.0');
+  .version('0.7.0');
 
 program
   .command('init')
@@ -48,9 +49,10 @@ program
 
 program
   .command('ask')
-  .description('Delegate bulk reading (files and/or web pages) to DeepSeek; returns a structured summary')
+  .description('Delegate bulk reading (files, URLs, and/or piped stdin) to DeepSeek; returns a structured summary')
   .option('-p, --paths <paths...>', 'files or globs to read')
   .option('-u, --urls <urls...>', 'http(s) URLs to fetch and convert to markdown')
+  .option('--stdin', 'read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)')
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
@@ -84,6 +86,16 @@ program
   .option('--timeout <ms>', 'per-request timeout in ms (default 30000)')
   .option('--json', 'output JSON array of {url, markdown}')
   .action((urls, opts) => wrap(runFetch)(urls, opts));
+
+program
+  .command('review [pr]')
+  .description('Code review via DeepSeek. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
+  .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
+  .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
+  .option('-q, --question <text>', 'override the default review question')
+  .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
+  .option('--max-tokens <n>', 'token budget for the review (default 8192)')
+  .action((pr, opts) => wrap(runReview)(pr, opts));
 
 program
   .command('status')
