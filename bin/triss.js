@@ -6,15 +6,16 @@ import { runWrite } from '../src/commands/write.js';
 import { runExtract } from '../src/commands/extract.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
+import { loadIntegrations } from '../src/integrations/_registry.js';
 
 const program = new Command();
 program
   .name('triss')
   .description(
-    'Cheap DeepSeek coworker for Claude Code. Delegate bulk reads, ' +
-      'boilerplate generation, and chat extraction to save tokens.',
+    'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
+      'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.1.0');
+  .version('0.2.0');
 
 program
   .command('init')
@@ -65,6 +66,13 @@ function wrap(fn) {
       process.exit(1);
     }
   };
+}
+
+// Plugin-style integrations (jira, linear, ...). See docs/extending.md.
+const integrations = await loadIntegrations();
+for (const manifest of integrations) {
+  const sub = program.command(manifest.name).description(manifest.description || manifest.name);
+  manifest.register(sub, { wrap });
 }
 
 await program.parseAsync(process.argv);

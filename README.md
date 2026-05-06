@@ -15,6 +15,12 @@ by Kunal Bhardwaj.
 
 The name is a Witcher reference. Triss is the helpful sorceress on your team.
 
+It now also ships with **first-class integrations for Jira and Linear**, so
+your agent can search, read, create, update, comment on, and transition
+tickets via Triss instead of pulling thousands of tokens of MCP output into
+context. Adding a new provider (GitHub Issues, Notion, …) takes one folder
+— see [docs/extending.md](docs/extending.md).
+
 ---
 
 ## Install
@@ -121,6 +127,40 @@ triss write --spec "Pytest tests for auth.py covering OAuth2 happy path" \
 triss extract ~/.claude/projects/my-project/session.jsonl -o /tmp/chat.txt
 ```
 
+## Integrations
+
+External-service plugins live under `src/integrations/<name>/`. They are
+auto-discovered at startup and appear as top-level subcommands.
+
+| Integration | Subcommand     | Operations                                                    | Reference |
+| ----------- | -------------- | ------------------------------------------------------------- | --------- |
+| Jira        | `triss jira`   | search, issue, create, update, comments, transitions, attachments | [docs/integrations/jira.md](docs/integrations/jira.md) |
+| Linear      | `triss linear` | search, issue, create, update, comments, states, attachments  | [docs/integrations/linear.md](docs/integrations/linear.md) |
+
+Two design rules:
+
+- **Read commands accept `--question`** — instead of dumping the raw API
+  response, Triss runs it through DeepSeek and returns a focused summary.
+- **Write commands stay direct** — `create`, `update`, `comments --post`,
+  `transitions --apply` make HTTP calls without LLM in the loop.
+
+`triss status` shows each integration's env-var readiness so you know what
+still needs configuring.
+
+### Adding your own integration
+
+The plugin contract is one folder + one file. A working **GitHub Issues**
+integration in ~80 lines is documented end-to-end in
+[**docs/extending.md**](docs/extending.md). High-level recipe:
+
+1. Create `src/integrations/<name>/index.js`.
+2. `export default { name, description, envVars, register(program, { wrap }) {} }`.
+3. Use the helpers in `src/integrations/_contract.js`
+   (`httpJson`, `requireEnv`, `summarize`, `printResult`,
+   `IntegrationError`).
+4. Drop tests in `test/<name>-*.test.js` (mock `globalThis.fetch`).
+5. Run `triss --help` — your subcommand appears automatically.
+
 ## Models
 
 By default, Triss exposes two presets so you can switch quickly:
@@ -166,7 +206,10 @@ directory. Real `process.env` always wins.
 ## Roadmap
 
 - [x] Claude Code support (`triss init`)
+- [x] Plugin-style integrations (`triss jira`, `triss linear`)
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
+- [ ] Confluence integration (`triss confluence`)
+- [ ] GitHub Issues integration (recipe in `docs/extending.md`)
 - [ ] `triss exec <task>` — auto-route a freeform task to the right command
 - [ ] Streaming output for `ask`
 - [ ] More provider templates (Kimi, Ollama, OpenRouter)
