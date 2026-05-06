@@ -59,8 +59,20 @@ function isSecretKey(name) {
 
 // ─── wizard ──────────────────────────────────────────────────────────────────
 
-async function chooseMode() {
-  if (!process.stdin.isTTY) return 'standard'; // safest non-TTY default
+// Exported for tests — pure function over the parsed flags.
+export function resolveMode(opts) {
+  if (opts.standard && opts.advanced) {
+    throw new Error('Pick one of --standard or --advanced, not both');
+  }
+  if (opts.standard) return 'standard';
+  if (opts.advanced) return 'advanced';
+  return null;
+}
+
+// Exported for tests — falls back to "standard" in non-TTY environments
+// so wizard works in CI / piped contexts without hanging.
+export async function chooseMode() {
+  if (!process.stdin.isTTY) return 'standard';
   return promptChoice(
     'Setup mode?',
     [
@@ -75,15 +87,6 @@ async function chooseMode() {
     ],
     { defaultIndex: 0 },
   );
-}
-
-function resolveMode(opts) {
-  if (opts.standard && opts.advanced) {
-    throw new Error('Pick one of --standard or --advanced, not both');
-  }
-  if (opts.standard) return 'standard';
-  if (opts.advanced) return 'advanced';
-  return null;
 }
 
 export async function runWizard(target, opts) {
@@ -156,7 +159,8 @@ async function runStandardWizard(path, current) {
   // 2. Worker model — optional, single value writes to both presets.
   const existingFlash = current['DEEPSEEK_FLASH_MODEL'];
   const existingPro = current['DEEPSEEK_PRO_MODEL'];
-  const existingModel = existingFlash && existingFlash === existingPro ? existingFlash : '';
+  const presetsMatch = existingFlash && existingFlash === existingPro;
+  const existingModel = presetsMatch ? existingFlash : '';
   process.stdout.write(
     '\n  ' + pc.dim('Worker model') + pc.dim(' (optional, Enter for default)\n'),
   );
@@ -165,6 +169,21 @@ async function runStandardWizard(path, current) {
   );
   const model = await prompt('  value', { defaultValue: existingModel });
   if (model) {
+    if (existingFlash && existingPro && !presetsMatch) {
+      process.stdout.write(
+        pc.yellow(
+          `  ⚠ flash (${existingFlash}) and pro (${existingPro}) presets are currently different.\n` +
+            `    Standard mode will overwrite BOTH with "${model}".\n`,
+        ),
+      );
+      const ok = await yesNo('  Overwrite both?', false);
+      if (!ok) {
+        process.stdout.write(
+          pc.dim('  · skipped — keep separate presets via `triss config wizard --advanced`\n'),
+        );
+        return;
+      }
+    }
     setVar(path, 'DEEPSEEK_FLASH_MODEL', model);
     setVar(path, 'DEEPSEEK_PRO_MODEL', model);
     process.stdout.write(pc.green('  ✓ saved as both flash and pro presets\n'));

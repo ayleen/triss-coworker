@@ -15,6 +15,7 @@ import { runWrite } from '../src/commands/write.js';
 import { runExtract } from '../src/commands/extract.js';
 import { runFetch } from '../src/commands/fetch.js';
 import { runReview } from '../src/commands/review.js';
+import { runChat } from '../src/commands/chat.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
@@ -36,7 +37,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.7.0');
+  .version('0.8.0');
 
 program
   .command('init')
@@ -86,6 +87,15 @@ program
   .option('--timeout <ms>', 'per-request timeout in ms (default 30000)')
   .option('--json', 'output JSON array of {url, markdown}')
   .action((urls, opts) => wrap(runFetch)(urls, opts));
+
+program
+  .command('chat [prompt]')
+  .description('Ask the worker model anything — no corpus, just a bare prompt.')
+  .option('--stdin', 'read prompt from piped stdin instead of [prompt] arg')
+  .option('-s, --system <text>', 'system prompt (e.g. role / persona)')
+  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
+  .option('--max-tokens <n>', 'token budget (default 4096)')
+  .action((prompt, opts) => wrap(runChat)(prompt, opts));
 
 program
   .command('review [pr]')

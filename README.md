@@ -139,6 +139,7 @@ and writing**.
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
 | `triss ask`     | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
+| `triss chat`    | Bare prompt to the worker model — no corpus           | A separate `gpt`-style CLI          |
 | `triss write`   | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
 | `triss extract` | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
 | `triss fetch`   | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
@@ -172,6 +173,19 @@ triss write --spec "Pytest tests for auth.py covering OAuth2 happy path" \
 ```bash
 triss extract ~/.claude/projects/my-project/session.jsonl -o /tmp/chat.txt
 ```
+
+### `triss chat`
+
+```bash
+triss chat "what's a JWT in one paragraph"
+triss chat --model pro "design a rate limiter for ..."
+triss chat --system "you are a postgres expert" "explain MVCC"
+echo "long prompt..." | triss chat --stdin
+```
+
+Bare prompt to the worker model — no corpus, no retrieval, just a
+direct call to `chat()`. Cheap one-shot lookups go here so the primary
+model's budget stays on actual code work.
 
 ### `triss ask --stdin`
 

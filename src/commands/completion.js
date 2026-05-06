@@ -1,33 +1,84 @@
 // Shell-completion generator. Walks the Commander tree and emits a
-// completion script for bash or zsh. The generated scripts only complete
-// command/subcommand names — they intentionally do not try to complete
-// option values, since most of those are free-form (paths, JQL, URLs).
+// completion script for bash or zsh. The generated scripts complete:
+//   - top-level command names
+//   - subcommand names inside command groups (e.g. `triss config <Tab>`)
+//   - long-form option flags for every leaf command (e.g. `--local`,
+//     `--force`, `--standard`)
+// Option values (paths, JQL, URLs, free-form text) are intentionally not
+// completed — the agent or user already knows what they want there.
 
-function collectCommands(program) {
+function leafFlags(cmd) {
+  const flags = (cmd.options || [])
+    .map((o) => o.long)
+    .filter(Boolean)
+    .filter((f) => f !== '--help' && f !== '--version');
+  flags.push('--help');
+  return flags;
+}
+
+function collectTree(program) {
   const top = [];
-  const subs = {};
+  const groups = {}; // groupName -> { subs: [{name, description, flags}], flags }
+  const leaves = {}; // leafName -> { flags }
+
   for (const cmd of program.commands || []) {
     if (cmd.name() === 'help' || cmd._hidden) continue;
-    top.push({ name: cmd.name(), description: cmd.description() || '' });
+    const name = cmd.name();
+    top.push({ name, description: cmd.description() || '' });
+
     if (cmd.commands?.length) {
-      subs[cmd.name()] = cmd.commands
-        .filter((s) => s.name() !== 'help' && !s._hidden)
-        .map((s) => ({ name: s.name(), description: s.description() || '' }));
+      groups[name] = {
+        subs: cmd.commands
+          .filter((s) => s.name() !== 'help' && !s._hidden)
+          .map((s) => ({
+            name: s.name(),
+            description: s.description() || '',
+            flags: leafFlags(s),
+          })),
+      };
+    } else {
+      leaves[name] = { flags: leafFlags(cmd) };
     }
   }
-  return { top, subs };
+  return { top, groups, leaves };
 }
 
 function bashScript(program) {
-  const { top, subs } = collectCommands(program);
+  const { top, groups, leaves } = collectTree(program);
   const topNames = top.map((c) => c.name).join(' ');
-  const cases = Object.entries(subs)
+
+  const leafBlocks = Object.entries(leaves)
     .map(
-      ([cmd, list]) =>
-        `    ${cmd})\n      if [ "\${COMP_CWORD}" -eq 2 ]; then\n        COMPREPLY=( $(compgen -W "${list
-          .map((s) => s.name)
-          .join(' ')}" -- "\${cur}") )\n        return 0\n      fi\n      ;;`,
+      ([name, { flags }]) =>
+        `    ${name})
+      COMPREPLY=( $(compgen -W "${flags.join(' ')}" -- "\${cur}") )
+      return 0
+      ;;`,
     )
+    .join('\n');
+
+  const groupBlocks = Object.entries(groups)
+    .map(([name, { subs }]) => {
+      const subNames = subs.map((s) => s.name).join(' ');
+      const subCases = subs
+        .map(
+          (s) =>
+            `        ${s.name})
+          COMPREPLY=( $(compgen -W "${s.flags.join(' ')}" -- "\${cur}") )
+          return 0
+          ;;`,
+        )
+        .join('\n');
+      return `    ${name})
+      if [ "\${COMP_CWORD}" -eq 2 ]; then
+        COMPREPLY=( $(compgen -W "${subNames}" -- "\${cur}") )
+        return 0
+      fi
+      case "\${COMP_WORDS[2]}" in
+${subCases}
+      esac
+      ;;`;
+    })
     .join('\n');
 
   return `# triss bash completion. Source this file or eval the output:
@@ -40,7 +91,8 @@ _triss_completion() {
     return 0
   fi
   case "\${COMP_WORDS[1]}" in
-${cases}
+${leafBlocks}
+${groupBlocks}
   esac
 }
 complete -F _triss_completion triss
@@ -48,16 +100,40 @@ complete -F _triss_completion triss
 }
 
 function zshScript(program) {
-  const { top, subs } = collectCommands(program);
-  const topLines = top
-    .map((c) => `    '${c.name}:${escapeZsh(c.description)}'`)
+  const { top, groups, leaves } = collectTree(program);
+  const topLines = top.map((c) => `    '${c.name}:${escapeZsh(c.description)}'`).join('\n');
+
+  const leafBlocks = Object.entries(leaves)
+    .map(
+      ([name, { flags }]) =>
+        `    ${name})
+      _values 'flag' \\
+${flags.map((f) => `        '${f}'`).join(' \\\n')}
+      ;;`,
+    )
     .join('\n');
-  const subFns = Object.entries(subs)
-    .map(([cmd, list]) => {
-      const lines = list.map((s) => `        '${s.name}:${escapeZsh(s.description)}'`).join('\n');
-      return `    ${cmd})
-      _values 'subcommand' \\
-${lines}
+
+  const groupBlocks = Object.entries(groups)
+    .map(([name, { subs }]) => {
+      const subLines = subs.map((s) => `        '${s.name}:${escapeZsh(s.description)}'`).join('\n');
+      const subCases = subs
+        .map(
+          (s) =>
+            `        ${s.name})
+          _values 'flag' \\
+${s.flags.map((f) => `            '${f}'`).join(' \\\n')}
+          ;;`,
+        )
+        .join('\n');
+      return `    ${name})
+      if (( CURRENT == 3 )); then
+        _values 'subcommand' \\
+${subLines.replace(/^/gm, '    ')}
+        return
+      fi
+      case \${words[3]} in
+${subCases}
+      esac
       ;;`;
     })
     .join('\n');
@@ -75,7 +151,8 @@ ${topLines}
     return
   fi
   case \${words[2]} in
-${subFns}
+${leafBlocks}
+${groupBlocks}
   esac
 }
 _triss "$@"

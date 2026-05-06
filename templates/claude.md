@@ -36,6 +36,22 @@ Pull a human-readable transcript out of Claude Code JSONL session logs.
 triss extract ~/.claude/projects/<project>/<session>.jsonl -o /tmp/chat.txt
 ```
 
+### `triss chat <prompt>` — bare worker prompt
+For one-shot lookups / transformations where there is **no corpus** —
+no files to read, no URLs to fetch, no diff to review. Just a question.
+
+```bash
+triss chat "что такое JWT в одном абзаце"
+triss chat "design a rate limiter for the auth endpoint" --model pro
+echo "long prompt..." | triss chat --stdin
+triss chat --system "ты Postgres эксперт" "explain MVCC"
+```
+
+Use it for trivial offload (definitions, rephrasings, ideation) so the
+primary model's tokens stay on actual code work. Do NOT use for code
+review (`triss review`), file analysis (`triss ask`), or anything that
+needs your reasoning.
+
 ### `triss ask --stdin` — pipe any command into Triss
 **Universal escape hatch.** Anything that prints to stdout can be triaged
 via Triss without writing to a file first:
