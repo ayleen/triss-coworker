@@ -99,23 +99,39 @@ restarting Claude Code.
 The set of MCP tools is **filtered by which integrations are configured**.
 Run `triss status` to see readiness.
 
-Always exposed:
+Always exposed (require only `DEEPSEEK_API_KEY`):
 
 - `triss_chat` — bare prompt to the worker model
 - `triss_ask` — read files/URLs and answer a question
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
 - `triss_review` — code review on current branch or a GitHub PR
+- `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_status` — current configuration and integration readiness
 
-Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**:
+Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
+(both Jira and Confluence reuse the same Atlassian credentials):
 
 - `triss_jira_search` `triss_jira_issue` `triss_jira_create`
   `triss_jira_update` `triss_jira_comment`
+- `triss_confluence_search` `triss_confluence_page` `triss_confluence_create`
+  `triss_confluence_update`
 
 Exposed **only when LINEAR_API_KEY is set**:
 
 - `triss_linear_search` `triss_linear_issue` `triss_linear_create`
   `triss_linear_update` `triss_linear_comment`
+
+Exposed **only when GITHUB_TOKEN is set** (or `gh` CLI is logged in —
+Triss bootstraps the token from `gh auth token` automatically):
+
+- `triss_github_search` `triss_github_issue` `triss_github_create`
+  `triss_github_update` `triss_github_comment`
+
+Exposed **only when GITLAB_TOKEN is set** (with optional `GITLAB_URL`
+override for self-hosted instances):
+
+- `triss_gitlab_search` `triss_gitlab_issue` `triss_gitlab_create`
+  `triss_gitlab_update` `triss_gitlab_comment`
 
 If the agent tries to call a tool that isn't currently in the list,
 Claude Code rejects the call before it reaches Triss. The user just

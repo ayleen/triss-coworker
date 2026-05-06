@@ -54,6 +54,20 @@ export default {
     claude: '### `triss yourthing` …\n```bash\ntriss yourthing search "..."\n```\n',
     codex:  '### `triss yourthing` …\n…',
   },
+
+  // Optional: prime process.env from an out-of-band source. Called once
+  // at load time, before any envReadiness check. The github integration
+  // uses this to pull `gh auth token` into GITHUB_TOKEN when the user
+  // hasn't exported it explicitly. Failures are swallowed — readiness
+  // simply reports "missing" as usual.
+  async bootstrap() {
+    if (process.env.YOURTHING_TOKEN) return;
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync('your-cli', ['print-token'], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout?.trim()) {
+      process.env.YOURTHING_TOKEN = r.stdout.trim();
+    }
+  },
 };
 ```
 

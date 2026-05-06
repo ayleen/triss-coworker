@@ -158,9 +158,18 @@ triss mcp install --local    # adds it to ./.mcp.json (project-only)
 
 Restart your Claude Code session — `triss` appears in `claude /mcp`
 with the per-tool list. Tools become first-class (faster, per-tool
-permissions, no Bash subprocess overhead). Provider-specific tools
-(`triss_jira_*`, `triss_linear_*`) are exposed **only when their
-credentials are configured**.
+permissions, no Bash subprocess overhead).
+
+The exposed tool set is **filtered by configured credentials**:
+
+- **Always** (need only `DEEPSEEK_API_KEY`): `triss_chat`, `triss_ask`,
+  `triss_fetch`, `triss_review`, `triss_commit_msg`, `triss_status`.
+- **`triss_jira_*` + `triss_confluence_*`** when `ATLASSIAN_*` is set.
+- **`triss_linear_*`** when `LINEAR_API_KEY` is set.
+- **`triss_github_*`** when `GITHUB_TOKEN` is set (or `gh` CLI logged in).
+- **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
+
+Add credentials later → restart session → new tools appear automatically.
 
 Full reference: [docs/mcp.md](docs/mcp.md).
 
@@ -432,6 +441,8 @@ Add `--local` to scope any of these to the current project only
 
 ## Environment reference
 
+### Worker model
+
 | Variable                | Required | Default                          | Notes                                 |
 | ----------------------- | -------- | -------------------------------- | ------------------------------------- |
 | `DEEPSEEK_API_KEY`      | yes      | —                                | Your provider key                     |
@@ -440,8 +451,32 @@ Add `--local` to scope any of these to the current project only
 | `DEEPSEEK_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
 
-`.env` files are loaded from `~/.config/triss/.env` and the current working
-directory. Real `process.env` always wins.
+### Integrations
+
+| Variable                | Required for      | Notes                                                     |
+| ----------------------- | ----------------- | --------------------------------------------------------- |
+| `ATLASSIAN_BASE_URL`    | jira, confluence  | e.g. `https://yourorg.atlassian.net`                      |
+| `ATLASSIAN_EMAIL`       | jira, confluence  | account email                                             |
+| `ATLASSIAN_API_TOKEN`   | jira, confluence  | <https://id.atlassian.com/manage-profile/security/api-tokens> |
+| `LINEAR_API_KEY`        | linear            | <https://linear.app/settings/api>                         |
+| `LINEAR_API_URL`        | linear (optional) | endpoint override (default `https://api.linear.app/graphql`) |
+| `GITHUB_TOKEN`          | github            | falls back to `gh auth token` if unset                    |
+| `GITLAB_TOKEN`          | gitlab            | <https://gitlab.com/-/profile/personal_access_tokens> (`api` scope) |
+| `GITLAB_URL`            | gitlab (optional) | self-hosted base URL (default `https://gitlab.com`)       |
+
+### Tunables
+
+| Variable                  | Default     | Effect                                                    |
+| ------------------------- | ----------- | --------------------------------------------------------- |
+| `TRISS_USAGE_LOG`         | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
+| `TRISS_PRICE_<MODEL_ID>`  | list prices | `miss,hit,out` USD-per-token override per model (e.g. for promo or non-DeepSeek providers) |
+| `TRISS_FETCH_MAX_BYTES`   | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
+| `TRISS_RESTRICT_PATHS`    | `1` in MCP, unset in CLI | `0` opts the MCP server out of the cwd-only file IO sandbox |
+
+`.env` files are loaded from `~/.config/triss/.env` (global) and
+`<cwd>/.triss.env` (project, overrides global). Real `process.env`
+always wins. See [docs/configuration.md](docs/configuration.md) for
+recipes (per-project Jira, CI, switching providers).
 
 ## Cost in practice
 
@@ -460,26 +495,24 @@ even); see `templates/claude.md` for the rules of thumb.
 
 ## Roadmap
 
-- [x] Claude Code support (`triss init`)
-- [x] Plugin-style integrations (`triss jira`, `triss linear`)
-- [x] Interactive credential management (`triss config wizard`, per-project overrides)
-- [x] Web fetching (`triss fetch`, `triss ask --urls`)
-- [x] Standard / Advanced wizard modes (cognitive-load reduction for new users)
-- [x] Shell completions (bash, zsh)
-- [x] `--stdin` for universal pipe input (`git diff | triss ask --stdin ...`)
-- [x] `triss review [PR]` (diff + PR metadata + linked Jira/Linear ticket)
-- [x] `triss chat` (bare worker prompt)
-- [x] MCP server (`triss mcp install`) — first-class tools in Claude Code
-- [x] Cost tracking (`triss usage`) — cumulative $$$ + per-project breakdown
-- [x] `triss commit-msg` — Conventional Commits from staged diff
-- [x] GitHub Issues integration (`triss github`)
-- [x] Streaming output for `pro` calls
-- [ ] Codex / `AGENTS.md` support (template stub already in place)
-- [ ] Confluence integration (`triss confluence`)
-- [ ] GitHub Issues integration (recipe in `docs/extending.md`)
-- [ ] `triss exec <task>` — auto-route a freeform task to the right command
-- [ ] Streaming output for `ask`
-- [ ] More provider templates (Kimi, Ollama, OpenRouter)
+**Shipped** — see the Tools table for usage:
+Claude Code support · Plugin-style integrations · Interactive credential
+management with per-project overrides · Web fetching · Standard/Advanced
+wizard · bash + zsh completions · `--stdin` · `triss review [PR]` ·
+`triss chat` · MCP server · Cost tracking · `triss commit-msg` · GitHub /
+Confluence / GitLab integrations · Streaming output for `ask`/`chat`/
+`review` · Path-safety sandbox in MCP mode · 150-test suite.
+
+**Planned**:
+
+- [ ] Codex / `AGENTS.md` first-class support (template stub already in
+      place; needs an `init --target codex` end-to-end check)
+- [ ] `triss exec <task>` — auto-route a freeform task to the right
+      sub-command
+- [ ] Optional `npm publish` so `npm install -g triss-coworker` works
+      out of the box
+- [ ] More provider recipe blocks in the docs (Kimi, Ollama,
+      OpenRouter — examples already present, but with terse setup steps)
 
 ## Acknowledgements
 
