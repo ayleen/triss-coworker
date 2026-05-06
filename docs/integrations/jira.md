@@ -4,7 +4,14 @@ Backed by the Jira REST API v3.
 
 ## Configuration
 
-Add to `~/.config/triss/.env`, your shell profile, or the project's `.env`:
+The easy way:
+
+```bash
+triss config wizard jira             # global ~/.config/triss/.env
+triss config wizard jira --local     # this project only (./.triss.env)
+```
+
+Both prompts ask for:
 
 ```
 ATLASSIAN_BASE_URL=https://yourorg.atlassian.net
@@ -13,7 +20,14 @@ ATLASSIAN_API_TOKEN=ATATT...
 ```
 
 Get a token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
-Verify with `triss status` — the `jira` row should turn green.
+Verify with `triss status` — the `jira` row should be green and the
+ATLASSIAN_* lines should show a `[local]` or `[global]` source tag.
+
+**Different Jira instances per project?** Use `--local` in each project
+root. The MCP server picks up whichever `.triss.env` is in your current
+working directory; a worker on `~/proj-a` hits proj-a's Jira, a worker
+on `~/proj-b` hits proj-b's. See the [recipes in docs/configuration.md](../configuration.md#recipes--common-setups-end-to-end)
+for the full step-by-step.
 
 ## Commands
 

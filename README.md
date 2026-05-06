@@ -94,6 +94,10 @@ saves to `<project>/.triss.env` instead of the global file. Project values
 override global values when you `cd` into that repo. The file is
 automatically `chmod 600`'d and added to `.gitignore`.
 
+Step-by-step recipes for the common setups (single workspace, multi-Jira
+per project, CI, etc.) live in
+[docs/configuration.md](docs/configuration.md#recipes--common-setups-end-to-end).
+
 ### Updating one variable
 
 ```bash

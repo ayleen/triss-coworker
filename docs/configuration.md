@@ -128,6 +128,102 @@ When you add a new integration (see [extending.md](extending.md)), its
 
 ---
 
+## Recipes — common setups end-to-end
+
+### A. Single shared workspace (most users)
+
+One DeepSeek key, one Jira workspace, one Linear team. Everything global.
+
+```bash
+# install (once)
+curl -fsSL https://raw.githubusercontent.com/ayleen/triss-coworker/main/install.sh | bash
+
+# wizard — Standard mode auto-installs MCP + global CLAUDE.md
+triss config wizard --standard
+# (later, when you want Jira/Linear too)
+triss config wizard jira
+triss config wizard linear
+
+triss status          # verify everything is "ready"
+```
+
+Restart your Claude Code session. Done — every project sees the same
+credentials.
+
+### B. Different Jira instances per project
+
+You work for two clients with separate Atlassian Cloud orgs. Same
+DeepSeek key everywhere, but `~/work-acme/` should hit Acme's Jira and
+`~/work-beta/` should hit Beta's.
+
+```bash
+# global once — DeepSeek key + MCP server + global CLAUDE.md fallback
+triss config wizard --standard
+
+# per-project — Acme
+cd ~/work-acme
+triss config wizard jira --local
+#   → ATLASSIAN_BASE_URL=https://acme.atlassian.net
+#   → ATLASSIAN_EMAIL=you@acme.com
+#   → ATLASSIAN_API_TOKEN=ATATT-acme...
+#   writes <pwd>/.triss.env, chmod 600, adds to .gitignore.
+
+# per-project — Beta
+cd ~/work-beta
+triss config wizard jira --local
+#   → different Atlassian credentials, written to a separate .triss.env
+```
+
+What happens when you open Claude Code:
+
+| In `~/work-acme`  | MCP server reads `~/work-acme/.triss.env` → `triss_jira_*` tools call Acme's Jira  |
+| In `~/work-beta`  | MCP server reads `~/work-beta/.triss.env` → `triss_jira_*` tools call Beta's Jira  |
+| In any other dir  | No project `.triss.env` → no Jira tools at all (just core)                         |
+
+You don't reconfigure anything — the right credentials follow the
+working directory automatically.
+
+Verification: `triss status` from inside each project shows the
+`[local]` source tag next to the ATLASSIAN_* rows.
+
+### C. Personal DeepSeek key per project
+
+Want to charge a specific project to a separate billing account? Put
+its `DEEPSEEK_API_KEY` in `<project>/.triss.env`. The global key in
+`~/.config/triss/.env` keeps working everywhere else.
+
+```bash
+cd ~/special-project
+triss config set DEEPSEEK_API_KEY --local
+# (masked prompt → ./.triss.env)
+```
+
+### D. CI / scripts
+
+`process.env` always wins over `.env` files, so in CI you just export
+what you need:
+
+```yaml
+env:
+  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+  ATLASSIAN_BASE_URL: ${{ vars.ATLASSIAN_BASE_URL }}
+  ATLASSIAN_EMAIL: ${{ vars.ATLASSIAN_EMAIL }}
+  ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+```
+
+`triss` commands then run unattended without needing any `.env` file.
+
+### E. Switching projects mid-session
+
+You added `.triss.env` to a project after Claude Code was already
+running there. As of v0.9.3, **no restart needed** — `.env` files are
+re-read on every `tools/list` request, so the next time the agent or
+`claude /mcp` lists tools, the new ones appear (or disappear).
+
+The only thing that requires a restart is the *initial* MCP-server
+registration — i.e. running `triss mcp install` for the first time.
+After that, credential changes are live.
+
 ## Troubleshooting
 
 **"No DeepSeek API key found"** — `triss config wizard deepseek`.

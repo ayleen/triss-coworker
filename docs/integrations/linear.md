@@ -4,15 +4,22 @@ Backed by the Linear GraphQL API.
 
 ## Configuration
 
-Add to `~/.config/triss/.env`:
+```bash
+triss config wizard linear             # global ~/.config/triss/.env
+triss config wizard linear --local     # this project only (./.triss.env)
+```
+
+Variables Triss recognises:
 
 ```
 LINEAR_API_KEY=lin_api_...
-# optional:
-# LINEAR_API_URL=https://api.linear.app/graphql
+LINEAR_API_URL=https://api.linear.app/graphql   # optional override
 ```
 
 Get a personal API key at <https://linear.app/settings/api>.
+
+For per-project setups (different Linear teams per project), see the
+[recipes in docs/configuration.md](../configuration.md#recipes--common-setups-end-to-end).
 
 ## Commands
 
