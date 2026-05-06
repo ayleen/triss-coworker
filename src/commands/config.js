@@ -119,12 +119,37 @@ export async function runWizard(target, opts) {
 
   if (mode === 'standard') {
     await runStandardWizard(path, current);
+    await silentlyInstallBoth();
   } else {
     await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
+    await offerClaudeCodeIntegration();
   }
   if (scope === 'local') maybeAddGitignore();
-  await offerClaudeCodeIntegration();
+}
+
+// Standard mode treats Claude Code integration as part of the default
+// setup — install both paths without asking. Aligns with the rest of
+// Standard mode's "do the obvious thing" philosophy.
+async function silentlyInstallBoth() {
+  process.stdout.write(
+    '\n' +
+      pc.bold('Wiring Triss into Claude Code') +
+      pc.dim(' (Standard installs both — re-run with --advanced to choose otherwise)') +
+      '\n',
+  );
+  const { installEntry } = await import('../mcp/install.js');
+  const r = installEntry('global');
+  process.stdout.write(pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}\n`));
+
+  const { runInit } = await import('./init.js');
+  await runInit({ global: true });
+
+  process.stdout.write(
+    '\n  ' +
+      pc.dim('Restart your Claude Code session to pick up the new server / rules.') +
+      '\n',
+  );
 }
 
 async function offerClaudeCodeIntegration() {

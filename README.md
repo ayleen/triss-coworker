@@ -120,18 +120,16 @@ top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
 
 ## Wire it into Claude Code
 
-`triss config wizard` ends with a single question — "How should Triss
-integrate with Claude Code?" — and offers four options:
+### Wizard takes care of this for you
 
-1. **Both (recommended)** — MCP server *and* a global `CLAUDE.md`.
-   They cooperate: MCP is primary, CLAUDE.md acts as a fallback.
-2. **MCP server only** — fastest, per-tool permissions, no markdown.
-3. **CLAUDE.md rules only** — universal, simple, no MCP requirement.
-4. **Skip** — do nothing now, run `triss mcp install` /
-   `triss init --global` manually later.
+| Mode in `triss config wizard` | What it does about Claude Code |
+| ----------------------------- | ------------------------------ |
+| **Standard** (default)        | Installs **both** paths automatically — MCP server *and* a global `CLAUDE.md`. No question asked. |
+| **Advanced** (`--advanced`)   | Asks at the end: Both / MCP only / CLAUDE.md only / Skip. Default = Both. |
 
-If you don't know what to pick, **option 1**. Both can run side-by-side
-without conflict; if MCP fails to load, the CLAUDE.md rules keep working.
+The two paths cooperate: MCP is primary, CLAUDE.md is the fallback. If
+MCP fails to load, the CLAUDE.md rules keep the agent working. If you
+don't know what to pick, just use Standard.
 
 Two complementary paths — pick either, both, or neither.
 

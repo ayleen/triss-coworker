@@ -146,22 +146,20 @@ re-rendered on every `triss init`, including only integrations whose
 required env vars are set. Run `triss init` again and your new
 integration's delegation rules will appear in the file.
 
-**Wizard's last question — "How should Triss integrate with Claude Code?"**
-At the end of every full `triss config wizard` run (Standard or Advanced)
-you'll be asked which integration path to take:
+**Claude Code integration step in the wizard** — split by mode:
 
-- *Both (recommended)* runs `triss mcp install` and `triss init --global`
-  for you. MCP becomes the primary tool path; CLAUDE.md rules serve as
-  a fallback if MCP fails to load.
-- *MCP only* installs the MCP server entry without touching CLAUDE.md.
-- *CLAUDE.md only* writes the global CLAUDE.md without touching the
-  MCP config.
-- *Skip* does nothing — useful when you have a custom setup.
+| Mode in `triss config wizard` | What happens at the end |
+| ----------------------------- | ----------------------- |
+| **Standard**                  | Installs both paths automatically (MCP server + global CLAUDE.md). No question asked — Standard's job is to make sensible defaults work. |
+| **Advanced**                  | Asks: 1) Both (default), 2) MCP only, 3) CLAUDE.md only, 4) Skip. |
 
-The choice is asked only on full wizard runs. Targeted invocations
-(`triss config wizard jira`) do not prompt — credentials change without
-side effects on the integration path. Re-run the wizard to revisit the
-choice; it's idempotent.
+The two paths cooperate: MCP is the primary tool surface; CLAUDE.md
+acts as a fallback in case the MCP server can't load. Both can run
+side-by-side without conflict.
+
+Targeted invocations (`triss config wizard jira`) never touch the
+integration paths — credential changes happen with no side effects.
+Re-run the wizard to revisit; the install commands are idempotent.
 
 When MCP is registered, `triss init` automatically prepends a hint to
 the CLAUDE.md block that tells the agent to prefer the native MCP tools
