@@ -124,6 +124,60 @@ export async function runWizard(target, opts) {
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
   }
   if (scope === 'local') maybeAddGitignore();
+  await offerClaudeCodeIntegration();
+}
+
+async function offerClaudeCodeIntegration() {
+  if (!process.stdin.isTTY) return; // CI / piped runs: stay silent
+
+  process.stdout.write('\n' + pc.bold('Wire Triss into Claude Code?') + '\n');
+  process.stdout.write(
+    pc.dim(
+      '  · MCP server      — Claude Code calls Triss tools natively\n' +
+        '                      (faster, per-tool permissions)\n' +
+        '  · CLAUDE.md rules — agent calls Triss via shell\n' +
+        '                      (universal, simple, also acts as MCP fallback)\n\n' +
+        '  Most users want both — they cooperate (MCP primary, rules fallback).\n',
+    ),
+  );
+
+  const choice = await promptChoice(
+    'How should Triss integrate with Claude Code?',
+    [
+      { label: 'Both (recommended) — MCP server + global CLAUDE.md', value: 'both' },
+      { label: 'MCP server only', value: 'mcp' },
+      { label: 'CLAUDE.md rules only', value: 'rules' },
+      { label: 'Skip — I will run `triss init` / `triss mcp install` later', value: 'skip' },
+    ],
+    { defaultIndex: 0 },
+  );
+
+  if (choice === 'skip') {
+    process.stdout.write(
+      pc.dim(
+        '\n  Hint: ' +
+          pc.cyan('triss mcp install') +
+          pc.dim(' to register as MCP, ') +
+          pc.cyan('triss init --global') +
+          pc.dim(' for CLAUDE.md rules.\n'),
+      ),
+    );
+    return;
+  }
+
+  process.stdout.write('\n');
+  if (choice === 'both' || choice === 'mcp') {
+    const { installEntry } = await import('../mcp/install.js');
+    const r = installEntry('global');
+    process.stdout.write(pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}\n`));
+  }
+  if (choice === 'both' || choice === 'rules') {
+    const { runInit } = await import('./init.js');
+    await runInit({ global: true });
+  }
+  process.stdout.write(
+    '\n  ' + pc.dim('Restart your Claude Code session to pick up the new server / rules.') + '\n',
+  );
 }
 
 async function runStandardWizard(path, current) {

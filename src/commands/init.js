@@ -6,6 +6,7 @@ import pc from 'picocolors';
 import { getConfig } from '../config.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { runWizard } from './config.js';
+import { showStatus as mcpStatus } from '../mcp/install.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(HERE, '..', '..', 'templates');
@@ -115,21 +116,43 @@ async function postInit(opts) {
 // Re-export the helper for tests.
 export { postInit as _postInit };
 
-// Render the {{INTEGRATIONS}} placeholder by collecting agentInstructions
-// only from integrations whose required env vars are all present. Keeps the
-// agent's CLAUDE.md focused on what the user actually has wired up.
+// Render the {{INTEGRATIONS}} placeholder. Two layers:
+//   1. If the MCP server is registered in Claude Code config, prepend a hint
+//      that the same operations are also available as native MCP tools so
+//      the agent prefers those.
+//   2. Splice in agentInstructions snippets from each integration whose
+//      required env vars are all set (so users who don't use Linear never
+//      see Linear instructions).
 async function renderTemplate(raw, target) {
   if (!raw.includes('{{INTEGRATIONS}}')) return raw;
   const integrations = await loadIntegrations();
   const active = integrations.filter((m) => envReadiness(m).ready && m.agentInstructions?.[target]);
+
+  let mcpHint = '';
+  try {
+    const { present } = mcpStatus('global');
+    if (present) {
+      mcpHint =
+        '\n> 💡 **Triss is also available as MCP tools in this Claude Code session.**\n' +
+        '> Native tools — `triss_ask`, `triss_chat`, `triss_review`, `triss_jira_*`,\n' +
+        '> `triss_linear_*` etc. — are usually faster and have per-tool permissions.\n' +
+        '> Prefer them over the Bash invocations described below; the CLI block stays\n' +
+        '> as a fallback if MCP is not loaded.\n\n';
+    }
+  } catch {
+    /* ~/.claude.json unreadable — silently fall back to CLI-only block */
+  }
+
   let block;
-  if (!active.length) {
+  if (!active.length && !mcpHint) {
     block = '';
   } else {
-    block =
-      '\n## Integrations enabled for this project\n\n' +
-      active.map((m) => m.agentInstructions[target].trim()).join('\n\n') +
-      '\n\n';
+    const integrationsBody = active.length
+      ? '\n## Integrations enabled for this project\n\n' +
+        active.map((m) => m.agentInstructions[target].trim()).join('\n\n') +
+        '\n\n'
+      : '';
+    block = mcpHint + integrationsBody;
   }
   return raw.replace(/\{\{INTEGRATIONS\}\}\n?/g, block);
 }

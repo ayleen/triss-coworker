@@ -146,5 +146,27 @@ re-rendered on every `triss init`, including only integrations whose
 required env vars are set. Run `triss init` again and your new
 integration's delegation rules will appear in the file.
 
+**Wizard's last question — "How should Triss integrate with Claude Code?"**
+At the end of every full `triss config wizard` run (Standard or Advanced)
+you'll be asked which integration path to take:
+
+- *Both (recommended)* runs `triss mcp install` and `triss init --global`
+  for you. MCP becomes the primary tool path; CLAUDE.md rules serve as
+  a fallback if MCP fails to load.
+- *MCP only* installs the MCP server entry without touching CLAUDE.md.
+- *CLAUDE.md only* writes the global CLAUDE.md without touching the
+  MCP config.
+- *Skip* does nothing — useful when you have a custom setup.
+
+The choice is asked only on full wizard runs. Targeted invocations
+(`triss config wizard jira`) do not prompt — credentials change without
+side effects on the integration path. Re-run the wizard to revisit the
+choice; it's idempotent.
+
+When MCP is registered, `triss init` automatically prepends a hint to
+the CLAUDE.md block that tells the agent to prefer the native MCP tools
+over the Bash invocations. So you don't get duplicate routing logic in
+the agent's prompt — just one path, with the other as fallback.
+
 **CI** — set the variables as environment variables directly. `process.env`
 wins over both files.

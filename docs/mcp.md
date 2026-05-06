@@ -19,6 +19,21 @@ You don't have to choose — both can be active simultaneously.
 
 ## Install
 
+The easiest path is the wizard — its final question offers MCP +
+CLAUDE.md as the recommended bundle:
+
+```bash
+triss config wizard
+# … prompts for credentials …
+# How should Triss integrate with Claude Code?
+#   1) Both (recommended) — MCP server + global CLAUDE.md
+#   2) MCP server only
+#   3) CLAUDE.md rules only
+#   4) Skip
+```
+
+Or wire it manually:
+
 ```bash
 triss mcp install            # writes ~/.claude.json (global default)
 triss mcp install --local    # writes ./.mcp.json (this project only)
