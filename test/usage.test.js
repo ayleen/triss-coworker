@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { estimateCost, summarize, parsePeriod, logUsage, readLog, clearLog } from '../src/usage.js';
+import {
+  estimateCost,
+  summarize,
+  parsePeriod,
+  logUsage,
+  readLog,
+  clearLog,
+  maybeRotate,
+} from '../src/usage.js';
 
 test('estimateCost applies the right per-token rates', () => {
   const cost = estimateCost({
@@ -61,6 +69,61 @@ test('parsePeriod parses common units', () => {
   assert.equal(parsePeriod('7d'), 7 * 86400e3);
   assert.equal(parsePeriod('2w'), 2 * 604800e3);
   assert.throws(() => parsePeriod('huh'), /Bad period/);
+});
+
+test('logUsage records cwd by default and omits it when TRISS_USAGE_LOG_CWD=0', () => {
+  const r1 = logUsage({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 1,
+    completion_tokens: 1,
+    label: 'cwd-default',
+  });
+  assert.equal(typeof r1.cwd, 'string');
+  assert.ok(r1.cwd.length > 0);
+
+  process.env.TRISS_USAGE_LOG_CWD = '0';
+  try {
+    const r2 = logUsage({
+      model: 'deepseek-v4-flash',
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      label: 'cwd-off',
+    });
+    assert.equal(r2.cwd, undefined);
+  } finally {
+    delete process.env.TRISS_USAGE_LOG_CWD;
+  }
+});
+
+test('maybeRotate renames the file once it crosses TRISS_USAGE_LOG_MAX_BYTES', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-rotate-'));
+  const file = join(dir, 'usage.jsonl');
+  writeFileSync(file, 'x'.repeat(200));
+  process.env.TRISS_USAGE_LOG_MAX_BYTES = '100';
+  try {
+    maybeRotate(file);
+    assert.equal(existsSync(file), false, 'active file should be moved aside');
+    assert.equal(existsSync(file + '.old'), true, 'archive should exist');
+    assert.equal(readFileSync(file + '.old', 'utf8').length, 200);
+  } finally {
+    delete process.env.TRISS_USAGE_LOG_MAX_BYTES;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('maybeRotate leaves the file alone below the threshold', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-rotate-noop-'));
+  const file = join(dir, 'usage.jsonl');
+  writeFileSync(file, 'x'.repeat(50));
+  process.env.TRISS_USAGE_LOG_MAX_BYTES = '1000';
+  try {
+    maybeRotate(file);
+    assert.equal(existsSync(file), true);
+    assert.equal(existsSync(file + '.old'), false);
+  } finally {
+    delete process.env.TRISS_USAGE_LOG_MAX_BYTES;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('logUsage / readLog / clearLog round-trip', () => {

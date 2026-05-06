@@ -10,6 +10,8 @@ export function linearConfig() {
   return {
     endpoint: process.env[ENV.endpoint] || 'https://api.linear.app/graphql',
     headers: {
+      // Linear personal API keys go in Authorization as the bare token —
+      // no `Bearer ` prefix (this differs from GitHub/GitLab on purpose).
       Authorization: process.env[ENV.apiKey],
       'Content-Type': 'application/json',
     },

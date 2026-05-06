@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+// SSRF resolver bypass — see web.test.js header.
+process.env.TRISS_ALLOW_PRIVATE_NETWORKS = '1';
+
 function makeMockResponse(bytes, { ok = true } = {}) {
   // Two chunks so we exercise the streaming-read path with a measurable
   // cumulative size, and validate the cap kicks in mid-stream.

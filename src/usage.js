@@ -1,11 +1,40 @@
 // Cost tracker. Appends one JSONL record per worker call to
 // ~/.cache/triss/usage.jsonl, then `triss usage` aggregates.
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  appendFileSync,
+  readFileSync,
+  writeFileSync,
+  statSync,
+  renameSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export const USAGE_FILE = join(homedir(), '.cache', 'triss', 'usage.jsonl');
+
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+function rotateBytes() {
+  const raw = process.env.TRISS_USAGE_LOG_MAX_BYTES;
+  if (!raw) return DEFAULT_MAX_BYTES;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BYTES;
+}
+
+// Single-step rotation: when the active log crosses the threshold,
+// rename it to <file>.old (overwriting any previous archive). Keeps
+// the working set bounded without losing the most recent history.
+export function maybeRotate(file) {
+  try {
+    const s = statSync(file);
+    if (s.size >= rotateBytes()) renameSync(file, file + '.old');
+  } catch {
+    /* nothing to rotate */
+  }
+}
 
 // DeepSeek list prices, USD per token. Override via env if pricing changes
 // or you point Triss at a different provider.
@@ -56,12 +85,15 @@ export function logUsage({ model, prompt_tokens, cached_tokens, completion_token
     prompt_tokens,
     cached_tokens: cached_tokens || 0,
     completion_tokens: completion_tokens || 0,
-    cwd: process.cwd(),
     label: label || 'triss',
   };
+  // Per-project breakdown is opt-in via cwd; some users sync this log
+  // across machines and prefer to omit absolute paths.
+  if (process.env.TRISS_USAGE_LOG_CWD !== '0') record.cwd = process.cwd();
   record.cost_usd = estimateCost(record);
   try {
     mkdirSync(dirname(USAGE_FILE), { recursive: true });
+    maybeRotate(USAGE_FILE);
     appendFileSync(USAGE_FILE, JSON.stringify(record) + '\n');
   } catch {
     // Tracking is best-effort; never fail a real call because of it.

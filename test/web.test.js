@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
+// Bypass the SSRF DNS lookup for unit tests that mock globalThis.fetch —
+// the resolver is exercised separately in net.test.js.
+process.env.TRISS_ALLOW_PRIVATE_NETWORKS = '1';
+
 import { htmlToMarkdown, fetchUrl, fetchAsMarkdown } from '../src/web.js';
 
 test('htmlToMarkdown turns headings, paragraphs, lists into markdown', () => {

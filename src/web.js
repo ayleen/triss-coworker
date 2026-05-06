@@ -1,17 +1,44 @@
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import { IntegrationError } from './integrations/_contract.js';
+import { assertPublicUrl } from './net.js';
 
 const DEFAULT_UA =
   'triss-coworker/0.5 (+https://github.com/ayleen/triss-coworker)';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_REDIRECTS = 5;
 
 function maxBytes() {
   const raw = process.env.TRISS_FETCH_MAX_BYTES;
   if (!raw) return DEFAULT_MAX_BYTES;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BYTES;
+}
+
+// Walks 3xx redirects manually so each hop is checked by assertPublicUrl —
+// otherwise a public URL could 302 to http://169.254.169.254/ and bypass
+// the SSRF guard.
+async function fetchFollowingRedirects(url, init) {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertPublicUrl(current);
+    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const status = res.status;
+    if (status >= 300 && status < 400 && typeof res.headers?.get === 'function') {
+      const loc = res.headers.get('location');
+      if (loc) {
+        current = new URL(loc, current).toString();
+        // Drain any body to free the socket before the next hop.
+        try { await res.body?.cancel?.(); } catch { /* ignore */ }
+        continue;
+      }
+    }
+    return res;
+  }
+  throw new IntegrationError(
+    `Too many redirects (>${MAX_REDIRECTS}) starting at ${url}`,
+  );
 }
 
 // Tags that almost always carry layout/UI noise rather than article body.
@@ -36,11 +63,19 @@ export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: 'follow',
-      headers: { 'User-Agent': DEFAULT_UA, Accept: 'text/html,application/xhtml+xml,*/*', ...headers },
-    });
+    let res;
+    try {
+      res = await fetchFollowingRedirects(url, {
+        signal: ctrl.signal,
+        headers: { 'User-Agent': DEFAULT_UA, Accept: 'text/html,application/xhtml+xml,*/*', ...headers },
+      });
+    } catch (err) {
+      // Surface SSRF / redirect-cap errors as IntegrationError for the
+      // standard caller-side error path. assertPublicUrl already produces
+      // a user-actionable message.
+      if (err instanceof IntegrationError) throw err;
+      throw new IntegrationError(err.message);
+    }
     // Streamed read with a hard ceiling so a malicious or accidental
     // multi-gigabyte response can't OOM the process.
     const limit = maxBytes();

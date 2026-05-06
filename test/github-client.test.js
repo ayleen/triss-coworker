@@ -20,6 +20,26 @@ test('resolveRepo returns the explicit value untouched', () => {
   assert.equal(resolveRepo('foo/bar.baz'), 'foo/bar.baz');
 });
 
+test('resolveRepo rejects malformed repo specs', () => {
+  for (const bad of [
+    'owner',                // no slash
+    'owner/name/extra',     // path traversal candidate
+    'owner/name?secret=1',  // query injection
+    'owner/name#frag',      // fragment injection
+    '../../etc/passwd',
+    'a b/c',                // whitespace
+    '',                     // empty after coercion is a different path; just ensure we throw on truthy junk
+    'owner/name/',          // trailing slash
+  ]) {
+    if (bad === '') continue; // empty falls back to detectRepo, not validation
+    assert.throws(
+      () => resolveRepo(bad),
+      /Invalid GitHub repo/,
+      `expected "${bad}" rejected`,
+    );
+  }
+});
+
 test('resolveRepo throws when nothing is given and no origin matches', () => {
   const orig = process.cwd();
   process.chdir('/');

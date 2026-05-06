@@ -89,8 +89,21 @@ export function detectRepo() {
   return null;
 }
 
+// owner/name pattern: each segment is the GitHub-allowed character set
+// (alphanumerics, dot, hyphen, underscore). No slashes, no path traversal,
+// no query/fragment injection.
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
 export function resolveRepo(repoOpt) {
-  if (repoOpt) return repoOpt;
+  if (repoOpt) {
+    if (!REPO_RE.test(repoOpt)) {
+      throw new Error(
+        `Invalid GitHub repo "${repoOpt}". Expected owner/name with only ` +
+          `letters, digits, dot, hyphen, underscore.`,
+      );
+    }
+    return repoOpt;
+  }
   const detected = detectRepo();
   if (!detected) {
     throw new Error('Could not auto-detect GitHub repo from origin. Pass --repo owner/name.');

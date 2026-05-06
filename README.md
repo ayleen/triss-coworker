@@ -466,12 +466,15 @@ Add `--local` to scope any of these to the current project only
 
 ### Tunables
 
-| Variable                  | Default     | Effect                                                    |
-| ------------------------- | ----------- | --------------------------------------------------------- |
-| `TRISS_USAGE_LOG`         | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
-| `TRISS_PRICE_<MODEL_ID>`  | list prices | `miss,hit,out` USD-per-token override per model (e.g. for promo or non-DeepSeek providers) |
-| `TRISS_FETCH_MAX_BYTES`   | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
-| `TRISS_RESTRICT_PATHS`    | `1` in MCP, unset in CLI | `0` opts the MCP server out of the cwd-only file IO sandbox |
+| Variable                       | Default     | Effect                                                    |
+| ------------------------------ | ----------- | --------------------------------------------------------- |
+| `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
+| `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
+| `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |
+| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. for promo or non-DeepSeek providers) |
+| `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
+| `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the cwd-only file IO sandbox |
+| `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. |
 
 `.env` files are loaded from `~/.config/triss/.env` (global) and
 `<cwd>/.triss.env` (project, overrides global). Real `process.env`

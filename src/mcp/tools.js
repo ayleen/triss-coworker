@@ -327,7 +327,11 @@ const GITHUB_TOOLS = [
       type: 'object',
       properties: {
         number: { type: 'number' },
-        repo: { type: 'string', description: 'owner/name; auto-detected from origin if omitted' },
+        repo: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$',
+          description: 'owner/name; auto-detected from origin if omitted',
+        },
         with_comments: { type: 'boolean' },
         question: { type: 'string' },
         model: { type: 'string' },
@@ -345,7 +349,7 @@ const GITHUB_TOOLS = [
       properties: {
         title: { type: 'string' },
         body: { type: 'string' },
-        repo: { type: 'string' },
+        repo: { type: 'string', pattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' },
         labels: { type: 'array', items: { type: 'string' } },
         assignees: { type: 'array', items: { type: 'string' } },
       },
@@ -360,7 +364,7 @@ const GITHUB_TOOLS = [
       type: 'object',
       properties: {
         number: { type: 'number' },
-        repo: { type: 'string' },
+        repo: { type: 'string', pattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' },
         title: { type: 'string' },
         body: { type: 'string' },
         state: { type: 'string', enum: ['open', 'closed'] },
@@ -378,7 +382,7 @@ const GITHUB_TOOLS = [
       type: 'object',
       properties: {
         number: { type: 'number' },
-        repo: { type: 'string' },
+        repo: { type: 'string', pattern: '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' },
         body: { type: 'string' },
       },
       required: ['number', 'body'],

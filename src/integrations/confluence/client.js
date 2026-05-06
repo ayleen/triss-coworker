@@ -1,26 +1,8 @@
-import { httpJson, requireEnv } from '../_contract.js';
+import { ATLASSIAN_ENV, atlassianConfig, atlassianCall } from '../_atlassian.js';
 
-export const ENV = {
-  baseUrl: 'ATLASSIAN_BASE_URL',
-  email: 'ATLASSIAN_EMAIL',
-  token: 'ATLASSIAN_API_TOKEN',
-};
-
-export function confluenceConfig() {
-  requireEnv([ENV.baseUrl, ENV.email, ENV.token]);
-  const base = process.env[ENV.baseUrl].replace(/\/+$/, '');
-  const auth = Buffer.from(`${process.env[ENV.email]}:${process.env[ENV.token]}`).toString('base64');
-  return {
-    base,
-    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
-  };
-}
-
-async function call(path, init = {}) {
-  const { base, headers } = confluenceConfig();
-  const url = path.startsWith('http') ? path : `${base}${path}`;
-  return httpJson(url, { ...init, headers: { ...headers, ...(init.headers || {}) } });
-}
+export const ENV = ATLASSIAN_ENV;
+export const confluenceConfig = atlassianConfig;
+const call = atlassianCall;
 
 export const confluence = {
   // Search via CQL — covers everything (pages, blogposts, attachments, …).

@@ -1,28 +1,11 @@
-import { httpJson, requireEnv, IntegrationError } from '../_contract.js';
+import { IntegrationError } from '../_contract.js';
+import { ATLASSIAN_ENV, atlassianConfig, atlassianCall } from '../_atlassian.js';
 
-export const ENV = {
-  baseUrl: 'ATLASSIAN_BASE_URL',
-  email: 'ATLASSIAN_EMAIL',
-  token: 'ATLASSIAN_API_TOKEN',
-};
-
-export function jiraConfig() {
-  requireEnv([ENV.baseUrl, ENV.email, ENV.token]);
-  const base = process.env[ENV.baseUrl].replace(/\/+$/, '');
-  const auth = Buffer.from(`${process.env[ENV.email]}:${process.env[ENV.token]}`).toString(
-    'base64',
-  );
-  return {
-    base,
-    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
-  };
-}
-
-async function call(path, init = {}) {
-  const { base, headers } = jiraConfig();
-  const url = path.startsWith('http') ? path : `${base}${path}`;
-  return httpJson(url, { ...init, headers: { ...headers, ...(init.headers || {}) } });
-}
+// Re-export under the historical names so existing imports / `triss config
+// wizard jira` keep working.
+export const ENV = ATLASSIAN_ENV;
+export const jiraConfig = atlassianConfig;
+const call = atlassianCall;
 
 export const jira = {
   // Search via the new JQL endpoint (POST). Works on both classic & next-gen.
