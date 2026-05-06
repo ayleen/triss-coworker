@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
+import { chat, chatStream, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { readStdin } from '../secrets.js';
 
@@ -24,11 +24,21 @@ export async function runChat(prompt, opts) {
 
   process.stderr.write(pc.dim(`[triss/chat] model=${model} prompt-bytes=${resolved.length}\n`));
 
-  const resp = await chat({
-    model,
-    maxTokens: parseInt(opts.maxTokens, 10) || 4096,
-    messages,
-  });
+  const useStream = shouldStream(opts);
+  const resp = useStream
+    ? await chatStream({
+        model,
+        maxTokens: parseInt(opts.maxTokens, 10) || 4096,
+        messages,
+        label: 'triss/chat',
+        onChunk: (d) => process.stdout.write(d),
+      })
+    : await chat({
+        model,
+        maxTokens: parseInt(opts.maxTokens, 10) || 4096,
+        messages,
+        label: 'triss/chat',
+      });
 
   const out = resp.choices?.[0]?.message?.content;
   if (!out) {
@@ -37,6 +47,13 @@ export async function runChat(prompt, opts) {
     );
     process.exit(1);
   }
-  process.stdout.write(out + '\n');
+  if (!useStream) process.stdout.write(out + '\n');
+  else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/chat') + '\n'));
+}
+
+export function shouldStream(opts) {
+  if (opts?.noStream) return false;
+  if (opts?.stream === false) return false;
+  return Boolean(process.stdout.isTTY);
 }

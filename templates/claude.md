@@ -36,6 +36,17 @@ Pull a human-readable transcript out of Claude Code JSONL session logs.
 triss extract ~/.claude/projects/<project>/<session>.jsonl -o /tmp/chat.txt
 ```
 
+### `triss commit-msg` — generate a commit message from staged diff
+```bash
+git add <paths>
+triss commit-msg            # prints Conventional Commits message
+triss commit-msg --apply    # prints + runs `git commit -m`
+```
+
+Use this whenever the user asks you to commit work — much cheaper than
+the primary model writing the message itself, and the format is
+consistent.
+
 ### `triss chat <prompt>` — bare worker prompt
 For one-shot lookups / transformations where there is **no corpus** —
 no files to read, no URLs to fetch, no diff to review. Just a question.

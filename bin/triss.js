@@ -16,12 +16,14 @@ import { runExtract } from '../src/commands/extract.js';
 import { runFetch } from '../src/commands/fetch.js';
 import { runReview } from '../src/commands/review.js';
 import { runChat } from '../src/commands/chat.js';
+import { runUsage } from '../src/commands/usage.js';
 import {
   runMcpServe,
   runMcpInstall,
   runMcpUninstall,
   runMcpStatus,
 } from '../src/commands/mcp.js';
+import { runCommitMsg } from '../src/commands/commit-msg.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
@@ -43,7 +45,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.9.4');
+  .version('0.10.0');
 
 program
   .command('init')
@@ -64,6 +66,7 @@ program
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
   .option('--system <text>', 'override the system prompt')
+  .option('--no-stream', "disable streaming output (default streams when stdout is a TTY)")
   .action(wrap(runAsk));
 
 program
@@ -101,7 +104,19 @@ program
   .option('-s, --system <text>', 'system prompt (e.g. role / persona)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget (default 4096)')
+  .option('--no-stream', 'disable streaming output')
   .action((prompt, opts) => wrap(runChat)(prompt, opts));
+
+program
+  .command('commit-msg')
+  .description('Generate a Git commit message from staged changes (Conventional Commits by default).')
+  .option('--apply', 'run `git commit -m <generated>` immediately instead of printing')
+  .option('--no-conventional', 'use a free-form commit subject instead of Conventional Commits')
+  .option('--type <type>', 'force the conventional type (feat | fix | refactor | …)')
+  .option('--scope <scope>', 'force the conventional scope')
+  .option('-m, --model <name>', 'model preset (flash | pro) or full id')
+  .option('--max-tokens <n>', 'token budget (default 2048)')
+  .action(wrap(runCommitMsg));
 
 program
   .command('review [pr]')
@@ -111,7 +126,20 @@ program
   .option('-q, --question <text>', 'override the default review question')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
+  .option('--no-stream', 'disable streaming output')
   .action((pr, opts) => wrap(runReview)(pr, opts));
+
+program
+  .command('usage')
+  .description('Cumulative cost / token usage summary across all triss calls')
+  .option('--since <period>', 'period like 24h, 7d, 4w (default 24h)')
+  .option('--month', 'shortcut for --since 30d')
+  .option('--by-project', 'break down by working directory')
+  .option('--by-model', 'break down by model name')
+  .option('--by-label', 'break down by call source (ask, review, chat, …)')
+  .option('--json', 'dump raw log records as JSON')
+  .option('--reset', 'clear the usage log (cannot be undone)')
+  .action(wrap(runUsage));
 
 program
   .command('status')

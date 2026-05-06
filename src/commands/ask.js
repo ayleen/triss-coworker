@@ -1,9 +1,10 @@
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
+import { chat, chatStream, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { readStdin } from '../secrets.js';
+import { shouldStream } from './chat.js';
 
 const SYSTEM_PROMPT =
   'You are a precise code/document analyst. Read the provided sources and ' +
@@ -63,15 +64,22 @@ export async function runAsk(opts) {
     pc.dim(`[triss/ask] model=${model} sources=${fileCount} bytes=${totalBytes}\n`),
   );
 
-  const resp = await chat({
-    model,
-    maxTokens,
-    messages: [
-      { role: 'system', content: system || SYSTEM_PROMPT },
-      { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
-      { role: 'user', content: question },
-    ],
-  });
+  const messages = [
+    { role: 'system', content: system || SYSTEM_PROMPT },
+    { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
+    { role: 'user', content: question },
+  ];
+
+  const useStream = shouldStream(opts);
+  const resp = useStream
+    ? await chatStream({
+        model,
+        maxTokens,
+        messages,
+        label: 'triss/ask',
+        onChunk: (d) => process.stdout.write(d),
+      })
+    : await chat({ model, maxTokens, messages, label: 'triss/ask' });
 
   const answer = resp.choices?.[0]?.message?.content;
   if (!answer) {
@@ -83,6 +91,7 @@ export async function runAsk(opts) {
     );
     process.exit(1);
   }
-  process.stdout.write(answer + '\n');
+  if (!useStream) process.stdout.write(answer + '\n');
+  else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask') + '\n'));
 }

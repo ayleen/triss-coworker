@@ -242,6 +242,15 @@ re-rendered on every `triss init`, including only integrations whose
 required env vars are set. Run `triss init` again and your new
 integration's delegation rules will appear in the file.
 
+**Cost tracking** — every worker call appends to
+`~/.cache/triss/usage.jsonl`. Inspect with `triss usage`. To opt out
+entirely, set `TRISS_USAGE_LOG=0` before any call. To override the
+baked-in DeepSeek list prices (e.g. you point Triss at a different
+provider, or want the discounted rate), set
+`TRISS_PRICE_<MODEL>=<input_cache_miss>,<input_cache_hit>,<output>` in
+USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
+applies the 75% promotional pricing to the pro preset.
+
 **Claude Code integration step in the wizard** — split by mode:
 
 | Mode in `triss config wizard` | What happens at the end |

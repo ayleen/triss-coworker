@@ -184,16 +184,19 @@ and writing**.
 
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
-| `triss ask`     | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
-| `triss chat`    | Bare prompt to the worker model — no corpus           | A separate `gpt`-style CLI          |
-| `triss write`   | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
-| `triss extract` | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
-| `triss fetch`   | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
-| `triss review`  | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
-| `triss init`    | Drops a delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules        |
-| `triss status`  | Shows current model + key + .env sources              | —                                   |
-| `triss config`  | Interactive credential management                     | Manual `.env` editing               |
-| `triss completion` | Shell completion script (bash/zsh)                | Hand-rolled completion              |
+| `triss ask`        | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
+| `triss chat`       | Bare prompt to the worker model — no corpus           | A separate `gpt`-style CLI          |
+| `triss write`      | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
+| `triss extract`    | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
+| `triss fetch`      | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
+| `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
+| `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
+| `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
+| `triss init`       | Drops a delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
+| `triss status`     | Shows current model + key + .env sources              | —                                   |
+| `triss config`     | Interactive credential management                     | Manual `.env` editing               |
+| `triss mcp`        | Register Triss as MCP server in Claude Code           | Editing `~/.claude.json` by hand    |
+| `triss completion` | Shell completion script (bash/zsh)                    | Hand-rolled completion              |
 
 ### `triss ask`
 
@@ -219,6 +222,47 @@ triss write --spec "Pytest tests for auth.py covering OAuth2 happy path" \
 ```bash
 triss extract ~/.claude/projects/my-project/session.jsonl -o /tmp/chat.txt
 ```
+
+### `triss commit-msg`
+
+```bash
+git add src/foo.js src/bar.js
+triss commit-msg                          # prints a Conventional Commits message
+triss commit-msg --apply                  # prints + runs `git commit -m`
+triss commit-msg --type fix --scope auth  # nudge the type/scope
+triss commit-msg --no-conventional        # plain subject + body
+```
+
+Reads `git diff --staged`, sends it to the worker model with a Conventional
+Commits-aware system prompt, prints the message. Defaults to your
+`TRISS_DEFAULT_MODEL` preset.
+
+### `triss usage`
+
+```bash
+triss usage                          # last 24h: total tokens + $$$
+triss usage --since 7d               # last week
+triss usage --month                  # last 30 days
+triss usage --by-project             # split by working directory
+triss usage --by-model               # flash vs pro breakdown
+triss usage --by-label               # ask / chat / review / commit-msg / …
+triss usage --json                   # raw log records
+triss usage --reset                  # clear the log
+```
+
+Every worker call (CLI **and** MCP) appends one record to
+`~/.cache/triss/usage.jsonl` with model, tokens, cached tokens, computed
+USD cost, working directory, and a label like `triss/ask`. List-price
+defaults for DeepSeek are baked in; override per-model with
+`TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token). Disable tracking
+entirely with `TRISS_USAGE_LOG=0`.
+
+### Streaming output
+
+Long `--model pro` calls (review, ask) now stream tokens as they arrive
+when stdout is a TTY, so you see progress instead of 1-3 minutes of
+silence. Disable per-call with `--no-stream`. Streaming is automatically
+off for piped output, MCP tool calls, and any `--json` flag.
 
 ### `triss chat`
 
@@ -293,6 +337,7 @@ auto-discovered at startup and appear as top-level subcommands.
 | ----------- | -------------- | ------------------------------------------------------------- | --------- |
 | Jira        | `triss jira`   | search, issue, create, update, comments, transitions, attachments | [docs/integrations/jira.md](docs/integrations/jira.md) |
 | Linear      | `triss linear` | search, issue, create, update, comments, states, attachments  | [docs/integrations/linear.md](docs/integrations/linear.md) |
+| GitHub      | `triss github` | search, issue, create, update, comments                       | [docs/integrations/github.md](docs/integrations/github.md) |
 
 Two design rules:
 
@@ -423,6 +468,10 @@ even); see `templates/claude.md` for the rules of thumb.
 - [x] `triss review [PR]` (diff + PR metadata + linked Jira/Linear ticket)
 - [x] `triss chat` (bare worker prompt)
 - [x] MCP server (`triss mcp install`) — first-class tools in Claude Code
+- [x] Cost tracking (`triss usage`) — cumulative $$$ + per-project breakdown
+- [x] `triss commit-msg` — Conventional Commits from staged diff
+- [x] GitHub Issues integration (`triss github`)
+- [x] Streaming output for `pro` calls
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)

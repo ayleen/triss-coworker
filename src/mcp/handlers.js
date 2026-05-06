@@ -314,6 +314,125 @@ export async function linearCommentHandler({ id, body }) {
   return `✓ Comment posted to ${issue.identifier}`;
 }
 
+// ─── github handlers ────────────────────────────────────────────────────────
+
+export async function githubSearchHandler({ query, limit = 30, question, model, max_tokens }) {
+  const { github } = await import('../integrations/github/client.js');
+  const data = await github.search({ query, limit });
+  const items = data.items || [];
+  const corpus = items
+    .map((i) => {
+      const repo = i.repository_url ? i.repository_url.split('/').slice(-2).join('/') : '?';
+      return `${repo}#${i.number}\t[${i.state}]\t${i.title}\t(${i.assignee?.login ?? 'unassigned'})`;
+    })
+    .join('\n');
+  if (!question) return corpus || '(no issues)';
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<github-issues query="${query}">\n${corpus}\n</github-issues>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function githubIssueHandler({ repo, number, with_comments, question, model, max_tokens }) {
+  const { github, resolveRepo } = await import('../integrations/github/client.js');
+  const r = resolveRepo(repo);
+  const issue = await github.getIssue(r, number);
+  const lines = [
+    `URL: ${issue.html_url}`,
+    `Title: ${issue.title}`,
+    `State: ${issue.state}`,
+    `Author: ${issue.user?.login}`,
+    `Assignee: ${issue.assignee?.login ?? 'unassigned'}`,
+    `Labels: ${(issue.labels || []).map((l) => l.name).join(', ') || '—'}`,
+    '',
+    '--- Body ---',
+    issue.body || '(empty)',
+  ];
+  if (with_comments) {
+    const cs = await github.listComments(r, number);
+    lines.push('\n--- Comments ---');
+    for (const c of cs) lines.push(`\n[${c.user?.login} @ ${c.created_at}]\n${c.body || ''}`);
+  }
+  const text = lines.join('\n');
+  if (!question) return text;
+  return callModel({
+    model,
+    maxTokens: max_tokens || 4096,
+    messages: [
+      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'user', content: `<github-issue>\n${text}\n</github-issue>` },
+      { role: 'user', content: question },
+    ],
+  });
+}
+
+export async function githubCreateHandler({ repo, title, body, labels, assignees }) {
+  const { github, resolveRepo } = await import('../integrations/github/client.js');
+  const r = resolveRepo(repo);
+  const issue = await github.createIssue(r, { title, body, labels, assignees });
+  return `✓ Created ${r}#${issue.number}\nURL: ${issue.html_url}`;
+}
+
+export async function githubUpdateHandler({ repo, number, title, body, state, labels, assignees }) {
+  const { github, resolveRepo } = await import('../integrations/github/client.js');
+  const r = resolveRepo(repo);
+  const fields = {};
+  if (title) fields.title = title;
+  if (body != null) fields.body = body;
+  if (state) fields.state = state;
+  if (labels?.length) fields.labels = labels;
+  if (assignees?.length) fields.assignees = assignees;
+  if (!Object.keys(fields).length) throw new Error('Pass at least one field to update');
+  await github.updateIssue(r, number, fields);
+  return `✓ Updated ${r}#${number}: ${Object.keys(fields).join(', ')}`;
+}
+
+export async function githubCommentHandler({ repo, number, body }) {
+  const { github, resolveRepo } = await import('../integrations/github/client.js');
+  const r = resolveRepo(repo);
+  await github.addComment(r, number, body);
+  return `✓ Comment posted to ${r}#${number}`;
+}
+
+// ─── commit-msg ─────────────────────────────────────────────────────────────
+
+export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {
+  const { git } = await import('../git.js');
+  const diff = git(['diff', '--staged']);
+  if (!diff.trim()) {
+    return '(nothing staged — run `git add <paths>` before requesting a commit message)';
+  }
+  const stat = git(['diff', '--staged', '--stat']);
+  const fileList = git(['diff', '--staged', '--name-only']).trim().split('\n').filter(Boolean);
+  const SYSTEM = conventional
+    ? 'Write a Conventional Commits message. First line: <type>(<optional scope>): <imperative ≤72 chars>. Body wraps at 72. Allowed types: feat, fix, refactor, docs, test, chore, perf, ci, build, style. Output only the message.'
+    : 'Write a short imperative commit message (subject ≤72 chars + optional body). Output only the message.';
+  const hints = [];
+  if (type) hints.push(`Force the type to "${type}".`);
+  if (scope) hints.push(`Use the scope "${scope}".`);
+  const userPrompt = [
+    `Files changed:\n${fileList.join('\n')}`,
+    `\nDiffstat:\n${stat.trim()}`,
+    hints.length ? `\nGuidance:\n- ${hints.join('\n- ')}` : '',
+    `\nFull diff:\n${diff}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return callModel({
+    model,
+    maxTokens: max_tokens || 2048,
+    messages: [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: userPrompt },
+    ],
+  });
+}
+
 // ─── status ─────────────────────────────────────────────────────────────────
 
 export async function statusHandler() {

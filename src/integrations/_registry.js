@@ -62,6 +62,16 @@ export async function loadIntegrations({ dir = HERE } = {}) {
     if (!existsSync(indexPath)) continue;
     const mod = await import(pathToFileURL(indexPath).href);
     const manifest = validateManifest(mod.default, `${entry}/index.js`);
+    // Optional bootstrap hook — lets an integration prime process.env from
+    // an out-of-band source (e.g. github reads `gh auth token` when the
+    // user hasn't exported GITHUB_TOKEN). Best-effort; failures are swallowed.
+    if (typeof manifest.bootstrap === 'function') {
+      try {
+        await manifest.bootstrap();
+      } catch {
+        /* keep going — readiness will report missing creds normally */
+      }
+    }
     integrations.push(manifest);
   }
   integrations.sort((a, b) => a.name.localeCompare(b.name));

@@ -10,6 +10,7 @@ import {
   fetchHandler,
   reviewHandler,
   statusHandler,
+  commitMsgHandler,
   jiraSearchHandler,
   jiraIssueHandler,
   jiraCreateHandler,
@@ -20,6 +21,11 @@ import {
   linearCreateHandler,
   linearUpdateHandler,
   linearCommentHandler,
+  githubSearchHandler,
+  githubIssueHandler,
+  githubCreateHandler,
+  githubUpdateHandler,
+  githubCommentHandler,
 } from './handlers.js';
 
 const CORE_TOOLS = [
@@ -105,6 +111,24 @@ const CORE_TOOLS = [
       'tool is missing — tells you which credential is unset.',
     inputSchema: { type: 'object', properties: {} },
     handler: statusHandler,
+  },
+  {
+    name: 'triss_commit_msg',
+    description:
+      'Generate a Git commit message from staged changes (Conventional ' +
+      'Commits by default). Returns the message text — you (or the user) ' +
+      'still run `git commit -m "<message>"`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Force conventional type (feat, fix, …)' },
+        scope: { type: 'string' },
+        conventional: { type: 'boolean', description: 'Default true' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+    },
+    handler: commitMsgHandler,
   },
 ];
 
@@ -270,6 +294,90 @@ const LINEAR_TOOLS = [
   },
 ];
 
+const GITHUB_TOOLS = [
+  {
+    name: 'triss_github_search',
+    description: 'Search GitHub Issues via the /search/issues endpoint. With `question`, summarises via DeepSeek.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Same syntax as github.com search (e.g. "is:issue is:open repo:owner/x")' },
+        limit: { type: 'number' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+      required: ['query'],
+    },
+    handler: githubSearchHandler,
+  },
+  {
+    name: 'triss_github_issue',
+    description: 'Read an issue by number. `repo` defaults to the cwd git origin.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        number: { type: 'number' },
+        repo: { type: 'string', description: 'owner/name; auto-detected from origin if omitted' },
+        with_comments: { type: 'boolean' },
+        question: { type: 'string' },
+        model: { type: 'string' },
+        max_tokens: { type: 'number' },
+      },
+      required: ['number'],
+    },
+    handler: githubIssueHandler,
+  },
+  {
+    name: 'triss_github_create',
+    description: 'Create a new GitHub issue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string' },
+        repo: { type: 'string' },
+        labels: { type: 'array', items: { type: 'string' } },
+        assignees: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['title'],
+    },
+    handler: githubCreateHandler,
+  },
+  {
+    name: 'triss_github_update',
+    description: 'Update title/body/state/labels/assignees on an existing issue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        number: { type: 'number' },
+        repo: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        state: { type: 'string', enum: ['open', 'closed'] },
+        labels: { type: 'array', items: { type: 'string' } },
+        assignees: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['number'],
+    },
+    handler: githubUpdateHandler,
+  },
+  {
+    name: 'triss_github_comment',
+    description: 'Post a comment on an issue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        number: { type: 'number' },
+        repo: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['number', 'body'],
+    },
+    handler: githubCommentHandler,
+  },
+];
+
 export async function listTools() {
   // Defensive: ensure env files are loaded even when listTools is called
   // outside the server lifecycle (e.g. from tests).
@@ -279,6 +387,7 @@ export async function listTools() {
   const tools = [...CORE_TOOLS];
   if (ready.has('jira')) tools.push(...JIRA_TOOLS);
   if (ready.has('linear')) tools.push(...LINEAR_TOOLS);
+  if (ready.has('github')) tools.push(...GITHUB_TOOLS);
   return tools;
 }
 

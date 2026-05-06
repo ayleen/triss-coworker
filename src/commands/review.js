@@ -1,6 +1,7 @@
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
+import { chat, chatStream, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
+import { shouldStream } from './chat.js';
 import {
   currentBranch,
   defaultBranch,
@@ -96,22 +97,30 @@ export async function runReview(prNumber, opts) {
     pc.dim(`[triss/review] model=${model} bytes=${corpus.length} base=${baseRef} head=${headRef}\n`),
   );
 
-  const resp = await chat({
-    model,
-    maxTokens: parseInt(opts.maxTokens, 10) || 8192,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: corpus },
-      { role: 'user', content: opts.question || DEFAULT_QUESTION },
-    ],
-  });
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: corpus },
+    { role: 'user', content: opts.question || DEFAULT_QUESTION },
+  ];
+  const maxTokens = parseInt(opts.maxTokens, 10) || 8192;
+  const useStream = shouldStream(opts);
+  const resp = useStream
+    ? await chatStream({
+        model,
+        maxTokens,
+        messages,
+        label: 'triss/review',
+        onChunk: (d) => process.stdout.write(d),
+      })
+    : await chat({ model, maxTokens, messages, label: 'triss/review' });
 
   const out = resp.choices?.[0]?.message?.content;
   if (!out) {
     process.stderr.write(pc.red('[triss/review] empty response — try --max-tokens 16384\n'));
     process.exit(1);
   }
-  process.stdout.write(out + '\n');
+  if (!useStream) process.stdout.write(out + '\n');
+  else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review') + '\n'));
 }
 
