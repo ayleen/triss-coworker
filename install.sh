@@ -39,13 +39,10 @@ echo "✓ Installed. Run 'triss --help' to get started."
 echo ""
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   cat <<EOF
-Next: export your DeepSeek API key, e.g.
+Next: configure your credentials (DeepSeek + any integrations) interactively:
 
-  export DEEPSEEK_API_KEY="sk-..."
+  triss config wizard
 
-Or create ~/.config/triss/.env with:
-
-  DEEPSEEK_API_KEY=sk-...
-
+(or 'triss config wizard --local' to save inside the current project only)
 EOF
 fi

@@ -1,18 +1,17 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import dotenv from 'dotenv';
-
-const CWD_ENV = join(process.cwd(), '.env');
-const USER_ENV = join(homedir(), '.config', 'triss', '.env');
+import { activeEnvFiles } from './secrets.js';
 
 let loaded = false;
 function loadEnvFiles() {
   if (loaded) return;
   loaded = true;
-  // Project-local .env wins over user-global, real process env wins over both.
-  if (existsSync(USER_ENV)) dotenv.config({ path: USER_ENV, override: false });
-  if (existsSync(CWD_ENV)) dotenv.config({ path: CWD_ENV, override: false });
+  // Precedence: process.env > project .triss.env > global ~/.config/triss/.env.
+  // dotenv with override:false only fills *missing* keys, so the first call
+  // (project) wins over the second (global), and real process env wins over both.
+  for (const f of activeEnvFiles()) {
+    if (f.exists) dotenv.config({ path: f.path, override: false });
+  }
 }
 
 export function getConfig() {
@@ -25,18 +24,23 @@ export function getConfig() {
     proModel: process.env.DEEPSEEK_PRO_MODEL || 'deepseek-v4-pro',
     defaultPreset: (process.env.TRISS_DEFAULT_MODEL || 'flash').toLowerCase(),
     envSources: {
-      userEnv: existsSync(USER_ENV) ? USER_ENV : null,
-      projectEnv: existsSync(CWD_ENV) ? CWD_ENV : null,
+      // Backwards-compatible shape for `triss status`.
+      userEnv: existsForScope('global'),
+      projectEnv: existsForScope('local'),
     },
   };
+}
+
+function existsForScope(scope) {
+  const f = activeEnvFiles().find((x) => x.scope === scope);
+  return f && f.exists ? f.path : null;
 }
 
 export function requireApiKey(cfg = getConfig()) {
   if (!cfg.apiKey) {
     const msg =
       'No DeepSeek API key found.\n' +
-      'Set DEEPSEEK_API_KEY in your shell, in a project .env, or in ~/.config/triss/.env\n' +
-      'Get a key at https://platform.deepseek.com/';
+      'Run `triss config wizard deepseek` to set one, or export DEEPSEEK_API_KEY.';
     throw new Error(msg);
   }
   return cfg;

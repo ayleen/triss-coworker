@@ -163,9 +163,30 @@ node --test test/yourthing-*.test.js  # just yours
 
 ## Adding env vars to the user's `.env`
 
-`.env` files are auto-loaded from `~/.config/triss/.env` and the project
-root. Reference the new variables in your manifest's `envVars` and update
-`.env.example` so users see them in the template.
+Env files are auto-loaded from `~/.config/triss/.env` (global) and
+`<cwd>/.triss.env` (project-local override). **You do not need to teach
+users where to write keys** — declare your variables in the manifest's
+`envVars` array and they automatically appear in:
+
+- `triss config wizard` — interactive prompt for each one (masked if the
+  name contains `KEY`/`TOKEN`/`SECRET`/`PASS`, or you set `secret: true`).
+- `triss config wizard <name>` — wizard scoped to just your integration.
+- `triss status` — readiness badge plus a per-variable source tag
+  (`[global]` / `[local]` / `[env]`).
+- `triss config get/set/list` — share the same plumbing.
+
+Mirror your `envVars` block into `.env.example` for the documentation.
+
+```js
+envVars: [
+  { name: 'YOURTHING_TOKEN', required: true,  secret: true,
+    doc: 'Get it from https://example.com/settings/tokens' },
+  { name: 'YOURTHING_BASE',  required: false,
+    doc: 'Override endpoint (default https://api.example.com)' },
+],
+```
+
+`secret: true` forces masked input; otherwise the heuristic above kicks in.
 
 ## Submitting an integration
 

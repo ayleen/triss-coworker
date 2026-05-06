@@ -1,20 +1,30 @@
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
 import { listPresets } from '../models.js';
-import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
+import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
+import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 
 export async function runStatus() {
   const cfg = getConfig();
   const presets = listPresets();
   const integrations = await loadIntegrations();
+  const allManifests = [getCoreManifest(), ...integrations];
 
-  const mask = (k) => (k ? `${k.slice(0, 4)}…${k.slice(-4)}` : pc.red('(missing)'));
+  // Map var name → scope where it was found (project wins).
+  const varSource = new Map();
+  for (const f of activeEnvFiles()) {
+    if (!f.exists) continue;
+    const vars = readEnvFile(f.path).vars;
+    for (const k of Object.keys(vars)) {
+      if (!varSource.has(k)) varSource.set(k, f.scope);
+    }
+  }
 
   const lines = [
     pc.bold('Triss Coworker — status'),
     '',
     `  API base    : ${cfg.baseUrl}`,
-    `  API key     : ${mask(cfg.apiKey)}`,
+    `  API key     : ${cfg.apiKey ? maskValue(cfg.apiKey) : pc.red('(missing)')}`,
     `  Default     : ${cfg.defaultPreset}`,
     '',
     pc.bold('Model presets'),
@@ -25,28 +35,33 @@ export async function runStatus() {
   }
 
   lines.push('');
-  lines.push(pc.bold('Loaded .env files'));
-  lines.push(`  user    : ${cfg.envSources.userEnv ?? pc.dim('(none)')}`);
-  lines.push(`  project : ${cfg.envSources.projectEnv ?? pc.dim('(none)')}`);
+  lines.push(pc.bold('Env files'));
+  for (const f of activeEnvFiles()) {
+    const tag = f.exists ? pc.green('exists') : pc.dim('(missing)');
+    lines.push(`  ${f.scope.padEnd(8)} ${tag}  ${f.path}`);
+  }
 
   lines.push('');
-  lines.push(pc.bold('Integrations'));
-  if (!integrations.length) {
-    lines.push(pc.dim('  (none)'));
-  } else {
-    for (const m of integrations) {
-      const r = envReadiness(m);
-      const tag = r.ready ? pc.green('✓ ready') : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
-      lines.push(`  ${m.name.padEnd(10)} ${tag}`);
-      if (m.envVars?.length) {
-        for (const e of m.envVars) {
-          const present = process.env[e.name];
-          const marker = present ? pc.green('●') : e.required ? pc.red('○') : pc.dim('○');
-          const value = present ? mask(present) : pc.dim('(unset)');
-          lines.push(`     ${marker} ${e.name.padEnd(28)} ${value}`);
-        }
-      }
+  lines.push(pc.bold('Credentials & integrations'));
+  for (const m of allManifests) {
+    const r = envReadiness(m);
+    const tag = r.ready
+      ? pc.green('✓ ready')
+      : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
+    lines.push(`  ${m.name.padEnd(10)} ${tag}`);
+    for (const e of m.envVars || []) {
+      const present = process.env[e.name];
+      const source = varSource.get(e.name);
+      const sourceTag = source ? pc.dim(`[${source}]`) : present ? pc.dim('[env]') : pc.dim('[—]');
+      const marker = present ? pc.green('●') : e.required ? pc.red('○') : pc.dim('○');
+      const value = present ? maskValue(present) : pc.dim('(unset)');
+      lines.push(`     ${marker} ${e.name.padEnd(28)} ${value} ${sourceTag}`);
     }
+  }
+
+  if (!cfg.apiKey || allManifests.some((m) => !envReadiness(m).ready)) {
+    lines.push('');
+    lines.push(pc.dim('Tip: run ') + pc.cyan('triss config wizard') + pc.dim(' for an interactive setup.'));
   }
 
   process.stdout.write(lines.join('\n') + '\n');

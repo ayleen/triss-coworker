@@ -6,6 +6,15 @@ import { runWrite } from '../src/commands/write.js';
 import { runExtract } from '../src/commands/extract.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
+import {
+  runWizard,
+  runSet,
+  runGet,
+  runList,
+  runPath,
+  runEdit,
+  runUnset,
+} from '../src/commands/config.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 
 const program = new Command();
@@ -15,7 +24,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.2.0');
+  .version('0.3.0');
 
 program
   .command('init')
@@ -56,6 +65,60 @@ program
   .command('status')
   .description('Show current configuration: API key, models, .env sources')
   .action(wrap(runStatus));
+
+const config = program
+  .command('config')
+  .description('Manage credentials in ~/.config/triss/.env (global) or ./.triss.env (project)');
+
+config
+  .command('wizard [target]')
+  .description('Interactive setup. Optional target: deepseek | jira | linear | …')
+  .option('-g, --global', 'save to ~/.config/triss/.env (default if not asked)')
+  .option('-l, --local', 'save to ./.triss.env (project-local override)')
+  .option('-f, --force', 're-prompt for keys that are already set')
+  .action(wrap(runWizard));
+
+config
+  .command('set <KEY> [value]')
+  .description('Set a single variable. Without value, prompts (masked for *_KEY/_TOKEN). Use "-" to read from stdin.')
+  .option('-g, --global', 'save to global env file')
+  .option('-l, --local', 'save to project env file (./.triss.env)')
+  .action(wrap(runSet));
+
+config
+  .command('get <KEY>')
+  .description('Print the active value (masked for secrets)')
+  .option('-g, --global', 'check only the global file')
+  .option('-l, --local', 'check only the project file')
+  .action(wrap(runGet));
+
+config
+  .command('list')
+  .description('List variables from all (or one) env file')
+  .option('-g, --global', 'only the global file')
+  .option('-l, --local', 'only the project file')
+  .action(wrap(runList));
+
+config
+  .command('path')
+  .description('Print path(s) of triss env file(s)')
+  .option('-g, --global', 'only the global path')
+  .option('-l, --local', 'only the project path')
+  .action(wrap(runPath));
+
+config
+  .command('edit')
+  .description('Open the env file in $EDITOR ($VISUAL > $EDITOR > vi)')
+  .option('-g, --global', 'edit the global file')
+  .option('-l, --local', 'edit the project file')
+  .action(wrap(runEdit));
+
+config
+  .command('unset <KEY>')
+  .description('Remove a variable from an env file')
+  .option('-g, --global', 'global file')
+  .option('-l, --local', 'project file')
+  .action(wrap(runUnset));
 
 function wrap(fn) {
   return async (...args) => {

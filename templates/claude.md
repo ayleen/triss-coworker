@@ -82,3 +82,5 @@ yet exist. `triss <provider> --help` lists every subcommand.
 - When you need exact line numbers to make a precise Edit — read the file yourself.
 
 Run `triss status` to verify the worker and any integrations are configured.
+Missing credentials? Suggest `triss config wizard` (or `triss config wizard <target>`
+for a single provider; `--local` saves to `./.triss.env` for project-only keys).

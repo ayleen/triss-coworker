@@ -1,0 +1,225 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  appendFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import readline from 'node:readline';
+
+const GLOBAL_DIR = join(homedir(), '.config', 'triss');
+const GLOBAL_FILE = join(GLOBAL_DIR, '.env');
+const LOCAL_FILE_NAME = '.triss.env';
+
+export function getEnvFilePath(scope = 'global') {
+  if (scope === 'global') return GLOBAL_FILE;
+  if (scope === 'local') return join(process.cwd(), LOCAL_FILE_NAME);
+  throw new Error(`Unknown scope "${scope}" — use "global" or "local"`);
+}
+
+export function ensureEnvFile(scope = 'global') {
+  const path = getEnvFilePath(scope);
+  mkdirSync(dirname(path), { recursive: true });
+  if (!existsSync(path)) {
+    writeFileSync(path, '');
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      // best-effort; chmod may fail on Windows
+    }
+  }
+  return path;
+}
+
+// Returns the active set of env files in lookup order (highest precedence first).
+// process.env always wins over both. Project file overrides global.
+export function activeEnvFiles() {
+  const local = getEnvFilePath('local');
+  const global = getEnvFilePath('global');
+  return [
+    { scope: 'local', path: local, exists: existsSync(local) },
+    { scope: 'global', path: global, exists: existsSync(global) },
+  ];
+}
+
+export function readEnvFile(path) {
+  if (!existsSync(path)) return { vars: {}, lines: [] };
+  const raw = readFileSync(path, 'utf8');
+  const lines = raw.split('\n');
+  const vars = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/i);
+    if (!m) continue;
+    let value = m[2];
+    // Strip surrounding quotes (single or double).
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    vars[m[1]] = value;
+  }
+  return { vars, lines };
+}
+
+// Set or update a variable in the env file, preserving order of existing
+// lines (comments + unrelated keys stay put). New keys are appended.
+export function setVar(path, key, value) {
+  ensureEnvFile(path === getEnvFilePath('local') ? 'local' : 'global');
+  // If the path was passed verbatim and doesn't match either scope, just touch.
+  if (!existsSync(path)) writeFileSync(path, '');
+
+  const raw = readFileSync(path, 'utf8');
+  const lines = raw.split('\n');
+  const lineRe = new RegExp(`^\\s*${key}\\s*=`, 'i');
+  let replaced = false;
+  const formatted = formatLine(key, value);
+  const newLines = lines.map((line) => {
+    if (replaced) return line;
+    if (lineRe.test(line)) {
+      replaced = true;
+      return formatted;
+    }
+    return line;
+  });
+  if (!replaced) {
+    if (newLines.length && newLines[newLines.length - 1] !== '') newLines.push('');
+    newLines.push(formatted);
+    newLines.push('');
+  }
+  writeFileSync(path, newLines.join('\n'));
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function unsetVar(path, key) {
+  if (!existsSync(path)) return false;
+  const raw = readFileSync(path, 'utf8');
+  const lines = raw.split('\n');
+  const lineRe = new RegExp(`^\\s*${key}\\s*=`, 'i');
+  let removed = false;
+  const newLines = lines.filter((line) => {
+    if (!removed && lineRe.test(line)) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  if (removed) writeFileSync(path, newLines.join('\n'));
+  return removed;
+}
+
+function formatLine(key, value) {
+  const needsQuotes = /[\s"'#=]/.test(value) || value === '';
+  const escaped = needsQuotes ? `"${value.replace(/"/g, '\\"')}"` : value;
+  return `${key}=${escaped}`;
+}
+
+// Add a pattern to .gitignore in cwd, creating the file if needed.
+// Idempotent — does nothing if already present.
+export function addToGitignore(pattern) {
+  const path = join(process.cwd(), '.gitignore');
+  let lines = [];
+  if (existsSync(path)) {
+    lines = readFileSync(path, 'utf8').split('\n');
+    if (lines.some((l) => l.trim() === pattern)) return false;
+  }
+  appendFileSync(
+    path,
+    (lines.length && lines[lines.length - 1] !== '' ? '\n' : '') + pattern + '\n',
+  );
+  return true;
+}
+
+// ─── Interactive prompts ─────────────────────────────────────────────────────
+
+export function maskValue(v) {
+  if (!v) return '';
+  if (v.length <= 8) return '•'.repeat(v.length);
+  return v.slice(0, 4) + '…' + v.slice(-4);
+}
+
+export function prompt(question, { hidden = false, defaultValue } = {}) {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    const suffix = defaultValue ? ` [${hidden ? maskValue(defaultValue) : defaultValue}]` : '';
+    const fullQuestion = `${question}${suffix}: `;
+
+    if (!hidden) {
+      const rl = readline.createInterface({ input: stdin, output: stdout });
+      rl.question(fullQuestion, (answer) => {
+        rl.close();
+        resolve(answer.trim() || defaultValue || '');
+      });
+      return;
+    }
+
+    if (!stdin.isTTY) {
+      // Non-TTY (piped stdin): read until EOF, no masking possible.
+      let buf = '';
+      stdin.on('data', (d) => (buf += d.toString()));
+      stdin.on('end', () => resolve(buf.trim() || defaultValue || ''));
+      stdin.on('error', reject);
+      return;
+    }
+
+    stdout.write(fullQuestion);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    const CTRL_C = String.fromCharCode(3);
+    const BACKSPACE = String.fromCharCode(127);
+    let value = '';
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          finish();
+          return resolve(value || defaultValue || '');
+        }
+        if (ch === CTRL_C) {
+          finish();
+          return reject(new Error('cancelled'));
+        }
+        if (ch === BACKSPACE || ch === '') {
+          if (value.length) {
+            value = value.slice(0, -1);
+            stdout.write('\b \b');
+          }
+          continue;
+        }
+        // Ignore other control chars.
+        if (ch < ' ') continue;
+        value += ch;
+        stdout.write('•');
+      }
+    };
+    function finish() {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      stdout.write('\n');
+    }
+    stdin.on('data', onData);
+  });
+}
+
+export async function promptChoice(question, choices, { defaultIndex = 0 } = {}) {
+  const lines = [question];
+  choices.forEach((c, i) => {
+    const tag = i === defaultIndex ? ' (default)' : '';
+    lines.push(`  ${i + 1}) ${c.label}${tag}`);
+  });
+  process.stdout.write(lines.join('\n') + '\n');
+  const answer = await prompt('Choice', { defaultValue: String(defaultIndex + 1) });
+  const idx = parseInt(answer, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= choices.length) return choices[defaultIndex].value;
+  return choices[idx].value;
+}

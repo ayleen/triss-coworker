@@ -54,27 +54,35 @@ triss --help
 
 ## Configure
 
-You need a DeepSeek API key — get one at <https://platform.deepseek.com/>.
-
-Pick **one** of these:
-
 ```bash
-# 1. Shell profile (~/.zshrc, ~/.bashrc):
-export DEEPSEEK_API_KEY="sk-..."
-
-# 2. User-global env file:
-mkdir -p ~/.config/triss
-echo 'DEEPSEEK_API_KEY=sk-...' > ~/.config/triss/.env
-
-# 3. Per-project .env (in the project root):
-echo 'DEEPSEEK_API_KEY=sk-...' >> .env
+triss config wizard
 ```
 
-Verify:
+Interactive setup — masked prompts for every credential the installed
+integrations need (DeepSeek, Jira, Linear, …). No file editing required.
+
+Then verify:
 
 ```bash
 triss status
 ```
+
+### Per-project credentials
+
+Different orgs / Jira instances per project? `triss config wizard --local`
+saves to `<project>/.triss.env` instead of the global file. Project values
+override global values when you `cd` into that repo. The file is
+automatically `chmod 600`'d and added to `.gitignore`.
+
+### Updating one variable
+
+```bash
+triss config set DEEPSEEK_API_KEY            # masked prompt → global
+triss config set ATLASSIAN_API_TOKEN --local # masked prompt → ./.triss.env
+echo "$KEY" | triss config set LINEAR_API_KEY -   # from stdin (CI)
+```
+
+Full reference: [docs/configuration.md](docs/configuration.md).
 
 ## Wire it into a project
 
@@ -207,6 +215,7 @@ directory. Real `process.env` always wins.
 
 - [x] Claude Code support (`triss init`)
 - [x] Plugin-style integrations (`triss jira`, `triss linear`)
+- [x] Interactive credential management (`triss config wizard`, per-project overrides)
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)
