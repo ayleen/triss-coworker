@@ -33,6 +33,11 @@ export const CORE_MANIFEST = {
       required: false,
       doc: 'Override the "pro" preset model id',
     },
+    {
+      name: 'TRISS_DEFAULT_MODEL',
+      required: false,
+      doc: 'Default preset when no --model is passed: "flash" (cheap, default) or "pro"',
+    },
   ],
 };
 
