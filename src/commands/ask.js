@@ -2,24 +2,49 @@ import pc from 'picocolors';
 import { chat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
+import { fetchAsMarkdown } from '../web.js';
 
 const SYSTEM_PROMPT =
-  'You are a precise code/document analyst. Read the provided files and ' +
-  'answer the question concisely. Quote file paths and line numbers when ' +
-  'relevant. Output structured bullets, not prose. Keep your answer under ' +
-  '800 words unless asked otherwise.';
+  'You are a precise code/document analyst. Read the provided sources and ' +
+  'answer the question concisely. Quote file paths, line numbers, or URLs ' +
+  'when relevant. Output structured bullets, not prose. Keep your answer ' +
+  'under 800 words unless asked otherwise.';
 
 export async function runAsk(opts) {
-  const { paths, question, maxTokens, model: modelInput, system } = opts;
-  if (!paths?.length) throw new Error('--paths is required (one or more files or globs)');
+  const { paths, urls, question, maxTokens, model: modelInput, system } = opts;
   if (!question) throw new Error('--question is required');
+  if (!paths?.length && !urls?.length) {
+    throw new Error('Pass at least one of --paths or --urls');
+  }
 
   const model = resolveModel(modelInput);
-  const expanded = expandPaths(paths);
-  const { corpus, totalBytes, fileCount } = readFilesAsCorpus(expanded);
+
+  let corpus = '';
+  let fileCount = 0;
+  let totalBytes = 0;
+
+  if (paths?.length) {
+    const expanded = expandPaths(paths);
+    const fileResult = readFilesAsCorpus(expanded);
+    corpus += fileResult.corpus;
+    fileCount += fileResult.fileCount;
+    totalBytes += fileResult.totalBytes;
+  }
+
+  if (urls?.length) {
+    const parts = [];
+    for (const u of urls) {
+      process.stderr.write(pc.dim(`[triss/ask] GET ${u}\n`));
+      const { url, markdown, contentType } = await fetchAsMarkdown(u);
+      parts.push(`<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`);
+      totalBytes += markdown.length;
+    }
+    if (parts.length) corpus += (corpus ? '\n\n' : '') + parts.join('\n\n');
+    fileCount += urls.length;
+  }
 
   process.stderr.write(
-    pc.dim(`[triss/ask] model=${model} files=${fileCount} bytes=${totalBytes}\n`),
+    pc.dim(`[triss/ask] model=${model} sources=${fileCount} bytes=${totalBytes}\n`),
   );
 
   const resp = await chat({

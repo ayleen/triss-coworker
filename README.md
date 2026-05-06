@@ -114,11 +114,13 @@ and writing**.
 
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
-| `triss ask`     | Reads many files, returns a structured summary        | The agent reading files itself      |
+| `triss ask`     | Reads many files (and/or URLs), returns a summary     | The agent reading files itself      |
 | `triss write`   | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
 | `triss extract` | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
+| `triss fetch`   | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
 | `triss init`    | Drops a delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules        |
 | `triss status`  | Shows current model + key + .env sources              | —                                   |
+| `triss config`  | Interactive credential management                     | Manual `.env` editing               |
 
 ### `triss ask`
 
@@ -144,6 +146,26 @@ triss write --spec "Pytest tests for auth.py covering OAuth2 happy path" \
 ```bash
 triss extract ~/.claude/projects/my-project/session.jsonl -o /tmp/chat.txt
 ```
+
+### `triss fetch` / `triss ask --urls`
+
+```bash
+# Just clean markdown
+triss fetch https://api-docs.example.com/
+
+# Fetch + summarise via DeepSeek
+triss fetch https://blog.example.com/long-post --question "key takeaways?"
+
+# Mix URLs with files (or several URLs together)
+triss ask --urls https://spec.example.com/v2 https://spec.example.com/v3 \
+          --paths README.md \
+          --question "what's missing from README that's in the spec?"
+```
+
+HTML is stripped of `<script>`, `<style>`, `<nav>`, `<aside>`, `<footer>`,
+forms, and SVG; `<main>` / `<article>` are preferred when present;
+non-HTML responses (JSON, plain text) are returned verbatim. 30-second
+default timeout, configurable via `--timeout <ms>`.
 
 ## Integrations
 
@@ -234,6 +256,7 @@ directory. Real `process.env` always wins.
 - [x] Claude Code support (`triss init`)
 - [x] Plugin-style integrations (`triss jira`, `triss linear`)
 - [x] Interactive credential management (`triss config wizard`, per-project overrides)
+- [x] Web fetching (`triss fetch`, `triss ask --urls`)
 - [ ] Codex / `AGENTS.md` support (template stub already in place)
 - [ ] Confluence integration (`triss confluence`)
 - [ ] GitHub Issues integration (recipe in `docs/extending.md`)

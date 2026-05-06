@@ -36,6 +36,24 @@ Pull a human-readable transcript out of Claude Code JSONL session logs.
 triss extract ~/.claude/projects/<project>/<session>.jsonl -o /tmp/chat.txt
 ```
 
+### `triss fetch` / `triss ask --urls` — web pages
+**Prefer this over the WebFetch tool when the page might be large.** Triss
+converts the HTML to readable markdown and (with `--question`) returns a
+DeepSeek summary instead of dumping the whole page into context.
+
+```bash
+# Just markdown, no LLM
+triss fetch https://api-docs.example.com/changelog
+
+# Markdown + summary
+triss fetch https://blog.example.com/post --question "what's the takeaway?"
+
+# Mix URLs with local files
+triss ask --urls https://spec.example.com/v2 \
+          --paths README.md \
+          --question "what's missing from README that's in the spec?"
+```
+
 ### Documentation workflow (preferred)
 **Do not write documentation from scratch in-context. Delegate the read.**
 

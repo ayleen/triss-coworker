@@ -13,6 +13,7 @@ import pc from 'picocolors';
 import { runAsk } from '../src/commands/ask.js';
 import { runWrite } from '../src/commands/write.js';
 import { runExtract } from '../src/commands/extract.js';
+import { runFetch } from '../src/commands/fetch.js';
 import { runInit } from '../src/commands/init.js';
 import { runStatus } from '../src/commands/status.js';
 import {
@@ -33,7 +34,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.4.0');
+  .version('0.5.0');
 
 program
   .command('init')
@@ -46,8 +47,9 @@ program
 
 program
   .command('ask')
-  .description('Delegate bulk reading to DeepSeek; returns a structured summary')
-  .requiredOption('-p, --paths <paths...>', 'files or globs to read')
+  .description('Delegate bulk reading (files and/or web pages) to DeepSeek; returns a structured summary')
+  .option('-p, --paths <paths...>', 'files or globs to read')
+  .option('-u, --urls <urls...>', 'http(s) URLs to fetch and convert to markdown')
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
@@ -70,6 +72,17 @@ program
   .argument('<jsonl>', 'path to a .jsonl session file')
   .option('-o, --output <path>', 'write to file instead of stdout')
   .action((jsonl, opts) => wrap(runExtract)({ jsonl, ...opts }));
+
+program
+  .command('fetch')
+  .description('Fetch URL(s) and return readable markdown; --question summarises via DeepSeek')
+  .argument('<urls...>', 'one or more http(s) URLs')
+  .option('-q, --question <text>', 'have DeepSeek summarise the fetched corpus')
+  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
+  .option('--max-tokens <n>', 'token budget for the summary')
+  .option('--timeout <ms>', 'per-request timeout in ms (default 30000)')
+  .option('--json', 'output JSON array of {url, markdown}')
+  .action((urls, opts) => wrap(runFetch)(urls, opts));
 
 program
   .command('status')
