@@ -37,21 +37,33 @@ triss extract ~/.claude/projects/<project>/<session>.jsonl -o /tmp/chat.txt
 ```
 
 ### `triss fetch` / `triss ask --urls` — web pages
-**Prefer this over the WebFetch tool when the page might be large.** Triss
-converts the HTML to readable markdown and (with `--question`) returns a
-DeepSeek summary instead of dumping the whole page into context.
+**Default to Triss for any web read. Use the built-in WebFetch tool only
+for the narrow case where you genuinely need raw markup** — e.g. extracting
+an exact regex/CSS-selector hit, copying a precise JSON shape, or you've
+already loaded the same URL in this session.
+
+You cannot tell whether a page is "short" until you've fetched it. Treat
+that as a non-decision: the rule is *who pays for the bytes*.
+
+| You want…                                | Use            | Why                                          |
+| ---------------------------------------- | -------------- | -------------------------------------------- |
+| Answer to a question about the page      | `triss fetch --question "…"` | DeepSeek pays for the body; you get ~300 tokens back |
+| Compare a page against local files       | `triss ask --urls … --paths …` | One round-trip, mixed corpus       |
+| Clean markdown on disk                   | `triss fetch <url> > /tmp/x.md` | No LLM at all                     |
+| Exact raw HTML / unprocessed text        | WebFetch       | Triss strips noise; you'd lose what you need |
+| Page already cached in this session      | WebFetch       | Re-fetching is wasted latency                |
 
 ```bash
-# Just markdown, no LLM
-triss fetch https://api-docs.example.com/changelog
-
-# Markdown + summary
+# Default path — answer about the page
 triss fetch https://blog.example.com/post --question "what's the takeaway?"
 
-# Mix URLs with local files
+# Multi-URL corpus, mixed with local files
 triss ask --urls https://spec.example.com/v2 \
           --paths README.md \
           --question "what's missing from README that's in the spec?"
+
+# Just markdown, no LLM
+triss fetch https://api-docs.example.com/changelog
 ```
 
 ### Documentation workflow (preferred)
