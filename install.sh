@@ -14,8 +14,20 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+NODE_MAJOR="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
+if [ "${NODE_MAJOR}" -lt 18 ]; then
+  echo "✗ Node.js ${NODE_MAJOR} is too old. Triss requires Node.js >= 18." >&2
+  echo "  Upgrade via nvm/fnm, or download from https://nodejs.org/." >&2
+  exit 1
+fi
+
 if ! command -v git >/dev/null 2>&1; then
   echo "✗ git is required." >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "✗ npm is required (it normally ships with Node.js)." >&2
   exit 1
 fi
 

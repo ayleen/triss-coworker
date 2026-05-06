@@ -128,5 +128,10 @@ command from that directory.
 **Switching organisations / Jira instances** — drop a `.triss.env` in the
 project root with the project-specific keys; nothing else needs to change.
 
+**Enabled an integration after `triss init`** — the agent's CLAUDE.md is
+re-rendered on every `triss init`, including only integrations whose
+required env vars are set. Run `triss init` again and your new
+integration's delegation rules will appear in the file.
+
 **CI** — set the variables as environment variables directly. `process.env`
 wins over both files.

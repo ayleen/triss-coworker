@@ -12,6 +12,7 @@ import {
   promptChoice,
   maskValue,
   addToGitignore,
+  readStdin,
 } from '../secrets.js';
 import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
 
@@ -60,7 +61,8 @@ function isSecretKey(name) {
 
 export async function runWizard(target, opts) {
   const manifests = await listManifests();
-  const targets = target ? [findManifest(target, manifests)] : manifests;
+  const explicit = !!target;
+  const targets = explicit ? [findManifest(target, manifests)] : manifests;
 
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope();
@@ -71,6 +73,25 @@ export async function runWizard(target, opts) {
 
   for (const m of targets) {
     if (!m.envVars?.length) continue;
+
+    // For the full wizard (no explicit target), ask before stepping into
+    // each non-core integration — most users only need a subset.
+    if (!explicit && !m.isCore) {
+      const readyAlready = m.envVars
+        .filter((v) => v.required)
+        .every((v) => current[v.name]);
+      const verb = readyAlready ? 'Re-enter' : 'Configure';
+      const defaultYes = false;
+      const want = await yesNo(
+        `\n${verb} ${pc.bold(m.name)}? ${pc.dim(m.description || '')}`,
+        defaultYes,
+      );
+      if (!want) {
+        process.stdout.write(pc.dim(`  · skipped\n`));
+        continue;
+      }
+    }
+
     process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
     if (m.description) process.stdout.write(pc.dim(m.description + '\n'));
 
@@ -138,7 +159,7 @@ export async function runSet(key, value, opts) {
 
   let resolved = value;
   if (resolved === '-') {
-    resolved = await prompt('', { hidden: false });
+    resolved = await readStdin();
   }
   if (resolved == null) {
     resolved = await prompt(key, { hidden: isSecretKey(key) });

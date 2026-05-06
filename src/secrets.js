@@ -146,6 +146,18 @@ export function maskValue(v) {
   return v.slice(0, 4) + '…' + v.slice(-4);
 }
 
+export function readStdin() {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    let buf = '';
+    stdin.setEncoding('utf8');
+    stdin.on('data', (d) => (buf += d));
+    stdin.on('end', () => resolve(buf.trim()));
+    stdin.on('error', reject);
+    stdin.resume();
+  });
+}
+
 export function prompt(question, { hidden = false, defaultValue } = {}) {
   return new Promise((resolve, reject) => {
     const stdin = process.stdin;
@@ -153,21 +165,19 @@ export function prompt(question, { hidden = false, defaultValue } = {}) {
     const suffix = defaultValue ? ` [${hidden ? maskValue(defaultValue) : defaultValue}]` : '';
     const fullQuestion = `${question}${suffix}: `;
 
+    // Non-interactive shell (CI / pipe / no TTY): never block. Use
+    // readStdin() explicitly when you actually want piped input.
+    if (!stdin.isTTY) {
+      resolve(defaultValue || '');
+      return;
+    }
+
     if (!hidden) {
       const rl = readline.createInterface({ input: stdin, output: stdout });
       rl.question(fullQuestion, (answer) => {
         rl.close();
         resolve(answer.trim() || defaultValue || '');
       });
-      return;
-    }
-
-    if (!stdin.isTTY) {
-      // Non-TTY (piped stdin): read until EOF, no masking possible.
-      let buf = '';
-      stdin.on('data', (d) => (buf += d.toString()));
-      stdin.on('end', () => resolve(buf.trim() || defaultValue || ''));
-      stdin.on('error', reject);
       return;
     }
 

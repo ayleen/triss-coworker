@@ -28,3 +28,5 @@ architectural decisions, hard debugging, or edits that need exact line numbers.
 Default preset is `flash` (cheap). Use `--model pro` for harder analysis,
 or pass any model id directly. Preset names are overridable via env:
 `DEEPSEEK_FLASH_MODEL`, `DEEPSEEK_PRO_MODEL`.
+
+{{INTEGRATIONS}}

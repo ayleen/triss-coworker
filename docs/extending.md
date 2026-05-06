@@ -41,12 +41,40 @@ export default {
     { name: 'YOURTHING_TOKEN', required: true,  doc: 'Where to get it' },
     { name: 'YOURTHING_BASE',  required: false, doc: 'Override endpoint' },
   ],
+
+  // Optional: markdown the agent should see when this integration is
+  // configured. Triss splices these snippets into CLAUDE.md / AGENTS.md
+  // at `triss init` time, but ONLY if all required envVars are present —
+  // so users who don't use your provider never see it in their agent's
+  // instructions. Snippets are also re-rendered on every `triss init`,
+  // so when the user later enables your integration via
+  // `triss config wizard yourthing`, they just re-run `triss init` to
+  // pick up the new section.
+  agentInstructions: {
+    claude: '### `triss yourthing` …\n```bash\ntriss yourthing search "..."\n```\n',
+    codex:  '### `triss yourthing` …\n…',
+  },
 };
 ```
 
 `triss status` will list your integration with a ready/missing badge based
 on `envVars`. `wrap(fn)` (passed by the loader) catches thrown errors and
 prints them as a red `✗` line — your action handlers should just throw.
+
+### Wiring into the agent's instructions
+
+The default templates (`templates/claude.md`, `templates/codex.md`) contain
+a `{{INTEGRATIONS}}` placeholder. At `triss init` time Triss:
+
+1. Loads every integration manifest.
+2. Filters to the ones whose required `envVars` are all set.
+3. Concatenates each filtered manifest's `agentInstructions[target]` and
+   substitutes the result into the placeholder.
+
+Result: agents get a focused, project-specific delegation guide — no
+mentions of providers the user hasn't configured. If a user later runs
+`triss config wizard yourthing` and adds their token, a follow-up
+`triss init` automatically adds your section to their CLAUDE.md.
 
 ## What `_contract.js` gives you
 
@@ -132,11 +160,24 @@ export default {
         printResult('✓ Comment posted');
       }));
   },
+  agentInstructions: {
+    claude: `### \`triss github\` — GitHub Issues
+Use instead of letting the agent itself paginate through issues.
+
+\`\`\`bash
+triss github search "<query>" --question "<q>"
+triss github issue owner/repo 42 --question "<q>"
+triss github create owner/repo --title "..." --body "..."
+triss github comment owner/repo 42 --body "..."
+\`\`\`
+`,
+  },
 };
 ```
 
-Save the file, run `triss --help`, and `github` shows up. No other code
-changes required.
+Save the file, run `triss --help`, and `github` shows up. After
+`triss config wizard github` (which prompts for `GITHUB_TOKEN`), the next
+`triss init` adds your section to the user's CLAUDE.md automatically.
 
 ## Conventions
 
@@ -191,7 +232,9 @@ envVars: [
 ## Submitting an integration
 
 1. Implement the integration + tests.
-2. Add a one-page reference in `docs/integrations/<name>.md` (env vars,
+2. Add `agentInstructions` to the manifest so users who configure your
+   provider get an extra section in their CLAUDE.md / AGENTS.md.
+3. Add a one-page reference in `docs/integrations/<name>.md` (env vars,
    special quirks, example command lines).
-3. Mention the integration in the README's *Integrations* table.
-4. Open a PR — the CI runs `npm test`.
+4. Mention the integration in the README's *Integrations* table.
+5. Open a PR — the CI runs `npm test`.

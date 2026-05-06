@@ -23,6 +23,16 @@ context. Adding a new provider (GitHub Issues, Notion, …) takes one folder
 
 ---
 
+## Requirements
+
+- **Node.js ≥ 18** (LTS recommended). Check with `node --version`.
+  - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
+- **npm** (ships with Node.js) — used for the `npm install -g` path.
+- **git** — used by the bash one-liner installer to clone the repo.
+- A **DeepSeek API key** (free tier works) for the worker model: <https://platform.deepseek.com/>.
+
+Triss has no other runtime dependencies.
+
 ## Install
 
 ### Option A — npm (recommended)
@@ -155,6 +165,12 @@ Two design rules:
 `triss status` shows each integration's env-var readiness so you know what
 still needs configuring.
 
+`triss init` injects per-integration delegation rules into your
+`CLAUDE.md` / `AGENTS.md` **only for integrations whose credentials are
+present**. Add a Linear key later? Run `triss config wizard linear` then
+`triss init` again — the new section appears automatically. Users who
+never use Jira never see Jira instructions in their agent's prompt.
+
 ### Adding your own integration
 
 The plugin contract is one folder + one file. A working **GitHub Issues**
@@ -162,12 +178,14 @@ integration in ~80 lines is documented end-to-end in
 [**docs/extending.md**](docs/extending.md). High-level recipe:
 
 1. Create `src/integrations/<name>/index.js`.
-2. `export default { name, description, envVars, register(program, { wrap }) {} }`.
+2. `export default { name, description, envVars, register(program, { wrap }) {}, agentInstructions: { claude, codex } }`.
 3. Use the helpers in `src/integrations/_contract.js`
    (`httpJson`, `requireEnv`, `summarize`, `printResult`,
    `IntegrationError`).
 4. Drop tests in `test/<name>-*.test.js` (mock `globalThis.fetch`).
-5. Run `triss --help` — your subcommand appears automatically.
+5. Run `triss --help` — your subcommand appears automatically. The
+   wizard, `triss status`, and `triss init` (CLAUDE.md generation) all
+   pick up the new manifest with no further wiring.
 
 ## Models
 

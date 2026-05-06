@@ -1,4 +1,13 @@
 #!/usr/bin/env node
+const [nodeMajor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 18) {
+  process.stderr.write(
+    `triss requires Node.js >= 18 (you are on ${process.versions.node}).\n` +
+      `Upgrade via nvm/fnm or https://nodejs.org/.\n`,
+  );
+  process.exit(1);
+}
+
 import { Command } from 'commander';
 import pc from 'picocolors';
 import { runAsk } from '../src/commands/ask.js';
@@ -24,7 +33,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.3.0');
+  .version('0.4.0');
 
 program
   .command('init')
@@ -32,6 +41,7 @@ program
   .option('-g, --global', 'install into ~/.claude/CLAUDE.md instead of the current project')
   .option('-t, --target <agent>', 'target agent (claude | codex)', 'claude')
   .option('-f, --force', 'force-replace an existing triss block without diffing')
+  .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
   .action(wrap(runInit));
 
 program

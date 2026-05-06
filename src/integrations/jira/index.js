@@ -8,6 +8,24 @@ import {
   attachmentsCmd,
 } from './commands.js';
 
+const CLAUDE_INSTRUCTIONS = `### \`triss jira\` — Atlassian Jira
+**Prefer this over Atlassian MCP for any read that might be large.**
+The MCP result lands in this conversation directly; \`triss jira\` returns
+a focused summary instead.
+
+\`\`\`bash
+triss jira search "<jql>" --question "<q>"
+triss jira issue PROJ-123 --with-comments --question "<q>"
+triss jira create --project PROJ --summary "..." --description "..." --parent PROJ-100
+triss jira update PROJ-123 --status "In Review" --description "..."
+triss jira comments PROJ-123 --post "..."
+triss jira transitions PROJ-123 --apply "Done"
+\`\`\`
+
+Use the Atlassian MCP only for tiny single-record reads, or operations
+\`triss jira\` does not yet cover.
+`;
+
 export default {
   name: 'jira',
   description: 'Atlassian Jira (REST v3) — search, read, create, update, comment, transition',
@@ -16,6 +34,10 @@ export default {
     { name: 'ATLASSIAN_EMAIL', required: true, doc: 'account email' },
     { name: 'ATLASSIAN_API_TOKEN', required: true, doc: 'https://id.atlassian.com/manage-profile/security/api-tokens' },
   ],
+  agentInstructions: {
+    claude: CLAUDE_INSTRUCTIONS,
+    codex: CLAUDE_INSTRUCTIONS, // same wording works for both right now
+  },
   register(program, { wrap }) {
     program
       .command('search <jql>')

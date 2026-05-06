@@ -8,6 +8,23 @@ import {
   attachmentsCmd,
 } from './commands.js';
 
+const CLAUDE_INSTRUCTIONS = `### \`triss linear\` — Linear
+**Prefer this over a Linear MCP for any read that might be large** — the
+worker returns a distilled summary instead of dumping the full GraphQL
+response into context.
+
+\`\`\`bash
+triss linear search "..." --question "<q>"
+triss linear issue ENG-42 --with-comments --question "<q>"
+triss linear create --team ENG --title "..." --description "..." --parent ENG-100
+triss linear update ENG-42 --state "In Review" --description "..."
+triss linear comments ENG-42 --post "..."
+triss linear states ENG --apply "In Progress" --issue ENG-42
+\`\`\`
+
+\`--project\` links to a Linear Project; \`--parent\` makes a sub-issue.
+`;
+
 export default {
   name: 'linear',
   description: 'Linear (GraphQL) — search, read, create, update, comment, transition',
@@ -15,6 +32,10 @@ export default {
     { name: 'LINEAR_API_KEY', required: true, doc: 'Personal API key (lin_api_…) from https://linear.app/settings/api' },
     { name: 'LINEAR_API_URL', required: false, doc: 'Override endpoint (default https://api.linear.app/graphql)' },
   ],
+  agentInstructions: {
+    claude: CLAUDE_INSTRUCTIONS,
+    codex: CLAUDE_INSTRUCTIONS,
+  },
   register(program, { wrap }) {
     program
       .command('search <term>')
