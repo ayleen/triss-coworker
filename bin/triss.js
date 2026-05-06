@@ -45,7 +45,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.11.0');
+  .version('0.11.1');
 
 program
   .command('init')

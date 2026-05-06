@@ -2,12 +2,12 @@ import OpenAI from 'openai';
 import { getConfig, requireApiKey } from './config.js';
 import { logUsage } from './usage.js';
 
-let cached = null;
+// Recreate the OpenAI client per call so a long-lived MCP server picks
+// up `triss config set DEEPSEEK_API_KEY` changes mid-session. Constructing
+// the client is microseconds — no observable overhead next to a model RTT.
 export function getClient() {
-  if (cached) return cached;
   const cfg = requireApiKey(getConfig());
-  cached = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
-  return cached;
+  return new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
 }
 
 function recordUsage(resp, label) {

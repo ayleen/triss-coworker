@@ -6,11 +6,16 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { listTools, findTool, toMcpToolList } from './tools.js';
 import { getConfig } from '../config.js';
+import { setRestricted } from '../safety.js';
 
 export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
   // Loads .env files (project-local first, then global) into process.env
   // so listTools() can see integration credentials before any tool call.
   getConfig();
+  // Sandbox path access to the cwd subtree by default. CLI usage is not
+  // affected — only this MCP-server entry point. An operator can opt
+  // out by exporting TRISS_RESTRICT_PATHS=0 before starting the server.
+  if (process.env.TRISS_RESTRICT_PATHS === undefined) setRestricted(true);
 
   const server = new Server(
     { name, version },

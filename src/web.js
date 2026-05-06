@@ -5,6 +5,14 @@ import { IntegrationError } from './integrations/_contract.js';
 const DEFAULT_UA =
   'triss-coworker/0.5 (+https://github.com/ayleen/triss-coworker)';
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+function maxBytes() {
+  const raw = process.env.TRISS_FETCH_MAX_BYTES;
+  if (!raw) return DEFAULT_MAX_BYTES;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BYTES;
+}
 
 // Tags that almost always carry layout/UI noise rather than article body.
 const STRIP_SELECTORS = [
@@ -33,7 +41,42 @@ export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = 
       redirect: 'follow',
       headers: { 'User-Agent': DEFAULT_UA, Accept: 'text/html,application/xhtml+xml,*/*', ...headers },
     });
-    const text = await res.text();
+    // Streamed read with a hard ceiling so a malicious or accidental
+    // multi-gigabyte response can't OOM the process.
+    const limit = maxBytes();
+    const reader = res.body?.getReader?.();
+    let text = '';
+    if (!reader) {
+      text = await res.text();
+      if (text.length > limit) {
+        throw new IntegrationError(
+          `Response too large: ${text.length} bytes > ${limit} cap. ` +
+            'Set TRISS_FETCH_MAX_BYTES to override.',
+        );
+      }
+    } else {
+      const decoder = new TextDecoder('utf-8', { fatal: false });
+      let received = 0;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > limit) {
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore */
+          }
+          throw new IntegrationError(
+            `Response exceeds ${limit} bytes (TRISS_FETCH_MAX_BYTES override available). Aborted at ${received} bytes.`,
+          );
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    }
+
     if (!res.ok) {
       throw new IntegrationError(
         `HTTP ${res.status} ${res.statusText} on GET ${url}`,

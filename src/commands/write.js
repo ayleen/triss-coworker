@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import pc from 'picocolors';
 import { chat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
+import { assertSafePath } from '../safety.js';
 
 const SYSTEM_PROMPT =
   'Generate clean, idiomatic code matching the style of any reference ' +
@@ -13,6 +14,9 @@ export async function runWrite(opts) {
   const { spec, context, target, maxTokens, model: modelInput } = opts;
   if (!spec) throw new Error('--spec is required');
   if (!target) throw new Error('--target is required');
+
+  assertSafePath(target, { kind: 'write' });
+  if (context) assertSafePath(context, { kind: 'read' });
 
   const model = resolveModel(modelInput);
   const ctx = context ? `<reference path='${context}'>\n${readFileSync(context, 'utf8')}\n</reference>\n` : '';

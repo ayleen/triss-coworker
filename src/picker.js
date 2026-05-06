@@ -122,11 +122,14 @@ function rawMultiSelect(items, title) {
     }
 
     function finish() {
-      stdout.write(`[${drawn}B`); // jump past the rendered list
-      stdout.write('[J\n');
+      // Move past the rendered list, clear from cursor to end of screen,
+      // then drop a clean newline. Without the clear, terminals can leave a
+      // half-painted last line on Ctrl+C.
+      stdout.write(`[${drawn}B`);
+      stdout.write("[2K[J\n");
       stdin.setRawMode(false);
       stdin.pause();
-      stdin.removeListener('data', onData);
+      stdin.removeListener("data", onData);
     }
 
     stdin.on('data', onData);

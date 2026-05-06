@@ -1,8 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import pc from 'picocolors';
+import { assertSafePath } from '../safety.js';
 
 export function runExtract({ jsonl, output }) {
   if (!jsonl) throw new Error('JSONL path is required');
+  assertSafePath(jsonl, { kind: 'read' });
+  if (output) assertSafePath(output, { kind: 'write' });
   const text = extract(jsonl);
   if (output) {
     writeFileSync(output, text);

@@ -20,6 +20,8 @@ export function getEnvFilePath(scope = 'global') {
   throw new Error(`Unknown scope "${scope}" — use "global" or "local"`);
 }
 
+let warnedAboutWindows = false;
+
 export function ensureEnvFile(scope = 'global') {
   const path = getEnvFilePath(scope);
   mkdirSync(dirname(path), { recursive: true });
@@ -29,6 +31,17 @@ export function ensureEnvFile(scope = 'global') {
       chmodSync(path, 0o600);
     } catch {
       // best-effort; chmod may fail on Windows
+    }
+    if (process.platform === 'win32' && !warnedAboutWindows) {
+      warnedAboutWindows = true;
+      process.stderr.write(
+        '⚠ Triss stores secrets at ' +
+          path +
+          ' as plain text.\n' +
+          '  POSIX permissions (chmod 600) do not apply on Windows — the file may be\n' +
+          '  readable by other accounts on this machine. For stronger protection,\n' +
+          '  export the variables from a Windows Credential Manager entry instead.\n',
+      );
     }
   }
   return path;
