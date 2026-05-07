@@ -74,7 +74,7 @@ export async function assertPublicUrl(url) {
   try {
     records = await lookup(host, { all: true });
   } catch (err) {
-    throw new Error(`DNS lookup failed for ${host}: ${err.message}`);
+    throw new Error(`DNS lookup failed for ${host}: ${err.message}`, { cause: err });
   }
   for (const r of records) {
     const priv = r.family === 6 ? isPrivateIPv6(r.address) : isPrivateIPv4(r.address);

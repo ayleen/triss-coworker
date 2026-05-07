@@ -1,4 +1,4 @@
-import { globSync, statSync, readFileSync, openSync, readSync, closeSync } from 'node:fs';
+import { globSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { assertSafePath } from './safety.js';
 

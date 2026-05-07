@@ -132,7 +132,6 @@ test('installEntry rejects malformed config files', () => {
 // ─── Codex (TOML) ────────────────────────────────────────────────────────────
 
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 
 function withTmpHome(fn) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-codex-home-')));

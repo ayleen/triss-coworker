@@ -17,9 +17,7 @@ import assert from 'node:assert/strict';
 import {
   mkdtempSync,
   writeFileSync,
-  mkdirSync,
   rmSync,
-  existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

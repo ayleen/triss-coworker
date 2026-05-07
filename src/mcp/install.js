@@ -51,7 +51,7 @@ function readJson(path) {
   try {
     return JSON.parse(raw);
   } catch (err) {
-    throw new Error(`${path} is not valid JSON: ${err.message}`);
+    throw new Error(`${path} is not valid JSON: ${err.message}`, { cause: err });
   }
 }
 

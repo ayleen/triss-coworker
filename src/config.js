@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { activeEnvFiles } from './secrets.js';
 

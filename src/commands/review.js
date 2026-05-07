@@ -35,11 +35,11 @@ const DEFAULT_QUESTION =
 export async function runReview(prNumber, opts) {
   const model = resolveModel(opts.model || 'pro');
 
-  let title = '';
+  let title;
   let description = '';
-  let diff = '';
+  let diff;
   let baseRef = opts.base;
-  let headRef = 'HEAD';
+  let headRef;
   let urlNote = '';
 
   if (prNumber) {

@@ -20,22 +20,23 @@ Requirements:
 - npm, which ships with Node.js.
 - A DeepSeek-compatible API key if you want to run model-backed commands.
 
-## Test
+## Test and lint
 
 ```bash
-npm test
+npm run lint     # ESLint flat config, eslint:recommended
+npm test         # node --test test/*.test.js
 ```
 
-The test script runs:
-
-```bash
-node --test test/*.test.js
-```
+CI runs both on every pull request (Node 22 + 24 matrix).
 
 Tests should not call live external services. Mock `globalThis.fetch` for
 integration clients. For `src/web.js` tests, set
 `TRISS_ALLOW_PRIVATE_NETWORKS=1` in the test process if the SSRF DNS guard
 would otherwise make the test depend on the local network.
+
+`npm run lint:fix` auto-fixes what it can. Lint config lives in
+`eslint.config.js` — minimal flat config, no Prettier, no pre-commit
+hooks (CI catches violations).
 
 ## Project shape
 
@@ -78,7 +79,7 @@ the relevant docs in the same PR:
 
 Before opening a PR:
 
-- Run `npm test`.
+- Run `npm run lint && npm test`.
 - Keep changes focused.
 - Include docs updates for user-visible behaviour.
 - Mention any security-sensitive path, URL-fetching, credential, or MCP change

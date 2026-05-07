@@ -28,61 +28,6 @@ const WORKER_VARS = ['TRISS_WORKER_API_KEY'];
 const ATLASSIAN_VARS = ['ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'];
 const GITHUB_VARS = ['GITHUB_TOKEN'];
 
-/**
- * Build a minimal OpenAI-style SSE fetch mock that returns a single
- * chat completion (non-streaming) with `content` as the assistant reply.
- */
-function mockDeepseekFetch(content) {
-  const resp = {
-    id: 'chatcmpl-test',
-    object: 'chat.completion',
-    model: 'deepseek-v4-flash',
-    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 0 } },
-  };
-  globalThis.fetch = async (_url, _init) =>
-    new Response(JSON.stringify(resp), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-}
-
-/**
- * Build a globalThis.fetch mock that delegates the first call (integration
- * API) to `apiHandler` and any subsequent call (DeepSeek) to a fixed
- * completion with `aiContent`.
- */
-function mockFetchWithAI(apiHandler, aiContent) {
-  let callCount = 0;
-  globalThis.fetch = async (url, init = {}) => {
-    callCount += 1;
-    if (callCount === 1) {
-      // First call is the integration endpoint
-      const result = await apiHandler(url, init);
-      const body = typeof result.body === 'string' ? result.body : JSON.stringify(result.body);
-      return {
-        ok: (result.status ?? 200) < 400,
-        status: result.status ?? 200,
-        statusText: result.statusText ?? 'OK',
-        text: async () => body,
-        json: async () => result.body,
-      };
-    }
-    // Subsequent calls go to DeepSeek
-    const resp = {
-      id: 'chatcmpl-ai',
-      object: 'chat.completion',
-      model: 'deepseek-v4-flash',
-      choices: [{ index: 0, message: { role: 'assistant', content: aiContent }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 20, completion_tokens: 8, prompt_tokens_details: { cached_tokens: 0 } },
-    };
-    return new Response(JSON.stringify(resp), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  };
-}
-
 // ─── MCP-H-01: chatHandler returns text from a mocked chat() ────────────────
 
 test('MCP-H-02: askHandler throws "Pass at least one of paths or urls" when neither is supplied', async () => {
@@ -228,7 +173,7 @@ test('MCP-H-06: githubIssueHandler uses explicit repo arg instead of detectRepo'
 
   const capturedUrls = [];
 
-  globalThis.fetch = async (url, init = {}) => {
+  globalThis.fetch = async (url, _init = {}) => {
     capturedUrls.push(String(url));
     return {
       ok: true,

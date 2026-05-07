@@ -19,7 +19,7 @@ import {
   readFileSync,
   existsSync,
 } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -27,17 +27,6 @@ import { join } from 'node:path';
 function makeTmpHome() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-wiz-')));
   return dir;
-}
-
-/** Redirect the global env-file path by overriding HOME and process.cwd. */
-function withTmpHome(home, fn) {
-  const origHome = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    return fn();
-  } finally {
-    process.env.HOME = origHome;
-  }
 }
 
 // ─── import helpers (after module-level setup so we read the right exports) ──
@@ -228,11 +217,9 @@ test('silentlyInstallBoth writes MCP config and creates CLAUDE.md in a tmp HOME'
         'installEntry should have registered a "triss" MCP server in ~/.claude.json',
       );
     }
-    // If the template was found, CLAUDE.md should exist under ~/.claude/
-    const claudeMd = join(home, '.claude', 'CLAUDE.md');
-    // We only assert its presence if the template exists in the real project tree
-    // (which it does on a full checkout); otherwise we accept graceful failure.
     // The important thing is that neither installEntry nor runInit threw.
+    // (We previously checked for ~/.claude/CLAUDE.md but it depends on the
+    // template being present in the project tree, which we don't enforce here.)
   } finally {
     process.stdout.write = origWrite;
     Object.defineProperty(process.stdin, 'isTTY', { value: origTTY, configurable: true });

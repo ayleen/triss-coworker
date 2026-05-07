@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
-import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
+import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { runWizard } from './config.js';
 import { showStatus as mcpStatus } from '../mcp/install.js';
 import { promptChoice } from '../secrets.js';

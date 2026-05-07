@@ -165,7 +165,7 @@ test('CONF-04: confluence.updatePage bumps version automatically (mock getPage v
   setEnv();
 
   let callCount = 0;
-  const calls = mockFetch((url) => {
+  const calls = mockFetch((_url) => {
     callCount++;
     if (callCount === 1) {
       // First call is the internal getPage inside updatePage

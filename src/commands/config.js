@@ -15,7 +15,7 @@ import {
   readStdin,
 } from '../secrets.js';
 import { multiSelect } from '../picker.js';
-import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
+import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
 
 function resolveScope(opts) {
   if (opts.global && opts.local) {

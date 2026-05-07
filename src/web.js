@@ -92,7 +92,7 @@ export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = 
     } else {
       const decoder = new TextDecoder('utf-8', { fatal: false });
       let received = 0;
-      // eslint-disable-next-line no-constant-condition
+       
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;

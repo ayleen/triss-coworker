@@ -24,11 +24,11 @@ export async function runReviewCore({
   reviewSystem,
   callModel,
 }) {
-  let title = '';
+  let title;
   let description = '';
-  let diff = '';
+  let diff;
   let baseRef = base;
-  let headRef = 'HEAD';
+  let headRef;
   let urlNote = '';
 
   if (pr) {

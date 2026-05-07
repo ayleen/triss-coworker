@@ -15,7 +15,7 @@ import {
   readFileSync,
   existsSync,
 } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -192,7 +192,6 @@ test('runInit includes "triss jira" instructions in CLAUDE.md when ATLASSIAN_* a
 
 test('logUsage then readLog returns the record with cost_usd > 0', async () => {
   const tmp = makeTmp('triss-usage-e2e-');
-  const usageFile = join(tmp, 'usage.jsonl');
 
   const restore = envSnapshot(['HOME']);
   // Point HOME so USAGE_FILE resolves into our tmp dir.

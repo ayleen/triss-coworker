@@ -41,6 +41,7 @@ export async function chat({ model, messages, maxTokens, temperature, label }) {
           `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n` +
           `→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n` +
           `Original error: ${body}`,
+        { cause: err },
       );
     }
     throw err;
@@ -78,6 +79,7 @@ export async function chatStream({ model, messages, maxTokens, temperature, labe
         `Model "${model}" not accepted by the provider.\n` +
           `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL.\n` +
           `Original error: ${body}`,
+        { cause: err },
       );
     }
     throw err;

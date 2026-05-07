@@ -44,7 +44,7 @@ async function readBodyCapped(res, limit, ctx) {
   const decoder = new TextDecoder('utf-8', { fatal: false });
   let received = 0;
   let text = '';
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
