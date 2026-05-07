@@ -19,7 +19,7 @@ worker. The CLI lives at `bin/triss.js`; the library code is in `src/`.
 
 ## Conventions
 - ESM only (`"type": "module"`). No TypeScript.
-- No build step — `bin/triss.js` runs directly with Node ≥ 18.
+- No build step — `bin/triss.js` runs directly with Node ≥ 22.
 - Dependencies stay minimal; check `package.json` before adding one.
 - `process.stderr` is for log lines (use `pc.dim()`); `process.stdout` is
   reserved for tool output the user pipes downstream.

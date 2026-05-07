@@ -39,7 +39,7 @@ export async function chat({ model, messages, maxTokens, temperature, label }) {
       throw new Error(
         `Model "${model}" not accepted by the provider.\n` +
           `→ Override with --model <name> or set DEEPSEEK_FLASH_MODEL / DEEPSEEK_PRO_MODEL in your env.\n` +
-          `→ Common DeepSeek model names today: deepseek-chat, deepseek-reasoner.\n` +
+          `→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n` +
           `Original error: ${body}`,
       );
     }

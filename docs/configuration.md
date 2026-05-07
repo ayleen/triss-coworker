@@ -81,7 +81,7 @@ Set a single variable.
 ```bash
 triss config set DEEPSEEK_API_KEY                    # interactive masked prompt → global
 triss config set ATLASSIAN_API_TOKEN --local         # interactive → project
-triss config set DEEPSEEK_FLASH_MODEL deepseek-chat  # value as argument → global
+triss config set DEEPSEEK_FLASH_MODEL deepseek-v4-flash  # value as argument → global
 echo "$KEY" | triss config set LINEAR_API_KEY -      # read from stdin (CI-friendly)
 ```
 

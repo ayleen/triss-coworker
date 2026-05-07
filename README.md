@@ -8,18 +8,21 @@
 [![npm](https://img.shields.io/badge/npm-triss--coworker-cb3837.svg)](https://www.npmjs.com/package/triss-coworker)
 
 Triss is a small CLI (`triss`) that hands token-heavy I/O off to a cheap
-DeepSeek model so your expensive primary agent (Claude Code today, Codex
-soon) stays focused on reasoning and edits. Inspired by
+DeepSeek model so your expensive primary agent (Claude Code, Codex, or
+anything else that can run a shell/MCP tool) stays focused on reasoning and
+edits. Inspired by
 [`claude-coworker-model`](https://github.com/imkunal007219/claude-coworker-model)
 by Kunal Bhardwaj.
 
 The name is a Witcher reference. Triss is the helpful sorceress on your team.
+Strictly fewer portals, substantially more `git diff`.
 
-It now also ships with **first-class integrations for Jira and Linear**, so
-your agent can search, read, create, update, comment on, and transition
-tickets via Triss instead of pulling thousands of tokens of MCP output into
-context. Adding a new provider (GitHub Issues, Notion, …) takes one folder
-— see [docs/extending.md](docs/extending.md).
+It also ships with first-class integrations for Jira, Confluence, Linear,
+GitHub Issues, and GitLab Issues, so your agent can search, read, create,
+update, comment on, and transition work items without pulling thousands of
+tokens of tracker chatter into its own context. Adding a new provider
+(Notion, Asana, Sentry, ...) takes one folder — see
+[docs/extending.md](docs/extending.md).
 
 ---
 
@@ -41,6 +44,10 @@ Triss has no other runtime dependencies.
 npm install -g triss-coworker
 ```
 
+Published on npm as
+[`triss-coworker`](https://www.npmjs.com/package/triss-coworker); the CLI
+binary is `triss`.
+
 ### Option B — one-line bash installer
 
 ```bash
@@ -59,7 +66,9 @@ npm link
 Then verify:
 
 ```bash
+triss --version
 triss --help
+triss status
 ```
 
 ## Configure
@@ -122,17 +131,17 @@ After re-sourcing your shell profile, `triss <Tab>` lists all
 top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
 `triss linear <Tab>` list subcommands.
 
-## Wire it into Claude Code
+## Connect your agent
 
 ### Wizard takes care of this for you
 
-| Mode in `triss config wizard` | What it does about Claude Code |
+| Mode in `triss config wizard` | What it does about your agent |
 | ----------------------------- | ------------------------------ |
-| **Standard** (default)        | Installs **both** paths automatically — MCP server *and* a global `CLAUDE.md`. No question asked. |
-| **Advanced** (`--advanced`)   | Asks at the end: Both / MCP only / CLAUDE.md only / Skip. Default = Both. |
+| **Standard** (default)        | Installs **both** paths automatically — MCP server *and* global agent rules. No question asked. |
+| **Advanced** (`--advanced`)   | Asks at the end: Both / MCP only / rules only / Skip. Default = Both. |
 
-The two paths cooperate: MCP is primary, CLAUDE.md is the fallback. If
-MCP fails to load, the CLAUDE.md rules keep the agent working. If you
+The two paths cooperate: MCP is primary, `CLAUDE.md` / `AGENTS.md` rules are
+the fallback. If MCP fails to load, the rules keep the agent working. If you
 don't know what to pick, just use Standard.
 
 Two complementary paths — pick either, both, or neither.
@@ -183,21 +192,9 @@ Add credentials later → restart session → new tools appear automatically.
 
 Full reference: [docs/mcp.md](docs/mcp.md).
 
-## Wire it into a project
-
-In any project directory:
-
-```bash
-triss init                 # interactive: pick Claude / Codex / Both
-triss init --target claude # ./CLAUDE.md (Claude Code reads it on startup)
-triss init --target codex  # ./AGENTS.md (Codex reads it on startup)
-triss init --target both   # ./CLAUDE.md and ./AGENTS.md (when you use both agents)
-triss init --global        # write to ~/.claude/ or ~/.codex/ instead of the project
-```
-
-This adds a delegation block that tells Claude Code when to call `triss ask`,
-`triss write`, and `triss extract` instead of burning tokens on file reads
-and boilerplate. Re-running `triss init` updates the block in place.
+The root `CLAUDE.md` and `AGENTS.md` in this repository are contributor
+instructions for working on Triss itself. The files under `templates/` are
+what `triss init` renders into other projects.
 
 ## What it does
 
@@ -230,6 +227,10 @@ triss ask --paths "src/**/*.ts" \
           --question "Find SQL injection risks" \
           --model pro --max-tokens 16384
 ```
+
+Typical output is a focused answer with cited file paths, not a raw file dump.
+That is the whole trick: the primary agent gets the useful bits, not a
+firehose wearing a moustache.
 
 ### `triss write`
 
@@ -330,6 +331,16 @@ a list of concrete issues with file:line citations — not a diff
 summary. Cost: a 25KB diff review on `pro` runs ~$0.005-0.01 with
 prompt caching.
 
+Example shape:
+
+```text
+Findings
+- src/auth.js:42 accepts an expired token because ...
+- test/auth.test.js:88 covers the happy path but not ...
+
+Residual risk: ...
+```
+
 ### `triss fetch` / `triss ask --urls`
 
 ```bash
@@ -411,18 +422,18 @@ triss ask   --paths ... --question "..." --model flash   # default
 triss write --spec   ... --target   ...   --model pro
 ```
 
-If DeepSeek renames the models or you want to point Triss at a different
-provider, override the names without touching code. Triss only requires
-an OpenAI-compatible chat-completions endpoint.
+If DeepSeek renames the models again, or you want to point Triss at a
+different provider, override the names without touching code. Triss only
+requires an OpenAI-compatible chat-completions endpoint.
 
-You can also pass any model id directly: `--model deepseek-chat`.
+You can also pass any model id directly: `--model deepseek-v4-pro`.
 
 ### Provider recipes
 
 #### DeepSeek (default, recommended)
 ```bash
 triss config set DEEPSEEK_API_KEY                     # masked prompt
-# That's it — DEEPSEEK_BASE_URL / FLASH / PRO are auto-defaulted.
+# That's it — BASE_URL / FLASH / PRO use the current DeepSeek V4 defaults.
 ```
 
 #### Kimi / Moonshot
@@ -445,8 +456,8 @@ triss config set DEEPSEEK_PRO_MODEL qwen2.5-coder:32b
 ```bash
 triss config set DEEPSEEK_API_KEY $OPENROUTER_API_KEY
 triss config set DEEPSEEK_BASE_URL https://openrouter.ai/api/v1
-triss config set DEEPSEEK_FLASH_MODEL deepseek/deepseek-chat
-triss config set DEEPSEEK_PRO_MODEL anthropic/claude-3.5-sonnet
+triss config set DEEPSEEK_FLASH_MODEL deepseek/deepseek-v4-flash
+triss config set DEEPSEEK_PRO_MODEL anthropic/claude-sonnet-4.6
 ```
 
 Add `--local` to scope any of these to the current project only
@@ -530,10 +541,18 @@ test suite.
 
 - [ ] `triss exec <task>` — auto-route a freeform task to the right
       sub-command
-- [ ] Optional `npm publish` so `npm install -g triss-coworker` works
-      out of the box
 - [ ] More provider recipe blocks in the docs (Kimi, Ollama,
       OpenRouter — examples already present, but with terse setup steps)
+
+## Contributing and security
+
+Contributions are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md)
+for local setup, test commands, and the project conventions.
+
+Security-sensitive changes deserve extra care because Triss sits between an
+agent, your filesystem, web URLs, and tracker credentials. See
+[SECURITY.md](SECURITY.md) for the reporting path and the current trust
+boundaries.
 
 ## Acknowledgements
 

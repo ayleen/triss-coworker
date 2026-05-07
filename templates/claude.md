@@ -134,7 +134,7 @@ triss fetch https://api-docs.example.com/changelog
 ### Models
 - `--model flash` (default) — cheap, fast, good for bulk reads.
 - `--model pro` — pricier, smarter, use for harder analysis or generation.
-- `--model <full-name>` — pin to any model id (e.g. `deepseek-chat`).
+- `--model <full-name>` — pin to any model id (e.g. `deepseek-v4-flash`).
 
 Override the preset names if needed via `DEEPSEEK_FLASH_MODEL` and
 `DEEPSEEK_PRO_MODEL` env vars (no code changes required).

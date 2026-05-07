@@ -9,6 +9,7 @@ if (nodeMajor < 22) {
 }
 
 import { Command } from 'commander';
+import { readFileSync } from 'node:fs';
 import pc from 'picocolors';
 import { runAsk } from '../src/commands/ask.js';
 import { runWrite } from '../src/commands/write.js';
@@ -38,6 +39,10 @@ import {
 } from '../src/commands/config.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 
+const packageJson = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+);
+
 const program = new Command();
 program
   .name('triss')
@@ -45,7 +50,7 @@ program
     'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
-  .version('0.12.1');
+  .version(packageJson.version);
 
 program
   .command('init')
@@ -220,7 +225,7 @@ function wrap(fn) {
 
 const mcp = program
   .command('mcp')
-  .description('MCP server: register Triss as a tool provider for Claude Code (and Codex soon)');
+  .description('MCP server: register Triss as a tool provider for Claude Code and Codex');
 
 mcp
   .command('serve', { isDefault: true })
