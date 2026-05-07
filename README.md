@@ -25,7 +25,7 @@ context. Adding a new provider (GitHub Issues, Notion, …) takes one folder
 
 ## Requirements
 
-- **Node.js ≥ 18** (LTS recommended). Check with `node --version`.
+- **Node.js ≥ 22** (LTS). Check with `node --version`.
   - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
 - **npm** (ships with Node.js) — used for the `npm install -g` path.
 - **git** — used by the bash one-liner installer to clone the repo.
