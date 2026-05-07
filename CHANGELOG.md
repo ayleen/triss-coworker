@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-05-08
+
+### Changed
+
+- Bumped `commander` from `^12.1.0` to `^14.0.3` and `dotenv` from
+  `^16.4.5` to `^17.4.2`. Both upgrades are API-transparent for our
+  call surface (`new Command()` + `.command/.option/.action/.parse`
+  for commander; `dotenv.config({ path, override: false })` for
+  dotenv). Engine constraints are unchanged (we already require Node
+  ≥22).
+
+### Fixed
+
+- Pass `quiet: true` to every `dotenv.config()` call. dotenv@17 ships
+  a promo banner (`◇ injected env (N) from <path> // tip: ⌘ custom
+  filepath { path: '/custom/path/.env' }`) that prints to stderr on
+  every `config()` call. The MCP server reloads `.triss.env` on every
+  `tools/call`, so without `quiet` the host's MCP-server log would
+  accumulate one banner line per tool call.
+
 ## [0.15.1] — 2026-05-08
 
 ### Changed

@@ -8,8 +8,12 @@ function loadEnvFiles() {
   // both. Not cached on purpose — re-loading is cheap (idempotent under
   // override:false), and skipping cache lets the MCP server pick up a
   // .triss.env added/edited mid-session as soon as it sees a fresh request.
+  //
+  // `quiet: true` suppresses the dotenv@17 promo banner ("◇ injected env …
+  // // tip: ⌘ custom filepath …"). Without it, every MCP tools/call would
+  // append a noisy line to the host's MCP-server log.
   for (const f of activeEnvFiles()) {
-    if (f.exists) dotenv.config({ path: f.path, override: false });
+    if (f.exists) dotenv.config({ path: f.path, override: false, quiet: true });
   }
 }
 
