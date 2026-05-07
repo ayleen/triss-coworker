@@ -105,6 +105,54 @@ export async function reviewHandler({ pr, base, skip_issue, question, model, max
   });
 }
 
+const WRITE_SYSTEM =
+  'Generate clean, idiomatic code matching the style of any reference ' +
+  'provided. No explanations, no markdown fences — output ONLY the file ' +
+  'contents.';
+
+function stripFences(s) {
+  const trimmed = s.trim();
+  if (!trimmed.startsWith('```')) return s;
+  const firstNl = trimmed.indexOf('\n');
+  if (firstNl === -1) return s;
+  const body = trimmed.slice(firstNl + 1);
+  const lastFence = body.lastIndexOf('```');
+  return lastFence === -1 ? body : body.slice(0, lastFence);
+}
+
+export async function writeHandler({ spec, target, context, model, max_tokens }) {
+  if (!spec) throw new Error('spec is required');
+  const { readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { dirname } = await import('node:path');
+  const { assertSafePath } = await import('../safety.js');
+
+  let ctx = '';
+  if (context) {
+    assertSafePath(context, { kind: 'read' });
+    ctx = `<reference path='${context}'>\n${readFileSync(context, 'utf8')}\n</reference>\n`;
+  }
+  if (target) assertSafePath(target, { kind: 'write' });
+
+  const text = await callModel({
+    model,
+    maxTokens: max_tokens || 16384,
+    messages: [
+      { role: 'system', content: WRITE_SYSTEM },
+      { role: 'user', content: `${ctx}Write: ${spec}` },
+    ],
+  });
+  // callModel appends a usage report — strip it so the file body stays clean.
+  const usageStart = text.indexOf('\n\n[triss/');
+  const body = stripFences(usageStart === -1 ? text : text.slice(0, usageStart));
+  const usage = usageStart === -1 ? '' : text.slice(usageStart);
+
+  if (!target) return body + usage;
+
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, body);
+  return `✓ Wrote ${target} (${body.length} chars)${usage}`;
+}
+
 // ─── jira handlers ──────────────────────────────────────────────────────────
 
 export async function jiraSearchHandler({ jql, question, limit = 50, model, max_tokens }) {
@@ -169,7 +217,15 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
   });
 }
 
-export async function jiraCreateHandler({ project, summary, description, type = 'Task', parent }) {
+export async function jiraCreateHandler({
+  project,
+  summary,
+  description,
+  type = 'Task',
+  parent,
+  assignee,
+  priority,
+}) {
   const { jira, setParentSmart } = await import('../integrations/jira/client.js');
   const { textToAdf } = await import('../integrations/jira/adf.js');
   const issue = await jira.createIssue({
@@ -178,6 +234,17 @@ export async function jiraCreateHandler({ project, summary, description, type = 
     summary,
     descriptionAdf: textToAdf(description ?? ''),
   });
+
+  // Apply optional fields after create — the create endpoint accepts them too,
+  // but issuing a follow-up update keeps the create call schema small and
+  // mirrors how the CLI does it.
+  const followUp = {};
+  if (assignee) followUp.assignee = { accountId: assignee };
+  if (priority) followUp.priority = { name: priority };
+  if (Object.keys(followUp).length) {
+    await jira.updateIssue(issue.key, followUp);
+  }
+
   let extra = '';
   if (parent) {
     const r = await setParentSmart(issue.key, parent);
@@ -186,12 +253,22 @@ export async function jiraCreateHandler({ project, summary, description, type = 
   return `✓ Created ${issue.key}${extra}\nURL: ${issue.self}`;
 }
 
-export async function jiraUpdateHandler({ key, summary, description, status, parent }) {
+export async function jiraUpdateHandler({
+  key,
+  summary,
+  description,
+  status,
+  parent,
+  assignee,
+  priority,
+}) {
   const { jira, setParentSmart } = await import('../integrations/jira/client.js');
   const { textToAdf } = await import('../integrations/jira/adf.js');
   const fields = {};
   if (summary) fields.summary = summary;
   if (description) fields.description = textToAdf(description);
+  if (assignee) fields.assignee = { accountId: assignee };
+  if (priority) fields.priority = { name: priority };
   const out = [];
   if (Object.keys(fields).length) {
     await jira.updateIssue(key, fields);
@@ -222,6 +299,24 @@ export async function jiraCommentHandler({ key, body }) {
   const { textToAdf } = await import('../integrations/jira/adf.js');
   await jira.addComment(key, textToAdf(body));
   return `✓ Comment posted to ${key}`;
+}
+
+export async function jiraTransitionsHandler({ key }) {
+  const { jira } = await import('../integrations/jira/client.js');
+  const data = await jira.listTransitions(key);
+  const lines = (data.transitions || []).map(
+    (t) => `${t.id}\t"${t.name}"\t→ ${t.to?.name ?? '?'}`,
+  );
+  return lines.join('\n') || '(no transitions)';
+}
+
+export async function jiraAttachmentsHandler({ key }) {
+  const { jira } = await import('../integrations/jira/client.js');
+  const list = await jira.listAttachments(key);
+  const lines = (list || []).map(
+    (a) => `${a.id}\t${a.filename}\t${a.size}\t${a.created}\t${a.content}`,
+  );
+  return lines.join('\n') || '(no attachments)';
 }
 
 // ─── linear handlers ────────────────────────────────────────────────────────
@@ -277,17 +372,35 @@ export async function linearIssueHandler({ id, with_comments, question, model, m
   });
 }
 
-export async function linearCreateHandler({ team, title, description, project, parent, priority }) {
-  const { linear } = await import('../integrations/linear/client.js');
-  const input = { teamId: team, title, description: description ?? '' };
+export async function linearCreateHandler({
+  team,
+  title,
+  description,
+  project,
+  parent,
+  priority,
+  assignee,
+}) {
+  const { linear, resolveTeamId } = await import('../integrations/linear/client.js');
+  const teamId = await resolveTeamId(team);
+  const input = { teamId, title, description: description ?? '' };
   if (project) input.projectId = project;
   if (parent) input.parentId = parent;
   if (priority != null) input.priority = priority;
+  if (assignee) input.assigneeId = assignee;
   const issue = await linear.createIssue(input);
   return `✓ Created ${issue.identifier}\nURL: ${issue.url}`;
 }
 
-export async function linearUpdateHandler({ id, title, description, state, project, parent }) {
+export async function linearUpdateHandler({
+  id,
+  title,
+  description,
+  state,
+  project,
+  parent,
+  priority,
+}) {
   const { linear, transitionIssue } = await import('../integrations/linear/client.js');
   const issue = await linear.getIssue(id);
   const input = {};
@@ -295,6 +408,7 @@ export async function linearUpdateHandler({ id, title, description, state, proje
   if (description) input.description = description;
   if (project) input.projectId = project;
   if (parent) input.parentId = parent;
+  if (priority != null) input.priority = priority;
   const out = [];
   if (Object.keys(input).length) {
     await linear.updateIssue(issue.id, input);
@@ -312,6 +426,25 @@ export async function linearCommentHandler({ id, body }) {
   const issue = await linear.getIssue(id);
   await linear.addComment(issue.id, body);
   return `✓ Comment posted to ${issue.identifier}`;
+}
+
+export async function linearStatesHandler({ team }) {
+  const { linear } = await import('../integrations/linear/client.js');
+  const states = await linear.listStates(team);
+  const lines = (states || []).map(
+    (s) => `${s.position}\t[${s.type}]\t${s.name}\t(${s.id})`,
+  );
+  return lines.join('\n') || '(no states)';
+}
+
+export async function linearAttachmentsHandler({ id }) {
+  const { linear } = await import('../integrations/linear/client.js');
+  const issue = await linear.getIssue(id);
+  const list = issue.attachments?.nodes || [];
+  const lines = list.map(
+    (a) => `${a.id}\t${a.title}\t${a.sourceType}\t${a.url}`,
+  );
+  return lines.join('\n') || '(no attachments)';
 }
 
 // ─── github handlers ────────────────────────────────────────────────────────
@@ -479,6 +612,13 @@ export async function confluenceUpdateHandler({ id, title, body }) {
   return `✓ Updated Confluence page ${id} → v${updated.version?.number}`;
 }
 
+export async function confluenceSpacesHandler({ limit = 100 } = {}) {
+  const { confluence } = await import('../integrations/confluence/client.js');
+  const data = await confluence.listSpaces({ limit });
+  const lines = (data.results || []).map((s) => `${s.id}\t${s.key}\t${s.name}`);
+  return lines.join('\n') || '(no spaces)';
+}
+
 // ─── gitlab handlers ────────────────────────────────────────────────────────
 
 export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, model, max_tokens }) {
@@ -606,14 +746,22 @@ export async function statusHandler() {
   const { getConfig } = await import('../config.js');
   const { listPresets } = await import('../models.js');
   const { loadIntegrations, envReadiness, getCoreManifest } = await import('../integrations/_registry.js');
+  const { projectRoot, pathsRestricted } = await import('../safety.js');
+  const { activeEnvFiles } = await import('../secrets.js');
   const cfg = getConfig();
   const presets = listPresets();
   const integrations = await loadIntegrations();
   const all = [getCoreManifest(), ...integrations];
+  const root = projectRoot();
+  const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
     `API base: ${cfg.baseUrl}`,
     `API key:  ${cfg.apiKey ? cfg.apiKey.slice(0, 4) + '…' + cfg.apiKey.slice(-4) : '(missing)'}`,
     `Default preset: ${cfg.defaultPreset}`,
+    `Project root: ${root} (from ${rootSource})`,
+    `Path sandbox: ${pathsRestricted() ? 'on' : 'off'}`,
+    `Env files:`,
+    ...activeEnvFiles().map((f) => `  ${f.scope}: ${f.path} (${f.exists ? 'loaded' : 'absent'})`),
     `Presets: ${presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
     `Integrations:`,
     ...all.map((m) => {

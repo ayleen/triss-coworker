@@ -1,3 +1,4 @@
+<!-- triss:start -->
 # Triss — Cheap DeepSeek Coworker (Token Saving)
 
 You have a DeepSeek-backed worker available as the `triss` CLI on PATH.
@@ -43,9 +44,9 @@ or code review. Override preset names via `DEEPSEEK_FLASH_MODEL` /
 `--question "<q>"` to summarise via DeepSeek instead of dumping raw API
 output. Configure with `triss config wizard <name>`.
 
-{{INTEGRATIONS}}
 
 Run `triss status` to verify. Missing credentials? Run
 `triss config wizard` for an interactive setup, or
 `triss config wizard <target>` for one provider. Add `--local` to scope
 to `./.triss.env` instead of the global file.
+<!-- triss:end -->

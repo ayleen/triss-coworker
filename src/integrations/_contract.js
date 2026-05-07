@@ -11,18 +11,102 @@ export class IntegrationError extends Error {
   }
 }
 
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
+const DEFAULT_HTTP_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
+
+function httpTimeoutMs() {
+  const raw = process.env.TRISS_HTTP_TIMEOUT_MS;
+  if (!raw) return DEFAULT_HTTP_TIMEOUT_MS;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_HTTP_TIMEOUT_MS;
+}
+
+function httpMaxBytes() {
+  const raw = process.env.TRISS_HTTP_MAX_BYTES;
+  if (!raw) return DEFAULT_HTTP_MAX_BYTES;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_HTTP_MAX_BYTES;
+}
+
+async function readBodyCapped(res, limit, ctx) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    // Test mocks (and a few legacy fetch impls) skip the streaming API.
+    const text = await res.text();
+    if (text.length > limit) {
+      throw new IntegrationError(
+        `Response body exceeds ${limit} bytes on ${ctx} (got ${text.length}). ` +
+          `Set TRISS_HTTP_MAX_BYTES to override.`,
+      );
+    }
+    return text;
+  }
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let received = 0;
+  let text = '';
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limit) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new IntegrationError(
+        `Response body exceeds ${limit} bytes on ${ctx} (aborted at ${received}). ` +
+          `Set TRISS_HTTP_MAX_BYTES to override.`,
+      );
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
+}
+
 export async function httpJson(url, { method = 'GET', headers = {}, body, signal } = {}) {
   const init = {
     method,
     headers: { Accept: 'application/json', ...headers },
-    signal,
   };
   if (body !== undefined) {
     init.headers['Content-Type'] ||= 'application/json';
     init.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
-  const res = await fetch(url, init);
-  const text = await res.text();
+
+  // Internal timeout, composed with any caller-provided AbortSignal so
+  // either source can cancel the request.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), httpTimeoutMs());
+  const onCallerAbort = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  init.signal = ctrl.signal;
+
+  let res;
+  let text;
+  try {
+    res = await fetch(url, init);
+    text = await readBodyCapped(res, httpMaxBytes(), `${method} ${url}`);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      if (res) {
+        throw new IntegrationError(
+          `Timeout reading body of ${method} ${url} after ${httpTimeoutMs()}ms ` +
+            '(set TRISS_HTTP_TIMEOUT_MS to override)',
+        );
+      }
+      throw new IntegrationError(
+        `Timeout after ${httpTimeoutMs()}ms on ${method} ${url} ` +
+          '(set TRISS_HTTP_TIMEOUT_MS to override)',
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener?.('abort', onCallerAbort);
+  }
+
   let parsed = null;
   if (text) {
     try {

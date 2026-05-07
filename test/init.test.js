@@ -120,6 +120,55 @@ test('INIT-02: --global writes to ~/.claude/CLAUDE.md', async () => {
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
+// ── Codex target: creates AGENTS.md locally and globally ─────────────────────
+
+test('INIT-CODEX-01: creates AGENTS.md with triss marker block', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ projectDir }) => {
+    const destPath = join(projectDir, 'AGENTS.md');
+    assert.ok(!existsSync(destPath), 'AGENTS.md should not exist yet');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'codex' });
+
+    assert.ok(existsSync(destPath), 'AGENTS.md should have been created');
+    const content = readFileSync(destPath, 'utf8');
+    assert.ok(content.includes(START_MARKER), 'AGENTS.md should contain start marker');
+    assert.ok(content.includes(END_MARKER), 'AGENTS.md should contain end marker');
+    assert.ok(content.includes('triss ask'), 'AGENTS.md should contain Codex triss rules');
+    assert.ok(!content.includes('experimental'), 'Codex target should not be marked experimental');
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-CODEX-02: --global writes to ~/.codex/AGENTS.md', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ homeDir }) => {
+    const destPath = join(homeDir, '.codex', 'AGENTS.md');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'codex', global: true });
+
+    assert.ok(existsSync(destPath), '~/.codex/AGENTS.md should have been created');
+    const content = readFileSync(destPath, 'utf8');
+    assert.ok(content.includes(START_MARKER), 'global AGENTS.md should contain start marker');
+    assert.ok(content.includes(END_MARKER), 'global AGENTS.md should contain end marker');
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
 // ── INIT-03: existing CLAUDE.md without markers → appends block ───────────────
 
 test('INIT-03: existing CLAUDE.md without markers gets block appended', async () => {
@@ -179,6 +228,30 @@ test('INIT-04: re-running init on unchanged CLAUDE.md is idempotent', async () =
       output.includes('already up to date') || output.includes('Updated'),
       `expected idempotency message in: ${output}`,
     );
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-CODEX-03: re-running init on unchanged AGENTS.md is idempotent', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ projectDir, captured }) => {
+    const destPath = join(projectDir, 'AGENTS.md');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'codex' });
+    const afterFirst = readFileSync(destPath, 'utf8');
+
+    await runInit({ target: 'codex' });
+    const afterSecond = readFileSync(destPath, 'utf8');
+
+    assert.equal(afterFirst, afterSecond, 'AGENTS.md should be identical after second run');
+    assert.match(captured.join(''), /already up to date|Updated/);
   });
 
   if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
@@ -315,6 +388,51 @@ test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars a
   if (origLinearKey !== undefined) process.env.LINEAR_API_KEY = origLinearKey;
 });
 
+test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATLASSIAN_* env vars are set', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  const origAtlBase = process.env.ATLASSIAN_BASE_URL;
+  const origAtlEmail = process.env.ATLASSIAN_EMAIL;
+  const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
+  const origLinearKey = process.env.LINEAR_API_KEY;
+
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+  delete process.env.LINEAR_API_KEY;
+  process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
+  process.env.ATLASSIAN_EMAIL = 'test@example.com';
+  process.env.ATLASSIAN_API_TOKEN = 'test-token-abc';
+
+  await withTmpEnv(async ({ projectDir }) => {
+    const destPath = join(projectDir, 'AGENTS.md');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'codex' });
+
+    const content = readFileSync(destPath, 'utf8');
+    assert.ok(!content.includes('{{INTEGRATIONS}}'), 'placeholder should be replaced');
+    assert.ok(
+      content.includes('triss jira') || content.includes('Jira'),
+      'jira instructions should be included in AGENTS.md when ATLASSIAN_* creds are present',
+    );
+    assert.ok(
+      !content.includes('triss linear'),
+      'linear instructions should not appear in AGENTS.md when LINEAR_API_KEY is missing',
+    );
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+  if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
+  else delete process.env.ATLASSIAN_BASE_URL;
+  if (origAtlEmail !== undefined) process.env.ATLASSIAN_EMAIL = origAtlEmail;
+  else delete process.env.ATLASSIAN_EMAIL;
+  if (origAtlToken !== undefined) process.env.ATLASSIAN_API_TOKEN = origAtlToken;
+  else delete process.env.ATLASSIAN_API_TOKEN;
+  if (origLinearKey !== undefined) process.env.LINEAR_API_KEY = origLinearKey;
+  else delete process.env.LINEAR_API_KEY;
+});
+
 // ── INIT-06: MCP detection — mcpServers.triss in ~/.claude.json ───────────────
 
 test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists in ~/.claude.json', async () => {
@@ -363,6 +481,87 @@ test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists i
   if (origAtlEmail !== undefined) process.env.ATLASSIAN_EMAIL = origAtlEmail;
   if (origAtlToken !== undefined) process.env.ATLASSIAN_API_TOKEN = origAtlToken;
   if (origLinearKey !== undefined) process.env.LINEAR_API_KEY = origLinearKey;
+});
+
+// ── INIT-BOTH: target='both' writes both CLAUDE.md and AGENTS.md ─────────────
+
+test('INIT-BOTH-01: target="both" creates CLAUDE.md and AGENTS.md in one call', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ projectDir }) => {
+    const claudePath = join(projectDir, 'CLAUDE.md');
+    const codexPath = join(projectDir, 'AGENTS.md');
+    assert.ok(!existsSync(claudePath));
+    assert.ok(!existsSync(codexPath));
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'both' });
+
+    assert.ok(existsSync(claudePath), 'CLAUDE.md should have been created');
+    assert.ok(existsSync(codexPath), 'AGENTS.md should have been created');
+    const claude = readFileSync(claudePath, 'utf8');
+    const codex = readFileSync(codexPath, 'utf8');
+    assert.ok(claude.includes(START_MARKER) && claude.includes(END_MARKER));
+    assert.ok(codex.includes(START_MARKER) && codex.includes(END_MARKER));
+    assert.ok(codex.includes('triss ask'), 'AGENTS.md should contain Codex rules body');
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-BOTH-02: target="both" with --global writes to ~/.claude and ~/.codex', async () => {
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ homeDir }) => {
+    const claudePath = join(homeDir, '.claude', 'CLAUDE.md');
+    const codexPath = join(homeDir, '.codex', 'AGENTS.md');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({ target: 'both', global: true });
+
+    assert.ok(existsSync(claudePath), '~/.claude/CLAUDE.md should exist');
+    assert.ok(existsSync(codexPath), '~/.codex/AGENTS.md should exist');
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-BOTH-03: omitted target falls back to "claude" in non-TTY', async () => {
+  // tests run with stdin not a TTY → chooseTarget() must default to 'claude'
+  // without prompting (otherwise the test would hang).
+  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origWorkerKey = process.env.WORKER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.WORKER_API_KEY;
+
+  await withTmpEnv(async ({ projectDir }) => {
+    const claudePath = join(projectDir, 'CLAUDE.md');
+    const codexPath = join(projectDir, 'AGENTS.md');
+
+    const { runInit } = await import('../src/commands/init.js');
+    await runInit({}); // no target
+
+    assert.ok(existsSync(claudePath), 'should default to CLAUDE.md in non-TTY');
+    assert.ok(!existsSync(codexPath), 'should not create AGENTS.md when defaulting to claude');
+  });
+
+  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-BOTH-04: unknown target throws a clear error', async () => {
+  await withTmpEnv(async () => {
+    const { runInit } = await import('../src/commands/init.js');
+    await assert.rejects(() => runInit({ target: 'xyz' }), /Unknown --target.*xyz/);
+  });
 });
 
 // ── INIT-05 / postInit: prints next-step tips when DEEPSEEK_API_KEY missing ──

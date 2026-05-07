@@ -127,6 +127,33 @@ export const linear = {
   },
 };
 
+// UUID v4-ish — used to short-circuit the team-key lookup.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolve a Linear team to its UUID. Accepts either:
+//   - a UUID (returned unchanged)
+//   - a team key like "ENG" (looked up via the teams query)
+// Throws IntegrationError when the key isn't found.
+export async function resolveTeamId(team) {
+  if (!team) throw new IntegrationError('Linear team is required (UUID or key)');
+  if (UUID_RE.test(team)) return team;
+  const data = await gql(
+    `query($key: String!) {
+      teams(filter: { key: { eq: $key } }, first: 2) {
+        nodes { id key name }
+      }
+    }`,
+    { key: team },
+  );
+  const nodes = data.teams?.nodes || [];
+  if (!nodes.length) {
+    throw new IntegrationError(
+      `Linear team "${team}" not found. Pass a UUID or an existing team key (e.g. ENG).`,
+    );
+  }
+  return nodes[0].id;
+}
+
 export async function transitionIssue(idOrIdentifier, stateName) {
   const issue = await linear.getIssue(idOrIdentifier);
   const states = await linear.listStates(issue.team.key);

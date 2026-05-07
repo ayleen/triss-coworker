@@ -129,26 +129,67 @@ export async function runWizard(target, opts) {
   if (scope === 'local') maybeAddGitignore();
 }
 
-// Standard mode treats Claude Code integration as part of the default
-// setup — install both paths without asking. Aligns with the rest of
-// Standard mode's "do the obvious thing" philosophy.
+// Ask which agent(s) to wire Triss into. Returns 'claude' | 'codex' |
+// 'both' | 'skip'. Falls back to 'claude' silently in non-TTY.
+async function chooseAgentTarget(opts = {}) {
+  if (!process.stdin.isTTY) return 'claude';
+  const choices = [
+    { label: 'Claude — ~/.claude.json + ~/.claude/CLAUDE.md', value: 'claude' },
+    { label: 'Codex  — ~/.codex/config.toml + ~/.codex/AGENTS.md', value: 'codex' },
+    { label: 'Both   — wire Triss into Claude and Codex', value: 'both' },
+  ];
+  if (opts.allowSkip) {
+    choices.push({
+      label: 'Skip   — I will run `triss init` / `triss mcp install` later',
+      value: 'skip',
+    });
+  }
+  return promptChoice(opts.question || 'Which agent(s) should Triss integrate with?', choices, {
+    defaultIndex: 0,
+  });
+}
+
+function expandAgentTargets(target) {
+  return target === 'both' ? ['claude', 'codex'] : [target];
+}
+
+function sessionLabel(target) {
+  if (target === 'codex') return 'Codex';
+  if (target === 'both') return 'Claude / Codex';
+  return 'Claude Code';
+}
+
+// Standard mode wires both paths (MCP + agent rules) without asking
+// about granularity — but it does ask which agent to wire into.
 async function silentlyInstallBoth() {
+  const agent = await chooseAgentTarget({
+    question: 'Wire Triss into which agent?',
+  });
   process.stdout.write(
     '\n' +
-      pc.bold('Wiring Triss into Claude Code') +
-      pc.dim(' (Standard installs both — re-run with --advanced to choose otherwise)') +
+      pc.bold(`Wiring Triss into ${sessionLabel(agent)}`) +
+      pc.dim(
+        ' (Standard installs MCP + rules — re-run with --advanced for granular control)',
+      ) +
       '\n',
   );
+
   const { installEntry } = await import('../mcp/install.js');
-  const r = installEntry('global');
-  process.stdout.write(pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}\n`));
+  for (const t of expandAgentTargets(agent)) {
+    const r = installEntry('global', { target: t });
+    process.stdout.write(
+      pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}`) + pc.dim(` (${t})`) + '\n',
+    );
+  }
 
   const { runInit } = await import('./init.js');
-  await runInit({ global: true });
+  await runInit({ global: true, target: agent });
 
   process.stdout.write(
     '\n  ' +
-      pc.dim('Restart your Claude Code session to pick up the new server / rules.') +
+      pc.dim(
+        `Restart your ${sessionLabel(agent)} session to pick up the new server / rules.`,
+      ) +
       '\n',
   );
 }
@@ -156,53 +197,65 @@ async function silentlyInstallBoth() {
 async function offerClaudeCodeIntegration() {
   if (!process.stdin.isTTY) return; // CI / piped runs: stay silent
 
-  process.stdout.write('\n' + pc.bold('Wire Triss into Claude Code?') + '\n');
+  process.stdout.write('\n' + pc.bold('Wire Triss into your agent?') + '\n');
   process.stdout.write(
     pc.dim(
-      '  · MCP server      — Claude Code calls Triss tools natively\n' +
-        '                      (faster, per-tool permissions)\n' +
-        '  · CLAUDE.md rules — agent calls Triss via shell\n' +
-        '                      (universal, simple, also acts as MCP fallback)\n\n' +
+      '  · MCP server         — agent calls Triss tools natively\n' +
+        '                         (faster, per-tool permissions)\n' +
+        '  · Agent rules file   — agent calls Triss via shell\n' +
+        '                         (universal, simple, also acts as MCP fallback)\n\n' +
         '  Most users want both — they cooperate (MCP primary, rules fallback).\n',
     ),
   );
 
-  const choice = await promptChoice(
-    'How should Triss integrate with Claude Code?',
-    [
-      { label: 'Both (recommended) — MCP server + global CLAUDE.md', value: 'both' },
-      { label: 'MCP server only', value: 'mcp' },
-      { label: 'CLAUDE.md rules only', value: 'rules' },
-      { label: 'Skip — I will run `triss init` / `triss mcp install` later', value: 'skip' },
-    ],
-    { defaultIndex: 0 },
-  );
+  const agent = await chooseAgentTarget({
+    question: 'Which agent should Triss integrate with?',
+    allowSkip: true,
+  });
 
-  if (choice === 'skip') {
+  if (agent === 'skip') {
     process.stdout.write(
       pc.dim(
         '\n  Hint: ' +
           pc.cyan('triss mcp install') +
           pc.dim(' to register as MCP, ') +
-          pc.cyan('triss init --global') +
-          pc.dim(' for CLAUDE.md rules.\n'),
+          pc.cyan('triss init') +
+          pc.dim(' for the agent rules file.\n'),
       ),
     );
     return;
   }
 
+  const paths = await promptChoice(
+    'How should Triss integrate?',
+    [
+      { label: 'Both (recommended) — MCP server + agent rules file', value: 'both' },
+      { label: 'MCP server only', value: 'mcp' },
+      { label: 'Agent rules only', value: 'rules' },
+    ],
+    { defaultIndex: 0 },
+  );
+
   process.stdout.write('\n');
-  if (choice === 'both' || choice === 'mcp') {
+  if (paths === 'both' || paths === 'mcp') {
     const { installEntry } = await import('../mcp/install.js');
-    const r = installEntry('global');
-    process.stdout.write(pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}\n`));
+    for (const t of expandAgentTargets(agent)) {
+      const r = installEntry('global', { target: t });
+      process.stdout.write(
+        pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}`) + pc.dim(` (${t})`) + '\n',
+      );
+    }
   }
-  if (choice === 'both' || choice === 'rules') {
+  if (paths === 'both' || paths === 'rules') {
     const { runInit } = await import('./init.js');
-    await runInit({ global: true });
+    await runInit({ global: true, target: agent });
   }
   process.stdout.write(
-    '\n  ' + pc.dim('Restart your Claude Code session to pick up the new server / rules.') + '\n',
+    '\n  ' +
+      pc.dim(
+        `Restart your ${sessionLabel(agent)} session to pick up the new server / rules.`,
+      ) +
+      '\n',
   );
 }
 
@@ -451,7 +504,15 @@ export async function runEdit(opts) {
   const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
   // spawnSync without shell: editor + path passed as separate argv entries.
   const result = spawnSync(editor, [path], { stdio: 'inherit' });
-  if (result.status !== 0 && result.error) throw result.error;
+  if (result.error) {
+    throw new Error(`Failed to launch editor "${editor}": ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Editor "${editor}" exited with status ${result.status} — ` +
+        `${path} was not saved (or your editor reports an error).`,
+    );
+  }
 }
 
 export async function runUnset(key, opts) {

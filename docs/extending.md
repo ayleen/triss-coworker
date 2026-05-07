@@ -191,7 +191,8 @@ triss github comment owner/repo 42 --body "..."
 
 Save the file, run `triss --help`, and `github` shows up. After
 `triss config wizard github` (which prompts for `GITHUB_TOKEN`), the next
-`triss init` adds your section to the user's CLAUDE.md automatically.
+`triss init` adds your section to the user's CLAUDE.md or AGENTS.md
+automatically, depending on the selected target.
 
 ## Conventions
 
@@ -219,7 +220,7 @@ node --test test/yourthing-*.test.js  # just yours
 ## Adding env vars to the user's `.env`
 
 Env files are auto-loaded from `~/.config/triss/.env` (global) and
-`<cwd>/.triss.env` (project-local override). **You do not need to teach
+`<project-root>/.triss.env` (project-local override). **You do not need to teach
 users where to write keys** — declare your variables in the manifest's
 `envVars` array and they automatically appear in:
 

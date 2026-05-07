@@ -50,8 +50,8 @@ program
 program
   .command('init')
   .description('Add the triss delegation block to your project (or globally)')
-  .option('-g, --global', 'install into ~/.claude/CLAUDE.md instead of the current project')
-  .option('-t, --target <agent>', 'target agent (claude | codex)', 'claude')
+  .option('-g, --global', 'install into the target agent global rules file instead of the current project')
+  .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .option('-f, --force', 'force-replace an existing triss block without diffing')
   .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
   .action(wrap(runInit));
@@ -229,9 +229,10 @@ mcp
 
 mcp
   .command('install')
-  .description('Add the triss MCP server to Claude Code config (~/.claude.json by default)')
-  .option('-g, --global', 'install into ~/.claude.json (default)')
-  .option('-l, --local', 'install into <cwd>/.mcp.json (project-only)')
+  .description('Register triss as MCP server for Claude Code (~/.claude.json) or Codex (~/.codex/config.toml)')
+  .option('-g, --global', 'install into the agent global config (default)')
+  .option('-l, --local', 'install into <cwd>/.mcp.json (claude only)')
+  .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .option('--command <cmd>', 'override the executable name (default: triss)')
   .option('--args <args>', "override args, space-separated (default: 'mcp serve')")
   .action(wrap(runMcpInstall));
@@ -239,15 +240,17 @@ mcp
 mcp
   .command('uninstall')
   .description('Remove the triss MCP entry from the config')
-  .option('-g, --global', 'remove from ~/.claude.json (default)')
-  .option('-l, --local', 'remove from <cwd>/.mcp.json')
+  .option('-g, --global', 'remove from the agent global config (default)')
+  .option('-l, --local', 'remove from <cwd>/.mcp.json (claude only)')
+  .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .action(wrap(runMcpUninstall));
 
 mcp
   .command('status')
   .description('Show whether triss is registered and with what command')
-  .option('-g, --global', '(default) check ~/.claude.json')
-  .option('-l, --local', 'check <cwd>/.mcp.json')
+  .option('-g, --global', '(default) check the agent global config')
+  .option('-l, --local', 'check <cwd>/.mcp.json (claude only)')
+  .option('-t, --target <agent>', 'target agent (claude | codex | both). Default: both')
   .action(wrap(runMcpStatus));
 
 // Plugin-style integrations (jira, linear, ...). See docs/extending.md.

@@ -25,10 +25,10 @@ test('assertSafePath is a no-op in CLI mode (default)', () => {
   });
 });
 
-test('assertSafePath blocks outside cwd when restricted', () => {
+test('assertSafePath blocks outside the project root when restricted', () => {
   withRestricted(true, () => {
     assert.equal(pathsRestricted(), true);
-    assert.throws(() => assertSafePath('/etc/passwd', { kind: 'read' }), /outside the current working directory/);
+    assert.throws(() => assertSafePath('/etc/passwd', { kind: 'read' }), /outside the project root/);
   });
 });
 

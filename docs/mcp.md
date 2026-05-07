@@ -1,9 +1,9 @@
 # Triss as an MCP server
 
 Triss can run as a Model Context Protocol (MCP) server, exposing its
-core functionality as native tools to Claude Code (and any other MCP
-client). This is **optional** — the CLI keeps working exactly the same
-whether or not the MCP server is registered.
+core functionality as native tools to **Claude Code**, **Codex**, and any
+other MCP client. This is **optional** — the CLI keeps working exactly
+the same whether or not the MCP server is registered.
 
 ## Why use the MCP mode?
 
@@ -19,35 +19,46 @@ You don't have to choose — both can be active simultaneously.
 
 ## Install
 
-The easiest path is the wizard — its final question offers MCP +
-CLAUDE.md as the recommended bundle:
+The easiest path is the wizard — it asks which agent to wire and offers
+MCP + agent rules as the recommended bundle:
 
 ```bash
 triss config wizard
 # … prompts for credentials …
-# How should Triss integrate with Claude Code?
-#   1) Both (recommended) — MCP server + global CLAUDE.md
-#   2) MCP server only
-#   3) CLAUDE.md rules only
+# Which agent should Triss integrate with?
+#   1) Claude — ~/.claude.json + ~/.claude/CLAUDE.md
+#   2) Codex  — ~/.codex/config.toml + ~/.codex/AGENTS.md
+#   3) Both   — wire Triss into Claude and Codex
 #   4) Skip
+# (advanced mode also asks: Both / MCP only / Rules only)
 ```
 
 Or wire it manually:
 
 ```bash
-triss mcp install            # writes ~/.claude.json (global default)
-triss mcp install --local    # writes ./.mcp.json (this project only)
+triss mcp install                  # asks: Claude / Codex / Both
+triss mcp install --target claude  # ~/.claude.json (default)
+triss mcp install --target codex   # ~/.codex/config.toml
+triss mcp install --target both    # both configs in one go
+triss mcp install --local          # ./.mcp.json (claude only — Codex has no project-local config)
 ```
 
-That edits the JSON file in-place, preserving every other key. Result
-inside the file:
+The installer pins `TRISS_PROJECT_ROOT` automatically so the MCP server
+does not depend on the launcher's current working directory.
+
+### Claude config (`~/.claude.json` or `./.mcp.json`)
+
+JSON file edited in-place, every other key preserved:
 
 ```json
 {
   "mcpServers": {
     "triss": {
       "command": "triss",
-      "args": ["mcp", "serve"]
+      "args": ["mcp", "serve"],
+      "env": {
+        "TRISS_PROJECT_ROOT": "/path/to/project"
+      }
     }
   }
 }
@@ -56,23 +67,50 @@ inside the file:
 Restart your Claude Code session and run `claude /mcp` — `triss` should
 appear in the list with the available tools.
 
+### Codex config (`~/.codex/config.toml`)
+
+TOML file edited in-place — only the `[mcp_servers.triss]` and
+`[mcp_servers.triss.env]` sections are managed; everything else (other
+servers, top-level keys, comments) is preserved byte-for-byte:
+
+```toml
+[mcp_servers.triss]
+command = "triss"
+args = ["mcp", "serve"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+
+[mcp_servers.triss.env]
+TRISS_PROJECT_ROOT = "/path/to/project"
+```
+
+The two timeouts give `--model pro` calls enough headroom out of the box.
+Restart the Codex CLI session and verify with `codex mcp list`.
+
 ## Uninstall
 
 ```bash
-triss mcp uninstall            # global
-triss mcp uninstall --local    # project
+triss mcp uninstall                 # asks for target, default scope = global
+triss mcp uninstall --target claude # remove only the Claude entry
+triss mcp uninstall --target codex  # remove only the Codex entry
+triss mcp uninstall --target both   # remove both
+triss mcp uninstall --local         # ./.mcp.json (claude only)
 ```
 
-Removes the `mcpServers.triss` key. Other entries are left untouched.
+For Claude this removes the `mcpServers.triss` key; for Codex it strips
+the `[mcp_servers.triss]` (and `.env` sub-table) block. Other entries are
+left untouched in both formats.
 
 ## Status
 
 ```bash
-triss mcp status            # global
-triss mcp status --local    # project
+triss mcp status                  # shows both Claude and Codex
+triss mcp status --target claude  # only Claude
+triss mcp status --target codex   # only Codex
 ```
 
-Prints the path Triss would write to and whether the entry is present.
+Prints the path Triss would write to and whether the entry is present in
+each agent's config.
 
 ## Per-project credentials work
 
@@ -106,6 +144,7 @@ Always exposed (require only `DEEPSEEK_API_KEY`):
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
 - `triss_review` — code review on current branch or a GitHub PR
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
+- `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness
 
 Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
@@ -113,13 +152,26 @@ Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
 
 - `triss_jira_search` `triss_jira_issue` `triss_jira_create`
   `triss_jira_update` `triss_jira_comment`
+- `triss_jira_transitions` — list available status transitions for an issue
+  (use before `triss_jira_update.status` to discover the exact name)
+- `triss_jira_attachments` — list attachments on an issue
 - `triss_confluence_search` `triss_confluence_page` `triss_confluence_create`
   `triss_confluence_update`
+- `triss_confluence_spaces` — list spaces (id/key/name) for `triss_confluence_create.space`
+
+`triss_jira_create` and `triss_jira_update` accept optional `assignee`
+(accountId) and `priority` (name) fields.
 
 Exposed **only when LINEAR_API_KEY is set**:
 
 - `triss_linear_search` `triss_linear_issue` `triss_linear_create`
   `triss_linear_update` `triss_linear_comment`
+- `triss_linear_states` — list a team's workflow states (use before
+  `triss_linear_update.state`)
+- `triss_linear_attachments` — list attachments on an issue
+
+`triss_linear_create` accepts optional `assignee` (user UUID);
+`triss_linear_update` accepts optional `priority` (0–4).
 
 Exposed **only when GITHUB_TOKEN is set** (or `gh` CLI is logged in —
 Triss bootstraps the token from `gh auth token` automatically):
@@ -148,8 +200,9 @@ triss mcp install --command "/Users/me/projects/triss-coworker/bin/triss.js"
 triss mcp install --args "mcp serve"
 ```
 
-Or edit `~/.claude.json` by hand — `mcpServers.triss.command` /
-`mcpServers.triss.args` are standard MCP fields.
+Or edit `~/.claude.json` by hand — `mcpServers.triss.command`,
+`mcpServers.triss.args`, and `mcpServers.triss.env.TRISS_PROJECT_ROOT`
+are the important fields.
 
 ## Running the server manually
 

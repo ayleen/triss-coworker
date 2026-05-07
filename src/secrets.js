@@ -9,6 +9,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
+import { projectRoot } from './safety.js';
 
 const GLOBAL_DIR = join(homedir(), '.config', 'triss');
 const GLOBAL_FILE = join(GLOBAL_DIR, '.env');
@@ -16,7 +17,7 @@ const LOCAL_FILE_NAME = '.triss.env';
 
 export function getEnvFilePath(scope = 'global') {
   if (scope === 'global') return GLOBAL_FILE;
-  if (scope === 'local') return join(process.cwd(), LOCAL_FILE_NAME);
+  if (scope === 'local') return join(projectRoot(), LOCAL_FILE_NAME);
   throw new Error(`Unknown scope "${scope}" — use "global" or "local"`);
 }
 
@@ -135,10 +136,10 @@ function formatLine(key, value) {
   return `${key}=${escaped}`;
 }
 
-// Add a pattern to .gitignore in cwd, creating the file if needed.
-// Idempotent — does nothing if already present.
+// Add a pattern to .gitignore in the project root, creating the file
+// if needed. Idempotent — does nothing if already present.
 export function addToGitignore(pattern) {
-  const path = join(process.cwd(), '.gitignore');
+  const path = join(projectRoot(), '.gitignore');
   let lines = [];
   if (existsSync(path)) {
     lines = readFileSync(path, 'utf8').split('\n');

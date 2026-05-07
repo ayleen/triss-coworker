@@ -3,12 +3,17 @@ import { getConfig } from '../config.js';
 import { listPresets } from '../models.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
+import { projectRoot, pathsRestricted } from '../safety.js';
 
 export async function runStatus() {
   const cfg = getConfig();
   const presets = listPresets();
   const integrations = await loadIntegrations();
   const allManifests = [getCoreManifest(), ...integrations];
+  const root = projectRoot();
+  const rootSource = process.env.TRISS_PROJECT_ROOT
+    ? pc.dim('[TRISS_PROJECT_ROOT]')
+    : pc.dim('[cwd]');
 
   // Map var name → scope where it was found (project wins).
   const varSource = new Map();
@@ -26,6 +31,8 @@ export async function runStatus() {
     `  API base    : ${cfg.baseUrl}`,
     `  API key     : ${cfg.apiKey ? maskValue(cfg.apiKey) : pc.red('(missing)')}`,
     `  Default     : ${cfg.defaultPreset}`,
+    `  Project root: ${root} ${rootSource}`,
+    `  Path sandbox: ${pathsRestricted() ? pc.green('on') : pc.dim('off (CLI mode)')}`,
     '',
     pc.bold('Model presets'),
   ];

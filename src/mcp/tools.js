@@ -11,16 +11,21 @@ import {
   reviewHandler,
   statusHandler,
   commitMsgHandler,
+  writeHandler,
   jiraSearchHandler,
   jiraIssueHandler,
   jiraCreateHandler,
   jiraUpdateHandler,
   jiraCommentHandler,
+  jiraTransitionsHandler,
+  jiraAttachmentsHandler,
   linearSearchHandler,
   linearIssueHandler,
   linearCreateHandler,
   linearUpdateHandler,
   linearCommentHandler,
+  linearStatesHandler,
+  linearAttachmentsHandler,
   githubSearchHandler,
   githubIssueHandler,
   githubCreateHandler,
@@ -30,6 +35,7 @@ import {
   confluencePageHandler,
   confluenceCreateHandler,
   confluenceUpdateHandler,
+  confluenceSpacesHandler,
   gitlabSearchHandler,
   gitlabIssueHandler,
   gitlabCreateHandler,
@@ -139,6 +145,26 @@ const CORE_TOOLS = [
     },
     handler: commitMsgHandler,
   },
+  {
+    name: 'triss_write',
+    description:
+      'Generate boilerplate code/docs from a spec, optionally mimicking the ' +
+      'style of a reference file. With `target` writes the result to disk ' +
+      '(path-sandboxed); without `target` returns the content as the tool ' +
+      'result so the caller can write it themselves.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        spec: { type: 'string', description: 'What to write (free-form description)' },
+        target: { type: 'string', description: 'Output file path (optional). When set, Triss writes the file.' },
+        context: { type: 'string', description: 'Optional reference file to mimic in style' },
+        model: { type: 'string', description: 'flash | pro | <model id>' },
+        max_tokens: { type: 'number', description: 'Token budget (default 16384)' },
+      },
+      required: ['spec'],
+    },
+    handler: writeHandler,
+  },
 ];
 
 const JIRA_TOOLS = [
@@ -185,6 +211,8 @@ const JIRA_TOOLS = [
         description: { type: 'string', description: 'Plain text — converted to ADF' },
         type: { type: 'string', description: 'Issue type, default Task' },
         parent: { type: 'string', description: 'Parent/epic key' },
+        assignee: { type: 'string', description: 'Assignee accountId' },
+        priority: { type: 'string', description: 'Priority name (e.g. High, Medium)' },
       },
       required: ['project', 'summary'],
     },
@@ -201,6 +229,8 @@ const JIRA_TOOLS = [
         description: { type: 'string' },
         status: { type: 'string', description: 'Transition target name' },
         parent: { type: 'string' },
+        assignee: { type: 'string', description: 'Reassign by accountId' },
+        priority: { type: 'string', description: 'Priority name (e.g. High, Medium)' },
       },
       required: ['key'],
     },
@@ -218,6 +248,33 @@ const JIRA_TOOLS = [
       required: ['key', 'body'],
     },
     handler: jiraCommentHandler,
+  },
+  {
+    name: 'triss_jira_transitions',
+    description:
+      'List the status transitions currently available on a Jira issue. Use ' +
+      'before `triss_jira_update` with `status` to discover the exact name ' +
+      'expected by the workflow.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Issue key, e.g. PROJ-123' },
+      },
+      required: ['key'],
+    },
+    handler: jiraTransitionsHandler,
+  },
+  {
+    name: 'triss_jira_attachments',
+    description: 'List the attachments on a Jira issue (id, filename, size, created, content URL).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Issue key, e.g. PROJ-123' },
+      },
+      required: ['key'],
+    },
+    handler: jiraAttachmentsHandler,
   },
 ];
 
@@ -266,6 +323,7 @@ const LINEAR_TOOLS = [
         project: { type: 'string', description: 'Project UUID' },
         parent: { type: 'string', description: 'Parent issue UUID or identifier' },
         priority: { type: 'number' },
+        assignee: { type: 'string', description: 'Assignee user UUID' },
       },
       required: ['team', 'title'],
     },
@@ -283,6 +341,7 @@ const LINEAR_TOOLS = [
         state: { type: 'string', description: 'Workflow state name' },
         project: { type: 'string' },
         parent: { type: 'string' },
+        priority: { type: 'number', description: 'Priority 0-4' },
       },
       required: ['id'],
     },
@@ -300,6 +359,32 @@ const LINEAR_TOOLS = [
       required: ['id', 'body'],
     },
     handler: linearCommentHandler,
+  },
+  {
+    name: 'triss_linear_states',
+    description:
+      "List a team's workflow states (id, type, name). Use to discover " +
+      'the exact name needed for `triss_linear_update.state`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        team: { type: 'string', description: 'Team key (e.g. ENG) or UUID' },
+      },
+      required: ['team'],
+    },
+    handler: linearStatesHandler,
+  },
+  {
+    name: 'triss_linear_attachments',
+    description: 'List attachments on a Linear issue (id, title, sourceType, URL).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Issue identifier (TEAM-42) or UUID' },
+      },
+      required: ['id'],
+    },
+    handler: linearAttachmentsHandler,
   },
 ];
 
@@ -451,6 +536,19 @@ const CONFLUENCE_TOOLS = [
       required: ['id'],
     },
     handler: confluenceUpdateHandler,
+  },
+  {
+    name: 'triss_confluence_spaces',
+    description:
+      'List Confluence spaces (id, key, name). Use to discover the space ' +
+      'key/id required by `triss_confluence_create.space`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max spaces to return (default 100)' },
+      },
+    },
+    handler: confluenceSpacesHandler,
   },
 ];
 

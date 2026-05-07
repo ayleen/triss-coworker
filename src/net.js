@@ -3,6 +3,19 @@
 // (`triss fetch`, `triss ask --urls`, MCP `triss_fetch` / `triss_ask`).
 // Integration clients (jira/github/...) intentionally bypass this — their
 // base URL comes from operator-managed env, not the model.
+//
+// Known residual risk — DNS rebinding:
+//   This guard does one DNS lookup; the subsequent fetch() inside Node's
+//   built-in undici performs its own lookup. An attacker who controls the
+//   authoritative DNS for a hostname can return a public IP to the first
+//   query (passes the guard) and a private IP to the second (the actual
+//   connection). Closing this fully requires pinning the connection to
+//   the IP we verified — a network-layer rewrite (https.request with a
+//   custom `lookup` callback, or an undici Agent with a connect hook).
+//   For a single-user CLI/MCP tool the guard catches the cheap bulk of
+//   attacks; if you run triss in a high-trust environment alongside
+//   metadata services or internal infra, prefer network-level egress
+//   filtering as the primary control.
 
 import { lookup } from 'node:dns/promises';
 

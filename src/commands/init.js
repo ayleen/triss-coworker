@@ -7,6 +7,7 @@ import { getConfig } from '../config.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { runWizard } from './config.js';
 import { showStatus as mcpStatus } from '../mcp/install.js';
+import { promptChoice } from '../secrets.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(HERE, '..', '..', 'templates');
@@ -16,17 +17,42 @@ const END_MARKER = '<!-- triss:end -->';
 
 const TARGETS = {
   claude: { template: 'claude.md', filename: 'CLAUDE.md', globalDir: '.claude' },
-  // Reserved for future support — codex/agents.md, etc.
   codex: { template: 'codex.md', filename: 'AGENTS.md', globalDir: '.codex' },
 };
 
+const SUPPORTED = [...Object.keys(TARGETS), 'both'];
+
 export async function runInit(opts) {
-  const target = (opts.target || 'claude').toLowerCase();
-  const meta = TARGETS[target];
-  if (!meta) {
-    throw new Error(`Unknown --target "${target}". Supported: ${Object.keys(TARGETS).join(', ')}`);
+  let raw = opts.target ? String(opts.target).toLowerCase() : '';
+  if (!raw) raw = await chooseTarget();
+  if (!SUPPORTED.includes(raw)) {
+    throw new Error(`Unknown --target "${raw}". Supported: ${SUPPORTED.join(', ')}`);
   }
 
+  const targets = raw === 'both' ? ['claude', 'codex'] : [raw];
+  for (const t of targets) {
+    await writeAgentRules(t, opts);
+  }
+
+  await postInit(opts);
+}
+
+async function chooseTarget() {
+  // Non-interactive shell (CI / pipes / hooks): preserve historical default.
+  if (!process.stdin.isTTY) return 'claude';
+  return promptChoice(
+    'Where should triss install its agent rules?',
+    [
+      { label: 'Claude — CLAUDE.md', value: 'claude' },
+      { label: 'Codex  — AGENTS.md', value: 'codex' },
+      { label: 'Both   — CLAUDE.md and AGENTS.md', value: 'both' },
+    ],
+    { defaultIndex: 0 },
+  );
+}
+
+async function writeAgentRules(target, opts) {
+  const meta = TARGETS[target];
   const templatePath = join(TEMPLATE_DIR, meta.template);
   if (!existsSync(templatePath)) {
     throw new Error(`Template not found for target "${target}" at ${templatePath}`);
@@ -44,32 +70,30 @@ export async function runInit(opts) {
   if (!existsSync(destPath)) {
     writeFileSync(destPath, wrapped);
     process.stdout.write(pc.green(`✓ Created ${destPath}\n`));
-  } else {
-    const existing = readFileSync(destPath, 'utf8');
-    if (existing.includes(START_MARKER) && existing.includes(END_MARKER)) {
-      const replaced = replaceBlock(existing, wrapped);
-      if (replaced === existing) {
-        process.stdout.write(pc.dim(`= ${destPath} already up to date\n`));
-      } else {
-        writeFileSync(destPath, replaced);
-        process.stdout.write(
-          pc.cyan(`${opts.force ? '↻ Force-updated' : '↻ Updated'} triss block in ${destPath}\n`),
-        );
-      }
-    } else {
-      const sep = existing.endsWith('\n') ? '\n' : '\n\n';
-      writeFileSync(destPath, existing + sep + wrapped);
-      process.stdout.write(pc.green(`+ Appended triss block to ${destPath}\n`));
-    }
+    return;
   }
-
-  await postInit(opts);
+  const existing = readFileSync(destPath, 'utf8');
+  if (existing.includes(START_MARKER) && existing.includes(END_MARKER)) {
+    const replaced = replaceBlock(existing, wrapped);
+    if (replaced === existing) {
+      process.stdout.write(pc.dim(`= ${destPath} already up to date\n`));
+    } else {
+      writeFileSync(destPath, replaced);
+      process.stdout.write(
+        pc.cyan(`${opts.force ? '↻ Force-updated' : '↻ Updated'} triss block in ${destPath}\n`),
+      );
+    }
+  } else {
+    const sep = existing.endsWith('\n') ? '\n' : '\n\n';
+    writeFileSync(destPath, existing + sep + wrapped);
+    process.stdout.write(pc.green(`+ Appended triss block to ${destPath}\n`));
+  }
 }
 
 async function postInit(opts) {
   if (opts.setup) {
     process.stdout.write('\n' + pc.bold('Running setup wizard…') + '\n');
-    // Don't conflate the `init` scope (where to write CLAUDE.md) with the
+    // Don't conflate the `init` scope (where to write agent rules) with the
     // `wizard` scope (where to write env files). Let the wizard ask
     // (or default to global silently in non-TTY).
     await runWizard(undefined, {});
@@ -130,17 +154,18 @@ async function renderTemplate(raw, target) {
 
   let mcpHint = '';
   try {
-    const { present } = mcpStatus('global');
+    const { present } = mcpStatus('global', { target });
     if (present) {
+      const sessionLabel = target === 'codex' ? 'Codex' : 'Claude Code';
       mcpHint =
-        '\n> 💡 **Triss is also available as MCP tools in this Claude Code session.**\n' +
+        `\n> 💡 **Triss is also available as MCP tools in this ${sessionLabel} session.**\n` +
         '> Native tools — `triss_ask`, `triss_chat`, `triss_review`, `triss_jira_*`,\n' +
         '> `triss_linear_*` etc. — are usually faster and have per-tool permissions.\n' +
         '> Prefer them over the Bash invocations described below; the CLI block stays\n' +
         '> as a fallback if MCP is not loaded.\n\n';
     }
   } catch {
-    /* ~/.claude.json unreadable — silently fall back to CLI-only block */
+    /* config unreadable — silently fall back to CLI-only block */
   }
 
   let block;

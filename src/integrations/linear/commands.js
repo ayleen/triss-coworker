@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { linear, transitionIssue } from './client.js';
+import { linear, transitionIssue, resolveTeamId } from './client.js';
 import { summarize, printResult, IntegrationError } from '../_contract.js';
 
 function formatIssueLine(i) {
@@ -79,7 +79,7 @@ export async function updateCmd(idOrIdentifier, opts) {
 
 export async function createCmd(opts) {
   const input = {
-    teamId: opts.team,
+    teamId: await resolveTeamId(opts.team),
     title: opts.title,
     description: opts.description ?? '',
   };
