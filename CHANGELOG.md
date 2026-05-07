@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-05-08
+
+### Fixed
+
+- **MCP path sandbox no longer leaks across projects.** A single global
+  `~/.claude.json` / `~/.codex/config.toml` was being written with
+  `TRISS_PROJECT_ROOT=<install-time-cwd>` baked in. Because that config
+  is shared by every Claude Code / Codex session, every install from a
+  new project would overwrite the pin and silently sandbox unrelated
+  sessions to the wrong root — yielding `outside project root /Users/.../X`
+  errors when working in project Y. Global installs now omit
+  `TRISS_PROJECT_ROOT`; the sandbox follows the per-session cwd. Local
+  `./.mcp.json` installs continue to pin the path (the config travels
+  with the project, so pinning is correct there). Existing global
+  configs are auto-migrated on the next `triss mcp install --global`
+  with a one-line `⚠ dropped stale TRISS_PROJECT_ROOT=…` notice.
+
+### Added
+
+- `triss mcp install` now prompts `Project / Global` interactively when
+  neither `--local` nor `--global` is passed and stdin is a TTY. The
+  default is `Project`, mirroring what most users expect after picking
+  "Project" in the wizard.
+- `triss config wizard` now propagates the user's scope choice (Global
+  vs Project) into the MCP-server install. Previously the wizard
+  hard-coded `global` for the MCP step regardless of what scope the
+  user selected for the credentials file, which is what masked the
+  bug above.
+- The MCP server prints one diagnostic line to stderr at startup —
+  `triss MCP: root=<X> (from env|cwd), sandbox=on|off` — visible in
+  the host's MCP-server log so you can verify which root is actually
+  in effect.
+
 ## [0.14.0] — 2026-05-07
 
 ### Changed

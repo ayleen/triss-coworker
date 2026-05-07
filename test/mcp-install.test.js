@@ -149,9 +149,9 @@ function withTmpHome(fn) {
   }
 }
 
-test('CODEX-01: installEntry --target codex writes TOML to ~/.codex/config.toml', () => {
+test('CODEX-01: installEntry --target codex writes TOML to ~/.codex/config.toml without pinning sandbox root', () => {
   withTmpHome((home) => {
-    withTempCwd((cwd) => {
+    withTempCwd(() => {
       const result = installEntry('global', { target: 'codex' });
       assert.equal(result.target, 'codex');
       assert.equal(result.status, 'added');
@@ -163,9 +163,15 @@ test('CODEX-01: installEntry --target codex writes TOML to ~/.codex/config.toml'
       assert.match(toml, /^args = \["mcp", "serve"\]$/m);
       assert.match(toml, /^startup_timeout_sec = 30$/m);
       assert.match(toml, /^tool_timeout_sec = 120$/m);
-      assert.match(toml, /^\[mcp_servers\.triss\.env\]$/m);
-      // TRISS_PROJECT_ROOT must point at the cwd we used.
-      assert.match(toml, new RegExp(`TRISS_PROJECT_ROOT = "${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'm'));
+      // Codex global must NOT bake TRISS_PROJECT_ROOT — that would pin every
+      // Codex session to a single fixed directory regardless of which project
+      // it was launched in (see install.js comment).
+      assert.ok(
+        !/TRISS_PROJECT_ROOT/.test(toml),
+        'global Codex install must not pin TRISS_PROJECT_ROOT',
+      );
+      // No env section at all when there are no custom env keys to render.
+      assert.ok(!/^\[mcp_servers\.triss\.env\]$/m.test(toml));
     });
   });
 });
@@ -293,6 +299,114 @@ test('CODEX-08: TOML escapes backslashes and double quotes in paths', () => {
         /^command = "C:\\\\path with \\"quotes\\"\\\\triss\.exe"$/m,
         'special chars must be escaped',
       );
+    });
+  });
+});
+
+// ─── scope-aware TRISS_PROJECT_ROOT pinning ──────────────────────────────────
+
+test('SCOPE-01: global Claude install does not pin TRISS_PROJECT_ROOT', () => {
+  withTmpHome((home) => {
+    withTempCwd(() => {
+      const r = installEntry('global', { target: 'claude' });
+      assert.equal(r.path, join(home, '.claude.json'));
+      const config = JSON.parse(readFileSync(r.path, 'utf8'));
+      const entry = config.mcpServers.triss;
+      assert.equal(entry.command, 'triss');
+      assert.deepEqual(entry.args, ['mcp', 'serve']);
+      // Either no env at all, or env without TRISS_PROJECT_ROOT.
+      assert.ok(
+        !entry.env || !('TRISS_PROJECT_ROOT' in entry.env),
+        'global install must not pin TRISS_PROJECT_ROOT',
+      );
+    });
+  });
+});
+
+test('SCOPE-02: global Claude install with custom env keeps custom keys, drops TRISS_PROJECT_ROOT', () => {
+  withTmpHome(() => {
+    withTempCwd(() => {
+      const r = installEntry('global', {
+        target: 'claude',
+        env: { CUSTOM_FLAG: '1' },
+      });
+      const config = JSON.parse(readFileSync(r.path, 'utf8'));
+      assert.deepEqual(config.mcpServers.triss.env, { CUSTOM_FLAG: '1' });
+    });
+  });
+});
+
+test('SCOPE-03: re-installing globally drops a stale TRISS_PROJECT_ROOT and surfaces it via migratedFrom', () => {
+  withTmpHome((home) => {
+    const path = join(home, '.claude.json');
+    // Simulate an entry written by an older triss version.
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          mcpServers: {
+            triss: {
+              command: 'triss',
+              args: ['mcp', 'serve'],
+              env: { TRISS_PROJECT_ROOT: '/old/project/path' },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    withTempCwd(() => {
+      const r = installEntry('global', { target: 'claude' });
+      assert.equal(r.status, 'updated');
+      assert.equal(r.migratedFrom, '/old/project/path');
+      const config = JSON.parse(readFileSync(path, 'utf8'));
+      assert.ok(
+        !config.mcpServers.triss.env ||
+          !('TRISS_PROJECT_ROOT' in (config.mcpServers.triss.env || {})),
+        'stale TRISS_PROJECT_ROOT must be removed on re-install',
+      );
+    });
+  });
+});
+
+test('SCOPE-04: re-installing locally refreshes TRISS_PROJECT_ROOT and does not flag migration', () => {
+  withTempCwd((dir) => {
+    // First install pins one path.
+    installEntry('local');
+    // Second install from the same cwd just refreshes; migratedFrom stays
+    // undefined because the new entry still pins a (current) value.
+    const second = installEntry('local');
+    assert.equal(second.status, 'updated');
+    assert.equal(second.migratedFrom, undefined);
+    const config = JSON.parse(readFileSync(second.path, 'utf8'));
+    assert.equal(config.mcpServers.triss.env.TRISS_PROJECT_ROOT, dir);
+  });
+});
+
+test('SCOPE-05: re-installing for Codex drops a previously baked TRISS_PROJECT_ROOT', () => {
+  withTmpHome((home) => {
+    const path = join(home, '.codex', 'config.toml');
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    // Hand-write a Codex block that previous triss versions used to emit.
+    writeFileSync(
+      path,
+      [
+        '[mcp_servers.triss]',
+        'command = "triss"',
+        'args = ["mcp", "serve"]',
+        '',
+        '[mcp_servers.triss.env]',
+        'TRISS_PROJECT_ROOT = "/old/codex/path"',
+        '',
+      ].join('\n'),
+    );
+    withTempCwd(() => {
+      const r = installEntry('global', { target: 'codex' });
+      assert.equal(r.status, 'updated');
+      assert.equal(r.migratedFrom, '/old/codex/path');
+      const toml = readFileSync(path, 'utf8');
+      assert.ok(!/TRISS_PROJECT_ROOT/.test(toml), 'stale pin must be gone');
     });
   });
 });

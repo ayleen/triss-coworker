@@ -6,7 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { listTools, findTool, toMcpToolList } from './tools.js';
 import { getConfig } from '../config.js';
-import { setRestricted } from '../safety.js';
+import { setRestricted, projectRoot, pathsRestricted } from '../safety.js';
 
 export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
   // Loads .env files (project-local first, then global) into process.env
@@ -16,6 +16,18 @@ export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
   // affected — only this MCP-server entry point. An operator can opt
   // out by exporting TRISS_RESTRICT_PATHS=0 before starting the server.
   if (process.env.TRISS_RESTRICT_PATHS === undefined) setRestricted(true);
+
+  // Surface the resolved sandbox root on stderr so the host (Claude Code,
+  // Codex, etc.) can show it in its MCP-server logs. Without this, when
+  // the sandbox refuses a path it's not obvious which root is actually in
+  // effect — and a wrong TRISS_PROJECT_ROOT in a global config can silently
+  // pin the worker to an unrelated project.
+  const root = projectRoot();
+  const source = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
+  const restricted = pathsRestricted() ? 'on' : 'off';
+  process.stderr.write(
+    `triss MCP: root=${root} (from ${source}), sandbox=${restricted}\n`,
+  );
 
   const server = new Server(
     { name, version },

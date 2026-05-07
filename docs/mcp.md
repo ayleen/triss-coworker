@@ -36,19 +36,62 @@ triss config wizard
 Or wire it manually:
 
 ```bash
-triss mcp install                  # asks: Claude / Codex / Both
-triss mcp install --target claude  # ~/.claude.json (default)
-triss mcp install --target codex   # ~/.codex/config.toml
-triss mcp install --target both    # both configs in one go
-triss mcp install --local          # ./.mcp.json (claude only — Codex has no project-local config)
+triss mcp install                  # asks: Claude / Codex / Both, then Project / Global
+triss mcp install --target claude  # Claude target, prompts for scope (or --local / --global)
+triss mcp install --target codex   # ~/.codex/config.toml (always global — Codex has no project-local config)
+triss mcp install --target both    # both configs in one go (Codex stays global)
+triss mcp install --local          # ./.mcp.json in cwd (claude only)
+triss mcp install --global         # ~/.claude.json (skips the prompt)
 ```
 
-The installer pins `TRISS_PROJECT_ROOT` automatically so the MCP server
-does not depend on the launcher's current working directory.
+### Scope and the path sandbox
+
+Triss MCP runs with a path sandbox: the worker can only read/write
+files under a single "project root", which `triss status` reports as
+`Project root: <X> (from TRISS_PROJECT_ROOT|cwd)`.
+
+- **Local install** (`--local`, writes `./.mcp.json`) bakes
+  `TRISS_PROJECT_ROOT` into the launcher entry. The config file lives in
+  the project tree, so the pinned path is intrinsic to it.
+- **Global install** (`--global`, writes `~/.claude.json` or
+  `~/.codex/config.toml`) does **not** bake `TRISS_PROJECT_ROOT`. A global
+  config is shared by every Claude Code / Codex session regardless of
+  which project they were launched in, so a pinned path would silently
+  sandbox every session into a single fixed directory. Instead, the
+  sandbox follows the per-session `cwd` that the host sets when it spawns
+  the MCP child.
+
+If you need the sandbox to land on a specific directory regardless of
+where the host launches the worker, export `TRISS_PROJECT_ROOT` in your
+shell, or set `TRISS_RESTRICT_PATHS=0` to disable the sandbox entirely
+(only do that if you trust the agent to behave).
+
+When the MCP server starts, it writes one diagnostic line to stderr —
+visible in the host's MCP-server log — so you can verify the resolved
+root:
+
+```
+triss MCP: root=/Users/me/projects/foo (from cwd), sandbox=on
+```
 
 ### Claude config (`~/.claude.json` or `./.mcp.json`)
 
-JSON file edited in-place, every other key preserved:
+JSON file edited in-place, every other key preserved.
+
+Global (`~/.claude.json`) — no env section; sandbox follows cwd:
+
+```json
+{
+  "mcpServers": {
+    "triss": {
+      "command": "triss",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Project-local (`./.mcp.json`) — `TRISS_PROJECT_ROOT` pinned:
 
 ```json
 {
@@ -79,13 +122,27 @@ command = "triss"
 args = ["mcp", "serve"]
 startup_timeout_sec = 30
 tool_timeout_sec = 120
-
-[mcp_servers.triss.env]
-TRISS_PROJECT_ROOT = "/path/to/project"
 ```
 
 The two timeouts give `--model pro` calls enough headroom out of the box.
+Codex has no project-local config — the block above is the canonical
+shape. The `[mcp_servers.triss.env]` sub-table is only emitted when there
+are custom env keys to render (none by default; `TRISS_PROJECT_ROOT` is
+intentionally not set, see "Scope and the path sandbox" above).
+
 Restart the Codex CLI session and verify with `codex mcp list`.
+
+### Migrating from older versions
+
+Older Triss versions (≤ 0.14) baked `TRISS_PROJECT_ROOT=<install-time-cwd>`
+into global configs as well. That worked for users with a single project
+but quietly broke multi-project setups: every `triss config wizard` /
+`triss mcp install` from a new project overwrote the global pin, so the
+sandbox followed whichever project was last installed from — *not* the
+session's actual project. Re-run `triss mcp install --global` once with
+the new version: the installer detects the stale pin, drops it, and
+prints a `⚠ dropped stale TRISS_PROJECT_ROOT=<old-path>` line so you
+know it happened.
 
 ## Uninstall
 
@@ -200,9 +257,12 @@ triss mcp install --command "/Users/me/projects/triss-coworker/bin/triss.js"
 triss mcp install --args "mcp serve"
 ```
 
-Or edit `~/.claude.json` by hand — `mcpServers.triss.command`,
-`mcpServers.triss.args`, and `mcpServers.triss.env.TRISS_PROJECT_ROOT`
-are the important fields.
+Or edit the config by hand — `mcpServers.triss.command` and
+`mcpServers.triss.args` (Claude) / `command` and `args` under
+`[mcp_servers.triss]` (Codex) are the only fields the host actually
+reads. `mcpServers.triss.env.TRISS_PROJECT_ROOT` is honoured if you
+choose to pin it manually, but the installer no longer writes it for
+global scope (see "Scope and the path sandbox" above).
 
 ## Running the server manually
 

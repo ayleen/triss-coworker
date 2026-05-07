@@ -262,7 +262,7 @@ self-hosted endpoints).
 | `TRISS_FILE_MAX_BYTES`         | `1048576`   | Per-file cap for `triss ask --paths`; oversized files are reported and skipped (1 MB default) |
 | `TRISS_CORPUS_MAX_BYTES`       | `16777216`  | Total corpus cap across all files in one `ask` call (16 MB default) |
 | `TRISS_GLOB_MAX_FILES`         | `500`       | Max files a single glob may expand to (`src/**/*.ts` etc.) |
-| `TRISS_PROJECT_ROOT`           | `process.cwd()` | Pin the project root used by the sandbox and `.triss.env` lookup. `triss mcp install` writes this into the MCP launcher config automatically. |
+| `TRISS_PROJECT_ROOT`           | `process.cwd()` | Pin the project root used by the sandbox and `.triss.env` lookup. `triss mcp install --local` writes this into the project-local `.mcp.json` automatically; **global** installs (`~/.claude.json`, `~/.codex/config.toml`) intentionally leave it unset and let the sandbox follow the per-session cwd — see [docs/mcp.md](mcp.md#scope-and-the-path-sandbox). |
 | `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
 | `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
 | `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |

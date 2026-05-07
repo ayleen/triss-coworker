@@ -188,11 +188,12 @@ agent (in your own scripts, CI, etc).
 ### Option 2 — MCP server (deeper integration)
 
 ```bash
-triss mcp install                  # asks: Claude / Codex / Both, then writes the config
-triss mcp install --target claude  # ~/.claude.json (no prompt)
-triss mcp install --target codex   # ~/.codex/config.toml (no prompt)
-triss mcp install --target both    # both configs
-triss mcp install --local          # ./.mcp.json (claude target only — Codex has no project-local config)
+triss mcp install                  # asks: Claude / Codex / Both, then Project / Global
+triss mcp install --target claude  # Claude only, prompts for scope
+triss mcp install --target codex   # ~/.codex/config.toml (always global)
+triss mcp install --target both    # both configs (Codex stays global)
+triss mcp install --local          # ./.mcp.json in cwd (claude only, skips scope prompt)
+triss mcp install --global         # ~/.claude.json (skips scope prompt)
 ```
 
 For **Claude Code**: restart your session — `triss` appears in `claude /mcp`
@@ -202,6 +203,17 @@ permissions, no Bash subprocess overhead).
 
 The Codex entry includes `startup_timeout_sec = 30` and `tool_timeout_sec
 = 120` defaults so `--model pro` calls have headroom.
+
+#### Scope: Project vs Global
+
+A **project-local** install (`./.mcp.json`, only Claude) bakes
+`TRISS_PROJECT_ROOT` into the launcher entry — fine, the file lives in
+the project tree. A **global** install (`~/.claude.json`,
+`~/.codex/config.toml`) is shared across every Claude Code / Codex
+session, so it does **not** pin a sandbox path; the worker's project
+root follows the per-session `cwd` set by the host. See
+[`docs/mcp.md`](docs/mcp.md#scope-and-the-path-sandbox) for the full
+rationale and the migration note for older configs.
 
 The exposed tool set is **filtered by configured credentials**:
 

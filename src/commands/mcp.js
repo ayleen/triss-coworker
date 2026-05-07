@@ -5,11 +5,46 @@ import { promptChoice } from '../secrets.js';
 
 const SUPPORTED_TARGETS = ['claude', 'codex', 'both'];
 
-function resolveScope(opts) {
+function resolveScopeFlags(opts) {
   if (opts.global && opts.local) {
     throw new Error('Pick one of --global or --local, not both');
   }
-  return opts.local ? 'local' : 'global';
+  if (opts.local) return 'local';
+  if (opts.global) return 'global';
+  return null;
+}
+
+// Read-only commands (status, uninstall) keep the old behaviour: default to
+// global when no flag is given. Only `install` prompts.
+function resolveScope(opts) {
+  return resolveScopeFlags(opts) || 'global';
+}
+
+// Install-time scope resolver. When neither --global nor --local is passed
+// and stdin is a TTY, prompt the user — we used to silently default to
+// global, which was the silent culprit behind cross-project sandbox bugs
+// (a global ~/.claude.json baked the install-time cwd into every session).
+// Codex / 'both' have no project-local config, so we don't prompt there.
+async function resolveInstallScope(opts, target) {
+  const flag = resolveScopeFlags(opts);
+  if (flag) return flag;
+  if (target !== 'claude') return 'global';
+  if (!process.stdin.isTTY) return 'global';
+  return promptChoice(
+    'Where should triss be registered?',
+    [
+      {
+        label: 'Project — ./.mcp.json (only this project; sandbox pinned here)',
+        value: 'local',
+      },
+      {
+        label:
+          'Global  — ~/.claude.json (every Claude Code session; sandbox follows per-session cwd)',
+        value: 'global',
+      },
+    ],
+    { defaultIndex: 0 },
+  );
 }
 
 async function resolveTarget(opts) {
@@ -43,8 +78,10 @@ export async function runMcpServe() {
 }
 
 export async function runMcpInstall(opts) {
-  const scope = resolveScope(opts);
+  // Resolve target first so we can skip the scope prompt for Codex / 'both'
+  // (those have no project-local mode — would just be a dead choice).
   const target = await resolveTarget(opts);
+  const scope = await resolveInstallScope(opts, target);
   const targets = expandTargets(target);
 
   // Codex doesn't support project-local config — fail fast before any write.
@@ -63,9 +100,18 @@ export async function runMcpInstall(opts) {
     });
     process.stdout.write(
       pc.green(`✓ MCP server "triss" ${result.status} in ${result.path}`) +
-        pc.dim(` (${t})`) +
+        pc.dim(` (${t}, scope=${t === 'codex' ? 'global' : scope})`) +
         '\n',
     );
+    if (result.migratedFrom) {
+      process.stdout.write(
+        pc.yellow(
+          `  ⚠ dropped stale TRISS_PROJECT_ROOT=${result.migratedFrom} ` +
+            `from this entry — global installs no longer pin a sandbox path; ` +
+            `the sandbox now follows the per-session cwd.\n`,
+        ),
+      );
+    }
   }
   const session = target === 'codex' ? 'Codex' : target === 'both' ? 'agent' : 'Claude Code';
   process.stdout.write(

@@ -60,13 +60,28 @@ function writeJson(path, obj) {
   writeFileSync(path, JSON.stringify(obj, null, 2) + '\n');
 }
 
-function claudeEntry(opts) {
+// Build the JSON entry written to ~/.claude.json or ./.mcp.json.
+//
+// `scope` controls TRISS_PROJECT_ROOT pinning. The variable hardwires the
+// MCP-server sandbox to a specific directory; that's correct only when the
+// config file itself lives inside that directory (project-local .mcp.json).
+// In a *global* config it would silently sandbox every Claude Code session
+// — regardless of which project it is launched in — to a single fixed path,
+// which is exactly the bug we want to avoid (see #issues/multi-root). For
+// global scope we leave TRISS_PROJECT_ROOT unset so projectRoot() falls
+// back to process.cwd(), which Claude Code sets per project.
+function claudeEntry(opts, scope) {
   const entry = {
     command: opts.command || SERVER_NAME,
     args: opts.args || ['mcp', 'serve'],
   };
-  const root = opts.projectRoot || projectRoot();
-  entry.env = { ...(opts.env || {}), TRISS_PROJECT_ROOT: root };
+  const customEnv = opts.env || {};
+  if (scope === 'local') {
+    const root = opts.projectRoot || projectRoot();
+    entry.env = { ...customEnv, TRISS_PROJECT_ROOT: root };
+  } else if (Object.keys(customEnv).length) {
+    entry.env = { ...customEnv };
+  }
   return entry;
 }
 
@@ -77,9 +92,18 @@ function installClaude(scope, opts) {
     config.mcpServers = {};
   }
   const existing = config.mcpServers[SERVER_NAME];
-  config.mcpServers[SERVER_NAME] = claudeEntry(opts);
+  const oldRoot = existing?.env?.TRISS_PROJECT_ROOT || null;
+  const next = claudeEntry(opts, scope);
+  config.mcpServers[SERVER_NAME] = next;
   writeJson(path, config);
-  return { path, status: existing ? 'updated' : 'added', target: 'claude' };
+  const result = { path, status: existing ? 'updated' : 'added', target: 'claude' };
+  // Only surface migration when we actively dropped a stale pin; if the new
+  // entry still has a TRISS_PROJECT_ROOT (local install), the value just got
+  // refreshed and there's nothing for the user to act on.
+  if (oldRoot && !next.env?.TRISS_PROJECT_ROOT) {
+    result.migratedFrom = oldRoot;
+  }
+  return result;
 }
 
 function uninstallClaude(scope) {
@@ -162,8 +186,10 @@ function renderTrissToml(opts) {
   const startup =
     opts.startupTimeoutSec ?? CODEX_STARTUP_TIMEOUT_SEC;
   const toolTimeout = opts.toolTimeoutSec ?? CODEX_TOOL_TIMEOUT_SEC;
-  const root = opts.projectRoot || projectRoot();
-  const env = { ...(opts.env || {}), TRISS_PROJECT_ROOT: root };
+  // Codex configs are global only — pinning TRISS_PROJECT_ROOT here would
+  // sandbox every Codex session to one fixed directory. Same reasoning as
+  // claudeEntry(): rely on launch-time cwd for the sandbox root.
+  const env = { ...(opts.env || {}) };
 
   const lines = [];
   lines.push('[mcp_servers.triss]');
@@ -180,6 +206,19 @@ function renderTrissToml(opts) {
     }
   }
   return lines.join('\n') + '\n';
+}
+
+// Pull `TRISS_PROJECT_ROOT = "…"` out of the existing Codex block so we can
+// tell the user when an install drops a stale pin. Best-effort string scan;
+// we don't fully parse TOML.
+function previousCodexProjectRoot(content) {
+  if (!content) return null;
+  const lines = content.split('\n');
+  const block = findTrissBlock(lines);
+  if (!block) return null;
+  const blockText = lines.slice(block.start, block.end).join('\n');
+  const m = blockText.match(/TRISS_PROJECT_ROOT\s*=\s*"([^"\n]*)"/);
+  return m ? m[1] : null;
 }
 
 // Drop the existing Triss block (and the blank line that separated it from
@@ -205,6 +244,7 @@ function installCodex(opts) {
   mkdirSync(dirname(path), { recursive: true });
   const before = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const had = !!findTrissBlock(before.split('\n'));
+  const oldRoot = previousCodexProjectRoot(before);
   const stripped = stripTrissBlock(before);
   const block = renderTrissToml(opts);
 
@@ -218,7 +258,12 @@ function installCodex(opts) {
     next = prefix + block;
   }
   writeFileSync(path, next);
-  return { path, status: had ? 'updated' : 'added', target: 'codex' };
+  const result = { path, status: had ? 'updated' : 'added', target: 'codex' };
+  // The new block intentionally never contains TRISS_PROJECT_ROOT, so any
+  // previously-pinned value was just dropped — surface it for the CLI
+  // wrapper to print a one-liner so the user knows the semantics changed.
+  if (oldRoot) result.migratedFrom = oldRoot;
+  return result;
 }
 
 function uninstallCodex() {

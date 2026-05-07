@@ -120,11 +120,11 @@ export async function runWizard(target, opts) {
 
   if (mode === 'standard') {
     await runStandardWizard(path, current);
-    await silentlyInstallBoth();
+    await silentlyInstallBoth(scope);
   } else {
     await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
-    await offerClaudeCodeIntegration();
+    await offerClaudeCodeIntegration(scope);
   }
   if (scope === 'local') maybeAddGitignore();
 }
@@ -161,7 +161,14 @@ function sessionLabel(target) {
 
 // Standard mode wires both paths (MCP + agent rules) without asking
 // about granularity — but it does ask which agent to wire into.
-async function silentlyInstallBoth() {
+//
+// `wizardScope` is the global/local choice the user already made for the
+// .env file. We honour it here too: a "Project" wizard run wires Triss into
+// ./.mcp.json (and ./CLAUDE.md), not into the global agent config. That's
+// what the user expects — without it, picking "Project" for the env file
+// silently installed MCP globally and pinned the sandbox to the install-time
+// cwd, breaking every other Claude Code session.
+async function silentlyInstallBoth(wizardScope) {
   const agent = await chooseAgentTarget({
     question: 'Wire Triss into which agent?',
   });
@@ -176,14 +183,29 @@ async function silentlyInstallBoth() {
 
   const { installEntry } = await import('../mcp/install.js');
   for (const t of expandAgentTargets(agent)) {
-    const r = installEntry('global', { target: t });
+    // Codex has no project-local MCP config — fall back to global there.
+    const scope = t === 'codex' ? 'global' : wizardScope || 'global';
+    const r = installEntry(scope, { target: t });
     process.stdout.write(
-      pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}`) + pc.dim(` (${t})`) + '\n',
+      pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}`) +
+        pc.dim(` (${t}, scope=${scope})`) +
+        '\n',
     );
+    if (r.migratedFrom) {
+      process.stdout.write(
+        pc.yellow(
+          `    ⚠ dropped stale TRISS_PROJECT_ROOT=${r.migratedFrom} ` +
+            `— global installs no longer pin a sandbox path.\n`,
+        ),
+      );
+    }
   }
 
   const { runInit } = await import('./init.js');
-  await runInit({ global: true, target: agent });
+  // For agent rules, "global" lives in ~/.claude/CLAUDE.md and "local" in
+  // ./CLAUDE.md — runInit's --global flag selects between them. Reuse the
+  // same scope so both halves of the install land in the same place.
+  await runInit({ global: wizardScope !== 'local', target: agent });
 
   process.stdout.write(
     '\n  ' +
@@ -194,7 +216,10 @@ async function silentlyInstallBoth() {
   );
 }
 
-async function offerClaudeCodeIntegration() {
+// Advanced mode's optional MCP/rules wiring. Like silentlyInstallBoth(),
+// inherits the wizard's scope so a "Project" wizard run wires MCP into
+// ./.mcp.json — see that function's comment for the rationale.
+async function offerClaudeCodeIntegration(wizardScope) {
   if (!process.stdin.isTTY) return; // CI / piped runs: stay silent
 
   process.stdout.write('\n' + pc.bold('Wire Triss into your agent?') + '\n');
@@ -240,15 +265,26 @@ async function offerClaudeCodeIntegration() {
   if (paths === 'both' || paths === 'mcp') {
     const { installEntry } = await import('../mcp/install.js');
     for (const t of expandAgentTargets(agent)) {
-      const r = installEntry('global', { target: t });
+      const scope = t === 'codex' ? 'global' : wizardScope || 'global';
+      const r = installEntry(scope, { target: t });
       process.stdout.write(
-        pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}`) + pc.dim(` (${t})`) + '\n',
+        pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}`) +
+          pc.dim(` (${t}, scope=${scope})`) +
+          '\n',
       );
+      if (r.migratedFrom) {
+        process.stdout.write(
+          pc.yellow(
+            `  ⚠ dropped stale TRISS_PROJECT_ROOT=${r.migratedFrom} ` +
+              `— global installs no longer pin a sandbox path.\n`,
+          ),
+        );
+      }
     }
   }
   if (paths === 'both' || paths === 'rules') {
     const { runInit } = await import('./init.js');
-    await runInit({ global: true, target: agent });
+    await runInit({ global: wizardScope !== 'local', target: agent });
   }
   process.stdout.write(
     '\n  ' +
