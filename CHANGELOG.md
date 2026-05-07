@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-05-08
+
+### Changed
+
+- Bumped `openai` from `^4.77.0` to `^6.37.0`. The v4 line still pulls
+  `formdata-node@4` → `node-domexception@1`, both of which now print
+  npm deprecation warnings on install (use the platform's native
+  `DOMException`). `openai@6` has zero runtime dependencies and our
+  usage (`chat.completions.create` + streaming via async iterator) is
+  unchanged across v4/v5/v6, so the bump is API-transparent.
+
 ## [0.15.0] — 2026-05-08
 
 ### Fixed
