@@ -33,6 +33,8 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Upgrade npm to latest (Trusted Publishing needs >= 11.5)
+        run: npm install -g npm@latest && npm --version
       - name: Verify tag matches package version
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
