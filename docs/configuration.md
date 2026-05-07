@@ -79,17 +79,17 @@ Behaviour:
 Set a single variable.
 
 ```bash
-triss config set DEEPSEEK_API_KEY                    # interactive masked prompt → global
+triss config set TRISS_WORKER_API_KEY                    # interactive masked prompt → global
 triss config set ATLASSIAN_API_TOKEN --local         # interactive → project
-triss config set DEEPSEEK_FLASH_MODEL deepseek-v4-flash  # value as argument → global
+triss config set TRISS_WORKER_FLASH_MODEL deepseek-v4-flash  # value as argument → global
 echo "$KEY" | triss config set LINEAR_API_KEY -      # read from stdin (CI-friendly)
 ```
 
 ### `triss config get <KEY>`
 
 ```bash
-triss config get DEEPSEEK_API_KEY        # → "global  sk-d…294"  (masked)
-triss config get DEEPSEEK_API_KEY --local
+triss config get TRISS_WORKER_API_KEY        # → "global  sk-d…294"  (masked)
+triss config get TRISS_WORKER_API_KEY --local
 ```
 
 Exits with code 1 if the key is missing.
@@ -119,7 +119,7 @@ Removes a variable.
 
 | Target     | Variables                                                                | Required                                  |
 | ---------- | ------------------------------------------------------------------------ | ----------------------------------------- |
-| `deepseek` | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_FLASH_MODEL`, `DEEPSEEK_PRO_MODEL` | only `DEEPSEEK_API_KEY` is required |
+| `deepseek` | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
 
@@ -189,12 +189,12 @@ Verification: `triss status` from inside each project shows the
 ### C. Personal DeepSeek key per project
 
 Want to charge a specific project to a separate billing account? Put
-its `DEEPSEEK_API_KEY` in `<project>/.triss.env`. The global key in
+its `TRISS_WORKER_API_KEY` in `<project>/.triss.env`. The global key in
 `~/.config/triss/.env` keeps working everywhere else.
 
 ```bash
 cd ~/special-project
-triss config set DEEPSEEK_API_KEY --local
+triss config set TRISS_WORKER_API_KEY --local
 # (masked prompt → ./.triss.env)
 ```
 
@@ -205,7 +205,7 @@ what you need:
 
 ```yaml
 env:
-  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+  TRISS_WORKER_API_KEY: ${{ secrets.TRISS_WORKER_API_KEY }}
   ATLASSIAN_BASE_URL: ${{ vars.ATLASSIAN_BASE_URL }}
   ATLASSIAN_EMAIL: ${{ vars.ATLASSIAN_EMAIL }}
   ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
@@ -226,7 +226,7 @@ After that, credential changes are live.
 
 ## Troubleshooting
 
-**"No DeepSeek API key found"** — `triss config wizard deepseek`.
+**"No worker API key found"** — `triss config wizard worker`.
 
 **Wrong credentials picked up** — `triss status` shows the source for each
 variable in `[global]` / `[local]` / `[env]` brackets. If you expected

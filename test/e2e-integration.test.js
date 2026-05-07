@@ -41,25 +41,25 @@ function envSnapshot(keys) {
 
 // ─── 1. Wizard write → status read ──────────────────────────────────────────
 //
-// Simulates `triss config set DEEPSEEK_API_KEY=sk-foo` then verifies
+// Simulates `triss config set TRISS_WORKER_API_KEY=sk-foo` then verifies
 // getConfig() returns the value from the written file.
 
-test('config set DEEPSEEK_API_KEY then getConfig returns it', async () => {
+test('config set TRISS_WORKER_API_KEY then getConfig returns it', async () => {
   const tmp = makeTmp('triss-config-rw-');
   const configDir = join(tmp, '.config', 'triss');
   mkdirSync(configDir, { recursive: true });
   const globalEnvFile = join(configDir, '.env');
   writeFileSync(globalEnvFile, '');
 
-  const restore = envSnapshot(['DEEPSEEK_API_KEY', 'HOME']);
+  const restore = envSnapshot(['TRISS_WORKER_API_KEY', 'HOME']);
   // Point HOME to our tmp dir so getEnvFilePath('global') resolves there.
   process.env.HOME = tmp;
-  delete process.env.DEEPSEEK_API_KEY; // avoid process.env winning over file
+  delete process.env.TRISS_WORKER_API_KEY; // avoid process.env winning over file
 
   try {
     // Import setVar fresh so it picks up the redirected HOME.
     const { setVar } = await import(`../src/secrets.js?config-rw-${Date.now()}`);
-    setVar(globalEnvFile, 'DEEPSEEK_API_KEY', 'sk-foo');
+    setVar(globalEnvFile, 'TRISS_WORKER_API_KEY', 'sk-foo');
 
     // getConfig reads env files then overlays process.env.
     const { getConfig } = await import(`../src/config.js?config-rw-${Date.now()}`);
@@ -73,25 +73,25 @@ test('config set DEEPSEEK_API_KEY then getConfig returns it', async () => {
 
 // ─── 2. Project-local override wins over global ───────────────────────────────
 //
-// Global env has DEEPSEEK_API_KEY=global-key; project .triss.env has
-// DEEPSEEK_API_KEY=local-key. getConfig() must return the local one.
+// Global env has TRISS_WORKER_API_KEY=global-key; project .triss.env has
+// TRISS_WORKER_API_KEY=local-key. getConfig() must return the local one.
 
-test('project .triss.env overrides global DEEPSEEK_API_KEY', async () => {
+test('project .triss.env overrides global TRISS_WORKER_API_KEY', async () => {
   const tmp = makeTmp('triss-local-override-');
   const globalDir = join(tmp, '.config', 'triss');
   mkdirSync(globalDir, { recursive: true });
   const globalEnvFile = join(globalDir, '.env');
-  writeFileSync(globalEnvFile, 'DEEPSEEK_API_KEY=global-key\n');
+  writeFileSync(globalEnvFile, 'TRISS_WORKER_API_KEY=global-key\n');
 
   // Write a project-local .triss.env in a separate project dir.
   const projectDir = makeTmp('triss-project-');
-  writeFileSync(join(projectDir, '.triss.env'), 'DEEPSEEK_API_KEY=local-key\n');
+  writeFileSync(join(projectDir, '.triss.env'), 'TRISS_WORKER_API_KEY=local-key\n');
 
   const originalCwd = process.cwd();
-  const restore = envSnapshot(['DEEPSEEK_API_KEY', 'HOME']);
+  const restore = envSnapshot(['TRISS_WORKER_API_KEY', 'HOME']);
 
   process.env.HOME = tmp;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   process.chdir(projectDir);
 
   try {
@@ -116,11 +116,11 @@ test('runInit writes MCP tools hint into CLAUDE.md when entry is present', async
   const tmp = makeTmp('triss-init-mcp-');
   const projectDir = makeTmp('triss-init-proj-');
   const originalCwd = process.cwd();
-  const restore = envSnapshot(['HOME', 'DEEPSEEK_API_KEY']);
+  const restore = envSnapshot(['HOME', 'TRISS_WORKER_API_KEY']);
 
   // Set HOME so ~/.claude.json and global env path resolve into tmp.
   process.env.HOME = tmp;
-  delete process.env.DEEPSEEK_API_KEY; // avoid spurious postInit hints
+  delete process.env.TRISS_WORKER_API_KEY; // avoid spurious postInit hints
 
   // Pre-install the MCP entry in the fake ~/.claude.json.
   const claudeJson = { mcpServers: { triss: { command: 'triss', args: ['mcp', 'serve'] } } };
@@ -153,10 +153,10 @@ test('runInit includes "triss jira" instructions in CLAUDE.md when ATLASSIAN_* a
   const originalCwd = process.cwd();
 
   const JIRA_VARS = ['ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'];
-  const restore = envSnapshot(['HOME', 'DEEPSEEK_API_KEY', ...JIRA_VARS]);
+  const restore = envSnapshot(['HOME', 'TRISS_WORKER_API_KEY', ...JIRA_VARS]);
 
   process.env.HOME = tmp;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   // Provide full Atlassian credentials so the jira integration is "ready".
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'test@example.com';

@@ -16,12 +16,12 @@ function loadEnvFiles() {
 
 export function getConfig() {
   loadEnvFiles();
-  const apiKey = process.env.DEEPSEEK_API_KEY || process.env.WORKER_API_KEY || '';
+  const apiKey = process.env.TRISS_WORKER_API_KEY || '';
   return {
     apiKey,
-    baseUrl: process.env.DEEPSEEK_BASE_URL || process.env.WORKER_BASE_URL || 'https://api.deepseek.com/v1',
-    flashModel: process.env.DEEPSEEK_FLASH_MODEL || 'deepseek-v4-flash',
-    proModel: process.env.DEEPSEEK_PRO_MODEL || 'deepseek-v4-pro',
+    baseUrl: process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1',
+    flashModel: process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash',
+    proModel: process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro',
     defaultPreset: (process.env.TRISS_DEFAULT_MODEL || 'flash').toLowerCase(),
     envSources: {
       // Backwards-compatible shape for `triss status`.
@@ -39,8 +39,8 @@ function existsForScope(scope) {
 export function requireApiKey(cfg = getConfig()) {
   if (!cfg.apiKey) {
     const msg =
-      'No DeepSeek API key found.\n' +
-      'Run `triss config wizard deepseek` to set one, or export DEEPSEEK_API_KEY.';
+      'No worker API key found.\n' +
+      'Run `triss config wizard worker` to set one, or export TRISS_WORKER_API_KEY.';
     throw new Error(msg);
   }
   return cfg;

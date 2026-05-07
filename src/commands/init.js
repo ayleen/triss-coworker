@@ -108,8 +108,8 @@ async function postInit(opts) {
   if (!cfg.apiKey) {
     tips.push({
       level: 'warn',
-      msg: 'DeepSeek API key is not set — required for `triss ask`/`triss write`.',
-      cmd: 'triss config wizard deepseek',
+      msg: 'Worker API key is not set — required for `triss ask`/`triss write`.',
+      cmd: 'triss config wizard worker',
     });
   }
 

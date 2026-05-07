@@ -8,28 +8,28 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // "Core" credentials live outside any single integration but should appear
 // in `triss config wizard`/`status` alongside integrations.
 export const CORE_MANIFEST = {
-  name: 'deepseek',
-  description: 'DeepSeek (the worker model itself)',
+  name: 'worker',
+  description: 'Worker model (any OpenAI-compatible chat-completions endpoint; DeepSeek by default)',
   isCore: true,
   envVars: [
     {
-      name: 'DEEPSEEK_API_KEY',
+      name: 'TRISS_WORKER_API_KEY',
       required: true,
       secret: true,
       doc: 'Get one at https://platform.deepseek.com/',
     },
     {
-      name: 'DEEPSEEK_BASE_URL',
+      name: 'TRISS_WORKER_BASE_URL',
       required: false,
       doc: 'Override endpoint (default https://api.deepseek.com/v1)',
     },
     {
-      name: 'DEEPSEEK_FLASH_MODEL',
+      name: 'TRISS_WORKER_FLASH_MODEL',
       required: false,
       doc: 'Override the "flash" preset model id',
     },
     {
-      name: 'DEEPSEEK_PRO_MODEL',
+      name: 'TRISS_WORKER_PRO_MODEL',
       required: false,
       doc: 'Override the "pro" preset model id',
     },

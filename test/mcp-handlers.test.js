@@ -24,7 +24,7 @@ function snapshot(vars) {
   };
 }
 
-const DEEPSEEK_VARS = ['DEEPSEEK_API_KEY'];
+const WORKER_VARS = ['TRISS_WORKER_API_KEY'];
 const ATLASSIAN_VARS = ['ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'];
 const GITHUB_VARS = ['GITHUB_TOKEN'];
 
@@ -86,8 +86,8 @@ function mockFetchWithAI(apiHandler, aiContent) {
 // ─── MCP-H-01: chatHandler returns text from a mocked chat() ────────────────
 
 test('MCP-H-02: askHandler throws "Pass at least one of paths or urls" when neither is supplied', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
 
   const { askHandler } = await import(
     `../src/mcp/handlers.js?mcp-h-02=${Date.now()}`
@@ -110,8 +110,8 @@ test('MCP-H-02: askHandler throws "Pass at least one of paths or urls" when neit
 });
 
 test('MCP-H-02b: askHandler throws "question is required" when question is missing', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
 
   const { askHandler } = await import(
     `../src/mcp/handlers.js?mcp-h-02b=${Date.now()}`
@@ -130,8 +130,8 @@ test('MCP-H-02b: askHandler throws "question is required" when question is missi
 // ─── MCP-H-03: fetchHandler with/without question ───────────────────────────
 
 test('MCP-H-04: jiraSearchHandler formats issues and without question returns corpus', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'user@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok123';
@@ -173,8 +173,8 @@ test('MCP-H-04: jiraSearchHandler formats issues and without question returns co
 });
 
 test('MCP-H-05: jiraCreateHandler calls createIssue with right fields and returns "✓ Created"', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'user@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok123';
@@ -222,8 +222,8 @@ test('MCP-H-05: jiraCreateHandler calls createIssue with right fields and return
 // ─── MCP-H-06: githubIssueHandler honours repo arg / falls back to detectRepo ─
 
 test('MCP-H-06: githubIssueHandler uses explicit repo arg instead of detectRepo', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...GITHUB_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...GITHUB_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.GITHUB_TOKEN = 'ghp_testtoken';
 
   const capturedUrls = [];
@@ -265,8 +265,8 @@ test('MCP-H-06: githubIssueHandler uses explicit repo arg instead of detectRepo'
 });
 
 test('MCP-H-06b: githubIssueHandler throws when repo cannot be detected and none is supplied', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...GITHUB_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...GITHUB_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.GITHUB_TOKEN = 'ghp_testtoken';
 
   // We don't need to mock fetch here — the error is thrown before any network
@@ -297,8 +297,8 @@ test('MCP-H-06b: githubIssueHandler throws when repo cannot be detected and none
 // ─── MCP-H-07: confluencePageHandler converts ADF to text ───────────────────
 
 test('MCP-H-07: confluencePageHandler converts ADF body to readable text', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'user@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok123';

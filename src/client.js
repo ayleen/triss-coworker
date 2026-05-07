@@ -3,7 +3,7 @@ import { getConfig, requireApiKey } from './config.js';
 import { logUsage } from './usage.js';
 
 // Recreate the OpenAI client per call so a long-lived MCP server picks
-// up `triss config set DEEPSEEK_API_KEY` changes mid-session. Constructing
+// up `triss config set TRISS_WORKER_API_KEY` changes mid-session. Constructing
 // the client is microseconds — no observable overhead next to a model RTT.
 export function getClient() {
   const cfg = requireApiKey(getConfig());
@@ -38,7 +38,7 @@ export async function chat({ model, messages, maxTokens, temperature, label }) {
     if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
       throw new Error(
         `Model "${model}" not accepted by the provider.\n` +
-          `→ Override with --model <name> or set DEEPSEEK_FLASH_MODEL / DEEPSEEK_PRO_MODEL in your env.\n` +
+          `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n` +
           `→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n` +
           `Original error: ${body}`,
       );
@@ -47,7 +47,7 @@ export async function chat({ model, messages, maxTokens, temperature, label }) {
   }
 }
 
-export function reportUsage(resp, label = 'deepseek') {
+export function reportUsage(resp, label = 'worker') {
   const u = resp?.usage;
   if (!u) return '';
   const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
@@ -76,7 +76,7 @@ export async function chatStream({ model, messages, maxTokens, temperature, labe
     if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
       throw new Error(
         `Model "${model}" not accepted by the provider.\n` +
-          `→ Override with --model <name> or set DEEPSEEK_FLASH_MODEL / DEEPSEEK_PRO_MODEL.\n` +
+          `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL.\n` +
           `Original error: ${body}`,
       );
     }

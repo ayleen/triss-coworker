@@ -70,10 +70,10 @@ async function withTmpEnv(fn) {
 // ── INIT-01: creates CLAUDE.md when missing ───────────────────────────────────
 
 test('INIT-01: creates CLAUDE.md with triss marker block when file does not exist', async () => {
-  // We must clear any DEEPSEEK_API_KEY so the postInit tip path doesn't error
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  // We must clear any TRISS_WORKER_API_KEY so the postInit tip path doesn't error
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -91,16 +91,16 @@ test('INIT-01: creates CLAUDE.md with triss marker block when file does not exis
   });
 
   // Restore
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── INIT-02: --global writes to ~/.claude/CLAUDE.md ──────────────────────────
 
 test('INIT-02: --global writes to ~/.claude/CLAUDE.md', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ homeDir }) => {
@@ -116,16 +116,16 @@ test('INIT-02: --global writes to ~/.claude/CLAUDE.md', async () => {
     assert.ok(content.includes(END_MARKER), 'global CLAUDE.md should contain end marker');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── Codex target: creates AGENTS.md locally and globally ─────────────────────
 
 test('INIT-CODEX-01: creates AGENTS.md with triss marker block', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -143,14 +143,14 @@ test('INIT-CODEX-01: creates AGENTS.md with triss marker block', async () => {
     assert.ok(!content.includes('experimental'), 'Codex target should not be marked experimental');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 test('INIT-CODEX-02: --global writes to ~/.codex/AGENTS.md', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ homeDir }) => {
@@ -165,16 +165,16 @@ test('INIT-CODEX-02: --global writes to ~/.codex/AGENTS.md', async () => {
     assert.ok(content.includes(END_MARKER), 'global AGENTS.md should contain end marker');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── INIT-03: existing CLAUDE.md without markers → appends block ───────────────
 
 test('INIT-03: existing CLAUDE.md without markers gets block appended', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -196,16 +196,16 @@ test('INIT-03: existing CLAUDE.md without markers gets block appended', async ()
     assert.ok(markerStart > existingEnd, 'triss block should come after existing content');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── INIT-04: idempotent re-run — same content stays untouched ─────────────────
 
 test('INIT-04: re-running init on unchanged CLAUDE.md is idempotent', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir, captured }) => {
@@ -230,14 +230,14 @@ test('INIT-04: re-running init on unchanged CLAUDE.md is idempotent', async () =
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 test('INIT-CODEX-03: re-running init on unchanged AGENTS.md is idempotent', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir, captured }) => {
@@ -254,16 +254,16 @@ test('INIT-CODEX-03: re-running init on unchanged AGENTS.md is idempotent', asyn
     assert.match(captured.join(''), /already up to date|Updated/);
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── INIT-04 (update path): updates only the block, preserves other content ────
 
 test('INIT-04: re-run updates triss block but preserves surrounding content', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -293,14 +293,14 @@ test('INIT-04: re-run updates triss block but preserves surrounding content', as
     assert.ok(content.includes(END_MARKER), 'markers should still be present');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 // ── INIT-07: {{INTEGRATIONS}} placeholder — empty when no integration ready ───
 
 test('INIT-07: {{INTEGRATIONS}} renders empty when no integration credentials are set', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   // Remove all known integration env vars
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
@@ -308,7 +308,7 @@ test('INIT-07: {{INTEGRATIONS}} renders empty when no integration credentials ar
   const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
   const origLinearKey = process.env.LINEAR_API_KEY;
 
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
   delete process.env.ATLASSIAN_BASE_URL;
   delete process.env.ATLASSIAN_EMAIL;
@@ -331,7 +331,7 @@ test('INIT-07: {{INTEGRATIONS}} renders empty when no integration credentials ar
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
   if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
   if (origAtlEmail !== undefined) process.env.ATLASSIAN_EMAIL = origAtlEmail;
@@ -342,14 +342,14 @@ test('INIT-07: {{INTEGRATIONS}} renders empty when no integration credentials ar
 // ── INIT-07: {{INTEGRATIONS}} contains jira section when ATLASSIAN_* set ──────
 
 test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars are set', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
   const origAtlEmail = process.env.ATLASSIAN_EMAIL;
   const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
   const origLinearKey = process.env.LINEAR_API_KEY;
 
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
   delete process.env.LINEAR_API_KEY;
   // Set Jira creds
@@ -377,7 +377,7 @@ test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars a
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
   if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
   else delete process.env.ATLASSIAN_BASE_URL;
@@ -389,14 +389,14 @@ test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars a
 });
 
 test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATLASSIAN_* env vars are set', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
   const origAtlEmail = process.env.ATLASSIAN_EMAIL;
   const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
   const origLinearKey = process.env.LINEAR_API_KEY;
 
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
   delete process.env.LINEAR_API_KEY;
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
@@ -421,7 +421,7 @@ test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATL
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
   if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
   else delete process.env.ATLASSIAN_BASE_URL;
@@ -436,14 +436,14 @@ test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATL
 // ── INIT-06: MCP detection — mcpServers.triss in ~/.claude.json ───────────────
 
 test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists in ~/.claude.json', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
   const origAtlEmail = process.env.ATLASSIAN_EMAIL;
   const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
   const origLinearKey = process.env.LINEAR_API_KEY;
 
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
   delete process.env.ATLASSIAN_BASE_URL;
   delete process.env.ATLASSIAN_EMAIL;
@@ -475,7 +475,7 @@ test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists i
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
   if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
   if (origAtlEmail !== undefined) process.env.ATLASSIAN_EMAIL = origAtlEmail;
@@ -486,9 +486,9 @@ test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists i
 // ── INIT-BOTH: target='both' writes both CLAUDE.md and AGENTS.md ─────────────
 
 test('INIT-BOTH-01: target="both" creates CLAUDE.md and AGENTS.md in one call', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -509,14 +509,14 @@ test('INIT-BOTH-01: target="both" creates CLAUDE.md and AGENTS.md in one call', 
     assert.ok(codex.includes('triss ask'), 'AGENTS.md should contain Codex rules body');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 test('INIT-BOTH-02: target="both" with --global writes to ~/.claude and ~/.codex', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ homeDir }) => {
@@ -530,16 +530,16 @@ test('INIT-BOTH-02: target="both" with --global writes to ~/.claude and ~/.codex
     assert.ok(existsSync(codexPath), '~/.codex/AGENTS.md should exist');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
 test('INIT-BOTH-03: omitted target falls back to "claude" in non-TTY', async () => {
   // tests run with stdin not a TTY → chooseTarget() must default to 'claude'
   // without prompting (otherwise the test would hang).
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ projectDir }) => {
@@ -553,7 +553,7 @@ test('INIT-BOTH-03: omitted target falls back to "claude" in non-TTY', async () 
     assert.ok(!existsSync(codexPath), 'should not create AGENTS.md when defaulting to claude');
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
@@ -564,12 +564,12 @@ test('INIT-BOTH-04: unknown target throws a clear error', async () => {
   });
 });
 
-// ── INIT-05 / postInit: prints next-step tips when DEEPSEEK_API_KEY missing ──
+// ── INIT-05 / postInit: prints next-step tips when TRISS_WORKER_API_KEY missing ──
 
-test('INIT-05 / postInit: prints API-key tip when DEEPSEEK_API_KEY is missing', async () => {
-  const origApiKey = process.env.DEEPSEEK_API_KEY;
+test('INIT-05 / postInit: prints API-key tip when TRISS_WORKER_API_KEY is missing', async () => {
+  const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.WORKER_API_KEY;
 
   await withTmpEnv(async ({ captured }) => {
@@ -578,11 +578,11 @@ test('INIT-05 / postInit: prints API-key tip when DEEPSEEK_API_KEY is missing', 
 
     const output = captured.join('');
     assert.ok(
-      output.includes('DeepSeek') || output.includes('DEEPSEEK_API_KEY') || output.includes('triss config wizard'),
+      output.includes('DeepSeek') || output.includes('TRISS_WORKER_API_KEY') || output.includes('triss config wizard'),
       `expected API key hint in postInit output, got: ${output}`,
     );
   });
 
-  if (origApiKey !== undefined) process.env.DEEPSEEK_API_KEY = origApiKey;
+  if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });

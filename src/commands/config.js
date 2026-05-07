@@ -267,7 +267,7 @@ async function runStandardWizard(path, current) {
   );
 
   // 1. API key — required.
-  const existingKey = current['DEEPSEEK_API_KEY'];
+  const existingKey = current['TRISS_WORKER_API_KEY'];
   let proceedKey = true;
   if (existingKey) {
     proceedKey = await yesNo(
@@ -276,22 +276,22 @@ async function runStandardWizard(path, current) {
     );
   }
   if (proceedKey) {
-    process.stdout.write('\n  ' + pc.yellow('DEEPSEEK_API_KEY') + ' (required)\n');
+    process.stdout.write('\n  ' + pc.yellow('TRISS_WORKER_API_KEY') + ' (required)\n');
     process.stdout.write(pc.dim('  Get one at https://platform.deepseek.com/\n'));
     const key = await prompt('  value', { hidden: true, defaultValue: existingKey });
     if (key) {
-      setVar(path, 'DEEPSEEK_API_KEY', key);
+      setVar(path, 'TRISS_WORKER_API_KEY', key);
       process.stdout.write(pc.green('  ✓ saved\n'));
     } else if (!existingKey) {
       process.stdout.write(
-        pc.yellow("  ⚠ skipped — set later via 'triss config set DEEPSEEK_API_KEY'\n"),
+        pc.yellow("  ⚠ skipped — set later via 'triss config set TRISS_WORKER_API_KEY'\n"),
       );
     }
   }
 
   // 2. Worker model — optional, single value writes to both presets.
-  const existingFlash = current['DEEPSEEK_FLASH_MODEL'];
-  const existingPro = current['DEEPSEEK_PRO_MODEL'];
+  const existingFlash = current['TRISS_WORKER_FLASH_MODEL'];
+  const existingPro = current['TRISS_WORKER_PRO_MODEL'];
   const presetsMatch = existingFlash && existingFlash === existingPro;
   const existingModel = presetsMatch ? existingFlash : '';
   process.stdout.write(
@@ -317,8 +317,8 @@ async function runStandardWizard(path, current) {
         return;
       }
     }
-    setVar(path, 'DEEPSEEK_FLASH_MODEL', model);
-    setVar(path, 'DEEPSEEK_PRO_MODEL', model);
+    setVar(path, 'TRISS_WORKER_FLASH_MODEL', model);
+    setVar(path, 'TRISS_WORKER_PRO_MODEL', model);
     process.stdout.write(pc.green('  ✓ saved as both flash and pro presets\n'));
   }
 

@@ -136,8 +136,8 @@ triss fetch https://api-docs.example.com/changelog
 - `--model pro` — pricier, smarter, use for harder analysis or generation.
 - `--model <full-name>` — pin to any model id (e.g. `deepseek-v4-flash`).
 
-Override the preset names if needed via `DEEPSEEK_FLASH_MODEL` and
-`DEEPSEEK_PRO_MODEL` env vars (no code changes required).
+Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
+`TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
 
 {{INTEGRATIONS}}
 ### When NOT to delegate

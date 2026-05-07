@@ -64,7 +64,7 @@
 | # | Trigger | Test case | Priority | Status |
 |---|---------|-----------|----------|--------|
 | 1 | MCP‑server `TRISS_RESTRICT_PATHS=1` | `askHandler` refuses files outside cwd | P0 | TODO |
-| 2 | `logUsage` does not leak secrets | Verify log lines contain no `DEEPSEEK_API_KEY`, `ATLASSIAN_API_TOKEN`, etc. | P0 | TODO |
+| 2 | `logUsage` does not leak secrets | Verify log lines contain no `TRISS_WORKER_API_KEY`, `ATLASSIAN_API_TOKEN`, etc. | P0 | TODO |
 | 3 | `fetchUrl` size cap with streaming response | Large response aborted mid‑stream when cap hit | P0 | COVERED (`test/web-size.test.js`) |
 | 4 | Corpus escaping prevents `</file>` tag injection | Source file containing `</file>` is escaped so framing stays intact | P0 | COVERED (`test/paths.test.js`) |
 | 5 | Binary file detection | NUL byte in first 8 KB → skipped, not injected into corpus | P0 | COVERED (`test/paths.test.js`) |
@@ -80,7 +80,7 @@
 | 2 | GitHub PR review with linked Linear ticket | GitHub (gh) + Linear | Review a PR whose branch name contains a Linear ticket key; verify the ticket description appears in the review corpus. | P1 | TODO |
 | 3 | MCP tool discovery with mixed credentials | MCP server + Jira/GitLab | Set only GitLab token, leave Jira empty; server returns `gitlab_*` tools but no `jira_*`. | P1 | COVERED (`test/mcp-tools.test.js`) |
 | 4 | CLI `triss ask` with both files and a Jira URL | CLI + Jira integration | Pass `--paths` and a Jira‑issue URL; corpus includes file content and Jira markdown. | P2 | TODO |
-| 5 | Multi‑project env overlap | Config loader | Global env sets `DEEPSEEK_API_KEY`, project `.triss.env` sets `JIRA_*`; both visible in MCP and CLI. | P2 | PARTIAL (covered by `test/mcp-tools.test.js` list‑tools test) |
+| 5 | Multi‑project env overlap | Config loader | Global env sets `TRISS_WORKER_API_KEY`, project `.triss.env` sets `JIRA_*`; both visible in MCP and CLI. | P2 | PARTIAL (covered by `test/mcp-tools.test.js` list‑tools test) |
 
 ## Detailed Test Cases
 

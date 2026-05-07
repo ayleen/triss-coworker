@@ -137,7 +137,7 @@ restarting Claude Code.
 The set of MCP tools is **filtered by which integrations are configured**.
 Run `triss status` to see readiness.
 
-Always exposed (require only `DEEPSEEK_API_KEY`):
+Always exposed (require only `TRISS_WORKER_API_KEY`):
 
 - `triss_chat` — bare prompt to the worker model
 - `triss_ask` — read files/URLs and answer a question

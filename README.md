@@ -10,11 +10,9 @@
 Triss is a small CLI (`triss`) that hands token-heavy I/O off to a cheap
 DeepSeek model so your expensive primary agent (Claude Code, Codex, or
 anything else that can run a shell/MCP tool) stays focused on reasoning and
-edits. Inspired by
-[`claude-coworker-model`](https://github.com/imkunal007219/claude-coworker-model)
-by Kunal Bhardwaj.
+edits.
 
-The name is a Witcher reference. Triss is the helpful sorceress on your team.
+Triss is the helpful sorceress on your team.
 Strictly fewer portals, substantially more `git diff`.
 
 It also ships with first-class integrations for Jira, Confluence, Linear,
@@ -110,7 +108,7 @@ per project, CI, etc.) live in
 ### Updating one variable
 
 ```bash
-triss config set DEEPSEEK_API_KEY            # masked prompt → global
+triss config set TRISS_WORKER_API_KEY            # masked prompt → global
 triss config set ATLASSIAN_API_TOKEN --local # masked prompt → ./.triss.env
 echo "$KEY" | triss config set LINEAR_API_KEY -   # from stdin (CI)
 ```
@@ -181,7 +179,7 @@ The Codex entry includes `startup_timeout_sec = 30` and `tool_timeout_sec
 
 The exposed tool set is **filtered by configured credentials**:
 
-- **Always** (need only `DEEPSEEK_API_KEY`): `triss_chat`, `triss_ask`,
+- **Always** (need only `TRISS_WORKER_API_KEY`): `triss_chat`, `triss_ask`,
   `triss_fetch`, `triss_review`, `triss_commit_msg`, `triss_status`.
 - **`triss_jira_*` + `triss_confluence_*`** when `ATLASSIAN_*` is set.
 - **`triss_linear_*`** when `LINEAR_API_KEY` is set.
@@ -221,7 +219,7 @@ and writing**.
 
 ```bash
 triss ask --paths src/auth.ts src/db.ts \
-          --question "List every place we read DEEPSEEK_API_KEY"
+          --question "List every place we read TRISS_WORKER_API_KEY"
 
 triss ask --paths "src/**/*.ts" \
           --question "Find SQL injection risks" \
@@ -432,32 +430,32 @@ You can also pass any model id directly: `--model deepseek-v4-pro`.
 
 #### DeepSeek (default, recommended)
 ```bash
-triss config set DEEPSEEK_API_KEY                     # masked prompt
+triss config set TRISS_WORKER_API_KEY                     # masked prompt
 # That's it — BASE_URL / FLASH / PRO use the current DeepSeek V4 defaults.
 ```
 
 #### Kimi / Moonshot
 ```bash
-triss config set DEEPSEEK_API_KEY $MOONSHOT_API_KEY
-triss config set DEEPSEEK_BASE_URL https://api.moonshot.ai/v1
-triss config set DEEPSEEK_FLASH_MODEL kimi-k2.5
-triss config set DEEPSEEK_PRO_MODEL kimi-k2.5
+triss config set TRISS_WORKER_API_KEY $MOONSHOT_API_KEY
+triss config set TRISS_WORKER_BASE_URL https://api.moonshot.ai/v1
+triss config set TRISS_WORKER_FLASH_MODEL kimi-k2.5
+triss config set TRISS_WORKER_PRO_MODEL kimi-k2.5
 ```
 
 #### Ollama (local, free)
 ```bash
-triss config set DEEPSEEK_API_KEY ollama
-triss config set DEEPSEEK_BASE_URL http://localhost:11434/v1
-triss config set DEEPSEEK_FLASH_MODEL qwen2.5-coder:14b
-triss config set DEEPSEEK_PRO_MODEL qwen2.5-coder:32b
+triss config set TRISS_WORKER_API_KEY ollama
+triss config set TRISS_WORKER_BASE_URL http://localhost:11434/v1
+triss config set TRISS_WORKER_FLASH_MODEL qwen2.5-coder:14b
+triss config set TRISS_WORKER_PRO_MODEL qwen2.5-coder:32b
 ```
 
 #### OpenRouter (any model, one key)
 ```bash
-triss config set DEEPSEEK_API_KEY $OPENROUTER_API_KEY
-triss config set DEEPSEEK_BASE_URL https://openrouter.ai/api/v1
-triss config set DEEPSEEK_FLASH_MODEL deepseek/deepseek-v4-flash
-triss config set DEEPSEEK_PRO_MODEL anthropic/claude-sonnet-4.6
+triss config set TRISS_WORKER_API_KEY $OPENROUTER_API_KEY
+triss config set TRISS_WORKER_BASE_URL https://openrouter.ai/api/v1
+triss config set TRISS_WORKER_FLASH_MODEL deepseek/deepseek-v4-flash
+triss config set TRISS_WORKER_PRO_MODEL anthropic/claude-sonnet-4.6
 ```
 
 Add `--local` to scope any of these to the current project only
@@ -469,10 +467,10 @@ Add `--local` to scope any of these to the current project only
 
 | Variable                | Required | Default                          | Notes                                 |
 | ----------------------- | -------- | -------------------------------- | ------------------------------------- |
-| `DEEPSEEK_API_KEY`      | yes      | —                                | Your provider key                     |
-| `DEEPSEEK_BASE_URL`     | no       | `https://api.deepseek.com/v1`    | Any OpenAI-compatible endpoint        |
-| `DEEPSEEK_FLASH_MODEL`  | no       | `deepseek-v4-flash`              | Override the `flash` preset           |
-| `DEEPSEEK_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
+| `TRISS_WORKER_API_KEY`      | yes      | —                                | Your provider key                     |
+| `TRISS_WORKER_BASE_URL`     | no       | `https://api.deepseek.com/v1`    | Any OpenAI-compatible endpoint        |
+| `TRISS_WORKER_FLASH_MODEL`  | no       | `deepseek-v4-flash`              | Override the `flash` preset           |
+| `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
 
 ### Integrations

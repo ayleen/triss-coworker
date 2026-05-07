@@ -73,7 +73,7 @@ function snapshot(vars) {
   };
 }
 
-const DEEPSEEK_VARS = ['DEEPSEEK_API_KEY'];
+const WORKER_VARS = ['TRISS_WORKER_API_KEY'];
 const ATLASSIAN_VARS = ['ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'];
 const LINEAR_VARS = ['LINEAR_API_KEY', 'LINEAR_API_URL'];
 
@@ -93,10 +93,10 @@ function mockJsonFetch(payload, captures = null) {
 // ─── triss_write ────────────────────────────────────────────────────────────
 
 test('WRITE-01: writeHandler without target returns generated content', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, 'DEEPSEEK_BASE_URL']);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, 'TRISS_WORKER_BASE_URL']);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   const mock = await startMockOpenAI('console.log("hello")\n');
-  process.env.DEEPSEEK_BASE_URL = mock.baseUrl;
+  process.env.TRISS_WORKER_BASE_URL = mock.baseUrl;
 
   const { writeHandler } = await import(`../src/mcp/handlers.js?write-01=${Date.now()}`);
   try {
@@ -110,15 +110,15 @@ test('WRITE-01: writeHandler without target returns generated content', async ()
 
 test('WRITE-02: writeHandler with target writes to disk and returns success', async () => {
   const restore = snapshot([
-    ...DEEPSEEK_VARS,
-    'DEEPSEEK_BASE_URL',
+    ...WORKER_VARS,
+    'TRISS_WORKER_BASE_URL',
     'TRISS_RESTRICT_PATHS',
     'TRISS_PROJECT_ROOT',
   ]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.TRISS_RESTRICT_PATHS = '0';
   const mock = await startMockOpenAI('```js\nconsole.log(42)\n```\n');
-  process.env.DEEPSEEK_BASE_URL = mock.baseUrl;
+  process.env.TRISS_WORKER_BASE_URL = mock.baseUrl;
 
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-write-')));
   const target = join(dir, 'out.js');
@@ -137,8 +137,8 @@ test('WRITE-02: writeHandler with target writes to disk and returns success', as
 });
 
 test('WRITE-03: writeHandler throws when spec is missing', async () => {
-  const restore = snapshot(DEEPSEEK_VARS);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot(WORKER_VARS);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   const { writeHandler } = await import(`../src/mcp/handlers.js?write-03=${Date.now()}`);
   try {
     await assert.rejects(() => writeHandler({}), /spec is required/);
@@ -150,8 +150,8 @@ test('WRITE-03: writeHandler throws when spec is missing', async () => {
 // ─── jira transitions / attachments ─────────────────────────────────────────
 
 test('JIRA-TR-01: jiraTransitionsHandler formats id/name/target', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';
@@ -176,8 +176,8 @@ test('JIRA-TR-01: jiraTransitionsHandler formats id/name/target', async () => {
 });
 
 test('JIRA-TR-02: jiraTransitionsHandler returns "(no transitions)" on empty list', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';
@@ -195,8 +195,8 @@ test('JIRA-TR-02: jiraTransitionsHandler returns "(no transitions)" on empty lis
 });
 
 test('JIRA-AT-01: jiraAttachmentsHandler formats id/filename/size/created', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';
@@ -231,8 +231,8 @@ test('JIRA-AT-01: jiraAttachmentsHandler formats id/filename/size/created', asyn
 // ─── jira update: assignee/priority pass-through ────────────────────────────
 
 test('JIRA-UP-01: jiraUpdateHandler sends assignee.accountId and priority.name', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';
@@ -262,8 +262,8 @@ test('JIRA-UP-01: jiraUpdateHandler sends assignee.accountId and priority.name',
 // ─── linear create: assignee pass-through ───────────────────────────────────
 
 test('LINEAR-CR-01: linearCreateHandler sends assigneeId in the GraphQL input', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...LINEAR_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.LINEAR_API_KEY = 'lin_api_test';
 
   const captured = [];
@@ -315,8 +315,8 @@ test('LINEAR-CR-01: linearCreateHandler sends assigneeId in the GraphQL input', 
 // ─── linear update: priority pass-through ───────────────────────────────────
 
 test('LINEAR-UP-01: linearUpdateHandler sends priority in the GraphQL input', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...LINEAR_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.LINEAR_API_KEY = 'lin_api_test';
 
   const captured = [];
@@ -367,8 +367,8 @@ test('LINEAR-UP-01: linearUpdateHandler sends priority in the GraphQL input', as
 // ─── linear states ──────────────────────────────────────────────────────────
 
 test('LINEAR-ST-01: linearStatesHandler formats states for a team', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...LINEAR_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.LINEAR_API_KEY = 'lin_api_test';
 
   globalThis.fetch = async () =>
@@ -405,8 +405,8 @@ test('LINEAR-ST-01: linearStatesHandler formats states for a team', async () => 
 // ─── linear attachments ─────────────────────────────────────────────────────
 
 test('LINEAR-AT-01: linearAttachmentsHandler lists issue attachments', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...LINEAR_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.LINEAR_API_KEY = 'lin_api_test';
 
   globalThis.fetch = async () =>
@@ -444,8 +444,8 @@ test('LINEAR-AT-01: linearAttachmentsHandler lists issue attachments', async () 
 // ─── confluence spaces ──────────────────────────────────────────────────────
 
 test('CONF-SP-01: confluenceSpacesHandler formats spaces list', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';
@@ -470,8 +470,8 @@ test('CONF-SP-01: confluenceSpacesHandler formats spaces list', async () => {
 });
 
 test('CONF-SP-02: confluenceSpacesHandler returns "(no spaces)" on empty list', async () => {
-  const restore = snapshot([...DEEPSEEK_VARS, ...ATLASSIAN_VARS]);
-  process.env.DEEPSEEK_API_KEY = 'sk-test';
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
   process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
   process.env.ATLASSIAN_EMAIL = 'u@example.com';
   process.env.ATLASSIAN_API_TOKEN = 'tok';

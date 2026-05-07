@@ -3,7 +3,7 @@
  *
  * Focuses on the deterministically-testable parts of the config wizard:
  *  - resolveMode / chooseMode / chooseScope in non-TTY (pure or branching logic)
- *  - standard-mode double-write of DEEPSEEK_FLASH_MODEL + DEEPSEEK_PRO_MODEL
+ *  - standard-mode double-write of TRISS_WORKER_FLASH_MODEL + TRISS_WORKER_PRO_MODEL
  *  - silentlyInstallBoth running installEntry + runInit
  *  - targeted invocation (explicit target) bypasses mode prompt
  *  - --standard and --advanced together throw
@@ -105,9 +105,9 @@ test('WIZ-02: runStandardWizard writes the model to both FLASH and PRO presets',
   // Pre-seed: write the model we want as both flash AND pro so the wizard
   // detects presetsMatch===true and re-uses existingModel as defaultValue.
   const { setVar, readEnvFile } = await import('../src/secrets.js');
-  setVar(envPath, 'DEEPSEEK_API_KEY', 'sk-test');
-  setVar(envPath, 'DEEPSEEK_FLASH_MODEL', 'deepseek-v4-flash');
-  setVar(envPath, 'DEEPSEEK_PRO_MODEL', 'deepseek-v4-flash');
+  setVar(envPath, 'TRISS_WORKER_API_KEY', 'sk-test');
+  setVar(envPath, 'TRISS_WORKER_FLASH_MODEL', 'deepseek-v4-flash');
+  setVar(envPath, 'TRISS_WORKER_PRO_MODEL', 'deepseek-v4-flash');
 
   // Force non-TTY so prompt() returns defaults without hanging.
   const origTTY = process.stdin.isTTY;
@@ -131,11 +131,11 @@ test('WIZ-02: runStandardWizard writes the model to both FLASH and PRO presets',
     // The model was already set identically in both; in non-TTY mode,
     // prompt returns the defaultValue (existingModel = 'deepseek-v4-flash').
     // setVar writes it to both keys.
-    assert.equal(vars.DEEPSEEK_FLASH_MODEL, 'deepseek-v4-flash');
-    assert.equal(vars.DEEPSEEK_PRO_MODEL, 'deepseek-v4-flash');
+    assert.equal(vars.TRISS_WORKER_FLASH_MODEL, 'deepseek-v4-flash');
+    assert.equal(vars.TRISS_WORKER_PRO_MODEL, 'deepseek-v4-flash');
     assert.equal(
-      vars.DEEPSEEK_FLASH_MODEL,
-      vars.DEEPSEEK_PRO_MODEL,
+      vars.TRISS_WORKER_FLASH_MODEL,
+      vars.TRISS_WORKER_PRO_MODEL,
       'standard mode must write the same value to both presets',
     );
   } finally {
@@ -208,9 +208,9 @@ test('silentlyInstallBoth writes MCP config and creates CLAUDE.md in a tmp HOME'
     const envPath = join(configDir, '.env');
     const { setVar } = await import('../src/secrets.js');
     writeFileSync(envPath, '');
-    setVar(envPath, 'DEEPSEEK_API_KEY', 'sk-test');
-    setVar(envPath, 'DEEPSEEK_FLASH_MODEL', 'mymodel');
-    setVar(envPath, 'DEEPSEEK_PRO_MODEL', 'mymodel');
+    setVar(envPath, 'TRISS_WORKER_API_KEY', 'sk-test');
+    setVar(envPath, 'TRISS_WORKER_FLASH_MODEL', 'mymodel');
+    setVar(envPath, 'TRISS_WORKER_PRO_MODEL', 'mymodel');
 
     const { runWizard } = await import('../src/commands/config.js');
     try {
