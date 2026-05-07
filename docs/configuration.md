@@ -224,6 +224,53 @@ The only thing that requires a restart is the *initial* MCP-server
 registration — i.e. running `triss mcp install` for the first time.
 After that, credential changes are live.
 
+## Environment reference
+
+`triss config wizard` writes these for you. Read the table only when
+overriding defaults (price tables, sandbox toggles, custom DNS,
+self-hosted endpoints).
+
+### Worker model
+
+| Variable                | Required | Default                          | Notes                                 |
+| ----------------------- | -------- | -------------------------------- | ------------------------------------- |
+| `TRISS_WORKER_API_KEY`      | yes      | —                                | Your provider key                     |
+| `TRISS_WORKER_BASE_URL`     | no       | `https://api.deepseek.com/v1`    | Any OpenAI-compatible endpoint        |
+| `TRISS_WORKER_FLASH_MODEL`  | no       | `deepseek-v4-flash`              | Override the `flash` preset           |
+| `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
+| `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
+
+### Integrations
+
+| Variable                | Required for      | Notes                                                     |
+| ----------------------- | ----------------- | --------------------------------------------------------- |
+| `ATLASSIAN_BASE_URL`    | jira, confluence  | e.g. `https://yourorg.atlassian.net`                      |
+| `ATLASSIAN_EMAIL`       | jira, confluence  | account email                                             |
+| `ATLASSIAN_API_TOKEN`   | jira, confluence  | <https://id.atlassian.com/manage-profile/security/api-tokens> |
+| `LINEAR_API_KEY`        | linear            | <https://linear.app/settings/api>                         |
+| `LINEAR_API_URL`        | linear (optional) | endpoint override (default `https://api.linear.app/graphql`) |
+| `GITHUB_TOKEN`          | github            | falls back to `gh auth token` if unset                    |
+| `GITLAB_TOKEN`          | gitlab            | <https://gitlab.com/-/profile/personal_access_tokens> (`api` scope) |
+| `GITLAB_URL`            | gitlab (optional) | self-hosted base URL (default `https://gitlab.com`)       |
+
+### Tunables
+
+| Variable                       | Default     | Effect                                                    |
+| ------------------------------ | ----------- | --------------------------------------------------------- |
+| `TRISS_HTTP_TIMEOUT_MS`        | `30000`     | Per-request timeout for integration HTTP calls (Jira/GitHub/GitLab/Linear/Confluence) |
+| `TRISS_HTTP_MAX_BYTES`         | `26214400`  | Max response body size for integration calls (25 MB default) |
+| `TRISS_FILE_MAX_BYTES`         | `1048576`   | Per-file cap for `triss ask --paths`; oversized files are reported and skipped (1 MB default) |
+| `TRISS_CORPUS_MAX_BYTES`       | `16777216`  | Total corpus cap across all files in one `ask` call (16 MB default) |
+| `TRISS_GLOB_MAX_FILES`         | `500`       | Max files a single glob may expand to (`src/**/*.ts` etc.) |
+| `TRISS_PROJECT_ROOT`           | `process.cwd()` | Pin the project root used by the sandbox and `.triss.env` lookup. `triss mcp install` writes this into the MCP launcher config automatically. |
+| `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
+| `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
+| `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |
+| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. for promo or non-DeepSeek providers) |
+| `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
+| `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
+| `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
+
 ## Troubleshooting
 
 **"No worker API key found"** — `triss config wizard worker`.
