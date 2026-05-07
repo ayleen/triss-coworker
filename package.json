@@ -17,18 +17,30 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "start": "node bin/triss.js"
+    "start": "node bin/triss.js",
+    "prepublishOnly": "npm test"
   },
   "keywords": [
     "claude-code",
     "claude",
+    "codex",
+    "mcp",
+    "model-context-protocol",
     "deepseek",
+    "openrouter",
+    "ollama",
     "llm",
+    "agent",
     "coworker",
     "delegation",
     "ai",
     "cli",
-    "token-saving"
+    "developer-tools",
+    "code-review",
+    "token-saving",
+    "jira",
+    "linear",
+    "confluence"
   ],
   "author": "ayleen",
   "license": "MIT",
