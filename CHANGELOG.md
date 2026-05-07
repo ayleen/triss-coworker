@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-05-07
+
 ### Changed
 
 - **BREAKING:** Renamed worker env vars from `DEEPSEEK_*` to `TRISS_WORKER_*`
@@ -32,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Community files: `CONTRIBUTING.md`, `SECURITY.md`, GitHub issue
   templates, and a pull-request template.
+- `CHANGELOG.md` (Keep a Changelog) shipped in the npm tarball.
+- README badges now reflect live state (npm version, downloads, Node
+  engines, Tests workflow, Changelog).
+- ToC in README; env-variable reference moved to
+  `docs/configuration.md`.
+- ESLint flat config (`eslint.config.js`) on `eslint:recommended`;
+  `npm run lint` and `npm run lint:fix` scripts.
+- PR test workflow (`.github/workflows/test.yml`) running on Node 22
+  and 24 matrix.
+- `prepublishOnly: "npm test"` blocks accidental publishes with red
+  tests.
 
 ### Fixed
 
@@ -40,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reads from `package.json` instead of a stale literal.
 - CI runner bumped to Node 24 so npm 11+ is available for Trusted
   Publishing (engines floor stays at Node 22).
+- Caught-error chains preserved (`{ cause: err }`) in `src/client.js`,
+  `src/mcp/install.js`, `src/net.js` — debugging worker 404s and SSRF
+  DNS failures now shows the underlying error.
+- Removed dead initial assignments in `src/commands/review.js` and
+  `src/mcp/review-core.js`; cleaned up unused imports across `src/`
+  and tests.
 
 ## [0.13.1] — 2026-05-07
 
@@ -223,6 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/ayleen/triss-coworker/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/ayleen/triss-coworker/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ayleen/triss-coworker/releases/tag/v0.13.0
