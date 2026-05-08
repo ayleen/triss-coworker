@@ -1,51 +1,18 @@
-# Triss — Cheap DeepSeek Coworker (Token Saving)
+# Triss — cheap delegation worker
 
-You have a DeepSeek-backed worker available as the `triss` CLI on PATH.
-Delegate token-heavy I/O to it — the primary model's tokens stay on
-reasoning and edits.
+You have a cheap DeepSeek-backed worker exposed as MCP tools (`triss_ask`,
+`triss_review`, `triss_fetch`, `triss_chat`, `triss_write`,
+`triss_commit_msg`, `triss_status`) — or the `triss` CLI as a fallback if
+MCP is not loaded.
 
-## Commands
+**Delegate when:** a single file is >400 lines, you would otherwise read 3+
+files for one question, you need a code review of a diff, or you want the
+content of a web page (not raw HTML).
 
-| Command | Use for |
-| --- | --- |
-| `triss ask --paths <files> --question "<q>"` | bulk read of files; structured summary back |
-| `triss ask --urls <url> --question "<q>"` | same for web pages (HTML→markdown internally) |
-| `triss ask --stdin --question "<q>"` | pipe any command's stdout (`git diff \| triss ask --stdin -q "..."`) |
-| `triss chat "<prompt>"` | bare worker prompt, no corpus — definitions, transformations |
-| `triss write --spec "<spec>" --context <ref> --target <out>` | boilerplate generation against a style reference |
-| `triss extract <session.jsonl> -o <out>` | extract human-readable transcript from Claude Code logs |
-| `triss fetch <url> [--question "<q>"]` | fetch URL → markdown (with `--question`, summary) |
-| `triss review [<pr>]` | code review on current branch or a GitHub PR (auto-detects linked Jira/Linear ticket) |
-| `triss commit-msg [--apply]` | Conventional Commits message from staged diff |
-| `triss usage [--since 7d \| --month] [--by-project]` | cumulative cost / token report |
-| `triss status` | model + integration readiness |
+**Don't delegate when:** the task is <2k tokens, you need exact line numbers
+for an Edit, or it is an architectural / safety-critical decision you must
+reason through yourself.
 
-## When to delegate
-
-Delegate any read >400 lines or 3+ files for one question, any web fetch,
-any code review on a real diff. Delegate boilerplate generation against a
-reference. Do **not** delegate:
-
-- architectural decisions or hard debugging,
-- edits that need exact line numbers (use direct read/edit instead),
-- tasks under ~2000 tokens (delegation overhead costs more).
-
-## Models
-
-Default preset is `flash` (cheap). Use `--model pro` for harder analysis
-or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
-`TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
-
-## Tracker integrations
-
-`triss jira / linear / github / gitlab / confluence` expose `search`,
-`issue`/`page`, `create`, `update`, `comment`. Each subcommand accepts
-`--question "<q>"` to summarise via DeepSeek instead of dumping raw API
-output. Configure with `triss config wizard <name>`.
-
-{{INTEGRATIONS}}
-
-Run `triss status` to verify. Missing credentials? Run
-`triss config wizard` for an interactive setup, or
-`triss config wizard <target>` for one provider. Add `--local` to scope
-to `./.triss.env` instead of the global file.
+For the full reference (examples, model presets, tracker integrations like
+Jira / Linear / GitHub) run `triss agent-help --target codex` once when you
+need it.

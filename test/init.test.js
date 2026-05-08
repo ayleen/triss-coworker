@@ -139,7 +139,11 @@ test('INIT-CODEX-01: creates AGENTS.md with triss marker block', async () => {
     const content = readFileSync(destPath, 'utf8');
     assert.ok(content.includes(START_MARKER), 'AGENTS.md should contain start marker');
     assert.ok(content.includes(END_MARKER), 'AGENTS.md should contain end marker');
-    assert.ok(content.includes('triss ask'), 'AGENTS.md should contain Codex triss rules');
+    assert.ok(content.includes('triss_ask'), 'AGENTS.md should mention Triss MCP tools by name');
+    assert.ok(
+      content.includes('triss agent-help --target codex'),
+      'AGENTS.md must point at codex-flavored agent-help so Codex agents do not get the Claude cookbook',
+    );
     assert.ok(!content.includes('experimental'), 'Codex target should not be marked experimental');
   });
 
@@ -339,9 +343,13 @@ test('INIT-07: {{INTEGRATIONS}} renders empty when no integration credentials ar
   if (origLinearKey !== undefined) process.env.LINEAR_API_KEY = origLinearKey;
 });
 
-// ── INIT-07: {{INTEGRATIONS}} contains jira section when ATLASSIAN_* set ──────
+// ── INIT-07: nano init does NOT inject integration command snippets ──────────
+//
+// Integration-specific commands (`triss jira <subcmd>`) are part of the FULL
+// cookbook served by `triss agent-help` — the always-loaded nano block stays
+// short. See test/agent-help.test.js for the inverse contract.
 
-test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars are set', async () => {
+test('INIT-07: nano init keeps CLAUDE.md tiny even when ATLASSIAN_* env vars are set', async () => {
   const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
@@ -364,16 +372,20 @@ test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars a
     await runInit({ target: 'claude' });
 
     const content = readFileSync(destPath, 'utf8');
-    assert.ok(!content.includes('{{INTEGRATIONS}}'), 'placeholder should be replaced');
-    // Jira agentInstructions should appear
+    assert.ok(!content.includes('{{INTEGRATIONS}}'), 'no leftover template placeholder');
+    // Nano keeps things short: integration command syntax does NOT leak in.
     assert.ok(
-      content.includes('triss jira') || content.includes('Jira'),
-      'jira instructions should be included when ATLASSIAN_* creds are present',
+      !content.includes('triss jira search'),
+      'integration command syntax must NOT be inlined into the nano block',
     );
-    // Linear section should NOT appear (no LINEAR_API_KEY)
     assert.ok(
       !content.includes('triss linear'),
-      'linear instructions should not appear when LINEAR_API_KEY is missing',
+      'linear instructions should not appear regardless of env',
+    );
+    // Nano must point at the full reference instead.
+    assert.ok(
+      content.includes('triss agent-help'),
+      'nano must point at `triss agent-help` for the full integration cookbook',
     );
   });
 
@@ -388,7 +400,7 @@ test('INIT-07: {{INTEGRATIONS}} renders Jira section when ATLASSIAN_* env vars a
   if (origLinearKey !== undefined) process.env.LINEAR_API_KEY = origLinearKey;
 });
 
-test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATLASSIAN_* env vars are set', async () => {
+test('INIT-CODEX-04: nano init keeps AGENTS.md tiny even when ATLASSIAN_* env vars are set', async () => {
   const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
@@ -410,14 +422,18 @@ test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATL
     await runInit({ target: 'codex' });
 
     const content = readFileSync(destPath, 'utf8');
-    assert.ok(!content.includes('{{INTEGRATIONS}}'), 'placeholder should be replaced');
+    assert.ok(!content.includes('{{INTEGRATIONS}}'), 'no leftover template placeholder');
     assert.ok(
-      content.includes('triss jira') || content.includes('Jira'),
-      'jira instructions should be included in AGENTS.md when ATLASSIAN_* creds are present',
+      !content.includes('triss jira search'),
+      'integration command syntax must NOT be inlined into the nano AGENTS.md block',
     );
     assert.ok(
       !content.includes('triss linear'),
-      'linear instructions should not appear in AGENTS.md when LINEAR_API_KEY is missing',
+      'linear instructions should not appear in AGENTS.md regardless of env',
+    );
+    assert.ok(
+      content.includes('triss agent-help'),
+      'nano AGENTS.md must point at `triss agent-help` for the full integration cookbook',
     );
   });
 
@@ -433,9 +449,14 @@ test('INIT-CODEX-04: {{INTEGRATIONS}} renders Jira section in AGENTS.md when ATL
   else delete process.env.LINEAR_API_KEY;
 });
 
-// ── INIT-06: MCP detection — mcpServers.triss in ~/.claude.json ───────────────
+// ── INIT-06: nano init does NOT branch on MCP registration ───────────────────
+//
+// The full MCP-hint blockquote is part of `triss agent-help` output (see
+// test/agent-help.test.js). The nano init block is identical regardless of
+// whether ~/.claude.json registers mcpServers.triss — it always names the
+// MCP tools and points at the full reference.
 
-test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists in ~/.claude.json', async () => {
+test('INIT-06: nano init output is identical with or without mcpServers.triss in ~/.claude.json', async () => {
   const origApiKey = process.env.TRISS_WORKER_API_KEY;
   const origWorkerKey = process.env.WORKER_API_KEY;
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
@@ -451,27 +472,28 @@ test('INIT-06: MCP hint appears in rendered block when mcpServers.triss exists i
   delete process.env.LINEAR_API_KEY;
 
   await withTmpEnv(async ({ homeDir, projectDir }) => {
-    // Write ~/.claude.json with mcpServers.triss present
+    const destPath = join(projectDir, 'CLAUDE.md');
+    const { runInit } = await import('../src/commands/init.js');
+
+    // First run: no MCP registered.
+    await runInit({ target: 'claude' });
+    const without = readFileSync(destPath, 'utf8');
+
+    // Now register MCP and re-run.
     const claudeConfigDir = join(homeDir, '.claude');
     mkdirSync(claudeConfigDir, { recursive: true });
-    const claudeJson = {
-      mcpServers: {
-        triss: { command: 'triss', args: ['mcp', 'serve'] },
-      },
-    };
-    writeFileSync(join(homeDir, '.claude.json'), JSON.stringify(claudeJson, null, 2) + '\n');
-
-    const destPath = join(projectDir, 'CLAUDE.md');
-
-    const { runInit } = await import('../src/commands/init.js');
+    writeFileSync(
+      join(homeDir, '.claude.json'),
+      JSON.stringify({ mcpServers: { triss: { command: 'triss', args: ['mcp', 'serve'] } } }) + '\n',
+    );
     await runInit({ target: 'claude' });
+    const withMcp = readFileSync(destPath, 'utf8');
 
-    const content = readFileSync(destPath, 'utf8');
+    assert.equal(without, withMcp, 'nano init must produce identical output regardless of MCP registration');
+    assert.ok(without.includes('triss_ask'), 'nano always names the MCP tools');
     assert.ok(
-      content.includes('Triss is also available as MCP tools') ||
-        content.includes('triss_ask') ||
-        content.includes('MCP'),
-      'rendered block should contain MCP hint when mcpServers.triss is registered',
+      !without.includes('Triss is also available as MCP tools'),
+      'long MCP-hint blockquote belongs to `triss agent-help`, not the nano block',
     );
   });
 
@@ -506,7 +528,8 @@ test('INIT-BOTH-01: target="both" creates CLAUDE.md and AGENTS.md in one call', 
     const codex = readFileSync(codexPath, 'utf8');
     assert.ok(claude.includes(START_MARKER) && claude.includes(END_MARKER));
     assert.ok(codex.includes(START_MARKER) && codex.includes(END_MARKER));
-    assert.ok(codex.includes('triss ask'), 'AGENTS.md should contain Codex rules body');
+    assert.ok(codex.includes('triss_ask'), 'AGENTS.md should mention Triss MCP tools by name');
+    assert.ok(claude.includes('triss agent-help'), 'CLAUDE.md should point at the full reference command');
   });
 
   if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;

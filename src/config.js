@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { activeEnvFiles } from './secrets.js';
 
-function loadEnvFiles() {
+export function loadEnvFiles() {
   // Precedence: process.env > project .triss.env > global ~/.config/triss/.env.
   // dotenv with override:false only fills *missing* keys, so the first call
   // (project) wins over the second (global), and real process env wins over

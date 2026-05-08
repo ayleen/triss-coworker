@@ -1,26 +1,20 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { runWizard } from './config.js';
-import { showStatus as mcpStatus } from '../mcp/install.js';
 import { promptChoice } from '../secrets.js';
+import {
+  TARGETS,
+  SUPPORTED_TARGETS,
+  START_MARKER,
+  END_MARKER,
+  renderRules,
+} from '../agent-rules.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const TEMPLATE_DIR = resolve(HERE, '..', '..', 'templates');
-
-const START_MARKER = '<!-- triss:start -->';
-const END_MARKER = '<!-- triss:end -->';
-
-const TARGETS = {
-  claude: { template: 'claude.md', filename: 'CLAUDE.md', globalDir: '.claude' },
-  codex: { template: 'codex.md', filename: 'AGENTS.md', globalDir: '.codex' },
-};
-
-const SUPPORTED = [...Object.keys(TARGETS), 'both'];
+const SUPPORTED = [...SUPPORTED_TARGETS, 'both'];
 
 export async function runInit(opts) {
   let raw = opts.target ? String(opts.target).toLowerCase() : '';
@@ -29,7 +23,7 @@ export async function runInit(opts) {
     throw new Error(`Unknown --target "${raw}". Supported: ${SUPPORTED.join(', ')}`);
   }
 
-  const targets = raw === 'both' ? ['claude', 'codex'] : [raw];
+  const targets = raw === 'both' ? [...SUPPORTED_TARGETS] : [raw];
   for (const t of targets) {
     await writeAgentRules(t, opts);
   }
@@ -53,12 +47,9 @@ async function chooseTarget() {
 
 async function writeAgentRules(target, opts) {
   const meta = TARGETS[target];
-  const templatePath = join(TEMPLATE_DIR, meta.template);
-  if (!existsSync(templatePath)) {
-    throw new Error(`Template not found for target "${target}" at ${templatePath}`);
-  }
-  const rawTemplate = readFileSync(templatePath, 'utf8');
-  const block = (await renderTemplate(rawTemplate, target)).trim();
+  // `init` writes the nano variant — the always-loaded block stays small.
+  // Full reference is on demand via `triss agent-help`.
+  const block = (await renderRules(target, { variant: 'nano' })).trim();
   const wrapped = `${START_MARKER}\n${block}\n${END_MARKER}\n`;
 
   const destPath = opts.global
@@ -139,48 +130,6 @@ async function postInit(opts) {
 
 // Re-export the helper for tests.
 export { postInit as _postInit };
-
-// Render the {{INTEGRATIONS}} placeholder. Two layers:
-//   1. If the MCP server is registered in Claude Code config, prepend a hint
-//      that the same operations are also available as native MCP tools so
-//      the agent prefers those.
-//   2. Splice in agentInstructions snippets from each integration whose
-//      required env vars are all set (so users who don't use Linear never
-//      see Linear instructions).
-async function renderTemplate(raw, target) {
-  if (!raw.includes('{{INTEGRATIONS}}')) return raw;
-  const integrations = await loadIntegrations();
-  const active = integrations.filter((m) => envReadiness(m).ready && m.agentInstructions?.[target]);
-
-  let mcpHint = '';
-  try {
-    const { present } = mcpStatus('global', { target });
-    if (present) {
-      const sessionLabel = target === 'codex' ? 'Codex' : 'Claude Code';
-      mcpHint =
-        `\n> 💡 **Triss is also available as MCP tools in this ${sessionLabel} session.**\n` +
-        '> Native tools — `triss_ask`, `triss_chat`, `triss_review`, `triss_jira_*`,\n' +
-        '> `triss_linear_*` etc. — are usually faster and have per-tool permissions.\n' +
-        '> Prefer them over the Bash invocations described below; the CLI block stays\n' +
-        '> as a fallback if MCP is not loaded.\n\n';
-    }
-  } catch {
-    /* config unreadable — silently fall back to CLI-only block */
-  }
-
-  let block;
-  if (!active.length && !mcpHint) {
-    block = '';
-  } else {
-    const integrationsBody = active.length
-      ? '\n## Integrations enabled for this project\n\n' +
-        active.map((m) => m.agentInstructions[target].trim()).join('\n\n') +
-        '\n\n'
-      : '';
-    block = mcpHint + integrationsBody;
-  }
-  return raw.replace(/\{\{INTEGRATIONS\}\}\n?/g, block);
-}
 
 function replaceBlock(text, replacement) {
   const start = text.indexOf(START_MARKER);

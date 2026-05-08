@@ -43,13 +43,14 @@ export default {
   ],
 
   // Optional: markdown the agent should see when this integration is
-  // configured. Triss splices these snippets into CLAUDE.md / AGENTS.md
-  // at `triss init` time, but ONLY if all required envVars are present —
-  // so users who don't use your provider never see it in their agent's
-  // instructions. Snippets are also re-rendered on every `triss init`,
-  // so when the user later enables your integration via
-  // `triss config wizard yourthing`, they just re-run `triss init` to
-  // pick up the new section.
+  // configured. Triss splices these snippets into the FULL cookbook
+  // served by `triss agent-help`, but ONLY if all required envVars are
+  // present — so users who don't use your provider never see it in
+  // their agent's instructions. The nano block written by `triss init`
+  // stays unchanged; integration hints live only in the on-demand
+  // cookbook. When the user later enables your integration via
+  // `triss config wizard yourthing`, the next `triss agent-help` call
+  // picks up the new section automatically.
   agentInstructions: {
     claude: '### `triss yourthing` …\n```bash\ntriss yourthing search "..."\n```\n',
     codex:  '### `triss yourthing` …\n…',
@@ -77,8 +78,11 @@ prints them as a red `✗` line — your action handlers should just throw.
 
 ### Wiring into the agent's instructions
 
-The default templates (`templates/claude.md`, `templates/codex.md`) contain
-a `{{INTEGRATIONS}}` placeholder. At `triss init` time Triss:
+`triss init` writes a tiny nano block (~15 lines, no integration content)
+into `CLAUDE.md` / `AGENTS.md`. The full cookbook lives in
+`templates/claude-full.md` / `templates/codex-full.md`, which contain the
+`{{INTEGRATIONS}}` placeholder and are rendered on demand by
+`triss agent-help`. At render time Triss:
 
 1. Loads every integration manifest.
 2. Filters to the ones whose required `envVars` are all set.
@@ -86,9 +90,10 @@ a `{{INTEGRATIONS}}` placeholder. At `triss init` time Triss:
    substitutes the result into the placeholder.
 
 Result: agents get a focused, project-specific delegation guide — no
-mentions of providers the user hasn't configured. If a user later runs
-`triss config wizard yourthing` and adds their token, a follow-up
-`triss init` automatically adds your section to their CLAUDE.md.
+mentions of providers the user hasn't configured — but only when they
+actually need it, so the always-loaded `CLAUDE.md` block stays small.
+If a user later runs `triss config wizard yourthing` and adds their
+token, the next `triss agent-help` call picks up the new section.
 
 ## What `_contract.js` gives you
 
@@ -191,7 +196,7 @@ triss github comment owner/repo 42 --body "..."
 
 Save the file, run `triss --help`, and `github` shows up. After
 `triss config wizard github` (which prompts for `GITHUB_TOKEN`), the next
-`triss init` adds your section to the user's CLAUDE.md or AGENTS.md
+`triss agent-help` adds your section to the on-demand cookbook
 automatically, depending on the selected target.
 
 ## Conventions

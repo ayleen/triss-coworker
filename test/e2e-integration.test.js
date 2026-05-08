@@ -51,10 +51,16 @@ test('config set TRISS_WORKER_API_KEY then getConfig returns it', async () => {
   const globalEnvFile = join(configDir, '.env');
   writeFileSync(globalEnvFile, '');
 
+  // Run the body from a fresh project dir so a contributor's local
+  // .triss.env in the repo root does not leak into getConfig() and shadow
+  // the value we just wrote to the global file.
+  const projectDir = makeTmp('triss-config-rw-proj-');
+  const originalCwd = process.cwd();
   const restore = envSnapshot(['TRISS_WORKER_API_KEY', 'HOME']);
   // Point HOME to our tmp dir so getEnvFilePath('global') resolves there.
   process.env.HOME = tmp;
   delete process.env.TRISS_WORKER_API_KEY; // avoid process.env winning over file
+  process.chdir(projectDir);
 
   try {
     // Import setVar fresh so it picks up the redirected HOME.
@@ -66,8 +72,10 @@ test('config set TRISS_WORKER_API_KEY then getConfig returns it', async () => {
     const cfg = getConfig();
     assert.equal(cfg.apiKey, 'sk-foo', `Expected apiKey=sk-foo, got ${cfg.apiKey}`);
   } finally {
+    process.chdir(originalCwd);
     restore();
     rmSync(tmp, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
   }
 });
 
@@ -145,9 +153,13 @@ test('runInit writes MCP tools hint into CLAUDE.md when entry is present', async
   }
 });
 
-// ─── 4. Init renders integration sections when ATLASSIAN_* is set ─────────────
+// ─── 4. Init keeps CLAUDE.md tiny — integration commands live in agent-help ──
+//
+// The full integration cookbook (with `triss jira <subcmd>` examples) is
+// rendered by `triss agent-help`, not inlined into CLAUDE.md. See
+// test/agent-help.test.js for the inverse contract.
 
-test('runInit includes "triss jira" instructions in CLAUDE.md when ATLASSIAN_* are set', async () => {
+test('runInit produces the nano CLAUDE.md regardless of ATLASSIAN_* env vars', async () => {
   const tmp = makeTmp('triss-init-jira-');
   const projectDir = makeTmp('triss-init-jira-proj-');
   const originalCwd = process.cwd();
@@ -174,8 +186,12 @@ test('runInit includes "triss jira" instructions in CLAUDE.md when ATLASSIAN_* a
 
     const claudeMd = readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8');
     assert.ok(
-      claudeMd.includes('triss jira') || claudeMd.includes('jira'),
-      `Expected "triss jira" section in CLAUDE.md. Got:\n${claudeMd.slice(0, 800)}`,
+      !claudeMd.includes('triss jira search'),
+      `nano CLAUDE.md must not inline integration command syntax. Got:\n${claudeMd.slice(0, 800)}`,
+    );
+    assert.ok(
+      claudeMd.includes('triss agent-help'),
+      `nano CLAUDE.md must point at \`triss agent-help\`. Got:\n${claudeMd.slice(0, 800)}`,
     );
   } finally {
     process.chdir(originalCwd);

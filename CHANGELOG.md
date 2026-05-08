@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-05-08
+
+### Added
+
+- New `triss agent-help` command prints the full delegation cookbook
+  (CLI examples, model presets, dynamically-rendered integration
+  sections) on demand. The nano `CLAUDE.md` / `AGENTS.md` block points
+  here so the long reference is loaded only when an agent actually
+  needs it.
+- Shared `src/agent-rules.js` module owns template rendering for both
+  `triss init` (nano variant) and `triss agent-help` (full variant).
+  The `{{INTEGRATIONS}}` placeholder and the MCP-hint blockquote now
+  apply only to the full variant.
+- New full-cookbook templates: `templates/claude-full.md` and
+  `templates/codex-full.md` (the long form previously in
+  `templates/claude.md` / `codex.md`).
+
+### Changed
+
+- **`triss init` now writes a ~17-line nano block** instead of the
+  ~150-220 line full cookbook. The block names the Triss MCP tools,
+  states when to delegate vs not, and points at `triss agent-help`.
+  Net effect: ~6-8× fewer always-loaded tokens per session for every
+  project that has run `triss init`. Existing users: re-run
+  `triss init` (with the same `--target` / `--global` flags as
+  before) to shrink the block in place — the marker-based
+  `replaceBlock` swap preserves all surrounding content.
+- The Codex nano block points at `triss agent-help --target codex`
+  so Codex agents receive AGENTS.md-flavored output instead of the
+  Claude-flavored default.
+
+### Fixed
+
+- `agent-rules.js` now calls `loadEnvFiles()` before checking
+  `envReadiness()`. Previously `triss agent-help` only saw integrations
+  whose credentials were exported into `process.env` — credentials
+  stored in `~/.config/triss/.env` (the wizard's default destination)
+  or `./.triss.env` were silently ignored, so agents never saw their
+  Jira/Linear/GitHub sections in the cookbook. `loadEnvFiles` is now
+  exported from `src/config.js` for direct reuse.
+- `test/e2e-integration.test.js`'s "config set TRISS_WORKER_API_KEY
+  then getConfig returns it" test now `chdir`s to a fresh tmp project
+  dir, matching its sibling tests in the same file. Previously it ran
+  from the repo cwd, so a contributor's local `.triss.env` would
+  shadow the value the test wrote to the global file. CI happened to
+  pass because the gitignored file was absent there; on developer
+  machines it could fail spuriously.
+
+### Internal
+
+- Added `.mcp.json` to `.gitignore`. The file is produced by
+  `triss mcp install --local` and bakes the developer's absolute
+  project path into a JSON `env.TRISS_PROJECT_ROOT` field — must not
+  be committed.
+- New regression tests in `test/agent-help.test.js`:
+  full-cookbook rendering, target switching, integration injection,
+  MCP-hint detection, and the env-file readiness path (the last one
+  spawns the CLI in a subprocess so module-level `homedir()`
+  constants in `src/secrets.js` resolve relative to the temp HOME).
+
 ## [0.15.2] — 2026-05-08
 
 ### Changed

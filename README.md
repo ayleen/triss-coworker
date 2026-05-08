@@ -185,6 +185,13 @@ Agent reads the rules and invokes Triss via the shell. No special
 setup. Best when you also want the same commands available outside the
 agent (in your own scripts, CI, etc).
 
+The block is intentionally tiny (~15 lines): it names the MCP tools,
+states when to delegate vs not, and points at `triss agent-help` for the
+full cookbook. The cookbook is rendered on demand — the agent reads it
+once when it actually needs the long reference, instead of loading 200
+lines of instructions into every session. This keeps the always-on
+context cost negligible compared to the savings Triss provides.
+
 ### Option 2 — MCP server (deeper integration)
 
 ```bash
@@ -230,7 +237,10 @@ Full reference: [docs/mcp.md](docs/mcp.md).
 
 The root `CLAUDE.md` and `AGENTS.md` in this repository are contributor
 instructions for working on Triss itself. The files under `templates/` are
-what `triss init` renders into other projects.
+what `triss init` and `triss agent-help` render into other projects:
+`claude.md` / `codex.md` are the nano variants written by `init`, and
+`claude-full.md` / `codex-full.md` are the long cookbook served by
+`agent-help`.
 
 ## What it does
 
@@ -247,7 +257,8 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss init`       | Drops a delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
+| `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
+| `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
 | `triss status`     | Shows current model + key + .env sources              | —                                   |
 | `triss config`     | Interactive credential management                     | Manual `.env` editing               |
 | `triss mcp`        | Register Triss as MCP server in Claude Code           | Editing `~/.claude.json` by hand    |
@@ -420,11 +431,14 @@ Two design rules:
 `triss status` shows each integration's env-var readiness so you know what
 still needs configuring.
 
-`triss init` injects per-integration delegation rules into your
-`CLAUDE.md` / `AGENTS.md` **only for integrations whose credentials are
-present**. Add a Linear key later? Run `triss config wizard linear` then
-`triss init` again — the new section appears automatically. Users who
-never use Jira never see Jira instructions in their agent's prompt.
+`triss agent-help` inlines per-integration delegation rules into the full
+cookbook **only for integrations whose credentials are present**. Add a
+Linear key later? Run `triss config wizard linear`, then the next time the
+agent runs `triss agent-help` the Linear section appears automatically.
+Users who never use Jira never see Jira instructions in the cookbook.
+
+(The nano `triss init` block stays the same regardless — integration
+hints live in the on-demand cookbook, not in the always-loaded block.)
 
 ### Adding your own integration
 
@@ -439,7 +453,7 @@ integration in ~80 lines is documented end-to-end in
    `IntegrationError`).
 4. Drop tests in `test/<name>-*.test.js` (mock `globalThis.fetch`).
 5. Run `triss --help` — your subcommand appears automatically. The
-   wizard, `triss status`, and `triss init` (CLAUDE.md / AGENTS.md generation) all
+   wizard, `triss status`, and `triss agent-help` (full cookbook) all
    pick up the new manifest with no further wiring.
 
 ## Models

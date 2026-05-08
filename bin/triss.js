@@ -26,6 +26,7 @@ import {
 } from '../src/commands/mcp.js';
 import { runCommitMsg } from '../src/commands/commit-msg.js';
 import { runInit } from '../src/commands/init.js';
+import { runAgentHelp } from '../src/commands/agent-help.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
 import {
@@ -145,6 +146,12 @@ program
   .option('--json', 'dump raw log records as JSON')
   .option('--reset', 'clear the usage log (cannot be undone)')
   .action(wrap(runUsage));
+
+program
+  .command('agent-help')
+  .description('Print the full Triss delegation cookbook (the nano block in CLAUDE.md / AGENTS.md points here)')
+  .option('-t, --target <agent>', 'agent flavour for headings (claude | codex)', 'claude')
+  .action(wrap(runAgentHelp));
 
 program
   .command('status')

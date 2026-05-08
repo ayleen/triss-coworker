@@ -8,6 +8,9 @@ node_modules/
 .idea/
 .claude/
 .serena/
+# Project-local MCP config produced by `triss mcp install --local`; bakes
+# absolute paths to the developer's machine, so it must not be committed.
+.mcp.json
 dist/
 coverage/
 *.tgz
