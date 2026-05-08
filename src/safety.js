@@ -23,7 +23,13 @@ export function setRestricted(on) {
 export function projectRoot() {
   const fromEnv = process.env[PROJECT_ROOT_ENV];
   if (fromEnv && fromEnv.trim()) return resolve(fromEnv.trim());
-  return resolve(process.cwd());
+  const cwd = resolve(process.cwd());
+  // When running inside a Claude Code worktree (.claude/worktrees/<id>/…),
+  // step up to the real project root so .triss.env is found there.
+  const marker = sep + '.claude' + sep + 'worktrees' + sep;
+  const idx = cwd.indexOf(marker);
+  if (idx !== -1) return cwd.slice(0, idx);
+  return cwd;
 }
 
 /**

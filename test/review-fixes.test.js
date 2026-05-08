@@ -151,6 +151,21 @@ test('projectRoot falls back to process.cwd when env unset', async () => {
   }
 });
 
+test('projectRoot strips .claude/worktrees/<id> suffix', async () => {
+  const restore = envSnap(['TRISS_PROJECT_ROOT']);
+  delete process.env.TRISS_PROJECT_ROOT;
+  const fakeWorktreeCwd = '/Users/dev/myproject/.claude/worktrees/agent-abc123/subdir';
+  const origCwd = process.cwd;
+  process.cwd = () => fakeWorktreeCwd;
+  try {
+    const { projectRoot } = await import(`../src/safety.js?root-wt=${Date.now()}`);
+    assert.equal(projectRoot(), '/Users/dev/myproject');
+  } finally {
+    process.cwd = origCwd;
+    restore();
+  }
+});
+
 test('assertSafePath sandboxes against TRISS_PROJECT_ROOT, not cwd', async () => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'triss-root-sb-')));
   writeFileSync(join(tmp, 'allowed.txt'), 'x');
