@@ -26,6 +26,9 @@ import {
   linearCommentHandler,
   linearStatesHandler,
   linearAttachmentsHandler,
+  linearProjectListHandler,
+  linearProjectCreateHandler,
+  linearInitiativeListHandler,
   githubSearchHandler,
   githubIssueHandler,
   githubCreateHandler,
@@ -324,6 +327,7 @@ const LINEAR_TOOLS = [
         parent: { type: 'string', description: 'Parent issue UUID or identifier' },
         priority: { type: 'number' },
         assignee: { type: 'string', description: 'Assignee user UUID' },
+        due_date: { type: 'string', description: 'Due date ISO 8601 (YYYY-MM-DD)' },
       },
       required: ['team', 'title'],
     },
@@ -342,6 +346,7 @@ const LINEAR_TOOLS = [
         project: { type: 'string' },
         parent: { type: 'string' },
         priority: { type: 'number', description: 'Priority 0-4' },
+        due_date: { type: 'string', description: 'Due date ISO 8601 (YYYY-MM-DD)' },
       },
       required: ['id'],
     },
@@ -385,6 +390,44 @@ const LINEAR_TOOLS = [
       required: ['id'],
     },
     handler: linearAttachmentsHandler,
+  },
+  {
+    name: 'triss_linear_project_list',
+    description: 'List Linear projects for a team (id, name, startDate, targetDate).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        team: { type: 'string', description: 'Team UUID or key (e.g. ENG)' },
+      },
+      required: ['team'],
+    },
+    handler: linearProjectListHandler,
+  },
+  {
+    name: 'triss_linear_project_create',
+    description:
+      'Create a Linear project. Optionally link to an initiative via `initiative` (UUID).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        team: { type: 'string', description: 'Team UUID or key' },
+        name: { type: 'string', description: 'Project name' },
+        start_date: { type: 'string', description: 'Start date ISO 8601 (YYYY-MM-DD)' },
+        target_date: { type: 'string', description: 'Target date ISO 8601 (YYYY-MM-DD)' },
+        initiative: { type: 'string', description: 'Initiative UUID to attach this project to' },
+      },
+      required: ['team', 'name'],
+    },
+    handler: linearProjectCreateHandler,
+  },
+  {
+    name: 'triss_linear_initiative_list',
+    description: 'List all Linear initiatives with their linked projects (id, name, projects[]).',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+    handler: linearInitiativeListHandler,
   },
 ];
 

@@ -380,6 +380,7 @@ export async function linearCreateHandler({
   parent,
   priority,
   assignee,
+  due_date,
 }) {
   const { linear, resolveTeamId } = await import('../integrations/linear/client.js');
   const teamId = await resolveTeamId(team);
@@ -388,6 +389,7 @@ export async function linearCreateHandler({
   if (parent) input.parentId = parent;
   if (priority != null) input.priority = priority;
   if (assignee) input.assigneeId = assignee;
+  if (due_date) input.dueDate = due_date;
   const issue = await linear.createIssue(input);
   return `✓ Created ${issue.identifier}\nURL: ${issue.url}`;
 }
@@ -400,6 +402,7 @@ export async function linearUpdateHandler({
   project,
   parent,
   priority,
+  due_date,
 }) {
   const { linear, transitionIssue } = await import('../integrations/linear/client.js');
   const issue = await linear.getIssue(id);
@@ -409,6 +412,7 @@ export async function linearUpdateHandler({
   if (project) input.projectId = project;
   if (parent) input.parentId = parent;
   if (priority != null) input.priority = priority;
+  if (due_date) input.dueDate = due_date;
   const out = [];
   if (Object.keys(input).length) {
     await linear.updateIssue(issue.id, input);
@@ -435,6 +439,44 @@ export async function linearStatesHandler({ team }) {
     (s) => `${s.position}\t[${s.type}]\t${s.name}\t(${s.id})`,
   );
   return lines.join('\n') || '(no states)';
+}
+
+export async function linearProjectListHandler({ team }) {
+  const { linear } = await import('../integrations/linear/client.js');
+  const projects = await linear.listProjects(team);
+  const lines = projects.map(
+    (p) => `${p.id}\t${p.name}\t${p.startDate ?? '—'}\t${p.targetDate ?? '—'}`,
+  );
+  return lines.join('\n') || '(no projects)';
+}
+
+export async function linearProjectCreateHandler({
+  team,
+  name,
+  start_date,
+  target_date,
+  initiative,
+}) {
+  const { linear, resolveTeamId } = await import('../integrations/linear/client.js');
+  const teamId = await resolveTeamId(team);
+  const project = await linear.createProject({
+    teamId,
+    name,
+    startDate: start_date,
+    targetDate: target_date,
+    initiativeId: initiative,
+  });
+  return `✓ Created project "${project.name}"\nURL: ${project.url}`;
+}
+
+export async function linearInitiativeListHandler() {
+  const { linear } = await import('../integrations/linear/client.js');
+  const initiatives = await linear.listInitiatives();
+  const lines = initiatives.map(
+    (i) =>
+      `${i.id}\t${i.name}\t[${(i.projects?.nodes || []).map((p) => p.name).join(', ') || 'no projects'}]`,
+  );
+  return lines.join('\n') || '(no initiatives)';
 }
 
 export async function linearAttachmentsHandler({ id }) {

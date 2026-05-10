@@ -6,6 +6,9 @@ import {
   commentsCmd,
   statesCmd,
   attachmentsCmd,
+  projectListCmd,
+  projectCreateCmd,
+  initiativeListCmd,
 } from './commands.js';
 
 const CLAUDE_INSTRUCTIONS = `### \`triss linear\` — Linear
@@ -17,12 +20,18 @@ response into context.
 triss linear search "..." --question "<q>"
 triss linear issue ENG-42 --with-comments --question "<q>"
 triss linear create --team ENG --title "..." --description "..." --parent ENG-100
-triss linear update ENG-42 --state "In Review" --description "..."
+triss linear create --team ENG --title "..." --due-date 2025-06-30
+triss linear update ENG-42 --state "In Review" --due-date 2025-07-15
 triss linear comments ENG-42 --post "..."
 triss linear states ENG --apply "In Progress" --issue ENG-42
+triss linear project-list ENG
+triss linear project-create --team ENG --name "Q3 Backend" --start-date 2025-07-01 --target-date 2025-09-30
+triss linear project-create --team ENG --name "Auth Revamp" --initiative <uuid>
+triss linear initiative-list
 \`\`\`
 
 \`--project\` links to a Linear Project; \`--parent\` makes a sub-issue.
+Use \`project-list\` / \`initiative-list\` to get UUIDs before linking.
 `;
 
 export default {
@@ -64,6 +73,7 @@ export default {
       .option('--project <id>', 'attach to a project (UUID)')
       .option('--parent <id>', 'set parent issue (sub-issue) by UUID or identifier')
       .option('--state <name>', 'transition to a workflow state by name')
+      .option('--due-date <date>', 'due date ISO 8601 (YYYY-MM-DD)')
       .action(wrap(updateCmd));
 
     program
@@ -76,6 +86,7 @@ export default {
       .option('--parent <id>', 'parent issue (UUID or identifier) for sub-issues')
       .option('--priority <n>', 'priority 0-4')
       .option('--assignee <id>', 'assignee UUID')
+      .option('--due-date <date>', 'due date ISO 8601 (YYYY-MM-DD)')
       .option('--json', 'print created issue as JSON')
       .action(wrap(createCmd));
 
@@ -101,5 +112,28 @@ export default {
       .description('List attachments on an issue')
       .option('--json', 'raw JSON output')
       .action(wrap(attachmentsCmd));
+
+    program
+      .command('project-list <team>')
+      .description('List projects for a team (id, name, startDate, targetDate)')
+      .option('--json', 'raw JSON output')
+      .action(wrap(projectListCmd));
+
+    program
+      .command('project-create')
+      .description('Create a Linear project; --initiative links to an initiative UUID')
+      .requiredOption('--team <id>', 'team UUID or key')
+      .requiredOption('--name <text>', 'project name')
+      .option('--start-date <date>', 'start date ISO 8601 (YYYY-MM-DD)')
+      .option('--target-date <date>', 'target date ISO 8601 (YYYY-MM-DD)')
+      .option('--initiative <id>', 'initiative UUID to attach this project to')
+      .option('--json', 'print created project as JSON')
+      .action(wrap(projectCreateCmd));
+
+    program
+      .command('initiative-list')
+      .description('List all initiatives with their linked projects')
+      .option('--json', 'raw JSON output')
+      .action(wrap(initiativeListCmd));
   },
 };

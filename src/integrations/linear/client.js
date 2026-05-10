@@ -38,8 +38,11 @@ const ISSUE_FIELDS = `
   id identifier title description url state { name type } priority
   assignee { name email } creator { name } team { id key name }
   project { id name } parent { identifier title }
+  dueDate
   createdAt updatedAt
 `;
+
+const PROJECT_FIELDS = `id name startDate targetDate url status { name type }`;
 
 export const linear = {
   async search({ term, limit = 50 }) {
@@ -111,6 +114,66 @@ export const linear = {
     );
     if (!data.commentCreate.success) throw new IntegrationError('commentCreate returned success=false');
     return data.commentCreate.comment;
+  },
+
+  async listProjects(teamKey) {
+    const data = await gql(
+      `query($key: String!) {
+        team(id: $key) {
+          projects(first: 100) {
+            nodes { ${PROJECT_FIELDS} }
+          }
+        }
+      }`,
+      { key: teamKey },
+    );
+    if (!data.team) throw new IntegrationError(`Linear team not found: ${teamKey}`);
+    return data.team.projects.nodes;
+  },
+
+  async createProject({ teamId, name, startDate, targetDate, initiativeId }) {
+    const input = { teamIds: [teamId], name };
+    if (startDate) input.startDate = startDate;
+    if (targetDate) input.targetDate = targetDate;
+    const data = await gql(
+      `mutation($input: ProjectCreateInput!) {
+        projectCreate(input: $input) {
+          success
+          project { ${PROJECT_FIELDS} }
+        }
+      }`,
+      { input },
+    );
+    if (!data.projectCreate.success) throw new IntegrationError('projectCreate returned success=false');
+    const project = data.projectCreate.project;
+    if (initiativeId) {
+      const link = await gql(
+        `mutation($input: InitiativeToProjectCreateInput!) {
+          initiativeToProjectCreate(input: $input) { success }
+        }`,
+        { input: { initiativeId, projectId: project.id } },
+      );
+      if (!link.initiativeToProjectCreate.success) {
+        throw new IntegrationError('initiativeToProjectCreate returned success=false');
+      }
+    }
+    return project;
+  },
+
+  async listInitiatives() {
+    const data = await gql(
+      `query {
+        initiatives(first: 100) {
+          nodes {
+            id name
+            projects(first: 50) {
+              nodes { id name }
+            }
+          }
+        }
+      }`,
+    );
+    return data.initiatives?.nodes ?? [];
   },
 
   async listStates(teamKey) {

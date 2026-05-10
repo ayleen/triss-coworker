@@ -2,6 +2,10 @@ import pc from 'picocolors';
 import { linear, transitionIssue, resolveTeamId } from './client.js';
 import { summarize, printResult, IntegrationError } from '../_contract.js';
 
+function formatProjectLine(p) {
+  return `${p.id}\t${p.name}\t${p.startDate ?? '—'}\t${p.targetDate ?? '—'}`;
+}
+
 function formatIssueLine(i) {
   const assignee = i.assignee?.name ?? 'unassigned';
   return `${i.identifier}\t[${i.state?.name}]\t${i.title}\t(${assignee})`;
@@ -66,6 +70,7 @@ export async function updateCmd(idOrIdentifier, opts) {
   if (opts.priority != null) input.priority = parseInt(opts.priority, 10);
   if (opts.project) input.projectId = opts.project;
   if (opts.parent) input.parentId = opts.parent;
+  if (opts.dueDate) input.dueDate = opts.dueDate;
 
   if (Object.keys(input).length) {
     await linear.updateIssue(issue.id, input);
@@ -87,6 +92,7 @@ export async function createCmd(opts) {
   if (opts.parent) input.parentId = opts.parent;
   if (opts.priority != null) input.priority = parseInt(opts.priority, 10);
   if (opts.assignee) input.assigneeId = opts.assignee;
+  if (opts.dueDate) input.dueDate = opts.dueDate;
   const issue = await linear.createIssue(input);
   process.stdout.write(pc.green(`✓ Created ${issue.identifier}: ${issue.url}\n`));
   if (opts.json) printResult(issue, { json: true });
@@ -123,6 +129,34 @@ export async function statesCmd(teamKey, { json, apply, issue: issueRef }) {
   const states = await linear.listStates(teamKey);
   if (json) return printResult(states, { json: true });
   printResult(states.map((s) => `${s.position}\t[${s.type}]\t${s.name}\t(${s.id})`).join('\n'));
+}
+
+export async function projectListCmd(teamKey, { json }) {
+  const projects = await linear.listProjects(teamKey);
+  if (json) return printResult(projects, { json: true });
+  printResult(projects.map(formatProjectLine).join('\n') || '(no projects)');
+}
+
+export async function projectCreateCmd(opts) {
+  const teamId = await resolveTeamId(opts.team);
+  const project = await linear.createProject({
+    teamId,
+    name: opts.name,
+    startDate: opts.startDate,
+    targetDate: opts.targetDate,
+    initiativeId: opts.initiative,
+  });
+  process.stdout.write(pc.green(`✓ Created project "${project.name}": ${project.url}\n`));
+  if (opts.json) printResult(project, { json: true });
+}
+
+export async function initiativeListCmd({ json }) {
+  const initiatives = await linear.listInitiatives();
+  if (json) return printResult(initiatives, { json: true });
+  const lines = initiatives.map(
+    (i) => `${i.id}\t${i.name}\t[${(i.projects?.nodes || []).map((p) => p.name).join(', ') || 'no projects'}]`,
+  );
+  printResult(lines.join('\n') || '(no initiatives)');
 }
 
 export async function attachmentsCmd(idOrIdentifier, { json }) {

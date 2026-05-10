@@ -226,9 +226,16 @@ Exposed **only when LINEAR_API_KEY is set**:
 - `triss_linear_states` — list a team's workflow states (use before
   `triss_linear_update.state`)
 - `triss_linear_attachments` — list attachments on an issue
+- `triss_linear_project_list` — list projects for a team (id, name, startDate, targetDate)
+- `triss_linear_project_create` — create a project with optional dates and initiative link
+- `triss_linear_initiative_list` — list all initiatives and their linked projects
 
-`triss_linear_create` accepts optional `assignee` (user UUID);
-`triss_linear_update` accepts optional `priority` (0–4).
+`triss_linear_create` and `triss_linear_update` accept optional `due_date`
+(ISO 8601 `YYYY-MM-DD`; Linear issues have `dueDate` but no `startDate` field).
+`triss_linear_create` also accepts `assignee` (user UUID);
+`triss_linear_update` accepts `priority` (0–4).
+Use `triss_linear_project_list` / `triss_linear_initiative_list` to discover
+UUIDs before calling `triss_linear_project_create`.
 
 Exposed **only when GITHUB_TOKEN is set** (or `gh` CLI is logged in —
 Triss bootstraps the token from `gh auth token` automatically):

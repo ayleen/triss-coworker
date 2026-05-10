@@ -60,3 +60,126 @@ test('linear surfaces GraphQL errors as IntegrationError', async () => {
   const { linear } = await import(`../src/integrations/linear/client.js?lin-err=${Date.now()}`);
   await assert.rejects(() => linear.search({ term: 'x' }), /Linear GraphQL error: nope/);
 });
+
+test('linear.listProjects returns team projects with dates', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        team: {
+          projects: {
+            nodes: [{ id: 'proj-1', name: 'Q3 Backend', startDate: '2025-07-01', targetDate: '2025-09-30', url: 'u' }],
+          },
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-projlist=${Date.now()}`);
+  const projects = await linear.listProjects('ENG');
+  assert.equal(projects[0].name, 'Q3 Backend');
+  assert.equal(projects[0].startDate, '2025-07-01');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /projects/);
+  assert.deepEqual(body.variables, { key: 'ENG' });
+});
+
+test('linear.createProject sends projectCreate mutation', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        projectCreate: {
+          success: true,
+          project: { id: 'proj-2', name: 'Auth Revamp', startDate: '2025-06-01', targetDate: '2025-08-31', url: 'p' },
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-projcreate=${Date.now()}`);
+  const project = await linear.createProject({
+    teamId: 'team-uuid',
+    name: 'Auth Revamp',
+    startDate: '2025-06-01',
+    targetDate: '2025-08-31',
+  });
+  assert.equal(project.name, 'Auth Revamp');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /projectCreate/);
+  assert.deepEqual(body.variables.input.teamIds, ['team-uuid']);
+  assert.equal(body.variables.input.startDate, '2025-06-01');
+});
+
+test('linear.createProject calls initiativeToProjectCreate when initiativeId provided', async () => {
+  setEnv();
+  let callCount = 0;
+  const calls = mockFetch(() => {
+    callCount++;
+    if (callCount === 1) {
+      return {
+        body: {
+          data: {
+            projectCreate: {
+              success: true,
+              project: { id: 'proj-3', name: 'Roadmap', startDate: null, targetDate: null, url: 'r' },
+            },
+          },
+        },
+      };
+    }
+    return { body: { data: { initiativeToProjectCreate: { success: true } } } };
+  });
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-projinit=${Date.now()}`);
+  await linear.createProject({ teamId: 'tid', name: 'Roadmap', initiativeId: 'init-uuid' });
+  assert.equal(calls.length, 2);
+  const linkBody = JSON.parse(calls[1].init.body);
+  assert.match(linkBody.query, /initiativeToProjectCreate/);
+  assert.equal(linkBody.variables.input.initiativeId, 'init-uuid');
+  assert.equal(linkBody.variables.input.projectId, 'proj-3');
+});
+
+test('linear.createProject throws when initiativeToProjectCreate returns success=false', async () => {
+  setEnv();
+  let callCount = 0;
+  mockFetch(() => {
+    callCount++;
+    if (callCount === 1) {
+      return {
+        body: {
+          data: {
+            projectCreate: {
+              success: true,
+              project: { id: 'proj-4', name: 'X', startDate: null, targetDate: null, url: 'u' },
+            },
+          },
+        },
+      };
+    }
+    return { body: { data: { initiativeToProjectCreate: { success: false } } } };
+  });
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-initfail=${Date.now()}`);
+  await assert.rejects(
+    () => linear.createProject({ teamId: 'tid', name: 'X', initiativeId: 'bad-init' }),
+    /initiativeToProjectCreate returned success=false/,
+  );
+});
+
+test('linear.listInitiatives returns initiatives with linked projects', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        initiatives: {
+          nodes: [
+            { id: 'init-1', name: 'Q3 Roadmap', projects: { nodes: [{ id: 'p1', name: 'Backend' }] } },
+          ],
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-initlist=${Date.now()}`);
+  const initiatives = await linear.listInitiatives();
+  assert.equal(initiatives[0].name, 'Q3 Roadmap');
+  assert.equal(initiatives[0].projects.nodes[0].name, 'Backend');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /initiatives/);
+});
