@@ -229,13 +229,31 @@ Exposed **only when LINEAR_API_KEY is set**:
 - `triss_linear_project_list` — list projects for a team (id, name, startDate, targetDate)
 - `triss_linear_project_create` — create a project with optional dates and initiative link
 - `triss_linear_initiative_list` — list all initiatives and their linked projects
+- `triss_linear_milestone_list` — list milestones inside a project (use before passing `milestone`)
+- `triss_linear_milestone_create` — create a Gantt-diamond milestone inside a project
+- `triss_linear_label_list` — list labels available on a team (use before passing `labels`)
+- `triss_linear_bulk_update` — apply the same field changes to many issues in one call
 
-`triss_linear_create` and `triss_linear_update` accept optional `due_date`
-(ISO 8601 `YYYY-MM-DD`; Linear issues have `dueDate` but no `startDate` field).
-`triss_linear_create` also accepts `assignee` (user UUID);
-`triss_linear_update` accepts `priority` (0–4).
-Use `triss_linear_project_list` / `triss_linear_initiative_list` to discover
-UUIDs before calling `triss_linear_project_create`.
+`triss_linear_create` / `triss_linear_update` / `triss_linear_bulk_update`
+accept these optional Gantt-and-classification fields:
+
+- `due_date` (TimelessDate `YYYY-MM-DD`) — planned due date. Linear's API
+  does not expose a planned-start input on issues; the Gantt bar's left
+  edge uses the read-only `startedAt` which Linear auto-fills on state
+  transition. Use `milestone` for an explicit start anchor.
+- `milestone` (UUID) — link the issue to a project milestone
+- `labels` (array of UUIDs and/or names) — REPLACES the existing labels on
+  update. Pass `[]` to clear all labels; omit the field to leave them
+  untouched. Names are resolved against the issue's own team unless `team`
+  is passed.
+- `assignee` accepts UUID, email, or display name (resolved via `users(filter:)`)
+- `priority` (0–4)
+
+Use `triss_linear_project_list` / `triss_linear_initiative_list` /
+`triss_linear_milestone_list` / `triss_linear_label_list` to discover UUIDs
+before passing them in. `triss_linear_bulk_update` processes issues in
+parallel with bounded concurrency (default 5) and returns a per-issue
+ok/fail summary.
 
 Exposed **only when GITHUB_TOKEN is set** (or `gh` CLI is logged in —
 Triss bootstraps the token from `gh auth token` automatically):

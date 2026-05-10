@@ -1,6 +1,22 @@
 import pc from 'picocolors';
-import { linear, transitionIssue, resolveTeamId } from './client.js';
+import {
+  linear,
+  transitionIssue,
+  resolveTeamId,
+  resolveAssigneeId,
+  resolveLabelIds,
+  bulkUpdateIssues,
+} from './client.js';
 import { summarize, printResult, IntegrationError } from '../_contract.js';
+
+function parseList(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
+  return String(v)
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function formatProjectLine(p) {
   return `${p.id}\t${p.name}\t${p.startDate ?? '—'}\t${p.targetDate ?? '—'}`;
@@ -71,6 +87,16 @@ export async function updateCmd(idOrIdentifier, opts) {
   if (opts.project) input.projectId = opts.project;
   if (opts.parent) input.parentId = opts.parent;
   if (opts.dueDate) input.dueDate = opts.dueDate;
+  if (opts.milestone) input.projectMilestoneId = opts.milestone;
+  if (opts.assignee) input.assigneeId = await resolveAssigneeId(opts.assignee);
+  // Distinguish "flag not passed" (opts.labels === undefined → leave as-is)
+  // from "flag passed empty" (e.g. --labels '' → labelIds: [] clears all).
+  if (opts.labels !== undefined) {
+    const labelList = parseList(opts.labels);
+    input.labelIds = labelList.length
+      ? await resolveLabelIds(labelList, opts.team || issue.team?.key)
+      : [];
+  }
 
   if (Object.keys(input).length) {
     await linear.updateIssue(issue.id, input);
@@ -91,8 +117,11 @@ export async function createCmd(opts) {
   if (opts.project) input.projectId = opts.project;
   if (opts.parent) input.parentId = opts.parent;
   if (opts.priority != null) input.priority = parseInt(opts.priority, 10);
-  if (opts.assignee) input.assigneeId = opts.assignee;
+  if (opts.assignee) input.assigneeId = await resolveAssigneeId(opts.assignee);
   if (opts.dueDate) input.dueDate = opts.dueDate;
+  if (opts.milestone) input.projectMilestoneId = opts.milestone;
+  const labelList = parseList(opts.labels);
+  if (labelList.length) input.labelIds = await resolveLabelIds(labelList, opts.team);
   const issue = await linear.createIssue(input);
   process.stdout.write(pc.green(`✓ Created ${issue.identifier}: ${issue.url}\n`));
   if (opts.json) printResult(issue, { json: true });
@@ -164,4 +193,67 @@ export async function attachmentsCmd(idOrIdentifier, { json }) {
   const list = i.attachments?.nodes || [];
   if (json) return printResult(list, { json: true });
   printResult(list.map((a) => `${a.id}\t${a.title}\t${a.sourceType}\t${a.url}`).join('\n') || '(no attachments)');
+}
+
+export async function milestoneListCmd(projectId, { json }) {
+  const list = await linear.listMilestones(projectId);
+  if (json) return printResult(list, { json: true });
+  printResult(
+    list.map((m) => `${m.id}\t${m.name}\t${m.targetDate ?? '—'}`).join('\n') || '(no milestones)',
+  );
+}
+
+export async function milestoneCreateCmd(opts) {
+  const milestone = await linear.createMilestone({
+    projectId: opts.project,
+    name: opts.name,
+    targetDate: opts.targetDate,
+    description: opts.description,
+  });
+  process.stdout.write(
+    pc.green(`✓ Created milestone "${milestone.name}" (${milestone.id})\n`),
+  );
+  if (opts.json) printResult(milestone, { json: true });
+}
+
+export async function labelListCmd(team, { json }) {
+  const teamId = await resolveTeamId(team);
+  const labels = await linear.listLabels(teamId);
+  if (json) return printResult(labels, { json: true });
+  printResult(
+    labels.map((l) => `${l.id}\t${l.name}\t${l.color ?? '—'}`).join('\n') || '(no labels)',
+  );
+}
+
+export async function bulkUpdateCmd(opts) {
+  const ids = parseList(opts.ids);
+  if (!ids.length) throw new IntegrationError('--ids must list at least one issue');
+  const input = {};
+  if (opts.project) input.projectId = opts.project;
+  if (opts.parent) input.parentId = opts.parent;
+  if (opts.priority != null) input.priority = parseInt(opts.priority, 10);
+  if (opts.dueDate) input.dueDate = opts.dueDate;
+  if (opts.milestone) input.projectMilestoneId = opts.milestone;
+  if (opts.assignee) input.assigneeId = await resolveAssigneeId(opts.assignee);
+  if (opts.labels !== undefined) {
+    const labelList = parseList(opts.labels);
+    input.labelIds = labelList.length
+      ? await resolveLabelIds(labelList, opts.team)
+      : [];
+  }
+  if (!Object.keys(input).length) {
+    throw new IntegrationError('No fields to update; pass at least one of --project/--milestone/--due-date/...');
+  }
+  const concurrency = parseInt(opts.concurrency, 10) || 5;
+  const results = await bulkUpdateIssues(ids, input, { concurrency });
+  if (opts.json) return printResult(results, { json: true });
+  const ok = results.filter((r) => r.ok).length;
+  const fail = results.length - ok;
+  const lines = results.map((r) =>
+    r.ok
+      ? `✓ ${r.identifier ?? r.id}`
+      : `✗ ${r.id}: ${r.error}`,
+  );
+  lines.push('', `${ok} ok, ${fail} failed`);
+  printResult(lines.join('\n'));
 }

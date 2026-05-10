@@ -299,14 +299,15 @@ test('LINEAR-CR-01: linearCreateHandler sends assigneeId in the GraphQL input', 
     `../src/mcp/handlers.js?linear-cr-01=${Date.now()}`
   );
   try {
+    const ASSIGNEE_UUID = '11111111-2222-3333-4444-555555555555';
     const result = await linearCreateHandler({
       team: 'ENG',
       title: 'Test',
-      assignee: 'user-uuid-9',
+      assignee: ASSIGNEE_UUID,
     });
     assert.match(result, /✓ Created ENG-99/);
     const createCall = captured[1];
-    assert.equal(createCall.body.variables.input.assigneeId, 'user-uuid-9');
+    assert.equal(createCall.body.variables.input.assigneeId, ASSIGNEE_UUID);
   } finally {
     restore();
   }
@@ -359,6 +360,358 @@ test('LINEAR-UP-01: linearUpdateHandler sends priority in the GraphQL input', as
     assert.match(result, /✓ Updated ENG-7/);
     const updateCall = captured[1];
     assert.equal(updateCall.body.variables.input.priority, 2);
+  } finally {
+    restore();
+  }
+});
+
+// ─── linear milestone / label / bulk handlers ──────────────────────────────
+
+test('LINEAR-MS-LIST-01: linearMilestoneListHandler formats milestones for a project', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          project: {
+            projectMilestones: {
+              nodes: [
+                { id: 'm-1', name: 'Alpha', targetDate: '2025-08-15', description: null, sortOrder: 0 },
+                { id: 'm-2', name: 'Beta', targetDate: null, description: null, sortOrder: 1 },
+              ],
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+
+  const { linearMilestoneListHandler } = await import(
+    `../src/mcp/handlers.js?linear-mslist-01=${Date.now()}`
+  );
+  try {
+    const result = await linearMilestoneListHandler({ project: 'proj-uuid' });
+    assert.match(result, /m-1\s+Alpha\s+2025-08-15/);
+    assert.match(result, /m-2\s+Beta\s+—/);
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-MS-CR-01: linearMilestoneCreateHandler posts projectMilestoneCreate', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), body: JSON.parse(init.body) });
+    return new Response(
+      JSON.stringify({
+        data: {
+          projectMilestoneCreate: {
+            success: true,
+            projectMilestone: {
+              id: 'm-9', name: 'Launch', targetDate: '2025-10-01', description: null, sortOrder: 0,
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const { linearMilestoneCreateHandler } = await import(
+    `../src/mcp/handlers.js?linear-mscr-01=${Date.now()}`
+  );
+  try {
+    const result = await linearMilestoneCreateHandler({
+      project: 'proj-uuid',
+      name: 'Launch',
+      target_date: '2025-10-01',
+    });
+    assert.match(result, /✓ Created milestone "Launch"/);
+    assert.match(result, /Target: 2025-10-01/);
+    const input = captured[0].body.variables.input;
+    assert.equal(input.projectId, 'proj-uuid');
+    assert.equal(input.targetDate, '2025-10-01');
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-LB-LIST-01: linearLabelListHandler formats team labels', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  // Two GraphQL calls expected: resolveTeamId (key → UUID), then listLabels.
+  let call = 0;
+  globalThis.fetch = async (url, init) => {
+    call += 1;
+    const body = JSON.parse(init.body);
+    if (call === 1) {
+      // resolveTeamId teams query
+      return new Response(
+        JSON.stringify({
+          data: { teams: { nodes: [{ id: 'team-uuid-1', key: 'ENG' }] } },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        data: {
+          team: {
+            labels: {
+              nodes: [
+                { id: 'lab-1', name: 'bug', color: '#ff0000', description: null },
+                { id: 'lab-2', name: 'legal', color: '#0000ff', description: 'compliance' },
+              ],
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+    // unreachable, body referenced only to silence linters
+    void body;
+  };
+
+  const { linearLabelListHandler } = await import(
+    `../src/mcp/handlers.js?linear-lblist-01=${Date.now()}`
+  );
+  try {
+    const result = await linearLabelListHandler({ team: 'ENG' });
+    assert.match(result, /lab-1\s+bug\s+#ff0000/);
+    assert.match(result, /lab-2\s+legal\s+#0000ff/);
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-BULK-01: linearBulkUpdateHandler reports per-issue results', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.query.includes('issue(id:')) {
+      const ident = body.variables.id;
+      return new Response(
+        JSON.stringify({
+          data: {
+            issue: {
+              id: `${ident}-uuid`,
+              identifier: ident,
+              title: 't',
+              team: { key: 'ENG' },
+              comments: { nodes: [] },
+              attachments: { nodes: [] },
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    // issueUpdate
+    const ident = String(body.variables.id).replace(/-uuid$/, '');
+    return new Response(
+      JSON.stringify({
+        data: { issueUpdate: { success: true, issue: { id: body.variables.id, identifier: ident } } },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const { linearBulkUpdateHandler } = await import(
+    `../src/mcp/handlers.js?linear-bulk-01=${Date.now()}`
+  );
+  try {
+    const result = await linearBulkUpdateHandler({
+      ids: ['ENG-5', 'ENG-6'],
+      milestone: '11111111-2222-3333-4444-555555555555',
+      concurrency: 1,
+    });
+    assert.match(result, /✓ ENG-5/);
+    assert.match(result, /✓ ENG-6/);
+    assert.match(result, /2 ok, 0 failed/);
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-BULK-02: linearBulkUpdateHandler refuses empty input', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  const { linearBulkUpdateHandler } = await import(
+    `../src/mcp/handlers.js?linear-bulk-02=${Date.now()}`
+  );
+  try {
+    await assert.rejects(() => linearBulkUpdateHandler({ ids: [] }), /at least one issue/);
+    await assert.rejects(
+      () => linearBulkUpdateHandler({ ids: ['ENG-1'] }),
+      /at least one field/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-CR-02: linearCreateHandler forwards due_date/milestone/labels', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  const captured = [];
+  let call = 0;
+  globalThis.fetch = async (url, init) => {
+    captured.push({ body: JSON.parse(init.body) });
+    call += 1;
+    if (call === 1) {
+      // resolveTeamId teams query
+      return new Response(
+        JSON.stringify({ data: { teams: { nodes: [{ id: 'team-uuid', key: 'ENG' }] } } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    // issueCreate
+    return new Response(
+      JSON.stringify({
+        data: {
+          issueCreate: {
+            success: true,
+            issue: { id: 'i', identifier: 'ENG-100', url: 'https://linear.app/ENG-100' },
+          },
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const { linearCreateHandler } = await import(
+    `../src/mcp/handlers.js?linear-cr-02=${Date.now()}`
+  );
+  try {
+    const LABEL_UUID = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+    const MILE_UUID = '22222222-3333-4444-5555-666666666666';
+    const ASSIGNEE_UUID = '11111111-2222-3333-4444-555555555555';
+    const result = await linearCreateHandler({
+      team: 'ENG',
+      title: 'With dates',
+      assignee: ASSIGNEE_UUID,
+      due_date: '2025-08-15',
+      milestone: MILE_UUID,
+      labels: [LABEL_UUID],
+    });
+    assert.match(result, /ENG-100/);
+    const input = captured[1].body.variables.input;
+    assert.equal(input.dueDate, '2025-08-15');
+    assert.equal(input.projectMilestoneId, MILE_UUID);
+    assert.deepEqual(input.labelIds, [LABEL_UUID]);
+    assert.equal(input.assigneeId, ASSIGNEE_UUID);
+    assert.equal('startDate' in input, false, 'must not send startDate to Linear');
+    assert.equal('startedAt' in input, false, 'must not send startedAt to Linear');
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-UP-CLEAR-LABELS: empty labels array sends labelIds: [] to clear', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  const captured = [];
+  let call = 0;
+  globalThis.fetch = async (url, init) => {
+    captured.push({ body: JSON.parse(init.body) });
+    call += 1;
+    if (call === 1) {
+      // getIssue
+      return new Response(
+        JSON.stringify({
+          data: {
+            issue: {
+              id: 'i-1',
+              identifier: 'ENG-7',
+              title: 't',
+              team: { key: 'ENG' },
+              comments: { nodes: [] },
+              attachments: { nodes: [] },
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    // issueUpdate
+    return new Response(
+      JSON.stringify({
+        data: { issueUpdate: { success: true, issue: { id: 'i-1', identifier: 'ENG-7' } } },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const { linearUpdateHandler } = await import(
+    `../src/mcp/handlers.js?linear-clear=${Date.now()}`
+  );
+  try {
+    const result = await linearUpdateHandler({ id: 'ENG-7', labels: [] });
+    assert.match(result, /✓ Updated ENG-7/);
+    const input = captured[1].body.variables.input;
+    assert.deepEqual(input.labelIds, []);
+  } finally {
+    restore();
+  }
+});
+
+test('LINEAR-UP-OMIT-LABELS: undefined labels does NOT touch labelIds', async () => {
+  const restore = snapshot([...WORKER_VARS, ...LINEAR_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-test';
+  process.env.LINEAR_API_KEY = 'lin_api_test';
+
+  const captured = [];
+  let call = 0;
+  globalThis.fetch = async (url, init) => {
+    captured.push({ body: JSON.parse(init.body) });
+    call += 1;
+    if (call === 1) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            issue: {
+              id: 'i-1', identifier: 'ENG-7', title: 't',
+              team: { key: 'ENG' }, comments: { nodes: [] }, attachments: { nodes: [] },
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        data: { issueUpdate: { success: true, issue: { id: 'i-1', identifier: 'ENG-7' } } },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const { linearUpdateHandler } = await import(
+    `../src/mcp/handlers.js?linear-omit=${Date.now()}`
+  );
+  try {
+    await linearUpdateHandler({ id: 'ENG-7', priority: 1 });
+    const input = captured[1].body.variables.input;
+    assert.equal('labelIds' in input, false);
+    assert.equal(input.priority, 1);
   } finally {
     restore();
   }

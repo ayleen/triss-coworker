@@ -50,6 +50,11 @@ test('AGENT-HELP-02: --target codex switches headings to AGENTS.md style', async
 });
 
 test('AGENT-HELP-03: integrations are injected into full output when env vars set', async () => {
+  // Run from a temp cwd so a project-local .triss.env (e.g. for the live
+  // Linear integration test) cannot reintroduce LINEAR_API_KEY via getConfig().
+  const origCwd = process.cwd();
+  const tempCwd = realpathSync(mkdtempSync(join(tmpdir(), 'triss-agent-help-')));
+
   const origAtlBase = process.env.ATLASSIAN_BASE_URL;
   const origAtlEmail = process.env.ATLASSIAN_EMAIL;
   const origAtlToken = process.env.ATLASSIAN_API_TOKEN;
@@ -61,6 +66,7 @@ test('AGENT-HELP-03: integrations are injected into full output when env vars se
   delete process.env.LINEAR_API_KEY;
 
   try {
+    process.chdir(tempCwd);
     const { runAgentHelp } = await import('../src/commands/agent-help.js');
     const out = await captureStdout(() => runAgentHelp({}));
 
@@ -74,6 +80,8 @@ test('AGENT-HELP-03: integrations are injected into full output when env vars se
       'linear instructions should not appear when LINEAR_API_KEY is missing',
     );
   } finally {
+    process.chdir(origCwd);
+    rmSync(tempCwd, { recursive: true, force: true });
     if (origAtlBase !== undefined) process.env.ATLASSIAN_BASE_URL = origAtlBase;
     else delete process.env.ATLASSIAN_BASE_URL;
     if (origAtlEmail !== undefined) process.env.ATLASSIAN_EMAIL = origAtlEmail;

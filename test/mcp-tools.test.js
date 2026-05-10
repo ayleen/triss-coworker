@@ -62,15 +62,44 @@ test('jira tools appear when ATLASSIAN_* env is set', async () => {
 });
 
 test('linear tools are hidden when LINEAR_API_KEY is missing', async () => {
+  // Run from a temp cwd so a project-local .triss.env (e.g. for the live
+  // integration test) cannot reintroduce LINEAR_API_KEY via getConfig().
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'triss-tools-'));
+  const originalCwd = process.cwd();
   const restore = snapshot(LINEAR_VARS);
   delete process.env.LINEAR_API_KEY;
   try {
+    process.chdir(dir);
     const tools = await listTools();
     assert.equal(
       tools.filter((t) => t.name.startsWith('triss_linear_')).length,
       0,
       'expected no linear tools without LINEAR_API_KEY',
     );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+    restore();
+  }
+});
+
+test('linear gantt/label/bulk tools surface when LINEAR_API_KEY is set', async () => {
+  const restore = snapshot(LINEAR_VARS);
+  process.env.LINEAR_API_KEY = 'lin_api_TEST';
+  try {
+    const tools = await listTools();
+    const names = new Set(tools.map((t) => t.name));
+    for (const required of [
+      'triss_linear_milestone_list',
+      'triss_linear_milestone_create',
+      'triss_linear_label_list',
+      'triss_linear_bulk_update',
+    ]) {
+      assert.ok(names.has(required), `missing ${required}`);
+    }
   } finally {
     restore();
   }

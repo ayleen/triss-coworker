@@ -29,6 +29,10 @@ import {
   linearProjectListHandler,
   linearProjectCreateHandler,
   linearInitiativeListHandler,
+  linearMilestoneListHandler,
+  linearMilestoneCreateHandler,
+  linearLabelListHandler,
+  linearBulkUpdateHandler,
   githubSearchHandler,
   githubIssueHandler,
   githubCreateHandler,
@@ -316,7 +320,11 @@ const LINEAR_TOOLS = [
   },
   {
     name: 'triss_linear_create',
-    description: 'Create a Linear issue. `project` attaches to a Project; `parent` makes it a sub-issue.',
+    description:
+      'Create a Linear issue. `project` attaches to a Project; `parent` ' +
+      'makes it a sub-issue; `milestone` (UUID) links to a project ' +
+      'milestone; `labels` accepts a mix of UUIDs and label names; ' +
+      '`assignee` accepts UUID, email, or display name.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -326,8 +334,14 @@ const LINEAR_TOOLS = [
         project: { type: 'string', description: 'Project UUID' },
         parent: { type: 'string', description: 'Parent issue UUID or identifier' },
         priority: { type: 'number' },
-        assignee: { type: 'string', description: 'Assignee user UUID' },
-        due_date: { type: 'string', description: 'Due date ISO 8601 (YYYY-MM-DD)' },
+        assignee: { type: 'string', description: 'Assignee — UUID, email, or display name' },
+        due_date: { type: 'string', description: 'Due date YYYY-MM-DD (TimelessDate)' },
+        milestone: { type: 'string', description: 'Project milestone UUID' },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Label UUIDs or names (resolved against the issue\'s team)',
+        },
       },
       required: ['team', 'title'],
     },
@@ -335,7 +349,10 @@ const LINEAR_TOOLS = [
   },
   {
     name: 'triss_linear_update',
-    description: 'Update Linear issue fields and/or transition state.',
+    description:
+      'Update Linear issue fields and/or transition state. Same field ' +
+      'semantics as `triss_linear_create`. `labels` REPLACES the existing ' +
+      'label set.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -346,7 +363,20 @@ const LINEAR_TOOLS = [
         project: { type: 'string' },
         parent: { type: 'string' },
         priority: { type: 'number', description: 'Priority 0-4' },
-        due_date: { type: 'string', description: 'Due date ISO 8601 (YYYY-MM-DD)' },
+        assignee: { type: 'string', description: 'UUID, email, or display name' },
+        due_date: { type: 'string', description: 'Due date YYYY-MM-DD (TimelessDate)' },
+        milestone: { type: 'string', description: 'Project milestone UUID' },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Label UUIDs or names. REPLACES existing labels. Pass [] to clear all labels; omit to leave them untouched.',
+        },
+        team: {
+          type: 'string',
+          description:
+            'Team key/UUID — only required to resolve label names from a different team than the issue\'s own',
+        },
       },
       required: ['id'],
     },
@@ -428,6 +458,85 @@ const LINEAR_TOOLS = [
       properties: {},
     },
     handler: linearInitiativeListHandler,
+  },
+  {
+    name: 'triss_linear_milestone_list',
+    description:
+      'List milestones inside a project (id, name, targetDate). Use to ' +
+      'discover the milestone UUID before passing it as `milestone` in ' +
+      '`triss_linear_create` / `triss_linear_update` / `triss_linear_bulk_update`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project UUID' },
+      },
+      required: ['project'],
+    },
+    handler: linearMilestoneListHandler,
+  },
+  {
+    name: 'triss_linear_milestone_create',
+    description:
+      'Create a milestone inside a project (rendered as a diamond on a ' +
+      'Gantt chart). Use for key dates such as Alpha / Beta / Launch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project UUID' },
+        name: { type: 'string' },
+        target_date: { type: 'string', description: 'Target date YYYY-MM-DD' },
+        description: { type: 'string' },
+      },
+      required: ['project', 'name'],
+    },
+    handler: linearMilestoneCreateHandler,
+  },
+  {
+    name: 'triss_linear_label_list',
+    description:
+      'List labels available on a Linear team (id, name, color). Use ' +
+      'before passing label names to `labels` in create/update.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        team: { type: 'string', description: 'Team key (e.g. ENG) or UUID' },
+      },
+      required: ['team'],
+    },
+    handler: linearLabelListHandler,
+  },
+  {
+    name: 'triss_linear_bulk_update',
+    description:
+      'Apply the same field changes to many issues in one call (parallel ' +
+      'with bounded concurrency). Returns a per-issue ok/fail summary so ' +
+      'a single failure does not abort the rest. Same fields as ' +
+      '`triss_linear_update` minus state transitions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Issue identifiers (TEAM-42) or UUIDs',
+        },
+        project: { type: 'string', description: 'Project UUID' },
+        parent: { type: 'string' },
+        priority: { type: 'number' },
+        assignee: { type: 'string', description: 'UUID, email, or display name' },
+        due_date: { type: 'string', description: 'Due date YYYY-MM-DD (TimelessDate)' },
+        milestone: { type: 'string', description: 'Project milestone UUID' },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Pass [] to clear; omit to leave untouched.',
+        },
+        team: { type: 'string', description: 'Team key/UUID — required to resolve label names' },
+        concurrency: { type: 'number', description: 'Parallel updates (default 5)' },
+      },
+      required: ['ids'],
+    },
+    handler: linearBulkUpdateHandler,
   },
 ];
 

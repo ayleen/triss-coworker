@@ -163,6 +163,236 @@ test('linear.createProject throws when initiativeToProjectCreate returns success
   );
 });
 
+test('linear.listLabels returns labels for a team', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        team: {
+          labels: {
+            nodes: [
+              { id: 'lab-1', name: 'bug', color: '#f00', description: null },
+              { id: 'lab-2', name: 'legal', color: '#00f', description: 'compliance' },
+            ],
+          },
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-labels=${Date.now()}`);
+  const labels = await linear.listLabels('team-uuid');
+  assert.equal(labels.length, 2);
+  assert.equal(labels[0].name, 'bug');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /labels/);
+  assert.deepEqual(body.variables, { key: 'team-uuid' });
+});
+
+test('linear.listMilestones returns milestones for a project', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        project: {
+          projectMilestones: {
+            nodes: [
+              { id: 'm-1', name: 'Alpha', targetDate: '2025-08-15', description: null, sortOrder: 0 },
+              { id: 'm-2', name: 'Beta', targetDate: '2025-09-30', description: null, sortOrder: 1 },
+            ],
+          },
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-mlist=${Date.now()}`);
+  const list = await linear.listMilestones('proj-uuid');
+  assert.equal(list[0].name, 'Alpha');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /projectMilestones/);
+  assert.deepEqual(body.variables, { id: 'proj-uuid' });
+});
+
+test('linear.createMilestone posts projectMilestoneCreate mutation', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        projectMilestoneCreate: {
+          success: true,
+          projectMilestone: { id: 'm-9', name: 'Launch', targetDate: '2025-10-01', description: null, sortOrder: 0 },
+        },
+      },
+    },
+  }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-mcreate=${Date.now()}`);
+  const m = await linear.createMilestone({
+    projectId: 'proj-uuid',
+    name: 'Launch',
+    targetDate: '2025-10-01',
+  });
+  assert.equal(m.id, 'm-9');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /projectMilestoneCreate/);
+  assert.equal(body.variables.input.projectId, 'proj-uuid');
+  assert.equal(body.variables.input.name, 'Launch');
+  assert.equal(body.variables.input.targetDate, '2025-10-01');
+});
+
+test('linear.createMilestone throws on success=false', async () => {
+  setEnv();
+  mockFetch(() => ({ body: { data: { projectMilestoneCreate: { success: false, projectMilestone: null } } } }));
+  const { linear } = await import(`../src/integrations/linear/client.js?lin-mfail=${Date.now()}`);
+  await assert.rejects(
+    () => linear.createMilestone({ projectId: 'p', name: 'x' }),
+    /projectMilestoneCreate returned success=false/,
+  );
+});
+
+test('resolveAssigneeId returns UUID input unchanged', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({ body: { data: {} } }));
+  const { resolveAssigneeId } = await import(
+    `../src/integrations/linear/client.js?lin-rauuid=${Date.now()}`
+  );
+  const id = await resolveAssigneeId('11111111-2222-3333-4444-555555555555');
+  assert.equal(id, '11111111-2222-3333-4444-555555555555');
+  assert.equal(calls.length, 0);
+});
+
+test('resolveAssigneeId resolves email via users(filter:)', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: {
+      data: {
+        users: {
+          nodes: [{ id: 'user-uuid-1', email: 'jane@acme.com', displayName: 'Jane', name: 'Jane Doe' }],
+        },
+      },
+    },
+  }));
+  const { resolveAssigneeId } = await import(
+    `../src/integrations/linear/client.js?lin-raemail=${Date.now()}`
+  );
+  const id = await resolveAssigneeId('jane@acme.com');
+  assert.equal(id, 'user-uuid-1');
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.query, /users\(/);
+  assert.equal(body.variables.q, 'jane@acme.com');
+});
+
+test('resolveAssigneeId throws when no user matches', async () => {
+  setEnv();
+  mockFetch(() => ({ body: { data: { users: { nodes: [] } } } }));
+  const { resolveAssigneeId } = await import(
+    `../src/integrations/linear/client.js?lin-rafail=${Date.now()}`
+  );
+  await assert.rejects(() => resolveAssigneeId('ghost@nowhere'), /No Linear user matches/);
+});
+
+test('resolveLabelIds maps mixed UUIDs and names to UUIDs', async () => {
+  setEnv();
+  // Two GraphQL calls expected: resolveTeamId (key → UUID), then listLabels.
+  let call = 0;
+  const calls = mockFetch(() => {
+    call += 1;
+    if (call === 1) {
+      return {
+        body: { data: { teams: { nodes: [{ id: 'team-uuid', key: 'ENG', name: 'Eng' }] } } },
+      };
+    }
+    return {
+      body: {
+        data: {
+          team: {
+            labels: {
+              nodes: [
+                { id: 'lab-bug', name: 'bug', color: '#f00', description: null },
+                { id: 'lab-legal', name: 'legal', color: '#00f', description: null },
+              ],
+            },
+          },
+        },
+      },
+    };
+  });
+  const { resolveLabelIds } = await import(
+    `../src/integrations/linear/client.js?lin-rlabels=${Date.now()}`
+  );
+  const ids = await resolveLabelIds(
+    ['11111111-2222-3333-4444-555555555555', 'bug', 'legal'],
+    'ENG',
+  );
+  assert.deepEqual(ids, ['11111111-2222-3333-4444-555555555555', 'lab-bug', 'lab-legal']);
+  assert.equal(calls.length, 2);
+});
+
+test('resolveLabelIds throws when a name is not found', async () => {
+  setEnv();
+  let call = 0;
+  mockFetch(() => {
+    call += 1;
+    if (call === 1) {
+      return { body: { data: { teams: { nodes: [{ id: 'team-uuid', key: 'ENG' }] } } } };
+    }
+    return { body: { data: { team: { labels: { nodes: [{ id: 'lab-bug', name: 'bug' }] } } } } };
+  });
+  const { resolveLabelIds } = await import(
+    `../src/integrations/linear/client.js?lin-rlabelsfail=${Date.now()}`
+  );
+  await assert.rejects(() => resolveLabelIds(['ghost'], 'ENG'), /Label "ghost" not found/);
+});
+
+test('bulkUpdateIssues reports per-id success and surfaces errors', async () => {
+  setEnv();
+  // Each id triggers two calls: getIssue, then issueUpdate.
+  let call = 0;
+  mockFetch((url, init) => {
+    const body = JSON.parse(init.body);
+    call += 1;
+    if (body.query.includes('issue(id:')) {
+      // getIssue
+      const ident = body.variables.id;
+      return {
+        body: {
+          data: {
+            issue: ident === 'BAD-1'
+              ? null
+              : {
+                  id: `${ident}-uuid`,
+                  identifier: ident,
+                  title: 't',
+                  team: { key: 'ENG' },
+                  comments: { nodes: [] },
+                  attachments: { nodes: [] },
+                },
+          },
+        },
+        status: ident === 'BAD-1' ? 200 : 200,
+      };
+    }
+    // issueUpdate — strip the "-uuid" suffix the getIssue mock added to
+    // recover the original identifier.
+    const ident = String(body.variables.id).replace(/-uuid$/, '');
+    return {
+      body: {
+        data: {
+          issueUpdate: { success: true, issue: { id: body.variables.id, identifier: ident } },
+        },
+      },
+    };
+  });
+  const { bulkUpdateIssues } = await import(
+    `../src/integrations/linear/client.js?lin-bulk=${Date.now()}`
+  );
+  const results = await bulkUpdateIssues(['ENG-5', 'BAD-1', 'ENG-6'], { priority: 1 }, { concurrency: 1 });
+  assert.equal(results.length, 3);
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].identifier, 'ENG-5');
+  assert.equal(results[1].ok, false);
+  assert.match(results[1].error, /Linear issue not found/);
+  assert.equal(results[2].ok, true);
+});
+
 test('linear.listInitiatives returns initiatives with linked projects', async () => {
   setEnv();
   const calls = mockFetch(() => ({

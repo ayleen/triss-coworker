@@ -381,15 +381,24 @@ export async function linearCreateHandler({
   priority,
   assignee,
   due_date,
+  milestone,
+  labels,
 }) {
-  const { linear, resolveTeamId } = await import('../integrations/linear/client.js');
+  const {
+    linear,
+    resolveTeamId,
+    resolveAssigneeId,
+    resolveLabelIds,
+  } = await import('../integrations/linear/client.js');
   const teamId = await resolveTeamId(team);
   const input = { teamId, title, description: description ?? '' };
   if (project) input.projectId = project;
   if (parent) input.parentId = parent;
   if (priority != null) input.priority = priority;
-  if (assignee) input.assigneeId = assignee;
+  if (assignee) input.assigneeId = await resolveAssigneeId(assignee);
   if (due_date) input.dueDate = due_date;
+  if (milestone) input.projectMilestoneId = milestone;
+  if (labels?.length) input.labelIds = await resolveLabelIds(labels, team);
   const issue = await linear.createIssue(input);
   return `✓ Created ${issue.identifier}\nURL: ${issue.url}`;
 }
@@ -402,9 +411,18 @@ export async function linearUpdateHandler({
   project,
   parent,
   priority,
+  assignee,
   due_date,
+  milestone,
+  labels,
+  team,
 }) {
-  const { linear, transitionIssue } = await import('../integrations/linear/client.js');
+  const {
+    linear,
+    transitionIssue,
+    resolveAssigneeId,
+    resolveLabelIds,
+  } = await import('../integrations/linear/client.js');
   const issue = await linear.getIssue(id);
   const input = {};
   if (title) input.title = title;
@@ -412,7 +430,16 @@ export async function linearUpdateHandler({
   if (project) input.projectId = project;
   if (parent) input.parentId = parent;
   if (priority != null) input.priority = priority;
+  if (assignee) input.assigneeId = await resolveAssigneeId(assignee);
   if (due_date) input.dueDate = due_date;
+  if (milestone) input.projectMilestoneId = milestone;
+  // Distinguish "labels not passed" (undefined → leave) from "labels=[]"
+  // (explicit clear → labelIds: []).
+  if (Array.isArray(labels)) {
+    input.labelIds = labels.length
+      ? await resolveLabelIds(labels, team || issue.team?.key)
+      : [];
+  }
   const out = [];
   if (Object.keys(input).length) {
     await linear.updateIssue(issue.id, input);
@@ -423,6 +450,73 @@ export async function linearUpdateHandler({
     out.push(`✓ ${updated.identifier} → ${updated.state?.name}`);
   }
   return out.join('\n') || '(no changes specified)';
+}
+
+export async function linearMilestoneListHandler({ project }) {
+  const { linear } = await import('../integrations/linear/client.js');
+  const list = await linear.listMilestones(project);
+  const lines = list.map((m) => `${m.id}\t${m.name}\t${m.targetDate ?? '—'}`);
+  return lines.join('\n') || '(no milestones)';
+}
+
+export async function linearMilestoneCreateHandler({ project, name, target_date, description }) {
+  const { linear } = await import('../integrations/linear/client.js');
+  const m = await linear.createMilestone({
+    projectId: project,
+    name,
+    targetDate: target_date,
+    description,
+  });
+  return `✓ Created milestone "${m.name}"\nID: ${m.id}\nTarget: ${m.targetDate ?? '—'}`;
+}
+
+export async function linearLabelListHandler({ team }) {
+  const { linear, resolveTeamId } = await import('../integrations/linear/client.js');
+  const teamId = await resolveTeamId(team);
+  const labels = await linear.listLabels(teamId);
+  const lines = labels.map((l) => `${l.id}\t${l.name}\t${l.color ?? '—'}`);
+  return lines.join('\n') || '(no labels)';
+}
+
+export async function linearBulkUpdateHandler({
+  ids,
+  project,
+  parent,
+  priority,
+  assignee,
+  due_date,
+  milestone,
+  labels,
+  team,
+  concurrency,
+}) {
+  if (!ids?.length) throw new Error('ids must list at least one issue');
+  const {
+    bulkUpdateIssues,
+    resolveAssigneeId,
+    resolveLabelIds,
+  } = await import('../integrations/linear/client.js');
+  const input = {};
+  if (project) input.projectId = project;
+  if (parent) input.parentId = parent;
+  if (priority != null) input.priority = priority;
+  if (assignee) input.assigneeId = await resolveAssigneeId(assignee);
+  if (due_date) input.dueDate = due_date;
+  if (milestone) input.projectMilestoneId = milestone;
+  if (Array.isArray(labels)) {
+    input.labelIds = labels.length ? await resolveLabelIds(labels, team) : [];
+  }
+  if (!Object.keys(input).length) {
+    throw new Error('Pass at least one field to update');
+  }
+  const results = await bulkUpdateIssues(ids, input, { concurrency: concurrency || 5 });
+  const ok = results.filter((r) => r.ok).length;
+  const fail = results.length - ok;
+  const lines = results.map((r) =>
+    r.ok ? `✓ ${r.identifier ?? r.id}` : `✗ ${r.id}: ${r.error}`,
+  );
+  lines.push('', `${ok} ok, ${fail} failed`);
+  return lines.join('\n');
 }
 
 export async function linearCommentHandler({ id, body }) {
