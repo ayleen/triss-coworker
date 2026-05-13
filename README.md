@@ -527,18 +527,43 @@ for recipes (per-project Jira, CI, switching providers).
 
 ## Cost in practice
 
-We have not run a multi-week study like the original
-`claude-coworker-model`, so the headline 60–70% savings is sourced from
-their data — but here is one fully-measured run from this codebase:
+One full week of real usage on this codebase, captured from the DeepSeek
+dashboard (May 6–13, 2026, all at list price — DeepSeek's off-peak window
+would add another ~75% discount we did not use):
 
-| Task                                                          | Source bytes | DeepSeek (pro, -75%) | DeepSeek (pro, list price) | Same job in Opus 4.x |
-| ------------------------------------------------------------- | ------------ | -------------------- | -------------------------- | -------------------- |
-| Compare original `claude-coworker-model` README + 12 of our source files (one `triss ask --urls --paths`, 18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.010** | \$0.040 | ≈ \$0.45 |
+| Metric         | Pro       | Flash     | **Total**  |
+| -------------- | --------- | --------- | ---------- |
+| Requests       | 143       | 66        | **209**    |
+| Input tokens   | 3.74M     | 2.10M     | **5.84M**  |
+|   ↳ cache hits | 1.08M     | 256       | **1.08M**  |
+| Output tokens  | 833K      | 156K      | **990K**   |
+| **Cost (USD)** | **\$1.88**| **\$0.34**| **\$2.22** |
 
-For this single benchmark `triss` was **~45× cheaper** than letting the
-primary model read those bytes itself. Real savings depend on which
-operations you delegate (bulk reads win the most; tiny lookups break
-even); see `templates/claude.md` for the rules of thumb.
+That is ≈ **1¢ per request** on actual day-to-day work — bulk reads,
+code reviews, tracker lookups, commit messages, web fetches. The same
+volume through the primary agent would have run roughly:
+
+| Primary model | Input (per 1M) | Output (per 1M) | Est. cost for the same week |
+| ------------- | -------------- | --------------- | --------------------------- |
+| Sonnet 4.6    | \$3            | \$15            | ~\$32 → **14× more**        |
+| Opus 4.7      | \$15           | \$75            | ~\$161 → **70× more**       |
+
+The actual saving is larger than the ratio above, because Triss returns
+a 1–2K-token summary — so the primary model's context never carries the
+raw 5.8M input. That compounds across turns.
+
+### One concrete request
+
+For reference, here is a single measured call of the kind that drives
+the weekly numbers above:
+
+| Task | Source bytes | DeepSeek (pro, -75%) | DeepSeek (pro, list price) | Same job in Opus 4.x |
+| ---- | ------------ | -------------------- | -------------------------- | -------------------- |
+| `triss ask --urls --paths` over the original `claude-coworker-model` README + 12 of our source files (18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.010** | \$0.040 | ≈ \$0.45 |
+
+Real savings depend on which operations you delegate (bulk reads win
+the most; tiny lookups break even); see `templates/claude.md` for the
+rules of thumb.
 
 ## Roadmap
 
