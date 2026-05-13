@@ -1,3 +1,11 @@
+<!--
+Contributor-only: this file is rules for an AI coding agent (Codex)
+editing **this** repository — kept here so the repo dogfoods its own
+`triss init` output. If you just want to *use* Triss in your project,
+read the README instead. Everything between the triss:start / triss:end
+markers is the same block that `triss init --target codex` writes into
+other projects.
+-->
 <!-- triss:start -->
 # Triss — Cheap DeepSeek Coworker (Token Saving)
 

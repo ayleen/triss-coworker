@@ -1,5 +1,9 @@
 # Project: triss-coworker
 
+> **Contributor-only.** These are rules for an AI coding agent (Claude / Codex)
+> editing **this** repository. If you just want to *use* Triss in your own
+> project, read the [README](README.md) instead.
+
 A Node.js CLI + stdio MCP server that delegates token-heavy I/O (file reads,
 URL fetches, tracker chatter, code review) to a cheap DeepSeek-compatible
 worker. The CLI lives at `bin/triss.js`; the library code is in `src/`.
