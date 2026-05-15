@@ -49,7 +49,7 @@ tokens of tracker chatter into its own context. Adding a new provider
 
 - **Node.js ≥ 22** (LTS). Check with `node --version`.
   - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
-- **npm** (ships with Node.js) — used for the `npm install -g` path.
+- **npm** (ships with Node.js) — used for the `npm install -g` path. `pnpm` and `yarn` also work.
 - **git** — used by the bash one-liner installer to clone the repo.
 - A **DeepSeek API key** (free tier works) for the worker model: <https://platform.deepseek.com/>.
 
@@ -57,20 +57,25 @@ Triss has no other runtime dependencies.
 
 ## Install
 
-### Option A — npm (recommended)
+### Option A — npm / pnpm / yarn (recommended)
 
 ```bash
 npm install -g triss-coworker
+# or
+pnpm add -g triss-coworker
+# or
+yarn global add triss-coworker
 ```
 
 Published on npm as
 [`triss-coworker`](https://www.npmjs.com/package/triss-coworker); the CLI
 binary is `triss`.
 
-> Prefer no global install? `npx triss-coworker <subcommand>` works
-> (e.g. `npx triss-coworker ask --paths src/ --question "…"`). Triss is
-> meant to live alongside your agent, though, so a global install is
-> usually less friction day-to-day.
+> Prefer no global install? `npx triss-coworker <subcommand>` (or
+> `pnpm dlx triss-coworker <subcommand>`) works — e.g.
+> `npx triss-coworker ask --paths src/ --question "…"`. Triss is meant
+> to live alongside your agent, though, so a global install is usually
+> less friction day-to-day.
 
 ### Option B — one-line bash installer
 
@@ -83,8 +88,8 @@ curl -fsSL https://raw.githubusercontent.com/ayleen/triss-coworker/main/install.
 ```bash
 git clone https://github.com/ayleen/triss-coworker.git
 cd triss-coworker
-npm install
-npm link
+npm install   # or: pnpm install / yarn install
+npm link      # or: pnpm link --global / yarn link
 ```
 
 Then verify:

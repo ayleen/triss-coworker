@@ -25,3 +25,28 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+
+  pnpm-install:
+    runs-on: ubuntu-latest
+    name: pnpm install (consumer smoke test)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pack tarball
+        run: |
+          mkdir -p /tmp/triss-pack
+          npm pack --pack-destination /tmp/triss-pack
+      - name: Install tarball with pnpm in a fresh project
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
+          mkdir /tmp/consumer
+          cd /tmp/consumer
+          pnpm init
+          TARBALL=$(ls /tmp/triss-pack/triss-coworker-*.tgz)
+          pnpm add "$TARBALL"
+          ./node_modules/.bin/triss --version
