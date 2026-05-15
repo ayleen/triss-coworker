@@ -76,7 +76,15 @@ export function estimateCost(record) {
   );
 }
 
-export function logUsage({ model, prompt_tokens, cached_tokens, completion_tokens, label }) {
+export function logUsage({
+  model,
+  prompt_tokens,
+  cached_tokens,
+  completion_tokens,
+  label,
+  call_id,
+  parent_call_id,
+}) {
   if (!model || prompt_tokens == null) return;
   if (process.env.TRISS_USAGE_LOG === '0') return; // opt-out
   const record = {
@@ -86,6 +94,8 @@ export function logUsage({ model, prompt_tokens, cached_tokens, completion_token
     cached_tokens: cached_tokens || 0,
     completion_tokens: completion_tokens || 0,
     label: label || 'triss',
+    call_id: call_id || null,
+    parent_call_id: parent_call_id || null,
   };
   // Per-project breakdown is opt-in via cwd; some users sync this log
   // across machines and prefer to omit absolute paths.

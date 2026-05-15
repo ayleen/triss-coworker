@@ -7,6 +7,7 @@ import {
 import { listTools, findTool, toMcpToolList } from './tools.js';
 import { getConfig } from '../config.js';
 import { setRestricted, projectRoot, pathsRestricted } from '../safety.js';
+import { withCall } from '../call-context.js';
 
 export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
   // Loads .env files (project-local first, then global) into process.env
@@ -48,7 +49,7 @@ export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
       };
     }
     try {
-      const text = await tool.handler(args);
+      const text = await withCall(() => tool.handler(args));
       return { content: [{ type: 'text', text: String(text) }] };
     } catch (err) {
       return {

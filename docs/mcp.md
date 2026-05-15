@@ -350,3 +350,32 @@ the CLI versions in `src/commands/*` adding a thin printing layer).
 
 If you remove the MCP entry, the CLI keeps working. If you remove
 `CLAUDE.md`, the MCP path keeps working.
+
+## Usage tracking
+
+Every MCP tool call gets its own `call_id` (UUIDv4) written to
+`~/.cache/triss/usage.jsonl` alongside the existing model/tokens/cost
+fields. Dashboards (e.g. tokentelemetry) can group records per
+invocation.
+
+To attribute all calls from one MCP server process to a single outer
+session, set `TRISS_PARENT_CALL_ID` in the server's `env` block — every
+record from that process will carry the value as `parent_call_id`:
+
+```json
+{
+  "mcpServers": {
+    "triss": {
+      "command": "triss",
+      "args": ["mcp", "serve"],
+      "env": {
+        "TRISS_PARENT_CALL_ID": "my-host-session"
+      }
+    }
+  }
+}
+```
+
+Unset by default; without it, `parent_call_id` is null. See the README
+section on the usage log for the rest of the schema and `TRISS_USAGE_LOG`
+opt-out.

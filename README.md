@@ -322,8 +322,13 @@ triss usage --reset                  # clear the log
 
 Every worker call (CLI **and** MCP) appends one record to
 `~/.cache/triss/usage.jsonl` with model, tokens, cached tokens, computed
-USD cost, working directory, and a label like `triss/ask`. List-price
-defaults for DeepSeek are baked in; override per-model with
+USD cost, working directory, a label like `triss/ask`, and a per-invocation
+`call_id` (UUIDv4). An optional `parent_call_id` lets a host group several
+Triss calls under a single outer session — set `TRISS_PARENT_CALL_ID` in
+the environment that launches Triss (e.g. in your MCP server's `env`
+block) and every record from that process carries it. External dashboards
+(e.g. tokentelemetry) can group by either field. List-price defaults for
+DeepSeek are baked in; override per-model with
 `TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token). Disable tracking
 entirely with `TRISS_USAGE_LOG=0`.
 

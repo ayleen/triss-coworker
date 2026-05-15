@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-invocation `call_id` (UUIDv4) on every usage record. Each CLI
+  subcommand and MCP tool call is wrapped in an `AsyncLocalStorage`
+  context so consumers of `~/.cache/triss/usage.jsonl` (e.g.
+  tokentelemetry) can group records by invocation.
+- New `TRISS_PARENT_CALL_ID` env var: when set, every record from that
+  process carries it as `parent_call_id`, letting a host (Claude Code,
+  CI job, wrapper script) attribute several Triss calls to one outer
+  session.
+
 ## [0.16.0] — 2026-05-08
 
 ### Added

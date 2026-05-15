@@ -39,6 +39,7 @@ import {
   runUnset,
 } from '../src/commands/config.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
+import { withCall } from '../src/call-context.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -222,7 +223,7 @@ config
 function wrap(fn) {
   return async (...args) => {
     try {
-      await fn(...args);
+      await withCall(() => fn(...args));
     } catch (err) {
       process.stderr.write(pc.red(`✗ ${err.message || err}\n`));
       process.exit(1);

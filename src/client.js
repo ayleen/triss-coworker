@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { getConfig, requireApiKey } from './config.js';
 import { logUsage } from './usage.js';
+import { currentCall } from './call-context.js';
 
 // Recreate the OpenAI client per call so a long-lived MCP server picks
 // up `triss config set TRISS_WORKER_API_KEY` changes mid-session. Constructing
@@ -12,12 +13,15 @@ export function getClient() {
 
 function recordUsage(resp, label) {
   if (!resp?.usage) return;
+  const ctx = currentCall();
   logUsage({
     model: resp.model || '(unknown)',
     prompt_tokens: resp.usage.prompt_tokens,
     cached_tokens: resp.usage.prompt_tokens_details?.cached_tokens,
     completion_tokens: resp.usage.completion_tokens,
     label,
+    call_id: ctx?.callId,
+    parent_call_id: ctx?.parentCallId,
   });
 }
 

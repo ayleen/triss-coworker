@@ -147,3 +147,27 @@ test('logUsage / readLog / clearLog round-trip', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('logUsage writes null call_id / parent_call_id when not supplied', () => {
+  const r = logUsage({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 10,
+    completion_tokens: 5,
+    label: 'no-context',
+  });
+  assert.equal(r.call_id, null);
+  assert.equal(r.parent_call_id, null);
+});
+
+test('logUsage records explicit call_id and parent_call_id', () => {
+  const r = logUsage({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 10,
+    completion_tokens: 5,
+    label: 'with-context',
+    call_id: 'fixed-call-id',
+    parent_call_id: 'fixed-parent-id',
+  });
+  assert.equal(r.call_id, 'fixed-call-id');
+  assert.equal(r.parent_call_id, 'fixed-parent-id');
+});
