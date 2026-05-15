@@ -450,9 +450,8 @@ test('LINEAR-LB-LIST-01: linearLabelListHandler formats team labels', async () =
 
   // Two GraphQL calls expected: resolveTeamId (key → UUID), then listLabels.
   let call = 0;
-  globalThis.fetch = async (url, init) => {
+  globalThis.fetch = async () => {
     call += 1;
-    const body = JSON.parse(init.body);
     if (call === 1) {
       // resolveTeamId teams query
       return new Response(
@@ -477,8 +476,6 @@ test('LINEAR-LB-LIST-01: linearLabelListHandler formats team labels', async () =
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
-    // unreachable, body referenced only to silence linters
-    void body;
   };
 
   const { linearLabelListHandler } = await import(
