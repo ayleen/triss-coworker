@@ -425,7 +425,7 @@ auto-discovered at startup and appear as top-level subcommands.
 
 | Integration | Subcommand         | Operations                                                    | Reference |
 | ----------- | ------------------ | ------------------------------------------------------------- | --------- |
-| Jira        | `triss jira`       | search, issue, create, update, comments, transitions, attachments | [docs/integrations/jira.md](docs/integrations/jira.md) |
+| Jira        | `triss jira`       | search, issue, create, update, comments, transitions, attachments, whoami | [docs/integrations/jira.md](docs/integrations/jira.md) |
 | Confluence  | `triss confluence` | search (CQL), page, create, update, spaces                    | [docs/integrations/confluence.md](docs/integrations/confluence.md) |
 | Linear      | `triss linear`     | search, issue, create, update, comments, states, attachments, projects, initiatives, milestones, labels, bulk-update | [docs/integrations/linear.md](docs/integrations/linear.md) |
 | GitHub      | `triss github`     | search, issue, create, update, comments                       | [docs/integrations/github.md](docs/integrations/github.md) |

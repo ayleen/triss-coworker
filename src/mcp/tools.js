@@ -19,6 +19,7 @@ import {
   jiraCommentHandler,
   jiraTransitionsHandler,
   jiraAttachmentsHandler,
+  jiraWhoamiHandler,
   linearSearchHandler,
   linearIssueHandler,
   linearCreateHandler,
@@ -282,6 +283,17 @@ const JIRA_TOOLS = [
       required: ['key'],
     },
     handler: jiraAttachmentsHandler,
+  },
+  {
+    name: 'triss_jira_whoami',
+    description:
+      'Show the authenticated Jira account — accountId (the value `assignee` ' +
+      'expects on create/update), display name, and email.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+    handler: jiraWhoamiHandler,
   },
 ];
 
