@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `triss jira whoami` command and `triss_jira_whoami` MCP tool. Both
+  call `GET /rest/api/3/myself` and print the authenticated account —
+  most usefully the `accountId`, which is the value `--assignee` (and the
+  `assignee` field on create/update) expects.
 - Per-invocation `call_id` (UUIDv4) on every usage record. Each CLI
   subcommand and MCP tool call is wrapped in an `AsyncLocalStorage`
   context so consumers of `~/.cache/triss/usage.jsonl` (e.g.

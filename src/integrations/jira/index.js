@@ -6,6 +6,7 @@ import {
   commentsCmd,
   transitionsCmd,
   attachmentsCmd,
+  whoamiCmd,
 } from './commands.js';
 
 const CLAUDE_INSTRUCTIONS = `### \`triss jira\` — Atlassian Jira
@@ -20,6 +21,7 @@ triss jira create --project PROJ --summary "..." --description "..." --parent PR
 triss jira update PROJ-123 --status "In Review" --description "..."
 triss jira comments PROJ-123 --post "..."
 triss jira transitions PROJ-123 --apply "Done"
+triss jira whoami   # your accountId — the value --assignee wants
 \`\`\`
 
 Use the Atlassian MCP only for tiny single-record reads, or operations
@@ -100,5 +102,11 @@ export default {
       .description('List attachments on an issue')
       .option('--json', 'raw JSON output')
       .action(wrap(attachmentsCmd));
+
+    program
+      .command('whoami')
+      .description('Show the authenticated account (accountId is what --assignee expects)')
+      .option('--json', 'raw JSON output')
+      .action(wrap(whoamiCmd));
   },
 };

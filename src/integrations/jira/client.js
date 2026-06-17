@@ -73,6 +73,12 @@ export const jira = {
     const issue = await jira.getIssue(key, { fields: ['attachment'] });
     return issue?.fields?.attachment ?? [];
   },
+
+  // The authenticated user behind the current ATLASSIAN_* credentials.
+  // Mostly useful for the `accountId` that `--assignee` expects.
+  async myself() {
+    return call(`/rest/api/3/myself`);
+  },
 };
 
 // Try to attach `parent` as a real parent first (modern Jira), and fall

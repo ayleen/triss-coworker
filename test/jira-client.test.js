@@ -59,6 +59,20 @@ test('jira.createIssue sends ADF in the description field', async () => {
   assert.equal(body.fields.description.type, 'doc');
 });
 
+test('jira.myself GETs /rest/api/3/myself and returns the account', async () => {
+  setEnv();
+  const calls = mockFetch(() => ({
+    body: { accountId: '5b10', displayName: 'Mia', emailAddress: 'mia@x.io' },
+  }));
+  const { jira } = await import(`../src/integrations/jira/client.js?jira-myself=${Date.now()}`);
+  const me = await jira.myself();
+  assert.equal(me.accountId, '5b10');
+
+  const call = calls[0];
+  assert.equal(call.url, 'https://example.atlassian.net/rest/api/3/myself');
+  assert.match(call.init.headers.Authorization, /^Basic /);
+});
+
 test('jira non-2xx surfaces as IntegrationError with status', async () => {
   setEnv();
   mockFetch(() => ({ status: 400, statusText: 'Bad', body: { errorMessages: ['boom'] } }));

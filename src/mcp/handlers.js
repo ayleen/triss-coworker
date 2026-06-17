@@ -319,6 +319,18 @@ export async function jiraAttachmentsHandler({ key }) {
   return lines.join('\n') || '(no attachments)';
 }
 
+export async function jiraWhoamiHandler() {
+  const { jira } = await import('../integrations/jira/client.js');
+  const me = await jira.myself();
+  return [
+    `Account ID: ${me.accountId ?? ''}`,
+    `Name: ${me.displayName ?? ''}`,
+    `Email: ${me.emailAddress ?? '(hidden by privacy settings)'}`,
+    `Active: ${me.active ?? ''}`,
+    `Time zone: ${me.timeZone ?? ''}`,
+  ].join('\n');
+}
+
 // ─── linear handlers ────────────────────────────────────────────────────────
 
 export async function linearSearchHandler({ term, question, limit = 50, model, max_tokens }) {

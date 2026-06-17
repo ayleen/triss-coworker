@@ -153,6 +153,19 @@ export async function transitionsCmd(key, { apply, json }) {
   printResult(lines.join('\n') || '(no transitions)');
 }
 
+export async function whoamiCmd({ json } = {}) {
+  const me = await jira.myself();
+  if (json) return printResult(me, { json: true });
+  const lines = [
+    `Account ID : ${me.accountId ?? ''}`,
+    `Name       : ${me.displayName ?? ''}`,
+    `Email      : ${me.emailAddress ?? '(hidden by privacy settings)'}`,
+    `Active     : ${me.active ?? ''}`,
+    `Time zone  : ${me.timeZone ?? ''}`,
+  ];
+  printResult(lines.join('\n'));
+}
+
 export async function attachmentsCmd(key, { json }) {
   const list = await jira.listAttachments(key);
   if (json) return printResult(list, { json: true });

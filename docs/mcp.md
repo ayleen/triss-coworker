@@ -212,6 +212,8 @@ Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
 - `triss_jira_transitions` — list available status transitions for an issue
   (use before `triss_jira_update.status` to discover the exact name)
 - `triss_jira_attachments` — list attachments on an issue
+- `triss_jira_whoami` — the authenticated account's accountId (what `assignee`
+  expects), display name, and email
 - `triss_confluence_search` `triss_confluence_page` `triss_confluence_create`
   `triss_confluence_update`
 - `triss_confluence_spaces` — list spaces (id/key/name) for `triss_confluence_create.space`

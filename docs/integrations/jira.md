@@ -64,6 +64,9 @@ triss jira transitions TRISS-123 --apply "In Progress"
 
 # Attachments.
 triss jira attachments TRISS-123
+
+# Who am I? Prints your accountId — the value --assignee / create --assignee want.
+triss jira whoami
 ```
 
 ## Epics
