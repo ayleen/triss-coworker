@@ -55,6 +55,27 @@ export function defaultBranch() {
   throw new Error('Could not determine default branch — pass --base <branch>');
 }
 
+// Same detection logic as defaultBranch(), but via an injectable `sh`
+// (spawnSync-shaped: `sh(cmd, args) -> {status, stdout, stderr, error}`)
+// against an explicit `cwd`, and never throwing (returns null instead) —
+// for callers that need this against a directory other than process.cwd()
+// and/or must stay usable when git/origin state is unusual (e.g.
+// src/commands/coder.js's worktree cleanup, which must not crash `triss
+// coder clean` just because a repo has no remote and no conventional
+// branch name).
+export function defaultBranchVia(sh, cwd) {
+  const symbolic = sh('git', ['-C', cwd, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  if (symbolic && !symbolic.error && symbolic.status === 0) {
+    const out = String(symbolic.stdout || '').trim();
+    if (out) return out.replace(/^origin\//, '');
+  }
+  for (const b of ['main', 'master', 'develop']) {
+    const check = sh('git', ['-C', cwd, 'rev-parse', '--verify', `refs/heads/${b}`]);
+    if (check && !check.error && check.status === 0) return b;
+  }
+  return null;
+}
+
 export function gitDiff(base, head = 'HEAD') {
   return git(['diff', '--no-color', `${base}...${head}`]);
 }

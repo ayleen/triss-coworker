@@ -236,6 +236,10 @@ The exposed tool set is **filtered by configured credentials**:
 - **`triss_linear_*`** when `LINEAR_API_KEY` is set.
 - **`triss_github_*`** when `GITHUB_TOKEN` is set (or `gh` CLI logged in).
 - **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
+- **`triss_coder_run` + `triss_coder_status`** when `ZHIPU_API_KEY` is set
+  (setup: `triss coder init`). `triss_coder_run`'s timeout defaults to
+  300s over MCP, not the CLI's 900s — long tasks should go through
+  `triss coder run` on the CLI instead.
 
 Add credentials later → restart session → new tools appear automatically.
 
@@ -263,6 +267,9 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
+| `triss coder init` | Sets up a GLM coding agent (opencode engine): key, `opencode.json`, agent templates | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--isolate` for a disposable worktree). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
 | `triss status`     | Shows current model + key + .env sources              | —                                   |

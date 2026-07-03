@@ -234,8 +234,8 @@ clobber.
    ```json
    {
      "$schema": "https://opencode.ai/config.json",
-     "model": "zai/glm-5.2",
-     "small_model": "zai/glm-5-turbo",
+     "model": "zai-coding-plan/glm-5.2",
+     "small_model": "zai-coding-plan/glm-5-turbo",
      "permission": {
        "bash": {
          "*": "deny",
@@ -323,8 +323,13 @@ Implementation notes:
    fields in the event stream, pass `prompt_tokens: 0` and add a
    `warnings` entry rather than letting runs vanish from accounting.
    `DEFAULT_PRICES` (`usage.js:41`, non-exported) keys must be the exact
-   string passed as `model`; add `zai/glm-5.2` and `zai/glm-5-turbo`
-   entries — look prices up on the https://docs.z.ai pricing page at
+   string passed as `model`; add `zai-coding-plan/glm-5.2` and
+   `zai-coding-plan/glm-5-turbo` entries (see Recon results: the
+   configured key is a coding-plan/subscription key, `cost` came back
+   `0` on every observed event — treat these as `$0`/token in
+   `DEFAULT_PRICES` but still log `prompt_tokens`/`completion_tokens`
+   for observability). If a future key targets the pay-as-you-go `zai`
+   provider instead, look those prices up on https://docs.z.ai at
    implementation time; do not guess.
 5. **Errors.** Follow the envelope-vs-throw split defined under the
    envelope contract above: parseable-but-failed run → envelope with
@@ -423,3 +428,190 @@ Prereq: `PHPCraftdream/crush` publishes an npm package or releases
   update THIS document first, then implement against the fixture.
 - Keep `docs/crush-glm-integration.md` untouched except adding a one-line
   pointer at the top to this document.
+
+## Recon results (Phase 0, 2026-07-03)
+
+Live recon performed against `opencode-ai@1.17.13` in a scratch git repo
+outside this checkout, using the `ZHIPU_API_KEY` configured in
+`.triss.env`. `npx -y opencode-ai@1.17.13` and `--version`/`--help` are
+fast and reliable; the pinned version is confirmed installable.
+
+### Provider correction (important — changes Phase 1's template)
+
+The configured `ZHIPU_API_KEY` is a **`zai-coding-plan` (subscription)
+key, not a pay-as-you-go `zai` key**. Calling `--model zai/glm-5-turbo`
+with this key fails every time with
+`AI_APICallError: Insufficient balance or no resource package. Please
+recharge.` — the wording ("no resource package") is the tell. Switching
+the provider prefix to `zai-coding-plan/glm-5-turbo` (same model id,
+different provider) succeeds immediately with `cost: 0` on every event
+(subscription, not metered). **Phase 1's `opencode.json` template model
+fields have been corrected in this document** (`"zai-coding-plan/glm-5.2"`
+/ `"zai-coding-plan/glm-5-turbo"`) and the `DEFAULT_PRICES` note in
+Phase 2 updated to match. If a future key targets the metered `zai`
+endpoint instead, this default needs to flip back — not guaranteed to
+generalize beyond this account's key.
+
+### Event schema (from `--format json`)
+
+Stdout is newline-delimited JSON (ndjson), one object per line, no
+wrapping array and no terminal "done" sentinel — completion is signaled
+by the process exiting. Every object has a top-level `type` field.
+Observed `type` values across all recon runs: `step_start`, `tool_use`,
+`step_finish`, `text`, `error`. No other types appeared (no
+session-start/session-end wrapper, no explicit heartbeat/ping type).
+
+Common envelope for step-ish events: `{"type", "timestamp"
+(epoch ms), "sessionID", "part": {...}}`. The shape of `part` depends on
+`type`:
+
+- `step_start` → `part: {id, messageID, sessionID, snapshot, type:
+  "step-start"}`.
+- `tool_use` → `part: {type: "tool", tool: "<name>", callID,
+  state: {status: "completed"|"error", input, output?, error?,
+  metadata?, title, time: {start, end}}, id, sessionID, messageID}`.
+  `tool` observed values: `"bash"`, `"read"`. On a permission denial,
+  `state.status` is `"error"` and `state.error` is a human-readable
+  string embedding the exact matched rule set as JSON (see Safety layer
+  below) — there is no separate `"denied"` status; denial is just a
+  tool-call error.
+- `step_finish` → `part: {id, reason: "tool-calls"|"stop", snapshot,
+  messageID, sessionID, type: "step-finish", tokens: {total, input,
+  output, reasoning, cache: {write, read}}, cost}`. `reason: "stop"`
+  marks the true end of the assistant's turn for that step.
+- `text` → `part: {id, messageID, sessionID, type: "text", text,
+  time: {start, end}}`. `text` is the literal assistant reply text
+  (may include markdown/code fences).
+- `error` (top-level run failure, not a per-tool error) → `{"type":
+  "error", "timestamp", "sessionID", "error": {"name": "APIError",
+  "data": {"message", "statusCode", "isRetryable", "responseHeaders",
+  "responseBody", "metadata": {"url"}}}}`.
+
+**Where the final assistant text lives:** the `text` field of the last
+`text`-type event in the stream (in every successful run observed, this
+coincided with the event preceding the final `step_finish` with
+`reason: "stop"`). A run can have multiple `text` events across multiple
+steps (intermediate commentary before a tool call); the fold logic
+should keep overwriting a "latest text" accumulator rather than
+concatenating, and trust the one that lines up with the final `stop`.
+
+**Where usage/tokens live:** `part.tokens` on **every** `step_finish`
+event, not just the last one — each step reports its own step-level
+token counts, they are **not cumulative**. A run with N steps (e.g. one
+tool call + one final reply = 2 steps) emits N `step_finish` events, each
+with its own `tokens.input`/`tokens.output`/`tokens.total`. To populate
+the envelope's `usage.prompt_tokens`/`usage.completion_tokens`, **sum**
+`tokens.input` and `tokens.output` across all `step_finish` events for
+the run. `part.cost` was `0` on every single event observed (subscription
+key — see provider correction above); still pass the summed
+`prompt_tokens`/`completion_tokens` (not `0`) to `logUsage()` so runs
+don't silently vanish from accounting per the `usage.js:88` short-circuit
+noted in Phase 2.
+
+### Exit codes
+
+| Scenario | Exit code | Stdout | Notes |
+|---|---|---|---|
+| Success (incl. runs where a tool call was permission-denied and the model worked around it) | `0` | valid ndjson stream | |
+| Unrecoverable API error (401, e.g. bad key — tested by corrupting the last 4 chars) | `1` | single `{"type":"error",...}` line | fails in ~1-2s, `isRetryable:false` in the payload |
+| **Recoverable/retryable API error** (e.g. insufficient balance on the wrong provider) | **never exits on its own** | nothing on stdout | retries indefinitely with exponential backoff (observed retry gaps ~19s, 33s, 66s, ...); **must** be killed externally |
+| No message and no `--command` given (incl. piping a prompt via stdin with no positional arg) | `1` | nothing (plain ANSI text on stderr: `Error: You must provide a message or a command`) | confirms the throw-`Error` path, not the envelope path |
+| `--session <id>` where `<id>` was never created by opencode | `1` | nothing (plain ANSI text on stderr: `Error: Session not found`) | see Session reuse below |
+| `--version` / `--help` | `0` | plain text, not JSON | `--format json` only affects `run` |
+
+The retryable-error row is the most consequential finding: opencode does
+**not** give up and exit on its own for retryable failures, so Phase 2's
+`--timeout` + process-group `SIGTERM`→`SIGKILL` logic is not a nice-to-have
+edge case, it is the *only* way such a run ever terminates. Confirmed
+live (a run against the wrong provider retried for 3+ minutes before
+being killed by the recon harness).
+
+### stdin verdict
+
+**Not accepted.** There is no `--stdin` flag (see `run --help` output),
+and running with no positional `message` and nothing on argv — even with
+text piped into stdin — errors immediately with `Error: You must provide
+a message or a command` (exit 1, nothing on stdout). Phase 2's `--stdin`
+option must read stdin itself in Node and pass the read text as a
+**positional argv message** to the `opencode run` invocation; it cannot
+rely on opencode reading its own stdin.
+
+### Session reuse verdict — correction to Phase 2's option description
+
+**Confirmed working, but not as "get-or-create" the way Phase 2 describes
+it.** `opencode run --session <id>` requires `<id>` to be a
+**real, opencode-issued session id** (format `ses_<24ish
+alphanumeric chars>`, e.g. `ses_0d7b5c721ffeouI80ItCOxAJ3g`). Passing an
+arbitrary caller-chosen slug (the plan's example, `task-3`) throws
+`Error: Session not found` — opencode does **not** create a session
+keyed by a caller-supplied id.
+
+The correct headless pattern, confirmed live (second run correctly
+recalled "hello" from the first run's echo):
+1. First invocation for a new logical session: **omit** `--session`
+   entirely. Capture the real `sessionID` from the first JSON event of
+   the resulting stream.
+2. Persist a mapping from triss's own session concept (whatever `--session
+   <id>` the *caller* passed to `triss coder run`) to that real
+   `ses_...` id — e.g. `.triss/sessions.json`.
+3. Subsequent invocations pass the **captured real id** via opencode's
+   `--session` flag, not the caller's original slug.
+
+**Phase 2's option table line for `--session` needs this correction**
+when implemented: `--session <id>` maps to triss's own slug→real-id
+lookup table, not directly to opencode's `--session` flag on the first
+call.
+
+### Safety layer verdict — template confirmed correct, two denial mechanisms observed
+
+The Phase 1 `opencode.json` permission template (JSON shape, `"git
+diff*"`-style globs, `"*": "deny"` catch-all) works exactly as the plan
+assumed — **no shape/semantics correction needed**. Two distinct denial
+mechanisms were observed depending on how "deny" is expressed:
+
+1. **Partial allowlist** (some patterns `allow`, `"*": "deny"` catches
+   the rest — the plan's actual template): the `bash` tool **is** exposed
+   to the model, and a denied command becomes a `tool_use` event with
+   `state.status: "error"` and a message that embeds the exact matched
+   rule set as JSON, e.g.:
+   `{"permission":"*","action":"allow","pattern":"*"},{"permission":"bash","pattern":"*","action":"deny"},{"permission":"bash","pattern":"git status","action":"allow"},...`.
+   Note the implicit **leading `{"permission":"*","action":"allow","pattern":"*"}`** — there is a default global allow-all baseline that the config's explicit `bash` rules override for that tool; this matches "last match wins" semantics. Confirmed blocking both `curl example.com` and `rm <file>` under `--auto`; the target file was untouched and no network call the model could make.
+2. **Full deny** (`"bash": {"*": "deny"}`, no allow patterns at all —
+   used to test global config pickup): the `bash` tool is **not exposed
+   to the model's tool list at all**. The model explicitly reported
+   "I don't have a Bash tool available... tools I have access to are:
+   edit, glob, grep, read, write, task, todowrite, skill" — a stronger
+   and cleaner form of denial than case 1, worth using for the
+   `researcher.md` agent template (Phase 1 step 4) which already
+   specifies `bash: deny`.
+
+**`--dir <path>` confirmed honored:** ran opencode from a cwd different
+from the target repo, passed `--dir <repo>`, and a file the agent created
+landed inside `<repo>`, not the actual process cwd.
+
+**Global config pickup (`~/.config/opencode/opencode.json`) confirmed
+working**, tested via `HOME=<scratch-home>` (never touching the real
+`~/.config/opencode`) with no local project `opencode.json` present —
+the global file's full-deny bash permission was picked up and reflected
+in the model's available tool list (case 2 above).
+
+### Fixture
+
+`test/fixtures/opencode-run-events.ndjson` — **6 lines**, genuine bytes
+from a live successful run (`--model zai-coding-plan/glm-5-turbo`,
+prompt "print hello via a shell echo", `--auto`), no redaction needed
+(scanned for the configured key's first 10 characters — zero matches).
+Contains one full turn: `step_start` → `tool_use` (bash `echo "hello"`)
+→ `step_finish` (`reason: tool-calls`) → `step_start` → `text`
+(`` `hello` ``) → `step_finish` (`reason: stop`).
+
+### Cost
+
+All recon calls landed on the `zai-coding-plan` (subscription) provider,
+which reports `cost: 0` on every event — **no determinable per-call USD
+cost from the usage events**. Call volume for the record: roughly a
+dozen `run` invocations (1 baseline, 1 bad-key, 1 stdin-check, 2 session
+reuse, 2 safety-layer denial checks, 2 `--dir`/global-config checks, plus
+retries) against the `zai-coding-plan` endpoint, all subscription-covered.
+One `zai` (non-coding-plan) call was attempted and failed before any
+tokens were billed (`isRetryable` error prior to a completion).

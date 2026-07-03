@@ -36,6 +36,30 @@ Default preset is `flash` (cheap). Use `--model pro` for harder analysis
 or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
 
+## `triss coder` — delegate a coding task to a GLM agent (opencode engine)
+
+Setup once per machine/project: `triss coder init` (installs the opencode
+engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
+policy, and `.opencode/agents/{coder,researcher}.md`).
+
+Then: `triss coder run "<task>" [--session <id>] [--continue] [--agent
+<name>] [--model <p/m>] [--isolate] [--cwd <path>] [--timeout <sec>]
+[--stdin]` — prints one JSON envelope to stdout (`engine`, `engine_version`,
+`session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
+`worktree`, `usage`, `warnings`). `--session <id>` is a triss-side slug
+mapped to a real opencode session id in `.triss/sessions.json` (first run
+creates it, later runs with the same slug continue that conversation).
+`--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)
+so you review the diff before merging; irreversible actions stay with you.
+`triss coder clean [--all]` removes finished isolation worktrees (default:
+only branches with no diff vs the default branch; `--all` forces removal
+of every worktree under `.triss/wt`).
+
+Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
+`TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
+`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
+`1.17.13`).
+
 ## Tracker integrations
 
 `triss jira / linear / github / gitlab / confluence` expose `search`,

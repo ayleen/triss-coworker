@@ -854,6 +854,81 @@ export async function gitlabCommentHandler({ project, iid, body }) {
   return `✓ Note posted to ${p}#${iid}`;
 }
 
+// ─── coder ──────────────────────────────────────────────────────────────────
+
+// MCP hosts commonly time out a tool call well before the CLI's 900s
+// default — 300s here, documented in docs/mcp.md. Long tasks should go
+// through `triss coder run` on the CLI (optionally backgrounded), not
+// this tool.
+const CODER_MCP_DEFAULT_TIMEOUT = 300;
+
+// `deps` (spawn/spawnSync) is only ever populated by tests — production
+// calls always fall through to the real subprocess machinery inside
+// runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
+export async function coderRunHandler(
+  { prompt, session, continue: cont, agent, model, isolate, cwd, timeout } = {},
+  deps = {},
+) {
+  if (!prompt) throw new Error('prompt is required');
+
+  const { runCoderRun, gitRepoRoot } = await import('../commands/coder.js');
+  const { assertSafePath, projectRoot } = await import('../safety.js');
+
+  // Sandbox boundary enforced HERE, at the MCP edge — runCoderRun itself
+  // stays unrestricted (same as every other command's CLI path). Two
+  // things can put files outside the project root: an explicit `cwd`,
+  // and `--isolate`'s worktree, which lands under the enclosing git
+  // repo's toplevel — not necessarily the same directory as the sandbox
+  // root if the project lives in a subdirectory of a larger repo.
+  // `cwd` is IGNORED by runCoderRun whenever `isolate` is set (isolate's
+  // worktree path wins), so checking it here too would reject calls over
+  // a `cwd` that's never actually used — only check whichever one the
+  // run will actually touch.
+  if (cwd && !isolate) {
+    const { resolve } = await import('node:path');
+    assertSafePath(resolve(cwd), { kind: 'write' });
+  }
+  if (isolate) {
+    const sh = deps.spawnSync || (await import('node:child_process')).spawnSync;
+    const repoRoot = gitRepoRoot(sh, projectRoot());
+    if (repoRoot) assertSafePath(repoRoot, { kind: 'write' });
+  }
+
+  let envelope = '';
+  await runCoderRun(
+    prompt,
+    {
+      session,
+      continue: cont,
+      agent,
+      model,
+      isolate,
+      cwd,
+      timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
+    },
+    { spawn: deps.spawn, spawnSync: deps.spawnSync, stdoutWrite: (s) => { envelope += s; } },
+  );
+  return envelope.trim();
+}
+
+export async function coderStatusHandler() {
+  const { describeCoderStatus, CODER_MANIFEST } = await import('../commands/coder.js');
+  const { envReadiness } = await import('../integrations/_registry.js');
+  const status = describeCoderStatus();
+  const ready = envReadiness(CODER_MANIFEST);
+  const lines = [
+    `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'}`,
+    status.engineVersion
+      ? `Engine: opencode ${status.engineVersion}${
+          status.engineVersion === status.pin ? ' (matches pin)' : ` (pin ${status.pin})`
+        }`
+      : `Engine: not installed (pin ${status.pin})`,
+    ...status.configs.map((c) => `opencode.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
+    `Worktrees (.triss/wt): ${status.worktreeCount} live`,
+  ];
+  return lines.join('\n');
+}
+
 // ─── commit-msg ─────────────────────────────────────────────────────────────
 
 export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {

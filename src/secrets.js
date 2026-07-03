@@ -247,3 +247,10 @@ export async function promptChoice(question, choices, { defaultIndex = 0 } = {})
   if (Number.isNaN(idx) || idx < 0 || idx >= choices.length) return choices[defaultIndex].value;
   return choices[idx].value;
 }
+
+export async function yesNo(question, defaultYes) {
+  const def = defaultYes ? 'Y/n' : 'y/N';
+  const ans = (await prompt(`${question} [${def}]`)).trim().toLowerCase();
+  if (!ans) return defaultYes;
+  return ans.startsWith('y');
+}

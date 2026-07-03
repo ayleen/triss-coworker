@@ -38,6 +38,7 @@ import {
   runEdit,
   runUnset,
 } from '../src/commands/config.js';
+import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
 
@@ -219,6 +220,37 @@ config
   .option('-g, --global', 'global file')
   .option('-l, --local', 'project file')
   .action(wrap(runUnset));
+
+const coder = program
+  .command('coder')
+  .description('Run a GLM coding agent (opencode engine)');
+
+coder
+  .command('init')
+  .description('Install/configure the opencode engine, Z.AI key, permission policy, and agent templates')
+  .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
+  .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
+  .action(wrap(runCoderInit));
+
+coder
+  .command('run [prompt]')
+  .description('Spawn a GLM coding agent (opencode engine) and print a JSON envelope to stdout')
+  .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
+  .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
+  .option('--agent <name>', 'opencode agent template to use', 'coder')
+  .option('--model <p/m>', 'override the model for this run only')
+  .option('--isolate', 'run in a disposable git worktree under .triss/wt/<slug>')
+  .option('--cwd <path>', 'working directory (ignored with --isolate)')
+  .option('--timeout <sec>', 'kill the engine after this many seconds', (v) => parseInt(v, 10), 900)
+  .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
+  .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
+  .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));
+
+coder
+  .command('clean')
+  .description('Remove finished .triss/wt isolation worktrees (branches with no diff vs the default branch)')
+  .option('--all', 'force-remove every worktree under .triss/wt, regardless of diff state')
+  .action(wrap(runCoderClean));
 
 function wrap(fn) {
   return async (...args) => {
