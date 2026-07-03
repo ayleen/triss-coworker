@@ -45,13 +45,30 @@ function fakeSpawnAlreadyInstalled(cmd, args) {
   return { status: 1, stdout: '', error: null };
 }
 
+// Fake fetch for the Z.AI provider probe: any test in this file that sets
+// ZHIPU_API_KEY and doesn't care about provider-detection itself must
+// inject this (or an equivalent) so runCoderSetup never makes a real
+// network call — see test/coder-provider-detect.test.js for detection
+// behavior itself. Reports "neither endpoint worked" (ok: false), which
+// keeps the historical default provider prefix.
+function fakeFetchNeitherEndpointWorks() {
+  return async () => ({ ok: false, status: 401 });
+}
+
 function withTmpHome(fn) {
   return async () => {
     const home = makeTmpHome();
     const origHome = process.env.HOME;
     const origTTY = process.stdin.isTTY;
     const origZhipu = process.env.ZHIPU_API_KEY;
+    const origRoot = process.env.TRISS_PROJECT_ROOT;
     process.env.HOME = home;
+    // Without this, projectRoot() falls back to process.cwd() — the real
+    // triss checkout — and loadEnvFiles() picks up ITS .triss.env
+    // (a real, working ZHIPU_API_KEY, used for live smoke tests). That
+    // leaked key would then make the provider-detection code below
+    // perform a genuine network call against api.z.ai from a unit test.
+    process.env.TRISS_PROJECT_ROOT = home;
     delete process.env.ZHIPU_API_KEY;
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
 
@@ -76,6 +93,8 @@ function withTmpHome(fn) {
       process.stderr.write = origStderrWrite;
       Object.defineProperty(process.stdin, 'isTTY', { value: origTTY, configurable: true });
       process.env.HOME = origHome;
+      if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+      else process.env.TRISS_PROJECT_ROOT = origRoot;
       if (origZhipu === undefined) delete process.env.ZHIPU_API_KEY;
       else process.env.ZHIPU_API_KEY = origZhipu;
       rmSync(home, { recursive: true, force: true });
@@ -101,7 +120,10 @@ test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY as requi
 test(
   'runCoderInit --global writes opencode.json and agent templates under HOME',
   withTmpHome(async ({ home }) => {
-    await runCoderInit({ global: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     const configPath = join(home, '.config', 'opencode', 'opencode.json');
     assert.ok(existsSync(configPath), 'opencode.json should be written');
@@ -125,14 +147,20 @@ test(
 test(
   'running runCoderInit twice is a no-op the second time (no clobber, no throw)',
   withTmpHome(async ({ home }) => {
-    await runCoderInit({ global: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     const configPath = join(home, '.config', 'opencode', 'opencode.json');
     const firstWrite = readFileSync(configPath, 'utf8');
 
     // ZHIPU_API_KEY is now set in process.env from the first run — second
     // run must not prompt again and must not touch the config file.
-    await runCoderInit({ global: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     const secondWrite = readFileSync(configPath, 'utf8');
     assert.equal(firstWrite, secondWrite, 'opencode.json must be byte-identical after a second run');
@@ -151,7 +179,10 @@ test(
     writeFileSync(configPath, custom);
 
     process.env.ZHIPU_API_KEY = 'zk-existing-key';
-    await runCoderSetup({ scope: 'global' }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderSetup(
+      { scope: 'global' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     assert.equal(readFileSync(configPath, 'utf8'), custom, 'existing config must be preserved verbatim');
   }),
@@ -166,7 +197,10 @@ test(
     writeFileSync(coderAgentPath, '---\ncustom: true\n---\nmy own agent\n');
 
     process.env.ZHIPU_API_KEY = 'zk-existing-key';
-    await runCoderSetup({ scope: 'global' }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderSetup(
+      { scope: 'global' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     assert.match(readFileSync(coderAgentPath, 'utf8'), /my own agent/);
   }),
@@ -179,7 +213,10 @@ test(
     writeFileSync(envPath, 'ZHIPU_API_KEY=zk-original-secret-value\n');
     process.env.ZHIPU_API_KEY = 'zk-original-secret-value';
 
-    await runCoderInit({ global: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     const out = captured.join('');
     assert.ok(!out.includes('zk-original-secret-value'), 'raw key must never be printed unmasked');
@@ -307,7 +344,15 @@ test(
       process.env.ZHIPU_API_KEY = 'zk-test';
       await runCoderSetup(
         { scope: 'global' },
-        { spawnSync, confirmInstall: async () => true },
+        {
+          spawnSync,
+          confirmInstall: async () => true,
+          fetch: fakeFetchNeitherEndpointWorks(),
+          // TTY is forced true in this test — without a stub, writing a
+          // brand-new opencode.json would drive the real interactive
+          // model picker and hang waiting on unfed stdin.
+          promptChoice: async (_q, choices, { defaultIndex = 0 } = {}) => choices[defaultIndex].value,
+        },
       );
 
       const npmInstallCall = calls.find((c) => c[0] === 'npm' && c[1][0] === 'install');
@@ -329,7 +374,12 @@ test(
       process.env.ZHIPU_API_KEY = 'zk-test';
       await runCoderSetup(
         { scope: 'global' },
-        { spawnSync, confirmInstall: async () => false },
+        {
+          spawnSync,
+          confirmInstall: async () => false,
+          fetch: fakeFetchNeitherEndpointWorks(),
+          promptChoice: async (_q, choices, { defaultIndex = 0 } = {}) => choices[defaultIndex].value,
+        },
       );
       assert.ok(
         !calls.some((c) => c[0] === 'npm' && c[1][0] === 'install'),

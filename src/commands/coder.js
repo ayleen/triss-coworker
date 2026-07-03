@@ -1,9 +1,8 @@
 // `triss coder` — delegate coding tasks to a GLM agent (opencode engine).
-// This file implements Phase 1 (`coder init`), Phase 2 (`coder run` — the
-// opencode adapter), and Phase 3 (`coder clean` + status helpers). MCP
-// wiring (Phase 4) is not done yet — see docs/coder-agent-plan.md for the
-// full roadmap. Naming: "agent" is taken (the AI assistant using triss),
-// so this feature is "coder" everywhere (command, file, env prefix).
+// See docs/coder-agent-plan.md for the original roadmap (init/run/clean,
+// the opencode adapter, MCP wiring — all shipped). Naming: "agent" is
+// taken (the AI assistant using triss), so this feature is "coder"
+// everywhere (command, file, env prefix).
 
 import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, cpSync, renameSync } from 'node:fs';
@@ -18,7 +17,16 @@ import { loadEnvFiles } from '../config.js';
 // bodies (never at module-eval time), so it doesn't matter which module
 // finishes evaluating first.
 import { chooseScope, resolveScope } from './config.js';
-import { ensureEnvFile, setVar, maskValue, prompt, yesNo, addToGitignore, readStdin } from '../secrets.js';
+import {
+  ensureEnvFile,
+  setVar,
+  maskValue,
+  prompt,
+  promptChoice,
+  yesNo,
+  addToGitignore,
+  readStdin,
+} from '../secrets.js';
 import { projectRoot } from '../safety.js';
 import { logUsage } from '../usage.js';
 import { currentCall } from '../call-context.js';
@@ -32,6 +40,118 @@ export const OPENCODE_PIN = '1.17.13';
 // that key. See docs/coder-agent-plan.md's "Recon results" section.
 const DEFAULT_CODER_MODEL = 'zai-coding-plan/glm-5.2';
 const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
+
+// ─── Z.AI provider auto-detection ───────────────────────────────────────────
+//
+// The zai-coding-plan default above was derived from ONE account's
+// subscription key during Phase 0 recon — a pay-as-you-go `zai` key hits
+// the wrong base URL and opencode retries the failing call forever (see
+// the DEFAULT_CODER_MODEL comment). `triss coder init` now probes which
+// base a given key actually authenticates against, so the written
+// opencode.json always gets the right provider prefix.
+//
+// Request shape: docs.z.ai's chat-completions reference (fetched
+// 2026-07-03) documents only `POST <base>/chat/completions` with
+// `Authorization: Bearer <key>` + `{model, messages}` — there is no
+// lighter-weight GET (e.g. a models list) to validate a key more cheaply,
+// and the coding-plan base is documented only as "follow the [separate]
+// tutorial to configure your dedicated endpoint" with no independent
+// spec. So the cheapest *verifiable* probe is a real chat completion with
+// `max_tokens: 1`, tried against coding-plan first (the more common key
+// type observed in recon), falling back to pay-as-you-go.
+const ZAI_CODING_PLAN_BASE = 'https://api.z.ai/api/coding/paas/v4';
+const ZAI_PAYG_BASE = 'https://api.z.ai/api/paas/v4';
+const ZAI_PROBE_MODEL = 'glm-5-turbo';
+const ZAI_PROBE_TIMEOUT_MS = 10_000;
+
+async function probeZaiBase(fetchImpl, base, key) {
+  try {
+    const res = await fetchImpl(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ZAI_PROBE_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      }),
+      signal: AbortSignal.timeout(ZAI_PROBE_TIMEOUT_MS),
+    });
+    return res.ok;
+  } catch {
+    // Network error, timeout, or non-throwing rejection shape — treat as
+    // "this base didn't work" and let the caller try the next one / warn.
+    return false;
+  }
+}
+
+// Returns 'zai-coding-plan', 'zai', or null (key unset, or neither base
+// accepted it — e.g. offline, or a key that's invalid everywhere).
+// `fetchImpl` defaults to globalThis.fetch (repo convention — tests mock
+// globalThis.fetch or pass a fake directly here).
+export async function detectZaiProvider(fetchImpl = globalThis.fetch) {
+  const key = process.env.ZHIPU_API_KEY;
+  if (!key) return null;
+  if (await probeZaiBase(fetchImpl, ZAI_CODING_PLAN_BASE, key)) return 'zai-coding-plan';
+  if (await probeZaiBase(fetchImpl, ZAI_PAYG_BASE, key)) return 'zai';
+  return null;
+}
+
+async function detectAndReportZaiProvider(fetchImpl) {
+  if (!process.env.ZHIPU_API_KEY) return null;
+  process.stderr.write(pc.dim('  · probing which Z.AI endpoint this key works with...\n'));
+  const provider = await detectZaiProvider(fetchImpl);
+  if (provider) {
+    process.stderr.write(pc.green(`  ✓ detected provider: ${provider}\n`));
+  } else {
+    process.stderr.write(
+      pc.yellow(
+        '  ⚠ could not verify ZHIPU_API_KEY against either Z.AI endpoint (coding-plan or ' +
+          'pay-as-you-go) — keeping the current default provider prefix. If opencode seems to ' +
+          'retry a model call forever, set TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL explicitly.\n',
+      ),
+    );
+  }
+  return provider;
+}
+
+// GLM models verified in the plan's "Fixed technical facts" (models.dev
+// catalog for the Z.AI provider). Same set offered for both the main and
+// small model picks — small model just defaults to a different index.
+const GLM_MODEL_CHOICES = [
+  { label: 'glm-5.2 (recommended)', value: 'glm-5.2' },
+  { label: 'glm-5-turbo', value: 'glm-5-turbo' },
+  { label: 'glm-4.7', value: 'glm-4.7' },
+];
+
+// Precedence: TRISS_CODER_MODEL/SMALL_MODEL env override > interactive
+// pick (TTY only) > silent default. The provider prefix comes from
+// detection (falling back to the historical zai-coding-plan default when
+// detection couldn't confirm one) — env overrides are taken verbatim
+// since a caller setting them already includes whatever prefix they want.
+async function resolveInitModels(detectedProvider, deps = {}) {
+  const providerPrefix = detectedProvider || DEFAULT_CODER_MODEL.split('/')[0];
+  const choose = deps.promptChoice || promptChoice;
+  const interactive = !!process.stdin.isTTY;
+
+  let model = process.env.TRISS_CODER_MODEL;
+  if (!model) {
+    model = interactive
+      ? `${providerPrefix}/${await choose('  Main GLM model for opencode.json?', GLM_MODEL_CHOICES, { defaultIndex: 0 })}`
+      : `${providerPrefix}/glm-5.2`;
+  }
+
+  let smallModel = process.env.TRISS_CODER_SMALL_MODEL;
+  if (!smallModel) {
+    smallModel = interactive
+      ? `${providerPrefix}/${await choose('  Small/fast GLM model for opencode.json?', GLM_MODEL_CHOICES, { defaultIndex: 1 })}`
+      : `${providerPrefix}/glm-5-turbo`;
+  }
+
+  return { model, smallModel };
+}
 
 // Fixed layout from the plan: `.triss/wt/<slug>` working trees, each on
 // its own `coder/<slug>` branch. Centralised here so every construction
@@ -150,16 +270,19 @@ async function setupKey(path) {
   process.stderr.write(pc.green('  ✓ saved\n'));
 }
 
-// Steps 1 (engine), 3 (opencode.json), 4 (agent templates), 6 (summary).
-// `deps.spawnSync` lets tests inject a fake spawnSync instead of touching
-// the real engine / npm. `deps.confirmInstall` lets tests stub the
-// install-confirmation prompt instead of driving real stdin.
+// Steps 1 (engine), 2 (Z.AI provider detection), 3 (opencode.json), 4
+// (agent templates), 6 (summary). `deps.spawnSync` lets tests inject a
+// fake spawnSync instead of touching the real engine / npm.
+// `deps.confirmInstall` lets tests stub the install-confirmation prompt
+// instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
+// tests stub the provider probe and the interactive model pick.
 export async function runCoderSetup({ scope } = {}, deps = {}) {
   const resolvedScope = scope || 'global';
   const sh = deps.spawnSync || nodeSpawnSync;
   process.stderr.write('\n' + pc.bold('── coder (opencode engine) ──') + '\n');
   await ensureEngine(sh, deps.confirmInstall);
-  writeOpencodeConfig(resolvedScope);
+  const detectedProvider = await detectAndReportZaiProvider(deps.fetch || globalThis.fetch);
+  await writeOpencodeConfig(resolvedScope, detectedProvider, deps);
   scaffoldAgentTemplates(resolvedScope);
 }
 
@@ -226,11 +349,11 @@ function opencodeConfigPath(scope) {
     : join(homedir(), '.config', 'opencode', 'opencode.json');
 }
 
-function opencodeConfigTemplate() {
+function opencodeConfigTemplate(model, smallModel) {
   return {
     $schema: 'https://opencode.ai/config.json',
-    model: coderModel(),
-    small_model: coderSmallModel(),
+    model,
+    small_model: smallModel,
     permission: {
       bash: {
         '*': 'deny',
@@ -248,7 +371,33 @@ function opencodeConfigTemplate() {
   };
 }
 
-function writeOpencodeConfig(scope) {
+// If the caller already has an opencode.json (the no-clobber path never
+// touches it), still tell them when its `model` provider prefix
+// contradicts what the key just verified against — a mismatched prefix
+// is exactly the infinite-retry trap this whole feature exists to catch.
+function warnIfProviderMismatch(path, detectedProvider) {
+  if (!detectedProvider) return; // nothing to compare against
+  let existing;
+  try {
+    existing = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return; // unreadable/malformed — not this function's job to fix that
+  }
+  const existingModel = typeof existing.model === 'string' ? existing.model : '';
+  const existingPrefix = existingModel.split('/')[0];
+  if (existingPrefix && existingPrefix !== detectedProvider) {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), but ZHIPU_API_KEY ` +
+          `just verified against the "${detectedProvider}" endpoint instead — this is the exact ` +
+          "mismatch that makes opencode retry a model call it can never complete. Update the " +
+          'model/small_model fields, or unset ZHIPU_API_KEY and use a key for the right plan.\n',
+      ),
+    );
+  }
+}
+
+async function writeOpencodeConfig(scope, detectedProvider, deps = {}) {
   const path = opencodeConfigPath(scope);
   if (existsSync(path)) {
     process.stderr.write(pc.dim(`  · ${path} already exists — not overwriting\n`));
@@ -258,11 +407,13 @@ function writeOpencodeConfig(scope) {
           'permission.bash.*=deny)\n',
       ),
     );
+    warnIfProviderMismatch(path, detectedProvider);
     return;
   }
+  const { model, smallModel } = await resolveInitModels(detectedProvider, deps);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(), null, 2) + '\n');
-  process.stderr.write(pc.green(`  ✓ wrote ${path}\n`));
+  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel), null, 2) + '\n');
+  process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
 }
 
 function agentsDir(scope) {

@@ -437,6 +437,11 @@ triss coder run "add input validation to /signup" --isolate
 triss coder clean                                 # remove finished isolation worktrees
 ```
 
+`triss coder init` probes which Z.AI plan your key actually works with
+(subscription vs. pay-as-you-go) and writes the matching model prefix, and
+lets you pick the GLM model interactively instead of always defaulting to
+`glm-5.2`.
+
 Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 `worktree` tell you what to review; `--isolate` runs the agent in a
 disposable `.triss/wt/<slug>` git worktree so it never touches your
