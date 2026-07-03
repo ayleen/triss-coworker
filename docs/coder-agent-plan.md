@@ -102,6 +102,26 @@ envelope so engine #2 slots in later:
 
 ---
 
+## Execution staffing (model / effort per phase)
+
+The orchestrator (Fable/Opus, medium effort) decomposes, reviews diffs
+against each phase's acceptance criteria, and runs `node --test` +
+`/code-review` before the PR. All coding is delegated to Sonnet subagents:
+
+| Phase | Model | Effort | Rationale |
+|---|---|---|---|
+| 0 — live recon | sonnet | high | Only phase with unknowns; a wrong event-schema fixture poisons everything downstream |
+| 1 — `coder init` | sonnet | medium | Mechanical, fully specified against existing wizard primitives |
+| 2 — `coder run` | sonnet | high | The core adapter: ndjson folding, worktree lifecycle, process-group kill, envelope-vs-throw edge cases |
+| 3 — clean + status | sonnet | medium | Simple mechanics following the existing status grammar |
+| 4 — MCP tools | sonnet | medium | Copies the established tools/handlers pattern + sandbox |
+| 5 — docs + tests | sonnet | medium | Tests replay the Phase 0 fixture; docs follow the lockstep checklist |
+
+Do not use haiku (even docs require code cross-checking here — a single
+wrong field name silently broke three subsystems during plan review) and
+do not use opus for coding (the plan deliberately front-loads the
+reasoning so Sonnet suffices).
+
 ## Phase 0 — live recon (requires a Z.AI key; ~1 hour)
 
 Blocking prerequisite for Phase 2. Ask the user for `ZHIPU_API_KEY` if not
