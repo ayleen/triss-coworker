@@ -195,6 +195,9 @@ Configure via `triss coder init` or `triss config wizard coder`. Env vars:
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
 `TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`).
 
+`triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
+Windows. `triss coder init`/`clean` are unaffected.
+
 {{INTEGRATIONS}}
 ### When NOT to delegate
 - Tasks under ~2000 tokens of work — delegation overhead costs more than it saves.

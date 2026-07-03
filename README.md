@@ -426,6 +426,25 @@ forms, and SVG; `<main>` / `<article>` are preferred when present;
 non-HTML responses (JSON, plain text) are returned verbatim. 30-second
 default timeout, configurable via `--timeout <ms>`.
 
+### `triss coder`
+
+Delegates an implementation task to a GLM coding agent (the `opencode`
+engine) instead of the primary model writing the code itself.
+
+```bash
+triss coder init                                  # once: key, opencode.json, agent templates
+triss coder run "add input validation to /signup" --isolate
+triss coder clean                                 # remove finished isolation worktrees
+```
+
+Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
+`worktree` tell you what to review; `--isolate` runs the agent in a
+disposable `.triss/wt/<slug>` git worktree so it never touches your
+working tree directly. `--session <slug>` continues the same opencode
+conversation across calls. **POSIX only** (macOS/Linux) for now. See
+`docs/configuration.md` for the coder env vars and `docs/mcp.md` for the
+MCP tool equivalents.
+
 ## Integrations
 
 External-service plugins live under `src/integrations/<name>/`. They are

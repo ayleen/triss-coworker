@@ -60,6 +60,9 @@ Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
 `zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
 `1.17.13`).
 
+`triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
+Windows. `triss coder init`/`clean` are unaffected.
+
 ## Tracker integrations
 
 `triss jira / linear / github / gitlab / confluence` expose `search`,
