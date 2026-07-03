@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-04
+
 ### Added
 
 - `triss coder init` now auto-detects which Z.AI endpoint a
@@ -517,7 +519,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/ayleen/triss-coworker/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/ayleen/triss-coworker/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/ayleen/triss-coworker/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/ayleen/triss-coworker/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/ayleen/triss-coworker/compare/v0.18.0...v0.19.0
