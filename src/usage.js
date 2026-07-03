@@ -49,6 +49,21 @@ const DEFAULT_PRICES = {
     input_cache_hit: 0.003625e-6,
     output: 0.87e-6,
   },
+  // `zai-coding-plan` (subscription) models used by `triss coder run` —
+  // every event observed during Phase 0 recon reported cost:0 for this
+  // provider (metered, not per-token). If a future ZHIPU_API_KEY targets
+  // the pay-as-you-go `zai/...` provider instead, look up real prices at
+  // https://docs.z.ai — do not guess.
+  'zai-coding-plan/glm-5.2': {
+    input_cache_miss: 0,
+    input_cache_hit: 0,
+    output: 0,
+  },
+  'zai-coding-plan/glm-5-turbo': {
+    input_cache_miss: 0,
+    input_cache_hit: 0,
+    output: 0,
+  },
 };
 
 function priceFor(model) {

@@ -1,0 +1,617 @@
+# `triss coder` — delegate coding tasks to a GLM agent (opencode engine)
+
+Implementation plan. Written to be executed by a mid-tier model (Sonnet/Opus):
+every step names the exact files, existing helpers to reuse, and acceptance
+criteria. Follow the repo conventions in `CLAUDE.md` at all times.
+
+> Supersedes the execution-engine choice in `docs/crush-glm-integration.md`:
+> **engine #1 is opencode** (`opencode-ai` on npm, MIT, Z.AI built in as the
+> `zai` provider). The crush fork becomes engine #2, added later behind the
+> same adapter interface (Phase 6). The background research and the
+> control-plane/execution-engine split from that document still apply.
+
+## Product vision (what we are building)
+
+triss stays the **control plane**; opencode is the **execution engine** with
+GLM hands; the orchestrator (Claude Code) is the **brain** that decomposes,
+supervises, reviews.
+
+```
+triss coder init          # one-time: install engine, key, policy, templates
+triss coder run [opts] "<task>"   # spawn a GLM coding agent, get a JSON envelope
+triss coder clean         # remove finished isolation worktrees
+triss status              # gains a "coder" block
+```
+
+Three safety layers, all owned by triss (engine-agnostic):
+1. **Tool policy** — generated `opencode.json` denies bash by default and
+   allowlists safe commands (`git diff`, `npm test`, …). Deny-first, not
+   deny-list-of-bad-things.
+2. **Secret scoping** — the engine subprocess receives a minimal env
+   (PATH/HOME/locale + `ZHIPU_API_KEY` only), never the caller's full env.
+3. **Worktree isolation** — `--isolate` runs the agent in a disposable
+   `git worktree`; irreversible actions (DB, deploy, push) stay with the
+   orchestrator, which reviews the diff before anything merges.
+
+## Naming decision (do not rename without checking this)
+
+"Agent" is taken in this codebase: it means the AI assistant that *uses*
+triss (`triss agent-help`, `src/agent-rules.js`, `templates/claude.md`).
+The new feature is therefore **`coder`** everywhere: command group
+`triss coder`, file `src/commands/coder.js`, env prefix `TRISS_CODER_*`,
+MCP tools `triss_coder_*`.
+
+## Fixed technical facts (verified 2026-07-03 — do not re-research)
+
+- npm package **`opencode-ai`** (MIT, bin `opencode`), verified working via
+  `npx -y opencode-ai --version` → `1.17.13`. Pin the version (see Phase 1).
+- Z.AI is a **built-in provider** in opencode's catalog (models.dev):
+  provider id `zai`, base `https://api.z.ai/api/paas/v4`, env
+  **`ZHIPU_API_KEY`**, models incl. `glm-5.2`, `glm-5-turbo`, `glm-4.7`.
+  There is also `zai-coding-plan` (subscription endpoint
+  `https://api.z.ai/api/coding/paas/v4`). No custom provider block needed.
+- Config: `~/.config/opencode/opencode.json` (global) and `./opencode.json`
+  (project; overrides global). Top-level `model` / `small_model` as
+  `<provider>/<model>`. `{env:VAR}` interpolation supported.
+- Custom agents: markdown + YAML frontmatter in `.opencode/agents/*.md`
+  (project) or `~/.config/opencode/agents/` (global). Frontmatter:
+  `description` (required), `mode`, `model`, `prompt`, `permission`,
+  `temperature`, `steps`.
+- Permissions: per-tool `allow|ask|deny`, bash supports command patterns
+  (`"git *": "allow"`, `"*": "deny"`, last match wins). Headless needs
+  `--auto` (auto-approves every `ask`; `deny` still blocks).
+- Headless: `opencode run [message..] --format json --model <p/m>
+  --agent <name> --session <id> | --continue | --fork --dir <path> --auto`.
+  `--format json` emits a **stream of JSON events**, not a single envelope.
+- NOT verified yet (Phase 0 resolves): exact event schema, exit codes,
+  stdin behavior, usage/token fields in the stream.
+
+## Envelope contract (the adapter's output)
+
+`triss coder run` prints exactly one JSON object to **stdout** (logs go to
+stderr via `pc.dim()`, per repo convention). Shape mirrors the crush fork's
+envelope so engine #2 slots in later:
+
+```json
+{
+  "engine": "opencode",
+  "engine_version": "1.17.13",
+  "session_id": "task-3",
+  "exit_reason": "end_turn | error | timeout | killed",
+  "final_text": "...",
+  "files_changed": ["src/a.js"],
+  "diff_stat": " 2 files changed, 40 insertions(+)",
+  "worktree": "/path/.triss/wt/task-3 | null",
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0 },
+  "warnings": []
+}
+```
+
+`files_changed`/`diff_stat`/`worktree` are populated only with `--isolate`
+(computed via `git -C <wt> diff --stat` etc.); otherwise `null`/`[]`.
+
+**Envelope vs thrown Error — the exact split** (do not improvise):
+- Engine started and produced parseable events, but exited non-zero, hit
+  the timeout, or was killed → **emit the envelope** with
+  `exit_reason: "error" | "timeout" | "killed"` and exit 0 (the caller
+  inspects `exit_reason`).
+- Engine binary not found, failed to spawn, or produced nothing
+  parseable → **throw a plain `Error`** (formatted by `wrap()` in
+  `bin/triss.js:223`, exits 1, no envelope). MCP handlers follow the
+  same split: envelope as tool result vs tool error.
+
+---
+
+## Execution staffing (model / effort per phase)
+
+The orchestrator (Fable/Opus, medium effort) decomposes, reviews diffs
+against each phase's acceptance criteria, and runs `node --test` +
+`/code-review` before the PR. All coding is delegated to Sonnet subagents:
+
+| Phase | Model | Effort | Rationale |
+|---|---|---|---|
+| 0 — live recon | sonnet | high | Only phase with unknowns; a wrong event-schema fixture poisons everything downstream |
+| 1 — `coder init` | sonnet | medium | Mechanical, fully specified against existing wizard primitives |
+| 2 — `coder run` | sonnet | high | The core adapter: ndjson folding, worktree lifecycle, process-group kill, envelope-vs-throw edge cases |
+| 3 — clean + status | sonnet | medium | Simple mechanics following the existing status grammar |
+| 4 — MCP tools | sonnet | medium | Copies the established tools/handlers pattern + sandbox |
+| 5 — docs + tests | sonnet | medium | Tests replay the Phase 0 fixture; docs follow the lockstep checklist |
+
+Do not use haiku (even docs require code cross-checking here — a single
+wrong field name silently broke three subsystems during plan review) and
+do not use opus for coding (the plan deliberately front-loads the
+reasoning so Sonnet suffices).
+
+## Phase 0 — live recon (requires a Z.AI key; ~1 hour)
+
+Blocking prerequisite for Phase 2. Ask the user for `ZHIPU_API_KEY` if not
+configured.
+
+1. `npx -y opencode-ai@1.17.13 run --format json --model zai/glm-5-turbo
+   --auto "print hello via a shell echo"` in a scratch dir.
+2. Capture the raw stream to `test/fixtures/opencode-run-events.ndjson`
+   (redact any key material). This fixture drives the Phase 2 parser tests.
+3. Record in this doc's "Recon results" section (append it): event types
+   observed, where the final assistant text lives, where usage/tokens live,
+   exit code on success, exit code on API error (kill the key to test),
+   whether stdin is accepted as the message.
+4. Confirm `--session` reuse works headlessly (run twice with the same id,
+   second prompt referencing the first).
+5. **Exercise the safety layer — this is the worst silent-failure risk.**
+   Generate the Phase 1 `opencode.json` in the scratch dir, then prompt
+   the agent to run a denied command (`curl example.com`, `rm /tmp/x`)
+   under `--auto`; assert the call is blocked. If the permission JSON
+   shape or pattern semantics ("last match wins", `"git diff*"` globs)
+   differ from this plan's template, fix the template HERE before
+   Phase 1. Also confirm: `--dir` is honored (agent writes land in the
+   given dir), and the global config path
+   `~/.config/opencode/opencode.json` is actually picked up.
+
+## Phase 1 — `triss coder init`
+
+New file `src/commands/coder.js` (one file per subcommand group — mirror how
+`src/commands/config.js` hosts `runWizard`/`runSet`/…). Register in
+`bin/triss.js` using the nested-group pattern of `config` (see the
+`program.command('config')` block):
+
+```js
+const coder = program.command('coder').description('Run a GLM coding agent (opencode engine)');
+coder.command('init').option('-g, --global').option('-l, --local').action(wrap(runCoderInit));
+// register run/clean in their own phases; if registered early, stub with
+// `throw new Error('not implemented yet')` — never a silent no-op
+coder.command('run [prompt]').action(wrap(runCoderRun));   // options in Phase 2
+coder.command('clean').action(wrap(runCoderClean));        // Phase 3
+```
+
+Shell completion needs zero work: `src/commands/completion.js:19-44`
+walks the Commander tree dynamically.
+
+### Two entry points, one implementation
+
+Setup must be reachable both ways, converging on the same function:
+
+- **`triss config wizard`** — register coder as a wizard target via a
+  minimal pseudo-manifest. Field name is `name`, NOT `key` — every
+  consumer reads `e.name` (`envReadiness` in
+  `src/integrations/_registry.js:83`, wizard prompts in
+  `src/commands/config.js:382`, status markers in
+  `src/commands/status.js:59`):
+
+  ```js
+  export const CODER_MANIFEST = {
+    name: 'coder',
+    description: 'GLM coding agent (opencode engine)',
+    envVars: [{ name: 'ZHIPU_API_KEY', required: true, secret: true,
+                doc: 'Z.AI API key for GLM models' }],
+    postSetup: runCoderSetup,   // steps 1, 3, 4 below
+  };
+  ```
+
+  Exact touch points (there is no hook mechanism today — build it):
+  (a) add `CODER_MANIFEST` inside `listManifests()` in
+  `src/commands/config.js:42-45`; (b) add it to `allManifests` in
+  `src/commands/status.js:12`; (c) add support for an **optional
+  `postSetup()`** manifest field, invoked in `runFullWizard`
+  (`config.js:372-447`) after the env-var loop completes — other
+  manifests don't define it and are unaffected; (d) do NOT add it to
+  `loadIntegrations()`: `validateManifest`
+  (`src/integrations/_contract.js:182`) requires a `register` function
+  the pseudo-manifest lacks, and the integrations loop in
+  `bin/triss.js:270-274` would try to call it. Note the advanced-mode
+  multi-select (`config.js:378-401`) filters on `!m.isCore &&
+  m.envVars?.length`, so coder appears in the picker — desired.
+- **`triss coder init`** — direct CLI path, same function. This is the
+  command the CLAUDE.md rule tells users/orchestrators to run.
+
+Both paths are idempotent: key present → show masked, skip; engine
+present → version check against the pin only; config present → no
+clobber.
+
+`runCoderInit(opts)` steps:
+
+1. **Detect engine.** `spawnSync('opencode', ['--version'])` (never
+   `shell: true`). If missing → offer `npm install -g opencode-ai@<PIN>`;
+   run it on confirm (spawnSync `npm`, argv array). If npm missing → print
+   install instructions and stop. Store the pin as a constant
+   `OPENCODE_PIN = '1.17.13'` in `src/commands/coder.js`; overridable via
+   env `TRISS_CODER_OPENCODE_VERSION`.
+2. **Key.** Reuse the config wizard primitives from
+   `src/commands/config.js` / `src/secrets.js`: `chooseScope()` →
+   `getEnvFilePath(scope)` → `ensureEnvFile(scope)` → `setVar(path,
+   'ZHIPU_API_KEY', value)`. **`chooseScope` is currently module-private
+   (`config.js:29`) — export it first.** Mask echo with `maskValue()`.
+   If already set, show masked value and skip. IMPORTANT: call
+   `loadEnvFiles()` from `src/config.js` at the top of `runCoderInit`
+   AND `runCoderRun` before reading `ZHIPU_API_KEY` — the key lives in
+   `~/.config/triss/.env` / `.triss.env` and reaches `process.env` only
+   via that loader (same defensive pattern as `listTools()` calling
+   `getConfig()` in `src/mcp/tools.js:805`).
+3. **Generate `opencode.json`.** Scope follows the same global/local choice:
+   global → `~/.config/opencode/opencode.json`, local → `./opencode.json`.
+   If the file exists, do NOT overwrite — print a diff-style hint of the
+   keys we would set and exit that step (idempotent init). Template:
+
+   ```json
+   {
+     "$schema": "https://opencode.ai/config.json",
+     "model": "zai-coding-plan/glm-5.2",
+     "small_model": "zai-coding-plan/glm-5-turbo",
+     "permission": {
+       "bash": {
+         "*": "deny",
+         "git status": "allow", "git diff*": "allow", "git log*": "allow",
+         "ls*": "allow",
+         "node --test*": "allow", "npm test*": "allow", "npm run test*": "allow"
+       },
+       "webfetch": "deny",
+       "websearch": "deny"
+     }
+   }
+   ```
+
+   Models are constants at the top of `coder.js`, overridable via
+   `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` (same pattern as
+   `TRISS_WORKER_FLASH_MODEL` in `src/models.js`).
+4. **Scaffold agent templates.** Write `.opencode/agents/coder.md`
+   (implementation agent, default permissions from opencode.json) and
+   `.opencode/agents/researcher.md` (read-only: `permission: { edit: deny,
+   bash: deny }`). Keep them short; store templates as string constants,
+   not new template files, unless they exceed ~40 lines.
+5. **Wire the orchestrator.** Add a "coder" section to
+   `templates/claude.md` (nano: one paragraph — when to delegate, the
+   `triss coder run` one-liner) and `templates/claude-full.md` (full
+   contract: flags, envelope fields, isolation, sessions). Same for the
+   codex templates. `triss init` then propagates it via the existing
+   `writeAgentRules()` machinery — no new writer needed.
+6. **Summary.** Print what was installed/written/skipped, stderr, dim.
+
+Acceptance: running `triss coder init` twice in a row is a no-op the second
+time; no file is clobbered; `ZHIPU_API_KEY` never printed unmasked.
+
+## Phase 2 — `triss coder run`
+
+The core adapter. Options:
+
+```
+triss coder run [prompt]
+  --session <id>        # get-or-create; maps to opencode --session
+  --continue            # maps to --continue
+  --agent <name>        # maps to --agent (default: coder)
+  --model <p/m>         # override model for this run
+  --isolate             # run in a fresh git worktree (see below)
+  --cwd <path>          # working dir (default: cwd; ignored with --isolate)
+  --timeout <sec>       # default 900; kill + exit_reason "timeout"
+  --stdin               # read prompt from stdin (mirror `triss ask --stdin`)
+  --json                # no-op (envelope is always the output; flag kept
+                        # for symmetry with other commands — do not invent
+                        # a non-JSON mode)
+```
+
+Implementation notes:
+
+1. **Spawn.** `spawn('opencode', ['run', ...argv], { detached: true })`
+   with an **allowlist env**: `{ PATH, HOME, TMPDIR, LANG, LC_ALL,
+   ZHIPU_API_KEY }` — build it explicitly, do not spread `process.env`.
+   Never `shell: true`. `detached: true` puts the engine in its own
+   process group so timeout/kill can reap its bash children:
+   `process.kill(-child.pid, 'SIGTERM')`, escalate to `SIGKILL` after a
+   grace period. (Remember `loadEnvFiles()` first — Phase 1 step 2.)
+2. **Stream folding.** Parse stdout as ndjson line-by-line against the
+   Phase 0 fixture schema. Accumulate: final assistant text, tool-call
+   counts, usage. Unknown event types → count into `warnings`, don't crash.
+   Forward a compact progress line per tool call to stderr (dim) so a
+   human/orchestrator tailing the process sees liveness.
+3. **Isolation.** With `--isolate`: derive a slug from `--session` (or a
+   short random suffix). Order matters: FIRST `addToGitignore('.triss/')`
+   (exported helper, `src/secrets.js:141` — NOT `maybeAddGitignore`,
+   which is private to `config.js` and hardcodes `.triss.env`), THEN
+   `git worktree add .triss/wt/<slug> -b coder/<slug>` via
+   `spawnSync('git', [...])` — otherwise the first run pollutes the
+   worktree diff with `.triss/` itself. Pass the worktree as `--dir`.
+   **Same slug re-run (session continuation):** if `.triss/wt/<slug>`
+   already exists and its branch is `coder/<slug>`, reuse it; if it
+   exists but doesn't match, throw a clear Error. After the run, compute
+   `files_changed` + `diff_stat`; if the diff is empty, `git worktree
+   remove` immediately. Refuse `--isolate` outside a git repo: there is
+   no detection helper in `src/git.js` — use `try { git(['rev-parse',
+   '--show-toplevel']) } catch { throw new Error(...) }` (or add an
+   `isGitRepo()` helper there).
+4. **Usage accounting.** On completion call `logUsage({ model,
+   prompt_tokens, completion_tokens, label: 'coder', call_id })`
+   (`src/usage.js:79`). Note `logUsage` silently returns when
+   `prompt_tokens == null` (`usage.js:88`) — if Phase 0 finds no token
+   fields in the event stream, pass `prompt_tokens: 0` and add a
+   `warnings` entry rather than letting runs vanish from accounting.
+   `DEFAULT_PRICES` (`usage.js:41`, non-exported) keys must be the exact
+   string passed as `model`; add `zai-coding-plan/glm-5.2` and
+   `zai-coding-plan/glm-5-turbo` entries (see Recon results: the
+   configured key is a coding-plan/subscription key, `cost` came back
+   `0` on every observed event — treat these as `$0`/token in
+   `DEFAULT_PRICES` but still log `prompt_tokens`/`completion_tokens`
+   for observability). If a future key targets the pay-as-you-go `zai`
+   provider instead, look those prices up on https://docs.z.ai at
+   implementation time; do not guess.
+5. **Errors.** Follow the envelope-vs-throw split defined under the
+   envelope contract above: parseable-but-failed run → envelope with
+   `exit_reason`; failed to start / nothing parseable → throw plain
+   `Error` with the last stderr lines attached (`wrap()` in
+   `bin/triss.js:223` formats it). Never print-and-exit inside the
+   command body.
+6. **MCP mode.** When invoked via MCP (Phase 4), `--cwd`/worktree paths
+   must pass `assertSafePath(p, { kind: 'write' })` from `src/safety.js`.
+
+Acceptance: with the fixture replayed through the parser (unit test), the
+envelope matches the contract above; a live `triss coder run --isolate
+"add a comment to README"` produces a worktree with the change and a valid
+envelope; timeout path produces `exit_reason: "timeout"` and kills the
+child.
+
+## Phase 3 — `triss coder clean` + status block
+
+1. `runCoderClean()`: list `.triss/wt/*` worktrees, `git worktree remove`
+   the ones whose branch has no diff vs its base, print kept ones. `--all`
+   forces removal.
+2. `src/commands/status.js`: add a "coder" block after the integrations
+   list, same visual grammar (`●`/`○` markers, `[global]`/`[local]`/`[env]`
+   source tags): engine found + version vs pin, `ZHIPU_API_KEY` presence
+   (masked source only), config file(s) found, count of live worktrees.
+
+## Phase 4 — MCP tools
+
+In `src/mcp/tools.js`, add `CODER_TOOLS`: `triss_coder_run` (schema
+mirrors the CLI options; prompt required) and `triss_coder_status`. Gate in
+`listTools()` on env readiness: include only when
+`envReadiness(CODER_MANIFEST).ready` (the same `CODER_MANIFEST` defined in
+Phase 1; do NOT create a full `src/integrations/coder/` directory, this is
+not a tracker integration).
+Handlers in `src/mcp/handlers.js` call the same functions as the CLI.
+`triss_coder_run` in MCP mode must enforce the `safety.js` sandbox (Phase 2
+note 6). MCP hosts often time tool calls out before the CLI's 900 s
+default — use a lower MCP-side default timeout (300 s), document the
+constraint in `docs/mcp.md`, and point long tasks to the CLI-in-background
+path in the templates rule.
+
+## Phase 5 — docs lockstep + tests (definition of done)
+
+Update in the same PR (repo rule):
+1. `README.md` — command catalogue (`coder init/run/clean`), env-var table
+   (`ZHIPU_API_KEY`, `TRISS_CODER_MODEL`, `TRISS_CODER_SMALL_MODEL`,
+   `TRISS_CODER_OPENCODE_VERSION`).
+2. `.env.example` — the same vars, one-line use-case each.
+3. `docs/mcp.md` — `triss_coder_*` tools + gating var.
+4. `templates/claude.md` / `claude-full.md` / codex twins — done in
+   Phase 1 step 5; verify they render via `triss agent-help`.
+5. `docs/extending.md` — NOT applicable (not an integration); do not touch.
+
+Tests (`node --test test/*.test.js`, no live network):
+- `test/coder-envelope.test.js` — feed `test/fixtures/opencode-run-events.ndjson`
+  through the stream folder; assert envelope fields, unknown-event
+  tolerance, truncated-line tolerance.
+- `test/coder-init.test.js` — config generation into a temp dir:
+  idempotency, no-clobber, gitignore append.
+- `test/coder-isolate.test.js` — worktree lifecycle against a temp git
+  repo (git IS allowed in tests — it's local, not network); empty-diff
+  auto-cleanup.
+- Spawning of the engine itself is injected: export the runner so tests can
+  pass a fake `spawn` (same spirit as mocking `globalThis.fetch` elsewhere).
+
+## Phase 6 — crush fork as engine #2 (later, separate PR)
+
+Prereq: `PHPCraftdream/crush` publishes an npm package or releases
+(Plans 1–2 of `docs/crush-glm-integration.md`).
+
+1. Introduce `TRISS_CODER_ENGINE=opencode|crush` (default `opencode`) and
+   split engine specifics behind a tiny adapter interface inside
+   `src/commands/coder.js` (or `src/coder-engines/` if it outgrows one
+   file): `{ detect(), installHint(), buildArgv(opts), foldOutput(stream),
+   configTemplate(scope) }`.
+2. crush mapping: `--session/--cwd` align 1:1; output is already a single
+   JSON envelope (easier than opencode — no folding).
+3. Known gap to carry into the config template: crush permissions have no
+   bash command patterns (`allowed_tools`/`disabled_tools`/`--yolo` only).
+   The generated `crush.json` must put `bash` in `disabled_tools` by
+   default and the docs must state the trade-off (agent can't self-run
+   tests). Verify what headless `crush run` does with a non-allowed tool
+   before shipping.
+
+## Guardrails for the implementing model
+
+- Do not add dependencies. ndjson parsing, worktree management and env
+  handling are all doable with node builtins + what's already in
+  `package.json`.
+- stdout is for the envelope only; every log/progress line goes to stderr
+  with `pc.dim()`.
+- Never pass the caller's full env to the engine subprocess.
+- Never log or echo `ZHIPU_API_KEY` — use `maskValue()`.
+- All subprocesses via `spawn`/`spawnSync` with argv arrays.
+- If Phase 0 reveals the event schema differs from assumptions here,
+  update THIS document first, then implement against the fixture.
+- Keep `docs/crush-glm-integration.md` untouched except adding a one-line
+  pointer at the top to this document.
+
+## Recon results (Phase 0, 2026-07-03)
+
+Live recon performed against `opencode-ai@1.17.13` in a scratch git repo
+outside this checkout, using the `ZHIPU_API_KEY` configured in
+`.triss.env`. `npx -y opencode-ai@1.17.13` and `--version`/`--help` are
+fast and reliable; the pinned version is confirmed installable.
+
+### Provider correction (important — changes Phase 1's template)
+
+The configured `ZHIPU_API_KEY` is a **`zai-coding-plan` (subscription)
+key, not a pay-as-you-go `zai` key**. Calling `--model zai/glm-5-turbo`
+with this key fails every time with
+`AI_APICallError: Insufficient balance or no resource package. Please
+recharge.` — the wording ("no resource package") is the tell. Switching
+the provider prefix to `zai-coding-plan/glm-5-turbo` (same model id,
+different provider) succeeds immediately with `cost: 0` on every event
+(subscription, not metered). **Phase 1's `opencode.json` template model
+fields have been corrected in this document** (`"zai-coding-plan/glm-5.2"`
+/ `"zai-coding-plan/glm-5-turbo"`) and the `DEFAULT_PRICES` note in
+Phase 2 updated to match. If a future key targets the metered `zai`
+endpoint instead, this default needs to flip back — not guaranteed to
+generalize beyond this account's key.
+
+### Event schema (from `--format json`)
+
+Stdout is newline-delimited JSON (ndjson), one object per line, no
+wrapping array and no terminal "done" sentinel — completion is signaled
+by the process exiting. Every object has a top-level `type` field.
+Observed `type` values across all recon runs: `step_start`, `tool_use`,
+`step_finish`, `text`, `error`. No other types appeared (no
+session-start/session-end wrapper, no explicit heartbeat/ping type).
+
+Common envelope for step-ish events: `{"type", "timestamp"
+(epoch ms), "sessionID", "part": {...}}`. The shape of `part` depends on
+`type`:
+
+- `step_start` → `part: {id, messageID, sessionID, snapshot, type:
+  "step-start"}`.
+- `tool_use` → `part: {type: "tool", tool: "<name>", callID,
+  state: {status: "completed"|"error", input, output?, error?,
+  metadata?, title, time: {start, end}}, id, sessionID, messageID}`.
+  `tool` observed values: `"bash"`, `"read"`. On a permission denial,
+  `state.status` is `"error"` and `state.error` is a human-readable
+  string embedding the exact matched rule set as JSON (see Safety layer
+  below) — there is no separate `"denied"` status; denial is just a
+  tool-call error.
+- `step_finish` → `part: {id, reason: "tool-calls"|"stop", snapshot,
+  messageID, sessionID, type: "step-finish", tokens: {total, input,
+  output, reasoning, cache: {write, read}}, cost}`. `reason: "stop"`
+  marks the true end of the assistant's turn for that step.
+- `text` → `part: {id, messageID, sessionID, type: "text", text,
+  time: {start, end}}`. `text` is the literal assistant reply text
+  (may include markdown/code fences).
+- `error` (top-level run failure, not a per-tool error) → `{"type":
+  "error", "timestamp", "sessionID", "error": {"name": "APIError",
+  "data": {"message", "statusCode", "isRetryable", "responseHeaders",
+  "responseBody", "metadata": {"url"}}}}`.
+
+**Where the final assistant text lives:** the `text` field of the last
+`text`-type event in the stream (in every successful run observed, this
+coincided with the event preceding the final `step_finish` with
+`reason: "stop"`). A run can have multiple `text` events across multiple
+steps (intermediate commentary before a tool call); the fold logic
+should keep overwriting a "latest text" accumulator rather than
+concatenating, and trust the one that lines up with the final `stop`.
+
+**Where usage/tokens live:** `part.tokens` on **every** `step_finish`
+event, not just the last one — each step reports its own step-level
+token counts, they are **not cumulative**. A run with N steps (e.g. one
+tool call + one final reply = 2 steps) emits N `step_finish` events, each
+with its own `tokens.input`/`tokens.output`/`tokens.total`. To populate
+the envelope's `usage.prompt_tokens`/`usage.completion_tokens`, **sum**
+`tokens.input` and `tokens.output` across all `step_finish` events for
+the run. `part.cost` was `0` on every single event observed (subscription
+key — see provider correction above); still pass the summed
+`prompt_tokens`/`completion_tokens` (not `0`) to `logUsage()` so runs
+don't silently vanish from accounting per the `usage.js:88` short-circuit
+noted in Phase 2.
+
+### Exit codes
+
+| Scenario | Exit code | Stdout | Notes |
+|---|---|---|---|
+| Success (incl. runs where a tool call was permission-denied and the model worked around it) | `0` | valid ndjson stream | |
+| Unrecoverable API error (401, e.g. bad key — tested by corrupting the last 4 chars) | `1` | single `{"type":"error",...}` line | fails in ~1-2s, `isRetryable:false` in the payload |
+| **Recoverable/retryable API error** (e.g. insufficient balance on the wrong provider) | **never exits on its own** | nothing on stdout | retries indefinitely with exponential backoff (observed retry gaps ~19s, 33s, 66s, ...); **must** be killed externally |
+| No message and no `--command` given (incl. piping a prompt via stdin with no positional arg) | `1` | nothing (plain ANSI text on stderr: `Error: You must provide a message or a command`) | confirms the throw-`Error` path, not the envelope path |
+| `--session <id>` where `<id>` was never created by opencode | `1` | nothing (plain ANSI text on stderr: `Error: Session not found`) | see Session reuse below |
+| `--version` / `--help` | `0` | plain text, not JSON | `--format json` only affects `run` |
+
+The retryable-error row is the most consequential finding: opencode does
+**not** give up and exit on its own for retryable failures, so Phase 2's
+`--timeout` + process-group `SIGTERM`→`SIGKILL` logic is not a nice-to-have
+edge case, it is the *only* way such a run ever terminates. Confirmed
+live (a run against the wrong provider retried for 3+ minutes before
+being killed by the recon harness).
+
+### stdin verdict
+
+**Not accepted.** There is no `--stdin` flag (see `run --help` output),
+and running with no positional `message` and nothing on argv — even with
+text piped into stdin — errors immediately with `Error: You must provide
+a message or a command` (exit 1, nothing on stdout). Phase 2's `--stdin`
+option must read stdin itself in Node and pass the read text as a
+**positional argv message** to the `opencode run` invocation; it cannot
+rely on opencode reading its own stdin.
+
+### Session reuse verdict — correction to Phase 2's option description
+
+**Confirmed working, but not as "get-or-create" the way Phase 2 describes
+it.** `opencode run --session <id>` requires `<id>` to be a
+**real, opencode-issued session id** (format `ses_<24ish
+alphanumeric chars>`, e.g. `ses_0d7b5c721ffeouI80ItCOxAJ3g`). Passing an
+arbitrary caller-chosen slug (the plan's example, `task-3`) throws
+`Error: Session not found` — opencode does **not** create a session
+keyed by a caller-supplied id.
+
+The correct headless pattern, confirmed live (second run correctly
+recalled "hello" from the first run's echo):
+1. First invocation for a new logical session: **omit** `--session`
+   entirely. Capture the real `sessionID` from the first JSON event of
+   the resulting stream.
+2. Persist a mapping from triss's own session concept (whatever `--session
+   <id>` the *caller* passed to `triss coder run`) to that real
+   `ses_...` id — e.g. `.triss/sessions.json`.
+3. Subsequent invocations pass the **captured real id** via opencode's
+   `--session` flag, not the caller's original slug.
+
+**Phase 2's option table line for `--session` needs this correction**
+when implemented: `--session <id>` maps to triss's own slug→real-id
+lookup table, not directly to opencode's `--session` flag on the first
+call.
+
+### Safety layer verdict — template confirmed correct, two denial mechanisms observed
+
+The Phase 1 `opencode.json` permission template (JSON shape, `"git
+diff*"`-style globs, `"*": "deny"` catch-all) works exactly as the plan
+assumed — **no shape/semantics correction needed**. Two distinct denial
+mechanisms were observed depending on how "deny" is expressed:
+
+1. **Partial allowlist** (some patterns `allow`, `"*": "deny"` catches
+   the rest — the plan's actual template): the `bash` tool **is** exposed
+   to the model, and a denied command becomes a `tool_use` event with
+   `state.status: "error"` and a message that embeds the exact matched
+   rule set as JSON, e.g.:
+   `{"permission":"*","action":"allow","pattern":"*"},{"permission":"bash","pattern":"*","action":"deny"},{"permission":"bash","pattern":"git status","action":"allow"},...`.
+   Note the implicit **leading `{"permission":"*","action":"allow","pattern":"*"}`** — there is a default global allow-all baseline that the config's explicit `bash` rules override for that tool; this matches "last match wins" semantics. Confirmed blocking both `curl example.com` and `rm <file>` under `--auto`; the target file was untouched and no network call the model could make.
+2. **Full deny** (`"bash": {"*": "deny"}`, no allow patterns at all —
+   used to test global config pickup): the `bash` tool is **not exposed
+   to the model's tool list at all**. The model explicitly reported
+   "I don't have a Bash tool available... tools I have access to are:
+   edit, glob, grep, read, write, task, todowrite, skill" — a stronger
+   and cleaner form of denial than case 1, worth using for the
+   `researcher.md` agent template (Phase 1 step 4) which already
+   specifies `bash: deny`.
+
+**`--dir <path>` confirmed honored:** ran opencode from a cwd different
+from the target repo, passed `--dir <repo>`, and a file the agent created
+landed inside `<repo>`, not the actual process cwd.
+
+**Global config pickup (`~/.config/opencode/opencode.json`) confirmed
+working**, tested via `HOME=<scratch-home>` (never touching the real
+`~/.config/opencode`) with no local project `opencode.json` present —
+the global file's full-deny bash permission was picked up and reflected
+in the model's available tool list (case 2 above).
+
+### Fixture
+
+`test/fixtures/opencode-run-events.ndjson` — **6 lines**, genuine bytes
+from a live successful run (`--model zai-coding-plan/glm-5-turbo`,
+prompt "print hello via a shell echo", `--auto`), no redaction needed
+(scanned for the configured key's first 10 characters — zero matches).
+Contains one full turn: `step_start` → `tool_use` (bash `echo "hello"`)
+→ `step_finish` (`reason: tool-calls`) → `step_start` → `text`
+(`` `hello` ``) → `step_finish` (`reason: stop`).
+
+### Cost
+
+All recon calls landed on the `zai-coding-plan` (subscription) provider,
+which reports `cost: 0` on every event — **no determinable per-call USD
+cost from the usage events**. Call volume for the record: roughly a
+dozen `run` invocations (1 baseline, 1 bad-key, 1 stdin-check, 2 session
+reuse, 2 safety-layer denial checks, 2 `--dir`/global-config checks, plus
+retries) against the `zai-coding-plan` endpoint, all subscription-covered.
+One `zai` (non-coding-plan) call was attempted and failed before any
+tokens were billed (`isRetryable` error prior to a completion).

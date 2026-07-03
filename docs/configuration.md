@@ -122,6 +122,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
+| `coder`    | `ZHIPU_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` is required |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -239,6 +240,22 @@ self-hosted endpoints).
 | `TRISS_WORKER_FLASH_MODEL`  | no       | `deepseek-v4-flash`              | Override the `flash` preset           |
 | `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
+
+### Coder (GLM coding agent, opencode engine)
+
+| Variable                        | Required | Default            | Notes                                     |
+| -------------------------------- | -------- | ------------------ | ------------------------------------------ |
+| `ZHIPU_API_KEY`                  | yes      | —                  | Z.AI API key for GLM models — <https://z.ai/manage-apikey/apikey-list> |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Model written to `opencode.json`           |
+| `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
+| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
+
+`triss coder run` is **POSIX only** (macOS/Linux) — its engine env
+allowlist and `--timeout` kill both rely on POSIX process-group
+semantics. It refuses to run on Windows with a clear error rather than
+shipping a silently half-working path (no group kill means a hung/
+retrying engine could never be terminated). `triss coder init`/`clean`
+are unaffected.
 
 ### Integrations
 

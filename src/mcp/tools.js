@@ -4,6 +4,11 @@
 
 import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
 import { getConfig } from '../config.js';
+// Circular import: coder.js's config.js dependency chain already involves
+// this kind of cycle (see the comment in src/commands/coder.js next to
+// its `chooseScope` import) — safe here too since CODER_MANIFEST is only
+// read inside listTools(), never at module-eval time.
+import { CODER_MANIFEST } from '../commands/coder.js';
 import {
   askHandler,
   chatHandler,
@@ -12,6 +17,8 @@ import {
   statusHandler,
   commitMsgHandler,
   writeHandler,
+  coderRunHandler,
+  coderStatusHandler,
   jiraSearchHandler,
   jiraIssueHandler,
   jiraCreateHandler,
@@ -799,6 +806,51 @@ const GITLAB_TOOLS = [
   },
 ];
 
+// Pseudo-manifest tool (see src/commands/coder.js's CODER_MANIFEST) — not
+// a tracker integration, so it's gated on envReadiness(CODER_MANIFEST)
+// directly below rather than via loadIntegrations()'s `ready` set.
+const CODER_TOOLS = [
+  {
+    name: 'triss_coder_run',
+    description:
+      'Delegate an implementation task to a GLM coding agent (opencode ' +
+      'engine, set up via `triss coder init`). Returns a JSON envelope: ' +
+      '{engine, engine_version, session_id, exit_reason, final_text, ' +
+      'files_changed, diff_stat, worktree, usage, warnings}. This tool\'s ' +
+      'timeout defaults to 300s (vs 900s on the CLI) since MCP hosts often ' +
+      'time out long tool calls — for anything that might run long, use ' +
+      '`triss coder run` on the CLI instead (optionally backgrounded).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'The task for the coding agent' },
+        session: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$',
+          description: 'Session slug, reused across calls via .triss/sessions.json to continue a conversation',
+        },
+        continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
+        agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
+        model: { type: 'string', description: 'Override the model for this run only' },
+        isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug>' },
+        cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
+        timeout: { type: 'number', description: 'Seconds before the engine is killed (default 300 over MCP)' },
+      },
+      required: ['prompt'],
+    },
+    handler: coderRunHandler,
+  },
+  {
+    name: 'triss_coder_status',
+    description:
+      'Show the GLM coding agent setup: ZHIPU_API_KEY presence, engine ' +
+      'version vs the pinned version, which opencode.json files exist, ' +
+      'and how many isolation worktrees are currently live.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: coderStatusHandler,
+  },
+];
+
 export async function listTools() {
   // Defensive: ensure env files are loaded even when listTools is called
   // outside the server lifecycle (e.g. from tests).
@@ -811,6 +863,7 @@ export async function listTools() {
   if (ready.has('github')) tools.push(...GITHUB_TOOLS);
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
+  if (envReadiness(CODER_MANIFEST).ready) tools.push(...CODER_TOOLS);
   return tools;
 }
 

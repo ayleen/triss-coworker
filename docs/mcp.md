@@ -269,6 +269,33 @@ override for self-hosted instances):
 - `triss_gitlab_search` `triss_gitlab_issue` `triss_gitlab_create`
   `triss_gitlab_update` `triss_gitlab_comment`
 
+Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
+`triss config wizard coder`):
+
+- `triss_coder_run` — delegate an implementation task to a GLM coding
+  agent (opencode engine). Same options as `triss coder run` on the CLI
+  (`session`, `continue`, `agent`, `model`, `isolate`, `cwd`, `timeout`)
+  minus `--stdin`, which is meaningless over MCP (the prompt is a normal
+  tool argument). Returns the JSON envelope — `engine`, `engine_version`,
+  `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
+  `worktree`, `usage`, `warnings` — as the tool result.
+- `triss_coder_status` — engine version vs the pinned version,
+  `ZHIPU_API_KEY` presence (never the value), which `opencode.json` files
+  exist, and how many isolation worktrees are live.
+
+**Timeout is lower over MCP than on the CLI: 300s, not 900s.** MCP hosts
+commonly time out a tool call before a long coding task finishes. For
+anything that might run long, use `triss coder run` on the CLI instead
+(optionally backgrounded) rather than `triss_coder_run`.
+
+**Sandbox:** an explicit `cwd`, and (with `isolate`) the git repository
+root that `.triss/wt/<slug>` will be created under, are both checked
+against the [MCP path sandbox](#scope-and-the-path-sandbox)
+(`assertSafePath`) before the run starts — this matters because
+`--isolate`'s worktree lands under the *enclosing git repository's*
+toplevel, which can be an ancestor of the sandboxed project root if the
+project lives in a subdirectory of a larger repo.
+
 If the agent tries to call a tool that isn't currently in the list,
 Claude Code rejects the call before it reaches Triss. The user just
 runs `triss config wizard <provider>`, restarts the session, and the

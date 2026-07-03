@@ -139,6 +139,65 @@ triss fetch https://api-docs.example.com/changelog
 Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 `TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
 
+### `triss coder` — delegate a coding task to a GLM agent (opencode engine)
+Setup once per machine/project:
+
+```bash
+triss coder init             # installs the opencode engine, sets ZHIPU_API_KEY,
+                              # writes opencode.json (deny-first bash policy) and
+                              # .opencode/agents/{coder,researcher}.md
+```
+
+Then hand off implementation work instead of writing it yourself:
+
+```bash
+triss coder run "<task>"
+  --session <id>      # triss-side slug, mapped to a real opencode session id
+                       # in .triss/sessions.json (first run creates it, later
+                       # runs with the same slug continue that conversation)
+  --continue           # continue the most recent opencode session
+  --agent <name>       # default: coder (researcher = read-only)
+  --model <p/m>        # override model for this run
+  --isolate            # run in a disposable git worktree
+  --cwd <path>         # working dir (ignored with --isolate)
+  --timeout <sec>      # default 900
+  --stdin              # read the task from piped stdin
+
+triss coder clean [--all]  # remove finished isolation worktrees (default: only
+                            # branches with no diff vs the default branch;
+                            # --all forces removal of everything under .triss/wt)
+```
+
+`triss coder run` prints exactly one JSON envelope to stdout:
+
+```json
+{
+  "engine": "opencode",
+  "engine_version": "1.17.13",
+  "session_id": "ses_0d7b5c721ffeouI80ItCOxAJ3g",
+  "exit_reason": "end_turn | error | timeout | killed",
+  "final_text": "...",
+  "files_changed": ["src/a.js"],
+  "diff_stat": " 2 files changed, 40 insertions(+)",
+  "worktree": "/path/.triss/wt/<slug> | null",
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0 },
+  "warnings": []
+}
+```
+
+With `--isolate`, the agent runs in `.triss/wt/<slug>` on its own branch —
+review the diff before merging; irreversible actions (deploy, push, DB
+migrations) stay with you, not the coder agent. Without `--isolate`, it
+edits directly in `--cwd` (default: current directory).
+
+Configure via `triss coder init` or `triss config wizard coder`. Env vars:
+`ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
+(model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
+`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`).
+
+`triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
+Windows. `triss coder init`/`clean` are unaffected.
+
 {{INTEGRATIONS}}
 ### When NOT to delegate
 - Tasks under ~2000 tokens of work — delegation overhead costs more than it saves.

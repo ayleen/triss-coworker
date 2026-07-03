@@ -13,11 +13,16 @@ import {
   maskValue,
   addToGitignore,
   readStdin,
+  yesNo,
 } from '../secrets.js';
 import { multiSelect } from '../picker.js';
 import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
+import { CODER_MANIFEST } from './coder.js';
 
-function resolveScope(opts) {
+// Exported for reuse by coder.js (`--global`/`--local` mean the same
+// thing everywhere in triss) — see the identical logic that used to live
+// there as `resolveCoderScope`.
+export function resolveScope(opts) {
   if (opts.global && opts.local) {
     throw new Error('Pick one of --global or --local, not both');
   }
@@ -26,7 +31,7 @@ function resolveScope(opts) {
   return null;
 }
 
-async function chooseScope(message = 'Where to save?') {
+export async function chooseScope(message = 'Where to save?') {
   // Non-interactive shell (CI, pipes): silently default to global.
   if (!process.stdin.isTTY) return 'global';
   return promptChoice(
@@ -41,7 +46,7 @@ async function chooseScope(message = 'Where to save?') {
 
 async function listManifests() {
   const integrations = await loadIntegrations();
-  return [getCoreManifest(), ...integrations];
+  return [getCoreManifest(), CODER_MANIFEST, ...integrations];
 }
 
 function findManifest(name, manifests) {
@@ -109,6 +114,7 @@ export async function runWizard(target, opts) {
     await runFullWizard([findManifest(target, manifests)], path, current, {
       explicit: true,
       force: !!opts.force,
+      scope,
     });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     if (scope === 'local') maybeAddGitignore();
@@ -122,7 +128,7 @@ export async function runWizard(target, opts) {
     await runStandardWizard(path, current);
     await silentlyInstallBoth(scope);
   } else {
-    await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force });
+    await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force, scope });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     await offerClaudeCodeIntegration(scope);
   }
@@ -369,7 +375,7 @@ async function runStandardWizard(path, current) {
   );
 }
 
-async function runFullWizard(targets, path, current, { explicit, force }) {
+async function runFullWizard(targets, path, current, { explicit, force, scope }) {
   // For non-targeted runs, let the user pick which integrations to walk
   // through with one multi-select instead of N sequential y/N prompts.
   let selected = null;
@@ -443,14 +449,18 @@ async function runFullWizard(targets, path, current, { explicit, force }) {
       setVar(path, v.name, answer);
       process.stdout.write(pc.green(`  ✓ saved\n`));
     }
-  }
-}
 
-async function yesNo(question, defaultYes) {
-  const def = defaultYes ? 'Y/n' : 'y/N';
-  const ans = (await prompt(`${question} [${def}]`)).trim().toLowerCase();
-  if (!ans) return defaultYes;
-  return ans.startsWith('y');
+    // Optional post-setup hook (only `CODER_MANIFEST` defines this today —
+    // other manifests are unaffected). Failures are non-fatal: they must
+    // not abort setup for the remaining manifests in this wizard run.
+    if (typeof m.postSetup === 'function') {
+      try {
+        await m.postSetup({ scope, path });
+      } catch (err) {
+        process.stdout.write(pc.yellow(`  ⚠ ${m.name} post-setup failed: ${err.message}\n`));
+      }
+    }
+  }
 }
 
 function maybeAddGitignore() {

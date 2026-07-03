@@ -13,6 +13,11 @@ content of a web page (not raw HTML).
 for an Edit, or it is an architectural / safety-critical decision you must
 reason through yourself.
 
+**`triss coder run "<task>"`** hands an implementation subtask to a
+separate GLM coding agent instead of writing it yourself (setup once via
+`triss coder init`); see `triss agent-help --target codex` for flags and
+the envelope it returns.
+
 For the full reference (examples, model presets, tracker integrations like
 Jira / Linear / GitHub) run `triss agent-help --target codex` once when you
 need it.

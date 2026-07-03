@@ -4,12 +4,13 @@ import { listPresets } from '../models.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
+import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
 
 export async function runStatus() {
   const cfg = getConfig();
   const presets = listPresets();
   const integrations = await loadIntegrations();
-  const allManifests = [getCoreManifest(), ...integrations];
+  const allManifests = [getCoreManifest(), CODER_MANIFEST, ...integrations];
   const root = projectRoot();
   const rootSource = process.env.TRISS_PROJECT_ROOT
     ? pc.dim('[TRISS_PROJECT_ROOT]')
@@ -64,6 +65,33 @@ export async function runStatus() {
       const value = present ? maskValue(present) : pc.dim('(unset)');
       lines.push(`     ${marker} ${e.name.padEnd(28)} ${value} ${sourceTag}`);
     }
+  }
+
+  // Richer engine-level view for coder — the manifest row above already
+  // covers ZHIPU_API_KEY (value + source), so this block sticks to what
+  // that generic grammar can't express: engine binary/version, which
+  // opencode.json files exist, and how many isolation worktrees are live.
+  // Gated on the same readiness check as the manifest row itself — a user
+  // who hasn't configured coder shouldn't have every `triss status` call
+  // silently fork `opencode`/`git` on their behalf.
+  if (envReadiness(CODER_MANIFEST).ready) {
+    lines.push('');
+    lines.push(pc.bold('Coder (opencode engine)'));
+    const coder = describeCoderStatus();
+    const engineMarker = coder.engineVersion ? pc.green('●') : pc.dim('○');
+    const engineLabel = coder.engineVersion
+      ? coder.engineVersion === coder.pin
+        ? `${coder.engineVersion} (matches pin)`
+        : pc.yellow(`${coder.engineVersion} (pin: ${coder.pin})`)
+      : pc.dim(`not installed (pin: ${coder.pin})`);
+    lines.push(`  ${engineMarker} engine                       ${engineLabel}`);
+    for (const c of coder.configs) {
+      const marker = c.exists ? pc.green('●') : pc.dim('○');
+      const value = c.exists ? c.path : pc.dim('(not written)');
+      lines.push(`  ${marker} opencode.json                ${value} ${pc.dim(`[${c.scope}]`)}`);
+    }
+    const wtMarker = coder.worktreeCount > 0 ? pc.green('●') : pc.dim('○');
+    lines.push(`  ${wtMarker} worktrees (.triss/wt)       ${coder.worktreeCount} live`);
   }
 
   if (!cfg.apiKey || allManifests.some((m) => !envReadiness(m).ready)) {

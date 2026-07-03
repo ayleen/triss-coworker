@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-03
+
+### Added
+
+- `triss coder` — delegate implementation tasks to a GLM coding agent via
+  the `opencode` engine (`opencode-ai`, pinned):
+  - `triss coder init` scaffolds `opencode.json` (deny-first `bash`
+    allowlist, `webfetch`/`websearch` denied; the engine subprocess gets a
+    minimal allowlisted env) plus `coder`/`researcher` agent templates
+    under `.opencode/` (researcher additionally denies `edit`/`bash`), and
+    guides installing the pinned engine.
+  - `triss coder run [prompt]` spawns the engine and prints a single JSON
+    envelope on stdout (`{engine, engine_version, session_id, exit_reason,
+    final_text, files_changed, diff_stat, worktree, usage, warnings}`).
+    Supports `--session <slug>` (a local slug mapped to opencode's real
+    session id in `.triss/sessions.json`, so callers never need to know
+    the real id), `--continue`, `--agent`, `--model`, `--isolate`
+    (disposable `.triss/wt/<slug>` git worktree on a `coder/<slug>`
+    branch, with content-based integrity checks on seeded
+    `opencode.json`/`.opencode/` so an agent-edited policy file always
+    stays visible in the diff instead of being silently excluded), `--cwd`,
+    and `--timeout` (default 900s, SIGTERM→SIGKILL on expiry). POSIX only
+    for now.
+  - `triss coder clean [--all]` removes disposable worktrees (and their
+    branch, when safely mergeable) created by `--isolate`.
+  - `triss status` gained a coder readiness block (engine version vs. the
+    pinned version, opencode.json presence, live worktree count).
+  - New MCP tools `triss_coder_run` and `triss_coder_status`, gated on
+    `ZHIPU_API_KEY` like the CLI; `triss_coder_run` defaults to a 300s
+    timeout (vs. 900s on the CLI) since MCP hosts commonly time out long
+    tool calls.
+  - New env vars: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL`,
+    `TRISS_CODER_SMALL_MODEL`, `TRISS_CODER_OPENCODE_VERSION`.
+
 ## [0.20.1] — 2026-07-03
 
 ### Fixed
