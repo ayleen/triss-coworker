@@ -1,5 +1,9 @@
 # Crush + GLM: integration and plans
 
+> **Superseded for engine #1:** the first implementation uses opencode — see
+> [`docs/coder-agent-plan.md`](coder-agent-plan.md). The crush fork remains
+> the planned engine #2; the research below still applies.
+
 Draft plan: how to let an orchestrator (Claude Code / Opus) conveniently spawn a
 coding agent on GLM, supervise it, and review its output — by analogy with how
 Opus currently spawns subagents on Sonnet.
