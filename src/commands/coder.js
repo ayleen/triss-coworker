@@ -277,6 +277,17 @@ async function setupKey(path) {
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
 export async function runCoderSetup({ scope } = {}, deps = {}) {
+  // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
+  // so ZHIPU_API_KEY is already in process.env by the time this function
+  // is reached from that path. But CODER_MANIFEST.postSetup (the
+  // `triss config wizard` path) calls runCoderSetup directly: the
+  // generic env-var loop writes the key to the .env FILE via setVar(),
+  // never to process.env. Without reloading here, detectAndReportZaiProvider
+  // below reads an unset ZHIPU_API_KEY on a first-time wizard setup,
+  // silently skips detection, and falls back to the default provider
+  // prefix. override:false + uncached (see config.js) makes this a safe,
+  // idempotent no-op when the key is already loaded.
+  loadEnvFiles();
   const resolvedScope = scope || 'global';
   const sh = deps.spawnSync || nodeSpawnSync;
   process.stderr.write('\n' + pc.bold('── coder (opencode engine) ──') + '\n');

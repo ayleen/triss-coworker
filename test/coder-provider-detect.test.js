@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { OPENCODE_PIN, detectZaiProvider, runCoderSetup, runCoderInit } from '../src/commands/coder.js';
+import { setVar } from '../src/secrets.js';
 
 const CODING_PLAN_BASE = 'https://api.z.ai/api/coding/paas/v4';
 const PAYG_BASE = 'https://api.z.ai/api/paas/v4';
@@ -366,5 +367,60 @@ test(
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
     assert.equal(config.model, 'zai/glm-4.7');
     assert.equal(config.small_model, 'zai/glm-5-turbo');
+  }),
+);
+
+// ─── wizard path: runCoderSetup called directly (not via runCoderInit) ────────
+//
+// `triss config wizard` -> select coder -> the generic env-var loop saves
+// ZHIPU_API_KEY to the .env FILE via setVar(), then calls
+// CODER_MANIFEST.postSetup -> runCoderSetup DIRECTLY — it never goes
+// through runCoderInit's setupKey(), which is the only place that also
+// sets process.env.ZHIPU_API_KEY. Without runCoderSetup reloading env
+// files itself, detectAndReportZaiProvider reads an unset key on a
+// first-time wizard setup and silently falls back to the default prefix.
+
+test(
+  'wizard path: runCoderSetup reloads env files, so a key written to disk (not process.env) by setVar still gets detected',
+  withTmpHome(async ({ home }) => {
+    // Scope 'local' deliberately: getEnvFilePath('local') resolves
+    // join(projectRoot(), '.triss.env') fresh on every call, which
+    // respects this test's TRISS_PROJECT_ROOT override. getEnvFilePath('global')
+    // does NOT — src/secrets.js computes GLOBAL_FILE once, at module
+    // import time, from a bare `homedir()` call, so it's permanently
+    // frozen to whatever HOME was when secrets.js first loaded in this
+    // process and never re-resolves against a later process.env.HOME
+    // override. That's a separate, pre-existing bug reported to team-lead
+    // alongside this fix — 'local' scope sidesteps it so this regression
+    // test exercises exactly the env-reload fix it's meant to cover.
+    const envPath = join(home, '.triss.env');
+    setVar(envPath, 'ZHIPU_API_KEY', 'zk-wizard-written-key');
+    assert.equal(
+      process.env.ZHIPU_API_KEY,
+      undefined,
+      'precondition: the key must be file-only, exactly like the wizard leaves it, before runCoderSetup runs',
+    );
+
+    let sawAuthHeader = false;
+    await runCoderSetup(
+      { scope: 'local' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: async (url, init) => {
+          sawAuthHeader =
+            sawAuthHeader || (init?.headers?.Authorization === 'Bearer zk-wizard-written-key');
+          return { ok: url.startsWith(CODING_PLAN_BASE) };
+        },
+      },
+    );
+
+    assert.equal(
+      sawAuthHeader,
+      true,
+      'detection must actually probe Z.AI with the key the wizard just wrote to disk, not skip it as unset',
+    );
+    const config = JSON.parse(readFileSync(join(home, 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'zai-coding-plan/glm-5.2');
+    assert.equal(config.small_model, 'zai-coding-plan/glm-5-turbo');
   }),
 );
