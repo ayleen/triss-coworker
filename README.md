@@ -39,6 +39,7 @@ tokens of tracker chatter into its own context. Adding a new provider
 - [Models](#models)
 - [Environment reference](#environment-reference)
 - [Cost in practice](#cost-in-practice)
+- [Security & privacy](#security--privacy)
 - [Roadmap](#roadmap)
 - [Contributing and security](#contributing-and-security)
 - [Changelog](#changelog)
@@ -574,6 +575,33 @@ the weekly numbers above:
 Real savings depend on which operations you delegate (bulk reads win
 the most; tiny lookups break even); see `templates/claude.md` for the
 rules of thumb.
+
+## Security & privacy
+
+The short version for a vendor security review — full details in
+[SECURITY.md](SECURITY.md):
+
+- **Local-first.** Triss is a CLI/MCP server on your machine, not a hosted
+  service. It stores nothing server-side and has **no telemetry** — zero
+  data goes to the Triss developers.
+- **Two outbound flows, both yours to configure.** Prompts and selected
+  context go to the model endpoint you set (`TRISS_WORKER_BASE_URL`,
+  DeepSeek by default); tracker commands talk to the Jira/Linear/GitHub/…
+  instances you configured. Nothing else leaves the machine.
+- **Data residency is a config option.** Need an EU processor, a DPA, or
+  zero retention? Point the worker at Azure OpenAI, Bedrock, Mistral, or a
+  self-hosted model — see [provider recipes](#provider-recipes).
+- **Usage log is metadata-only.** `~/.cache/triss/usage.jsonl` records
+  tokens and cost, never prompt or file content. `TRISS_USAGE_LOG=0`
+  disables it.
+- **Guardrails.** SSRF guard on all agent-controlled fetches, path sandbox
+  in MCP mode, response-size caps, secret masking in output. Residual risks
+  are documented, not hidden.
+- **Auditable supply chain.** Plain ESM, no build step, seven direct
+  dependencies, committed lockfile, `npm audit` kept clean.
+
+Report vulnerabilities via GitHub Security Advisories
+([SECURITY.md](SECURITY.md#reporting-vulnerabilities)).
 
 ## Roadmap
 

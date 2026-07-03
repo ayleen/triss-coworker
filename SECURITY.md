@@ -29,6 +29,47 @@ Write commands for trackers (`create`, `update`, `comment --post`,
 transitions, etc.) call the target provider directly and do not ask the model
 to invent the HTTP request.
 
+There are exactly two categories of outbound traffic: the configured model
+endpoint and the tracker APIs you configured. Nothing else.
+
+## No telemetry
+
+Triss sends no analytics, crash reports, or usage data to its developers.
+There is no phone-home code path. The only network calls are the ones listed
+above, and all of them are triggered by an explicit command.
+
+## Local usage log
+
+Every worker call appends one record to `~/.cache/triss/usage.jsonl`:
+timestamp, model, token counts, estimated cost, a label, `call_id`,
+optional `parent_call_id`, and the working directory. **Prompt and file
+content is never written to this log** — metadata only. If working-directory
+paths are themselves sensitive (client names in folder names), set
+`TRISS_USAGE_LOG_CWD=0`, or disable the log entirely with
+`TRISS_USAGE_LOG=0`. The file rotates once past `TRISS_USAGE_LOG_MAX_BYTES`
+(default 10 MB); delete it at any time with `triss usage --reset`.
+
+## Data residency and GDPR
+
+Triss is a local tool, not a hosted service — it stores none of your data
+server-side and has no subprocessors of its own. The party that processes
+your prompts is **whatever model endpoint you configure**. The default is
+DeepSeek (`api.deepseek.com`); if your compliance posture requires an EU- or
+US-resident processor, a signed DPA, or a zero-retention guarantee, point
+`TRISS_WORKER_BASE_URL` at a provider that offers one (Azure OpenAI,
+AWS Bedrock, Mistral, or a self-hosted vLLM/Ollama endpoint — see the
+provider recipes in the README) and set the model names accordingly. Your
+organisation's agreement with that provider is the controlling document;
+Triss adds no additional data flows on top of it.
+
+## Supply chain
+
+Triss ships as plain ESM JavaScript with no build step — the code you audit
+on GitHub is the code that runs. Runtime dependencies are intentionally few
+(seven direct packages, listed in `package.json`); `npm audit` is kept clean
+and the lockfile is committed. Install from npm with a pinned version or from
+a reviewed checkout if your policy requires it.
+
 ## Credentials
 
 Triss reads configuration from:

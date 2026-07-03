@@ -7,12 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-07-03
+
+### Fixed
+
+- `deepseek-v4-pro` default prices in cost estimation updated to the
+  current DeepSeek list price ($0.435 / $0.87 per 1M tokens, cache hit
+  $0.003625) — previous defaults overstated `triss usage` costs ~4×.
+  Flash prices were already correct.
+- `npm audit` clean again: bumped transitive `hono`, `qs`, and
+  `brace-expansion` (HTTP-transport deps of the MCP SDK; Triss uses
+  stdio, so the advisories were not exploitable here).
+
+### Added
+
+- Compliance-ready security documentation: SECURITY.md now covers the
+  no-telemetry guarantee, usage-log contents and retention, data
+  residency / GDPR guidance, and the supply-chain posture; README gained
+  a "Security & privacy" summary section for vendor reviews.
+
+## [0.20.0] — 2026-06-17
+
 ### Added
 
 - New `triss jira whoami` command and `triss_jira_whoami` MCP tool. Both
   call `GET /rest/api/3/myself` and print the authenticated account —
   most usefully the `accountId`, which is the value `--assignee` (and the
   `assignee` field on create/update) expects.
+- Official pnpm / yarn install support: README documents install + dlx
+  usage for both, `packageManager` is pinned in `package.json`, and CI
+  gained a job that packs the tarball and installs it via pnpm in a
+  fresh project to catch lifecycle-script / peerDeps regressions.
+
+### Changed
+
+- The npm publish workflow now runs lint before publishing, matching the
+  test workflow.
+
+## [0.19.0] — 2026-05-15
+
+### Added
+
 - Per-invocation `call_id` (UUIDv4) on every usage record. Each CLI
   subcommand and MCP tool call is wrapped in an `AsyncLocalStorage`
   context so consumers of `~/.cache/triss/usage.jsonl` (e.g.
@@ -21,6 +56,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process carries it as `parent_call_id`, letting a host (Claude Code,
   CI job, wrapper script) attribute several Triss calls to one outer
   session.
+- CODE_OF_CONDUCT.md (Contributor Covenant v2.1) with a private
+  security-advisory contact path.
+
+### Changed
+
+- README cost section now uses a full week of captured DeepSeek usage
+  data (May 6–13, 2026) instead of a single-benchmark estimate.
+- CLAUDE.md / AGENTS.md are explicitly labelled as contributor-only
+  agent rules; removed an outdated internal test plan and fixed the
+  wizard target name (`deepseek` → `worker`) in docs/configuration.md.
+
+## [0.18.0] — 2026-05-10
+
+### Added
+
+- Linear planning ("gantt") toolkit: `triss_linear_milestone_list` /
+  `milestone-list`, `triss_linear_milestone_create` / `milestone-create`,
+  `triss_linear_label_list` / `label-list`, and `triss_linear_bulk_update`
+  / `bulk-update --ids`.
+- `triss_linear_create` / `update` / `bulk_update` now accept `due_date`
+  (TimelessDate), `milestone` (UUID), `labels` (UUIDs or names), and
+  `assignee` by UUID / email / displayName.
+- Live-schema integration test (`test/linear-integration.test.js`,
+  skipped without `LINEAR_API_KEY`) that introspects the real Linear
+  schema and asserts every field Triss reads or writes exists.
+
+### Fixed
+
+- Removed `start_date` from every layer (MCP tools, CLI flags, agent
+  instructions): Linear's `IssueCreateInput` / `IssueUpdateInput` do not
+  expose `startDate`, so the field could never work; docs now point at
+  project milestones for explicit anchors.
+- Explicit label-clearing semantics: `labels: []` (or `--labels ''`)
+  clears all labels, while omitting the field leaves them untouched.
+
+## [0.17.0] — 2026-05-10
+
+### Added
+
+- Linear project and initiative support: list and create projects, list
+  initiatives (with the two-step `initiativeToProjectCreate` link), and
+  set `dueDate` on issues.
+
+## [0.16.1] — 2026-05-08
+
+### Fixed
+
+- Project-root detection now strips the `.claude/worktrees/<id>/...`
+  suffix, so the safety helpers and `.triss.env` lookup work inside
+  Claude Code temporary worktrees.
 
 ## [0.16.0] — 2026-05-08
 
@@ -381,7 +466,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/ayleen/triss-coworker/compare/v0.20.0...v0.20.1
+[0.20.0]: https://github.com/ayleen/triss-coworker/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/ayleen/triss-coworker/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/ayleen/triss-coworker/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/ayleen/triss-coworker/compare/v0.16.1...v0.17.0
+[0.16.1]: https://github.com/ayleen/triss-coworker/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/ayleen/triss-coworker/compare/v0.15.2...v0.16.0
+[0.15.2]: https://github.com/ayleen/triss-coworker/compare/v0.15.1...v0.15.2
+[0.15.1]: https://github.com/ayleen/triss-coworker/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/ayleen/triss-coworker/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/ayleen/triss-coworker/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/ayleen/triss-coworker/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ayleen/triss-coworker/releases/tag/v0.13.0

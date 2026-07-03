@@ -345,10 +345,8 @@ test('resolveLabelIds throws when a name is not found', async () => {
 test('bulkUpdateIssues reports per-id success and surfaces errors', async () => {
   setEnv();
   // Each id triggers two calls: getIssue, then issueUpdate.
-  let call = 0;
   mockFetch((url, init) => {
     const body = JSON.parse(init.body);
-    call += 1;
     if (body.query.includes('issue(id:')) {
       // getIssue
       const ident = body.variables.id;

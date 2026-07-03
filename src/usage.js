@@ -36,8 +36,8 @@ export function maybeRotate(file) {
   }
 }
 
-// DeepSeek list prices, USD per token. Override via env if pricing changes
-// or you point Triss at a different provider.
+// DeepSeek list prices as of 2026-07-03, USD per token. Override via env
+// if pricing changes or you point Triss at a different provider.
 const DEFAULT_PRICES = {
   'deepseek-v4-flash': {
     input_cache_miss: 0.14e-6,
@@ -45,9 +45,9 @@ const DEFAULT_PRICES = {
     output: 0.28e-6,
   },
   'deepseek-v4-pro': {
-    input_cache_miss: 1.74e-6,
-    input_cache_hit: 0.0145e-6,
-    output: 3.48e-6,
+    input_cache_miss: 0.435e-6,
+    input_cache_hit: 0.003625e-6,
+    output: 0.87e-6,
   },
 };
 
