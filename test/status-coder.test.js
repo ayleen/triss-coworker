@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runStatus } from '../src/commands/status.js';
+import { stripAnsi } from './_ansi.js';
 
 function captureStdout(fn) {
   return async () => {
@@ -39,7 +40,7 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
   delete process.env.ZHIPU_API_KEY;
   process.chdir(dir);
   try {
-    const out = await captureStdout(runStatus)();
+    const out = stripAnsi(await captureStdout(runStatus)());
     assert.doesNotMatch(out, /Coder \(opencode engine\)/);
     // The generic manifest row (env var readiness) still shows.
     assert.match(out, /coder\s+⚠ missing ZHIPU_API_KEY/);
@@ -61,7 +62,7 @@ test('runStatus: the coder block appears when ZHIPU_API_KEY is configured', asyn
   process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
   process.chdir(dir);
   try {
-    const out = await captureStdout(runStatus)();
+    const out = stripAnsi(await captureStdout(runStatus)());
     assert.match(out, /Coder \(opencode engine\)/);
     assert.match(out, /worktrees \(\.triss\/wt\)/);
   } finally {

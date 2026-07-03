@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runCoderClean, describeCoderStatus } from '../src/commands/coder.js';
+import { stripAnsi } from './_ansi.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -65,7 +66,7 @@ function withCapturedStderr(fn) {
       return true;
     };
     try {
-      await fn({ captured: () => captured.join('') });
+      await fn({ captured: () => stripAnsi(captured.join('')) });
     } finally {
       process.stderr.write = origWrite;
     }
