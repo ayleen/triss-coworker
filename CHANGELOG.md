@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-07-04
+
+### Fixed
+
+- `triss config wizard` → coder: the Z.AI plan auto-detection now sees a
+  freshly-entered `ZHIPU_API_KEY` (the wizard saves the key to the env file
+  without touching `process.env`; `runCoderSetup` now reloads env files
+  itself). The direct `triss coder init` path was unaffected.
+
 ## [0.22.0] — 2026-07-04
 
 ### Added
@@ -519,7 +528,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/ayleen/triss-coworker/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/ayleen/triss-coworker/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/ayleen/triss-coworker/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/ayleen/triss-coworker/compare/v0.20.0...v0.20.1
