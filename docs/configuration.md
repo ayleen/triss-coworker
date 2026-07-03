@@ -250,6 +250,17 @@ self-hosted endpoints).
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
 
+`triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
+actually authenticates against — the `zai-coding-plan` (subscription)
+base or the pay-as-you-go `zai` base — and writes the matching provider
+prefix into `opencode.json`'s `model`/`small_model` fields. Setting
+`TRISS_CODER_MODEL`/`TRISS_CODER_SMALL_MODEL` always overrides both
+detection and the interactive model picker. If `opencode.json` already
+exists, `init` still runs detection and warns (without touching the
+file) when the existing `model` prefix doesn't match what the key
+verified against — that mismatch is what makes opencode retry a model
+call it can never complete.
+
 `triss coder run` is **POSIX only** (macOS/Linux) — its engine env
 allowlist and `--timeout` kill both rely on POSIX process-group
 semantics. It refuses to run on Windows with a clear error rather than

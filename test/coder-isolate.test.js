@@ -27,6 +27,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
 import { runCoderRun } from '../src/commands/coder.js';
+import { stripAnsi } from './_ansi.js';
 
 const FIXTURE_PATH = join(new URL('.', import.meta.url).pathname, 'fixtures', 'opencode-run-events.ndjson');
 const FIXTURE = readFileSync(FIXTURE_PATH, 'utf8');
@@ -1007,7 +1008,7 @@ test(
       assert.equal(existsSync(wtPath), true);
       assert.equal(existsSync(join(wtPath, 'partial.txt')), true);
       assert.equal(branchExists(repoRoot, 'coder/task-partial-kept'), true);
-      assert.ok(stderrOut.includes(`worktree kept for inspection: ${wtPath}`));
+      assert.ok(stripAnsi(stderrOut).includes(`worktree kept for inspection: ${wtPath}`));
     });
     try {
       await run();

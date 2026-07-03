@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `triss coder init` now auto-detects which Z.AI endpoint a
+  `ZHIPU_API_KEY` actually authenticates against (`zai-coding-plan`
+  subscription vs. pay-as-you-go `zai`) and writes the matching provider
+  prefix into `opencode.json` — the previous hardcoded `zai-coding-plan`
+  default was derived from a single account and silently mismatched keys
+  targeting the other plan, which makes opencode retry a failing model
+  call forever. If `opencode.json` already exists, `init` still runs
+  detection and warns (without touching the file) on a mismatched prefix.
+- Interactive GLM model picker in `init`: when writing a new
+  `opencode.json` from a TTY, choose the main model (`glm-5.2` default,
+  `glm-5-turbo`, `glm-4.7`) and the small/fast model instead of always
+  getting the hardcoded default. Non-interactive runs keep the silent
+  default; `TRISS_CODER_MODEL`/`TRISS_CODER_SMALL_MODEL` env overrides
+  still win over both the picker and the default.
+
 ## [0.21.0] — 2026-07-03
 
 ### Added
