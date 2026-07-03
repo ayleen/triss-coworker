@@ -836,3 +836,220 @@ test('runCoderRun: a child that never emits any parseable output and is killed b
   await run();
   rmSync(repoRoot, { recursive: true, force: true });
 });
+
+// ─── host SIGINT/SIGTERM forwarding (Codex review finding #1) ─────────────────
+
+test(
+  'runCoderRun: registers SIGINT/SIGTERM forwarding listeners while the child is alive, ' +
+    'and removes them once the run settles (no leak across calls, e.g. in a long-lived MCP server)',
+  async () => {
+    const repoRoot = initRepo();
+    const run = withIsolatedRun(repoRoot, async () => {
+      const baselineSigint = process.listenerCount('SIGINT');
+      const baselineSigterm = process.listenerCount('SIGTERM');
+      let child;
+      const spawnFn = () => {
+        child = new EventEmitter();
+        child.pid = 777777;
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        return child;
+      };
+
+      let captured = '';
+      const runPromise = runCoderRun(
+        'do something',
+        {},
+        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
+      );
+      // Let spawnEngine register its handlers before we inspect them.
+      await new Promise((r) => setImmediate(r));
+      assert.equal(process.listenerCount('SIGINT'), baselineSigint + 1);
+      assert.equal(process.listenerCount('SIGTERM'), baselineSigterm + 1);
+
+      child.stdout.end(FIXTURE);
+      child.stderr.end('');
+      child.emit('close', 0, null);
+      await runPromise;
+
+      assert.equal(process.listenerCount('SIGINT'), baselineSigint);
+      assert.equal(process.listenerCount('SIGTERM'), baselineSigterm);
+      assert.ok(JSON.parse(captured.trim()).session_id);
+    });
+    try {
+      await run();
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test('runCoderRun: forwards a host SIGINT to the detached child process group (SIGTERM), without touching the host process itself', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const FAKE_PID = 654322;
+    const killCalls = [];
+    const origKill = process.kill.bind(process);
+    process.kill = (pid, sig) => {
+      killCalls.push([pid, sig]);
+      return true;
+    };
+    let child;
+    const spawnFn = () => {
+      child = new EventEmitter();
+      child.pid = FAKE_PID;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      return child;
+    };
+    try {
+      let captured = '';
+      const runPromise = runCoderRun(
+        'do something',
+        {},
+        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
+      );
+      await new Promise((r) => setImmediate(r));
+
+      process.emit('SIGINT');
+      assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
+      // Forward-only: the host process itself was never asked to exit or
+      // re-signal itself (only the negative-PID child-group kill above).
+      assert.ok(killCalls.every(([pid]) => pid !== process.pid));
+
+      child.stdout.end(FIXTURE);
+      child.stderr.end('');
+      child.emit('close', 0, null);
+      await runPromise;
+    } finally {
+      process.kill = origKill;
+    }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ─── worktree/branch leak on throw before envelope (Codex review finding #2) ──
+
+test('runCoderRun --isolate: a freshly-created worktree is cleaned up when the engine fails to spawn (ENOENT)', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const spawnFn = () => {
+      throw Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+    };
+    await assert.rejects(
+      () =>
+        runCoderRun(
+          'do something',
+          { isolate: true, session: 'task-spawn-fail' },
+          { spawn: spawnFn, stdoutWrite: noopStdout() },
+        ),
+      /Failed to spawn opencode/,
+    );
+    assert.equal(existsSync(join(repoRoot, '.triss', 'wt', 'task-spawn-fail')), false);
+    assert.equal(branchExists(repoRoot, 'coder/task-spawn-fail'), false);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test(
+  'runCoderRun --isolate: a freshly-created worktree with agent writes is KEPT (not deleted) when the ' +
+    'engine then produces no parseable output, with a stderr note',
+  async () => {
+    const repoRoot = initRepo();
+    const run = withIsolatedRun(repoRoot, async () => {
+      const spawnFn = (cmd, argv) => {
+        const dirIdx = argv.indexOf('--dir');
+        const dir = argv[dirIdx + 1];
+        writeFileSync(join(dir, 'partial.txt'), 'partial work\n');
+        const child = new EventEmitter();
+        child.pid = 111222;
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(() => {
+          // Real file written to the worktree, but nothing parseable on
+          // stdout — e.g. the engine crashed right after writing.
+          child.stdout.end('');
+          child.stderr.end('engine crashed\n');
+          setImmediate(() => child.emit('close', 1, null));
+        });
+        return child;
+      };
+
+      const origWrite = process.stderr.write.bind(process.stderr);
+      let stderrOut = '';
+      process.stderr.write = (chunk, ...rest) => {
+        stderrOut += chunk;
+        return origWrite(chunk, ...rest);
+      };
+      try {
+        await assert.rejects(
+          () =>
+            runCoderRun(
+              'partial then crash',
+              { isolate: true, session: 'task-partial-kept' },
+              { spawn: spawnFn, stdoutWrite: noopStdout() },
+            ),
+          /produced no parseable output/,
+        );
+      } finally {
+        process.stderr.write = origWrite;
+      }
+
+      const wtPath = join(repoRoot, '.triss', 'wt', 'task-partial-kept');
+      assert.equal(existsSync(wtPath), true);
+      assert.equal(existsSync(join(wtPath, 'partial.txt')), true);
+      assert.equal(branchExists(repoRoot, 'coder/task-partial-kept'), true);
+      assert.ok(stderrOut.includes(`worktree kept for inspection: ${wtPath}`));
+    });
+    try {
+      await run();
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test('runCoderRun --isolate: a REUSED worktree is never deleted on throw, even with an empty diff', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    // First turn: succeeds, creates the worktree/branch.
+    await runCoderRun(
+      'first turn',
+      { isolate: true, session: 'task-reuse-throw' },
+      { spawn: fakeEngineWriting('a.txt'), stdoutWrite: noopStdout() },
+    );
+    const wtPath = join(repoRoot, '.triss', 'wt', 'task-reuse-throw');
+    assert.equal(existsSync(wtPath), true);
+
+    // Second turn on the SAME (now-reused) worktree: engine fails to spawn.
+    const spawnFn = () => {
+      throw Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+    };
+    await assert.rejects(
+      () =>
+        runCoderRun(
+          'second turn',
+          { isolate: true, session: 'task-reuse-throw' },
+          { spawn: spawnFn, stdoutWrite: noopStdout() },
+        ),
+      /Failed to spawn opencode/,
+    );
+
+    // Reused worktree must survive regardless of cleanliness.
+    assert.equal(existsSync(wtPath), true);
+    assert.equal(branchExists(repoRoot, 'coder/task-reuse-throw'), true);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});

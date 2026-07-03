@@ -576,6 +576,7 @@ function setupIsolation(sh, slug) {
 
   const branch = `${CODER_BRANCH_PREFIX}${slug}`;
   const wtPath = join(worktreesRoot(repoRoot), slug);
+  let freshlyCreated = false;
 
   if (existsSync(wtPath)) {
     const existingBranch = gitWorktreeBranch(sh, wtPath);
@@ -623,6 +624,7 @@ function setupIsolation(sh, slug) {
       const msg = String((r && (r.stderr || r.stdout)) || 'unknown error').trim();
       throw new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
     }
+    freshlyCreated = true;
   }
 
   // `git worktree add` only checks out COMMITTED state — an uncommitted
@@ -636,7 +638,33 @@ function setupIsolation(sh, slug) {
   // in case an earlier run seeded before this existed.
   seedIsolationConfig(repoRoot, wtPath);
 
-  return { repoRoot, wtPath, branch };
+  return { repoRoot, wtPath, branch, freshlyCreated };
+}
+
+// If the engine spawn/fold fails after setupIsolation already created a
+// worktree, the worktree+branch would otherwise leak: the "already
+// exists" guard in setupIsolation then hard-fails a retry with the same
+// slug until the user runs `triss coder clean`. Only clean up worktrees
+// THIS run freshly created (never touch a reused one — it may hold prior
+// turns' state) and only when the engine wrote nothing to it (a git
+// status --porcelain default listing skips gitignored seed files, so a
+// freshly-seeded-but-untouched worktree still reads as clean here).
+function cleanupAbandonedIsolation(sh, isolation) {
+  const status = sh('git', ['-C', isolation.wtPath, 'status', '--porcelain']);
+  const clean = status && !status.error && status.status === 0 && String(status.stdout || '').trim() === '';
+  if (!clean) {
+    process.stderr.write(pc.dim(`worktree kept for inspection: ${isolation.wtPath}\n`));
+    return;
+  }
+  try {
+    gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+    if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
+      gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
+    }
+  } catch {
+    // Best-effort cleanup while already unwinding a failure — the
+    // original error is what the caller needs to see, not this one.
+  }
 }
 
 // See setupIsolation's comment for why this exists. Copies opencode.json
@@ -816,11 +844,40 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
       }, KILL_GRACE_MS);
     }, timeoutSec * 1000);
 
+    // The child is spawned `detached: true` so the timeout-kill above can
+    // signal its whole process GROUP (negative PID), not just opencode's
+    // immediate PID. But the timeout timer is not the only way this
+    // process can end: a user hitting Ctrl-C (SIGINT) or a supervisor
+    // sending SIGTERM ends the PARENT without touching the detached
+    // child's group at all — per Phase 0 recon, opencode retries failed
+    // API calls indefinitely, so an orphaned engine can burn quota
+    // headless forever. Forward both signals to the child's group.
+    //
+    // Forward-only, no exit()/process.kill(process.pid, sig) re-raise:
+    // this same code path runs inside the long-lived MCP server process
+    // (coderRunHandler), which has its own shutdown story and possibly
+    // its own SIGINT/SIGTERM handlers — we must not terminate or
+    // interfere with the host, only make sure the child doesn't outlive
+    // this one engine call. The listeners are removed in settle() so a
+    // server handling many `coder run` calls over its lifetime doesn't
+    // accumulate one pair of listeners per call.
+    const onHostSignal = () => {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        /* already gone */
+      }
+    };
+    process.on('SIGINT', onHostSignal);
+    process.on('SIGTERM', onHostSignal);
+
     function settle(fn) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
+      process.off('SIGINT', onHostSignal);
+      process.off('SIGTERM', onHostSignal);
       fn();
     }
 
@@ -968,20 +1025,30 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     ),
   );
 
-  const result = await spawnEngine({ argv, env, timeoutSec, spawnFn });
+  let result;
+  try {
+    result = await spawnEngine({ argv, env, timeoutSec, spawnFn });
 
-  // Engine started and produced nothing parseable (e.g. bad --session id,
-  // missing message, immediate crash) -> throw, per the envelope-vs-throw
-  // split. Note this also covers "unknown real-id" errors from a stale
-  // sessions.json entry — opencode's "Session not found" prints nothing
-  // to stdout, so it naturally lands here.
-  if (!result.parsedAnyEvent) {
-    const tailLines = result.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
-    const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
-    throw new Error(
-      `opencode produced no parseable output (exit ${result.code ?? 'null'}` +
-        `${result.signal ? `, signal ${result.signal}` : ''}).${detail}`,
-    );
+    // Engine started and produced nothing parseable (e.g. bad --session id,
+    // missing message, immediate crash) -> throw, per the envelope-vs-throw
+    // split. Note this also covers "unknown real-id" errors from a stale
+    // sessions.json entry — opencode's "Session not found" prints nothing
+    // to stdout, so it naturally lands here.
+    if (!result.parsedAnyEvent) {
+      const tailLines = result.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+      const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+      throw new Error(
+        `opencode produced no parseable output (exit ${result.code ?? 'null'}` +
+          `${result.signal ? `, signal ${result.signal}` : ''}).${detail}`,
+      );
+    }
+  } catch (err) {
+    // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
+    // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
+    if (isolation && isolation.freshlyCreated) {
+      cleanupAbandonedIsolation(sh, isolation);
+    }
+    throw err;
   }
 
   let exit_reason;
