@@ -6,7 +6,7 @@
 // so this feature is "coder" everywhere (command, file, env prefix).
 
 import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, cpSync, renameSync } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -38,6 +38,16 @@ const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // site and every `startsWith(...)` gate uses the same literal.
 const TRISS_STATE_DIR = '.triss';
 const CODER_BRANCH_PREFIX = 'coder/';
+
+// A user-supplied --session slug flows verbatim into a worktree path
+// segment (join(worktreesRoot(repoRoot), slug)) and a git branch name
+// (coder/<slug>). Without this check, a slug like '../../../tmp/evil'
+// would make wtPath resolve outside the repo, and existsSync would stat
+// it before git's own ref-name grammar ever runs — a filesystem
+// existence oracle outside the sandbox, and a bare path-segment guard
+// that git-specific validation alone doesn't cover. randomSlug() is
+// compliant with this pattern by construction.
+const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 function opencodeVersionPin() {
   return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_PIN;
@@ -508,15 +518,45 @@ function readSessionsMap() {
   }
 }
 
+// Write-then-rename so a reader never observes a partially-written file.
+// renameSync is atomic on the same filesystem, which the tmp file always
+// is (same directory as the target).
+function atomicWriteJson(path, obj) {
+  const tmpPath = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmpPath, JSON.stringify(obj, null, 2) + '\n');
+  renameSync(tmpPath, path);
+}
+
 // Only gitignores `.triss/` when we're inside a git repo (mirrors
 // config.js's maybeAddGitignore guard) — a non-git cwd still gets the
 // mapping file written, just not a .gitignore entry for it.
+//
+// Read-modify-write race: two concurrent `coder run` calls with different
+// slugs can each read the map before the other writes, then each write
+// back a version missing the other's fresh mapping — the loser's slug
+// silently vanishes from sessions.json, breaking its future --continue.
+// The atomic write above only prevents torn reads; it doesn't close this
+// window. Narrow it further by re-reading immediately after our write and,
+// if our own slug's value was clobbered by a concurrent writer, redo the
+// merge once. This is a best-effort mitigation, not a lock: two processes
+// racing on the SAME slug is still inherently last-write-wins (there is
+// no source of truth for "which write is correct" in that case, and it's
+// not the scenario this guards against).
 function persistSessionMapping(sh, slug, realId) {
   const path = sessionsFilePath();
   mkdirSync(dirname(path), { recursive: true });
+
   const map = readSessionsMap();
   map[slug] = realId;
-  writeFileSync(path, JSON.stringify(map, null, 2) + '\n');
+  atomicWriteJson(path, map);
+
+  const verify = readSessionsMap();
+  if (verify[slug] !== realId) {
+    const retryMap = readSessionsMap();
+    retryMap[slug] = realId;
+    atomicWriteJson(path, retryMap);
+  }
+
   if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
 }
 
@@ -565,6 +605,21 @@ function setupIsolation(sh, slug) {
     }
     const r = sh('git', ['-C', repoRoot, 'worktree', 'add', wtPath, '-b', branch]);
     if (!r || r.error || r.status !== 0) {
+      // A concurrent `coder run` on the same fresh slug can win the race
+      // between our existsSync/rev-parse checks above and this `add` —
+      // the loser hits git's raw error. Re-check now and, if either the
+      // worktree dir or the branch exists, it's that race: give the same
+      // polished message setupIsolation uses elsewhere instead of git's
+      // stderr.
+      const branchExistsNow = sh('git', ['-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`]);
+      const branchNowExists =
+        branchExistsNow && !branchExistsNow.error && branchExistsNow.status === 0;
+      if (existsSync(wtPath) || branchNowExists) {
+        throw new Error(
+          `${TRISS_STATE_DIR}/wt/${slug} (branch "${branch}") already exists — another run may have ` +
+            'created it concurrently; use a different --session slug or `triss coder clean`.',
+        );
+      }
       const msg = String((r && (r.stderr || r.stdout)) || 'unknown error').trim();
       throw new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
     }
@@ -824,7 +879,15 @@ async function resolveCoderPrompt(promptArg, opts) {
 }
 
 function resolveSlug(opts) {
-  if (opts.session) return opts.session;
+  if (opts.session) {
+    if (!SLUG_PATTERN.test(opts.session)) {
+      throw new Error(
+        `--session "${opts.session}" is invalid — slugs must match ${SLUG_PATTERN} ` +
+          '(letters, digits, underscore, hyphen; max 64 chars; no path separators).',
+      );
+    }
+    return opts.session;
+  }
   if (opts.isolate) return randomSlug();
   return null;
 }

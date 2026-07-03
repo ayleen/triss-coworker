@@ -826,6 +826,7 @@ const CODER_TOOLS = [
         prompt: { type: 'string', description: 'The task for the coding agent' },
         session: {
           type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$',
           description: 'Session slug, reused across calls via .triss/sessions.json to continue a conversation',
         },
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },

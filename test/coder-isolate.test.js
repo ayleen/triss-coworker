@@ -643,6 +643,114 @@ test('runCoderRun: persists slug -> real opencode session id in .triss/sessions.
   }
 });
 
+test('runCoderRun: preserves unrelated slugs already in sessions.json when persisting a new one (merge, not replace)', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    mkdirSync(join(repoRoot, '.triss'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.triss', 'sessions.json'),
+      JSON.stringify({ 'other-session': 'ses_preexisting' }, null, 2) + '\n',
+    );
+
+    await runCoderRun(
+      'first turn',
+      { session: 'my-session' },
+      { spawn: fakeEngineWriting(null), stdoutWrite: noopStdout() },
+    );
+
+    const map = JSON.parse(readFileSync(join(repoRoot, '.triss', 'sessions.json'), 'utf8'));
+    assert.equal(map['other-session'], 'ses_preexisting');
+    assert.equal(map['my-session'], 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ─── slug validation ──────────────────────────────────────────────────────────
+
+test('runCoderRun: rejects --session slugs that are not safe path/branch segments', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    for (const bad of ['../../../tmp/evil', 'a b', 'x;y', '.hidden']) {
+      await assert.rejects(
+        () =>
+          runCoderRun(
+            'do something',
+            { session: bad },
+            { spawn: fakeEngineWriting(null), stdoutWrite: noopStdout() },
+          ),
+        /--session .* is invalid/,
+        `expected slug ${JSON.stringify(bad)} to be rejected`,
+      );
+    }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun: accepts a normal --session slug', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    await assert.doesNotReject(() =>
+      runCoderRun(
+        'do something',
+        { session: 'task_1-ok' },
+        { spawn: fakeEngineWriting(null), stdoutWrite: noopStdout() },
+      ),
+    );
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ─── concurrent worktree creation ──────────────────────────────────────────────
+
+test('runCoderRun --isolate: a concurrent `git worktree add` failure on the same slug produces a friendly Error', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    // Simulate the loser of a race: the worktree dir + branch appear
+    // (created by a "concurrent" run) only AFTER setupIsolation's own
+    // existsSync/rev-parse pre-checks ran, so `git worktree add` itself
+    // is the one that fails.
+    const realSpawnSync = spawnSync;
+    let addCalls = 0;
+    const raceSh = (cmd, args, opts) => {
+      if (cmd === 'git' && args.includes('worktree') && args.includes('add')) {
+        addCalls += 1;
+        // Create the "concurrent" worktree behind our back, then let the
+        // real add fail (path already exists).
+        git(repoRoot, ['worktree', 'add', '-q', join(repoRoot, '.triss', 'wt', 'task-race'), '-b', 'coder/task-race']);
+      }
+      return realSpawnSync(cmd, args, opts);
+    };
+
+    await assert.rejects(
+      () =>
+        runCoderRun(
+          'do something',
+          { isolate: true, session: 'task-race' },
+          { spawn: fakeEngineWriting('x.txt'), spawnSync: raceSh, stdoutWrite: noopStdout() },
+        ),
+      /wt\/task-race \(branch "coder\/task-race"\) already exists — another run may have created it concurrently/,
+    );
+    assert.equal(addCalls, 1);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ─── timeout / kill path ──────────────────────────────────────────────────────
 
 test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports exit_reason "timeout" (when some output was already parsed)', async () => {
