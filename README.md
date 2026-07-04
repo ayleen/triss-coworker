@@ -238,8 +238,9 @@ The exposed tool set is **filtered by configured credentials**:
 - **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
 - **`triss_coder_run` + `triss_coder_status`** when `ZHIPU_API_KEY` is set
   (setup: `triss coder init`). `triss_coder_run`'s timeout defaults to
-  300s over MCP, not the CLI's 900s — long tasks should go through
-  `triss coder run` on the CLI instead.
+  1500s (25 min) over MCP, above the CLI's 900s, since GLM runs are
+  expected to be long; override per call via the `timeout` arg. For
+  runs that may exceed it, use `triss coder run` on the CLI instead.
 
 Add credentials later → restart session → new tools appear automatically.
 

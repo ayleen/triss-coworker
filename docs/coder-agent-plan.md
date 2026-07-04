@@ -366,10 +366,11 @@ Phase 1; do NOT create a full `src/integrations/coder/` directory, this is
 not a tracker integration).
 Handlers in `src/mcp/handlers.js` call the same functions as the CLI.
 `triss_coder_run` in MCP mode must enforce the `safety.js` sandbox (Phase 2
-note 6). MCP hosts often time tool calls out before the CLI's 900 s
-default — use a lower MCP-side default timeout (300 s), document the
-constraint in `docs/mcp.md`, and point long tasks to the CLI-in-background
-path in the templates rule.
+note 6). GLM runs over MCP are expected to be long, and stdio MCP has no
+client-side per-call cap — use a generous MCP-side default timeout
+(1500 s), allow per-call override via the `timeout` arg, document the
+constraint in `docs/mcp.md`, and point runs that may exceed it to the
+CLI-in-background path in the templates rule.
 
 ## Phase 5 — docs lockstep + tests (definition of done)
 

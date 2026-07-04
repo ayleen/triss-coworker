@@ -283,10 +283,13 @@ Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
   `ZHIPU_API_KEY` presence (never the value), which `opencode.json` files
   exist, and how many isolation worktrees are live.
 
-**Timeout is lower over MCP than on the CLI: 300s, not 900s.** MCP hosts
-commonly time out a tool call before a long coding task finishes. For
-anything that might run long, use `triss coder run` on the CLI instead
-(optionally backgrounded) rather than `triss_coder_run`.
+**Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
+since GLM runs over MCP are expected to be long. Override per call via
+the `timeout` arg. Stdio MCP has no client-side per-call cap of its own
+(Claude Code's `MCP_TOOL_TIMEOUT` is effectively unlimited, and the 300s
+idle timeout applies only to remote transports), so this value is the
+real bound. For runs that may exceed it, use `triss coder run` on the
+CLI instead (optionally backgrounded) rather than `triss_coder_run`.
 
 **Sandbox:** an explicit `cwd`, and (with `isolate`) the git repository
 root that `.triss/wt/<slug>` will be created under, are both checked

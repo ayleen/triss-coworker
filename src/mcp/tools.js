@@ -817,9 +817,10 @@ const CODER_TOOLS = [
       'engine, set up via `triss coder init`). Returns a JSON envelope: ' +
       '{engine, engine_version, session_id, exit_reason, final_text, ' +
       'files_changed, diff_stat, worktree, usage, warnings}. This tool\'s ' +
-      'timeout defaults to 300s (vs 900s on the CLI) since MCP hosts often ' +
-      'time out long tool calls — for anything that might run long, use ' +
-      '`triss coder run` on the CLI instead (optionally backgrounded).',
+      'timeout defaults to 1500s (25 min) since GLM runs over MCP are ' +
+      'expected to be long; override per call via the `timeout` arg. For ' +
+      'runs that may exceed that, use `triss coder run` on the CLI ' +
+      '(optionally backgrounded).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -834,7 +835,7 @@ const CODER_TOOLS = [
         model: { type: 'string', description: 'Override the model for this run only' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug>' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
-        timeout: { type: 'number', description: 'Seconds before the engine is killed (default 300 over MCP)' },
+        timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },
       required: ['prompt'],
     },
