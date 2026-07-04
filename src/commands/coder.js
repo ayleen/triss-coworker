@@ -5,7 +5,19 @@
 // everywhere (command, file, env prefix).
 
 import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, cpSync, renameSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  cpSync,
+  renameSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
+} from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -565,6 +577,134 @@ export function describeCoderStatus(deps = {}) {
 // is a lookup key into `.triss/sessions.json` (slug -> real id), not a
 // value passed straight through to opencode on a session's first run.
 
+// ─── GLM rate-limit detection ────────────────────────────────────────────────
+//
+// On a Z.AI usage-limit hit, opencode's provider call fails with an
+// AI_APICallError that the AI SDK RETRIES indefinitely — unlike a terminal
+// error it never emits an `error` event on stdout, so a `coder run` just
+// hangs until --timeout kills it with nothing to show (parsedAnyEvent stays
+// false). The only durable trace is opencode's own log file, where every
+// failed attempt logs a line like:
+//   ...error.error="AI_APICallError: Usage limit reached for 5 hour. Your limit will reset at 2026-07-04 19:39:04"
+// The reset timestamp is Z.AI server time (Beijing, UTC+8); we surface it
+// converted to the caller's local time. spawnEngine polls this log so the
+// run is killed within seconds of the limit instead of hanging to --timeout.
+
+// Z.AI reports the reset time on its own clock (Beijing, no offset in the
+// string) — parse it as +08:00 so the local-time conversion is correct.
+const ZAI_RESET_TZ_OFFSET = '+08:00';
+const RATE_LIMIT_RE =
+  /Usage limit reached[^\n"]*?reset at (\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/i;
+
+// Parse a Z.AI usage-limit message out of arbitrary text (an engine error
+// string or a raw log line). Returns null when there's no match. `beijing`
+// is the timestamp verbatim as Z.AI reported it; `resetLocal` is the same
+// instant formatted in the host's local timezone (null only if the parsed
+// date is somehow invalid).
+export function parseRateLimitReset(text) {
+  if (!text) return null;
+  const m = RATE_LIMIT_RE.exec(String(text));
+  if (!m) return null;
+  const beijing = `${m[1]} ${m[2]}`;
+  const at = new Date(`${m[1]}T${m[2]}${ZAI_RESET_TZ_OFFSET}`);
+  const valid = !Number.isNaN(at.getTime());
+  return {
+    beijing,
+    resetAt: valid ? at.toISOString() : null,
+    resetLocal: valid ? at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'long' }) : null,
+  };
+}
+
+// Human-facing one-liner for the CLI/MCP error and envelope warnings.
+export function rateLimitMessage(info) {
+  const when = info.resetLocal
+    ? `${info.resetLocal} (local time)`
+    : `${info.beijing} Beijing time`;
+  return `GLM usage limit reached — quota resets at ${when} (reported ${info.beijing} Beijing time).`;
+}
+
+// Default opencode log location — XDG data dir, overridable in tests via the
+// `logPath` dep on findRecentRateLimit (no env var, to keep the doc surface
+// small).
+function opencodeLogPath() {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  return join(dataHome, 'opencode', 'log', 'opencode.log');
+}
+
+// Read up to `maxBytes` from the END of a file without loading the whole
+// thing (the engine log grows to many MB). Returns '' on any error. When the
+// file is larger than `maxBytes` the window starts mid-line, so the leading
+// partial fragment is DROPPED: callers scan for complete lines and a
+// fragment has no reliable `timestamp=` prefix, which would otherwise defeat
+// findRecentRateLimit's recency guard (a stale prior-run limit line split by
+// the window boundary would read as fresh). Only whole trailing lines are
+// returned.
+function readFileTail(path, maxBytes) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const { size } = fstatSync(fd);
+    const truncated = size > maxBytes;
+    const start = truncated ? size - maxBytes : 0;
+    const len = size - start;
+    if (len <= 0) return '';
+    const buf = Buffer.allocUnsafe(len);
+    let pos = 0;
+    while (pos < len) {
+      const n = readSync(fd, buf, pos, len - pos, start + pos);
+      if (n <= 0) break;
+      pos += n;
+    }
+    let text = buf.subarray(0, pos).toString('utf8');
+    if (truncated) {
+      const nl = text.indexOf('\n');
+      text = nl === -1 ? '' : text.slice(nl + 1);
+    }
+    return text;
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+}
+
+const RATE_LIMIT_LOG_SCAN_BYTES = 256 * 1024;
+
+// Scan the tail of opencode's log for a usage-limit line logged at or after
+// `sinceMs` (epoch ms). The recency filter is essential: the tail is full of
+// PRIOR runs' rate-limit lines, and only lines from THIS run should count —
+// otherwise every healthy run inherits a stale limit. Lines are chronological
+// so the last match wins. Never throws.
+export function findRecentRateLimit(sinceMs, deps = {}) {
+  const readTail = deps.readFileTail || readFileTail;
+  const path = deps.logPath || opencodeLogPath();
+  const text = readTail(path, deps.scanBytes || RATE_LIMIT_LOG_SCAN_BYTES);
+  if (!text) return null;
+  let latest = null;
+  for (const line of text.split('\n')) {
+    if (!line.includes('Usage limit reached')) continue;
+    // Fail CLOSED on a missing/unparseable timestamp: readFileTail already
+    // drops the leading partial fragment, so every remaining line should
+    // carry a real `timestamp=` prefix. A line without one means the log
+    // format changed — skipping it degrades to the old hang-to-timeout,
+    // whereas trusting it would fast-fail healthy runs against a stale limit
+    // for hours. Only a line proven at-or-after this run's start counts.
+    const tsMatch = /^timestamp=(\S+)/.exec(line);
+    if (!tsMatch) continue;
+    const lineMs = Date.parse(tsMatch[1]);
+    if (!Number.isFinite(lineMs) || lineMs < sinceMs) continue;
+    const info = parseRateLimitReset(line);
+    if (info) latest = info;
+  }
+  return latest;
+}
+
 // ─── event folding (exported: replayable against the Phase 0 fixture) ──────────
 
 export function createEventFolder() {
@@ -575,6 +715,7 @@ export function createEventFolder() {
     usage: { input: 0, output: 0 },
     sawStepFinish: false,
     warnings: [],
+    rateLimit: null,
   };
 }
 
@@ -623,6 +764,11 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
     case 'error': {
       const msg = evt.error?.data?.message || evt.error?.name || 'unknown engine error';
       state.warnings.push(`engine error: ${msg}`);
+      // A terminal rate-limit error (rare on stdout — usually retried
+      // silently and only logged) still gets recognised here so the live
+      // path can kill early and report the reset time.
+      const rl = parseRateLimitReset(msg) || parseRateLimitReset(line);
+      if (rl && !state.rateLimit) state.rateLimit = rl;
       break;
     }
     default:
@@ -969,8 +1115,16 @@ function computeWorktreeChanges(sh, repoRoot, wtPath) {
 // ─── spawn + fold ────────────────────────────────────────────────────────────────
 
 const KILL_GRACE_MS = 5000;
+// How often to poll the engine log for a usage-limit line while a run is in
+// flight. On a rate-limited run opencode emits nothing on stdout and retries
+// forever, so without this the run hangs to --timeout; polling turns that
+// into a ~poll-interval-latency clear error instead.
+const RATE_LIMIT_POLL_MS = 3000;
 
-function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
+function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, logPath, pollMs }) {
+  // pollMs === 0 disables the watchdog entirely; null/undefined uses the
+  // default cadence. Tests set a small value to exercise the poll path.
+  const resolvedPollMs = pollMs == null ? RATE_LIMIT_POLL_MS : pollMs;
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -987,24 +1141,59 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
     let settled = false;
     let timedOut = false;
     let graceTimer = null;
+    let pollTimer = null;
     const state = createEventFolder();
     const stderrChunks = [];
 
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const killGroup = (sig) => {
       try {
-        process.kill(-child.pid, 'SIGTERM');
+        process.kill(-child.pid, sig);
       } catch {
         /* already gone */
       }
-      graceTimer = setTimeout(() => {
-        try {
-          process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          /* already gone */
-        }
-      }, KILL_GRACE_MS);
+    };
+    // Schedule the SIGKILL escalation AT MOST ONCE — the timeout, the
+    // rate-limit poll, and the stdout-error path can all send SIGTERM, but a
+    // second graceTimer would leak past settle() (which only clears the
+    // latest reference) and fire a stray SIGKILL at an already-reaped group.
+    // The `settled` guard also stops a buffered stdout line delivered after
+    // 'close' from arming a fresh timer that outlives settle().
+    const scheduleSigkill = () => {
+      if (settled || graceTimer) return;
+      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      scheduleSigkill();
     }, timeoutSec * 1000);
+
+    // Rate-limit watchdog: opencode retries a usage-limit failure silently
+    // (nothing on stdout), so poll its log for a limit line newer than this
+    // run's start and, on the first hit, record the reset time and kill the
+    // engine group early rather than waiting out --timeout. Disabled when
+    // sinceMs is absent (e.g. a caller that opted out).
+    // Default scan honours the caller's logPath so tests never poll the
+    // developer's real engine log (and never SIGTERM a fake pid on a match).
+    const scan = scanRateLimit || ((since) => findRecentRateLimit(since, { logPath }));
+    if (sinceMs != null && resolvedPollMs > 0) {
+      pollTimer = setInterval(() => {
+        if (settled || state.rateLimit) return;
+        let info;
+        try {
+          info = scan(sinceMs);
+        } catch {
+          info = null;
+        }
+        if (info) {
+          state.rateLimit = info;
+          killGroup('SIGTERM');
+          scheduleSigkill();
+        }
+      }, resolvedPollMs);
+      if (typeof pollTimer.unref === 'function') pollTimer.unref();
+    }
 
     // The child is spawned `detached: true` so the timeout-kill above can
     // signal its whole process GROUP (negative PID), not just opencode's
@@ -1038,6 +1227,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
       settled = true;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
+      if (pollTimer) clearInterval(pollTimer);
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
       fn();
@@ -1050,6 +1240,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
     if (child.stdout) {
       const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
       rl.on('line', (line) => {
+        const hadRateLimit = state.rateLimit;
         foldEventLine(state, line, {
           onToolUse: (evt) => {
             const tool = evt.part?.tool || 'tool';
@@ -1057,6 +1248,13 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn }) {
             process.stderr.write(pc.dim(`  → ${tool}${denied ? ' (denied/error)' : ''}\n`));
           },
         });
+        // A rate-limit error that DID reach stdout: kill early, same as the
+        // log-poll path, so we don't wait out --timeout. Guard on `settled`
+        // so a line buffered past 'close' can't signal a reaped/recycled pid.
+        if (state.rateLimit && !hadRateLimit && !settled) {
+          killGroup('SIGTERM');
+          scheduleSigkill();
+        }
       });
     }
 
@@ -1187,9 +1385,34 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     ),
   );
 
+  const spawnStartMs = Date.now();
   let result;
+  let rateLimit;
   try {
-    result = await spawnEngine({ argv, env, timeoutSec, spawnFn });
+    result = await spawnEngine({
+      argv,
+      env,
+      timeoutSec,
+      spawnFn,
+      sinceMs: spawnStartMs,
+      scanRateLimit: deps.scanRateLimit,
+      logPath: deps.logPath,
+      pollMs: deps.pollMs,
+    });
+
+    // GLM usage limit: opencode retries the failing provider call forever and
+    // emits nothing parseable on stdout, so without this the run hangs to
+    // --timeout and throws the generic "no parseable output". spawnEngine's
+    // watchdog already killed the engine early on detection; here we turn it
+    // into a clear error with the reset time converted from Z.AI's Beijing
+    // clock to local. The fallback log scan covers a run that was killed some
+    // other way (e.g. timeout) but whose log still shows the limit.
+    rateLimit = result.rateLimit || findRecentRateLimit(spawnStartMs, { logPath: deps.logPath });
+    if (rateLimit && !result.finalText) {
+      const err = new Error(rateLimitMessage(rateLimit));
+      err.rateLimit = rateLimit;
+      throw err;
+    }
 
     // Engine started and produced nothing parseable (e.g. bad --session id,
     // missing message, immediate crash) -> throw, per the envelope-vs-throw
@@ -1212,6 +1435,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
     throw err;
   }
+
+  // Rate limit that only hit AFTER the engine produced some text: keep the
+  // partial envelope but flag it so the caller knows the run was cut short.
+  if (rateLimit) result.warnings.push(rateLimitMessage(rateLimit));
 
   let exit_reason;
   if (result.timedOut) exit_reason = 'timeout';
