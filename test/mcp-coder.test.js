@@ -160,14 +160,14 @@ test(
 );
 
 test(
-  'coderRunHandler: applies the MCP default timeout of 300s, not the CLI\'s 900s',
+  'coderRunHandler: applies the generous MCP default timeout of 1500s',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
     // Verified indirectly: a fake spawn that captures the moment it's
     // invoked can't see the timeout value directly (it's internal to
     // spawnEngine), so we assert the documented default via the source
     // constant instead of re-deriving it from timing.
     const src = readFileSync(new URL('../src/mcp/handlers.js', import.meta.url), 'utf8');
-    assert.match(src, /CODER_MCP_DEFAULT_TIMEOUT\s*=\s*300/);
+    assert.match(src, /CODER_MCP_DEFAULT_TIMEOUT\s*=\s*1500/);
   }),
 );
 

@@ -856,11 +856,13 @@ export async function gitlabCommentHandler({ project, iid, body }) {
 
 // ─── coder ──────────────────────────────────────────────────────────────────
 
-// MCP hosts commonly time out a tool call well before the CLI's 900s
-// default — 300s here, documented in docs/mcp.md. Long tasks should go
-// through `triss coder run` on the CLI (optionally backgrounded), not
-// this tool.
-const CODER_MCP_DEFAULT_TIMEOUT = 300;
+// GLM/opencode runs over MCP are expected to be long, so the default is
+// generous — 1500s (25 min), above the CLI's 900s, documented in
+// docs/mcp.md. Stdio MCP has no client-side per-call cap (Claude Code's
+// MCP_TOOL_TIMEOUT is effectively unlimited, and the 300s idle timeout
+// only applies to remote transports), so triss's own timeout is the
+// real bound. Callers can override per request via the `timeout` arg.
+const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 
 // `deps` (spawn/spawnSync) is only ever populated by tests — production
 // calls always fall through to the real subprocess machinery inside
