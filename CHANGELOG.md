@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3] — 2026-07-04
+
+### Fixed
+
+- `getEnvFilePath('global')` in `src/secrets.js` now resolves `homedir()`
+  lazily on each call. The path was previously frozen into module-level
+  constants (`GLOBAL_DIR`/`GLOBAL_FILE`) at import time, so any later
+  `HOME` override — notably in tests — was ignored, unlike the lazy
+  resolution already used by `coder.js` and `safety.js`. Runtime path
+  values are unchanged. (#6)
+
 ## [0.22.2] — 2026-07-04
 
 ### Changed
