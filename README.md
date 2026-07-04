@@ -451,6 +451,13 @@ conversation across calls. **POSIX only** (macOS/Linux) for now. See
 `docs/configuration.md` for the coder env vars and `docs/mcp.md` for the
 MCP tool equivalents.
 
+If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
+the reset time converted to your local timezone (Z.AI reports it in
+Beijing time), instead of hanging until `--timeout`. Under the hood
+opencode retries the throttled call silently, so the reset time is read
+from the engine log and the run is killed within a few seconds of the
+limit.
+
 ## Integrations
 
 External-service plugins live under `src/integrations/<name>/`. They are

@@ -291,6 +291,12 @@ idle timeout applies only to remote transports), so this value is the
 real bound. For runs that may exceed it, use `triss coder run` on the
 CLI instead (optionally backgrounded) rather than `triss_coder_run`.
 
+**Z.AI usage limit:** when the plan is throttled, opencode retries the
+call silently and would otherwise run until `timeout`. `triss_coder_run`
+detects the limit from the engine log, kills the run within seconds, and
+fails with the reset time converted to the host's local timezone (Z.AI
+reports it in Beijing time) rather than a generic "no parseable output".
+
 **Sandbox:** an explicit `cwd`, and (with `isolate`) the git repository
 root that `.triss/wt/<slug>` will be created under, are both checked
 against the [MCP path sandbox](#scope-and-the-path-sandbox)
