@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.4] — 2026-07-04
+
+### Fixed
+
+- `triss coder run` / `triss_coder_run` no longer hang until `--timeout`
+  when the Z.AI plan hits its usage limit. opencode retries the throttled
+  provider call indefinitely and emits nothing parseable on stdout, so a
+  limited run used to run out the full timeout (900s CLI / 1500s MCP) and
+  then throw a generic "opencode produced no parseable output". A watchdog
+  now polls the engine log, kills the run within a few seconds of the
+  limit, and fails with the reset time converted from Z.AI's Beijing clock
+  (UTC+8) to the host's local timezone, e.g. `GLM usage limit reached —
+  quota resets at Jul 4, 2026, 3:39:04 PM GMT+4 (local time)`. The poll is
+  a local log read only — no API calls, no token cost — and by cutting the
+  retry loop short it reduces wasted provider attempts. (#9)
+
 ## [0.22.3] — 2026-07-04
 
 ### Fixed
