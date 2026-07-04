@@ -11,12 +11,14 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { projectRoot } from './safety.js';
 
-const GLOBAL_DIR = join(homedir(), '.config', 'triss');
-const GLOBAL_FILE = join(GLOBAL_DIR, '.env');
 const LOCAL_FILE_NAME = '.triss.env';
 
+// Resolve HOME lazily on each call so tests (and runtime) that override
+// HOME / TRISS_PROJECT_ROOT are honored — matches the lazy style already
+// used by projectRoot() in safety.js. Computing at import time froze the
+// path to whatever HOME was when secrets.js first loaded.
 export function getEnvFilePath(scope = 'global') {
-  if (scope === 'global') return GLOBAL_FILE;
+  if (scope === 'global') return join(homedir(), '.config', 'triss', '.env');
   if (scope === 'local') return join(projectRoot(), LOCAL_FILE_NAME);
   throw new Error(`Unknown scope "${scope}" — use "global" or "local"`);
 }

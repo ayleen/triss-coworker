@@ -383,16 +383,12 @@ test(
 test(
   'wizard path: runCoderSetup reloads env files, so a key written to disk (not process.env) by setVar still gets detected',
   withTmpHome(async ({ home }) => {
-    // Scope 'local' deliberately: getEnvFilePath('local') resolves
-    // join(projectRoot(), '.triss.env') fresh on every call, which
-    // respects this test's TRISS_PROJECT_ROOT override. getEnvFilePath('global')
-    // does NOT — src/secrets.js computes GLOBAL_FILE once, at module
-    // import time, from a bare `homedir()` call, so it's permanently
-    // frozen to whatever HOME was when secrets.js first loaded in this
-    // process and never re-resolves against a later process.env.HOME
-    // override. That's a separate, pre-existing bug reported to team-lead
-    // alongside this fix — 'local' scope sidesteps it so this regression
-    // test exercises exactly the env-reload fix it's meant to cover.
+    // Scope 'local' keeps this regression test focused on the env-reload
+    // fix: getEnvFilePath('local') resolves join(projectRoot(), '.triss.env')
+    // fresh on every call against this test's TRISS_PROJECT_ROOT override.
+    // (getEnvFilePath('global') now also re-evaluates homedir() lazily, so
+    // it would honor the HOME override too, but 'local' stays the cleaner
+    // exercise of the file-reload path.)
     const envPath = join(home, '.triss.env');
     setVar(envPath, 'ZHIPU_API_KEY', 'zk-wizard-written-key');
     assert.equal(
