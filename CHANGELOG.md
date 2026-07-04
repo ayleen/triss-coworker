@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2] — 2026-07-04
+
+### Changed
+
+- `triss_coder_run` (MCP): the default timeout is now **1500s (25 min)**,
+  up from 300s and above the CLI's 900s, since GLM/opencode runs over MCP
+  are expected to be long. A stdio MCP server has no client-side per-call
+  cap (Claude Code's `MCP_TOOL_TIMEOUT` is effectively unlimited; the 300s
+  idle timeout applies only to remote transports), so triss's own timer is
+  the real bound. Override per call via the `timeout` arg.
+
 ## [0.22.1] — 2026-07-04
 
 ### Fixed
@@ -528,7 +539,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.22.2...HEAD
+[0.22.2]: https://github.com/ayleen/triss-coworker/compare/v0.22.1...v0.22.2
 [0.22.1]: https://github.com/ayleen/triss-coworker/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/ayleen/triss-coworker/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/ayleen/triss-coworker/compare/v0.20.1...v0.21.0
