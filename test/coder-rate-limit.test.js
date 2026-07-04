@@ -116,6 +116,35 @@ test('findRecentRateLimit: missing log file returns null (never throws)', () => 
   assert.equal(findRecentRateLimit(0, { logPath: '/no/such/triss/opencode.log' }), null);
 });
 
+test('findRecentRateLimit: drops the partial leading line so a split STALE limit line is not read as fresh', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-log-'));
+  const path = join(dir, 'opencode.log');
+  try {
+    // A stale limit line (old timestamp) followed by a benign, non-limit
+    // line with a fresh timestamp. With a small scan window the read starts
+    // mid-way through the stale line — its `timestamp=` prefix is lost, so
+    // without dropping that fragment its "Usage limit reached" text would be
+    // treated as recent. sinceMs is AFTER the stale line: the only correct
+    // answer is null.
+    const stale = logLine('2026-07-04T08:00:00.000Z');
+    const benign = 'timestamp=2026-07-04T12:00:00.000Z level=INFO message="all good" run=zzz';
+    const body = stale + '\n' + benign + '\n';
+    writeFileSync(path, body);
+    // Size the window so the read starts ~45 bytes into the stale line —
+    // PAST its `timestamp=` token but BEFORE "Usage limit reached ... reset
+    // at ...". Without dropping that fragment the recency guard is skipped
+    // and the stale limit is wrongly returned (this is the regression).
+    const startOffset = 45;
+    const info = findRecentRateLimit(Date.parse('2026-07-04T10:00:00.000Z'), {
+      logPath: path,
+      scanBytes: Buffer.byteLength(body) - startOffset,
+    });
+    assert.equal(info, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ─── runCoderRun short-circuit ───────────────────────────────────────────────
 
 function fakeSpawnReplaying(streamText, { code = 0, signal = null } = {}) {

@@ -632,13 +632,20 @@ function opencodeLogPath() {
 }
 
 // Read up to `maxBytes` from the END of a file without loading the whole
-// thing (the engine log grows to many MB). Returns '' on any error.
+// thing (the engine log grows to many MB). Returns '' on any error. When the
+// file is larger than `maxBytes` the window starts mid-line, so the leading
+// partial fragment is DROPPED: callers scan for complete lines and a
+// fragment has no reliable `timestamp=` prefix, which would otherwise defeat
+// findRecentRateLimit's recency guard (a stale prior-run limit line split by
+// the window boundary would read as fresh). Only whole trailing lines are
+// returned.
 function readFileTail(path, maxBytes) {
   let fd;
   try {
     fd = openSync(path, 'r');
     const { size } = fstatSync(fd);
-    const start = size > maxBytes ? size - maxBytes : 0;
+    const truncated = size > maxBytes;
+    const start = truncated ? size - maxBytes : 0;
     const len = size - start;
     if (len <= 0) return '';
     const buf = Buffer.allocUnsafe(len);
@@ -648,7 +655,12 @@ function readFileTail(path, maxBytes) {
       if (n <= 0) break;
       pos += n;
     }
-    return buf.subarray(0, pos).toString('utf8');
+    let text = buf.subarray(0, pos).toString('utf8');
+    if (truncated) {
+      const nl = text.indexOf('\n');
+      text = nl === -1 ? '' : text.slice(nl + 1);
+    }
+    return text;
   } catch {
     return '';
   } finally {
@@ -672,7 +684,7 @@ const RATE_LIMIT_LOG_SCAN_BYTES = 256 * 1024;
 export function findRecentRateLimit(sinceMs, deps = {}) {
   const readTail = deps.readFileTail || readFileTail;
   const path = deps.logPath || opencodeLogPath();
-  const text = readTail(path, RATE_LIMIT_LOG_SCAN_BYTES);
+  const text = readTail(path, deps.scanBytes || RATE_LIMIT_LOG_SCAN_BYTES);
   if (!text) return null;
   let latest = null;
   for (const line of text.split('\n')) {
@@ -1132,11 +1144,18 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
         /* already gone */
       }
     };
+    // Schedule the SIGKILL escalation AT MOST ONCE — the timeout, the
+    // rate-limit poll, and the stdout-error path can all send SIGTERM, but a
+    // second graceTimer would leak past settle() (which only clears the
+    // latest reference) and fire a stray SIGKILL at an already-reaped group.
+    const scheduleSigkill = () => {
+      if (!graceTimer) graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup('SIGTERM');
-      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+      scheduleSigkill();
     }, timeoutSec * 1000);
 
     // Rate-limit watchdog: opencode retries a usage-limit failure silently
@@ -1157,7 +1176,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
         if (info) {
           state.rateLimit = info;
           killGroup('SIGTERM');
-          if (!graceTimer) graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+          scheduleSigkill();
         }
       }, RATE_LIMIT_POLL_MS);
       if (typeof pollTimer.unref === 'function') pollTimer.unref();
@@ -1220,7 +1239,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
         // log-poll path, so we don't wait out --timeout.
         if (state.rateLimit && !hadRateLimit) {
           killGroup('SIGTERM');
-          if (!graceTimer) graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+          scheduleSigkill();
         }
       });
     }
