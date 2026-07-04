@@ -1180,7 +1180,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
     if (sinceMs != null && resolvedPollMs > 0) {
       pollTimer = setInterval(() => {
         if (settled || state.rateLimit) return;
-        let info = null;
+        let info;
         try {
           info = scan(sinceMs);
         } catch {
@@ -1387,7 +1387,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const spawnStartMs = Date.now();
   let result;
-  let rateLimit = null;
+  let rateLimit;
   try {
     result = await spawnEngine({
       argv,
