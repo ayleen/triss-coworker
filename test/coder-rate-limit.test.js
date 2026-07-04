@@ -211,6 +211,55 @@ test(
   }),
 );
 
+// A child that emits nothing on stdout and stays "running" until we close it
+// after `closeAfterMs` — long enough for the fast test poll to fire first.
+function fakeSpawnStayingOpen({ closeAfterMs = 60, code = null, signal = 'SIGTERM' } = {}) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 555556; // fake; killGroup's process.kill ESRCHs harmlessly
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end('');
+      child.stderr.end('');
+      setTimeout(() => child.emit('close', code, signal), closeAfterMs);
+    });
+    return child;
+  };
+}
+
+test(
+  'runCoderRun: the log watchdog kills early and reports the reset when the engine emits nothing on stdout',
+  withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const info = parseRateLimitReset(LIMIT_MSG);
+    let calls = 0;
+    const scanRateLimit = () => {
+      calls += 1;
+      return info; // limit visible from the first poll
+    };
+    await assert.rejects(
+      () =>
+        runCoderRun(
+          'do something',
+          {},
+          {
+            spawn: fakeSpawnStayingOpen({ closeAfterMs: 60, signal: 'SIGTERM' }),
+            spawnSync: () => ({ status: 1, stdout: '', error: null }),
+            scanRateLimit, // the watchdog's injected scan
+            pollMs: 5, // fast poll so it fires before the child closes
+            logPath: '/no/such/triss/opencode.log', // fallback scan can't match
+          },
+        ),
+      (err) => {
+        assert.match(err.message, /quota resets at/);
+        assert.doesNotMatch(err.message, /no parseable output/);
+        return true;
+      },
+    );
+    assert.ok(calls >= 1, 'the watchdog poll invoked the injected scan');
+  }),
+);
+
 test(
   'runCoderRun: a rate-limit error that DID reach stdout throws the reset message',
   withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {

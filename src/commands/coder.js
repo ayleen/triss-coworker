@@ -689,11 +689,16 @@ export function findRecentRateLimit(sinceMs, deps = {}) {
   let latest = null;
   for (const line of text.split('\n')) {
     if (!line.includes('Usage limit reached')) continue;
+    // Fail CLOSED on a missing/unparseable timestamp: readFileTail already
+    // drops the leading partial fragment, so every remaining line should
+    // carry a real `timestamp=` prefix. A line without one means the log
+    // format changed — skipping it degrades to the old hang-to-timeout,
+    // whereas trusting it would fast-fail healthy runs against a stale limit
+    // for hours. Only a line proven at-or-after this run's start counts.
     const tsMatch = /^timestamp=(\S+)/.exec(line);
-    if (tsMatch) {
-      const lineMs = Date.parse(tsMatch[1]);
-      if (Number.isFinite(lineMs) && lineMs < sinceMs) continue;
-    }
+    if (!tsMatch) continue;
+    const lineMs = Date.parse(tsMatch[1]);
+    if (!Number.isFinite(lineMs) || lineMs < sinceMs) continue;
     const info = parseRateLimitReset(line);
     if (info) latest = info;
   }
@@ -1116,7 +1121,10 @@ const KILL_GRACE_MS = 5000;
 // into a ~poll-interval-latency clear error instead.
 const RATE_LIMIT_POLL_MS = 3000;
 
-function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit }) {
+function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, logPath, pollMs }) {
+  // pollMs === 0 disables the watchdog entirely; null/undefined uses the
+  // default cadence. Tests set a small value to exercise the poll path.
+  const resolvedPollMs = pollMs == null ? RATE_LIMIT_POLL_MS : pollMs;
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -1148,8 +1156,11 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
     // rate-limit poll, and the stdout-error path can all send SIGTERM, but a
     // second graceTimer would leak past settle() (which only clears the
     // latest reference) and fire a stray SIGKILL at an already-reaped group.
+    // The `settled` guard also stops a buffered stdout line delivered after
+    // 'close' from arming a fresh timer that outlives settle().
     const scheduleSigkill = () => {
-      if (!graceTimer) graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+      if (settled || graceTimer) return;
+      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
     };
 
     const timer = setTimeout(() => {
@@ -1163,8 +1174,10 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
     // run's start and, on the first hit, record the reset time and kill the
     // engine group early rather than waiting out --timeout. Disabled when
     // sinceMs is absent (e.g. a caller that opted out).
-    const scan = scanRateLimit || ((since) => findRecentRateLimit(since));
-    if (sinceMs != null && RATE_LIMIT_POLL_MS > 0) {
+    // Default scan honours the caller's logPath so tests never poll the
+    // developer's real engine log (and never SIGTERM a fake pid on a match).
+    const scan = scanRateLimit || ((since) => findRecentRateLimit(since, { logPath }));
+    if (sinceMs != null && resolvedPollMs > 0) {
       pollTimer = setInterval(() => {
         if (settled || state.rateLimit) return;
         let info = null;
@@ -1178,7 +1191,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
           killGroup('SIGTERM');
           scheduleSigkill();
         }
-      }, RATE_LIMIT_POLL_MS);
+      }, resolvedPollMs);
       if (typeof pollTimer.unref === 'function') pollTimer.unref();
     }
 
@@ -1236,8 +1249,9 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit })
           },
         });
         // A rate-limit error that DID reach stdout: kill early, same as the
-        // log-poll path, so we don't wait out --timeout.
-        if (state.rateLimit && !hadRateLimit) {
+        // log-poll path, so we don't wait out --timeout. Guard on `settled`
+        // so a line buffered past 'close' can't signal a reaped/recycled pid.
+        if (state.rateLimit && !hadRateLimit && !settled) {
           killGroup('SIGTERM');
           scheduleSigkill();
         }
@@ -1382,6 +1396,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       spawnFn,
       sinceMs: spawnStartMs,
       scanRateLimit: deps.scanRateLimit,
+      logPath: deps.logPath,
+      pollMs: deps.pollMs,
     });
 
     // GLM usage limit: opencode retries the failing provider call forever and
