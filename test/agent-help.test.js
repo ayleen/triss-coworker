@@ -102,9 +102,10 @@ test('AGENT-HELP-06: integrations are detected when creds live in ~/.config/tris
   // must call loadEnvFiles() first or integrations whose creds live only in the
   // wizard-installed env file won't show up in the cookbook.
   //
-  // We run the CLI in a subprocess with a clean env so module-level constants
-  // like `GLOBAL_DIR = join(homedir(), '.config', 'triss')` in src/secrets.js
-  // resolve relative to the temp HOME we set up.
+  // We run the CLI in a subprocess with a clean env so the global env
+  // path (join(homedir(), '.config', 'triss', '.env') in src/secrets.js,
+  // resolved lazily via getEnvFilePath) resolves relative to the temp
+  // HOME we set up.
   const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-home-envfile-')));
   try {
     const trissEnvDir = join(homeDir, '.config', 'triss');

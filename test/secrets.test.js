@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readEnvFile, setVar, unsetVar, addToGitignore } from '../src/secrets.js';
+import { readEnvFile, setVar, unsetVar, addToGitignore, getEnvFilePath } from '../src/secrets.js';
 
 function tmpFile() {
   const dir = mkdtempSync(join(tmpdir(), 'triss-test-'));
@@ -79,6 +79,26 @@ test('unsetVar removes a key and is idempotent', () => {
   assert.equal(readFileSync(path, 'utf8').includes('DROP'), false);
   assert.equal(unsetVar(path, 'DROP'), false); // already gone
   assert.equal(readEnvFile(path).vars.KEEP, '1');
+});
+
+// Regression for issue #6: getEnvFilePath('global') must resolve homedir()
+// lazily on each call. secrets.js is already imported at the top of this
+// file, so a HOME override applied *now* — long after import — can only be
+// honored if the path is re-evaluated per call. The old module-level
+// GLOBAL_FILE constant froze the path at import time and would fail this.
+test('getEnvFilePath("global") honors a HOME override applied after import', () => {
+  const originalHome = process.env.HOME;
+  try {
+    process.env.HOME = '/tmp/triss-home-a';
+    assert.equal(getEnvFilePath('global'), join('/tmp/triss-home-a', '.config', 'triss', '.env'));
+    // Change HOME again in the same process: a frozen constant would keep
+    // returning the first path; the lazy version tracks the new HOME.
+    process.env.HOME = '/tmp/triss-home-b';
+    assert.equal(getEnvFilePath('global'), join('/tmp/triss-home-b', '.config', 'triss', '.env'));
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  }
 });
 
 test('addToGitignore appends and is idempotent', () => {
