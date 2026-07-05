@@ -36,17 +36,19 @@ Default preset is `flash` (cheap). Use `--model pro` for harder analysis
 or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
 
-## `triss coder` — delegate a coding task to a GLM agent (opencode engine)
+## `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
 
 Setup once per machine/project: `triss coder init` (installs the opencode
 engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
-policy, and `.opencode/agents/{coder,researcher}.md`).
+policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
+(or set `TRISS_CODER_ENGINE=crush`) to target the crush engine instead.
 
-Then: `triss coder run "<task>" [--session <id>] [--continue] [--agent
-<name>] [--model <p/m>] [--isolate] [--cwd <path>] [--timeout <sec>]
-[--stdin]` — prints one JSON envelope to stdout (`engine`, `engine_version`,
-`session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
-`worktree`, `usage`, `warnings`). `--session <id>` is a triss-side slug
+Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
+[--agent <name>] [--model <p/m>] [--isolate] [--no-isolate] [--cwd <path>]
+[--timeout <sec>] [--stdin]` — prints one JSON envelope to stdout (`engine`,
+`engine_version`, `session_id`, `exit_reason`, `final_text`, `files_changed`,
+`diff_stat`, `worktree`, `usage`, `warnings`). `--engine <name>` selects
+`opencode` (default) or `crush`. `--session <id>` is a triss-side slug
 mapped to a real opencode session id in `.triss/sessions.json` (first run
 creates it, later runs with the same slug continue that conversation).
 `--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)
@@ -55,10 +57,20 @@ so you review the diff before merging; irreversible actions stay with you.
 only branches with no diff vs the default branch; `--all` forces removal
 of every worktree under `.triss/wt`).
 
+**Engines.** `opencode` (default) enforces a deny-first bash allowlist via
+`opencode.json` — prefer it for that safety layer. `crush` (npm
+`@phpcraftdream/crush`, bin `crush`) has **no bash allowlist** — `crush run`
+auto-approves every tool — so triss defaults `--isolate` ON for crush and
+passes `--agents single`; don't use `--no-isolate` in a workspace you can't
+lose. crush is simpler otherwise (one JSON envelope, native session ids).
+Both share the single `ZHIPU_API_KEY` (crush's `zai` provider reads
+`ZAI_API_KEY`, bridged automatically). See `docs/crush-issues.md` for caveats.
+
 Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
 `zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
-`1.17.13`).
+`1.17.13`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
+(crush pin override, default `0.1.0`).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
 Windows. `triss coder init`/`clean` are unaffected.

@@ -15,8 +15,10 @@ reason through yourself.
 
 **`triss coder run "<task>"`** hands an implementation subtask to a
 separate GLM coding agent instead of writing it yourself (setup once via
-`triss coder init`); see `triss agent-help` for flags and the envelope it
-returns.
+`triss coder init`; default `opencode` engine, or `--engine crush`). The
+default opencode engine enforces a deny-first bash allowlist; crush
+(`--engine crush`) has none and isolates by default — keep it isolated.
+See `triss agent-help` for flags and the envelope it returns.
 
 For the full reference (examples, model presets, tracker integrations like
 Jira / Linear / GitHub) run `triss agent-help` once when you need it.

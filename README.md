@@ -237,7 +237,8 @@ The exposed tool set is **filtered by configured credentials**:
 - **`triss_github_*`** when `GITHUB_TOKEN` is set (or `gh` CLI logged in).
 - **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
 - **`triss_coder_run` + `triss_coder_status`** when `ZHIPU_API_KEY` is set
-  (setup: `triss coder init`). `triss_coder_run`'s timeout defaults to
+  (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
+  (`opencode` default, or `crush`); its timeout defaults to
   1500s (25 min) over MCP, above the CLI's 900s, since GLM runs are
   expected to be long; override per call via the `timeout` arg. For
   runs that may exceed it, use `triss coder run` on the CLI instead.
@@ -268,8 +269,8 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a GLM coding agent (opencode engine): key, `opencode.json`, agent templates | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--isolate` for a disposable worktree). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a GLM coding agent (default `opencode` engine; `--engine crush` for crush): key, `opencode.json` / crush models, agent templates | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — on by default for crush, `--no-isolate` disables it). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
@@ -430,11 +431,13 @@ default timeout, configurable via `--timeout <ms>`.
 ### `triss coder`
 
 Delegates an implementation task to a GLM coding agent (the `opencode`
-engine) instead of the primary model writing the code itself.
+engine by default; `crush` is an alternative — see **Engines** below)
+instead of the primary model writing the code itself.
 
 ```bash
 triss coder init                                  # once: key, opencode.json, agent templates
 triss coder run "add input validation to /signup" --isolate
+triss coder run "..." --engine crush              # crush engine (isolates by default)
 triss coder clean                                 # remove finished isolation worktrees
 ```
 
@@ -450,6 +453,16 @@ working tree directly. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See
 `docs/configuration.md` for the coder env vars and `docs/mcp.md` for the
 MCP tool equivalents.
+
+**Engines** — `opencode` (default) enforces a deny-first bash allowlist
+(`opencode.json`). `crush` (`--engine crush` / `TRISS_CODER_ENGINE=crush`,
+npm `@phpcraftdream/crush`) has no allowlist — it auto-approves every tool
+— so triss defaults `--isolate` ON for crush and passes `--agents single`;
+pass `--no-isolate` to opt out (not recommended outside a disposable
+workspace). Prefer opencode for the bash-policy safety layer; crush is
+simpler (one JSON envelope, native session ids). Both share the single
+`ZHIPU_API_KEY` (crush's `zai` provider reads `ZAI_API_KEY`, bridged
+automatically). See `docs/crush-issues.md` for crush caveats.
 
 If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
 the reset time converted to your local timezone (Z.AI reports it in

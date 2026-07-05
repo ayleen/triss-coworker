@@ -868,12 +868,16 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // calls always fall through to the real subprocess machinery inside
 // runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, model, isolate, cwd, timeout } = {},
+  { prompt, session, continue: cont, agent, model, isolate, cwd, timeout, engine } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
 
-  const { runCoderRun, gitRepoRoot } = await import('../commands/coder.js');
+  const coder = await import('../commands/coder.js');
+  // deps.runCoderRun lets tests spy on the opts forwarded to the engine
+  // (e.g. assert `engine` is passed through) without driving a real spawn.
+  const runCoderRun = deps.runCoderRun || coder.runCoderRun;
+  const { gitRepoRoot, resolveCoderEngine } = coder;
   const { assertSafePath, projectRoot } = await import('../safety.js');
 
   // Sandbox boundary enforced HERE, at the MCP edge — runCoderRun itself
@@ -882,15 +886,23 @@ export async function coderRunHandler(
   // and `--isolate`'s worktree, which lands under the enclosing git
   // repo's toplevel — not necessarily the same directory as the sandbox
   // root if the project lives in a subdirectory of a larger repo.
-  // `cwd` is IGNORED by runCoderRun whenever `isolate` is set (isolate's
-  // worktree path wins), so checking it here too would reject calls over
-  // a `cwd` that's never actually used — only check whichever one the
-  // run will actually touch.
-  if (cwd && !isolate) {
+  //
+  // The check must use the EFFECTIVE isolate flag, not the raw `isolate`
+  // arg: crush defaults isolate-ON when `isolate` is undefined (see
+  // runCoderRun), so a bare crush call WILL create a worktree whose root
+  // needs sandboxing. Resolve the engine the same way runCoderRun does and
+  // derive effectiveIsolate identically, so the right path is checked for
+  // both engines. `cwd` is IGNORED by runCoderRun whenever the run
+  // isolates, so checking cwd too would reject calls over a cwd that's
+  // never actually used — only check whichever one the run will touch.
+  const resolvedEngine = resolveCoderEngine({ engine });
+  const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
+
+  if (cwd && !effectiveIsolate) {
     const { resolve } = await import('node:path');
     assertSafePath(resolve(cwd), { kind: 'write' });
   }
-  if (isolate) {
+  if (effectiveIsolate) {
     const sh = deps.spawnSync || (await import('node:child_process')).spawnSync;
     const repoRoot = gitRepoRoot(sh, projectRoot());
     if (repoRoot) assertSafePath(repoRoot, { kind: 'write' });
@@ -900,6 +912,7 @@ export async function coderRunHandler(
   await runCoderRun(
     prompt,
     {
+      engine,
       session,
       continue: cont,
       agent,
@@ -919,13 +932,18 @@ export async function coderStatusHandler() {
   const status = describeCoderStatus();
   const ready = envReadiness(CODER_MANIFEST);
   const lines = [
-    `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'}`,
+    `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush; crush bridges it to ZAI_API_KEY at run time)`,
+    `Default engine: ${status.defaultEngine}`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${
           status.engineVersion === status.pin ? ' (matches pin)' : ` (pin ${status.pin})`
         }`
-      : `Engine: not installed (pin ${status.pin})`,
+      : `Engine: opencode not installed (pin ${status.pin})`,
     ...status.configs.map((c) => `opencode.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
+    status.crush.found
+      ? `Engine: crush ${status.crush.version} (dev build — pin check skipped)`
+      : `Engine: crush not installed`,
+    ...status.crush.configs.map((c) => `crush.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
     `Worktrees (.triss/wt): ${status.worktreeCount} live`,
   ];
   return lines.join('\n');

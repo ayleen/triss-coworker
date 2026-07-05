@@ -223,23 +223,26 @@ config
 
 const coder = program
   .command('coder')
-  .description('Run a GLM coding agent (opencode engine)');
+  .description('Run a GLM coding agent (opencode or crush engine)');
 
 coder
   .command('init')
-  .description('Install/configure the opencode engine, Z.AI key, permission policy, and agent templates')
+  .description('Install/configure a GLM coding engine (opencode default, or crush), Z.AI key, permission policy, and agent templates')
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
+  .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
   .action(wrap(runCoderInit));
 
 coder
   .command('run [prompt]')
-  .description('Spawn a GLM coding agent (opencode engine) and print a JSON envelope to stdout')
+  .description('Spawn a GLM coding agent (opencode default, or --engine crush) and print a JSON envelope to stdout')
+  .option('--engine <name>', 'coding engine: opencode (default) or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
   .option('--agent <name>', 'opencode agent template to use', 'coder')
   .option('--model <p/m>', 'override the model for this run only')
   .option('--isolate', 'run in a disposable git worktree under .triss/wt/<slug>')
+  .option('--no-isolate', 'disable worktree isolation (crush isolates by default)')
   .option('--cwd <path>', 'working directory (ignored with --isolate)')
   .option('--timeout <sec>', 'kill the engine after this many seconds', (v) => parseInt(v, 10), 900)
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')

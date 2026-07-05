@@ -241,7 +241,7 @@ self-hosted endpoints).
 | `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
 
-### Coder (GLM coding agent, opencode engine)
+### Coder (GLM coding agent)
 
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
@@ -249,6 +249,8 @@ self-hosted endpoints).
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Model written to `opencode.json`           |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
+| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.0`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
 actually authenticates against — the `zai-coding-plan` (subscription)
@@ -260,6 +262,21 @@ exists, `init` still runs detection and warns (without touching the
 file) when the existing `model` prefix doesn't match what the key
 verified against — that mismatch is what makes opencode retry a model
 call it can never complete.
+
+**Engines.** `opencode` (default) enforces a deny-first per-command bash
+allowlist via `opencode.json` (curated safe commands only). `crush`
+(`--engine crush` or `TRISS_CODER_ENGINE=crush`; npm
+`@phpcraftdream/crush`, bin `crush`) has **no such allowlist** — `crush
+run` auto-approves every tool — so triss compensates by defaulting
+`--isolate` ON for crush (disposable git worktree) plus `--agents single`;
+pass `--no-isolate` to opt out. Prefer opencode when you want the
+bash-policy safety layer; crush is simpler (one JSON envelope, native
+session ids) and fine inside isolation, but don't run it with
+`--no-isolate` in a workspace you can't afford to lose. Both engines
+share the single `ZHIPU_API_KEY` — crush's built-in `zai` provider reads
+`ZAI_API_KEY`, which triss bridges automatically in the subprocess env.
+See `docs/crush-issues.md` for the fuller list of crush caveats (dirty
+version string, `ZAI_API_KEY` naming, `--role fast` latency).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — its engine env
 allowlist and `--timeout` kill both rely on POSIX process-group

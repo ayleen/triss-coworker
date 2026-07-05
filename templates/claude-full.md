@@ -139,7 +139,7 @@ triss fetch https://api-docs.example.com/changelog
 Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 `TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
 
-### `triss coder` — delegate a coding task to a GLM agent (opencode engine)
+### `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
 Setup once per machine/project:
 
 ```bash
@@ -152,13 +152,16 @@ Then hand off implementation work instead of writing it yourself:
 
 ```bash
 triss coder run "<task>"
+  --engine <name>     # opencode (default) or crush
   --session <id>      # triss-side slug, mapped to a real opencode session id
                        # in .triss/sessions.json (first run creates it, later
                        # runs with the same slug continue that conversation)
   --continue           # continue the most recent opencode session
   --agent <name>       # default: coder (researcher = read-only)
   --model <p/m>        # override model for this run
-  --isolate            # run in a disposable git worktree
+  --isolate            # run in a disposable git worktree (on by default for crush)
+  --no-isolate         # disable worktree isolation (crush only; not recommended
+                       # outside a disposable workspace — crush has no bash allowlist)
   --cwd <path>         # working dir (ignored with --isolate)
   --timeout <sec>      # default 900
   --stdin              # read the task from piped stdin
@@ -190,10 +193,24 @@ review the diff before merging; irreversible actions (deploy, push, DB
 migrations) stay with you, not the coder agent. Without `--isolate`, it
 edits directly in `--cwd` (default: current directory).
 
+**Engines.** `opencode` (default) enforces a deny-first bash allowlist via
+`opencode.json` (curated safe commands only) — prefer it when you want
+that safety layer. `crush` (`--engine crush` / `TRISS_CODER_ENGINE=crush`;
+npm `@phpcraftdream/crush`, bin `crush`) has **no bash allowlist** —
+`crush run` auto-approves every tool — so triss defaults `--isolate` ON
+for crush and passes `--agents single`; don't run it with `--no-isolate`
+in a workspace you can't afford to lose. crush is simpler in other
+respects (one JSON envelope on stdout, native get-or-create session ids).
+Both engines share the single `ZHIPU_API_KEY` — crush's `zai` provider
+reads `ZAI_API_KEY`, which triss bridges automatically. See
+`docs/crush-issues.md` for crush caveats.
+
 Configure via `triss coder init` or `triss config wizard coder`. Env vars:
 `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
-`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`).
+`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`),
+`TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
+(crush pin override, default `0.1.0`).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
 Windows. `triss coder init`/`clean` are unaffected.

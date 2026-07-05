@@ -616,3 +616,74 @@ reuse, 2 safety-layer denial checks, 2 `--dir`/global-config checks, plus
 retries) against the `zai-coding-plan` endpoint, all subscription-covered.
 One `zai` (non-coding-plan) call was attempted and failed before any
 tokens were billed (`isRetryable` error prior to a completion).
+
+## Phase 6 recon (crush fork — 2026-07-05)
+
+The prereq is unblocked: the fork publishes **`@phpcraftdream/crush`** on
+npm (`0.1.0`, FSL-1.1-MIT, bin `crush`, node ≥18, Go-free prebuilt binary
+via per-platform optionalDependencies). Live recon of that binary
+(`v0.0.0-20260704…+dirty`) in a scratch dir against the existing
+`ZHIPU_API_KEY` — the fork's `crush run` **diverges substantially from
+this plan's Phase 6 assumptions**. Corrections, all verified live:
+
+- **Provider / key var mismatch.** crush ships Z.AI as a built-in Catwalk
+  provider `zai` (`type: openai-compat`, endpoint
+  `https://api.z.ai/api/coding/paas/v4` — same coding-plan endpoint as
+  opencode), models `glm-5.2 / glm-5.1 / glm-5-turbo / glm-4.7 / …`. But
+  it reads **`ZAI_API_KEY`**, NOT `ZHIPU_API_KEY`. Adapter must bridge
+  this: simplest is to map the value into `ZAI_API_KEY` inside crush's
+  spawn-env allowlist so triss keeps a single user-facing `ZHIPU_API_KEY`.
+  Confirmed working: `crush ping` → `zai / glm-5.2 … status: ok`; a
+  `crush run --role smart --json` returned a clean `end_turn` envelope.
+- **Single JSON envelope (no ndjson fold).** `crush run --json` prints ONE
+  object to stdout at end-of-run:
+  `{session_id, exit_reason, final_text, assistant_notes?, tool_calls,
+   usage:{delta_tokens, delta_cost_usd}, duration_ms, error}`. `exit_reason`
+  vocabulary: `end_turn | done | canceled | timeout | max_cost |
+  max_tokens | error`. Tool-call heartbeat still goes to stderr as
+  `▶ <toolName>`. So the crush adapter's `foldOutput` is a trivial
+  parse-last-line, not a streaming fold. **cost is real here**
+  (`delta_cost_usd: 0.000048` observed) — unlike opencode's coding-plan
+  cost:0. Usage is a combined `delta_tokens`, NOT split prompt/completion.
+- **Native sessions — no slug→id map needed.** `crush run --session <id>`
+  is genuine get-or-create with a **caller-supplied arbitrary id** (docs:
+  "an arbitrary new id to start a fresh session with that exact id — handy
+  for CI"). So for crush, pass triss's own slug straight through; the
+  `.triss/sessions.json` mapping (an opencode-only workaround) is
+  unnecessary. Adapter flag e.g. `needsSessionMap: false`.
+- **`--role` is REQUIRED.** Every `crush run` must declare `--role
+  smart|large` (big model) or `--role fast|small` (cheap). `--model
+  <provider/model[@level]>` overrides per invocation. Default large model
+  resolved from `crush models use <large> <small>` (atoms `glm5_2`,
+  `glm5_turbo`) written to `crush.json` (global
+  `~/.local/share/crush/crush.json`, local `./.crush/crush.json`).
+- **SAFETY MODEL IS WEAKER — the headline caveat.** This confirms Phase 6
+  note 3, but stronger: `crush run` is non-interactive and
+  **auto-approves EVERY permission request; the agent gets the full tool
+  set with no prompting** and there is **no bash command-pattern
+  allowlist** like opencode's deny-first `opencode.json`. crush's own
+  `run --help` warns runs are "fast but irreversible — only run in a
+  workspace you can afford to lose." Mitigations available, all must be
+  applied by triss for crush: (a) force/strongly-default `--isolate`
+  (disposable git worktree) for crush; (b) `CRUSH_FORBID_WRITES=<paths>`
+  env blocks write/edit tools from named paths; (c) `--agents single`
+  (default) disables sub-agent fan-out/recursion; (d) `--max-cost` /
+  `--max-tokens` runaway caps. There is NO way to reproduce opencode's
+  per-command bash allowlist — document this trade-off prominently
+  (agent can't be given a curated safe-command list; it's all-or-nothing
+  inside the sandbox).
+- **stdin IS accepted** (unlike opencode): prompt = `<stdin>\n\n<args>`.
+- **Extra levers worth surfacing in the adapter/docs:** `--timeout`
+  (accepts `900`/`900s`/`15m`; preserves partial answer in envelope),
+  `--on-finish "cmd"` (sets `CRUSH_SESSION_ID`/`CRUSH_EXIT_REASON`/…),
+  `crush sessions cancel <id>` for external cancellation, `--format json`
+  post-processing that strips code fences from `final_text`.
+
+Net: the crush adapter is in most respects SIMPLER than opencode
+(single-envelope parse, native sessions, no template-shape guessing) but
+its **safety story is the one place it is worse** and must not be papered
+over. The engine-abstraction shape in Phase 6 step 1 still holds; the
+`configTemplate` member becomes a `crush.json` + `crush models use`
+writer, and a new adapter member is needed for the spawn-env key bridge
+(`ZHIPU_API_KEY` → `ZAI_API_KEY`) and the crush-only safety env
+(`CRUSH_FORBID_WRITES`).

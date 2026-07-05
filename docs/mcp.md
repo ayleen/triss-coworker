@@ -273,15 +273,19 @@ Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
 `triss config wizard coder`):
 
 - `triss_coder_run` — delegate an implementation task to a GLM coding
-  agent (opencode engine). Same options as `triss coder run` on the CLI
-  (`session`, `continue`, `agent`, `model`, `isolate`, `cwd`, `timeout`)
+  agent (default `opencode` engine; `engine: "crush"` selects the crush
+  engine). Same options as `triss coder run` on the CLI (`engine`,
+  `session`, `continue`, `agent`, `model`, `isolate`, `cwd`, `timeout`)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
   tool argument). Returns the JSON envelope — `engine`, `engine_version`,
   `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
-  `worktree`, `usage`, `warnings` — as the tool result.
-- `triss_coder_status` — engine version vs the pinned version,
-  `ZHIPU_API_KEY` presence (never the value), which `opencode.json` files
-  exist, and how many isolation worktrees are live.
+  `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
+  `opencode`/`crush` enum (default `opencode`, or `TRISS_CODER_ENGINE`);
+  when `isolate` is unset, crush isolates by default (opencode does not).
+- `triss_coder_status` — the default engine, each engine's version/install
+  state (`opencode` vs the pinned version, `crush` presence), which
+  `opencode.json` / `crush.json` files exist, `ZHIPU_API_KEY` presence
+  (never the value), and how many isolation worktrees are live.
 
 **Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
 since GLM runs over MCP are expected to be long. Override per call via
@@ -297,13 +301,15 @@ detects the limit from the engine log, kills the run within seconds, and
 fails with the reset time converted to the host's local timezone (Z.AI
 reports it in Beijing time) rather than a generic "no parseable output".
 
-**Sandbox:** an explicit `cwd`, and (with `isolate`) the git repository
-root that `.triss/wt/<slug>` will be created under, are both checked
-against the [MCP path sandbox](#scope-and-the-path-sandbox)
-(`assertSafePath`) before the run starts — this matters because
-`--isolate`'s worktree lands under the *enclosing git repository's*
-toplevel, which can be an ancestor of the sandboxed project root if the
-project lives in a subdirectory of a larger repo.
+**Sandbox:** an explicit `cwd`, and the git repository root that
+`.triss/wt/<slug>` will be created under, are both checked against the
+[MCP path sandbox](#scope-and-the-path-sandbox) (`assertSafePath`) before
+the run starts. The worktree-root check fires for *either* engine
+whenever the run will actually isolate — including a bare `engine: "crush"`
+call with no `isolate` (crush isolates by default). This matters because
+the worktree lands under the *enclosing git repository's* toplevel, which
+can be an ancestor of the sandboxed project root if the project lives in
+a subdirectory of a larger repo.
 
 If the agent tries to call a tool that isn't currently in the list,
 Claude Code rejects the call before it reaches Triss. The user just

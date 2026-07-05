@@ -1,4 +1,7 @@
-// `triss coder` — delegate coding tasks to a GLM agent (opencode engine).
+// `triss coder` — delegate coding tasks to a GLM agent. opencode is the
+// default engine (deny-first bash policy); crush is an optional second
+// engine behind --engine crush / TRISS_CODER_ENGINE=crush (single JSON
+// envelope, native session ids, isolates by default).
 // See docs/coder-agent-plan.md for the original roadmap (init/run/clean,
 // the opencode adapter, MCP wiring — all shipped). Naming: "agent" is
 // taken (the AI assistant using triss), so this feature is "coder"
@@ -43,6 +46,11 @@ import { projectRoot } from '../safety.js';
 import { logUsage } from '../usage.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
+// crush is the SECOND coding engine behind `--engine crush`. The adapter is
+// pure (detect/argv/env/parse/map); this module owns the engine-agnostic
+// orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
+// docs/coder-agent-plan.md and docs/crush-issues.md.
+import { crush as crushEngine } from '../coder-engines/crush.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
 export const OPENCODE_PIN = '1.17.13';
@@ -52,6 +60,28 @@ export const OPENCODE_PIN = '1.17.13';
 // that key. See docs/coder-agent-plan.md's "Recon results" section.
 const DEFAULT_CODER_MODEL = 'zai-coding-plan/glm-5.2';
 const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
+
+// Default coding engine. opencode is engine #1 (shipped — deny-first
+// opencode.json policy is its safety layer). crush is engine #2 (Phase 6 —
+// simpler single-envelope model, but a weaker safety story that this module
+// compensates for by defaulting --isolate ON). Override per-call via --engine
+// or globally via TRISS_CODER_ENGINE.
+export const DEFAULT_CODER_ENGINE = 'opencode';
+const VALID_CODER_ENGINES = ['opencode', 'crush'];
+
+// Resolve + validate the engine selection. --engine beats TRISS_CODER_ENGINE
+// beats the default. An invalid name throws a clear Error listing valid values
+// (caught + formatted by wrap() in bin/triss.js; never a silent fallback).
+export function resolveCoderEngine(opts = {}) {
+  const engine = opts.engine || process.env.TRISS_CODER_ENGINE || DEFAULT_CODER_ENGINE;
+  if (!VALID_CODER_ENGINES.includes(engine)) {
+    throw new Error(
+      `Unknown coder engine "${engine}" — valid values: ${VALID_CODER_ENGINES.join(', ')}. ` +
+        'Pass --engine <name> or set TRISS_CODER_ENGINE=<name>.',
+    );
+  }
+  return engine;
+}
 
 // ─── Z.AI provider auto-detection ───────────────────────────────────────────
 //
@@ -202,7 +232,7 @@ function coderSmallModel() {
 // requires that (see src/integrations/_contract.js validateManifest).
 export const CODER_MANIFEST = {
   name: 'coder',
-  description: 'GLM coding agent (opencode engine)',
+  description: 'GLM coding agent (opencode or crush engine)',
   envVars: [
     {
       name: 'ZHIPU_API_KEY',
@@ -249,6 +279,7 @@ commands — report findings as text only.
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
   loadEnvFiles();
+  const engine = resolveCoderEngine(opts);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the Z.AI key and coder config?');
   const path = ensureEnvFile(scope);
@@ -256,7 +287,39 @@ export async function runCoderInit(opts = {}, deps = {}) {
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
-  await runCoderSetup({ scope }, deps);
+  if (engine === 'crush') {
+    // crush init's ONE job beyond the shared ZHIPU_API_KEY setup: pin the
+    // default model atoms (glm5_2 / glm5_turbo) via `crush models use` so
+    // --role smart/fast resolve to GLM deterministically (otherwise crush may
+    // pick a non-GLM default atom). The adapter bridges ZHIPU_API_KEY ->
+    // ZAI_API_KEY at run time, so NO key is written into crush.json here.
+    process.stderr.write('\n' + pc.bold('── coder (crush engine) ──') + '\n');
+    const sh = deps.spawnSync || nodeSpawnSync;
+    const det = crushEngine.detect(sh);
+    if (det.found && det.version) {
+      process.stderr.write(
+        pc.dim(`  · crush ${det.version} (pin check skipped — see docs/crush-issues.md)\n`),
+      );
+    } else {
+      process.stderr.write(
+        pc.yellow(`  ⚠ crush not found — install: ${crushEngine.installHint()}\n`),
+      );
+    }
+    const hint = crushEngine.crushDefaultModelsHint();
+    process.stderr.write(
+      pc.dim(`  · default models: ${hint.large} (large) / ${hint.small} (small)\n`),
+    );
+    // Only attempt the models write when crush is actually present; otherwise
+    // the install hint above is the actionable line and `models use` would just
+    // fail with ENOENT. Non-fatal: a non-zero exit returns {ok:false} and is
+    // surfaced yellow, never thrown (init still exits 0).
+    if (det.found) {
+      const res = crushEngine.configureCrushModels({ scope, sh });
+      process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
+    }
+  } else {
+    await runCoderSetup({ scope }, deps);
+  }
   process.stderr.write(
     '\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss coder init') + pc.dim(' again anytime — it is idempotent.\n'),
   );
@@ -370,6 +433,16 @@ function opencodeConfigPath(scope) {
   return scope === 'local'
     ? join(projectRoot(), 'opencode.json')
     : join(homedir(), '.config', 'opencode', 'opencode.json');
+}
+
+// crush.json locations (verified live, Phase 6 recon): `crush models use ...
+// --global` writes ~/.local/share/crush/crush.json; `--local` writes
+// ./.crush/crush.json. Used only for presence checks in `triss status` — we
+// never parse or write it from here (crush owns the shape).
+function crushConfigPath(scope) {
+  return scope === 'local'
+    ? join(projectRoot(), '.crush', 'crush.json')
+    : join(homedir(), '.local', 'share', 'crush', 'crush.json');
 }
 
 function opencodeConfigTemplate(model, smallModel) {
@@ -544,7 +617,9 @@ function gitBranchDeleteSafe(sh, repoRoot, branch) {
 
 // Read-only snapshot used by `triss status`. Never throws — every check
 // degrades to a "not found / unknown" value instead, so a missing engine
-// or a non-git cwd never crashes `triss status`.
+// or a non-git cwd never crashes `triss status`. Additively reports BOTH
+// engines (opencode #1, crush #2) and which engine a bare `triss coder run`
+// resolves to, so the user knows what's installed and what's the default.
 export function describeCoderStatus(deps = {}) {
   const sh = deps.spawnSync || nodeSpawnSync;
   const pin = opencodeVersionPin();
@@ -560,7 +635,28 @@ export function describeCoderStatus(deps = {}) {
   } catch {
     worktreeCount = 0;
   }
-  return { pin, engineVersion, configs, worktreeCount };
+  // crush engine #2 — additive awareness. detect() is presence-only (crush
+  // --version reports a dirty dev string, docs/crush-issues.md); crush.json
+  // presence is a best-effort file check, never parsed deeply. Never throws.
+  const crushDetect = crushEngine.detect(sh);
+  const crushConfigs = ['global', 'local'].map((scope) => {
+    const path = crushConfigPath(scope);
+    return { scope, path, exists: existsSync(path) };
+  });
+  // What a bare `triss coder run` (no --engine) resolves to right now.
+  const defaultEngine = resolveCoderEngine({});
+  return {
+    pin,
+    engineVersion,
+    configs,
+    worktreeCount,
+    crush: {
+      found: crushDetect.found,
+      version: crushDetect.version,
+      configs: crushConfigs,
+    },
+    defaultEngine,
+  };
 }
 
 // ─── coder run (Phase 2) ────────────────────────────────────────────────────────
@@ -1276,6 +1372,265 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
   });
 }
 
+// ─── crush spawn + flow (engine #2) ─────────────────────────────────────────────
+//
+// spawnCrush mirrors spawnEngine's process-management (detached process group,
+// timeout, SIGTERM->SIGKILL escalation, host SIGINT/SIGTERM forwarding) but for
+// crush's single-envelope output model: NO ndjson fold, NO rate-limit log
+// polling (crush has its own --timeout that preserves the partial answer and
+// does not retry a failing call forever — see docs/coder-agent-plan.md Phase 6
+// recon). crush writes the whole JSON envelope at end-of-run, so stdout is
+// buffered fully and parsed once on close.
+
+function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnFn('crush', argv, {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+    } catch (err) {
+      reject(new Error(`Failed to spawn crush: ${err.message}`));
+      return;
+    }
+
+    let settled = false;
+    let timedOut = false;
+    let graceTimer = null;
+    const stdoutChunks = [];
+    const stderrChunks = [];
+
+    const killGroup = (sig) => {
+      try {
+        process.kill(-child.pid, sig);
+      } catch {
+        /* already gone */
+      }
+    };
+    // Same SIGKILL-once guard as spawnEngine: the timeout, the stdout-error
+    // path, and host-signal forwarding can all send SIGTERM, but a second
+    // graceTimer would fire a stray SIGKILL at an already-reaped group.
+    const scheduleSigkill = () => {
+      if (settled || graceTimer) return;
+      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      scheduleSigkill();
+    }, timeoutSec * 1000);
+
+    // Forward host SIGINT/SIGTERM to the child's process group ONLY — never
+    // touch the host (same rationale as spawnEngine; this also runs inside the
+    // long-lived MCP server). Removed on settle so a host handling many crush
+    // runs doesn't accumulate one listener pair per call.
+    const onHostSignal = () => {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        /* already gone */
+      }
+    };
+    process.on('SIGINT', onHostSignal);
+    process.on('SIGTERM', onHostSignal);
+
+    function settle(fn) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      process.off('SIGINT', onHostSignal);
+      process.off('SIGTERM', onHostSignal);
+      fn();
+    }
+
+    child.on('error', (err) => settle(() => reject(new Error(`Failed to spawn crush: ${err.message}`))));
+
+    // crush emits the whole envelope at end-of-run, so buffer stdout fully
+    // (parseEnvelope takes the last non-empty line on close).
+    if (child.stdout) child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    // stderr is captured for the error-tail on the throw path; NOT forwarded
+    // live — crush's WARN noise + `▶ <tool>` heartbeats would interleave with
+    // this module's own dim stderr logs (a later step can forward it dimmed).
+    if (child.stderr) child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+
+    child.on('close', (code, signal) => {
+      settle(() =>
+        resolve({
+          code,
+          signal,
+          timedOut,
+          stdout: stdoutChunks.join(''),
+          stderrTail: stderrChunks.join(''),
+        }),
+      );
+    });
+  });
+}
+
+// runCrushFlow: the crush run path, branched out of runCoderRun. Builds the
+// triss envelope from crush's single-JSON output, reusing the EXISTING
+// engine-agnostic isolation helpers (setupIsolation ran in runCoderRun before
+// this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
+// / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
+// envelope shape as the opencode path so callers are engine-agnostic.
+async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolation, slug, timeoutSec }) {
+  const modelOverride = opts.model || null;
+  // crush sessions are native get-or-create with caller-supplied ids — pass the
+  // slug straight through (NO .triss/sessions.json map, unlike opencode).
+  const session = slug || opts.session || null;
+  const dir = isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : null;
+
+  const argv = crushEngine.buildRunArgv({
+    prompt,
+    model: modelOverride, // only when an explicit override is given
+    session,
+    continue: !!opts.continue,
+    cwd: dir,
+    timeoutSec,
+  });
+  const env = crushEngine.buildSpawnEnv();
+
+  // Presence-only version detect: crush --version reports a dirty dev string
+  // (docs/crush-issues.md), so log what it says dim but skip the pin check.
+  const det = crushEngine.detect(sh);
+  const engineVersion = det.version || crushEngine.CRUSH_PIN;
+  if (det.found && det.version) {
+    process.stderr.write(
+      pc.dim(`  · crush ${det.version} (pin check skipped — see docs/crush-issues.md)\n`),
+    );
+  }
+
+  process.stderr.write(
+    pc.dim(
+      '[coder run] engine=crush' +
+        (modelOverride ? ` model=${modelOverride}` : '') +
+        (isolation ? ` isolate=${isolation.wtPath}` : '') +
+        '\n',
+    ),
+  );
+
+  // Outer SIGTERM backstop. crush's own --timeout (passed above) fires FIRST
+  // and preserves the partial answer in the envelope; this outer kill only
+  // triggers if crush hung past its own timeout. +5s grace so crush's graceful
+  // exit wins the race and we don't truncate the JSON line mid-write (which
+  // would land in the "nothing parseable -> throw" path needlessly).
+  const outerTimeoutSec = timeoutSec + 5;
+
+  let result;
+  try {
+    result = await spawnCrush({ argv, env, timeoutSec: outerTimeoutSec, spawnFn });
+  } catch (err) {
+    if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw err;
+  }
+
+  const parsed = crushEngine.parseEnvelope(result.stdout);
+  if (!parsed) {
+    // Nothing parseable on stdout -> throw a plain Error (envelope-vs-throw
+    // split, identical to the opencode path). Clean up a freshly-created empty
+    // worktree first so it doesn't leak.
+    if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    const tailLines = result.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+    const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+    throw new Error(
+      `crush produced no parseable output (exit ${result.code ?? 'null'}` +
+        `${result.signal ? `, signal ${result.signal}` : ''}).${detail}`,
+    );
+  }
+
+  const warnings = [];
+  if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
+
+  // crush reports a COMBINED delta_tokens, never split prompt/completion (unlike
+  // opencode's per-step input/output). Stuff it into completion_tokens so the
+  // run is still accounted (prompt_tokens:0 is fine — logUsage only
+  // short-circuits on null), and flag the split as unavailable.
+  const deltaTokens = parsed.usage?.delta_tokens ?? 0;
+  const deltaCostUsd = parsed.usage?.delta_cost_usd;
+  warnings.push(
+    'crush reports combined token count only (delta_tokens); prompt/completion split unavailable',
+  );
+
+  // exit_reason: our outer timeout/signal wins over the envelope's reported
+  // reason (we know definitively we killed it); otherwise map crush's
+  // vocabulary onto the triss envelope vocabulary.
+  let exit_reason;
+  if (result.timedOut) exit_reason = 'timeout';
+  else if (result.signal) exit_reason = 'killed';
+  else exit_reason = crushEngine.mapExitReason(parsed.exit_reason).triss;
+
+  // Isolation teardown — engine-agnostic, same helpers/logic as the opencode
+  // path: stage everything, integrity-check seeded config, auto-remove a
+  // zero-diff worktree + its branch.
+  let filesChanged = [];
+  let diffStat = null;
+  let worktreeOut = null;
+  if (isolation) {
+    const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
+    if (changes.warnings.length) warnings.push(...changes.warnings);
+    if (changes.filesChanged.length === 0) {
+      try {
+        gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+        if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
+          const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
+          if (!branchDeleted) {
+            warnings.push(
+              `branch ${isolation.branch} kept — not fully merged; a future --isolate --session ` +
+                '<slug> reusing this slug will fail until it\'s removed (see `triss coder clean --all`)',
+            );
+          }
+        }
+      } catch (err) {
+        warnings.push(`isolate cleanup failed: ${err.message}`);
+      }
+    } else {
+      filesChanged = changes.filesChanged;
+      diffStat = changes.diffStat;
+      worktreeOut = isolation.wtPath;
+    }
+  }
+
+  // Usage accounting. prompt_tokens:0 (crush has no split) + the real combined
+  // count as completion_tokens, so runs never vanish from the usage log.
+  const ctx = currentCall();
+  logUsage({
+    model: modelOverride || 'crush',
+    prompt_tokens: 0,
+    completion_tokens: deltaTokens,
+    label: 'coder',
+    call_id: ctx?.callId,
+    parent_call_id: ctx?.parentCallId,
+  });
+
+  const envelope = {
+    engine: 'crush',
+    engine_version: engineVersion,
+    session_id: parsed.session_id || null,
+    exit_reason,
+    final_text: parsed.final_text ?? null,
+    files_changed: filesChanged,
+    diff_stat: diffStat,
+    worktree: worktreeOut,
+    usage: {
+      prompt_tokens: 0,
+      completion_tokens: deltaTokens,
+      // crush reports REAL per-call cost (unlike opencode's coding-plan
+      // cost:0). Preserved verbatim as an extra usage field.
+      cost_usd: deltaCostUsd ?? null,
+    },
+    warnings,
+  };
+
+  // Injectable so tests don't have to monkey-patch process.stdout.write
+  // (same reason as the opencode path — see comment there).
+  const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  writeStdout(JSON.stringify(envelope) + '\n');
+}
+
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
 
 async function resolveCoderPrompt(promptArg, opts) {
@@ -1295,7 +1650,7 @@ async function resolveCoderPrompt(promptArg, opts) {
   return promptArg;
 }
 
-function resolveSlug(opts) {
+function resolveSlug(opts, isolate) {
   if (opts.session) {
     if (!SLUG_PATTERN.test(opts.session)) {
       throw new Error(
@@ -1305,7 +1660,7 @@ function resolveSlug(opts) {
     }
     return opts.session;
   }
-  if (opts.isolate) return randomSlug();
+  if (isolate) return randomSlug();
   return null;
 }
 
@@ -1321,11 +1676,25 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     throw new Error('triss coder run is POSIX-only for now (Windows is not supported).');
   }
 
+  const engine = resolveCoderEngine(opts);
   loadEnvFiles();
   const sh = deps.spawnSync || nodeSpawnSync;
   const spawnFn = deps.spawn || nodeSpawn;
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
+
+  // Effective --isolate. opencode defaults isolate-OFF (its deny-first
+  // opencode.json policy is the safety layer). crush defaults isolate-ON
+  // because `crush run` auto-approves EVERY tool with no bash allowlist
+  // (docs/crush-issues.md "[Medium] crush run auto-approves every tool with
+  // no allowlist") — a disposable git worktree is the one structural
+  // mitigation triss can apply for crush. An explicit --isolate / --no-isolate
+  // always wins. bin/triss.js declares BOTH options on `coder run` (neither
+  // carries a default), so Commander yields the tristate this line relies on:
+  // opts.isolate is `undefined` when neither flag is passed, `true` under
+  // --isolate, `false` under --no-isolate. (Do NOT add a default to either
+  // option — the undefined tristate is load-bearing here.)
+  const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
 
   // Pure usage-error checks first, independent of environment/credentials
   // — a caller should get "you combined two contradictory flags" rather
@@ -1335,7 +1704,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // (without --session) creates a brand-new worktree/branch on a random
   // slug. Combined with no --session, those two are self-contradictory —
   // there is no session tied to the fresh worktree to continue.
-  if (opts.continue && opts.isolate && !opts.session) {
+  if (opts.continue && isolate && !opts.session) {
     throw new Error(
       '--continue with --isolate requires --session <id> — without it, --isolate creates a new ' +
         'worktree/branch while --continue tries to resume an unrelated previous session. Pass the ' +
@@ -1356,11 +1725,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const modelOverride = opts.model || null;
   const modelUsed = modelOverride || coderModel();
 
-  const slug = resolveSlug(opts);
+  const slug = resolveSlug(opts, isolate);
 
   let isolation = null;
-  if (opts.isolate) {
+  if (isolate) {
     isolation = setupIsolation(sh, slug);
+  }
+
+  // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
+  // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
+  // reuses the same teardown helpers as the opencode path below.
+  if (engine === 'crush') {
+    return runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolation, slug, timeoutSec });
   }
 
   const sessionRealIdArg = opts.session ? readSessionsMap()[opts.session] || null : null;
