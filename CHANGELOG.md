@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-07
+
+### Added
+
+- **Second GLM coding engine: `crush`** (`@phpcraftdream/crush`, pinned
+  `0.1.3`), selectable per run with `triss coder run --engine crush` or
+  globally with `TRISS_CODER_ENGINE=crush`; set up via
+  `triss coder init --engine crush`. Compared to the default opencode
+  engine it emits one JSON envelope (no ndjson fold), uses native
+  get-or-create session ids (no `.triss/sessions.json` map), reports a real
+  per-call `delta_cost_usd`, and exposes `--role smart|fast`. Both engines
+  share the single `ZHIPU_API_KEY` (crush reads it natively on ≥0.1.1, with
+  a `ZAI_API_KEY` compatibility alias). (#10)
+- `--restrict` / `--no-restrict` on `triss coder run`, plus the
+  `TRISS_CODER_CRUSH_RESTRICT` env var, to opt into a crush command
+  allowlist. When on, triss emits the read-only allowlist as CLI flags
+  (`--allow-bash` / `--allow-tool`); it is **opt-in** (default off) because
+  a denied bash command currently deadlocks crush until the timeout. (#10)
+- `TRISS_CODER_CRUSH_VERSION` to pin a specific `@phpcraftdream/crush`
+  npm version. (#10)
+- New `docs/glm-clients.md` — a single reference for how Triss talks to
+  GLM (both engines, key/endpoint routing, model selection, usage modes,
+  and the safety model), and `docs/crush-issues.md` /
+  `docs/crush-restrict-issues.md` capturing the crush maintainer bug
+  reports. (#10)
+
+### Changed
+
+- `triss coder run --engine crush` isolates by default (a disposable
+  `.triss/wt/<slug>` worktree); pass `--no-isolate` to opt out. crush's
+  own `crush.json` `permissions.run` config is not yet honored upstream and
+  a denied command deadlocks, so the worktree is crush's reliable safety
+  layer. opencode is unchanged (isolate off; its `opencode.json` bash
+  allowlist is enforced). (#10)
+
 ## [0.22.4] — 2026-07-04
 
 ### Fixed
