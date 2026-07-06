@@ -10,7 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -224,6 +224,146 @@ test(
       );
       const envelope = JSON.parse(result);
       assert.equal(envelope.exit_reason, 'end_turn');
+    } finally {
+      setRestricted(false);
+      if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+      else process.env.TRISS_PROJECT_ROOT = origRoot;
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  }),
+);
+
+// ─── Phase 6 step 4: engine selection over MCP ───────────────────────────────
+
+test(
+  'listTools: triss_coder_run schema exposes an `engine` enum [opencode, crush]',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const tools = await listTools();
+    const run = tools.find((t) => t.name === 'triss_coder_run');
+    const engineProp = run.inputSchema.properties.engine;
+    assert.ok(engineProp, 'engine property must exist on triss_coder_run');
+    assert.equal(engineProp.type, 'string');
+    assert.deepEqual(engineProp.enum, ['opencode', 'crush']);
+    // isolate stays OPTIONAL with NO schema default — the undefined tristate
+    // must reach runCoderRun (opencode resolves undefined -> isolate OFF;
+    // crush resolves undefined -> isolate ON, since crush 0.1.3's config
+    // allowlist is inert and the worktree is its reliable safety layer).
+    assert.ok(!('default' in run.inputSchema.properties.isolate));
+  }),
+);
+
+test(
+  'coderRunHandler: forwards `engine` straight through to runCoderRun opts',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const seen = [];
+    const spyRun = async (_prompt, opts) => {
+      seen.push(opts);
+    };
+    // spawnSync stubbed so the engine-aware sandbox check's gitRepoRoot call
+    // short-circuits (no real git); runCoderRun itself is the spy.
+    await coderRunHandler(
+      { prompt: 'do something', engine: 'crush' },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].engine, 'crush');
+  }),
+);
+
+test(
+  'coderRunHandler: leaves isolate UNDEFINED when the caller omits it (the tristate reaches runCoderRun)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const seen = [];
+    const spyRun = async (_prompt, opts) => {
+      seen.push(opts);
+    };
+    await coderRunHandler(
+      { prompt: 'do something' },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    // Must be strictly undefined, NOT coerced to a boolean — runCoderRun's
+    // `opts.isolate === undefined ? engine === 'crush' : !!opts.isolate`
+    // depends on the tristate (opencode: undefined -> OFF; crush: undefined
+    // -> ON). The handler must not pre-resolve it.
+    assert.equal(seen[0].isolate, undefined);
+  }),
+);
+
+test(
+  'coderRunHandler: a BARE crush call (no isolate arg) sandbox-checks the worktree root — crush isolates by default',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    // crush defaults to isolate-ON (its permissions.run config is inert and
+    // denied bash deadlocks, so the disposable worktree is the reliable safety
+    // layer). So a bare crush call with NO isolate arg must resolve
+    // effectiveIsolate=true and fire the worktree-root sandbox check. Build a
+    // repo, set the sandbox to a SUBDIR — crush's worktree would land at the
+    // repo root, OUTSIDE the subdir sandbox. The engine-aware check must catch
+    // this even though the caller passed no isolate.
+    const repoRoot = initRepo();
+    const sandboxDir = join(repoRoot, 'sandbox-subdir');
+    mkdirSync(sandboxDir);
+    const origRoot = process.env.TRISS_PROJECT_ROOT;
+    process.env.TRISS_PROJECT_ROOT = sandboxDir;
+    setRestricted(true);
+    try {
+      await assert.rejects(
+        () =>
+          coderRunHandler(
+            { prompt: 'do something', engine: 'crush', session: 'mcp-iso-default' },
+            { spawn: fakeSpawnReplayingFixture() },
+          ),
+        /outside the project root/,
+      );
+    } finally {
+      setRestricted(false);
+      if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+      else process.env.TRISS_PROJECT_ROOT = origRoot;
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  }),
+);
+
+test(
+  'coderRunHandler: a bare opencode call (no isolate arg) does NOT fire the worktree-root check — opencode defaults isolate-OFF',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    // opencode's deny-first opencode.json is the dependable safety layer, so
+    // opencode stays isolate-OFF by default. A bare opencode call with an
+    // out-of-root cwd must reject on the CWD (cwd is checked only when NOT
+    // isolating), proving effectiveIsolate resolved false.
+    setRestricted(true);
+    try {
+      await assert.rejects(
+        () => coderRunHandler({ prompt: 'do something', cwd: '/etc' }, { spawn: fakeSpawnReplayingFixture() }),
+        /outside the project root/,
+      );
+    } finally {
+      setRestricted(false);
+    }
+  }),
+);
+
+test(
+  'coderRunHandler: engine "crush" with isolate:true still sandbox-checks the worktree root (explicit flag)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    // isolate:true is now redundant for crush (it isolates by default) but the
+    // explicit flag still resolves effectiveIsolate=true and fires the check.
+    // Build a repo, set the sandbox to a SUBDIR — crush's worktree would land
+    // at the repo root, OUTSIDE the subdir sandbox.
+    const repoRoot = initRepo();
+    const sandboxDir = join(repoRoot, 'sandbox-subdir');
+    mkdirSync(sandboxDir);
+    const origRoot = process.env.TRISS_PROJECT_ROOT;
+    process.env.TRISS_PROJECT_ROOT = sandboxDir;
+    setRestricted(true);
+    try {
+      await assert.rejects(
+        () =>
+          coderRunHandler(
+            { prompt: 'do something', engine: 'crush', isolate: true, session: 'mcp-iso-check' },
+            { spawn: fakeSpawnReplayingFixture() },
+          ),
+        /outside the project root/,
+      );
     } finally {
       setRestricted(false);
       if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;

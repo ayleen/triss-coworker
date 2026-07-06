@@ -825,6 +825,11 @@ const CODER_TOOLS = [
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'The task for the coding agent' },
+        engine: {
+          type: 'string',
+          enum: ['opencode', 'crush'],
+          description: 'Coding engine (default: opencode, or TRISS_CODER_ENGINE)',
+        },
         session: {
           type: 'string',
           pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$',
@@ -833,7 +838,7 @@ const CODER_TOOLS = [
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
         agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
         model: { type: 'string', description: 'Override the model for this run only' },
-        isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug>' },
+        isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },
@@ -844,9 +849,10 @@ const CODER_TOOLS = [
   {
     name: 'triss_coder_status',
     description:
-      'Show the GLM coding agent setup: ZHIPU_API_KEY presence, engine ' +
-      'version vs the pinned version, which opencode.json files exist, ' +
-      'and how many isolation worktrees are currently live.',
+      'Show the GLM coding agent setup: ZHIPU_API_KEY presence, the default ' +
+      'engine, each engine (opencode + crush) version/install state, which ' +
+      'opencode.json / crush.json config files exist, and how many isolation ' +
+      'worktrees are currently live.',
     inputSchema: { type: 'object', properties: {} },
     handler: coderStatusHandler,
   },
