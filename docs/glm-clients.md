@@ -61,6 +61,27 @@ behind the same adapter interface, both fed the same `ZHIPU_API_KEY`.
 layer; reach for **crush** when you want the simpler single-envelope model,
 native session ids, or real per-call cost accounting.
 
+### 2.1 Which engine, and when
+
+| Axis | Winner | Notes |
+|---|---|---|
+| Output parsing | **crush** | one JSON envelope vs opencode's ndjson fold |
+| Per-call cost | **crush** | real `delta_cost_usd`; opencode reports `0` on the coding plan |
+| Sessions | **crush** | native get-or-create ids; opencode needs a slug→`ses_` map file |
+| Roles / health-check | **crush** | `--role smart\|fast`, `ping` / `ping-fast`; opencode has none |
+| Allowlist patterns | **crush** | `exact:`/`glob:`/`regex:` + chaining-guard vs opencode glob keys |
+| **Enforced safety (today)** | **opencode** | opencode's `opencode.json` allowlist enforces live; crush's config `permissions.run` is **not honored** and denied commands hang to timeout (see `docs/crush-restrict-issues.md`) |
+| User-editable persistent policy | **opencode** | edit `opencode.json`; crush's config policy is currently inert |
+| Maturity | **opencode** | engine #1, battle-tested; crush enforcement is 0.1.x-new |
+
+**Bottom line:** crush wins on integration ergonomics (parsing, cost,
+sessions, roles); opencode wins on working, persistent safety **until the two
+crush enforcement bugs are fixed upstream**. Practical stance today: use crush
+for ergonomics but keep it paired with worktree isolation (`--isolate`) so the
+disposable worktree backstops the allowlist that crush does not yet enforce —
+i.e. *crush ergonomics ⊕ worktree safety*. Once the maintainer fixes the two
+bugs, crush can become the default without caveats.
+
 ---
 
 ## 3. How the key reaches GLM

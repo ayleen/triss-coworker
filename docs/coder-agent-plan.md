@@ -844,3 +844,86 @@ resolution order (CLI > env > config > default-ON) is exactly as specified;
 (d) `spawnSync` stays argv-array (never `shell:true`); (e) all three doc
 files moved in lockstep, and the `--no-restrict` flag + `TRISS_CODER_CRUSH_
 RESTRICT` env are both documented in README + .env.example.
+
+## Phase 6 fix — restrict enforcement is CLI-only (2026-07-06, live-verified)
+
+Post-merge review (Fable + live crush runs) found that the committed Variant A
+(commit `2ad14dc`) **does not actually restrict crush**, and by flipping crush
+to isolate-OFF it shipped a net safety *regression*. All facts below were
+verified live against `@phpcraftdream/crush@0.1.3` with a real Z.AI key; see
+`docs/crush-restrict-issues.md` for the maintainer bug report.
+
+**What's broken (verified live):**
+- **Config `permissions.run` is inert.** `crush run --restrict-run` with an
+  `allow_bash` policy seeded into `crush.json` (tried `./crush.json`,
+  `./.crush/crush.json`, and both) still ran a non-allowlisted `echo` to
+  completion. Our `seedCrushPermissions` writes a policy crush ignores.
+- **`--restrict-run` with no CLI allow flags == unrestricted** (auto-approves
+  everything), not deny-all.
+- **CLI `--allow-bash` / `--allow-tool` DO enforce.** Only the command-line
+  flags take effect. Verified tool taxonomy: file tools are `view`, `edit`,
+  `write`, `ls` (accepts `name` or `tool:action`, e.g. `edit:write`); a coder
+  successfully created a file via `write` under `--restrict-run` + those
+  allow-tools with no deadlock.
+- **A denied *bash* command deadlocks to timeout** (`Context deadline
+  exceeded`, no envelope) instead of denying cleanly. File-tool denials were
+  not observed to deadlock; only bash.
+
+**Consequence for the default.** A coding agent routinely runs bash outside a
+read-only allowlist (`npm run build`, `tsc`, `npm run lint`, …). With the
+deadlock bug, every such call dead-ends the whole run at the timeout. So
+**Variant-A "restrict ON by default" is NOT viable for the coder use case
+until the maintainer fixes the deadlock** — it would make crush runs
+routinely dead-end. This supersedes the "restrict ON by default" decision
+above: that decision assumed clean deny (as the crush `--help` text promises),
+which live testing disproved.
+
+**Revised interim stance (until the two crush bugs are fixed upstream):**
+- **crush isolate default → back to ON** (revert the flip in `2ad14dc`). The
+  disposable worktree is the reliable, deadlock-free safety layer — the same
+  posture crush shipped with originally.
+- **crush restrict default → OFF**, but **opt-in restrict actually works**:
+  when the user passes `--restrict` / `TRISS_CODER_CRUSH_RESTRICT=1`,
+  `buildCrushRunArgv` emits the allowlist as **CLI flags** (not config).
+- Net interim posture: *worktree containment (default) + opt-in CLI allowlist
+  for defense-in-depth*. Once the maintainer fixes deadlock + config, revisit
+  flipping restrict back ON by default for true opencode parity.
+
+### Tasks (implement, then live-verify — enforcement can't be unit-tested)
+
+1. **`buildCrushRunArgv` — emit CLI allow flags when restrict is ON.**
+   For each pattern in `CRUSH_ALLOW_BASH_PATTERNS` push `--allow-bash <p>`,
+   and for each tool in a new `CRUSH_ALLOW_TOOLS = ['view','edit','write','ls']`
+   constant push `--allow-tool <t>`, alongside the existing `--restrict-run`.
+   When restrict is OFF, emit none of them (unchanged). Keep argv an array.
+2. **Revert the isolate default for crush to ON.** In `src/commands/coder.js`
+   change `opts.isolate === undefined ? false` back to `? engine === 'crush'`
+   (opencode stays OFF). Update the comment to cite the deadlock/inert-config
+   reason, not the old "policy is the safety layer" reason.
+3. **Change `CRUSH_RESTRICT_DEFAULT` to `false`.** `resolveCrushRestrict`
+   precedence is unchanged (CLI > env > crush.json > default); only the final
+   default flips. `--restrict` / `TRISS_CODER_CRUSH_RESTRICT=1` still turn it on.
+4. **Keep `seedCrushPermissions` but label it forward-compat.** The config is
+   inert today; keep seeding it (harmless, and correct once the maintainer
+   honors it) BUT update the comment + any user-facing message to say the
+   allowlist is currently enforced via CLI flags, not this config block.
+5. **Fable low fixes:**
+   - `seedCrushPermissions`: a valid-JSON-but-non-object crush.json (e.g. `[]`)
+     must route into the same warn-and-skip branch as a parse error — do NOT
+     silently overwrite it.
+   - `detectCrush`/pin: when the pin string itself doesn't parse to semver
+     (e.g. `TRISS_CODER_CRUSH_VERSION=latest`), skip the comparison (treat as
+     satisfied / emit a dim "pin unparseable" note) instead of a perpetual
+     `satisfiesPin:false` warning.
+6. **Docs lockstep + reconcile the now-false parity claims:** `glm-clients.md`
+   §2 table (Safety/Isolation rows) + §8, `crush-issues.md` row #4, README
+   Engines section, and `.env.example` currently say crush has working
+   `permissions.run` parity and isolate-OFF. Correct all to the interim stance:
+   config inert / CLI-flag enforcement / isolate-ON / restrict opt-in.
+
+**Live-verify after implementing (mandatory — this is the whole point):**
+`triss coder run --engine crush --restrict "<edit a file + run an allowed
+test>"` actually edits and runs; a run that tries a disallowed bash command
+fails safe (times out) rather than executing it; default (no `--restrict`)
+runs isolated. Passing unit tests are necessary but NOT sufficient — the
+`2ad14dc` regression passed 431 tests.
