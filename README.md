@@ -269,8 +269,8 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a GLM coding agent (default `opencode` engine; `--engine crush` for crush): key, `opencode.json` / crush models, agent templates | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — on by default for crush, `--no-isolate` disables it). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a GLM coding agent (default `opencode` engine; `--engine crush` for crush): key, `opencode.json` / crush models + `permissions.run` policy, agent templates | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — both engines default to isolate-OFF; crush adds `--restrict`/`--no-restrict` for its `permissions.run` policy). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
@@ -437,7 +437,8 @@ instead of the primary model writing the code itself.
 ```bash
 triss coder init                                  # once: key, opencode.json, agent templates
 triss coder run "add input validation to /signup" --isolate
-triss coder run "..." --engine crush              # crush engine (isolates by default)
+triss coder run "..." --engine crush              # crush engine (restrict-run on by default)
+triss coder run "..." --engine crush --no-restrict  # crush, unrestricted (not recommended)
 triss coder clean                                 # remove finished isolation worktrees
 ```
 
@@ -451,18 +452,24 @@ Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 disposable `.triss/wt/<slug>` git worktree so it never touches your
 working tree directly. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See
-`docs/configuration.md` for the coder env vars and `docs/mcp.md` for the
+`docs/glm-clients.md` for the full picture of how Triss talks to GLM
+(both engines, key/endpoint routing, models, and every usage mode),
+`docs/configuration.md` for the coder env vars, and `docs/mcp.md` for the
 MCP tool equivalents.
 
 **Engines** — `opencode` (default) enforces a deny-first bash allowlist
 (`opencode.json`). `crush` (`--engine crush` / `TRISS_CODER_ENGINE=crush`,
-npm `@phpcraftdream/crush`) has no allowlist — it auto-approves every tool
-— so triss defaults `--isolate` ON for crush and passes `--agents single`;
-pass `--no-isolate` to opt out (not recommended outside a disposable
-workspace). Prefer opencode for the bash-policy safety layer; crush is
-simpler (one JSON envelope, native session ids). Both share the single
-`ZHIPU_API_KEY` (crush's `zai` provider reads `ZAI_API_KEY`, bridged
-automatically). See `docs/crush-issues.md` for crush caveats.
+npm `@phpcraftdream/crush` ≥0.1.3) now has parity: `triss coder init` seeds
+a `permissions.run` policy (`restrict:true` + a read-only `allow_bash` set
+mirroring opencode's) into crush.json, and `triss coder run` passes
+`--restrict-run` by default. So **both engines default to `--isolate` OFF**
+(the config policy is the safety layer); use `--isolate` for a disposable
+worktree on top. Override crush's policy per-run with `--restrict` /
+`--no-restrict`, or globally via `TRISS_CODER_CRUSH_RESTRICT=0|1` (CLI flag
+> env > crush.json `permissions.run.restrict` > default ON). Both engines
+share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads it natively; triss also
+forwards it as `ZAI_API_KEY` for older binaries). See `docs/crush-issues.md`
+for crush caveats.
 
 If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
 the reset time converted to your local timezone (Z.AI reports it in

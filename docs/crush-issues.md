@@ -7,6 +7,31 @@ command, observed behavior, expected behavior, and impact. Findings are
 ordered High → Medium → Low. A "what works well" section is included at the
 end for balance.
 
+---
+
+## Resolved in 0.1.3 (2026-07-06)
+
+Re-evaluated **live** against `@phpcraftdream/crush@0.1.3` (real
+`ZHIPU_API_KEY`, live Z.AI coding-plan endpoint) on 2026-07-06. **6 of 7
+fully fixed, 1 (low) mostly** — every High and Medium is resolved. Status of
+each original finding below; the full original entries are preserved verbatim
+further down for posterity.
+
+| # | Original issue | Status in 0.1.3 |
+| --- | --- | --- |
+| 1 | [High] Version string does not match the release | **Fixed.** `crush --version` now reports a clean `crush version v0.1.3` (no `+dirty`, no `v0.0.0` placeholder). triss parses the `vX.Y.Z` semver and pin-checks against `0.1.3` (non-fatal on mismatch). |
+| 2 | [High] Provider env var mismatch (`ZAI_API_KEY` vs `ZHIPU_API_KEY`) | **Fixed.** Verified live: with only `ZHIPU_API_KEY` set (`ZAI_API_KEY` unset), the `zai` provider reached the network and returned a 401 — proving the key is read natively (≥0.1.1). triss now forwards `ZHIPU_API_KEY` straight through AND keeps `ZAI_API_KEY` as a compat alias for `<0.1.1` binaries. |
+| 3 | [Medium] `--role fast` hangs until timeout | **Fixed.** Verified live: the exact original repro (`crush run --role fast --model zai/glm-5-turbo`) now returns a clean `end_turn` envelope with `final_text:"PONG"` in ~47s (previously hung the full 90s with "Context deadline exceeded"). `ping --role fast` also returns `status:ok` in ~4s. |
+| 4 | [Medium] `crush run` auto-approves every tool with no allowlist | **Fixed.** crush 0.1.3 honors a `permissions.run` policy in crush.json (`--restrict-run` + `--allow-bash`/`--allow-tool`, forms: prefix / `exact:` / `glob:` / `regex:`, chaining-guarded). triss seeds `{restrict:true, allow_bash:<read-only set>, allow_tools:["view"]}` at `triss coder init` and passes `--restrict-run` by default (parity with opencode's deny-first bash allowlist). With restrict in place, crush's isolate default flips to OFF (matching opencode); `--no-restrict` opts out. |
+| 5 | [Medium] `crush models list` has network/disk side effects | **Fixed.** Verified live: `crush models list` now reads the on-disk/embedded provider cache with **no network and no cache writes** by default; a fresh fetch is opt-in via `--refresh`. |
+| 6 | [Low] Flag surface inconsistent between subcommands (`crush ping --role`) | **Fixed.** Verified live: `crush ping --role smart\|fast` is accepted, and a dedicated `crush ping-fast` subcommand health-checks the small model. |
+| 7 | [Low] Startup WARN noise on stderr | **Mostly.** Verified live: the old `No git repository` / `Detected Apple Terminal` warnings are gone, and stderr is clean once the models are configured. One WARN remains only on misconfig (large-model-as-small fallback for `local-cli` when no GLM model is set). |
+
+The "What works well" findings (single JSON envelope, native get-or-create
+sessions, clear exit codes, real per-call cost) all still hold in 0.1.3.
+
+---
+
 ## Environment
 
 - **Package:** `@phpcraftdream/crush@0.1.0` (npm, license FSL-1.1-MIT, bin

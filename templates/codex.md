@@ -17,7 +17,9 @@ reason through yourself.
 separate GLM coding agent instead of writing it yourself (setup once via
 `triss coder init`; default `opencode` engine, or `--engine crush`). The
 default opencode engine enforces a deny-first bash allowlist; crush
-(`--engine crush`) has none and isolates by default — keep it isolated.
+(`--engine crush`, ≥0.1.3) has parity via a `permissions.run` policy seeded
+at init and `--restrict-run` by default. Both engines default to
+isolate-OFF; pass `--isolate` for a disposable worktree on top.
 See `triss agent-help --target codex` for flags and the envelope it
 returns.
 

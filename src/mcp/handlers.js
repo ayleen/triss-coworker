@@ -888,15 +888,16 @@ export async function coderRunHandler(
   // root if the project lives in a subdirectory of a larger repo.
   //
   // The check must use the EFFECTIVE isolate flag, not the raw `isolate`
-  // arg: crush defaults isolate-ON when `isolate` is undefined (see
-  // runCoderRun), so a bare crush call WILL create a worktree whose root
-  // needs sandboxing. Resolve the engine the same way runCoderRun does and
-  // derive effectiveIsolate identically, so the right path is checked for
-  // both engines. `cwd` is IGNORED by runCoderRun whenever the run
-  // isolates, so checking cwd too would reject calls over a cwd that's
-  // never actually used — only check whichever one the run will touch.
+  // arg, so it matches runCoderRun's own resolution. Both engines default
+  // isolate-OFF (crush's safety layer is now its permissions.run policy,
+  // not a worktree), so an unset `isolate` resolves to false for either
+  // engine. Resolve the engine the same way runCoderRun does and derive
+  // effectiveIsolate identically, so the right path is checked for both
+  // engines. `cwd` is IGNORED by runCoderRun whenever the run isolates,
+  // so checking cwd too would reject calls over a cwd that's never
+  // actually used — only check whichever one the run will touch.
   const resolvedEngine = resolveCoderEngine({ engine });
-  const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
+  const effectiveIsolate = isolate === undefined ? false : !!isolate;
 
   if (cwd && !effectiveIsolate) {
     const { resolve } = await import('node:path');
@@ -941,8 +942,10 @@ export async function coderStatusHandler() {
       : `Engine: opencode not installed (pin ${status.pin})`,
     ...status.configs.map((c) => `opencode.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
     status.crush.found
-      ? `Engine: crush ${status.crush.version} (dev build — pin check skipped)`
-      : `Engine: crush not installed`,
+      ? `Engine: crush ${status.crush.version}${
+          status.crush.satisfiesPin ? ' (matches pin)' : ` (pin ${status.crush.pin})`
+        }`
+      : `Engine: crush not installed (pin ${status.crush.pin})`,
     ...status.crush.configs.map((c) => `crush.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
     `Worktrees (.triss/wt): ${status.worktreeCount} live`,
   ];

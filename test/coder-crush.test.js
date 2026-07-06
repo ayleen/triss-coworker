@@ -10,18 +10,30 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   buildCrushRunArgv,
   buildCrushSpawnEnv,
+  detectCrush,
   parseCrushEnvelope,
   mapCrushExitReason,
   configureCrushModels,
+  crushPermissionsRunBlock,
+  mergeCrushPermissionsRun,
+  CRUSH_ALLOW_BASH_PATTERNS,
 } from '../src/coder-engines/crush.js';
-import { resolveCoderEngine, DEFAULT_CODER_ENGINE, runCoderInit } from '../src/commands/coder.js';
+import { resolveCoderEngine, DEFAULT_CODER_ENGINE, runCoderInit, resolveCrushRestrict } from '../src/commands/coder.js';
 
 // ─── buildCrushRunArgv ─────────────────────────────────────────────────────────
 
@@ -79,7 +91,7 @@ test('buildCrushRunArgv: --model is omitted on a falsy override (rely on the con
 
 // ─── buildCrushSpawnEnv ─────────────────────────────────────────────────────────
 
-test('buildCrushSpawnEnv: bridges ZHIPU_API_KEY -> ZAI_API_KEY and never leaks ZHIPU_API_KEY itself', () => {
+test('buildCrushSpawnEnv: forwards BOTH ZHIPU_API_KEY and ZAI_API_KEY (crush ≥0.1.1 reads ZHIPU natively; ZAI kept as a compat alias)', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk-secret-key',
     PATH: '/bin',
@@ -90,17 +102,21 @@ test('buildCrushSpawnEnv: bridges ZHIPU_API_KEY -> ZAI_API_KEY and never leaks Z
     // An unrelated var that must NOT cross into the subprocess env.
     AWS_SECRET_ACCESS_KEY: 'should-not-leak',
   });
+  // crush ≥0.1.1 reads ZHIPU_API_KEY directly — forward it verbatim.
+  assert.equal(env.ZHIPU_API_KEY, 'zk-secret-key');
+  // Older crush binaries read ZAI_API_KEY — keep forwarding the same value as
+  // a compat alias so a single user-facing key works across versions.
   assert.equal(env.ZAI_API_KEY, 'zk-secret-key');
-  assert.equal('ZHIPU_API_KEY' in env, false, 'ZHIPU_API_KEY must never appear in the crush env');
   assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined, 'unrelated vars must not be spread');
 });
 
-test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets no ZAI_API_KEY', () => {
+test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets neither ZHIPU_API_KEY nor ZAI_API_KEY', () => {
   const env = buildCrushSpawnEnv({ PATH: '/bin', HOME: '/h' });
   assert.equal('ZAI_API_KEY' in env, false);
+  assert.equal('ZHIPU_API_KEY' in env, false);
 });
 
-test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PATH/HOME/TMPDIR/LANG/LC_ALL/ZAI_API_KEY)', () => {
+test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PATH/HOME/TMPDIR/LANG/LC_ALL/ZHIPU_API_KEY/ZAI_API_KEY)', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk',
     PATH: '/bin',
@@ -112,7 +128,7 @@ test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PAT
     DEBUG: '*',
     SHELL: '/bin/zsh',
   });
-  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZAI_API_KEY']);
+  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY', 'ZAI_API_KEY']);
   for (const key of Object.keys(env)) {
     assert.ok(allowed.has(key), `unexpected key in crush env: ${key}`);
   }
@@ -125,6 +141,141 @@ test('buildCrushSpawnEnv: omits allowlist keys that are unset on the base env', 
   assert.equal('TMPDIR' in env, false);
   assert.equal('LANG' in env, false);
   assert.equal('LC_ALL' in env, false);
+});
+
+// ─── detectCrush (Task 1: version pin + semver parse) ──────────────────────────
+//
+// crush ≥0.1.3 reports a clean `crush version v0.1.3`. detectCrush parses the
+// vX.Y.Z out and returns {found, version, satisfiesPin}; it must NOT throw on
+// a +dirty suffix, garbage, or a newer version. Version mismatch is NON-FATAL
+// (caller warns) — detect just reports satisfiesPin:false.
+
+// A fake spawnSync that returns `stdout` for `crush --version`.
+function versionSh(stdout) {
+  return (cmd, argv) => {
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout, stderr: '', error: null };
+    }
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+}
+
+test('detectCrush: clean `crush version v0.1.3` -> found true, version "0.1.3" (bare), satisfiesPin true', () => {
+  const det = detectCrush(versionSh('crush version v0.1.3\n'));
+  assert.equal(det.found, true);
+  assert.equal(det.version, '0.1.3');
+  assert.equal(det.satisfiesPin, true);
+});
+
+test('detectCrush: a NEWER version (v0.2.0) -> found true, satisfiesPin true', () => {
+  const det = detectCrush(versionSh('crush version v0.2.0'));
+  assert.equal(det.found, true);
+  assert.equal(det.version, '0.2.0');
+  assert.equal(det.satisfiesPin, true);
+});
+
+test('detectCrush: an OLDER version (v0.1.2) -> found true, satisfiesPin false (NON-FATAL — caller warns)', () => {
+  const det = detectCrush(versionSh('crush version v0.1.2'));
+  assert.equal(det.found, true);
+  assert.equal(det.version, '0.1.2');
+  assert.equal(det.satisfiesPin, false);
+});
+
+test('detectCrush: a +dirty suffix (pre-0.1.3 dev build) does not throw, parses the numeric core', () => {
+  const det = detectCrush(versionSh('crush version v0.0.0-20260704214312-f45bb790a171+dirty\n'));
+  assert.equal(det.found, true);
+  // The placeholder 0.0.0 numeric core is parsed; it's below the pin.
+  assert.equal(det.version, '0.0.0');
+  assert.equal(det.satisfiesPin, false);
+});
+
+test('detectCrush: a garbage version string does not throw; found stays true, version is the raw string', () => {
+  const det = detectCrush(versionSh('totally not a version string'));
+  assert.equal(det.found, true);
+  assert.equal(det.satisfiesPin, false);
+  // No semver parseable -> version is the raw trimmed stdout (for diagnostics).
+  assert.equal(det.version, 'totally not a version string');
+});
+
+test('detectCrush: crush missing (non-zero exit / spawn error) -> found false, version null, satisfiesPin false', () => {
+  const missing = () => ({ status: 1, stdout: '', stderr: '', error: null });
+  const enoent = () => ({ status: null, stdout: '', stderr: '', error: new Error('spawn crush ENOENT') });
+  for (const sh of [missing, enoent]) {
+    const det = detectCrush(sh);
+    assert.equal(det.found, false);
+    assert.equal(det.version, null);
+    assert.equal(det.satisfiesPin, false);
+  }
+});
+
+// ─── buildCrushRunArgv: restrict (Task 3) ─────────────────────────────────────
+
+test('buildCrushRunArgv: restrict ON (default) appends --restrict-run', () => {
+  const argv = buildCrushRunArgv({ prompt: 'hi' });
+  // restrict defaults to true.
+  assert.ok(argv.includes('--restrict-run'), 'default restrict=ON must add --restrict-run');
+  // prompt still positional + last.
+  assert.equal(argv[argv.length - 1], 'hi');
+});
+
+test('buildCrushRunArgv: restrict ON explicitly appends --restrict-run', () => {
+  const argv = buildCrushRunArgv({ prompt: 'hi', restrict: true });
+  assert.ok(argv.includes('--restrict-run'));
+});
+
+test('buildCrushRunArgv: restrict OFF appends NEITHER --restrict-run NOR any allow flag', () => {
+  const argv = buildCrushRunArgv({ prompt: 'hi', restrict: false });
+  assert.equal(argv.includes('--restrict-run'), false);
+  // No yolo/allow flags either — crush then runs with no permissions policy.
+  assert.equal(argv.includes('--yolo'), false);
+  assert.equal(argv.some((a) => a.startsWith('--allow')), false);
+});
+
+// ─── permissions.run block (Task 3: init seeding parity with opencode) ────────
+
+test('CRUSH_ALLOW_BASH_PATTERNS: mirrors opencode read-only allowlist (git status/diff/log, ls, node --test, npm test, npm run test)', () => {
+  // Must contain a safe-command entry for each opencode allow pattern.
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.includes('git status'));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p === 'git diff'));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p === 'git log'));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p.startsWith('glob:ls ')));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p.startsWith('glob:node --test ')));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p.startsWith('glob:npm test ')));
+  assert.ok(CRUSH_ALLOW_BASH_PATTERNS.some((p) => p.startsWith('glob:npm run test ')));
+});
+
+test('crushPermissionsRunBlock: returns {restrict:true, allow_bash:<patterns>, allow_tools:["view"]}', () => {
+  const block = crushPermissionsRunBlock();
+  assert.equal(block.restrict, true);
+  assert.deepEqual(block.allow_bash, [...CRUSH_ALLOW_BASH_PATTERNS]);
+  assert.deepEqual(block.allow_tools, ['view']);
+  // Fresh copy each call — mutating one must not poison the constant.
+  block.allow_bash.push('rm -rf');
+  const fresh = crushPermissionsRunBlock();
+  assert.equal(fresh.allow_bash.includes('rm -rf'), false);
+});
+
+test('mergeCrushPermissionsRun: seeds permissions.run into a config that lacks it, WITHOUT touching the models block', () => {
+  const config = { models: { large: 'glm5_2', small: 'glm5_turbo' } };
+  const { merged, hadRunPolicy } = mergeCrushPermissionsRun(config);
+  assert.equal(hadRunPolicy, false);
+  // models block preserved verbatim.
+  assert.deepEqual(merged.models, { large: 'glm5_2', small: 'glm5_turbo' });
+  // permissions.run seeded.
+  assert.equal(merged.permissions.run.restrict, true);
+  assert.deepEqual(merged.permissions.run.allow_bash, [...CRUSH_ALLOW_BASH_PATTERNS]);
+  assert.deepEqual(merged.permissions.run.allow_tools, ['view']);
+  // original input not mutated.
+  assert.equal(config.permissions, undefined);
+});
+
+test('mergeCrushPermissionsRun: does NOT clobber an existing permissions.run (no-clobber)', () => {
+  const userBlock = { restrict: false, allow_bash: ['rm -rf'], allow_tools: [] };
+  const config = { models: { large: 'glm5_2' }, permissions: { run: userBlock } };
+  const { merged, hadRunPolicy } = mergeCrushPermissionsRun(config);
+  assert.equal(hadRunPolicy, true);
+  assert.equal(merged.permissions.run, userBlock, 'user block must be referenced verbatim, not overwritten');
+  assert.equal(merged.permissions.run.restrict, false);
 });
 
 // ─── parseCrushEnvelope ─────────────────────────────────────────────────────────
@@ -456,5 +607,167 @@ test(
     assert.equal(modelsCall, undefined, 'crush models use must NOT be invoked when crush is absent');
     assert.match(captured(), /crush not found/);
     assert.match(captured(), /npm install -g @phpcraftdream\/crush/);
+  }),
+);
+
+// ─── Task 3: permissions.run seeding at init (parity with opencode) ──────────
+//
+// A fake spawnSync that mimics REAL `crush models use`: on the models-use call
+// it READ-MODIFY-WRITES crush.json (preserving existing keys, setting only the
+// models block) — exactly what the real binary does. This lets seedCrushPermissions
+// read-modify-write the same file and exercise the merge/no-clobber paths.
+
+function crushWritingModelsSh() {
+  const calls = [];
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: 'crush version v0.1.3\n', stderr: '', error: null };
+    }
+    if (cmd === 'crush' && argv[0] === 'models' && argv[1] === 'use') {
+      const scopeFlag = argv[argv.length - 1];
+      const scope = scopeFlag === '--local' ? 'local' : 'global';
+      const path =
+        scope === 'local'
+          ? join(process.env.HOME, '.crush', 'crush.json')
+          : join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+      let existing = {};
+      if (existsSync(path)) {
+        try {
+          const parsed = JSON.parse(readFileSync(path, 'utf8'));
+          if (parsed && typeof parsed === 'object') existing = parsed;
+        } catch {
+          /* corrupt — start fresh, like crush would */
+        }
+      }
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify({ ...existing, models: { large: 'glm5_2', small: 'glm5_turbo' } }, null, 2) + '\n',
+      );
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+  sh.calls = calls;
+  return sh;
+}
+
+test(
+  'runCoderInit --engine crush --global: seeds permissions.run.restrict:true + allow_bash WITHOUT dropping the models block',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = crushWritingModelsSh();
+    await runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh });
+
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    assert.ok(existsSync(path), 'crush.json must exist after init');
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+
+    // The models block that `crush models use` wrote must still be there.
+    assert.deepEqual(config.models, { large: 'glm5_2', small: 'glm5_turbo' });
+    // permissions.run seeded with restrict ON and the read-only allowlist.
+    assert.equal(config.permissions.run.restrict, true);
+    assert.ok(
+      config.permissions.run.allow_bash.some((p) => p === 'git diff'),
+      'allow_bash must mirror the opencode read-only set',
+    );
+    assert.ok(config.permissions.run.allow_tools.includes('view'));
+    // Confirmation logged.
+    assert.match(captured(), /seeded permissions\.run/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: does NOT clobber an existing user permissions.run (no-clobber + dim warning)',
+  withTmpCrushHome(async ({ captured }) => {
+    // Pre-create crush.json with a USER-SET permissions.run (restrict OFF +
+    // a custom command). `crush models use` preserves it; seedCrushPermissions
+    // must leave it untouched.
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          models: { large: 'glm5_2', small: 'glm5_turbo' },
+          permissions: { run: { restrict: false, allow_bash: ['custom-cmd'], allow_tools: [] } },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+
+    const sh = crushWritingModelsSh();
+    await runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh });
+
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    // User block preserved verbatim — NOT overwritten with restrict:true.
+    assert.equal(config.permissions.run.restrict, false);
+    assert.deepEqual(config.permissions.run.allow_bash, ['custom-cmd']);
+    // Warned (dim) that the existing block lacks restrict:true.
+    assert.match(captured(), /permissions\.run without restrict:true/);
+  }),
+);
+
+// ─── Task 3: resolveCrushRestrict resolution order ────────────────────────────
+//
+// CLI --no-restrict (opts.restrict:false) beats TRISS_CODER_CRUSH_RESTRICT=1
+// beats crush.json permissions.run.restrict beats built-in default true.
+
+function writeGlobalCrushJson(content) {
+  const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, typeof content === 'string' ? content : JSON.stringify(content, null, 2) + '\n');
+}
+
+test(
+  'resolveCrushRestrict: built-in default is true when nothing is set',
+  withTmpCrushHome(async () => {
+    assert.equal(resolveCrushRestrict({}), true);
+    assert.equal(resolveCrushRestrict({ restrict: undefined }), true);
+  }),
+);
+
+test(
+  'resolveCrushRestrict: crush.json permissions.run.restrict beats the built-in default',
+  withTmpCrushHome(async () => {
+    writeGlobalCrushJson({ permissions: { run: { restrict: false } } });
+    assert.equal(resolveCrushRestrict({}), false);
+  }),
+);
+
+test(
+  'resolveCrushRestrict: TRISS_CODER_CRUSH_RESTRICT env beats crush.json config',
+  withTmpCrushHome(async () => {
+    writeGlobalCrushJson({ permissions: { run: { restrict: false } } });
+    const saved = process.env.TRISS_CODER_CRUSH_RESTRICT;
+    process.env.TRISS_CODER_CRUSH_RESTRICT = '1';
+    try {
+      assert.equal(resolveCrushRestrict({}), true, 'env=1 must override config restrict:false');
+    } finally {
+      if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_RESTRICT;
+      else process.env.TRISS_CODER_CRUSH_RESTRICT = saved;
+    }
+  }),
+);
+
+test(
+  'resolveCrushRestrict: CLI --no-restrict (opts.restrict:false) beats env=1',
+  withTmpCrushHome(async () => {
+    writeGlobalCrushJson({ permissions: { run: { restrict: true } } });
+    const saved = process.env.TRISS_CODER_CRUSH_RESTRICT;
+    process.env.TRISS_CODER_CRUSH_RESTRICT = '1';
+    try {
+      assert.equal(
+        resolveCrushRestrict({ restrict: false }),
+        false,
+        '--no-restrict must win over env and config',
+      );
+      // And --restrict wins over a config that says false.
+      assert.equal(resolveCrushRestrict({ restrict: true }), true);
+    } finally {
+      if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_RESTRICT;
+      else process.env.TRISS_CODER_CRUSH_RESTRICT = saved;
+    }
   }),
 );

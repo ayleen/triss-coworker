@@ -1,7 +1,8 @@
 // `triss coder` — delegate coding tasks to a GLM agent. opencode is the
 // default engine (deny-first bash policy); crush is an optional second
 // engine behind --engine crush / TRISS_CODER_ENGINE=crush (single JSON
-// envelope, native session ids, isolates by default).
+// envelope, native session ids; 0.1.3+ adds a permissions.run policy
+// seeded at init so crush has parity with opencode's safety layer).
 // See docs/coder-agent-plan.md for the original roadmap (init/run/clean,
 // the opencode adapter, MCP wiring — all shipped). Naming: "agent" is
 // taken (the AI assistant using triss), so this feature is "coder"
@@ -288,18 +289,30 @@ export async function runCoderInit(opts = {}, deps = {}) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
   if (engine === 'crush') {
-    // crush init's ONE job beyond the shared ZHIPU_API_KEY setup: pin the
+    // crush init's jobs beyond the shared ZHIPU_API_KEY setup: (1) pin the
     // default model atoms (glm5_2 / glm5_turbo) via `crush models use` so
-    // --role smart/fast resolve to GLM deterministically (otherwise crush may
-    // pick a non-GLM default atom). The adapter bridges ZHIPU_API_KEY ->
-    // ZAI_API_KEY at run time, so NO key is written into crush.json here.
+    // --role smart/fast resolve to GLM deterministically; (2) seed the
+    // permissions.run policy (restrict + read-only allow_bash) into crush.json
+    // so crush 0.1.3+ runs restricted by default — the crush analog of
+    // opencode's deny-first opencode.json bash allowlist. The adapter bridges
+    // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
+    // crush.json here.
     process.stderr.write('\n' + pc.bold('── coder (crush engine) ──') + '\n');
     const sh = deps.spawnSync || nodeSpawnSync;
     const det = crushEngine.detect(sh);
     if (det.found && det.version) {
-      process.stderr.write(
-        pc.dim(`  · crush ${det.version} (pin check skipped — see docs/crush-issues.md)\n`),
-      );
+      // Version mismatch is NON-FATAL: warn yellow, keep going. The install
+      // hint below already carries the pin for an `npm install -g` upgrade.
+      if (det.satisfiesPin) {
+        process.stderr.write(pc.green(`  ✓ crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
+      } else {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
+              '(not auto-upgrading — restrict-run policy still seeds into crush.json)\n',
+          ),
+        );
+      }
     } else {
       process.stderr.write(
         pc.yellow(`  ⚠ crush not found — install: ${crushEngine.installHint()}\n`),
@@ -316,6 +329,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
     if (det.found) {
       const res = crushEngine.configureCrushModels({ scope, sh });
       process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
+      // Seed permissions.run AFTER `crush models use` has written the models
+      // block — read-modify-write so we MERGE, never clobber it. Skipped
+      // (warned) when crush.json already has a user-set permissions.run.
+      seedCrushPermissions(scope);
+    } else {
+      // crush binary absent: still seed permissions.run into crush.json if we
+      // can, so the policy is in place the moment the user installs crush.
+      // (crush.json may not exist yet — seedCrushPermissions creates it.)
+      seedCrushPermissions(scope);
     }
   } else {
     await runCoderSetup({ scope }, deps);
@@ -443,6 +465,112 @@ function crushConfigPath(scope) {
   return scope === 'local'
     ? join(projectRoot(), '.crush', 'crush.json')
     : join(homedir(), '.local', 'share', 'crush', 'crush.json');
+}
+
+// seedCrushPermissions: read-modify-write crush.json to MERGE in the
+// permissions.run policy (restrict:true + the read-only allow_bash that
+// mirrors opencode's bash allowlist). There is NO `crush config` CLI, so we
+// touch the JSON that `crush models use` already wrote — and we MERGE, never
+// clobbering the `models` block or a user-set `permissions.run`.
+//
+// No-clobber rules (parity with opencode's "don't overwrite an existing
+// opencode.json"):
+//  - crush.json missing or has no permissions.run -> seed it (green).
+//  - crush.json already has a permissions.run -> leave it untouched. Warn dim
+//    when it lacks restrict:true (mirrors the opencode "existing config lacks
+//    deny policy" warning) so the user knows their runs will be unrestricted;
+//    stay quiet + dim-confirm when they DO have restrict:true.
+//  - crush.json unparseable -> warn yellow and skip (don't risk clobbering a
+//    hand-maintained file we can't read).
+//
+// Uses atomicWriteJson (write-then-rename) so a reader never sees a torn file.
+function seedCrushPermissions(scope) {
+  const path = crushConfigPath(scope);
+  let config = {};
+  if (existsSync(path)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed;
+    } catch {
+      process.stderr.write(
+        pc.yellow(`  ⚠ ${path} is not valid JSON — not seeding permissions.run (edit it manually)\n`),
+      );
+      return;
+    }
+  }
+  const existingRun =
+    config.permissions && typeof config.permissions === 'object' ? config.permissions.run : undefined;
+  if (existingRun && typeof existingRun === 'object') {
+    // No-clobber: respect the user's existing permissions.run verbatim.
+    if (existingRun.restrict === true) {
+      process.stderr.write(
+        pc.dim(`  · ${path} already has a permissions.run (restrict:true) — not overwriting\n`),
+      );
+    } else {
+      process.stderr.write(
+        pc.dim(
+          `  · ${path} has a permissions.run without restrict:true — crush runs will be ` +
+            'unrestricted; set permissions.run.restrict true to enable the allow_bash policy\n',
+        ),
+      );
+    }
+    return;
+  }
+  const { merged } = crushEngine.mergeCrushPermissionsRun(config);
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWriteJson(path, merged);
+  process.stderr.write(
+    pc.green(`  ✓ seeded permissions.run (restrict + read-only allow_bash) into ${path}\n`),
+  );
+}
+
+// crush's restrict policy default. crush 0.1.3 honors a permissions.run policy
+// in crush.json; with it in place, restrict is crush's safety layer (parity
+// with opencode's deny-first bash allowlist), so it defaults ON.
+const CRUSH_RESTRICT_DEFAULT = true;
+
+// Read permissions.run.restrict out of crush.json (local first, then global —
+// matching crush's own local-over-global precedence). Returns true/false when
+// the user hand-set it, or undefined when neither file sets it (caller falls
+// back to the built-in default). Never throws: missing/malformed files are
+// skipped. Used by resolveCrushRestrict at run time.
+function readCrushConfigRestrict() {
+  for (const scope of ['local', 'global']) {
+    const path = crushConfigPath(scope);
+    if (!existsSync(path)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      const restrict = parsed?.permissions?.run?.restrict;
+      if (restrict === true || restrict === false) return restrict;
+    } catch {
+      // malformed crush.json — skip to the next scope, don't abort the run.
+    }
+  }
+  return undefined;
+}
+
+// Resolve the crush restrict tristate to a concrete boolean. Order (per the
+// Phase 6 re-eval spec):
+//   1. CLI flag --restrict (true) / --no-restrict (false) — opts.restrict.
+//      Both options are declared WITHOUT a Commander default in bin/triss.js,
+//      so opts.restrict is undefined when neither is passed (the tristate is
+//      load-bearing — do NOT add a default there).
+//   2. TRISS_CODER_CRUSH_RESTRICT env (1/true/yes/on => true; 0/false/no/off
+//      => false; any other value ignored so garbage can't silently flip safety).
+//   3. crush.json permissions.run.restrict (if the user hand-set it).
+//   4. Built-in default: ON (parity with opencode).
+// Exported so the resolution order is unit-testable without driving a run.
+export function resolveCrushRestrict(opts = {}) {
+  if (opts.restrict === true || opts.restrict === false) return opts.restrict;
+  const env = process.env.TRISS_CODER_CRUSH_RESTRICT;
+  if (env !== undefined) {
+    const v = String(env).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+    if (['0', 'false', 'no', 'off'].includes(v)) return false;
+  }
+  const fromConfig = readCrushConfigRestrict();
+  if (fromConfig !== undefined) return fromConfig;
+  return CRUSH_RESTRICT_DEFAULT;
 }
 
 function opencodeConfigTemplate(model, smallModel) {
@@ -653,6 +781,8 @@ export function describeCoderStatus(deps = {}) {
     crush: {
       found: crushDetect.found,
       version: crushDetect.version,
+      satisfiesPin: crushDetect.satisfiesPin,
+      pin: crushEngine.CRUSH_PIN,
       configs: crushConfigs,
     },
     defaultEngine,
@@ -1484,6 +1614,11 @@ async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolatio
   const session = slug || opts.session || null;
   const dir = isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : null;
 
+  // restrict tristate resolution is crush-only (opencode's safety layer is its
+  // opencode.json bash policy, not a restrict flag). CLI --restrict/--no-restrict
+  // > TRISS_CODER_CRUSH_RESTRICT env > crush.json permissions.run.restrict > true.
+  const restrict = resolveCrushRestrict(opts);
+
   const argv = crushEngine.buildRunArgv({
     prompt,
     model: modelOverride, // only when an explicit override is given
@@ -1491,17 +1626,26 @@ async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolatio
     continue: !!opts.continue,
     cwd: dir,
     timeoutSec,
+    restrict,
   });
   const env = crushEngine.buildSpawnEnv();
 
-  // Presence-only version detect: crush --version reports a dirty dev string
-  // (docs/crush-issues.md), so log what it says dim but skip the pin check.
+  // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
+  // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow
+  // and the run continues (the restrict-run policy still applies via crush.json).
   const det = crushEngine.detect(sh);
   const engineVersion = det.version || crushEngine.CRUSH_PIN;
   if (det.found && det.version) {
-    process.stderr.write(
-      pc.dim(`  · crush ${det.version} (pin check skipped — see docs/crush-issues.md)\n`),
-    );
+    if (det.satisfiesPin) {
+      process.stderr.write(pc.dim(`  · crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
+    } else {
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
+            '(not auto-upgrading)\n',
+        ),
+      );
+    }
   }
 
   process.stderr.write(
@@ -1683,18 +1827,19 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
 
-  // Effective --isolate. opencode defaults isolate-OFF (its deny-first
-  // opencode.json policy is the safety layer). crush defaults isolate-ON
-  // because `crush run` auto-approves EVERY tool with no bash allowlist
-  // (docs/crush-issues.md "[Medium] crush run auto-approves every tool with
-  // no allowlist") — a disposable git worktree is the one structural
-  // mitigation triss can apply for crush. An explicit --isolate / --no-isolate
-  // always wins. bin/triss.js declares BOTH options on `coder run` (neither
-  // carries a default), so Commander yields the tristate this line relies on:
+  // Effective --isolate. BOTH engines default isolate-OFF now: opencode's
+  // safety layer is its deny-first opencode.json bash policy; crush 0.1.3's
+  // safety layer is the permissions.run policy (restrict + read-only
+  // allow_bash) seeded into crush.json at init and enforced via --restrict-run
+  // (see resolveCrushRestrict). Earlier crush isolated by default because it
+  // had no allowlist — that's no longer true, so crush now has parity with
+  // opencode. An explicit --isolate / --no-isolate always wins.
+  // bin/triss.js declares BOTH options on `coder run` (neither carries a
+  // default), so Commander yields the tristate this line relies on:
   // opts.isolate is `undefined` when neither flag is passed, `true` under
   // --isolate, `false` under --no-isolate. (Do NOT add a default to either
   // option — the undefined tristate is load-bearing here.)
-  const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
+  const isolate = opts.isolate === undefined ? false : !!opts.isolate;
 
   // Pure usage-error checks first, independent of environment/credentials
   // — a caller should get "you combined two contradictory flags" rather

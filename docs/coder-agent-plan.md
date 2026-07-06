@@ -687,3 +687,160 @@ over. The engine-abstraction shape in Phase 6 step 1 still holds; the
 writer, and a new adapter member is needed for the spawn-env key bridge
 (`ZHIPU_API_KEY` → `ZAI_API_KEY`) and the crush-only safety env
 (`CRUSH_FORBID_WRITES`).
+
+## Phase 6 re-eval (crush 0.1.3 — 2026-07-06)
+
+The fork maintainer shipped three releases (0.1.1 → 0.1.3, all 2026-07-05)
+in direct response to `docs/crush-issues.md`. Re-verified every one of the
+seven reported issues live on `0.1.3` (real `ZHIPU_API_KEY`, live Z.AI
+coding-plan endpoint). Scorecard:
+
+| # | Sev | Issue | Status | Evidence (0.1.3) |
+|---|-----|-------|--------|------------------|
+| 1 | High | `--version` = `v0.0.0…+dirty` | ✅ fixed | reports clean `v0.1.3` |
+| 2 | High | `zai` reads only `ZAI_API_KEY` | ✅ fixed | with only `ZHIPU_API_KEY` set (`ZAI_API_KEY` unset), `zai` hit the network and returned 401 → key read natively |
+| 3 | Med | `--role fast` (glm-5-turbo) hung to timeout | ✅ fixed | original repro (`crush run --role fast --model zai/glm-5-turbo`) → `exit_reason:end_turn`, `final_text:"PONG"` in 47s |
+| 4 | Med | no allowlist, everything auto-approved | ✅ fixed | `--restrict-run` + `--allow-bash` (forms: prefix / `exact:` / `glob:` / `regex:`, chaining-guarded) + `--allow-tool` + config `permissions.run.{restrict,allow_bash,allow_tools}`; CLI merges with config |
+| 5 | Med | `models list` does network + disk writes | ✅ fixed | default reads cache/embedded, no network, no writes; `--refresh` is opt-in |
+| 6 | Low | `ping` rejects `--role` | ✅ fixed | `ping --role smart\|fast` + dedicated `ping-fast` |
+| 7 | Low | startup WARN noise on stderr | 🟡 mostly | old git-repo / Apple-Terminal warnings gone; stderr is clean once models are configured; one WARN remains only on misconfig (large-as-small fallback for `local-cli`) |
+
+**6/7 fully fixed, 1 (low) mostly. Every High and Medium is resolved.**
+Issue #4 was closed exactly as suggested (command-pattern allowlist honored
+by `crush run`), and better — CLI flags merge with `crush.json`.
+
+Bonus levers added (not requested), worth surfacing later: `--effort
+low|medium|high`, `--on-finish` hook (`CRUSH_SESSION_ID/EXIT_REASON/COST_USD/
+TOKENS/DURATION_SEC`), watchdog `--timeout-extends-on-progress` +
+`--timeout-hard-cap`, `--small-model`, `--format json-schema:<file>`,
+`--aggregation attach|concat` for sub-agent fan-out + reduction-loss
+warning, per-session budget persistence, default `--timeout` now 60m.
+
+The `exit_reason` vocabulary is unchanged (`done | canceled | timeout |
+max_cost | max_tokens | error`, plus `end_turn`) → `mapCrushExitReason`
+already covers all of them; **no mapper change needed.**
+
+### What to do now (adapter work — implement via GLM, Claude reviews)
+
+Assignee: GLM (`triss coder run --engine crush`). Reviewer: Claude.
+All changes are in `src/coder-engines/crush.js` + tests + docs. Ship on
+`feat/coder-crush-engine`.
+
+1. **Bump the pin + enforce the version.**
+   - `CRUSH_PIN_DEFAULT`: `0.1.0` → `0.1.3`.
+   - `detectCrush()` is presence-only today with a TODO "enforce pin once
+     crush --version reports clean semver." That precondition now holds
+     (`v0.1.3`). Parse the `vX.Y.Z` out of `crush --version` and return a
+     structured `{found, version, satisfiesPin}`; the caller warns (dim
+     stderr, non-fatal) on mismatch. Keep it non-fatal — a newer crush must
+     still run. Drop the two `TODO: enforce pin` comments.
+   - Test: feed a fake `sh` returning `crush version v0.1.3` and assert
+     parsed `version === '0.1.3'` / `satisfiesPin === true`; also a
+     `v0.2.0` (newer, still `found:true`) and a garbage string.
+
+2. **Retire / re-annotate the ZHIPU→ZAI env bridge.**
+   - crush now reads `ZHIPU_API_KEY` natively (issue #2), so the
+     `ZHIPU_API_KEY → ZAI_API_KEY` copy in `buildCrushSpawnEnv` is no longer
+     required. Decision: **keep it as belt-and-suspenders** (harmless, helps
+     anyone still on 0.1.0) BUT rewrite the "silently unconfigured zai
+     provider" comment — it is now false for 0.1.1+. New comment: crush
+     ≥0.1.1 reads `ZHIPU_API_KEY` directly; we still forward `ZAI_API_KEY`
+     as a compatibility alias for older binaries. Also forward
+     `ZHIPU_API_KEY` itself into the env allowlist so the native path works.
+   - Test: assert the spawn env contains BOTH `ZHIPU_API_KEY` and
+     `ZAI_API_KEY` when the base env has `ZHIPU_API_KEY`.
+
+3. **Adopt real restricted-run safety — DECISION: Variant A (parity with
+   opencode), restrict ON by default.** This closes the one gap we flagged.
+   The design mirrors opencode's deny-first `opencode.json`: persist the
+   policy in `crush.json`, do NOT inject the allowlist as per-run CLI flags.
+   Rationale: crush merges `permissions.run.allow_bash` from config with CLI
+   flags and honors `permissions.run.restrict:true` — so a config-seeded
+   policy travels into isolated worktrees and lets users add/remove/replace
+   commands by editing ONE file, exactly like `opencode.json`. Injecting via
+   CLI flags would let users only ADD, not remove our defaults.
+   - **Seed `permissions.run` into `crush.json` at init**
+     (`configureCrushModels` / the crush init path). `crush models use`
+     already writes `.crush/crush.json` (local) / `~/.local/share/crush/
+     crush.json` (global) with a `models` block and NO permissions — there
+     is no `crush config` CLI, so read-modify-write that JSON, merging the
+     `permissions.run` block into the existing object (never clobber the
+     `models` block). Write:
+     ```json
+     "permissions": { "run": {
+       "restrict": true,
+       "allow_bash": [ …shared read-only set… ],
+       "allow_tools": ["view"]
+     }}
+     ```
+   - **Shared allowlist constant.** Mirror the opencode adapter's trusted
+     set verbatim so both engines behave identically. opencode's is
+     `opencode.json` `permission.bash` (see coder.js ~L453): `git status`,
+     `git diff*`, `git log*`, `ls*`, `node --test*`, `npm test*`,
+     `npm run test*`, with `webfetch/websearch: deny`. Translate to crush
+     forms (`'git diff'` prefix, `'glob:ls *'`, `'glob:npm test *'`,
+     `'glob:node --test *'`, etc.) in ONE named constant so a bump is one
+     edit. crush's chaining-guard on prefix patterns is stricter than
+     opencode's glob — fine, keep it.
+   - **No-clobber, like opencode.** If the user already has a
+     `permissions.run` block in crush.json, do NOT overwrite it; if an
+     existing crush.json has no restrict policy, warn on stderr (dim), same
+     as the opencode "existing config lacks deny policy" warning path
+     (coder.js ~L503).
+   - **Flip crush's isolate default to OFF** to complete the parity. Today
+     `coder.js:1697` defaults crush isolate-ON because it had no allowlist;
+     under Variant A the config-seeded deny-first policy is the safety layer,
+     so crush should default isolate-OFF like opencode. Update that line AND
+     its comment. `--isolate` / `--no-isolate` tristate still wins.
+
+   **User override surface (precedence high → low) — document all four:**
+   1. Per-run CLI: add `--no-restrict` / `--restrict` tristate on `coder
+      run` in `bin/triss.js` (mirror the existing `--isolate` tristate — no
+      Commander default, undefined = "use env/config default"). `--no-restrict`
+      drops to auto-approve for one run; `--isolate` brings back the
+      disposable worktree for one run.
+   2. Env: `TRISS_CODER_CRUSH_RESTRICT=0` disables restrict by default
+      without touching config or flags. (Add to README + .env.example.)
+   3. Persistent: edit `crush.json` `permissions.run` — set
+      `restrict:false`, or add/remove/replace `allow_bash`/`allow_tools`.
+      This is the recommended, opencode-equivalent override.
+   4. Fallback default when none of the above is set: restrict ON.
+
+   Resolution order in code: CLI flag (if defined) > `TRISS_CODER_CRUSH_
+   RESTRICT` env (if set) > `crush.json` `permissions.run.restrict` (if the
+   user hand-set it) > built-in default `true`. When restrict resolves ON
+   and we control the config, `buildCrushRunArgv` passes `--restrict-run`
+   (belt-and-suspenders even though config also has `restrict:true`); when
+   it resolves OFF, pass nothing (crush's auto-approve default).
+   - Tests: (a) init seeds `permissions.run.restrict:true` + the shared
+     allow_bash into a fresh crush.json WITHOUT dropping the `models` block;
+     (b) init does NOT clobber a user's existing `permissions.run`;
+     (c) `buildCrushRunArgv` with restrict ON contains `--restrict-run`,
+     with restrict OFF contains neither `--restrict-run` nor allow flags;
+     (d) resolution order: CLI `--no-restrict` beats env=1 beats config.
+
+4. **Docs lockstep (per CLAUDE.md "user-visible change" rule).**
+   - `docs/crush-issues.md`: add a "Resolved in 0.1.3 (2026-07-06)" header
+     block at the top mapping each issue → fixed/mostly, so the report reads
+     as closed, not open. Do not delete the original findings (they are the
+     provenance).
+   - `README.md` + `.env.example`: document any new env var introduced in
+     step 3 (`TRISS_CODER_CRUSH_RESTRICT` / allowlist) and the
+     `TRISS_CODER_CRUSH_VERSION` pin now defaulting to `0.1.3`.
+   - `docs/mcp.md` only if a new gating env var is added.
+
+5. **Do NOT (out of scope for this pass, note for later):** wiring
+   `--effort`, `--on-finish`, or the progress-watchdog flags. They are real
+   upside but belong in a follow-up; keep this PR to "close the 7 issues +
+   safety parity."
+
+Review focus for Claude: (a) version parse handles `+dirty`/garbage/newer
+without throwing; (b) the env bridge keeps BOTH keys and the comment no
+longer claims the provider is "silently unconfigured"; (c) Variant A parity
+is correct — init seeds `permissions.run` WITHOUT clobbering the `models`
+block or an existing user policy, the shared allowlist actually matches the
+opencode set, crush isolate default is flipped to OFF, and the override
+resolution order (CLI > env > config > default-ON) is exactly as specified;
+(d) `spawnSync` stays argv-array (never `shell:true`); (e) all three doc
+files moved in lockstep, and the `--no-restrict` flag + `TRISS_CODER_CRUSH_
+RESTRICT` env are both documented in README + .env.example.

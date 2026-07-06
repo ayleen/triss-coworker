@@ -838,7 +838,7 @@ const CODER_TOOLS = [
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
         agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
         model: { type: 'string', description: 'Override the model for this run only' },
-        isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (crush isolates by default when this is unset)' },
+        isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (both engines default to isolate-OFF; crush safety now comes from its permissions.run policy)' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },

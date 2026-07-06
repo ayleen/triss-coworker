@@ -250,7 +250,8 @@ self-hosted endpoints).
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
-| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.0`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.3`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
+| `TRISS_CODER_CRUSH_RESTRICT`     | no       | `1`                 | crush only — enforce the `permissions.run` policy (`--restrict-run`). `0` makes crush auto-approve every tool. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
 actually authenticates against — the `zai-coding-plan` (subscription)
@@ -266,17 +267,22 @@ call it can never complete.
 **Engines.** `opencode` (default) enforces a deny-first per-command bash
 allowlist via `opencode.json` (curated safe commands only). `crush`
 (`--engine crush` or `TRISS_CODER_ENGINE=crush`; npm
-`@phpcraftdream/crush`, bin `crush`) has **no such allowlist** — `crush
-run` auto-approves every tool — so triss compensates by defaulting
-`--isolate` ON for crush (disposable git worktree) plus `--agents single`;
-pass `--no-isolate` to opt out. Prefer opencode when you want the
-bash-policy safety layer; crush is simpler (one JSON envelope, native
-session ids) and fine inside isolation, but don't run it with
-`--no-isolate` in a workspace you can't afford to lose. Both engines
-share the single `ZHIPU_API_KEY` — crush's built-in `zai` provider reads
-`ZAI_API_KEY`, which triss bridges automatically in the subprocess env.
-See `docs/crush-issues.md` for the fuller list of crush caveats (dirty
-version string, `ZAI_API_KEY` naming, `--role fast` latency).
+`@phpcraftdream/crush` ≥0.1.3, bin `crush`) now has parity: `triss coder init`
+seeds a `permissions.run` policy (`restrict:true` + a read-only `allow_bash`
+set mirroring opencode's) into crush.json, and `triss coder run` passes
+`--restrict-run` by default. So **both engines default to `--isolate` OFF**
+— the config policy is the safety layer; use `--isolate` for a disposable
+worktree on top. Override crush's policy per-run with `--restrict` /
+`--no-restrict`, or via `TRISS_CODER_CRUSH_RESTRICT=0|1` (resolution: CLI
+flag > env > crush.json `permissions.run.restrict` > default ON). Prefer
+opencode when you want the bash-policy safety layer baked into the project;
+crush is simpler (one JSON envelope, native session ids) and equally safe
+inside its restrict policy, but `--no-restrict` reverts to crush's old
+all-or-nothing behavior — don't use it in a workspace you can't afford to
+lose. Both engines share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it
+natively; triss also forwards it as `ZAI_API_KEY` for older binaries.
+See `docs/crush-issues.md` for the fuller list of crush caveats (the
+`--role fast` latency question, `crush models list` side effects).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — its engine env
 allowlist and `--timeout` kill both rely on POSIX process-group

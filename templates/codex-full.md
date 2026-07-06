@@ -44,7 +44,8 @@ policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 (or set `TRISS_CODER_ENGINE=crush`) to target the crush engine instead.
 
 Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
-[--agent <name>] [--model <p/m>] [--isolate] [--no-isolate] [--cwd <path>]
+[--agent <name>] [--model <p/m>] [--isolate] [--no-isolate]
+[--restrict] [--no-restrict] [--cwd <path>]
 [--timeout <sec>] [--stdin]` — prints one JSON envelope to stdout (`engine`,
 `engine_version`, `session_id`, `exit_reason`, `final_text`, `files_changed`,
 `diff_stat`, `worktree`, `usage`, `warnings`). `--engine <name>` selects
@@ -59,18 +60,23 @@ of every worktree under `.triss/wt`).
 
 **Engines.** `opencode` (default) enforces a deny-first bash allowlist via
 `opencode.json` — prefer it for that safety layer. `crush` (npm
-`@phpcraftdream/crush`, bin `crush`) has **no bash allowlist** — `crush run`
-auto-approves every tool — so triss defaults `--isolate` ON for crush and
-passes `--agents single`; don't use `--no-isolate` in a workspace you can't
-lose. crush is simpler otherwise (one JSON envelope, native session ids).
-Both share the single `ZHIPU_API_KEY` (crush's `zai` provider reads
-`ZAI_API_KEY`, bridged automatically). See `docs/crush-issues.md` for caveats.
+`@phpcraftdream/crush` ≥0.1.3, bin `crush`) now has parity: `triss coder
+init` seeds a `permissions.run` policy (`restrict:true` + a read-only
+`allow_bash` set) into crush.json, and `triss coder run` passes
+`--restrict-run` by default. So **both engines default to `--isolate` OFF**
+— the config policy is the safety layer; use `--isolate` for a disposable
+worktree on top. Override per-run with `--restrict` / `--no-restrict`, or
+via `TRISS_CODER_CRUSH_RESTRICT=0|1`. crush is simpler otherwise (one JSON
+envelope, native session ids). Both share the single `ZHIPU_API_KEY`
+(crush ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY`
+for older binaries). See `docs/crush-issues.md` for caveats.
 
 Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
 `zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
 `1.17.13`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.0`).
+(crush pin override, default `0.1.3`), `TRISS_CODER_CRUSH_RESTRICT` (crush only,
+default `1`).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
 Windows. `triss coder init`/`clean` are unaffected.

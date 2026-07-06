@@ -245,7 +245,8 @@ test(
     assert.equal(engineProp.type, 'string');
     assert.deepEqual(engineProp.enum, ['opencode', 'crush']);
     // isolate stays OPTIONAL with NO schema default — the undefined tristate
-    // must reach runCoderRun so crush's isolate-ON default applies.
+    // must reach runCoderRun (both engines now default isolate-OFF; crush's
+    // safety layer is its permissions.run policy, not a worktree).
     assert.ok(!('default' in run.inputSchema.properties.isolate));
   }),
 );
@@ -269,7 +270,7 @@ test(
 );
 
 test(
-  'coderRunHandler: leaves isolate UNDEFINED when the caller omits it (so crush isolates by default)',
+  'coderRunHandler: leaves isolate UNDEFINED when the caller omits it (both engines default isolate-OFF now)',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const seen = [];
     const spyRun = async (_prompt, opts) => {
@@ -280,19 +281,21 @@ test(
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
     // Must be strictly undefined, NOT coerced to false — runCoderRun's
-    // `opts.isolate === undefined ? engine === 'crush' : !!opts.isolate`
-    // depends on the tristate.
+    // `opts.isolate === undefined ? false : !!opts.isolate` depends on the
+    // tristate (both engines resolve undefined -> isolate OFF).
     assert.equal(seen[0].isolate, undefined);
   }),
 );
 
 test(
-  'coderRunHandler: engine "crush" with no isolate still sandbox-checks the worktree root (crush isolates by default)',
+  'coderRunHandler: engine "crush" with isolate:true sandbox-checks the worktree root',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
-    // Build a repo, then set the sandbox to a SUBDIR — crush's default
-    // isolate-ON means its worktree would land at the repo root, which is
-    // OUTSIDE the subdir sandbox. The engine-aware sandbox check must catch
-    // this even though the caller passed no `isolate` and no `cwd`.
+    // crush no longer isolates by default (its permissions.run policy is the
+    // safety layer), so a bare crush call creates NO worktree and the worktree-
+    // root sandbox check only fires when the caller explicitly passes
+    // isolate:true. Build a repo, then set the sandbox to a SUBDIR — crush's
+    // worktree would land at the repo root, which is OUTSIDE the subdir
+    // sandbox. The engine-aware sandbox check must catch this when isolate:true.
     const repoRoot = initRepo();
     const sandboxDir = join(repoRoot, 'sandbox-subdir');
     mkdirSync(sandboxDir);
@@ -303,7 +306,7 @@ test(
       await assert.rejects(
         () =>
           coderRunHandler(
-            { prompt: 'do something', engine: 'crush' },
+            { prompt: 'do something', engine: 'crush', isolate: true, session: 'mcp-iso-check' },
             { spawn: fakeSpawnReplayingFixture() },
           ),
         /outside the project root/,

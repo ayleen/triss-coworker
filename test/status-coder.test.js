@@ -117,19 +117,18 @@ test(
 );
 
 test(
-  'runStatus: shows the crush version flagged as a dev build when crush is detected',
+  'runStatus: shows the crush version with a pin-check label when crush is detected',
   withTmpKey(async () => {
     const dirty = 'crush version v0.0.0-20260704214312-f45bb790a171+dirty';
     const out = stripAnsi(
       await captureStdout(() => runStatus({ spawnSync: fakeSh({ crushVersion: dirty }) }))(),
     );
-    // The dirty dev string is surfaced verbatim with a "(dev build …)" qualifier
-    // (crush --version is unpinned — docs/crush-issues.md). Check the version
-    // prefix, the +dirty marker, and the dev-build qualifier separately so the
-    // assertion is robust to the exact timestamp/hash in the version string.
-    assert.match(out, /crush\s+crush version v0\.0\.0/);
-    assert.match(out, /\+dirty/);
-    assert.match(out, /dev build/);
+    // crush ≥0.1.3 reports a clean semver and detect() parses the numeric
+    // core, so the dirty dev string surfaces as the bare `0.0.0` — below the
+    // 0.1.3 pin, so it's flagged yellow with the pin (mirrors opencode's
+    // below-pin label). The raw +dirty marker no longer appears in the label.
+    assert.match(out, /crush\s+0\.0\.0/);
+    assert.match(out, /pin: 0\.1\.3/);
     assert.match(out, /crush\.json \[global\]/);
     assert.match(out, /crush\.json \[local\]/);
   }),

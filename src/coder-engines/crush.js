@@ -13,11 +13,11 @@
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 
-// Pin the npm package version. crush --version currently reports a dirty dev
-// string (docs/crush-issues.md "[High] Version string does not match the
-// release"), so this pin drives only the installHint() command, NOT a strict
-// runtime version check (see detect()).
-const CRUSH_PIN_DEFAULT = '0.1.0';
+// Pin the npm package version. crush ≥0.1.3 reports a clean `crush version
+// v0.1.3` (docs/crush-issues.md "[High] Version string does not match the
+// release" — resolved in 0.1.3), so detect() now parses the semver and
+// compares against this pin. The pin still also drives installHint().
+const CRUSH_PIN_DEFAULT = '0.1.3';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
 // and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>
@@ -33,20 +33,47 @@ export function crushVersionPin() {
   return process.env.TRISS_CODER_CRUSH_VERSION || CRUSH_PIN_DEFAULT;
 }
 
-// detect(): spawnSync('crush', ['--version']) — NEVER shell:true. Returns
-// {found, version}; never throws. `sh` defaults to real spawnSync and is
-// injectable for tests.
-//
-// NOTE: we detect PRESENCE only here. crush --version reports a dirty dev
-// string like `v0.0.0-20260704...+dirty` (docs/crush-issues.md), so a strict
-// pin comparison would always fail. The caller logs the reported version to
-// stderr dim; the installHint command still carries the pin for `npm install`.
-// TODO: enforce pin once crush --version reports clean semver.
+// Parse a `vX.Y.Z` semver out of arbitrary text (the crush --version stdout).
+// Returns {major, minor, patch} or null when no semver is parseable. Tolerates
+// a leading `v`, surrounding noise (`crush version v0.1.3`), and a `+dirty` /
+// `-pre` suffix (the suffix is ignored — only the numeric core is captured).
+// NEVER throws: garbage in -> null out.
+function parseSemver(text) {
+  if (text == null) return null;
+  const m = /v?(\d+)\.(\d+)\.(\d+)/.exec(String(text));
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+}
+
+// a >= b (lexicographic on major/minor/patch). Both inputs must be parsed.
+function semverGte(a, b) {
+  if (a.major !== b.major) return a.major > b.major;
+  if (a.minor !== b.minor) return a.minor > b.minor;
+  return a.patch >= b.patch;
+}
+
+// detect(): spawnSync('crush', ['--version']) — NEVER shell:true. crush 0.1.3+
+// reports a clean `crush version v0.1.3`; earlier builds reported a dirty dev
+// string like `v0.0.0-20260704...+dirty` (docs/crush-issues.md). We parse the
+// `vX.Y.Z` semver out of whatever it prints and return {found, version,
+// satisfiesPin}: `version` is the bare `0.1.3` (or the raw string when no
+// semver is parseable, for diagnostics); `satisfiesPin` is parsed >= pin.
+// NEVER throws — a `+dirty` suffix, garbage, or a NEWER version all yield a
+// usable result (newer is still found:true, satisfiesPin:true). Version
+// mismatch is NON-FATAL: callers warn at most, never abort (the installHint
+// command still carries the pin for `npm install`). `sh` defaults to real
+// spawnSync and is injectable for tests.
 export function detectCrush(sh = nodeSpawnSync) {
   const r = sh('crush', ['--version']);
-  if (!r || r.error || r.status !== 0) return { found: false, version: null };
+  if (!r || r.error || r.status !== 0) {
+    return { found: false, version: null, satisfiesPin: false };
+  }
   const out = String(r.stdout || '').trim();
-  return { found: true, version: out || null };
+  const parsed = parseSemver(out);
+  const version = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : out || null;
+  const pin = parseSemver(crushVersionPin());
+  const satisfiesPin = !!(parsed && pin && semverGte(parsed, pin));
+  return { found: true, version, satisfiesPin };
 }
 
 export function installHintCrush() {
@@ -71,7 +98,22 @@ export function installHintCrush() {
 // Safety note: the CALLER (runCrushFlow) is responsible for adding
 // CRUSH_FORBID_WRITES=<paths> to the spawn env for any harness-owned output
 // paths; buildSpawnEnv below does not set it (it's per-run, not a default).
-export function buildCrushRunArgv({ prompt, model, session, continue: cont, cwd, timeoutSec = 900 }) {
+//
+// restrict: when ON (the default), append `--restrict-run` so crush honors the
+// permissions.run policy seeded into crush.json at init (allow_bash +
+// allow_tools). When OFF, append nothing — crush then auto-approves every tool
+// (the pre-0.1.3 all-or-nothing behavior; only reachable via an explicit
+// --no-restrict). The caller resolves the tristate (CLI/env/config/default)
+// and passes a concrete boolean here.
+export function buildCrushRunArgv({
+  prompt,
+  model,
+  session,
+  continue: cont,
+  cwd,
+  timeoutSec = 900,
+  restrict = true,
+} = {}) {
   const argv = [
     'run',
     '--role',
@@ -82,6 +124,7 @@ export function buildCrushRunArgv({ prompt, model, session, continue: cont, cwd,
     '--agents',
     'single',
   ];
+  if (restrict) argv.push('--restrict-run');
   if (model) argv.push('--model', model);
   if (session) argv.push('--session', session);
   if (cont) argv.push('--continue');
@@ -93,19 +136,23 @@ export function buildCrushRunArgv({ prompt, model, session, continue: cont, cwd,
 // buildCrushSpawnEnv: minimal allowlist env for the crush subprocess. NEVER
 // spread process.env — only what crush needs.
 //
-// CRITICAL KEY BRIDGE: crush's built-in `zai` provider reads ZAI_API_KEY, but
-// triss (and opencode, and docs.z.ai) standardize on ZHIPU_API_KEY for the
-// SAME key and SAME coding-plan endpoint. Without this bridge a user with a
-// working ZHIPU_API_KEY gets a silently "unconfigured" zai provider
-// (docs/crush-issues.md "[High] Provider env var mismatch"). So we map the
-// value across here, letting the user keep a single key. NEVER log ZAI_API_KEY
-// (use maskValue() at the call site if anything is echoed).
+// KEY BRIDGE: crush ≥0.1.1 reads `ZHIPU_API_KEY` natively (the ecosystem-
+// standard name used by Z.AI's own docs, opencode, and triss). We forward
+// `ZHIPU_API_KEY` straight through into the spawn env AND still forward
+// `ZAI_API_KEY` as a compat alias for older crush binaries that read only
+// that name (docs/crush-issues.md "[High] Provider env var mismatch" —
+// fixed upstream in 0.1.1; the alias keeps <0.1.1 binaries working with a
+// single user-facing ZHIPU_API_KEY). NEVER log either value (use
+// maskValue() at the call site if anything is echoed).
 export function buildCrushSpawnEnv(baseEnv = process.env) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (baseEnv[key] != null) env[key] = baseEnv[key];
   }
-  if (baseEnv.ZHIPU_API_KEY) env.ZAI_API_KEY = baseEnv.ZHIPU_API_KEY;
+  if (baseEnv.ZHIPU_API_KEY) {
+    env.ZHIPU_API_KEY = baseEnv.ZHIPU_API_KEY;
+    env.ZAI_API_KEY = baseEnv.ZHIPU_API_KEY;
+  }
   return env;
 }
 
@@ -181,6 +228,56 @@ export function crushDefaultModelsHint() {
   };
 }
 
+// The shared read-only bash allowlist, mirroring opencode's `permission.bash`
+// allowlist in src/commands/coder.js (opencodeConfigTemplate). Kept in ONE
+// named constant here so the two engines' safe-command sets stay in sync —
+// edit this and opencode's template together. crush 0.1.3 pattern forms: a
+// bare string is a command-prefix match (e.g. 'git diff' matches `git diff`,
+// `git diff --stat`, ...); `glob:<pattern>` is a glob match. This is crush's
+// closest analog to opencode's deny-first bash policy (crush has no per-key
+// allow/deny object — just a flat allow_bash list under permissions.run).
+export const CRUSH_ALLOW_BASH_PATTERNS = [
+  'git status',
+  'git diff',
+  'git log',
+  'glob:ls *',
+  'glob:node --test *',
+  'glob:npm test *',
+  'glob:npm run test *',
+];
+
+// Build the `permissions.run` block triss seeds into crush.json at init.
+// restrict:true + the curated read-only allow_bash above + `view` as the only
+// always-allowed non-bash tool — the crush analog of opencode's deny-first
+// opencode.json bash policy. Returned fresh each call so callers can merge it
+// into a config object without mutating the constant.
+export function crushPermissionsRunBlock() {
+  return {
+    restrict: true,
+    allow_bash: [...CRUSH_ALLOW_BASH_PATTERNS],
+    allow_tools: ['view'],
+  };
+}
+
+// Pure merge of the permissions.run block into a crush.json config object.
+// Returns {merged, hadRunPolicy}: `merged` is a shallow-cloned config with the
+// run block seeded ONLY when no run policy was already present (no-clobber);
+// `hadRunPolicy` tells the caller whether the user already had one (so it can
+// warn instead of overwriting). NEVER touches the `models` block —
+// `crush models use` owns that, and crush.json is read-modify-written (there
+// is no `crush config` CLI).
+export function mergeCrushPermissionsRun(config = {}) {
+  const merged = { ...config };
+  if (!merged.permissions || typeof merged.permissions !== 'object') {
+    merged.permissions = {};
+  }
+  const hadRunPolicy = !!(merged.permissions.run && typeof merged.permissions.run === 'object');
+  if (!hadRunPolicy) {
+    merged.permissions = { ...merged.permissions, run: crushPermissionsRunBlock() };
+  }
+  return { merged, hadRunPolicy };
+}
+
 // configureCrushModels: runs `crush models use glm5_2 glm5_turbo <scopeFlag>` so
 // crush's --role smart/fast resolve to GLM deterministically. This is the ONE
 // thing crush init does beyond the shared ZHIPU_API_KEY setup. It does NOT write
@@ -228,9 +325,8 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
 export const crush = {
   id: 'crush',
   binaryName: 'crush',
-  // Pin drives installHint() only; runtime version check is presence-only
-  // (crush --version reports a dirty dev string — see detect()).
-  // TODO: enforce pin once crush --version reports clean semver.
+  // Pin drives installHint() AND the satisfiesPin comparison in detect()
+  // (crush ≥0.1.3 reports a clean semver — see detectCrush).
   get CRUSH_PIN() {
     return crushVersionPin();
   },
@@ -242,6 +338,12 @@ export const crush = {
   mapExitReason: mapCrushExitReason,
   crushDefaultModelsHint,
   configureCrushModels,
+  // permissions.run policy (crush 0.1.3+): the curated read-only bash
+  // allowlist, the block builder, and the no-clobber merge helper. Used by
+  // src/commands/coder.js seedCrushPermissions() at init.
+  CRUSH_ALLOW_BASH_PATTERNS,
+  crushPermissionsRunBlock,
+  mergeCrushPermissionsRun,
   // crush `--session <id>` is genuine get-or-create with caller-supplied ids —
   // NO slug->real-id map needed (unlike opencode's ses_ workaround).
   needsSessionMap: false,

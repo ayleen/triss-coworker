@@ -95,15 +95,18 @@ export async function runStatus(deps = {}) {
       const value = c.exists ? c.path : pc.dim('(not written)');
       lines.push(`  ${marker} opencode.json [${c.scope}]        ${value}`);
     }
-    // crush (engine #2) — presence-only version detect; crush --version
-    // reports a dirty dev string (docs/crush-issues.md), so we flag it as a
-    // dev build rather than pin-checking. crush.json presence is a
-    // best-effort file check. Never hard-fails — opencode-only users see a
-    // clean ○ "not installed" line.
+    // crush (engine #2) — version-checked against the pin (crush ≥0.1.3
+    // reports a clean semver, parsed by detect()). A below-pin build is shown
+    // yellow like opencode; a missing/garbage version falls back to a dim
+    // "(version unknown)" note. crush.json presence is a best-effort file
+    // check. Never hard-fails — opencode-only users see a clean ○ "not
+    // installed" line.
     const crushMarker = coder.crush.found ? pc.green('●') : pc.dim('○');
     const crushLabel = coder.crush.found
-      ? `${coder.crush.version} ${pc.dim('(dev build — pin check skipped)')}`
-      : pc.dim('not installed');
+      ? coder.crush.satisfiesPin
+        ? `${coder.crush.version} ${pc.dim('(matches pin)')}`
+        : pc.yellow(`${coder.crush.version || '(version unknown)'} (pin: ${coder.crush.pin})`)
+      : pc.dim(`not installed (pin: ${coder.crush.pin})`);
     lines.push(`  ${crushMarker} crush                        ${crushLabel}`);
     for (const c of coder.crush.configs) {
       const marker = c.exists ? pc.green('●') : pc.dim('○');
