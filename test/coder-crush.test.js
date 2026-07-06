@@ -32,6 +32,7 @@ import {
   crushPermissionsRunBlock,
   mergeCrushPermissionsRun,
   CRUSH_ALLOW_BASH_PATTERNS,
+  CRUSH_ALLOW_TOOLS,
 } from '../src/coder-engines/crush.js';
 import { resolveCoderEngine, DEFAULT_CODER_ENGINE, runCoderInit, resolveCrushRestrict } from '../src/commands/coder.js';
 
@@ -208,19 +209,96 @@ test('detectCrush: crush missing (non-zero exit / spawn error) -> found false, v
   }
 });
 
-// ─── buildCrushRunArgv: restrict (Task 3) ─────────────────────────────────────
+// ─── detectCrush: unparseable pin (Task 5b) ───────────────────────────────────
+//
+// When TRISS_CODER_CRUSH_VERSION itself doesn't parse to semver (e.g. "latest"),
+// detectCrush SKIPS the comparison and treats the installed version as
+// satisfying the pin — instead of a perpetual satisfiesPin:false yellow warning
+// at every init/run/status.
 
-test('buildCrushRunArgv: restrict ON (default) appends --restrict-run', () => {
+test('detectCrush: a non-semver pin (TRISS_CODER_CRUSH_VERSION=latest) -> satisfiesPin TRUE (comparison skipped)', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  process.env.TRISS_CODER_CRUSH_VERSION = 'latest';
+  try {
+    // Even an OLDER installed version is treated as satisfied when the pin
+    // itself is unparseable — the comparison is skipped, not failed.
+    const det = detectCrush(versionSh('crush version v0.1.2'));
+    assert.equal(det.found, true);
+    assert.equal(det.version, '0.1.2');
+    assert.equal(det.satisfiesPin, true, 'unparseable pin must skip the comparison (treat as satisfied)');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a non-semver pin still reports found:true + the parsed version for a clean install', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
+  try {
+    const det = detectCrush(versionSh('crush version v0.1.3'));
+    assert.equal(det.found, true);
+    assert.equal(det.version, '0.1.3');
+    assert.equal(det.satisfiesPin, true);
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+// ─── buildCrushRunArgv: restrict (Task 3) ─────────────────────────────────────
+//
+// restrict ON emits --restrict-run AND the allowlist as CLI flags (one
+// --allow-bash per CRUSH_ALLOW_BASH_PATTERNS entry, one --allow-tool per
+// CRUSH_ALLOW_TOOLS entry) — the ONLY enforcement path that works today
+// (crush 0.1.3 ignores the permissions.run config block). restrict OFF emits
+// none of them.
+
+// Extract the values following every occurrence of `flag` in argv (each
+// occurrence consumes the next element as its value). Returns [].
+function flagValues(argv, flag) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === flag && i + 1 < argv.length) out.push(argv[i + 1]);
+  }
+  return out;
+}
+
+test('buildCrushRunArgv: restrict ON (default) appends --restrict-run AND the CLI allow flags', () => {
   const argv = buildCrushRunArgv({ prompt: 'hi' });
   // restrict defaults to true.
   assert.ok(argv.includes('--restrict-run'), 'default restrict=ON must add --restrict-run');
+  // One --allow-bash per CRUSH_ALLOW_BASH_PATTERNS entry, value-for-value.
+  const bashVals = flagValues(argv, '--allow-bash');
+  assert.deepEqual(bashVals, [...CRUSH_ALLOW_BASH_PATTERNS]);
+  // One --allow-tool per CRUSH_ALLOW_TOOLS entry.
+  const toolVals = flagValues(argv, '--allow-tool');
+  assert.deepEqual(toolVals, [...CRUSH_ALLOW_TOOLS]);
   // prompt still positional + last.
   assert.equal(argv[argv.length - 1], 'hi');
 });
 
-test('buildCrushRunArgv: restrict ON explicitly appends --restrict-run', () => {
+test('buildCrushRunArgv: restrict ON explicitly appends --restrict-run + CLI allow flags', () => {
   const argv = buildCrushRunArgv({ prompt: 'hi', restrict: true });
   assert.ok(argv.includes('--restrict-run'));
+  assert.deepEqual(flagValues(argv, '--allow-bash'), [...CRUSH_ALLOW_BASH_PATTERNS]);
+  assert.deepEqual(flagValues(argv, '--allow-tool'), [...CRUSH_ALLOW_TOOLS]);
+});
+
+test('buildCrushRunArgv: the CLI allow flags are interleaved as flag/value pairs (never shell-joined)', () => {
+  // argv must stay a plain array — each flag immediately followed by its value.
+  const argv = buildCrushRunArgv({ prompt: 'hi', restrict: true });
+  for (const p of CRUSH_ALLOW_BASH_PATTERNS) {
+    const i = argv.indexOf('--allow-bash');
+    assert.ok(i >= 0, 'first --allow-bash present');
+    // every pattern is reachable as a (flag, value) pair somewhere
+    assert.ok(
+      argv.some((a, idx) => a === '--allow-bash' && argv[idx + 1] === p),
+      `--allow-bash ${p} must appear as a flag/value pair`,
+    );
+  }
+  // No element is a shell-joined "--allow-bash=foo" form.
+  assert.equal(argv.some((a) => typeof a === 'string' && a.startsWith('--allow-bash=')), false);
 });
 
 test('buildCrushRunArgv: restrict OFF appends NEITHER --restrict-run NOR any allow flag', () => {
@@ -229,6 +307,12 @@ test('buildCrushRunArgv: restrict OFF appends NEITHER --restrict-run NOR any all
   // No yolo/allow flags either — crush then runs with no permissions policy.
   assert.equal(argv.includes('--yolo'), false);
   assert.equal(argv.some((a) => a.startsWith('--allow')), false);
+});
+
+test('CRUSH_ALLOW_TOOLS: is the working coder file-tool set [view, edit, write, ls]', () => {
+  // Verified live against crush 0.1.3 (docs/crush-restrict-issues.md): the
+  // file-tool taxonomy a coder needs under --restrict-run.
+  assert.deepEqual(CRUSH_ALLOW_TOOLS, ['view', 'edit', 'write', 'ls']);
 });
 
 // ─── permissions.run block (Task 3: init seeding parity with opencode) ────────
@@ -709,10 +793,58 @@ test(
   }),
 );
 
+// ─── Task 5a: seedCrushPermissions routes valid-JSON-but-non-object crush.json
+// into the SAME warn-and-skip branch as a parse error — it must NOT silently
+// overwrite a non-object file.
+//
+// We use crushPresentSh (which reports crush present + models-use success but
+// writes NOTHING to disk) so the pre-written non-object crush.json survives
+// intact for seedCrushPermissions to read.
+
+test(
+  'runCoderInit --engine crush: a valid-JSON-but-non-object crush.json ([]) is NOT clobbered — warns and skips',
+  withTmpCrushHome(async ({ captured }) => {
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '[]\n'); // valid JSON array, not an object
+
+    const sh = crushPresentSh({ status: 0, stdout: '', stderr: '', error: null });
+    await runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh });
+
+    // The file must be UNCHANGED — not overwritten with a seeded object.
+    assert.equal(readFileSync(path, 'utf8'), '[]\n');
+    // And the warn-and-skip message must fire (not the green "seeded" line).
+    assert.match(captured(), /valid JSON but not a JSON object/);
+    assert.match(captured(), /not seeding permissions\.run/);
+    assert.doesNotMatch(captured(), /✓ seeded permissions\.run/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: valid-JSON scalars/null (string, number, null) are also NOT clobbered',
+  withTmpCrushHome(async ({ captured }) => {
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    mkdirSync(dirname(path), { recursive: true });
+    const sh = crushPresentSh({ status: 0, stdout: '', stderr: '', error: null });
+
+    for (const content of ['"just a string"\n', '42\n', 'null\n']) {
+      writeFileSync(path, content);
+      // Reset captured between iterations by re-running inside the same HOME.
+      await runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh });
+      // File unchanged.
+      assert.equal(readFileSync(path, 'utf8'), content);
+    }
+    // At least one warn fired across the iterations.
+    assert.match(captured(), /valid JSON but not a JSON object/);
+  }),
+);
+
 // ─── Task 3: resolveCrushRestrict resolution order ────────────────────────────
 //
 // CLI --no-restrict (opts.restrict:false) beats TRISS_CODER_CRUSH_RESTRICT=1
-// beats crush.json permissions.run.restrict beats built-in default true.
+// beats crush.json permissions.run.restrict beats built-in default FALSE
+// (interim — restrict is opt-in; the config allowlist is inert and denied bash
+// deadlocks, so crush defaults to worktree isolation instead).
 
 function writeGlobalCrushJson(content) {
   const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
@@ -721,18 +853,22 @@ function writeGlobalCrushJson(content) {
 }
 
 test(
-  'resolveCrushRestrict: built-in default is true when nothing is set',
+  'resolveCrushRestrict: built-in default is FALSE when nothing is set (interim — restrict is opt-in)',
   withTmpCrushHome(async () => {
-    assert.equal(resolveCrushRestrict({}), true);
-    assert.equal(resolveCrushRestrict({ restrict: undefined }), true);
+    assert.equal(resolveCrushRestrict({}), false);
+    assert.equal(resolveCrushRestrict({ restrict: undefined }), false);
   }),
 );
 
 test(
-  'resolveCrushRestrict: crush.json permissions.run.restrict beats the built-in default',
+  'resolveCrushRestrict: crush.json permissions.run.restrict beats the built-in default (both true and false)',
   withTmpCrushHome(async () => {
+    // config restrict:false -> false (also matches the default, but proves no throw).
     writeGlobalCrushJson({ permissions: { run: { restrict: false } } });
     assert.equal(resolveCrushRestrict({}), false);
+    // config restrict:true beats the default false.
+    writeGlobalCrushJson({ permissions: { run: { restrict: true } } });
+    assert.equal(resolveCrushRestrict({}), true, 'config restrict:true must beat default false');
   }),
 );
 

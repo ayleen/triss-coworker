@@ -1,8 +1,10 @@
 // `triss coder` — delegate coding tasks to a GLM agent. opencode is the
 // default engine (deny-first bash policy); crush is an optional second
 // engine behind --engine crush / TRISS_CODER_ENGINE=crush (single JSON
-// envelope, native session ids; 0.1.3+ adds a permissions.run policy
-// seeded at init so crush has parity with opencode's safety layer).
+// envelope, native session ids; crush 0.1.3's permissions.run config is
+// currently inert, so crush defaults to worktree isolation and an opt-in
+// CLI-flag allowlist — see src/coder-engines/crush.js and
+// docs/crush-restrict-issues.md).
 // See docs/coder-agent-plan.md for the original roadmap (init/run/clean,
 // the opencode adapter, MCP wiring — all shipped). Naming: "agent" is
 // taken (the AI assistant using triss), so this feature is "coder"
@@ -64,9 +66,10 @@ const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 
 // Default coding engine. opencode is engine #1 (shipped — deny-first
 // opencode.json policy is its safety layer). crush is engine #2 (Phase 6 —
-// simpler single-envelope model, but a weaker safety story that this module
-// compensates for by defaulting --isolate ON). Override per-call via --engine
-// or globally via TRISS_CODER_ENGINE.
+// simpler single-envelope model, but a weaker safety story: crush 0.1.3's
+// permissions.run config is inert and denied bash deadlocks, so this module
+// compensates by defaulting --isolate ON for crush and making restrict opt-in).
+// Override per-call via --engine or globally via TRISS_CODER_ENGINE.
 export const DEFAULT_CODER_ENGINE = 'opencode';
 const VALID_CODER_ENGINES = ['opencode', 'crush'];
 
@@ -293,8 +296,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // default model atoms (glm5_2 / glm5_turbo) via `crush models use` so
     // --role smart/fast resolve to GLM deterministically; (2) seed the
     // permissions.run policy (restrict + read-only allow_bash) into crush.json
-    // so crush 0.1.3+ runs restricted by default — the crush analog of
-    // opencode's deny-first opencode.json bash allowlist. The adapter bridges
+    // as a FORWARD-COMPAT gesture — crush 0.1.3 currently IGNORES this block
+    // (docs/crush-restrict-issues.md), so it does NOT make crush restricted by
+    // itself; the working allowlist is enforced via CLI flags at run time when
+    // --restrict is on (see buildCrushRunArgv). The adapter bridges
     // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
     // crush.json here.
     process.stderr.write('\n' + pc.bold('── coder (crush engine) ──') + '\n');
@@ -309,7 +314,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
         process.stderr.write(
           pc.yellow(
             `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
-              '(not auto-upgrading — restrict-run policy still seeds into crush.json)\n',
+              '(not auto-upgrading — permissions.run still seeds into crush.json)\n',
           ),
         );
       }
@@ -473,30 +478,54 @@ function crushConfigPath(scope) {
 // touch the JSON that `crush models use` already wrote — and we MERGE, never
 // clobbering the `models` block or a user-set `permissions.run`.
 //
+// FORWARD-COMPAT CAVEAT (live-verified 2026-07-06, docs/crush-restrict-issues.md):
+// crush 0.1.3 IGNORES this `permissions.run` config block — `crush run
+// --restrict-run` does not honor it. We keep seeding it because it is harmless
+// and correct once the maintainer honors config (then it becomes the editable
+// persistent policy, like opencode.json). But TODAY the working allowlist is
+// enforced via CLI flags at run time (see buildCrushRunArgv in
+// src/coder-engines/crush.js), NOT via this block. The user-facing "seeded"
+// message below says so explicitly.
+//
 // No-clobber rules (parity with opencode's "don't overwrite an existing
 // opencode.json"):
 //  - crush.json missing or has no permissions.run -> seed it (green).
 //  - crush.json already has a permissions.run -> leave it untouched. Warn dim
-//    when it lacks restrict:true (mirrors the opencode "existing config lacks
-//    deny policy" warning) so the user knows their runs will be unrestricted;
-//    stay quiet + dim-confirm when they DO have restrict:true.
+//    when it lacks restrict:true so the user knows their runs will be
+//    unrestricted under --restrict; stay quiet + dim-confirm when they DO have
+//    restrict:true.
 //  - crush.json unparseable -> warn yellow and skip (don't risk clobbering a
 //    hand-maintained file we can't read).
+//  - crush.json valid JSON but NOT a plain object (e.g. `[]`, `"x"`, `null`)
+//    -> warn yellow and skip too. Silently re-seeding over a non-object would
+//    destroy whatever the user kept there.
 //
 // Uses atomicWriteJson (write-then-rename) so a reader never sees a torn file.
 function seedCrushPermissions(scope) {
   const path = crushConfigPath(scope);
   let config = {};
   if (existsSync(path)) {
+    let parsed;
     try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed;
+      parsed = JSON.parse(readFileSync(path, 'utf8'));
     } catch {
       process.stderr.write(
         pc.yellow(`  ⚠ ${path} is not valid JSON — not seeding permissions.run (edit it manually)\n`),
       );
       return;
     }
+    // Valid JSON but not a plain object (array / string / number / null):
+    // route into the SAME warn-and-skip branch as a parse error. Do NOT
+    // silently overwrite a non-object crush.json.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${path} is valid JSON but not a JSON object — not seeding permissions.run (edit it manually)\n`,
+        ),
+      );
+      return;
+    }
+    config = parsed;
   }
   const existingRun =
     config.permissions && typeof config.permissions === 'object' ? config.permissions.run : undefined;
@@ -510,7 +539,7 @@ function seedCrushPermissions(scope) {
       process.stderr.write(
         pc.dim(
           `  · ${path} has a permissions.run without restrict:true — crush runs will be ` +
-            'unrestricted; set permissions.run.restrict true to enable the allow_bash policy\n',
+            'unrestricted under --restrict; set permissions.run.restrict true to enable the allow_bash policy\n',
         ),
       );
     }
@@ -520,14 +549,25 @@ function seedCrushPermissions(scope) {
   mkdirSync(dirname(path), { recursive: true });
   atomicWriteJson(path, merged);
   process.stderr.write(
-    pc.green(`  ✓ seeded permissions.run (restrict + read-only allow_bash) into ${path}\n`),
+    pc.green(
+      `  ✓ seeded permissions.run into ${path} ` +
+        '(forward-compat: currently inert — crush 0.1.3 ignores this block; the working allowlist is enforced via CLI --allow-bash/--allow-tool flags at run time when --restrict is on)\n',
+    ),
   );
 }
 
-// crush's restrict policy default. crush 0.1.3 honors a permissions.run policy
-// in crush.json; with it in place, restrict is crush's safety layer (parity
-// with opencode's deny-first bash allowlist), so it defaults ON.
-const CRUSH_RESTRICT_DEFAULT = true;
+// crush's restrict policy default. INTERIM (live-verified 2026-07-06,
+// docs/crush-restrict-issues.md): crush 0.1.3 IGNORES the permissions.run
+// config block, and a denied bash command deadlocks to the timeout instead of
+// denying cleanly. A coding agent routinely runs bash outside a read-only
+// allowlist (`npm run build`, `tsc`, ...), so restrict-ON-by-default would make
+// crush runs routinely dead-end at the timeout. restrict therefore defaults
+// OFF; the disposable worktree (crush isolate-ON) is the dependable safety
+// layer. restrict is still OPT-IN and, when turned on, buildCrushRunArgv emits
+// the allowlist as CLI flags (the only enforcement path that works today).
+// Once the maintainer fixes the deadlock + honors config, revisit flipping this
+// back ON for true opencode parity.
+const CRUSH_RESTRICT_DEFAULT = false;
 
 // Read permissions.run.restrict out of crush.json (local first, then global —
 // matching crush's own local-over-global precedence). Returns true/false when
@@ -550,7 +590,7 @@ function readCrushConfigRestrict() {
 }
 
 // Resolve the crush restrict tristate to a concrete boolean. Order (per the
-// Phase 6 re-eval spec):
+// Phase 6 fix spec):
 //   1. CLI flag --restrict (true) / --no-restrict (false) — opts.restrict.
 //      Both options are declared WITHOUT a Commander default in bin/triss.js,
 //      so opts.restrict is undefined when neither is passed (the tristate is
@@ -558,7 +598,7 @@ function readCrushConfigRestrict() {
 //   2. TRISS_CODER_CRUSH_RESTRICT env (1/true/yes/on => true; 0/false/no/off
 //      => false; any other value ignored so garbage can't silently flip safety).
 //   3. crush.json permissions.run.restrict (if the user hand-set it).
-//   4. Built-in default: ON (parity with opencode).
+//   4. Built-in default: OFF (interim — see CRUSH_RESTRICT_DEFAULT above).
 // Exported so the resolution order is unit-testable without driving a run.
 export function resolveCrushRestrict(opts = {}) {
   if (opts.restrict === true || opts.restrict === false) return opts.restrict;
@@ -1616,7 +1656,9 @@ async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolatio
 
   // restrict tristate resolution is crush-only (opencode's safety layer is its
   // opencode.json bash policy, not a restrict flag). CLI --restrict/--no-restrict
-  // > TRISS_CODER_CRUSH_RESTRICT env > crush.json permissions.run.restrict > true.
+  // > TRISS_CODER_CRUSH_RESTRICT env > crush.json permissions.run.restrict >
+  // built-in default (OFF, interim). When ON, buildCrushRunArgv emits the
+  // allowlist as CLI flags (the only enforcement path that works today).
   const restrict = resolveCrushRestrict(opts);
 
   const argv = crushEngine.buildRunArgv({
@@ -1827,19 +1869,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
 
-  // Effective --isolate. BOTH engines default isolate-OFF now: opencode's
-  // safety layer is its deny-first opencode.json bash policy; crush 0.1.3's
-  // safety layer is the permissions.run policy (restrict + read-only
-  // allow_bash) seeded into crush.json at init and enforced via --restrict-run
-  // (see resolveCrushRestrict). Earlier crush isolated by default because it
-  // had no allowlist — that's no longer true, so crush now has parity with
-  // opencode. An explicit --isolate / --no-isolate always wins.
+  // Effective --isolate. The two engines DEFAULT differently:
+  //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
+  //     reliable safety layer — it actually enforces).
+  //   - crush: isolate-ON. crush 0.1.3's `permissions.run` config block is
+  //     INERT (live-verified, docs/crush-restrict-issues.md) and a denied bash
+  //     command deadlocks to the timeout instead of denying cleanly. So the
+  //     config allowlist is NOT a dependable safety layer today; the disposable
+  //     git worktree is. crush therefore ships isolate-ON by default — the same
+  //     posture it had before the (reverted) Variant-A flip — with opt-in
+  //     `--restrict` adding a CLI allowlist on top for defense-in-depth.
+  // An explicit --isolate / --no-isolate always wins for either engine.
   // bin/triss.js declares BOTH options on `coder run` (neither carries a
   // default), so Commander yields the tristate this line relies on:
   // opts.isolate is `undefined` when neither flag is passed, `true` under
   // --isolate, `false` under --no-isolate. (Do NOT add a default to either
   // option — the undefined tristate is load-bearing here.)
-  const isolate = opts.isolate === undefined ? false : !!opts.isolate;
+  const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
 
   // Pure usage-error checks first, independent of environment/credentials
   // — a caller should get "you combined two contradictory flags" rather

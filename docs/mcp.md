@@ -281,8 +281,10 @@ Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
   `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
   `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
   `opencode`/`crush` enum (default `opencode`, or `TRISS_CODER_ENGINE`);
-  `isolate` is unset by default for both engines (crush's safety layer is its
-  `permissions.run` policy, not a worktree).
+  `isolate` is unset by default in the schema — opencode resolves unset to
+  isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
+  `permissions.run` config is inert and denied bash deadlocks, so the
+  worktree is its reliable safety layer).
 - `triss_coder_status` — the default engine, each engine's version/install
   state (`opencode` vs the pinned version, `crush` presence), which
   `opencode.json` / `crush.json` files exist, `ZHIPU_API_KEY` presence
@@ -307,7 +309,8 @@ reports it in Beijing time) rather than a generic "no parseable output".
 [MCP path sandbox](#scope-and-the-path-sandbox) (`assertSafePath`) before
 the run starts. The worktree-root check fires for *either* engine
 whenever the run will actually isolate — i.e. when the caller passes
-`isolate: true` (both engines default to isolate-OFF now). This matters
+`isolate: true`, OR when crush is selected and `isolate` is left unset
+(crush defaults to isolate-ON; opencode defaults to isolate-OFF). This matters
 because the worktree lands under the *enclosing git repository's*
 toplevel, which can be an ancestor of the sandboxed project root if the
 project lives in a subdirectory of a larger repo.

@@ -888,16 +888,18 @@ export async function coderRunHandler(
   // root if the project lives in a subdirectory of a larger repo.
   //
   // The check must use the EFFECTIVE isolate flag, not the raw `isolate`
-  // arg, so it matches runCoderRun's own resolution. Both engines default
-  // isolate-OFF (crush's safety layer is now its permissions.run policy,
-  // not a worktree), so an unset `isolate` resolves to false for either
-  // engine. Resolve the engine the same way runCoderRun does and derive
-  // effectiveIsolate identically, so the right path is checked for both
-  // engines. `cwd` is IGNORED by runCoderRun whenever the run isolates,
-  // so checking cwd too would reject calls over a cwd that's never
+  // arg, so it matches runCoderRun's own resolution. The two engines DEFAULT
+  // differently: opencode isolate-OFF (its opencode.json allowlist is the
+  // dependable safety layer); crush isolate-ON (crush 0.1.3's permissions.run
+  // config is inert and denied bash deadlocks, so the disposable worktree is
+  // the reliable safety layer). So an unset `isolate` resolves to true for
+  // crush and false for opencode. Resolve the engine the same way runCoderRun
+  // does and derive effectiveIsolate IDENTICALLY, so the right path is checked
+  // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
+  // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
   const resolvedEngine = resolveCoderEngine({ engine });
-  const effectiveIsolate = isolate === undefined ? false : !!isolate;
+  const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
 
   if (cwd && !effectiveIsolate) {
     const { resolve } = await import('node:path');

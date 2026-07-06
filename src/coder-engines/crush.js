@@ -72,7 +72,17 @@ export function detectCrush(sh = nodeSpawnSync) {
   const parsed = parseSemver(out);
   const version = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : out || null;
   const pin = parseSemver(crushVersionPin());
-  const satisfiesPin = !!(parsed && pin && semverGte(parsed, pin));
+  // If the configured pin doesn't itself parse to semver (e.g. someone set
+  // TRISS_CODER_CRUSH_VERSION=latest), SKIP the comparison entirely and treat
+  // the installed version as satisfying the pin. Otherwise a non-semver pin
+  // would yield a perpetual satisfiesPin:false and a yellow warning at every
+  // init/run/status call for no actionable reason. The install hint still
+  // carries the raw pin string for `npm install`.
+  const satisfiesPin = !parsed
+    ? false // nothing parseable from the installed binary
+    : !pin
+      ? true // pin unparseable -> comparison skipped (treat as satisfied)
+      : semverGte(parsed, pin);
   return { found: true, version, satisfiesPin };
 }
 
@@ -99,12 +109,16 @@ export function installHintCrush() {
 // CRUSH_FORBID_WRITES=<paths> to the spawn env for any harness-owned output
 // paths; buildSpawnEnv below does not set it (it's per-run, not a default).
 //
-// restrict: when ON (the default), append `--restrict-run` so crush honors the
-// permissions.run policy seeded into crush.json at init (allow_bash +
-// allow_tools). When OFF, append nothing — crush then auto-approves every tool
-// (the pre-0.1.3 all-or-nothing behavior; only reachable via an explicit
-// --no-restrict). The caller resolves the tristate (CLI/env/config/default)
-// and passes a concrete boolean here.
+// restrict: when ON, append `--restrict-run` AND the allowlist as CLI flags
+// (`--allow-bash <p>` per pattern, `--allow-tool <t>` per tool). This is the
+// ONLY enforcement path that actually works today: live testing (see
+// docs/crush-restrict-issues.md) proved crush 0.1.3 IGNORES the
+// `permissions.run` config block — only the CLI flags take effect. So when
+// restrict is ON we emit the full allowlist on the command line. When OFF,
+// append nothing — crush then auto-approves every tool (its default). The
+// caller resolves the tristate (CLI/env/config/default — see
+// resolveCrushRestrict in src/commands/coder.js) and passes a concrete boolean
+// here. argv stays a plain array (never shell:true).
 export function buildCrushRunArgv({
   prompt,
   model,
@@ -124,7 +138,18 @@ export function buildCrushRunArgv({
     '--agents',
     'single',
   ];
-  if (restrict) argv.push('--restrict-run');
+  if (restrict) {
+    argv.push('--restrict-run');
+    // CLI allow flags are the load-bearing enforcement (config is inert — see
+    // the comment block above). One --allow-bash per pattern, one --allow-tool
+    // per tool, so the working coder can read/edit/write files + run the
+    // read-only bash allowlist. A denied *bash* command deadlocks to timeout
+    // (docs/crush-restrict-issues.md [Medium]), so the bash set is deliberately
+    // narrow; pair restrict with worktree isolation (the crush isolate default)
+    // for defense-in-depth.
+    for (const p of CRUSH_ALLOW_BASH_PATTERNS) argv.push('--allow-bash', p);
+    for (const t of CRUSH_ALLOW_TOOLS) argv.push('--allow-tool', t);
+  }
   if (model) argv.push('--model', model);
   if (session) argv.push('--session', session);
   if (cont) argv.push('--continue');
@@ -246,11 +271,29 @@ export const CRUSH_ALLOW_BASH_PATTERNS = [
   'glob:npm run test *',
 ];
 
+// The non-bash tool allowlist emitted as `--allow-tool <t>` flags when restrict
+// is ON. Verified live against crush 0.1.3 (docs/crush-restrict-issues.md
+// "What works well"): the file-tool taxonomy is `view`, `edit`, `write`, `ls`
+// (each accepts a bare name or `tool:action`). This is the WORKING set a coder
+// needs to read and edit files under `--restrict-run` — broader than the
+// `allow_tools: ['view']` we seed into crush.json (which is the conservative
+// forward-compat config block, currently inert). Kept in ONE named constant so
+// the CLI flag set is one edit.
+export const CRUSH_ALLOW_TOOLS = ['view', 'edit', 'write', 'ls'];
+
 // Build the `permissions.run` block triss seeds into crush.json at init.
 // restrict:true + the curated read-only allow_bash above + `view` as the only
-// always-allowed non-bash tool — the crush analog of opencode's deny-first
-// opencode.json bash policy. Returned fresh each call so callers can merge it
-// into a config object without mutating the constant.
+// always-allowed non-bash tool — the opencode-parity persistent policy shape.
+//
+// FORWARD-COMAT CAVEAT (live-verified 2026-07-06, docs/crush-restrict-issues.md):
+// crush 0.1.3 IGNORES this config block — `permissions.run` in crush.json is
+// not honored by `crush run --restrict-run`. We keep seeding it because it is
+// harmless AND correct once the maintainer honors config (then this becomes the
+// real persistent policy, editable in one file like opencode.json). But TODAY
+// the working allowlist is enforced via CLI flags at run time (see
+// buildCrushRunArgv's `--allow-bash`/`--allow-tool` emission), NOT via this
+// block. Returned fresh each call so callers can merge it into a config object
+// without mutating the constant.
 export function crushPermissionsRunBlock() {
   return {
     restrict: true,
@@ -339,9 +382,12 @@ export const crush = {
   crushDefaultModelsHint,
   configureCrushModels,
   // permissions.run policy (crush 0.1.3+): the curated read-only bash
-  // allowlist, the block builder, and the no-clobber merge helper. Used by
-  // src/commands/coder.js seedCrushPermissions() at init.
+  // allowlist, the CLI tool allowlist, the block builder, and the no-clobber
+  // merge helper. Used by src/commands/coder.js seedCrushPermissions() at init
+  // (config block, currently inert) and buildCrushRunArgv() at run (CLI flags,
+  // the load-bearing enforcement).
   CRUSH_ALLOW_BASH_PATTERNS,
+  CRUSH_ALLOW_TOOLS,
   crushPermissionsRunBlock,
   mergeCrushPermissionsRun,
   // crush `--session <id>` is genuine get-or-create with caller-supplied ids —

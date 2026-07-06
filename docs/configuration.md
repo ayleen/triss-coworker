@@ -251,7 +251,7 @@ self-hosted endpoints).
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.3`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
-| `TRISS_CODER_CRUSH_RESTRICT`     | no       | `1`                 | crush only — enforce the `permissions.run` policy (`--restrict-run`). `0` makes crush auto-approve every tool. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback |
+| `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
 actually authenticates against — the `zai-coding-plan` (subscription)
@@ -265,24 +265,27 @@ verified against — that mismatch is what makes opencode retry a model
 call it can never complete.
 
 **Engines.** `opencode` (default) enforces a deny-first per-command bash
-allowlist via `opencode.json` (curated safe commands only). `crush`
-(`--engine crush` or `TRISS_CODER_ENGINE=crush`; npm
-`@phpcraftdream/crush` ≥0.1.3, bin `crush`) now has parity: `triss coder init`
-seeds a `permissions.run` policy (`restrict:true` + a read-only `allow_bash`
-set mirroring opencode's) into crush.json, and `triss coder run` passes
-`--restrict-run` by default. So **both engines default to `--isolate` OFF**
-— the config policy is the safety layer; use `--isolate` for a disposable
-worktree on top. Override crush's policy per-run with `--restrict` /
-`--no-restrict`, or via `TRISS_CODER_CRUSH_RESTRICT=0|1` (resolution: CLI
-flag > env > crush.json `permissions.run.restrict` > default ON). Prefer
+allowlist via `opencode.json` (curated safe commands only) that actually
+works. `crush` (`--engine crush` or `TRISS_CODER_ENGINE=crush`; npm
+`@phpcraftdream/crush` ≥0.1.3, bin `crush`) has a **weaker, interim** safety
+story: live testing proved crush 0.1.3 **ignores** its `permissions.run`
+config block and a denied bash command **deadlocks to timeout**, so triss
+ships crush isolate-**ON** by default (the disposable worktree is the reliable
+safety layer) and makes restrict **opt-in** (default OFF). `triss coder init`
+still seeds a `permissions.run` block into crush.json as forward-compat
+(harmless, correct once upstream honors it), but the working allowlist today
+is the CLI flags: `--restrict` (or `TRISS_CODER_CRUSH_RESTRICT=1`) makes
+`triss coder run` emit `--restrict-run` plus `--allow-bash`/`--allow-tool` for
+each entry. Override per-run with `--restrict` / `--no-restrict` (resolution:
+CLI flag > env > crush.json `permissions.run.restrict` > default OFF). Prefer
 opencode when you want the bash-policy safety layer baked into the project;
-crush is simpler (one JSON envelope, native session ids) and equally safe
-inside its restrict policy, but `--no-restrict` reverts to crush's old
-all-or-nothing behavior — don't use it in a workspace you can't afford to
+crush is simpler (one JSON envelope, native session ids) but pair it with its
+default isolation, or opt into `--restrict` for a CLI allowlist on top — don't
+combine `--no-restrict` with `--no-isolate` in a workspace you can't afford to
 lose. Both engines share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it
 natively; triss also forwards it as `ZAI_API_KEY` for older binaries.
-See `docs/crush-issues.md` for the fuller list of crush caveats (the
-`--role fast` latency question, `crush models list` side effects).
+See `docs/crush-restrict-issues.md` for the live-verified bug facts and
+`docs/crush-issues.md` for the fuller list of crush caveats.
 
 `triss coder run` is **POSIX only** (macOS/Linux) — its engine env
 allowlist and `--timeout` kill both rely on POSIX process-group

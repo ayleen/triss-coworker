@@ -159,10 +159,10 @@ triss coder run "<task>"
   --continue           # continue the most recent opencode session
   --agent <name>       # default: coder (researcher = read-only)
   --model <p/m>        # override model for this run
-  --isolate            # run in a disposable git worktree (both engines default OFF)
-  --no-isolate         # disable worktree isolation (the default)
-  --restrict           # crush only: enforce permissions.run policy (default ON)
-  --no-restrict        # crush only: disable it (auto-approve every tool)
+  --isolate            # run in a disposable git worktree (opencode default OFF, crush default ON)
+  --no-isolate         # disable worktree isolation
+  --restrict           # crush only: opt into the CLI allowlist (--restrict-run + --allow-bash/--allow-tool)
+  --no-restrict        # crush only: keep crush unrestricted (the default)
   --cwd <path>         # working dir (ignored with --isolate)
   --timeout <sec>      # default 900
   --stdin              # read the task from piped stdin
@@ -195,20 +195,24 @@ migrations) stay with you, not the coder agent. Without `--isolate`, it
 edits directly in `--cwd` (default: current directory).
 
 **Engines.** `opencode` (default) enforces a deny-first bash allowlist via
-`opencode.json` (curated safe commands only) — prefer it when you want
-that safety layer. `crush` (`--engine crush` / `TRISS_CODER_ENGINE=crush`;
-npm `@phpcraftdream/crush` ≥0.1.3, bin `crush`) now has parity: `triss
-coder init` seeds a `permissions.run` policy (`restrict:true` + a read-only
-`allow_bash` set mirroring opencode's) into crush.json, and `triss coder
-run` passes `--restrict-run` by default. So **both engines default to
-`--isolate` OFF** — the config policy is the safety layer; use `--isolate`
-for a disposable worktree on top. Override crush's policy per-run with
-`--restrict` / `--no-restrict`, or via `TRISS_CODER_CRUSH_RESTRICT=0|1`
-(CLI flag > env > crush.json `permissions.run.restrict` > default ON).
-crush is simpler in other respects (one JSON envelope on stdout, native
-get-or-create session ids). Both engines share the single `ZHIPU_API_KEY`
-— crush ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY`
-for older binaries. See `docs/crush-issues.md` for crush caveats.
+`opencode.json` (curated safe commands only) that actually works — prefer it
+when you want that safety layer. `crush` (`--engine crush` /
+`TRISS_CODER_ENGINE=crush`; npm `@phpcraftdream/crush` ≥0.1.3, bin `crush`)
+has a **weaker, interim** safety story: live testing proved crush 0.1.3
+**ignores** its `permissions.run` config block and a denied bash command
+**deadlocks to timeout**. So triss ships crush isolate-**ON** by default (the
+disposable worktree is the reliable safety layer) and makes restrict
+**opt-in** (default OFF). `triss coder init` still seeds a `permissions.run`
+block into crush.json as forward-compat (harmless once upstream honors it),
+but today the working allowlist is the CLI flags: `--restrict` makes `triss
+coder run` emit `--restrict-run` plus `--allow-bash`/`--allow-tool` for each
+entry. Override per-run with `--restrict` / `--no-restrict`, or via
+`TRISS_CODER_CRUSH_RESTRICT=1` (CLI flag > env > crush.json
+`permissions.run.restrict` > default OFF). crush is simpler in other respects
+(one JSON envelope on stdout, native get-or-create session ids). Both engines
+share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it natively; triss also
+forwards it as `ZAI_API_KEY` for older binaries. See
+`docs/crush-restrict-issues.md` for the live-verified bug facts.
 
 Configure via `triss coder init` or `triss config wizard coder`. Env vars:
 `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
@@ -216,7 +220,7 @@ Configure via `triss coder init` or `triss config wizard coder`. Env vars:
 `TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
 (crush pin override, default `0.1.3`), `TRISS_CODER_CRUSH_RESTRICT`
-(crush only, default `1` — set `0` to disable the `permissions.run` policy).
+(crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
 Windows. `triss coder init`/`clean` are unaffected.

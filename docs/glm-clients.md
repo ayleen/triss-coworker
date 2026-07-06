@@ -52,14 +52,16 @@ behind the same adapter interface, both fed the same `ZHIPU_API_KEY`.
 | Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
-| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent) | **deny-first `permissions.run` policy** seeded into `crush.json` + `--restrict-run` on by default (parity — see §8) |
-| Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **OFF** (the `permissions.run` policy is the safety layer) |
+| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
+| Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **ON** (the disposable worktree is crush's reliable safety layer — the config allowlist is inert and a denied bash deadlocks to timeout) |
 | Per-call cost | reported `0` on the coding plan | real `delta_cost_usd` reported |
 | Sub-agents | opencode agent templates | `--agents single` (Triss forces this) |
 
 **Rule of thumb:** prefer **opencode** for the persistent bash-policy safety
-layer; reach for **crush** when you want the simpler single-envelope model,
-native session ids, or real per-call cost accounting.
+layer (it actually enforces); reach for **crush** when you want the simpler
+single-envelope model, native session ids, or real per-call cost accounting —
+and keep crush paired with its default worktree isolation (or opt into
+`--restrict` for a CLI-flag allowlist on top).
 
 ### 2.1 Which engine, and when
 
@@ -176,9 +178,11 @@ for the shell/CI). `--engine` beats the env beats the built-in default
 - `--isolate` runs the agent in a throwaway git worktree at
   `.triss/wt/<slug>` on a `coder/<slug>` branch, so it never touches your
   working tree. `--no-isolate` opts out.
-- **Both engines default isolate-OFF:** each has a persistent config policy
-  as its safety layer (opencode's `opencode.json` allowlist, crush's
-  `crush.json` `permissions.run`). An explicit flag always wins.
+- **Defaults differ by engine:** opencode defaults isolate-**OFF** (its
+  deny-first `opencode.json` bash allowlist is the dependable safety layer);
+  crush defaults isolate-**ON** (crush 0.1.3's `permissions.run` config is
+  inert and a denied bash deadlocks to timeout, so the disposable worktree is
+  crush's reliable safety layer). An explicit flag always wins.
 - `triss coder clean` removes finished worktrees (branches with no diff vs
   the default branch); `--all` forces all.
 
@@ -251,7 +255,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
 | `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.17.13`). |
 | `TRISS_CODER_CRUSH_VERSION` | no | Pin a different `@phpcraftdream/crush` version (default `0.1.3`). |
-| `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `0` disables the `permissions.run` policy by default (auto-approve every tool); `1` forces it on. Overridden per-run by `--restrict`/`--no-restrict`. |
+| `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 
 All are documented in `.env.example`; this table is the authoritative
 GLM-only subset.
@@ -268,31 +272,47 @@ deny`. Headless runs use `--auto` (auto-approve *ask*; *deny* still blocks).
 The policy travels into isolation worktrees. **Override by editing
 `opencode.json`.**
 
-**crush — deny-first parity (crush ≥0.1.3).** `triss coder init` seeds a
-`permissions.run` block into `crush.json` — `{ restrict: true, allow_bash:
-[…the same read-only set as opencode…], allow_tools: ['view'] }` — via a
-read-modify-write that never clobbers the `models` block or a user's existing
-`permissions.run` (it warns instead). `triss coder run` then passes
-`--restrict-run` by default, so crush honors that allowlist and denies
-everything else cleanly. `--agents single` still disables sub-agent fan-out.
-Because the config policy is now the safety layer, crush defaults isolate-OFF,
-exactly like opencode.
+**crush — interim stance (config inert; CLI-flag enforcement; isolate-ON).**
+Live testing (2026-07-06, `docs/crush-restrict-issues.md`) proved crush 0.1.3
+**ignores** the `permissions.run` config block — `crush run --restrict-run`
+with an `allow_bash` policy seeded into `crush.json` still ran a
+non-allowlisted command. Only the **CLI flags** (`--allow-bash`/`--allow-tool`)
+enforce, and a denied *bash* command **deadlocks to the timeout** instead of
+denying cleanly. So:
+
+- `triss coder init` still seeds a `permissions.run` block into `crush.json`
+  (`{ restrict: true, allow_bash: […read-only set…], allow_tools: ['view'] }`)
+  as a **forward-compat** gesture — harmless, and correct once the maintainer
+  honors config. It is **not** the enforcement path today.
+- crush **defaults to isolate-ON** (the disposable worktree is the reliable,
+  deadlock-free safety layer — the same posture crush shipped with). restrict
+  is **opt-in** (default OFF), because a coding agent routinely runs bash
+  outside a read-only allowlist and every such call would deadlock under
+  restrict-ON.
+- When you DO opt in (`--restrict` / `TRISS_CODER_CRUSH_RESTRICT=1`),
+  `triss coder run` emits the allowlist as **CLI flags** alongside
+  `--restrict-run`: `--allow-bash <p>` for each read-only pattern and
+  `--allow-tool <t>` for the file tools (`view`, `edit`, `write`, `ls`).
+  `--agents single` still disables sub-agent fan-out.
+
+Net interim posture: *worktree containment (default) + opt-in CLI allowlist
+for defense-in-depth*. Once the maintainer honors config + fixes the deadlock,
+restrict can flip back ON by default for true opencode parity.
 
 **Override surface (precedence high → low):**
 
-1. **Per-run flag** — `--no-restrict` drops to auto-approve for one run (a
-   trusted throwaway); `--restrict` forces it on. `--isolate` adds a
-   disposable worktree on top for one run.
-2. **Env** — `TRISS_CODER_CRUSH_RESTRICT=0` disables the policy by default;
-   `=1` forces it on.
-3. **Persistent** — edit `crush.json` `permissions.run`: set
-   `restrict: false`, or add/remove/replace `allow_bash` / `allow_tools`.
-   This is the recommended, opencode-equivalent override.
-4. **Default** when none of the above is set: restrict **ON**.
+1. **Per-run flag** — `--restrict` opts into the CLI allowlist for one run
+   (also forces isolate-style safety on top); `--no-restrict` keeps crush
+   unrestricted (the default). `--isolate`/`--no-isolate` toggle the worktree.
+2. **Env** — `TRISS_CODER_CRUSH_RESTRICT=1` opts into the allowlist by default;
+   `=0` (or unset) leaves it off.
+3. **Persistent** — edit `crush.json` `permissions.run` (forward-compat —
+   honored once crush fixes the config bug).
+4. **Default** when none of the above is set: restrict **OFF**, isolate **ON**.
 
-Resolution order in code: CLI flag (if given) > `TRISS_CODER_CRUSH_RESTRICT`
-env (if set) > `crush.json` `permissions.run.restrict` (if hand-set) >
-built-in default `true`.
+Resolution order for restrict in code: CLI flag (if given) >
+`TRISS_CODER_CRUSH_RESTRICT` env (if set) > `crush.json`
+`permissions.run.restrict` (if hand-set) > built-in default `false`.
 
 ---
 
