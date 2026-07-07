@@ -278,9 +278,10 @@ test('GITLAB_URL env override changes the API base URL', async () => {
   await gitlab.search({ search: 'test' });
 
   assert.equal(calls.length, 1);
+  const actualOrigin = new URL(calls[0].url).origin;
   assert.ok(
-    calls[0].url.startsWith('https://mygitlab.example.com'),
-    `Expected custom base URL, got: ${calls[0].url}`,
+    actualOrigin === 'https://mygitlab.example.com',
+    `Expected custom base URL origin, got: ${actualOrigin} (full URL: ${calls[0].url})`,
   );
 
   restoreEnv();
