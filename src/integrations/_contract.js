@@ -190,15 +190,52 @@ export function validateManifest(manifest, source) {
 
 /**
  * Strip HTML tags from a string, including the content of <script> and
- * <style> elements. Also decodes common HTML entities. More robust than
- * a naive /<[^>]+>/g replace which can leave script fragments behind.
+ * <style> elements. Uses a character-by-character state machine rather
+ * than regexes to avoid CodeQL js/incomplete-multi-character-sanitization.
  */
 export function stripHtml(input) {
   if (input == null) return undefined;
-  return String(input)
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<[^>]+>/g, '')
+  const s = String(input);
+  let out = '';
+  let i = 0;
+  const len = s.length;
+
+  while (i < len) {
+    // Detect an opening tag: '<' followed by a letter or '/'
+    if (s[i] === '<' && i + 1 < len && /[a-zA-Z/]/.test(s[i + 1])) {
+      // Read the tag name to check for script/style
+      let j = i + 1;
+      if (s[j] === '/') j++;
+      const tagStart = j;
+      while (j < len && /[a-zA-Z0-9]/.test(s[j])) j++;
+      const tagName = s.slice(tagStart, j).toLowerCase();
+
+      // Find the matching close '>' for this tag
+      while (j < len && s[j] !== '>') j++;
+      if (j < len) j++; // skip past '>'
+
+      if (tagName === 'script' || tagName === 'style') {
+        // Skip everything until we find the corresponding closing tag
+        const closeTag = '</' + tagName;
+        while (j < len) {
+          if (s[j] === '<' && s.slice(j, j + closeTag.length).toLowerCase() === closeTag) {
+            // Skip past the closing tag entirely
+            while (j < len && s[j] !== '>') j++;
+            if (j < len) j++;
+            break;
+          }
+          j++;
+        }
+      }
+      i = j;
+      continue;
+    }
+    out += s[i];
+    i++;
+  }
+
+  // Decode HTML entities (applied once to avoid double-unescaping)
+  return out
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
