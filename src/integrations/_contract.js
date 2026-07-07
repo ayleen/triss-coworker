@@ -187,3 +187,21 @@ export function validateManifest(manifest, source) {
   }
   return manifest;
 }
+
+/**
+ * Strip HTML tags from a string, including the content of <script> and
+ * <style> elements. Also decodes common HTML entities. More robust than
+ * a naive /<[^>]+>/g replace which can leave script fragments behind.
+ */
+export function stripHtml(input) {
+  if (input == null) return undefined;
+  return String(input)
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}

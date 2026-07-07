@@ -5,6 +5,7 @@ import { chat as deepseekChat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
+import { stripHtml } from '../integrations/_contract.js';
 
 const ASK_SYSTEM =
   'You are a precise code/document analyst. Read the supplied sources and ' +
@@ -688,7 +689,7 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, model
   const results = data.results || [];
   const corpus = results
     .map((r) => {
-      const title = r.title?.replace(/<[^>]+>/g, '') ?? '?';
+      const title = stripHtml(r.title) ?? '?';
       return `${r.content?.id ?? r.id ?? '?'}\t${title}\t${r.url ?? r._links?.webui ?? ''}`;
     })
     .join('\n');

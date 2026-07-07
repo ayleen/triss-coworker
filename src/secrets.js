@@ -134,7 +134,9 @@ export function unsetVar(path, key) {
 
 function formatLine(key, value) {
   const needsQuotes = /[\s"'#=]/.test(value) || value === '';
-  const escaped = needsQuotes ? `"${value.replace(/"/g, '\\"')}"` : value;
+  const escaped = needsQuotes
+    ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    : value;
   return `${key}=${escaped}`;
 }
 

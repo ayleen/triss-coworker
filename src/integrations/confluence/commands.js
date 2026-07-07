@@ -1,10 +1,10 @@
 import pc from 'picocolors';
 import { confluence, textToStorage } from './client.js';
 import { adfToText } from '../jira/adf.js';
-import { summarize, printResult } from '../_contract.js';
+import { summarize, printResult, stripHtml } from '../_contract.js';
 
 function searchLine(r) {
-  const title = r.title?.replace(/<[^>]+>/g, '') ?? '?';
+  const title = stripHtml(r.title) ?? '?';
   const space = r.resultGlobalContainer?.title ?? r.space?.name ?? '';
   const url = r.url ?? r._links?.webui ?? '';
   return `${r.content?.id ?? r.id ?? '?'}\t[${space}]\t${title}\t${url}`;

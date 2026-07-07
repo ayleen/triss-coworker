@@ -160,7 +160,10 @@ _triss "$@"
 }
 
 function escapeZsh(s) {
-  return String(s).replace(/'/g, "'\\''").replace(/:/g, '\\:');
+  return String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "'\\''")
+    .replace(/:/g, '\\:');
 }
 
 export function runCompletion(shell, program) {
