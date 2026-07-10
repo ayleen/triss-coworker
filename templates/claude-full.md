@@ -214,8 +214,14 @@ share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it natively; triss als
 forwards it as `ZAI_API_KEY` for older binaries. See
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
 
-Configure via `triss coder init` or `triss config wizard coder`. Env vars:
-`ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
+Configure via `triss coder init` or `triss config wizard coder`. The opencode
+engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
+sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
+`opencode/hy3-free`) with `OPENCODE_API_KEY` — see `docs/opencode-zen.md`. A
+Zen run forwards only `OPENCODE_API_KEY`, so a Zen-only machine needs no
+`ZHIPU_API_KEY`. Env vars: `ZHIPU_API_KEY` (required for GLM; the default
+provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
+`TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
 `TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
