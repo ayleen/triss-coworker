@@ -101,16 +101,17 @@ Two things it will **not** silently do:
 
 - **Shadowed pin.** If a higher‑precedence source will override the pin in the
   next process — a `TRISS_CODER_MODEL` **exported in your shell** (beats every
-  `.env`), or a project `./.triss.env` when you wrote `--global` — init warns
-  and reports *"Setup incomplete"* instead of success. Remove or fix that
-  override, then re‑run. (Check with `triss coder status` → *default model*.)
+  `.env`), or a project `./.triss.env` when you wrote `--global` — init warns,
+  reports *"Setup incomplete"*, and exits non-zero. Remove or fix that override,
+  then re-run. (Check with `triss coder status` → *default model*.)
 - **Existing `opencode.json`.** It is never overwritten. Instead init *audits*
   it and warns when: it lacks the deny‑first bash policy
   (`permission.bash["*"]="deny"` — important because runs use `--auto`, which
   auto‑approves every "ask"), its `model` provider mismatches, or its
-  `small_model` provider mismatches. The last matters because `opencode run` has
-  no small‑model flag, so triss can't override a stale `small_model` at run
-  time — fix it in the file or delete `opencode.json` and re‑run.
+  `small_model` provider mismatches. The last is a blocking error because
+  `opencode run` has no small‑model flag, so triss can't override a stale
+  `small_model` at run time; init exits non-zero until you fix it in the file
+  or delete `opencode.json` and re-run.
 
 Provider resolution when you don't pass `--provider`:
 

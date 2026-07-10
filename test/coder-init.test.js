@@ -545,9 +545,13 @@ test(
     // init saves OPENCODE_API_KEY but pins a GLM model, and a bare run then
     // demands the absent ZHIPU_API_KEY.
     process.env.TRISS_CODER_MODEL = 'zai-coding-plan/glm-5.2';
-    await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /Coder setup incomplete/,
     );
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
@@ -595,9 +599,13 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // A local .triss.env (project scope) outranks the global one we write.
     writeFileSync(join(home, '.triss.env'), 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\n');
-    await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /Coder setup incomplete/,
     );
     const out = captured.join('');
     assert.match(out, /\.triss\.env \(local scope\) sets TRISS_CODER_MODEL=zai-coding-plan\/glm-5\.2/);
@@ -611,9 +619,13 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Simulate a shell export present before init (highest precedence of all).
     process.env.TRISS_CODER_MODEL = 'zai-coding-plan/glm-5.2';
-    await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /Coder setup incomplete/,
     );
     assert.match(captured.join(''), /TRISS_CODER_MODEL=zai-coding-plan\/glm-5\.2 is exported in your shell/);
   }),
@@ -657,13 +669,19 @@ test(
         permission: { bash: { '*': 'deny' } },
       }) + '\n',
     );
-    await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /existing opencode\.json issues/,
     );
     const out = captured.join('');
     assert.match(out, /small_model="zai-coding-plan\/glm-5-turbo", which is not a OpenCode Zen/);
     assert.match(out, /cannot override it at run time/);
+    assert.doesNotMatch(out, /pinned TRISS_CODER_MODEL/);
+    assert.doesNotMatch(out, /Done\./);
   }),
 );
 

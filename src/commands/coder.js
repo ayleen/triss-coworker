@@ -564,7 +564,9 @@ export async function runCoderInit(opts = {}, deps = {}) {
         pc.cyan('triss coder init') +
         '.\n',
     );
-    return;
+    throw new Error(
+      'Coder setup incomplete: remove or fix the higher-precedence model override, then re-run `triss coder init`.',
+    );
   }
   process.stderr.write(
     '\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss coder init') + pc.dim(' again anytime — it is idempotent.\n'),
@@ -683,7 +685,12 @@ export async function runCoderSetup({ scope, provider } = {}, deps = {}) {
   // right after a successful Zen setup.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
   const { model, smallModel } = await resolveInitModels(providerInfo, deps, existing);
-  writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel);
+  const configAudit = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel);
+  if (configAudit.blocking) {
+    throw new Error(
+      'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
+    );
+  }
   persistCoderModels(resolvedScope, model, smallModel);
   scaffoldAgentTemplates(resolvedScope);
   return { model, smallModel };
@@ -999,7 +1006,7 @@ function auditExistingConfig(path, providerInfo) {
     process.stderr.write(
       pc.yellow(`  ⚠ ${path} exists but is not valid JSON — leaving it; runs may misbehave.\n`),
     );
-    return;
+    return { blocking: true };
   }
   if (existing?.permission?.bash?.['*'] !== 'deny') {
     process.stderr.write(
@@ -1013,7 +1020,9 @@ function auditExistingConfig(path, providerInfo) {
   }
   const wantEnv = kindKeyEnv(providerInfo.kind);
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
+  let blocking = false;
   if (small && coderModelCredential(small).env !== wantEnv) {
+    blocking = true;
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${path} sets small_model="${small}", which is not a ${coderInitCatalogue(providerInfo).noun} ` +
@@ -1022,6 +1031,7 @@ function auditExistingConfig(path, providerInfo) {
       ),
     );
   }
+  return { blocking };
 }
 
 // Writes opencode.json with the already-resolved `model`/`smallModel` (from
@@ -1037,12 +1047,12 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel) {
       pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
     );
     warnIfProviderMismatch(path, providerInfo);
-    auditExistingConfig(path, providerInfo);
-    return;
+    return auditExistingConfig(path, providerInfo);
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
+  return { blocking: false };
 }
 
 function agentsDir(scope) {
