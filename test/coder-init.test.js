@@ -201,13 +201,19 @@ test(
     const configDir = join(home, '.config', 'opencode');
     mkdirSync(configDir, { recursive: true });
     const configPath = join(configDir, 'opencode.json');
+    // No deny-first policy -> the audit blocks (unsafe under --auto), but the
+    // file itself is still never edited.
     const custom = JSON.stringify({ model: 'custom/model', untouched: true });
     writeFileSync(configPath, custom);
 
     process.env.ZHIPU_API_KEY = 'zk-existing-key';
-    await runCoderSetup(
-      { scope: 'global' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    await assert.rejects(
+      () =>
+        runCoderSetup(
+          { scope: 'global' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /Coder setup incomplete/,
     );
 
     assert.equal(readFileSync(configPath, 'utf8'), custom, 'existing config must be preserved verbatim');
@@ -588,7 +594,11 @@ test(
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(
       join(cfgDir, 'opencode.json'),
-      JSON.stringify({ model: 'opencode/deepseek-v4-flash-free', small_model: 'opencode/deepseek-v4-flash-free' }) + '\n',
+      JSON.stringify({
+        model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/deepseek-v4-flash-free',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
     );
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
@@ -646,24 +656,50 @@ test(
 );
 
 test(
-  'runCoderInit: audits an existing opencode.json and warns on a missing deny-first bash policy (P1-b)',
+  'runCoderInit: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy (P1-round7)',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
-    // A config with models but NO permission policy — unsafe under --auto.
+    // A config with models but NO permission policy — unsafe under --auto, so
+    // init must fail rather than report success with the safety layer missing.
     writeFileSync(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free' }) + '\n',
     );
-    await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+        ),
+      /Coder setup incomplete/,
     );
     const out = captured.join('');
     assert.match(out, /no deny-first bash policy/);
-    // ...and it must NOT claim the policy is already applied.
+    assert.match(out, /--allow-unsafe-bash/);
     assert.ok(!/policy already applied/.test(out), 'must not falsely claim the policy is applied');
+  }),
+);
+
+test(
+  'runCoderInit --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds (P1-round7)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free' }) + '\n',
+    );
+    // Explicit opt-in — the run must complete despite the missing policy.
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen', allowUnsafeBash: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+    );
+    const out = captured.join('');
+    assert.match(out, /proceeding because --allow-unsafe-bash was passed/);
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
   }),
 );
 
@@ -857,14 +893,16 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: drops an existing opencode.json model the live catalogue no longer lists (P1-round6)',
+  'runCoderInit --provider opencode-zen: drops a stale existing opencode.json MAIN model (overridden at run time) and pins an available one (P1-round6)',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
+    // Stale MAIN model only (no small_model): runs override model via --model,
+    // so a gone main in the file is harmless — init just re-pins an available one.
     writeFileSync(
       join(cfgDir, 'opencode.json'),
-      JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free', permission: { bash: { '*': 'deny' } } }) + '\n',
+      JSON.stringify({ model: 'opencode/hy3-free', permission: { bash: { '*': 'deny' } } }) + '\n',
     );
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
@@ -875,6 +913,38 @@ test(
     );
     // The stale existing model is not re-pinned; an available one takes over.
     assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: BLOCKS on a stale existing small_model the catalogue no longer lists (P1-round7)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    // Main model still available, but small_model is a gone free model. opencode
+    // reads small_model from THIS file and triss can't override it at run time,
+    // so the stale small_model would keep being used — init must block.
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/hy3-free',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          {
+            spawnSync: fakeSpawnAlreadyInstalled,
+            fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+          },
+        ),
+      /Coder setup incomplete/,
+    );
+    assert.match(captured.join(''), /init resolved small_model="opencode\/north-mini-code-free"/);
   }),
 );
 
@@ -893,6 +963,24 @@ test(
         ),
       /none of triss's known free OpenCode Zen models are in the current catalogue/,
     );
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: a single in-catalogue TRISS_CODER_MODEL preset also supplies the small model (P2-round7)',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Catalogue offers only a paid/custom id triss doesn't know; the user sets
+    // ONE variable. Main is honored (it's in the catalogue); small must fall
+    // back to that same model rather than dead-ending on a missing small default.
+    process.env.TRISS_CODER_MODEL = 'opencode/gpt-5.5';
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue(['gpt-5.5']) },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/gpt-5.5');
+    assert.equal(config.small_model, 'opencode/gpt-5.5', 'small model falls back to the resolved main');
   }),
 );
 

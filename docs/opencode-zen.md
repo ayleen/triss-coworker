@@ -74,7 +74,10 @@ catalogue actually lists. The catalogue is authoritative when it's fetched:
 - **None of the known free models left ⇒ init blocks.** If the catalogue is
   fetched but lists none of the models above, init **fails** (non-zero) rather
   than pinning a gone default — set `TRISS_CODER_MODEL=opencode/<id>` to a model
-  from <https://opencode.ai/docs/zen/> and re-run.
+  from <https://opencode.ai/docs/zen/> and re-run. **One variable is enough:**
+  the model you pick as `TRISS_CODER_MODEL` also becomes the small/fast model
+  when the catalogue offers no known small default, so a single
+  `TRISS_CODER_MODEL=opencode/gpt-5.5` (say) doesn't dead-end on `small_model`.
 - **If the catalogue can't be fetched** (no key, non-200, offline), init falls
   back to the built-in list but prints a clear warning that availability is
   **not verified** — if a run then fails immediately, switch to a listed model.
@@ -128,14 +131,24 @@ and re-running is a clean idempotent completion):
   *"Setup incomplete"* and fails. (Check with `triss status` → Coder block →
   *default model*.)
 - **Existing `opencode.json`.** It is never overwritten. Instead init *audits*
-  it: a missing deny‑first bash policy (`permission.bash["*"]="deny"` — runs use
-  `--auto`, which auto‑approves every "ask") or a `model` provider mismatch is a
-  warning; a `small_model` mismatch — cross-provider **or** cross-plan (e.g.
-  `zai-coding-plan` main + `zai` small) — is **blocking**, because `opencode run`
-  has no small‑model flag so triss can't override a stale `small_model` at run
-  time. The audit also covers a **project `./opencode.json`** when you write
-  `--global` (opencode resolves the project file over the global one at run
-  time).
+  it. A `model` provider mismatch is a warning (runs override `model` with
+  `--model`, so a stale main model in the file is harmless). These are
+  **blocking**, because `opencode run` has no small‑model flag and reads the file
+  directly, so triss can't fix them at run time:
+    - **Missing deny‑first bash policy** (`permission.bash["*"]="deny"`). Runs use
+      `--auto`, which auto‑approves every "ask", so without the allowlist the
+      agent can run arbitrary shell commands — that's the whole safety layer.
+      Pass **`--allow-unsafe-bash`** to proceed anyway (downgraded to a warning).
+    - **`small_model` mismatch** — cross-provider, cross-plan (e.g.
+      `zai-coding-plan` main + `zai` small), **or** simply *stale*: a
+      `small_model` that isn't the one init just resolved (e.g. an
+      `opencode/hy3-free` the live catalogue no longer lists). opencode reads
+      `small_model` from the file, so the stale/gone model keeps being used —
+      set `small_model` to the resolved value, or delete `opencode.json` and
+      re-run.
+
+  The audit also covers a **project `./opencode.json`** when you write `--global`
+  (opencode resolves the project file over the global one at run time).
 
 These gates apply to **`triss config wizard coder`** too, not just `triss coder
 init` — the wizard runs the same setup and exits non-zero on a blocking

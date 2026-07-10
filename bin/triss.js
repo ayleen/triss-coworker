@@ -232,6 +232,7 @@ coder
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
   .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default) or opencode-zen (free models incl. hy3)')
+  .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .action(wrap(runCoderInit));
 
 coder

@@ -369,7 +369,7 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   const bareId = (m) => String(m).split('/').slice(1).join('/');
   const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(bareId(m));
 
-  const pickOne = async (envVar, existingVal, label, idx, def) => {
+  const pickOne = async (envVar, existingVal, label, idx, def, fallbackFull) => {
     // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
     //    KIND (the user set it deliberately). Warn — but still use it — if its
     //    plan prefix doesn't match the detected Z.AI plan.
@@ -421,29 +421,36 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     if (modelFitsProvider(existingVal, providerInfo) && !zenVerifiedAbsent(existingVal)) {
       return existingVal;
     }
-    // 3./4. picker (TTY) or the provider's silent default — but a VERIFIED Zen
-    //       catalogue that lists none of triss's known free models leaves
-    //       nothing safe to pin (def undefined), so block with an actionable
-    //       message rather than fabricating a model the catalogue said is gone.
-    if (providerInfo.kind === 'opencode-zen' && zenAvailable && !def) {
-      throw new Error(
-        `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
-          `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
-          `set ${envVar}=opencode/<id>, then re-run.`,
-      );
+    // 3./4. picker (TTY, when the catalogue offers choices) or the provider's
+    //       silent default. When a VERIFIED Zen catalogue lists none of triss's
+    //       known free models there is no `def`: fall back to `fallbackFull`
+    //       (the already-resolved main model — any available model serves as the
+    //       small/fast one, so a single in-catalogue main pick like a paid
+    //       opencode/gpt-5.5 doesn't dead-end on the small model). Only when
+    //       there is no fallback either do we block with an actionable message
+    //       rather than fabricating a model the catalogue said is gone.
+    if (interactive && cat.choices.length) {
+      return `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`;
     }
-    return interactive
-      ? `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`
-      : `${cat.prefix}/${def}`;
+    if (def) return `${cat.prefix}/${def}`;
+    if (fallbackFull) return fallbackFull;
+    throw new Error(
+      `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
+        `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
+        `set ${envVar}=opencode/<id>, then re-run.`,
+    );
   };
 
-  const model = await pickOne('TRISS_CODER_MODEL', existing.model, 'Main', cat.mainIdx, cat.mainDefault);
+  const model = await pickOne('TRISS_CODER_MODEL', existing.model, 'Main', cat.mainIdx, cat.mainDefault, null);
+  // The resolved main model is the small model's last-resort fallback (see the
+  // block above) so a paid/custom in-catalogue main pick never dead-ends here.
   const smallModel = await pickOne(
     'TRISS_CODER_SMALL_MODEL',
     existing.smallModel,
     'Small/fast',
     cat.smallIdx,
     cat.smallDefault,
+    model,
   );
   // A preset/existing model with a prefix triss doesn't recognize is routed to
   // ZHIPU_API_KEY by default (coderModelCredential) and can never be served —
@@ -734,7 +741,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
     // this path and the wizard's postSetup path fail the same way.
-    await runCoderSetup({ scope, provider, inheritedModels }, deps);
+    await runCoderSetup({ scope, provider, inheritedModels, allowUnsafeBash: opts.allowUnsafeBash }, deps);
   }
   // The setup isn't runnable if the provider's key never got set (a skipped or
   // empty prompt, or a non-TTY run with nothing in the env) — fail rather than
@@ -821,7 +828,7 @@ async function setupKey(path, provider = 'zai') {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup({ scope, provider, inheritedModels } = {}, deps = {}) {
+export async function runCoderSetup({ scope, provider, inheritedModels, allowUnsafeBash } = {}, deps = {}) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
   // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
@@ -869,7 +876,9 @@ export async function runCoderSetup({ scope, provider, inheritedModels } = {}, d
   // right after a successful Zen setup.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
   const { model, smallModel } = await resolveInitModels(providerInfo, deps, existing);
-  let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel).blocking;
+  let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
+    allowUnsafeBash,
+  }).blocking;
   // Cross-scope audit: opencode resolves config from the run's cwd upward, so a
   // project ./opencode.json overrides the global one. Writing --global while a
   // project file exists means THAT file (its small_model / bash policy) governs
@@ -879,6 +888,8 @@ export async function runCoderSetup({ scope, provider, inheritedModels } = {}, d
     if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
       const otherAudit = auditExistingConfig(projectCfg, providerInfo, {
         note: '(project scope — higher precedence than the global config, so it governs runs)',
+        allowUnsafeBash,
+        resolvedSmall: smallModel,
       });
       blocking = blocking || otherAudit.blocking;
     }
@@ -1247,20 +1258,35 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
     );
     return { blocking: true };
   }
+  let blocking = false;
   if (existing?.permission?.bash?.['*'] !== 'deny') {
-    process.stderr.write(
-      pc.yellow(
-        `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
-          'with --auto — every "ask" permission is auto-approved, so without an explicit deny-first ' +
-          'allowlist it can run arbitrary shell commands. Add the policy, or delete opencode.json and ' +
-          're-run init to regenerate it.\n',
-      ),
-    );
+    // The coder agent runs with --auto (every "ask" permission auto-approved),
+    // so WITHOUT a deny-first allowlist it can run arbitrary shell commands.
+    // That's the whole safety layer, so a missing policy is BLOCKING by default;
+    // `--allow-unsafe-bash` is the explicit opt-in that downgrades it to a warning.
+    if (opts.allowUnsafeBash) {
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny") — proceeding because ` +
+            '--allow-unsafe-bash was passed. The coder agent runs with --auto and can run arbitrary shell ' +
+            'commands. Add the policy when you can.\n',
+        ),
+      );
+    } else {
+      blocking = true;
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
+            'with --auto — every "ask" permission is auto-approved, so without an explicit deny-first ' +
+            'allowlist it can run arbitrary shell commands. Add the policy, delete opencode.json and re-run ' +
+            'init to regenerate it, or pass --allow-unsafe-bash to proceed without it.\n',
+        ),
+      );
+    }
   }
   const wantEnv = kindKeyEnv(providerInfo.kind);
   const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
-  let blocking = false;
   if (small && coderModelCredential(small).env !== wantEnv) {
     blocking = true;
     process.stderr.write(
@@ -1284,6 +1310,22 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
           'opencode.json and re-run init.\n',
       ),
     );
+  } else if (small && opts.resolvedSmall && small !== opts.resolvedSmall) {
+    // Same provider/plan, but the file's small_model is NOT the one init just
+    // resolved — e.g. a previous init's opencode/hy3-free that the live Zen
+    // catalogue no longer lists, so resolveInitModels dropped it in favour of an
+    // available model. opencode reads small_model from THIS file (triss has no
+    // run-time small-model flag), so the stale/gone model keeps being used and
+    // the new pin is cosmetic. Blocking — no-clobber won't fix it silently.
+    blocking = true;
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${where} sets small_model="${small}", but init resolved small_model="${opts.resolvedSmall}" ` +
+          '(the old one is no longer selected — likely dropped from the OpenCode Zen catalogue). opencode ' +
+          'reads small_model from this file and triss cannot override it at run time, so runs keep using ' +
+          `the stale model. Set small_model="${opts.resolvedSmall}", or delete opencode.json and re-run init.\n`,
+      ),
+    );
   }
   return { blocking };
 }
@@ -1293,7 +1335,7 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
 // policy. Never clobbers an existing file — instead it audits that file (main
 // model provider, small_model provider, deny-first policy) and warns on any
 // problem. `providerInfo` is { kind: 'zai' | 'opencode-zen', detectedZai }.
-function writeOpencodeConfig(scope, providerInfo, model, smallModel) {
+function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) {
   const path = opencodeConfigPath(scope);
   if (existsSync(path)) {
     process.stderr.write(pc.dim(`  · ${path} already exists — not overwriting\n`));
@@ -1301,7 +1343,10 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel) {
       pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
     );
     warnIfProviderMismatch(path, providerInfo);
-    return auditExistingConfig(path, providerInfo);
+    return auditExistingConfig(path, providerInfo, {
+      allowUnsafeBash: opts.allowUnsafeBash,
+      resolvedSmall: smallModel,
+    });
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel), null, 2) + '\n');
