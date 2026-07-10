@@ -58,7 +58,7 @@ import { defaultBranchVia } from '../git.js';
 import { crush as crushEngine } from '../coder-engines/crush.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
-export const OPENCODE_PIN = '1.17.13';
+export const OPENCODE_PIN = '1.17.18';
 // Provider corrected during Phase 0 recon: the configured ZHIPU_API_KEY is
 // a `zai-coding-plan` (subscription) key, not a pay-as-you-go `zai` key —
 // `zai/glm-*` fails with "Insufficient balance or no resource package" on

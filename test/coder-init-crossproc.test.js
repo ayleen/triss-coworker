@@ -53,7 +53,7 @@ function makeDirs() {
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   const opencode = join(bin, 'opencode');
-  writeFileSync(opencode, '#!/bin/sh\nprintf "1.17.13\\n"\n');
+  writeFileSync(opencode, '#!/bin/sh\nprintf "1.17.18\\n"\n');
   chmodSync(opencode, 0o755);
   return { home, project };
 }

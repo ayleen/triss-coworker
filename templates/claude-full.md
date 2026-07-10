@@ -177,7 +177,7 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 ```json
 {
   "engine": "opencode",
-  "engine_version": "1.17.13",
+  "engine_version": "1.17.18",
   "session_id": "ses_0d7b5c721ffeouI80ItCOxAJ3g",
   "exit_reason": "end_turn | error | timeout | killed",
   "final_text": "...",
@@ -223,7 +223,7 @@ Zen run forwards only `OPENCODE_API_KEY`, so a Zen-only machine needs no
 provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
 `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
-`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.13`),
+`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.18`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
 (crush pin override, default `0.1.3`), `TRISS_CODER_CRUSH_RESTRICT`
 (crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).

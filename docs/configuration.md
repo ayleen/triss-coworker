@@ -249,7 +249,7 @@ self-hosted endpoints).
 | `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
-| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
+| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.18`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.3`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
