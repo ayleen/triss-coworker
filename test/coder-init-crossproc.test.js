@@ -107,6 +107,24 @@ test('init --global warns AND a separate process confirms a local .triss.env rea
   }
 });
 
+test('the REAL `config wizard coder` path FAILS (non-zero) when no provider key is set (P2-round6)', () => {
+  const { home, project } = makeDirs();
+  try {
+    // Drive the ACTUAL wizard with NO ZHIPU/OPENCODE key in the env and empty
+    // stdin (so the key prompt is skipped). The missing-key gate lives in
+    // runCoderSetup — the wizard's postSetup path — so this must exit non-zero,
+    // not print a green "Done." a later `coder run` contradicts.
+    const wiz = runCli(['config', 'wizard', 'coder', '--global'], { home, project, env: {} });
+    assert.equal(wiz.status, 1, `wizard must exit non-zero without a provider key: ${wiz.stderr}`);
+    const out = wiz.stdout + wiz.stderr;
+    assert.match(out, /coder post-setup failed/);
+    assert.match(out, /ZHIPU_API_KEY is not set/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
 test('the REAL `config wizard coder` path enforces the blocking audit and exits non-zero (P2-b)', () => {
   const { home, project } = makeDirs();
   try {

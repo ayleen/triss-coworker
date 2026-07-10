@@ -225,9 +225,14 @@ async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
   }
 }
 
-// Resolves a Zen catalogue { mainDefault, smallDefault, choices } from the live
-// model set (or the static fallback). Warns clearly when availability could not
-// be verified, or when a preferred model is gone.
+// Resolves a Zen catalogue { available, mainDefault, smallDefault, choices }
+// from the live model set (or the static fallback). Carries `available` (the
+// verified Set, or null when unverified) so the caller can reject a stale
+// preset/existing model the catalogue no longer lists. Warns clearly when
+// availability could not be verified. When the catalogue IS verified but lists
+// none of triss's known free models, mainDefault/smallDefault come back
+// undefined — the caller then blocks (or honors an in-catalogue preset) rather
+// than pinning a model the catalogue just said is gone.
 function resolveZenCatalogue(available) {
   if (!available) {
     process.stderr.write(
@@ -238,6 +243,7 @@ function resolveZenCatalogue(available) {
       ),
     );
     return {
+      available: null,
       choices: ZEN_MODEL_CHOICES,
       mainDefault: ZEN_MAIN_PRIORITY[0],
       smallDefault: ZEN_SMALL_PRIORITY[0],
@@ -246,21 +252,11 @@ function resolveZenCatalogue(available) {
   const firstAvailable = (priority) => priority.find((id) => available.has(id));
   const choices = ZEN_MODEL_CHOICES.filter((c) => available.has(c.value));
   const mainDefault = firstAvailable(ZEN_MAIN_PRIORITY);
-  const smallDefault = firstAvailable(ZEN_SMALL_PRIORITY);
-  if (!mainDefault || !smallDefault || choices.length === 0) {
-    process.stderr.write(
-      pc.yellow(
-        '  ⚠ none of triss\'s known free OpenCode Zen models are in the current catalogue — pick a model ' +
-          'from https://opencode.ai/docs/zen/ and set TRISS_CODER_MODEL=opencode/<id>.\n',
-      ),
-    );
-    return {
-      choices: choices.length ? choices : ZEN_MODEL_CHOICES,
-      mainDefault: mainDefault || ZEN_MAIN_PRIORITY[0],
-      smallDefault: smallDefault || ZEN_SMALL_PRIORITY[0],
-    };
-  }
-  return { choices, mainDefault, smallDefault };
+  // Any available model can serve as the small/fast one, so if none of the
+  // small-priority ids remain but a main model does, reuse it rather than
+  // leaving small unresolved (which would falsely trip the "none known" block).
+  const smallDefault = firstAvailable(ZEN_SMALL_PRIORITY) || mainDefault;
+  return { available, choices, mainDefault, smallDefault };
 }
 
 // Init-time picker choices for the provider itself (opencode engine only).
@@ -278,16 +274,22 @@ const CODER_PROVIDER_CHOICES = [
 // defaults/choices when the kind is opencode-zen; omitted for zai.
 function coderInitCatalogue(providerInfo, zenCatalogue) {
   if (providerInfo.kind === 'opencode-zen') {
-    const z = zenCatalogue || { choices: ZEN_MODEL_CHOICES, mainDefault: ZEN_MAIN_PRIORITY[0], smallDefault: ZEN_SMALL_PRIORITY[0] };
-    const smallIdx = Math.max(0, z.choices.findIndex((c) => c.value === z.smallDefault));
+    const z = zenCatalogue || {
+      available: null,
+      choices: ZEN_MODEL_CHOICES,
+      mainDefault: ZEN_MAIN_PRIORITY[0],
+      smallDefault: ZEN_SMALL_PRIORITY[0],
+    };
+    const idxOf = (v) => Math.max(0, z.choices.findIndex((c) => c.value === v));
     return {
       prefix: 'opencode',
       choices: z.choices,
       mainDefault: z.mainDefault,
       smallDefault: z.smallDefault,
-      mainIdx: 0,
-      smallIdx,
+      mainIdx: idxOf(z.mainDefault),
+      smallIdx: idxOf(z.smallDefault),
       noun: 'OpenCode Zen',
+      available: z.available,
     };
   }
   return {
@@ -357,6 +359,16 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   const choose = deps.promptChoice || promptChoice;
   const interactive = !!process.stdin.isTTY;
 
+  // With a VERIFIED live Zen catalogue (available is a Set), a preset/existing
+  // model — or a static default — is only usable if the catalogue still lists
+  // its bare id. Free Zen models are temporary, so a stale pin (e.g. a
+  // previous init's opencode/hy3-free after the promo ends) must NOT be honored
+  // verbatim just because its provider prefix matches. When the catalogue is
+  // unverified (available null) we can't reject anything.
+  const zenAvailable = providerInfo.kind === 'opencode-zen' ? cat.available : null;
+  const bareId = (m) => String(m).split('/').slice(1).join('/');
+  const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(bareId(m));
+
   const pickOne = async (envVar, existingVal, label, idx, def) => {
     // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
     //    KIND (the user set it deliberately). Warn — but still use it — if its
@@ -364,37 +376,62 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     const preset = process.env[envVar];
     if (preset) {
       if (modelMatchesKind(preset, providerInfo.kind)) {
-        // A zai preset on the wrong PLAN (detected) is honored but flagged; a
-        // totally unknown prefix is left to the end-of-function warning.
-        const pfx = preset.split('/')[0];
-        if (
-          providerInfo.kind === 'zai' &&
-          providerInfo.detectedZai &&
-          (pfx === 'zai' || pfx === 'zai-coding-plan') &&
-          pfx !== providerInfo.detectedZai
-        ) {
+        if (zenVerifiedAbsent(preset)) {
+          // A stale Zen pin the catalogue no longer lists: don't honor it —
+          // fall through to an available model instead of pinning a dead id.
           process.stderr.write(
             pc.yellow(
-              `  ⚠ ${envVar}=${preset} uses the "${pfx}/" prefix but the key verified against the ` +
-                `"${providerInfo.detectedZai}" plan — using it as set, but runs may retry forever if the ` +
-                'key cannot serve that plan.\n',
+              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current OpenCode Zen catalogue ` +
+                '(free models are temporary); selecting an available model instead.\n',
             ),
           );
+        } else {
+          // A zai preset on the wrong PLAN (detected) is honored but flagged; a
+          // totally unknown prefix is left to the end-of-function warning.
+          const pfx = preset.split('/')[0];
+          if (
+            providerInfo.kind === 'zai' &&
+            providerInfo.detectedZai &&
+            (pfx === 'zai' || pfx === 'zai-coding-plan') &&
+            pfx !== providerInfo.detectedZai
+          ) {
+            process.stderr.write(
+              pc.yellow(
+                `  ⚠ ${envVar}=${preset} uses the "${pfx}/" prefix but the key verified against the ` +
+                  `"${providerInfo.detectedZai}" plan — using it as set, but runs may retry forever if the ` +
+                  'key cannot serve that plan.\n',
+              ),
+            );
+          }
+          return preset;
         }
-        return preset;
+      } else {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ ignoring ${envVar}=${preset} — it does not match the ${cat.noun} provider you ` +
+              `selected (expected the "${cat.prefix}/" prefix); unset it or set a matching model.\n`,
+          ),
+        );
       }
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ ignoring ${envVar}=${preset} — it does not match the ${cat.noun} provider you ` +
-            `selected (expected the "${cat.prefix}/" prefix); unset it or set a matching model.\n`,
-        ),
-      );
     }
     // 2. Reuse an existing opencode.json model only when it FITS the provider,
     //    plan included — so a zai-coding-plan model isn't re-pinned against a
-    //    key that verified as pay-as-you-go zai (the infinite-retry trap).
-    if (modelFitsProvider(existingVal, providerInfo)) return existingVal;
-    // 3./4. picker (TTY) or the provider's silent default.
+    //    key that verified as pay-as-you-go zai (the infinite-retry trap) — AND
+    //    (for Zen) the live catalogue still offers it.
+    if (modelFitsProvider(existingVal, providerInfo) && !zenVerifiedAbsent(existingVal)) {
+      return existingVal;
+    }
+    // 3./4. picker (TTY) or the provider's silent default — but a VERIFIED Zen
+    //       catalogue that lists none of triss's known free models leaves
+    //       nothing safe to pin (def undefined), so block with an actionable
+    //       message rather than fabricating a model the catalogue said is gone.
+    if (providerInfo.kind === 'opencode-zen' && zenAvailable && !def) {
+      throw new Error(
+        `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
+          `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
+          `set ${envVar}=opencode/<id>, then re-run.`,
+      );
+    }
     return interactive
       ? `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`
       : `${cat.prefix}/${def}`;
@@ -853,6 +890,23 @@ export async function runCoderSetup({ scope, provider, inheritedModels } = {}, d
   }
   persistCoderModels(resolvedScope, model, smallModel);
   scaffoldAgentTemplates(resolvedScope);
+  // Missing-key gate runs HERE (not only in runCoderInit) so the wizard's
+  // postSetup path — `config wizard coder` calls runCoderSetup directly, never
+  // runCoderInit — is gated too: without the provider's key the setup isn't
+  // runnable, so fail rather than print a green "Done." the next run
+  // contradicts with "<KEY> is not set". Config + templates are already on
+  // disk, so re-running after setting the key is a clean idempotent completion.
+  const keyEnv = coderProviderKeyInfo(resolvedProvider).env;
+  if (!process.env[keyEnv]) {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
+      ),
+    );
+    throw new Error(
+      `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+    );
+  }
   // Pin-shadow check runs HERE (not only in runCoderInit) so the wizard's
   // postSetup path is covered too. A shell export needs inheritedModels (only
   // runCoderInit captures it pre-loadEnvFiles); the .env-file shadow is detected
