@@ -79,10 +79,12 @@ function withIsolatedEnv(vars, fn) {
 // ─── listTools gating ────────────────────────────────────────────────────────
 
 test(
-  'listTools: triss_coder_* tools are hidden when ZHIPU_API_KEY is missing',
-  withIsolatedEnv({ ZHIPU_API_KEY: undefined }, async () => {
+  'listTools: triss_coder_* tools are hidden when NEITHER provider key is set',
+  // Both credentials cleared — gating is coderCredentialReady() (either key),
+  // so an ambient OPENCODE_API_KEY would otherwise keep the tools visible.
+  withIsolatedEnv({ ZHIPU_API_KEY: undefined, OPENCODE_API_KEY: undefined }, async () => {
     // Run from an empty tmp HOME/cwd so no .triss.env / global .env can
-    // reintroduce ZHIPU_API_KEY via getConfig()'s loadEnvFiles() call.
+    // reintroduce a key via getConfig()'s loadEnvFiles() call.
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-mcp-coder-nokey-')));
     const origCwd = process.cwd();
     const origHome = process.env.HOME;
@@ -93,8 +95,30 @@ test(
       assert.equal(
         tools.filter((t) => t.name.startsWith('triss_coder_')).length,
         0,
-        'expected no coder tools without ZHIPU_API_KEY',
+        'expected no coder tools without any provider key',
       );
+    } finally {
+      process.chdir(origCwd);
+      process.env.HOME = origHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }),
+);
+
+test(
+  'listTools: triss_coder_* tools appear for a zen-only setup (OPENCODE_API_KEY, no ZHIPU_API_KEY)',
+  withIsolatedEnv({ ZHIPU_API_KEY: undefined, OPENCODE_API_KEY: 'sk-zen-fake' }, async () => {
+    // Empty HOME/cwd so .triss.env can't reintroduce ZHIPU_API_KEY — the point
+    // is that OPENCODE_API_KEY alone lights up the coder tools.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-mcp-coder-zen-')));
+    const origCwd = process.cwd();
+    const origHome = process.env.HOME;
+    process.env.HOME = dir;
+    process.chdir(dir);
+    try {
+      const names = (await listTools()).map((t) => t.name);
+      assert.ok(names.includes('triss_coder_run'), 'coder tools visible with OPENCODE_API_KEY only');
+      assert.ok(names.includes('triss_coder_status'));
     } finally {
       process.chdir(origCwd);
       process.env.HOME = origHome;

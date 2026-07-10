@@ -8,7 +8,7 @@ import { getConfig } from '../config.js';
 // this kind of cycle (see the comment in src/commands/coder.js next to
 // its `chooseScope` import) — safe here too since CODER_MANIFEST is only
 // read inside listTools(), never at module-eval time.
-import { CODER_MANIFEST } from '../commands/coder.js';
+import { CODER_MANIFEST, coderCredentialReady } from '../commands/coder.js';
 import {
   askHandler,
   chatHandler,
@@ -807,8 +807,9 @@ const GITLAB_TOOLS = [
 ];
 
 // Pseudo-manifest tool (see src/commands/coder.js's CODER_MANIFEST) — not
-// a tracker integration, so it's gated on envReadiness(CODER_MANIFEST)
-// directly below rather than via loadIntegrations()'s `ready` set.
+// a tracker integration, so it's gated on coderCredentialReady() directly
+// below (ZHIPU_API_KEY or OPENCODE_API_KEY) rather than via
+// loadIntegrations()'s `ready` set.
 const CODER_TOOLS = [
   {
     name: 'triss_coder_run',
@@ -837,7 +838,7 @@ const CODER_TOOLS = [
         },
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
         agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
-        model: { type: 'string', description: 'Override the model for this run only' },
+        model: { type: 'string', description: 'Override the model for this run only, as <provider>/<id> — e.g. a Z.AI GLM (zai-coding-plan/glm-5.2) or an OpenCode Zen model (opencode/hy3-free, needs OPENCODE_API_KEY)' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
@@ -849,10 +850,10 @@ const CODER_TOOLS = [
   {
     name: 'triss_coder_status',
     description:
-      'Show the GLM coding agent setup: ZHIPU_API_KEY presence, the default ' +
-      'engine, each engine (opencode + crush) version/install state, which ' +
-      'opencode.json / crush.json config files exist, and how many isolation ' +
-      'worktrees are currently live.',
+      'Show the coding agent setup: ZHIPU_API_KEY / OPENCODE_API_KEY presence, ' +
+      'the default engine, each engine (opencode + crush) version/install ' +
+      'state, which opencode.json / crush.json config files exist, and how ' +
+      'many isolation worktrees are currently live.',
     inputSchema: { type: 'object', properties: {} },
     handler: coderStatusHandler,
   },
@@ -870,7 +871,11 @@ export async function listTools() {
   if (ready.has('github')) tools.push(...GITHUB_TOOLS);
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
-  if (envReadiness(CODER_MANIFEST).ready) tools.push(...CODER_TOOLS);
+  // Coder tools surface once EITHER provider credential is set: ZHIPU_API_KEY
+  // (Z.AI GLM, the default) or OPENCODE_API_KEY (OpenCode Zen). envReadiness
+  // only tracks the required ZHIPU key, so a zen-only user (opencode/hy3-free
+  // via OPENCODE_API_KEY) would otherwise never see triss_coder_run.
+  if (coderCredentialReady()) tools.push(...CODER_TOOLS);
   return tools;
 }
 

@@ -269,10 +269,11 @@ override for self-hosted instances):
 - `triss_gitlab_search` `triss_gitlab_issue` `triss_gitlab_create`
   `triss_gitlab_update` `triss_gitlab_comment`
 
-Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
-`triss config wizard coder`):
+Exposed **when a provider credential is set** — `ZHIPU_API_KEY` (Z.AI GLM,
+the default) **or** `OPENCODE_API_KEY` (OpenCode Zen). Setup: `triss coder
+init` or `triss config wizard coder`.
 
-- `triss_coder_run` — delegate an implementation task to a GLM coding
+- `triss_coder_run` — delegate an implementation task to a coding
   agent (default `opencode` engine; `engine: "crush"` selects the crush
   engine). Same options as `triss coder run` on the CLI (`engine`,
   `session`, `continue`, `agent`, `model`, `isolate`, `cwd`, `timeout`)
@@ -284,11 +285,15 @@ Exposed **only when ZHIPU_API_KEY is set** (setup: `triss coder init` or
   `isolate` is unset by default in the schema — opencode resolves unset to
   isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
   `permissions.run` config is inert and denied bash deadlocks, so the
-  worktree is its reliable safety layer).
+  worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
+  string — a Z.AI GLM (`zai-coding-plan/glm-5.2`) or an OpenCode Zen model
+  (`opencode/hy3-free`, which needs `OPENCODE_API_KEY`); triss forwards only
+  the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
   state (`opencode` vs the pinned version, `crush` presence), which
-  `opencode.json` / `crush.json` files exist, `ZHIPU_API_KEY` presence
-  (never the value), and how many isolation worktrees are live.
+  `opencode.json` / `crush.json` files exist, `ZHIPU_API_KEY` /
+  `OPENCODE_API_KEY` presence (never the value), and how many isolation
+  worktrees are live.
 
 **Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
 since GLM runs over MCP are expected to be long. Override per call via

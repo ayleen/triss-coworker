@@ -37,7 +37,9 @@ isolation, roles, restrict, model override, health-check, …).
 Triss never speaks the GLM HTTP protocol itself (except a tiny key-probe —
 see §3). It **drives a local agent binary** and parses the one JSON
 envelope that binary prints. There are two such binaries ("engines"), both
-behind the same adapter interface, both fed the same `ZHIPU_API_KEY`.
+behind the same adapter interface. crush is always fed `ZHIPU_API_KEY`
+(bridged to `ZAI_API_KEY`); opencode is fed whichever key its resolved model
+needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3).
 
 ---
 
@@ -48,8 +50,9 @@ behind the same adapter interface, both fed the same `ZHIPU_API_KEY`.
 | Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
 | npm package | `opencode-ai` (pinned `1.17.13`) | `@phpcraftdream/crush` (pinned `0.1.3`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
-| Key it reads | `ZHIPU_API_KEY` (native) | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
+| Key it reads | `ZHIPU_API_KEY` (native); `OPENCODE_API_KEY` for `opencode/…` Zen models | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
+| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`) **and** OpenCode Zen (`opencode/…`, e.g. `opencode/hy3-free`) | Z.AI GLM only |
+| Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix; Zen models resolve via opencode's built-in `opencode` provider | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
 | Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
@@ -88,17 +91,27 @@ bugs, crush can become the default without caveats.
 
 ## 3. How the key reaches GLM
 
-### One user-facing key
-Both engines are configured from a single secret, `ZHIPU_API_KEY`
-(get it at <https://z.ai/manage-apikey/apikey-list>). It is the only
-**required** env var for the coder subsystem (`CODER_MANIFEST`).
+### One user-facing key (per provider)
+Z.AI GLM — the default and crush's only provider — is configured from a
+single secret, `ZHIPU_API_KEY` (get it at
+<https://z.ai/manage-apikey/apikey-list>). It is the only **required** env var
+for the coder subsystem (`CODER_MANIFEST`). The `opencode` engine can also run
+[OpenCode Zen](https://opencode.ai/docs/zen/) `opencode/*` models (e.g. the
+free `opencode/hy3-free`); those authenticate with an optional
+`OPENCODE_API_KEY` instead. `coderModelCredential(model)` maps a resolved
+model's `<provider>/` prefix to the key it needs, and `triss coder run` gates
+on exactly that key before spawning — so a zen-only setup runs on
+`OPENCODE_API_KEY` alone.
 
 ### Minimal subprocess environment
 The engine subprocess never inherits your full environment. `buildEngineEnv()`
-copies only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL` plus `ZHIPU_API_KEY`.
-For crush, the adapter additionally maps `ZHIPU_API_KEY → ZAI_API_KEY` in the
-spawn env (`buildCrushSpawnEnv`) because crush's built-in `zai` provider
-historically read only `ZAI_API_KEY`. The value is never logged.
+copies only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL` plus the **single**
+provider key the resolved model needs — `ZHIPU_API_KEY` for GLM or
+`OPENCODE_API_KEY` for an `opencode/*` Zen model, never both, so a run only ever
+carries the credential its own provider uses. For crush, the adapter instead
+maps `ZHIPU_API_KEY → ZAI_API_KEY` in the spawn env (`buildCrushSpawnEnv`)
+because crush's built-in `zai` provider historically read only `ZAI_API_KEY`.
+The values are never logged.
 
 ### Which endpoint? Plan auto-detection
 There are two Z.AI base URLs and a given key works against exactly one:
@@ -131,7 +144,8 @@ Precedence for the models written at init time
 a TTY  >  silent default):
 
 - **Env override** — taken verbatim, prefix included, e.g.
-  `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2`.
+  `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2` (GLM) or
+  `TRISS_CODER_MODEL=opencode/hy3-free` (OpenCode Zen; needs `OPENCODE_API_KEY`).
 - **Interactive** — `triss coder init` prompts you to pick the main and
   small model from the list above.
 - **Default** — `zai-coding-plan/glm-5.2` (large) / `zai-coding-plan/glm-5-turbo`

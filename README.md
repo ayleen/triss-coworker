@@ -470,10 +470,34 @@ correct once upstream honors it), but the working allowlist today is the CLI
 flags: when you pass `--restrict` (or `TRISS_CODER_CRUSH_RESTRICT=1`), `triss
 coder run` emits `--restrict-run` plus `--allow-bash`/`--allow-tool` flags for
 each entry. Override per-run with `--restrict` / `--no-restrict` (resolution:
-CLI flag > env > crush.json `permissions.run.restrict` > default OFF). Both
-engines share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads it natively; triss
-also forwards it as `ZAI_API_KEY` for older binaries). See
+CLI flag > env > crush.json `permissions.run.restrict` > default OFF). For
+Z.AI GLM, both engines share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads it
+natively; triss also forwards it as `ZAI_API_KEY` for older binaries; see
+**Providers** below for the opencode-only OpenCode Zen alternative). See
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
+
+**Providers** — the `opencode` engine isn't limited to Z.AI. The required
+API key follows the model's `<provider>/` prefix: `zai-coding-plan/*` and
+`zai/*` (GLM) use `ZHIPU_API_KEY`, while `opencode/*` models — served free by
+[OpenCode Zen](https://opencode.ai/docs/zen/), e.g. **`opencode/hy3-free`**
+(Tencent Hunyuan 3) — use `OPENCODE_API_KEY`. To point coder at a Zen model:
+
+```bash
+triss config set OPENCODE_API_KEY <key>          # or add it to .triss.env
+export TRISS_CODER_MODEL=opencode/hy3-free        # default it for every run
+export TRISS_CODER_SMALL_MODEL=opencode/hy3-free
+triss coder run "add input validation to /signup"
+# …or per-run, without changing the default:
+triss coder run "..." --model opencode/hy3-free
+```
+
+`triss coder run` passes the resolved model to opencode with `--model` and
+forwards only the key that model needs, so a Zen run works with
+`OPENCODE_API_KEY` alone — no Z.AI key required. `triss coder init` still sets
+up the Z.AI key and writes `opencode.json`'s deny-first bash policy (which
+applies to Zen runs too); pass `TRISS_CODER_MODEL=opencode/hy3-free` before it
+to have that model written into the config as well. (The `crush` engine speaks
+Z.AI only.)
 
 If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
 the reset time converted to your local timezone (Z.AI reports it in

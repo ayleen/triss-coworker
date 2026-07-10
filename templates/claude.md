@@ -19,7 +19,9 @@ separate GLM coding agent instead of writing it yourself (setup once via
 default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
-CLI-flag allowlist on top.
+CLI-flag allowlist on top. The opencode engine can also run OpenCode Zen
+models (e.g. the free `--model opencode/hy3-free`, set `OPENCODE_API_KEY`)
+instead of Z.AI GLM.
 See `triss agent-help` for flags and the envelope it returns.
 
 For the full reference (examples, model presets, tracker integrations like
