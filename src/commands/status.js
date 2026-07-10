@@ -4,7 +4,7 @@ import { listPresets } from '../models.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
-import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
+import { CODER_MANIFEST, describeCoderStatus, coderCredentialReady } from './coder.js';
 
 export async function runStatus(deps = {}) {
   const cfg = getConfig();
@@ -68,13 +68,14 @@ export async function runStatus(deps = {}) {
   }
 
   // Richer engine-level view for coder — the manifest row above already
-  // covers ZHIPU_API_KEY (value + source), so this block sticks to what
-  // that generic grammar can't express: engine binaries/versions, which
-  // config files exist, and how many isolation worktrees are live.
-  // Gated on the same readiness check as the manifest row itself — a user
-  // who hasn't configured coder shouldn't have every `triss status` call
-  // silently fork `opencode`/`crush`/`git` on their behalf.
-  if (envReadiness(CODER_MANIFEST).ready) {
+  // covers ZHIPU_API_KEY / OPENCODE_API_KEY (value + source), so this block
+  // sticks to what that generic grammar can't express: engine
+  // binaries/versions, which config files exist, and how many isolation
+  // worktrees are live. Gated on coderCredentialReady() (ZHIPU_API_KEY OR
+  // OPENCODE_API_KEY) so a zen-only user still sees engine state — but a user
+  // who hasn't configured coder at all shouldn't have every `triss status`
+  // call silently fork `opencode`/`crush`/`git` on their behalf.
+  if (coderCredentialReady()) {
     lines.push('');
     // Header dropped the "(opencode engine)" qualifier now that crush is a
     // second engine — the per-engine lines below identify each, and a

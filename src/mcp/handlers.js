@@ -937,6 +937,7 @@ export async function coderStatusHandler() {
   const ready = envReadiness(CODER_MANIFEST);
   const lines = [
     `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush; crush bridges it to ZAI_API_KEY at run time)`,
+    `OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? 'configured' : 'not set'} (optional — unlocks OpenCode Zen models like opencode/hy3-free on the opencode engine)`,
     `Default engine: ${status.defaultEngine}`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${

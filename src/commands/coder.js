@@ -227,6 +227,28 @@ function coderSmallModel() {
   return process.env.TRISS_CODER_SMALL_MODEL || DEFAULT_CODER_SMALL_MODEL;
 }
 
+// Which API key a resolved coder model needs. OpenCode Zen models (provider
+// prefix `opencode/`, e.g. the free `opencode/hy3-free`) authenticate with
+// OPENCODE_API_KEY; every other prefix — the Z.AI GLM families
+// `zai-coding-plan/*` and `zai/*`, plus any unrecognised prefix (the
+// historical default) — uses ZHIPU_API_KEY. triss forwards whichever key is
+// set straight through to the engine subprocess (see buildEngineEnv). The
+// crush engine only speaks Z.AI (it bridges ZHIPU_API_KEY -> ZAI_API_KEY), so
+// its credential is always ZHIPU regardless of the model string.
+export function coderModelCredential(model) {
+  const provider = String(model || '').split('/')[0];
+  if (provider === 'opencode') return { env: 'OPENCODE_API_KEY', provider: 'opencode-zen' };
+  return { env: 'ZHIPU_API_KEY', provider: 'zai' };
+}
+
+// The coder tools/status surface as soon as ANY provider credential is
+// present: ZHIPU_API_KEY (Z.AI GLM — the default) or OPENCODE_API_KEY
+// (OpenCode Zen). envReadiness(CODER_MANIFEST) only tracks the required ZHIPU
+// key, so callers that must also light up for a zen-only setup OR this in.
+export function coderCredentialReady() {
+  return !!(process.env.ZHIPU_API_KEY || process.env.OPENCODE_API_KEY);
+}
+
 // ─── wizard manifest ─────────────────────────────────────────────────────────
 
 // Pseudo-manifest so `triss config wizard` / `triss status` can surface
@@ -243,6 +265,17 @@ export const CODER_MANIFEST = {
       required: true,
       secret: true,
       doc: 'Z.AI API key for GLM models — https://z.ai/manage-apikey/apikey-list',
+    },
+    {
+      // Optional: only the opencode engine needs it, and only for
+      // `opencode/*` (OpenCode Zen) models — e.g. the free opencode/hy3-free.
+      // Set TRISS_CODER_MODEL=opencode/<id> (or pass --model) to route a run
+      // through it. Readiness stays governed by ZHIPU_API_KEY (the default
+      // provider); this key just unlocks the zen provider when present.
+      name: 'OPENCODE_API_KEY',
+      required: false,
+      secret: true,
+      doc: 'OpenCode Zen API key for opencode/* models (e.g. opencode/hy3-free) — https://opencode.ai/docs/zen/',
     },
   ],
   postSetup: (ctx) => runCoderSetup(ctx),
@@ -1045,13 +1078,17 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
 // ─── engine env / argv ──────────────────────────────────────────────────────────
 
 // Minimal allowlist env for the engine subprocess — never spread
-// process.env, so the engine only ever sees what it needs.
-function buildEngineEnv() {
+// process.env, so the engine only ever sees what it needs. `credEnv` is the
+// single provider key the resolved model requires (from coderModelCredential):
+// only that key is forwarded, so a Zen run never carries the Z.AI key and vice
+// versa, even when both are configured. Included only when actually set — an
+// unconfigured credential never appears.
+function buildEngineEnv(credEnv) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (process.env[key] != null) env[key] = process.env[key];
   }
-  if (process.env.ZHIPU_API_KEY) env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY;
+  if (credEnv && process.env[credEnv]) env[credEnv] = process.env[credEnv];
   return env;
 }
 
@@ -1903,18 +1940,41 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     );
   }
 
-  if (!process.env.ZHIPU_API_KEY) {
-    throw new Error('ZHIPU_API_KEY is not set — run `triss coder init` first.');
+  const agent = opts.agent || 'coder';
+  const modelOverride = opts.model || null;
+  const modelUsed = modelOverride || coderModel();
+
+  // Provider-aware credential gate. crush only speaks Z.AI (it bridges
+  // ZHIPU_API_KEY -> ZAI_API_KEY), so it always needs ZHIPU_API_KEY. For
+  // opencode the required key follows the resolved model's provider:
+  // `opencode/*` (OpenCode Zen, e.g. the free opencode/hy3-free) needs
+  // OPENCODE_API_KEY, every other prefix needs ZHIPU_API_KEY. Keeping the
+  // Z.AI message wording identical preserves the historical error text.
+  // crush speaks Z.AI GLM only. An explicit `--model opencode/*` would be
+  // forwarded to crush verbatim (buildCrushRunArgv) and fail at the engine
+  // with an opaque parse/timeout — reject it upfront with a clear message.
+  // (A bare TRISS_CODER_MODEL=opencode/* env default is fine: crush ignores it
+  // and runs its GLM atoms, so only the explicit override is a real mistake.)
+  if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env === 'OPENCODE_API_KEY') {
+    throw new Error(
+      `The crush engine speaks Z.AI GLM only — it cannot run the OpenCode Zen model "${modelOverride}". ` +
+        'Use the opencode engine (drop --engine crush) for opencode/* models, or choose a GLM model.',
+    );
+  }
+
+  const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
+  if (!process.env[cred.env]) {
+    const suffix =
+      cred.env === 'OPENCODE_API_KEY'
+        ? ' (set OPENCODE_API_KEY to use OpenCode Zen models like opencode/hy3-free)'
+        : '';
+    throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}`);
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
   if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
     throw new Error(`Invalid --timeout "${opts.timeout}" — must be a positive number of seconds`);
   }
-
-  const agent = opts.agent || 'coder';
-  const modelOverride = opts.model || null;
-  const modelUsed = modelOverride || coderModel();
 
   const slug = resolveSlug(opts, isolate);
 
@@ -1941,7 +2001,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     cont: !!opts.continue,
     dir,
   });
-  const env = buildEngineEnv();
+  const env = buildEngineEnv(cred.env);
   const engineVersion = detectOpencodeVersion(sh) || opencodeVersionPin();
 
   process.stderr.write(

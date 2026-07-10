@@ -122,7 +122,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
-| `coder`    | `ZHIPU_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` is required |
+| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` (Z.AI GLM); `OPENCODE_API_KEY` optional (OpenCode Zen, e.g. `opencode/hy3-free`) |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -245,8 +245,9 @@ self-hosted endpoints).
 
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
-| `ZHIPU_API_KEY`                  | yes      | —                  | Z.AI API key for GLM models — <https://z.ai/manage-apikey/apikey-list> |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Model written to `opencode.json`           |
+| `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for GLM models — <https://z.ai/manage-apikey/apikey-list> |
+| `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.13`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
@@ -263,6 +264,17 @@ exists, `init` still runs detection and warns (without touching the
 file) when the existing `model` prefix doesn't match what the key
 verified against — that mismatch is what makes opencode retry a model
 call it can never complete.
+
+¹ **Credentials are provider-specific.** A run needs the one key its
+resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need
+`ZHIPU_API_KEY`; `opencode/*` OpenCode Zen models (e.g. the free
+`opencode/hy3-free`) need `OPENCODE_API_KEY`. So `ZHIPU_API_KEY` is
+"required" only in the sense that it is the default provider's key — a
+zen-only setup runs on `OPENCODE_API_KEY` alone. `triss coder run` forwards
+whichever key the model needs to the engine subprocess and gates on it
+before spawning. The `crush` engine speaks Z.AI only and always needs
+`ZHIPU_API_KEY`. `triss status` / `triss_coder_status` show both keys, and
+the coder MCP tools surface once **either** is set.
 
 **Engines.** `opencode` (default) enforces a deny-first per-command bash
 allowlist via `opencode.json` (curated safe commands only) that actually
@@ -282,8 +294,10 @@ opencode when you want the bash-policy safety layer baked into the project;
 crush is simpler (one JSON envelope, native session ids) but pair it with its
 default isolation, or opt into `--restrict` for a CLI allowlist on top — don't
 combine `--no-restrict` with `--no-isolate` in a workspace you can't afford to
-lose. Both engines share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it
-natively; triss also forwards it as `ZAI_API_KEY` for older binaries.
+lose. For Z.AI GLM, both engines share the single `ZHIPU_API_KEY` — crush
+≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY` for older
+binaries. (opencode can alternatively run OpenCode Zen `opencode/*` models on
+`OPENCODE_API_KEY` — see the coder env-var table above.)
 See `docs/crush-restrict-issues.md` for the live-verified bug facts and
 `docs/crush-issues.md` for the fuller list of crush caveats.
 

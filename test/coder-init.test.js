@@ -104,14 +104,23 @@ function withTmpHome(fn) {
 
 // ─── manifest shape ──────────────────────────────────────────────────────────
 
-test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY as required+secret', () => {
+test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required + OPENCODE_API_KEY optional, both secret', () => {
   assert.equal(CODER_MANIFEST.name, 'coder');
   assert.equal(CODER_MANIFEST.key, undefined);
-  assert.equal(CODER_MANIFEST.envVars.length, 1);
-  const v = CODER_MANIFEST.envVars[0];
-  assert.equal(v.name, 'ZHIPU_API_KEY');
-  assert.equal(v.required, true);
-  assert.equal(v.secret, true);
+  assert.equal(CODER_MANIFEST.envVars.length, 2);
+
+  const zhipu = CODER_MANIFEST.envVars.find((e) => e.name === 'ZHIPU_API_KEY');
+  assert.ok(zhipu, 'ZHIPU_API_KEY declared');
+  assert.equal(zhipu.required, true);
+  assert.equal(zhipu.secret, true);
+
+  // OpenCode Zen key — optional (readiness stays governed by ZHIPU_API_KEY),
+  // secret so it is masked in status/config output.
+  const oc = CODER_MANIFEST.envVars.find((e) => e.name === 'OPENCODE_API_KEY');
+  assert.ok(oc, 'OPENCODE_API_KEY declared');
+  assert.equal(oc.required, false);
+  assert.equal(oc.secret, true);
+
   assert.equal(typeof CODER_MANIFEST.postSetup, 'function');
 });
 
