@@ -812,6 +812,62 @@ test(
 );
 
 test(
+  'runCoderInit --global: a VALID in-catalogue project small_model that merely differs from the global default does NOT block (P2-round8)',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Project-scope opencode.json with a correct deny-policy and an in-catalogue
+    // small_model that isn't the global default (north). It's valid — the run
+    // will use it fine — so the cross-scope audit must NOT flag it stale just
+    // because it differs from the global resolvedSmall (the round-7 regression).
+    writeFileSync(
+      join(home, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/deepseek-v4-flash-free',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+    );
+    // Global pin uses the global default; init completes (no false block).
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+  }),
+);
+
+test(
+  'runCoderInit --global: BLOCKS on a project small_model the live catalogue no longer lists (P2-round8)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Project-scope small_model that's a gone free model — opencode reads it from
+    // this higher-precedence file and triss can't override it, so it must block.
+    writeFileSync(
+      join(home, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/hy3-free',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          {
+            spawnSync: fakeSpawnAlreadyInstalled,
+            fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+          },
+        ),
+      /existing opencode\.json issues/,
+    );
+    const out = captured.join('');
+    assert.match(out, /project scope — higher precedence/);
+    assert.match(out, /small_model="opencode\/hy3-free", which the live OpenCode Zen catalogue no longer lists/);
+  }),
+);
+
+test(
   'runCoderSetup (wizard entry point) also enforces the pin-shadow gate (#2)',
   withTmpHome(async () => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';

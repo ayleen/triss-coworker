@@ -148,7 +148,11 @@ and re-running is a clean idempotent completion):
       re-run.
 
   The audit also covers a **project `./opencode.json`** when you write `--global`
-  (opencode resolves the project file over the global one at run time).
+  (opencode resolves the project file over the global one at run time). Since
+  that file belongs to a *different* scope, its `small_model` is judged by
+  catalogue presence and provider/plan compatibility — **not** exact equality
+  with the global default — so a valid project-level `small_model` that merely
+  differs from what `--global` would pin is left alone.
 
 These gates apply to **`triss config wizard coder`** too, not just `triss coder
 init` — the wizard runs the same setup and exits non-zero on a blocking
