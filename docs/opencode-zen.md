@@ -52,19 +52,26 @@ safety layer.
 
 ## Model catalogue
 
-The `--provider opencode-zen` init picker offers the current **free** models as
-a convenience snapshot:
+Free Zen models are **temporary/promotional**, so init doesn't trust a hardcoded
+default — it fetches the live catalogue (`GET https://opencode.ai/zen/v1/models`)
+and picks the first still-available model from a priority list:
 
-| Model id | Notes |
+| Role | Priority order (first available wins) |
 |---|---|
-| `opencode/hy3-free` | Tencent Hunyuan 3 (295B MoE) — the init default |
-| `opencode/deepseek-v4-flash-free` | DeepSeek V4 Flash, free tier |
-| `opencode/nemotron-3-ultra-free` | NVIDIA Nemotron 3 Ultra, free tier |
-| `opencode/mimo-v2.5-free` | MiMo v2.5, free tier |
+| main | `hy3-free` → `deepseek-v4-flash-free` → `north-mini-code-free` → `nemotron-3-ultra-free` → `mimo-v2.5-free` |
+| small | `north-mini-code-free` → `deepseek-v4-flash-free` → `mimo-v2.5-free` |
 
-This list is intentionally short and free‑only. The **full Zen catalogue is
-large and moves** (paid GPT‑5.x, Claude, Gemini, Qwen, Kimi, GLM… mirrors), so
-any other id is reachable verbatim without a triss change:
+`hy3-free` (Tencent Hunyuan 3, 295B MoE) stays the preferred main default while
+the promo lasts; `north-mini-code-free` (trained for repo-level agentic coding)
+is the small/fast default. The interactive picker only offers models the live
+catalogue actually lists. **If the catalogue can't be fetched** (no key,
+non-200, offline), init falls back to the built-in list but prints a clear
+warning that availability is **not verified** — if a run then fails immediately,
+switch to a model listed at <https://opencode.ai/docs/zen/>.
+
+This priority list is intentionally short and free‑only. The **full Zen
+catalogue is large and moves** (paid GPT‑5.x, Claude, Gemini, Qwen, Kimi, GLM…
+mirrors), so any other id is reachable verbatim without a triss change:
 
 ```bash
 export TRISS_CODER_MODEL=opencode/<any-zen-id>
@@ -98,21 +105,31 @@ chosen model into `TRISS_CODER_MODEL`** in the same `.env` (so a bare
 you selected (warned, not written), so `--provider opencode-zen` always beats a
 stale Z.AI preset. Idempotent — re‑run anytime.
 
-Two things it will **not** silently do:
+Things it will **not** silently do (each **exits non-zero** so you can't miss a
+half-broken setup — the config/templates are still written, so fixing the cause
+and re-running is a clean idempotent completion):
 
+- **Missing key.** If the provider's key (`OPENCODE_API_KEY` / `ZHIPU_API_KEY`)
+  isn't set by the end of init, it fails rather than printing a green "Done." the
+  next run contradicts with "<KEY> is not set".
 - **Shadowed pin.** If a higher‑precedence source will override the pin in the
   next process — a `TRISS_CODER_MODEL` **exported in your shell** (beats every
-  `.env`), or a project `./.triss.env` when you wrote `--global` — init warns,
-  reports *"Setup incomplete"*, and exits non-zero. Remove or fix that override,
-  then re-run. (Check with `triss status` → Coder block → *default model*.)
+  `.env`), or a project `./.triss.env` when you wrote `--global` — init reports
+  *"Setup incomplete"* and fails. (Check with `triss status` → Coder block →
+  *default model*.)
 - **Existing `opencode.json`.** It is never overwritten. Instead init *audits*
-  it and warns when: it lacks the deny‑first bash policy
-  (`permission.bash["*"]="deny"` — important because runs use `--auto`, which
-  auto‑approves every "ask"), its `model` provider mismatches, or its
-  `small_model` provider mismatches. The last is a blocking error because
-  `opencode run` has no small‑model flag, so triss can't override a stale
-  `small_model` at run time; init exits non-zero until you fix it in the file
-  or delete `opencode.json` and re-run.
+  it: a missing deny‑first bash policy (`permission.bash["*"]="deny"` — runs use
+  `--auto`, which auto‑approves every "ask") or a `model` provider mismatch is a
+  warning; a `small_model` mismatch — cross-provider **or** cross-plan (e.g.
+  `zai-coding-plan` main + `zai` small) — is **blocking**, because `opencode run`
+  has no small‑model flag so triss can't override a stale `small_model` at run
+  time. The audit also covers a **project `./opencode.json`** when you write
+  `--global` (opencode resolves the project file over the global one at run
+  time).
+
+These gates apply to **`triss config wizard coder`** too, not just `triss coder
+init` — the wizard runs the same setup and exits non-zero on a blocking
+conflict.
 
 Provider resolution when you don't pass `--provider`:
 
