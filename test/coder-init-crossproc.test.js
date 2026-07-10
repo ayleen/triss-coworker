@@ -106,3 +106,33 @@ test('init --global warns AND a separate process confirms a local .triss.env rea
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+test('the REAL `config wizard coder` path enforces the blocking audit and exits non-zero (P2-b)', () => {
+  const { home, project } = makeDirs();
+  try {
+    // A project opencode.json (higher precedence at run time) with a
+    // cross-provider small_model triss can't override.
+    writeFileSync(
+      join(project, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode/hy3-free',
+        small_model: 'zai-coding-plan/glm-5-turbo',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    // Drive the ACTUAL wizard (config wizard coder), not runCoderSetup directly.
+    // Empty stdin skips the key prompts; OPENCODE_API_KEY comes from the env.
+    const wiz = runCli(['config', 'wizard', 'coder', '--global'], {
+      home,
+      project,
+      env: { OPENCODE_API_KEY: 'sk-zen-fake' },
+    });
+    assert.equal(wiz.status, 1, `wizard must exit non-zero on a blocking coder conflict: ${wiz.stderr}`);
+    const out = wiz.stdout + wiz.stderr;
+    assert.match(out, /coder post-setup failed/);
+    assert.match(out, /project scope — higher precedence/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});

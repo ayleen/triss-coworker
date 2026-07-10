@@ -98,6 +98,13 @@ export async function chooseMode() {
 export async function runWizard(target, opts) {
   const manifests = await listManifests();
   const explicit = !!target;
+  // Capture shell-exported coder model overrides BEFORE anything loads .env
+  // files, so the coder postSetup's pin-shadow check can flag a shell override
+  // that would beat what the wizard writes (mirrors runCoderInit).
+  const inheritedModels = {
+    model: process.env.TRISS_CODER_MODEL,
+    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
+  };
 
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope();
@@ -115,6 +122,7 @@ export async function runWizard(target, opts) {
       explicit: true,
       force: !!opts.force,
       scope,
+      inheritedModels,
     });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     if (scope === 'local') maybeAddGitignore();
@@ -128,7 +136,12 @@ export async function runWizard(target, opts) {
     await runStandardWizard(path, current);
     await silentlyInstallBoth(scope);
   } else {
-    await runFullWizard(manifests, path, current, { explicit: false, force: !!opts.force, scope });
+    await runFullWizard(manifests, path, current, {
+      explicit: false,
+      force: !!opts.force,
+      scope,
+      inheritedModels,
+    });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     await offerClaudeCodeIntegration(scope);
   }
@@ -375,7 +388,7 @@ async function runStandardWizard(path, current) {
   );
 }
 
-async function runFullWizard(targets, path, current, { explicit, force, scope }) {
+async function runFullWizard(targets, path, current, { explicit, force, scope, inheritedModels }) {
   // For non-targeted runs, let the user pick which integrations to walk
   // through with one multi-select instead of N sequential y/N prompts.
   let selected = null;
@@ -407,6 +420,7 @@ async function runFullWizard(targets, path, current, { explicit, force, scope })
     }
   }
 
+  let postSetupError = null;
   for (const m of targets) {
     if (!m.envVars?.length) continue;
 
@@ -451,16 +465,22 @@ async function runFullWizard(targets, path, current, { explicit, force, scope })
     }
 
     // Optional post-setup hook (only `CODER_MANIFEST` defines this today —
-    // other manifests are unaffected). Failures are non-fatal: they must
-    // not abort setup for the remaining manifests in this wizard run.
+    // other manifests are unaffected). A failure must not abort the OTHER
+    // manifests' setup, so it's caught here — but it is remembered and
+    // re-thrown after the loop so the wizard exits non-zero (a blocking coder
+    // conflict is a real "setup incomplete", not a cosmetic warning).
+    // `inheritedModels` (shell overrides captured before any .env load) flows in
+    // so runCoderSetup's pin-shadow check works on the wizard path too.
     if (typeof m.postSetup === 'function') {
       try {
-        await m.postSetup({ scope, path });
+        await m.postSetup({ scope, path, inheritedModels });
       } catch (err) {
         process.stdout.write(pc.yellow(`  ⚠ ${m.name} post-setup failed: ${err.message}\n`));
+        postSetupError = postSetupError || err;
       }
     }
   }
+  if (postSetupError) throw postSetupError;
 }
 
 function maybeAddGitignore() {

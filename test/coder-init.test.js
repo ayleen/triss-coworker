@@ -144,6 +144,7 @@ test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required
 test(
   'runCoderInit --global writes opencode.json and agent templates under HOME',
   withTmpHome(async ({ home }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
     await runCoderInit(
       { global: true },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
@@ -171,6 +172,7 @@ test(
 test(
   'running runCoderInit twice is a no-op the second time (no clobber, no throw)',
   withTmpHome(async ({ home }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
     await runCoderInit(
       { global: true },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
@@ -264,8 +266,12 @@ test(
       stdoutChunks.push(chunk);
       return true;
     };
+    process.env.ZHIPU_API_KEY = 'zk-fake';
     try {
-      await runCoderInit({ global: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+      await runCoderInit(
+        { global: true },
+        { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+      );
     } finally {
       process.stdout.write = origStdoutWrite;
     }
@@ -290,7 +296,7 @@ test('runCoderInit --local writes opencode.json in the project root and adds .tr
   mkdirSync(join(projectDir, '.config', 'triss'), { recursive: true });
   writeFileSync(join(projectDir, '.config', 'triss', '.env'), '');
   process.env.TRISS_PROJECT_ROOT = projectDir;
-  delete process.env.ZHIPU_API_KEY;
+  process.env.ZHIPU_API_KEY = 'zk-fake';
   Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
 
   const origStdoutWrite = process.stdout.write.bind(process.stdout);
@@ -299,7 +305,10 @@ test('runCoderInit --local writes opencode.json in the project root and adds .tr
   process.stderr.write = () => true;
 
   try {
-    await runCoderInit({ local: true }, { spawnSync: fakeSpawnAlreadyInstalled });
+    await runCoderInit(
+      { local: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
 
     const configPath = join(projectDir, 'opencode.json');
     assert.ok(existsSync(configPath), 'local opencode.json should be written at the project root');
@@ -437,26 +446,35 @@ test(
 
 // ─── provider-aware init: OpenCode Zen ───────────────────────────────────────
 
-// A fetch that fails the test if the Z.AI provider probe is ever attempted —
-// Zen setup must NOT run plan detection.
-function fetchThatMustNotBeCalled() {
-  return async () => {
-    throw new Error('Z.AI provider probe must not run for an OpenCode Zen setup');
+// Fetch stub for Zen init: serves the OpenCode Zen /models catalogue (so the
+// live-availability lookup resolves deterministically) and THROWS on anything
+// else — chiefly the Z.AI chat/completions plan probe, which a Zen setup must
+// never run. Default ids include all of triss's known free models.
+function fakeZenCatalogue(
+  ids = ['hy3-free', 'north-mini-code-free', 'deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'mimo-v2.5-free'],
+) {
+  return async (url) => {
+    if (String(url).includes('/zen/v1/models')) {
+      return { ok: true, json: async () => ({ object: 'list', data: ids.map((id) => ({ id })) }) };
+    }
+    throw new Error(`unexpected fetch (Z.AI probe must not run for a Zen setup): ${url}`);
   };
 }
 
 test(
-  'runCoderInit --provider opencode-zen: writes an opencode/hy3-free config and skips Z.AI detection',
+  'runCoderInit --provider opencode-zen: writes an opencode config from the live catalogue and skips Z.AI detection',
   withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
+    // Catalogue-driven defaults: hy3-free main, north-mini-code-free small.
     assert.equal(config.model, 'opencode/hy3-free');
-    assert.equal(config.small_model, 'opencode/hy3-free');
+    assert.equal(config.small_model, 'opencode/north-mini-code-free');
     // The deny-first bash policy still applies to a Zen setup.
     assert.equal(config.permission.bash['*'], 'deny');
   }),
@@ -465,23 +483,19 @@ test(
 test(
   'runCoderInit: TRISS_CODER_MODEL=opencode/* infers the zen provider (no --provider) and writes it verbatim',
   withTmpHome(async ({ home }) => {
-    const origModel = process.env.TRISS_CODER_MODEL;
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     process.env.TRISS_CODER_MODEL = 'opencode/nemotron-3-ultra-free';
-    try {
-      await runCoderInit(
-        { global: true },
-        { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
-      );
-      const config = JSON.parse(
-        readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
-      );
-      assert.equal(config.model, 'opencode/nemotron-3-ultra-free');
-      // Small model not preset -> falls back to the zen default, not the GLM one.
-      assert.equal(config.small_model, 'opencode/hy3-free');
-    } finally {
-      if (origModel === undefined) delete process.env.TRISS_CODER_MODEL;
-      else process.env.TRISS_CODER_MODEL = origModel;
-    }
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode/nemotron-3-ultra-free');
+    // Small model not preset -> falls back to the zen small default (from the
+    // live catalogue), not the GLM one.
+    assert.equal(config.small_model, 'opencode/north-mini-code-free');
   }),
 );
 
@@ -491,7 +505,7 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake'; // withTmpHome restores it
     await runCoderInit(
       { global: true },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
@@ -506,7 +520,7 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     // triss coder run resolves the model from TRISS_CODER_MODEL (NOT
     // opencode.json), so init must pin it — otherwise a bare run would fall
@@ -515,7 +529,7 @@ test(
     assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
     const env = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
     assert.match(env, /^TRISS_CODER_MODEL=opencode\/hy3-free$/m);
-    assert.match(env, /^TRISS_CODER_SMALL_MODEL=opencode\/hy3-free$/m);
+    assert.match(env, /^TRISS_CODER_SMALL_MODEL=opencode\/north-mini-code-free$/m);
   }),
 );
 
@@ -527,7 +541,7 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     await runCoderSetup(
       { scope: 'global' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
@@ -549,7 +563,7 @@ test(
       () =>
         runCoderInit(
           { global: true, provider: 'opencode-zen' },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /Coder setup incomplete/,
     );
@@ -578,7 +592,7 @@ test(
     );
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     // The existing config's model is honored and pinned so a bare run works —
     // previously TRISS_CODER_MODEL stayed empty and the run demanded ZHIPU.
@@ -603,7 +617,7 @@ test(
       () =>
         runCoderInit(
           { global: true, provider: 'opencode-zen' },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /Coder setup incomplete/,
     );
@@ -623,7 +637,7 @@ test(
       () =>
         runCoderInit(
           { global: true, provider: 'opencode-zen' },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /Coder setup incomplete/,
     );
@@ -644,7 +658,7 @@ test(
     );
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const out = captured.join('');
     assert.match(out, /no deny-first bash policy/);
@@ -673,7 +687,7 @@ test(
       () =>
         runCoderInit(
           { global: true, provider: 'opencode-zen' },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /existing opencode\.json issues/,
     );
@@ -703,12 +717,14 @@ test(
 );
 
 test(
-  'runCoderInit: warns (non-blocking) on a plan-level small_model mismatch in an existing config (#5)',
+  'runCoderInit: BLOCKS on a plan-level small_model mismatch in an existing config (#5)',
   withTmpHome(async ({ home, captured }) => {
     process.env.ZHIPU_API_KEY = 'zk-fake';
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
     // Same ZHIPU kind, different plan prefix (zai-coding-plan main vs zai small).
+    // triss can't override small_model at run time, so this is a guaranteed
+    // broken run — a blocking error, not a cosmetic warning.
     writeFileSync(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({
@@ -717,13 +733,17 @@ test(
         permission: { bash: { '*': 'deny' } },
       }) + '\n',
     );
-    await runCoderInit(
-      { global: true, provider: 'zai' },
-      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'zai' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /existing opencode\.json issues/,
     );
     const out = captured.join('');
     assert.match(out, /model="zai-coding-plan\/glm-5\.2" but small_model="zai\/glm-5-turbo" — different provider prefixes/);
-    assert.match(out, /Done\./, 'plan-level mismatch is a warning, not a blocking error');
+    assert.doesNotMatch(out, /Done\./);
   }),
 );
 
@@ -745,7 +765,7 @@ test(
       () =>
         runCoderInit(
           { global: true, provider: 'opencode-zen' },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /existing opencode\.json issues/,
     );
@@ -766,10 +786,87 @@ test(
       () =>
         runCoderSetup(
           { scope: 'global', provider: 'opencode-zen', inheritedModels: { model: 'zai-coding-plan/glm-5.2' } },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /higher-precedence model override/,
     );
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: picks the first AVAILABLE model from the priority list (P1-a)',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Catalogue without hy3-free — main should fall to the next priority.
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+      },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: warns availability is unverified when the catalogue fetch fails (P1-a)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // A non-200 (and the Z.AI probe never runs for zen) — fall back to the
+    // built-in default but say availability is not verified.
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: async () => ({ ok: false, status: 500 }) },
+    );
+    assert.match(captured.join(''), /could not fetch the OpenCode Zen catalogue .* availability is NOT verified/s);
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/hy3-free'); // static fallback
+  }),
+);
+
+test(
+  'runCoderInit: does NOT reuse an existing zai model whose plan differs from the detected plan (P1-b)',
+  withTmpHome(async ({ home }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    // Existing config on the subscription plan, but the key verifies as
+    // pay-as-you-go zai — reusing it verbatim would retry forever.
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({ model: 'zai-coding-plan/glm-5.2', permission: { bash: { '*': 'deny' } } }) + '\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'zai' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        // payg base ok, coding-plan not -> detects 'zai'
+        fetch: async (url) => ({ ok: url.includes('/api/paas/v4') && !url.includes('coding') }),
+      },
+    );
+    // The stale subscription model is NOT re-pinned; the detected-plan default is.
+    assert.equal(process.env.TRISS_CODER_MODEL, 'zai/glm-5.2');
+  }),
+);
+
+test(
+  'runCoderInit: FAILS (non-zero) when the provider key is never set (P2-a)',
+  withTmpHome(async ({ home }) => {
+    // No ZHIPU_API_KEY, non-TTY (key prompt returns empty) -> setup unusable.
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /ZHIPU_API_KEY is not set/,
+    );
+    // Config/templates are still written (so re-running after setting the key
+    // is a clean idempotent completion) — only the key is missing.
+    assert.ok(existsSync(join(home, '.config', 'opencode', 'opencode.json')));
   }),
 );
 
@@ -789,7 +886,7 @@ test(
         { global: true },
         {
           spawnSync: fakeSpawnAlreadyInstalled,
-          fetch: fetchThatMustNotBeCalled(),
+          fetch: fakeZenCatalogue(),
           promptChoice: async (_question, choices) => {
             questionsAsked.push(choices);
             // Q1 = provider (return zen); Q2 = main model; Q3 = small model.

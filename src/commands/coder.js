@@ -176,16 +176,92 @@ const GLM_MODEL_CHOICES = [
 
 // A convenience snapshot of the FREE OpenCode Zen models (served under the
 // built-in `opencode` provider, base https://opencode.ai/zen/v1) offered by
-// the `--provider opencode-zen` init picker. This is intentionally short and
-// free-tier only — the whole Zen catalogue (paid GPT/Claude/Gemini/… mirrors)
-// is large and moves, so any other id is reachable verbatim via
-// TRISS_CODER_MODEL=opencode/<id>. hy3-free is Tencent Hunyuan 3.
+// the `--provider opencode-zen` init picker. Free-tier only — the whole Zen
+// catalogue (paid GPT/Claude/Gemini/… mirrors) is large and moves, so any other
+// id is reachable verbatim via TRISS_CODER_MODEL=opencode/<id>. These free
+// models are TEMPORARY (promotional), so init resolves the actual default and
+// picker order against the LIVE catalogue (fetchZenModelIds) rather than
+// trusting this static list — it's the offline fallback.
 const ZEN_MODEL_CHOICES = [
   { label: 'hy3-free — Tencent Hunyuan 3 (free)', value: 'hy3-free' },
-  { label: 'deepseek-v4-flash-free (free)', value: 'deepseek-v4-flash-free' },
+  { label: 'deepseek-v4-flash-free — DeepSeek V4 Flash (free)', value: 'deepseek-v4-flash-free' },
+  { label: 'north-mini-code-free — repo-level agentic coding (free)', value: 'north-mini-code-free' },
   { label: 'nemotron-3-ultra-free (free)', value: 'nemotron-3-ultra-free' },
   { label: 'mimo-v2.5-free (free)', value: 'mimo-v2.5-free' },
 ];
+// Preference order for the silent (non-TTY) default. First one that the live
+// catalogue actually offers wins. Main favours hy3-free while the promo lasts,
+// then strong general/agentic coders; small favours the compact repo-level
+// north-mini-code, then flash models.
+const ZEN_MAIN_PRIORITY = [
+  'hy3-free',
+  'deepseek-v4-flash-free',
+  'north-mini-code-free',
+  'nemotron-3-ultra-free',
+  'mimo-v2.5-free',
+];
+const ZEN_SMALL_PRIORITY = ['north-mini-code-free', 'deepseek-v4-flash-free', 'mimo-v2.5-free'];
+const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
+const ZEN_MODELS_TIMEOUT_MS = 10_000;
+
+// Fetches the set of currently-offered OpenCode Zen model ids, or null if it
+// can't be verified (no key, non-200, network/parse error). Injectable
+// `fetchImpl` mirrors the Z.AI probe (tests pass a fake; never a live call).
+async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
+  const key = process.env.OPENCODE_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetchImpl(ZEN_MODELS_URL, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(ZEN_MODELS_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const data = Array.isArray(body?.data) ? body.data : [];
+    const ids = new Set(data.map((m) => m && m.id).filter(Boolean));
+    return ids.size ? ids : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolves a Zen catalogue { mainDefault, smallDefault, choices } from the live
+// model set (or the static fallback). Warns clearly when availability could not
+// be verified, or when a preferred model is gone.
+function resolveZenCatalogue(available) {
+  if (!available) {
+    process.stderr.write(
+      pc.yellow(
+        '  ⚠ could not fetch the OpenCode Zen catalogue — using built-in model defaults; their ' +
+          'availability is NOT verified (free Zen models are temporary). If a run fails immediately, ' +
+          'set TRISS_CODER_MODEL to a model listed at https://opencode.ai/docs/zen/.\n',
+      ),
+    );
+    return {
+      choices: ZEN_MODEL_CHOICES,
+      mainDefault: ZEN_MAIN_PRIORITY[0],
+      smallDefault: ZEN_SMALL_PRIORITY[0],
+    };
+  }
+  const firstAvailable = (priority) => priority.find((id) => available.has(id));
+  const choices = ZEN_MODEL_CHOICES.filter((c) => available.has(c.value));
+  const mainDefault = firstAvailable(ZEN_MAIN_PRIORITY);
+  const smallDefault = firstAvailable(ZEN_SMALL_PRIORITY);
+  if (!mainDefault || !smallDefault || choices.length === 0) {
+    process.stderr.write(
+      pc.yellow(
+        '  ⚠ none of triss\'s known free OpenCode Zen models are in the current catalogue — pick a model ' +
+          'from https://opencode.ai/docs/zen/ and set TRISS_CODER_MODEL=opencode/<id>.\n',
+      ),
+    );
+    return {
+      choices: choices.length ? choices : ZEN_MODEL_CHOICES,
+      mainDefault: mainDefault || ZEN_MAIN_PRIORITY[0],
+      smallDefault: smallDefault || ZEN_SMALL_PRIORITY[0],
+    };
+  }
+  return { choices, mainDefault, smallDefault };
+}
 
 // Init-time picker choices for the provider itself (opencode engine only).
 const CODER_PROVIDER_CHOICES = [
@@ -198,15 +274,19 @@ const CODER_PROVIDER_CHOICES = [
 // `providerInfo.kind` is 'zai' | 'opencode-zen'; for zai, `detectedZai` is the
 // plan probe result (zai-coding-plan / zai / null) so the prefix matches the
 // endpoint the key actually authenticates against.
-function coderInitCatalogue(providerInfo) {
+// `zenCatalogue` (from resolveZenCatalogue) supplies the live-verified Zen
+// defaults/choices when the kind is opencode-zen; omitted for zai.
+function coderInitCatalogue(providerInfo, zenCatalogue) {
   if (providerInfo.kind === 'opencode-zen') {
+    const z = zenCatalogue || { choices: ZEN_MODEL_CHOICES, mainDefault: ZEN_MAIN_PRIORITY[0], smallDefault: ZEN_SMALL_PRIORITY[0] };
+    const smallIdx = Math.max(0, z.choices.findIndex((c) => c.value === z.smallDefault));
     return {
       prefix: 'opencode',
-      choices: ZEN_MODEL_CHOICES,
-      mainDefault: 'hy3-free',
-      smallDefault: 'hy3-free',
+      choices: z.choices,
+      mainDefault: z.mainDefault,
+      smallDefault: z.smallDefault,
       mainIdx: 0,
-      smallIdx: 0,
+      smallIdx,
       noun: 'OpenCode Zen',
     };
   }
@@ -228,6 +308,20 @@ function kindKeyEnv(kind) {
 }
 function modelMatchesKind(model, kind) {
   return !!model && coderModelCredential(model).env === kindKeyEnv(kind);
+}
+
+// Whether a preset/existing model may be REUSED verbatim for the chosen
+// provider. Stricter than modelMatchesKind: for zai it also requires the
+// model's plan prefix to match the DETECTED plan (when detection succeeded), so
+// a `zai-coding-plan/*` model is not re-pinned against a probe that resolved to
+// the pay-as-you-go `zai` base (which would retry forever). Unknown/undetected
+// plan (detectedZai null) can't be verified, so it's allowed through.
+function modelFitsProvider(model, providerInfo) {
+  if (!model) return false;
+  const prefix = String(model).split('/')[0];
+  if (providerInfo.kind === 'opencode-zen') return prefix === 'opencode';
+  if (prefix !== 'zai' && prefix !== 'zai-coding-plan') return false;
+  return providerInfo.detectedZai ? prefix === providerInfo.detectedZai : true;
 }
 
 // The main/small_model of an existing opencode.json (or {} if absent/unreadable).
@@ -253,23 +347,54 @@ function readOpencodeModels(path) {
 //   4. the provider's silent default.
 // `existing` is readOpencodeModels(opencode.json) from the caller.
 async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
-  const cat = coderInitCatalogue(providerInfo);
-  const kind = providerInfo.kind;
+  // For Zen, resolve defaults + picker order against the LIVE catalogue (free
+  // models are temporary) so we never pin a model that's already gone.
+  const zenCatalogue =
+    providerInfo.kind === 'opencode-zen'
+      ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch))
+      : undefined;
+  const cat = coderInitCatalogue(providerInfo, zenCatalogue);
   const choose = deps.promptChoice || promptChoice;
   const interactive = !!process.stdin.isTTY;
 
   const pickOne = async (envVar, existingVal, label, idx, def) => {
+    // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
+    //    KIND (the user set it deliberately). Warn — but still use it — if its
+    //    plan prefix doesn't match the detected Z.AI plan.
     const preset = process.env[envVar];
     if (preset) {
-      if (modelMatchesKind(preset, kind)) return preset;
+      if (modelMatchesKind(preset, providerInfo.kind)) {
+        // A zai preset on the wrong PLAN (detected) is honored but flagged; a
+        // totally unknown prefix is left to the end-of-function warning.
+        const pfx = preset.split('/')[0];
+        if (
+          providerInfo.kind === 'zai' &&
+          providerInfo.detectedZai &&
+          (pfx === 'zai' || pfx === 'zai-coding-plan') &&
+          pfx !== providerInfo.detectedZai
+        ) {
+          process.stderr.write(
+            pc.yellow(
+              `  ⚠ ${envVar}=${preset} uses the "${pfx}/" prefix but the key verified against the ` +
+                `"${providerInfo.detectedZai}" plan — using it as set, but runs may retry forever if the ` +
+                'key cannot serve that plan.\n',
+            ),
+          );
+        }
+        return preset;
+      }
       process.stderr.write(
         pc.yellow(
-          `  ⚠ ignoring ${envVar}=${preset} — it does not belong to the ${cat.noun} provider you ` +
+          `  ⚠ ignoring ${envVar}=${preset} — it does not match the ${cat.noun} provider you ` +
             `selected (expected the "${cat.prefix}/" prefix); unset it or set a matching model.\n`,
         ),
       );
     }
-    if (modelMatchesKind(existingVal, kind)) return existingVal;
+    // 2. Reuse an existing opencode.json model only when it FITS the provider,
+    //    plan included — so a zai-coding-plan model isn't re-pinned against a
+    //    key that verified as pay-as-you-go zai (the infinite-retry trap).
+    if (modelFitsProvider(existingVal, providerInfo)) return existingVal;
+    // 3./4. picker (TTY) or the provider's silent default.
     return interactive
       ? `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`
       : `${cat.prefix}/${def}`;
@@ -574,16 +699,20 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // this path and the wizard's postSetup path fail the same way.
     await runCoderSetup({ scope, provider, inheritedModels }, deps);
   }
-  // Don't imply the setup is runnable if the provider's key never got set (a
-  // skipped/empty prompt, or a non-TTY run with nothing in the env) — otherwise
-  // the very next run fails with "<KEY> is not set" after a green "Done.".
+  // The setup isn't runnable if the provider's key never got set (a skipped or
+  // empty prompt, or a non-TTY run with nothing in the env) — fail rather than
+  // print a green "Done." the very next run contradicts with "<KEY> is not set".
+  // Config + templates are already on disk, so re-running after setting the key
+  // is a clean, idempotent completion.
   const keyEnv = coderProviderKeyInfo(provider).env;
   if (!process.env[keyEnv]) {
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${keyEnv} is not set — runs will fail until you set it: ` +
-          `triss config set ${keyEnv}\n`,
+        `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
       ),
+    );
+    throw new Error(
+      `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run \`triss coder init\`.`,
     );
   }
   process.stderr.write(
@@ -1088,12 +1217,17 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
       ),
     );
   } else if (model && small && model.split('/')[0] !== small.split('/')[0]) {
-    // Same credential kind but different plan/prefix — still the wrong base.
+    // Same credential kind but different plan/prefix (e.g. zai-coding-plan main
+    // + zai small). triss cannot override small_model at run time and the two
+    // Z.AI plans hit different bases, so a key serving one won't serve the other
+    // — a guaranteed-broken run. Blocking, like the cross-kind case.
+    blocking = true;
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${where} sets model="${model}" but small_model="${small}" — different provider prefixes. ` +
-          'opencode reads small_model from this file (triss cannot override it at run time), so a key that ' +
-          "serves one prefix may not serve the other. Align small_model's prefix with the main model.\n",
+          'opencode reads small_model from this file (triss cannot override it at run time), so the ' +
+          "run's key likely can't serve both. Align small_model's prefix with the main model, or delete " +
+          'opencode.json and re-run init.\n',
       ),
     );
   }
