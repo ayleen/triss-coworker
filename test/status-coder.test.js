@@ -103,12 +103,12 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
 test(
   'runStatus: the coder block appears with both engines + the default-engine indicator when ZHIPU_API_KEY is configured',
   withTmpKey(async () => {
-    const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '1.17.13' }) }))());
+    const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '1.17.18' }) }))());
     assert.match(out, /^Coder$/m);
     assert.match(out, /default engine\s+opencode/);
     assert.match(out, /worktrees \(\.triss\/wt\)/);
     // opencode section.
-    assert.match(out, /opencode\s+1\.17\.13/);
+    assert.match(out, /opencode\s+1\.17\.18/);
     assert.match(out, /opencode\.json \[global\]/);
     // crush section (absent here — fake didn't report a crush version).
     assert.match(out, /crush\s+not installed/);
