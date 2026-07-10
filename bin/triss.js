@@ -227,10 +227,11 @@ const coder = program
 
 coder
   .command('init')
-  .description('Install/configure a GLM coding engine (opencode default, or crush), Z.AI key, permission policy, and agent templates')
+  .description('Install/configure a coding engine (opencode default, or crush), provider key, permission policy, and agent templates')
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
+  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default) or opencode-zen (free models incl. hy3)')
   .action(wrap(runCoderInit));
 
 coder

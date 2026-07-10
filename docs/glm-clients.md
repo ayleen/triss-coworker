@@ -101,7 +101,8 @@ free `opencode/hy3-free`); those authenticate with an optional
 `OPENCODE_API_KEY` instead. `coderModelCredential(model)` maps a resolved
 model's `<provider>/` prefix to the key it needs, and `triss coder run` gates
 on exactly that key before spawning — so a zen-only setup runs on
-`OPENCODE_API_KEY` alone.
+`OPENCODE_API_KEY` alone. See [opencode-zen.md](opencode-zen.md) for the Zen
+model catalogue and every way to configure it.
 
 ### Minimal subprocess environment
 The engine subprocess never inherits your full environment. `buildEngineEnv()`

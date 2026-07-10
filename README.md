@@ -269,7 +269,7 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a GLM coding agent (default `opencode` engine; `--engine crush` for crush): key, `opencode.json` / crush models + `permissions.run` policy, agent templates | Manually installing/configuring opencode |
+| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key (Z.AI GLM, or `--provider opencode-zen` for free OpenCode Zen models like `hy3`), `opencode.json` / crush models + `permissions.run` policy, agent templates | Manually installing/configuring opencode |
 | `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
@@ -442,10 +442,13 @@ triss coder run "..." --engine crush --restrict   # crush + CLI allowlist on top
 triss coder clean                                 # remove finished isolation worktrees
 ```
 
-`triss coder init` probes which Z.AI plan your key actually works with
-(subscription vs. pay-as-you-go) and writes the matching model prefix, and
-lets you pick the GLM model interactively instead of always defaulting to
-`glm-5.2`.
+`triss coder init` first asks which provider to configure — **Z.AI GLM**
+(default) or **OpenCode Zen** (`--provider opencode-zen`, free models incl.
+Hunyuan `hy3`). For Z.AI it probes which plan your key works with (subscription
+vs. pay-as-you-go) and writes the matching model prefix; for Zen it saves an
+`OPENCODE_API_KEY` and writes an `opencode/<id>` model. Either way it lets you
+pick the model interactively. See the **Providers** section below and
+[docs/opencode-zen.md](docs/opencode-zen.md) for the OpenCode Zen deep‑dive.
 
 Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 `worktree` tell you what to review; `--isolate` runs the agent in a
@@ -483,6 +486,8 @@ API key follows the model's `<provider>/` prefix: `zai-coding-plan/*` and
 (Tencent Hunyuan 3) — use `OPENCODE_API_KEY`. To point coder at a Zen model:
 
 ```bash
+triss coder init --provider opencode-zen         # guided: key + opencode.json
+# …or by hand:
 triss config set OPENCODE_API_KEY <key>          # or add it to .triss.env
 export TRISS_CODER_MODEL=opencode/hy3-free        # default it for every run
 export TRISS_CODER_SMALL_MODEL=opencode/hy3-free
@@ -493,11 +498,12 @@ triss coder run "..." --model opencode/hy3-free
 
 `triss coder run` passes the resolved model to opencode with `--model` and
 forwards only the key that model needs, so a Zen run works with
-`OPENCODE_API_KEY` alone — no Z.AI key required. `triss coder init` still sets
-up the Z.AI key and writes `opencode.json`'s deny-first bash policy (which
-applies to Zen runs too); pass `TRISS_CODER_MODEL=opencode/hy3-free` before it
-to have that model written into the config as well. (The `crush` engine speaks
-Z.AI only.)
+`OPENCODE_API_KEY` alone — no Z.AI key required. The deny-first `opencode.json`
+bash policy applies to Zen runs too. Any Zen model id works via
+`TRISS_CODER_MODEL=opencode/<id>` / `--model`, not just the free ones the
+picker lists. (The `crush` engine speaks Z.AI only.) Full details, the model
+catalogue, and every configuration path are in
+[docs/opencode-zen.md](docs/opencode-zen.md).
 
 If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
 the reset time converted to your local timezone (Z.AI reports it in

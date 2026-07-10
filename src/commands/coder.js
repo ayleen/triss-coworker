@@ -44,6 +44,8 @@ import {
   yesNo,
   addToGitignore,
   readStdin,
+  activeEnvFiles,
+  readEnvFile,
 } from '../secrets.js';
 import { projectRoot } from '../safety.js';
 import { logUsage } from '../usage.js';
@@ -172,31 +174,178 @@ const GLM_MODEL_CHOICES = [
   { label: 'glm-4.7', value: 'glm-4.7' },
 ];
 
-// Precedence: TRISS_CODER_MODEL/SMALL_MODEL env override > interactive
-// pick (TTY only) > silent default. The provider prefix comes from
-// detection (falling back to the historical zai-coding-plan default when
-// detection couldn't confirm one) — env overrides are taken verbatim
-// since a caller setting them already includes whatever prefix they want.
-async function resolveInitModels(detectedProvider, deps = {}) {
-  const providerPrefix = detectedProvider || DEFAULT_CODER_MODEL.split('/')[0];
+// A convenience snapshot of the FREE OpenCode Zen models (served under the
+// built-in `opencode` provider, base https://opencode.ai/zen/v1) offered by
+// the `--provider opencode-zen` init picker. This is intentionally short and
+// free-tier only — the whole Zen catalogue (paid GPT/Claude/Gemini/… mirrors)
+// is large and moves, so any other id is reachable verbatim via
+// TRISS_CODER_MODEL=opencode/<id>. hy3-free is Tencent Hunyuan 3.
+const ZEN_MODEL_CHOICES = [
+  { label: 'hy3-free — Tencent Hunyuan 3 (free)', value: 'hy3-free' },
+  { label: 'deepseek-v4-flash-free (free)', value: 'deepseek-v4-flash-free' },
+  { label: 'nemotron-3-ultra-free (free)', value: 'nemotron-3-ultra-free' },
+  { label: 'mimo-v2.5-free (free)', value: 'mimo-v2.5-free' },
+];
+
+// Init-time picker choices for the provider itself (opencode engine only).
+const CODER_PROVIDER_CHOICES = [
+  { label: 'Z.AI GLM (glm-5.2, …) — needs a Z.AI key', value: 'zai' },
+  { label: 'OpenCode Zen (free models incl. Hunyuan hy3) — needs an OpenCode key', value: 'opencode-zen' },
+];
+
+// Resolves the per-provider init catalogue: the model prefix written into
+// opencode.json, the picker choices, and the silent (non-TTY) defaults.
+// `providerInfo.kind` is 'zai' | 'opencode-zen'; for zai, `detectedZai` is the
+// plan probe result (zai-coding-plan / zai / null) so the prefix matches the
+// endpoint the key actually authenticates against.
+function coderInitCatalogue(providerInfo) {
+  if (providerInfo.kind === 'opencode-zen') {
+    return {
+      prefix: 'opencode',
+      choices: ZEN_MODEL_CHOICES,
+      mainDefault: 'hy3-free',
+      smallDefault: 'hy3-free',
+      mainIdx: 0,
+      smallIdx: 0,
+      noun: 'OpenCode Zen',
+    };
+  }
+  return {
+    prefix: providerInfo.detectedZai || DEFAULT_CODER_MODEL.split('/')[0],
+    choices: GLM_MODEL_CHOICES,
+    mainDefault: 'glm-5.2',
+    smallDefault: 'glm-5-turbo',
+    mainIdx: 0,
+    smallIdx: 1,
+    noun: 'GLM',
+  };
+}
+
+// The credential env a provider KIND uses (not the plan sub-prefix) — so a
+// preset is judged by provider, not by exact string.
+function kindKeyEnv(kind) {
+  return kind === 'opencode-zen' ? 'OPENCODE_API_KEY' : 'ZHIPU_API_KEY';
+}
+function modelMatchesKind(model, kind) {
+  return !!model && coderModelCredential(model).env === kindKeyEnv(kind);
+}
+
+// The main/small_model of an existing opencode.json (or {} if absent/unreadable).
+function readOpencodeModels(path) {
+  try {
+    const j = JSON.parse(readFileSync(path, 'utf8'));
+    return {
+      model: typeof j.model === 'string' ? j.model : undefined,
+      smallModel: typeof j.small_model === 'string' ? j.small_model : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Resolve the main + small model for the CHOSEN provider. Per field, priority:
+//   1. a TRISS_CODER_MODEL/SMALL_MODEL preset — but ONLY if it belongs to the
+//      chosen provider (an explicit --provider must beat a stale cross-provider
+//      preset; a mismatch is warned and ignored, not written);
+//   2. the model already in opencode.json when it matches the provider (so a
+//      re-run is idempotent and pins what's configured, without re-prompting);
+//   3. the interactive picker (TTY);
+//   4. the provider's silent default.
+// `existing` is readOpencodeModels(opencode.json) from the caller.
+async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
+  const cat = coderInitCatalogue(providerInfo);
+  const kind = providerInfo.kind;
   const choose = deps.promptChoice || promptChoice;
   const interactive = !!process.stdin.isTTY;
 
-  let model = process.env.TRISS_CODER_MODEL;
-  if (!model) {
-    model = interactive
-      ? `${providerPrefix}/${await choose('  Main GLM model for opencode.json?', GLM_MODEL_CHOICES, { defaultIndex: 0 })}`
-      : `${providerPrefix}/glm-5.2`;
-  }
+  const pickOne = async (envVar, existingVal, label, idx, def) => {
+    const preset = process.env[envVar];
+    if (preset) {
+      if (modelMatchesKind(preset, kind)) return preset;
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ignoring ${envVar}=${preset} — it does not belong to the ${cat.noun} provider you ` +
+            `selected (expected the "${cat.prefix}/" prefix); unset it or set a matching model.\n`,
+        ),
+      );
+    }
+    if (modelMatchesKind(existingVal, kind)) return existingVal;
+    return interactive
+      ? `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`
+      : `${cat.prefix}/${def}`;
+  };
 
-  let smallModel = process.env.TRISS_CODER_SMALL_MODEL;
-  if (!smallModel) {
-    smallModel = interactive
-      ? `${providerPrefix}/${await choose('  Small/fast GLM model for opencode.json?', GLM_MODEL_CHOICES, { defaultIndex: 1 })}`
-      : `${providerPrefix}/glm-5-turbo`;
-  }
-
+  const model = await pickOne('TRISS_CODER_MODEL', existing.model, 'Main', cat.mainIdx, cat.mainDefault);
+  const smallModel = await pickOne(
+    'TRISS_CODER_SMALL_MODEL',
+    existing.smallModel,
+    'Small/fast',
+    cat.smallIdx,
+    cat.smallDefault,
+  );
   return { model, smallModel };
+}
+
+// Normalizes a --provider flag value (with aliases) to 'zai' | 'opencode-zen',
+// throwing on anything else. Shared by resolveInitProvider and the crush guard
+// so both accept the SAME alias set (glm/z.ai/zhipu -> zai; opencode/zen ->
+// opencode-zen).
+function normalizeProviderFlag(raw) {
+  const v = String(raw).trim().toLowerCase();
+  if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
+  if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
+  throw new Error(`Unknown --provider "${raw}" — valid values: zai, opencode-zen.`);
+}
+
+// Provider implied by the environment alone (no flag, no prompt): a
+// TRISS_CODER_MODEL preset decides by its prefix, else a single configured
+// credential is taken as the intent (only OPENCODE_API_KEY -> zen; only ZHIPU
+// -> zai). Returns null when genuinely ambiguous (neither or both set).
+function providerFromEnv() {
+  const preset = process.env.TRISS_CODER_MODEL;
+  if (preset) return coderModelCredential(preset).env === 'OPENCODE_API_KEY' ? 'opencode-zen' : 'zai';
+  const hasZhipu = !!process.env.ZHIPU_API_KEY;
+  const hasZen = !!process.env.OPENCODE_API_KEY;
+  if (hasZen && !hasZhipu) return 'opencode-zen';
+  if (hasZhipu && !hasZen) return 'zai';
+  return null;
+}
+
+// Non-prompting resolution (wizard postSetup path): environment intent, else
+// the historical default (zai).
+function inferCoderProvider() {
+  return providerFromEnv() || 'zai';
+}
+
+// The interactive provider resolution for `triss coder init`: explicit
+// --provider flag > environment intent (preset / single credential) > a TTY
+// prompt when genuinely ambiguous > silent default (zai). Inferring from an
+// existing single key means users who already configured one provider aren't
+// re-asked; a fresh user (no key, no preset) on a TTY gets the choice, and
+// --provider always forces it.
+async function resolveInitProvider(opts, deps = {}) {
+  if (opts.provider) return normalizeProviderFlag(opts.provider);
+  const fromEnv = providerFromEnv();
+  if (fromEnv) return fromEnv;
+  if (process.stdin.isTTY) {
+    const choose = deps.promptChoice || promptChoice;
+    return await choose('  Model provider for the opencode engine?', CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
+  }
+  return 'zai';
+}
+
+// Per-provider key descriptor for setupKey / the init prompt.
+function coderProviderKeyInfo(provider) {
+  if (provider === 'opencode-zen') {
+    return {
+      env: 'OPENCODE_API_KEY',
+      doc: 'OpenCode Zen API key — free models incl. Hunyuan hy3 — https://opencode.ai/docs/zen/',
+    };
+  }
+  return {
+    env: 'ZHIPU_API_KEY',
+    doc: 'Z.AI API key for GLM models — https://z.ai/manage-apikey/apikey-list',
+  };
 }
 
 // Fixed layout from the plan: `.triss/wt/<slug>` working trees, each on
@@ -315,12 +464,30 @@ commands — report findings as text only.
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
+  // Capture model overrides that are in the environment BEFORE loadEnvFiles()
+  // merges the .env files — i.e. genuine shell exports, which have higher
+  // precedence than any .env file and so would shadow whatever init pins.
+  const inheritedModels = {
+    model: process.env.TRISS_CODER_MODEL,
+    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
+  };
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
+  // The provider choice applies to the opencode engine only — crush speaks
+  // Z.AI GLM exclusively (it bridges ZHIPU_API_KEY -> ZAI_API_KEY). A
+  // --provider opencode-zen with --engine crush is a contradiction, so reject
+  // it rather than silently ignoring the flag.
+  if (engine === 'crush' && opts.provider && normalizeProviderFlag(opts.provider) !== 'zai') {
+    throw new Error(
+      'The crush engine supports Z.AI GLM only — `--provider opencode-zen` requires the opencode ' +
+        'engine. Drop --engine crush (or use --provider zai).',
+    );
+  }
+  const provider = engine === 'crush' ? 'zai' : await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
-  if (!scope) scope = await chooseScope('Where to save the Z.AI key and coder config?');
+  if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const path = ensureEnvFile(scope);
-  await setupKey(path);
+  await setupKey(path, provider);
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -377,31 +544,88 @@ export async function runCoderInit(opts = {}, deps = {}) {
       // (crush.json may not exist yet — seedCrushPermissions creates it.)
       seedCrushPermissions(scope);
     }
-  } else {
-    await runCoderSetup({ scope }, deps);
+  }
+  let shadowed = false;
+  if (engine !== 'crush') {
+    const pinned = await runCoderSetup({ scope, provider }, deps);
+    // Verify the pin will actually take effect in the NEXT process — a shell
+    // export or a higher-precedence .env file can silently shadow it, which
+    // would otherwise make a "successful" init produce a broken bare run.
+    if (pinned) shadowed = warnIfPinShadowed(scope, pinned, inheritedModels);
+  }
+  if (shadowed) {
+    // Don't report a clean success: a higher-precedence override will make the
+    // next run use a different model/provider than the one just configured.
+    process.stderr.write(
+      '\n' +
+        pc.yellow('⚠ Setup incomplete: ') +
+        'the override flagged above wins over what was just written, so runs will NOT use this ' +
+        'config until you remove or fix it. Then re-run ' +
+        pc.cyan('triss coder init') +
+        '.\n',
+    );
+    return;
   }
   process.stderr.write(
     '\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss coder init') + pc.dim(' again anytime — it is idempotent.\n'),
   );
 }
 
-async function setupKey(path) {
-  const existing = process.env.ZHIPU_API_KEY;
+// Warn when the model just pinned by init will be overridden in a fresh process
+// by a higher-precedence source: a shell export (beats every .env file) or a
+// higher-precedence .env file (local `.triss.env` beats global). Silent here
+// means a green "Done." followed by `ZHIPU_API_KEY is not set` on the next run.
+// Returns true if it emitted any shadow warning (so the caller can withhold the
+// green "Done.").
+function warnIfPinShadowed(scope, pinned, inherited) {
+  let shadowed = false;
+  const warn = (m) => {
+    shadowed = true;
+    process.stderr.write(pc.yellow(m));
+  };
+  // 1. Shell export — highest precedence of all, not fixable by writing files.
+  if (inherited.model && inherited.model !== pinned.model) {
+    warn(
+      `  ⚠ TRISS_CODER_MODEL=${inherited.model} is exported in your shell — it overrides the pinned ` +
+        `${pinned.model} in EVERY .env file, so the next run will use it (and likely the wrong ` +
+        'provider/key). Run `unset TRISS_CODER_MODEL TRISS_CODER_SMALL_MODEL`, or export the pinned value.\n',
+    );
+  }
+  // 2. A higher-precedence .env FILE. activeEnvFiles() is highest-first; stop at
+  //    the scope we wrote — anything after it is lower precedence and can't win.
+  for (const f of activeEnvFiles()) {
+    if (f.scope === scope) break;
+    if (!f.exists) continue;
+    const v = readEnvFile(f.path).vars.TRISS_CODER_MODEL;
+    if (v && v !== pinned.model) {
+      warn(
+        `  ⚠ ${f.path} (${f.scope} scope) sets TRISS_CODER_MODEL=${v}, which has higher precedence than ` +
+          `the ${scope} config just written (pin ${pinned.model}) and will win in the next run. Fix or ` +
+          `remove it, or re-run init with --${f.scope}.\n`,
+      );
+    }
+  }
+  return shadowed;
+}
+
+async function setupKey(path, provider = 'zai') {
+  const info = coderProviderKeyInfo(provider);
+  const existing = process.env[info.env];
   if (existing) {
-    process.stderr.write(pc.dim(`  ✓ ZHIPU_API_KEY already set (${maskValue(existing)}) — skipping\n`));
+    process.stderr.write(pc.dim(`  ✓ ${info.env} already set (${maskValue(existing)}) — skipping\n`));
     return;
   }
-  process.stderr.write('\n  ' + pc.yellow('ZHIPU_API_KEY') + ' (required)\n');
-  process.stderr.write(pc.dim('  Z.AI API key for GLM models — https://z.ai/manage-apikey/apikey-list\n'));
+  process.stderr.write('\n  ' + pc.yellow(info.env) + ' (required)\n');
+  process.stderr.write(pc.dim(`  ${info.doc}\n`));
   const key = await prompt('  value', { hidden: true });
   if (!key) {
     process.stderr.write(
-      pc.yellow("  ⚠ skipped — set later via 'triss config set ZHIPU_API_KEY'\n"),
+      pc.yellow(`  ⚠ skipped — set later via 'triss config set ${info.env}'\n`),
     );
     return;
   }
-  setVar(path, 'ZHIPU_API_KEY', key);
-  process.env.ZHIPU_API_KEY = key;
+  setVar(path, info.env, key);
+  process.env[info.env] = key;
   process.stderr.write(pc.green('  ✓ saved\n'));
 }
 
@@ -411,9 +635,9 @@ async function setupKey(path) {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup({ scope } = {}, deps = {}) {
+export async function runCoderSetup({ scope, provider } = {}, deps = {}) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
-  // so ZHIPU_API_KEY is already in process.env by the time this function
+  // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
   // `triss config wizard` path) calls runCoderSetup directly: the
   // generic env-var loop writes the key to the .env FILE via setVar(),
@@ -423,13 +647,64 @@ export async function runCoderSetup({ scope } = {}, deps = {}) {
   // prefix. override:false + uncached (see config.js) makes this a safe,
   // idempotent no-op when the key is already loaded.
   loadEnvFiles();
+  // The wizard postSetup path passes no provider — infer it from the
+  // configured model/credential (no prompt) so a preset zen model is honored.
+  const resolvedProvider = provider || inferCoderProvider();
   const resolvedScope = scope || 'global';
   const sh = deps.spawnSync || nodeSpawnSync;
-  process.stderr.write('\n' + pc.bold('── coder (opencode engine) ──') + '\n');
+  const noun = resolvedProvider === 'opencode-zen' ? 'OpenCode Zen' : 'Z.AI GLM';
+  process.stderr.write('\n' + pc.bold(`── coder (opencode engine · ${noun}) ──`) + '\n');
+  // Privacy: the coder agent reads your repository and sends it to the model.
+  // OpenCode Zen's FREE models come with data-usage terms (some log or train on
+  // submitted content), so warn BEFORE anything is picked or written.
+  if (resolvedProvider === 'opencode-zen') {
+    process.stderr.write(
+      pc.yellow(
+        '  ⚠ OpenCode Zen free models may LOG or TRAIN ON submitted content — the coder agent sends\n' +
+          '    your repository to the model, so avoid them for confidential/proprietary code. Review\n' +
+          '    the current terms first: https://opencode.ai/docs/zen/\n',
+      ),
+    );
+  }
   await ensureEngine(sh, deps.confirmInstall);
-  const detectedProvider = await detectAndReportZaiProvider(deps.fetch || globalThis.fetch);
-  await writeOpencodeConfig(resolvedScope, detectedProvider, deps);
+  // Z.AI plan detection is meaningless for Zen (its models resolve via
+  // opencode's built-in `opencode` provider, not a Z.AI base) — skip it.
+  const detectedZai =
+    resolvedProvider === 'opencode-zen'
+      ? null
+      : await detectAndReportZaiProvider(deps.fetch || globalThis.fetch);
+  const providerInfo = { kind: resolvedProvider, detectedZai };
+  // Resolve the model ONCE, up front, honoring only presets/config that belong
+  // to the chosen provider — then write opencode.json (if absent) and pin
+  // TRISS_CODER_MODEL from the SAME resolved value. This has to happen even when
+  // opencode.json already exists: the run path reads the model from
+  // TRISS_CODER_MODEL, never from opencode.json, so skipping the pin would leave
+  // a bare run falling back to the GLM default (and demanding ZHIPU_API_KEY)
+  // right after a successful Zen setup.
+  const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
+  const { model, smallModel } = await resolveInitModels(providerInfo, deps, existing);
+  writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel);
+  persistCoderModels(resolvedScope, model, smallModel);
   scaffoldAgentTemplates(resolvedScope);
+  return { model, smallModel };
+}
+
+// Pin TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL into the .env of `scope` (and
+// process.env, so an in-process run like the MCP server sees it immediately) so
+// the model chosen at init drives every later run — the run path resolves the
+// model from TRISS_CODER_MODEL, not from opencode.json. The values passed in are
+// already provider-correct (resolveInitModels rejected any cross-provider
+// preset), so we write them authoritatively rather than preserving a stale env
+// value that would send a Zen run to the GLM default.
+function persistCoderModels(scope, model, smallModel) {
+  const path = ensureEnvFile(scope);
+  setVar(path, 'TRISS_CODER_MODEL', model);
+  process.env.TRISS_CODER_MODEL = model;
+  setVar(path, 'TRISS_CODER_SMALL_MODEL', smallModel);
+  process.env.TRISS_CODER_SMALL_MODEL = smallModel;
+  process.stderr.write(
+    pc.dim(`  · pinned TRISS_CODER_MODEL=${model} (small_model=${smallModel}) so runs use it\n`),
+  );
 }
 
 function detectOpencodeVersion(sh) {
@@ -669,11 +944,15 @@ function opencodeConfigTemplate(model, smallModel) {
 }
 
 // If the caller already has an opencode.json (the no-clobber path never
-// touches it), still tell them when its `model` provider prefix
-// contradicts what the key just verified against — a mismatched prefix
-// is exactly the infinite-retry trap this whole feature exists to catch.
-function warnIfProviderMismatch(path, detectedProvider) {
-  if (!detectedProvider) return; // nothing to compare against
+// touches it), still tell them when its `model` provider prefix contradicts
+// the provider being configured — a mismatched prefix is exactly the
+// infinite-retry trap this whole feature exists to catch. `providerInfo` is
+// { kind: 'zai' | 'opencode-zen', detectedZai }: for zai the expected prefix
+// is the detected plan (skip if detection couldn't confirm one); for zen it
+// is the fixed `opencode`.
+function warnIfProviderMismatch(path, providerInfo) {
+  const expected = providerInfo.kind === 'opencode-zen' ? 'opencode' : providerInfo.detectedZai;
+  if (!expected) return; // nothing to compare against
   let existing;
   try {
     existing = JSON.parse(readFileSync(path, 'utf8'));
@@ -682,32 +961,85 @@ function warnIfProviderMismatch(path, detectedProvider) {
   }
   const existingModel = typeof existing.model === 'string' ? existing.model : '';
   const existingPrefix = existingModel.split('/')[0];
-  if (existingPrefix && existingPrefix !== detectedProvider) {
+  if (!existingPrefix || existingPrefix === expected) return;
+  if (providerInfo.kind === 'opencode-zen') {
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), but ZHIPU_API_KEY ` +
-          `just verified against the "${detectedProvider}" endpoint instead — this is the exact ` +
-          "mismatch that makes opencode retry a model call it can never complete. Update the " +
-          'model/small_model fields, or unset ZHIPU_API_KEY and use a key for the right plan.\n',
+        `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), which does not match ` +
+          'the OpenCode Zen provider you are configuring — the existing file is kept untouched. Set an ' +
+          'opencode/<id> model (e.g. via TRISS_CODER_MODEL), or delete opencode.json and re-run init.\n',
+      ),
+    );
+    return;
+  }
+  process.stderr.write(
+    pc.yellow(
+      `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), but ZHIPU_API_KEY ` +
+        `just verified against the "${expected}" endpoint instead — this is the exact ` +
+        "mismatch that makes opencode retry a model call it can never complete. Update the " +
+        'model/small_model fields, or unset ZHIPU_API_KEY and use a key for the right plan.\n',
+    ),
+  );
+}
+
+// Audits an existing opencode.json (the no-clobber path never rewrites it) for
+// the two things a fresh config would guarantee but a user's file might not:
+//   1. the deny-first bash policy — without permission.bash["*"]="deny" the
+//      agent (run with --auto, which auto-approves every "ask") can execute
+//      arbitrary shell commands; and
+//   2. the small_model provider — opencode has no run-time small-model flag, so
+//      triss can't override a stale small_model; a cross-provider one is read
+//      straight from the file and won't authenticate with the run's key.
+// Emits a specific warning for each problem; never throws or edits the file.
+function auditExistingConfig(path, providerInfo) {
+  let existing;
+  try {
+    existing = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    process.stderr.write(
+      pc.yellow(`  ⚠ ${path} exists but is not valid JSON — leaving it; runs may misbehave.\n`),
+    );
+    return;
+  }
+  if (existing?.permission?.bash?.['*'] !== 'deny') {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${path} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
+          'with --auto — every "ask" permission is auto-approved, so without an explicit deny-first ' +
+          'allowlist it can run arbitrary shell commands. Add the policy, or delete opencode.json and ' +
+          're-run init to regenerate it.\n',
+      ),
+    );
+  }
+  const wantEnv = kindKeyEnv(providerInfo.kind);
+  const small = typeof existing.small_model === 'string' ? existing.small_model : '';
+  if (small && coderModelCredential(small).env !== wantEnv) {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${path} sets small_model="${small}", which is not a ${coderInitCatalogue(providerInfo).noun} ` +
+          "model. opencode reads small_model from this file (triss cannot override it at run time), so the " +
+          "run's key won't authenticate it. Update small_model, or delete opencode.json and re-run init.\n",
       ),
     );
   }
 }
 
-async function writeOpencodeConfig(scope, detectedProvider, deps = {}) {
+// Writes opencode.json with the already-resolved `model`/`smallModel` (from
+// runCoderSetup's single resolveInitModels call) plus the deny-first bash
+// policy. Never clobbers an existing file — instead it audits that file (main
+// model provider, small_model provider, deny-first policy) and warns on any
+// problem. `providerInfo` is { kind: 'zai' | 'opencode-zen', detectedZai }.
+function writeOpencodeConfig(scope, providerInfo, model, smallModel) {
   const path = opencodeConfigPath(scope);
   if (existsSync(path)) {
     process.stderr.write(pc.dim(`  · ${path} already exists — not overwriting\n`));
     process.stderr.write(
-      pc.dim(
-        `    (would set model=${coderModel()}, small_model=${coderSmallModel()}, ` +
-          'permission.bash.*=deny)\n',
-      ),
+      pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
     );
-    warnIfProviderMismatch(path, detectedProvider);
+    warnIfProviderMismatch(path, providerInfo);
+    auditExistingConfig(path, providerInfo);
     return;
   }
-  const { model, smallModel } = await resolveInitModels(detectedProvider, deps);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
@@ -846,6 +1178,11 @@ export function describeCoderStatus(deps = {}) {
   });
   // What a bare `triss coder run` (no --engine) resolves to right now.
   const defaultEngine = resolveCoderEngine({});
+  // The model a bare `triss coder run` on the opencode engine would use — i.e.
+  // TRISS_CODER_MODEL or the built-in default (NOT opencode.json, which the run
+  // path ignores). Surfacing it makes provider/model misconfiguration visible.
+  const defaultModel = coderModel();
+  const defaultSmallModel = coderSmallModel();
   return {
     pin,
     engineVersion,
@@ -859,6 +1196,8 @@ export function describeCoderStatus(deps = {}) {
       configs: crushConfigs,
     },
     defaultEngine,
+    defaultModel,
+    defaultSmallModel,
   };
 }
 

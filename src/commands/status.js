@@ -83,6 +83,7 @@ export async function runStatus(deps = {}) {
     lines.push(pc.bold('Coder'));
     const coder = describeCoderStatus(deps);
     lines.push(`  default engine                ${pc.cyan(coder.defaultEngine)}`);
+    lines.push(`  default model                 ${pc.cyan(coder.defaultModel)}`);
     // opencode (engine #1) — version-checked against the pin.
     const ocMarker = coder.engineVersion ? pc.green('●') : pc.dim('○');
     const ocLabel = coder.engineVersion

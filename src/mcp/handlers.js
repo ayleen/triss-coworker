@@ -939,6 +939,7 @@ export async function coderStatusHandler() {
     `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush; crush bridges it to ZAI_API_KEY at run time)`,
     `OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? 'configured' : 'not set'} (optional — unlocks OpenCode Zen models like opencode/hy3-free on the opencode engine)`,
     `Default engine: ${status.defaultEngine}`,
+    `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — what a bare run uses (from TRISS_CODER_MODEL, not opencode.json)`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${
           status.engineVersion === status.pin ? ' (matches pin)' : ` (pin ${status.pin})`
