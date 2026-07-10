@@ -16,7 +16,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,7 +37,7 @@ function runCli(args, { home, project, env = {} }) {
     input: '', // never block on a hidden prompt
     encoding: 'utf8',
     env: {
-      PATH: process.env.PATH,
+      PATH: `${join(home, 'bin')}:${process.env.PATH || ''}`,
       HOME: home,
       TRISS_PROJECT_ROOT: project,
       ...env,
@@ -43,6 +50,11 @@ function makeDirs() {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-xproc-home-')));
   const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-xproc-proj-')));
   mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+  const bin = join(home, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const opencode = join(bin, 'opencode');
+  writeFileSync(opencode, '#!/bin/sh\nprintf "1.17.13\\n"\n');
+  chmodSync(opencode, 0o755);
   return { home, project };
 }
 
@@ -80,9 +92,10 @@ test('init --global warns AND a separate process confirms a local .triss.env rea
       project,
       env: { OPENCODE_API_KEY: 'sk-zen-fake' },
     });
-    assert.equal(init.status, 0, `init failed: ${init.stderr}`);
+    assert.equal(init.status, 1, `shadowed init must fail: ${init.stderr}`);
     // init must not silently succeed — it warns about the shadowing file.
     assert.match(init.stderr, /\.triss\.env \(local scope\) sets TRISS_CODER_MODEL=zai-coding-plan\/glm-5\.2/);
+    assert.match(init.stderr, /Setup incomplete/);
 
     // A fresh process indeed resolves the LOCAL Z.AI model, not the global pin —
     // proving the shadow the warning describes is real.
