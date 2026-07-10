@@ -140,17 +140,28 @@ everything else goes through the engine binary.
 GLM models offered/verified: **`glm-5.2`** (recommended default large),
 **`glm-5-turbo`** (default small/fast), **`glm-4.7`**.
 
-Precedence for the models written at init time
-(`TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` env  >  interactive picker on
-a TTY  >  silent default):
+Precedence for the models resolved at init time (per field), highest first:
 
-- **Env override** — taken verbatim, prefix included, e.g.
-  `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2` (GLM) or
+- **Env override** — a `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` preset,
+  taken verbatim, **but only if it belongs to the chosen provider**. An explicit
+  `--provider` beats a stale cross-provider preset: e.g. `--provider
+  opencode-zen` with a leftover `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2`
+  ignores (and warns about) the preset rather than writing it. Matching example:
   `TRISS_CODER_MODEL=opencode/hy3-free` (OpenCode Zen; needs `OPENCODE_API_KEY`).
-- **Interactive** — `triss coder init` prompts you to pick the main and
-  small model from the list above.
+- **Existing `opencode.json`** — a model already in the file that matches the
+  chosen provider is reused (so a re-run is idempotent and pins what's
+  configured, without re-prompting).
+- **Interactive** — on a TTY, `triss coder init` prompts you to pick the main
+  and small model.
 - **Default** — `zai-coding-plan/glm-5.2` (large) / `zai-coding-plan/glm-5-turbo`
-  (small); the prefix comes from plan detection (§3).
+  (small), or `opencode/hy3-free` for a Zen setup; the Z.AI prefix comes from
+  plan detection (§3).
+
+The resolved model is written to `opencode.json` (if absent) **and pinned into
+`TRISS_CODER_MODEL`** in the chosen `.env` — that pin, not `opencode.json`, is
+what a bare run reads (see §4's per-run note). init warns and exits non-zero if
+a higher-precedence source (a shell export, or a project `.triss.env` under a
+`--global` write) would shadow the pin.
 
 Per-run override: `--model <provider/model>` (CLI) or `model` (MCP) changes
 the model for **one** invocation only, without touching config. opencode

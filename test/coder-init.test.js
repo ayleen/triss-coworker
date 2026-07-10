@@ -686,6 +686,94 @@ test(
 );
 
 test(
+  'runCoderInit: warns when a resolved model has a provider prefix triss doesn\'t recognize (#4)',
+  withTmpHome(async ({ captured }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
+    // Unknown prefix maps to ZHIPU by default but can never be served.
+    process.env.TRISS_CODER_MODEL = 'anthropic/claude-x';
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    assert.match(
+      captured.join(''),
+      /TRISS_CODER_MODEL resolved to "anthropic\/claude-x", whose provider prefix triss doesn't recognize/,
+    );
+  }),
+);
+
+test(
+  'runCoderInit: warns (non-blocking) on a plan-level small_model mismatch in an existing config (#5)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    // Same ZHIPU kind, different plan prefix (zai-coding-plan main vs zai small).
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({
+        model: 'zai-coding-plan/glm-5.2',
+        small_model: 'zai/glm-5-turbo',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'zai' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    const out = captured.join('');
+    assert.match(out, /model="zai-coding-plan\/glm-5\.2" but small_model="zai\/glm-5-turbo" — different provider prefixes/);
+    assert.match(out, /Done\./, 'plan-level mismatch is a warning, not a blocking error');
+  }),
+);
+
+test(
+  'runCoderInit --global: audits a higher-precedence project ./opencode.json and blocks on its bad small_model (#1)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Project-scope opencode.json (opencode resolves it over the global one at
+    // run time) with a cross-provider small_model init didn't write.
+    writeFileSync(
+      join(home, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode/hy3-free',
+        small_model: 'zai-coding-plan/glm-5-turbo',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /existing opencode\.json issues/,
+    );
+    const out = captured.join('');
+    assert.match(out, /project scope — higher precedence/);
+    assert.match(out, /small_model="zai-coding-plan\/glm-5-turbo"/);
+  }),
+);
+
+test(
+  'runCoderSetup (wizard entry point) also enforces the pin-shadow gate (#2)',
+  withTmpHome(async () => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // The wizard's postSetup calls runCoderSetup directly. A higher-precedence
+    // override (here a simulated shell export) must still fail it, not slip
+    // through with a green pin.
+    await assert.rejects(
+      () =>
+        runCoderSetup(
+          { scope: 'global', provider: 'opencode-zen', inheritedModels: { model: 'zai-coding-plan/glm-5.2' } },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fetchThatMustNotBeCalled() },
+        ),
+      /higher-precedence model override/,
+    );
+  }),
+);
+
+test(
   'runCoderInit: on a TTY with both keys set (ambiguous), the provider picker chooses zen and its model',
   withTmpHome(async ({ home }) => {
     const origTTY = process.stdin.isTTY;

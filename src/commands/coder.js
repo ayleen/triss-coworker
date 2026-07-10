@@ -283,6 +283,20 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     cat.smallIdx,
     cat.smallDefault,
   );
+  // A preset/existing model with a prefix triss doesn't recognize is routed to
+  // ZHIPU_API_KEY by default (coderModelCredential) and can never be served —
+  // opencode retries it forever. Warn rather than silently pin it.
+  for (const [field, m] of [['TRISS_CODER_MODEL', model], ['TRISS_CODER_SMALL_MODEL', smallModel]]) {
+    if (!isKnownProviderPrefix(m)) {
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${field} resolved to "${m}", whose provider prefix triss doesn't recognize ` +
+            '(known: zai-coding-plan/*, zai/*, opencode/*). Runs will send it the ZHIPU_API_KEY by ' +
+            'default and likely retry forever — set a model with a known prefix.\n',
+        ),
+      );
+    }
+  }
   return { model, smallModel };
 }
 
@@ -388,6 +402,14 @@ export function coderModelCredential(model) {
   const provider = String(model || '').split('/')[0];
   if (provider === 'opencode') return { env: 'OPENCODE_API_KEY', provider: 'opencode-zen' };
   return { env: 'ZHIPU_API_KEY', provider: 'zai' };
+}
+
+// Provider prefixes triss actually knows how to authenticate. Anything else is
+// routed to ZHIPU_API_KEY by coderModelCredential's default, which then can't
+// serve it — a silent infinite-retry trap. Used to warn at init time.
+const KNOWN_PROVIDER_PREFIXES = new Set(['zai-coding-plan', 'zai', 'opencode']);
+function isKnownProviderPrefix(model) {
+  return KNOWN_PROVIDER_PREFIXES.has(String(model || '').split('/')[0]);
 }
 
 // The coder tools/status surface as soon as ANY provider credential is
@@ -545,27 +567,23 @@ export async function runCoderInit(opts = {}, deps = {}) {
       seedCrushPermissions(scope);
     }
   }
-  let shadowed = false;
   if (engine !== 'crush') {
-    const pinned = await runCoderSetup({ scope, provider }, deps);
-    // Verify the pin will actually take effect in the NEXT process — a shell
-    // export or a higher-precedence .env file can silently shadow it, which
-    // would otherwise make a "successful" init produce a broken bare run.
-    if (pinned) shadowed = warnIfPinShadowed(scope, pinned, inheritedModels);
+    // runCoderSetup does the cross-scope opencode.json audit AND the pin-shadow
+    // check (shell export needs inheritedModels; .env-file shadow is read from
+    // disk), throwing "Coder setup incomplete" on any blocking problem so both
+    // this path and the wizard's postSetup path fail the same way.
+    await runCoderSetup({ scope, provider, inheritedModels }, deps);
   }
-  if (shadowed) {
-    // Don't report a clean success: a higher-precedence override will make the
-    // next run use a different model/provider than the one just configured.
+  // Don't imply the setup is runnable if the provider's key never got set (a
+  // skipped/empty prompt, or a non-TTY run with nothing in the env) — otherwise
+  // the very next run fails with "<KEY> is not set" after a green "Done.".
+  const keyEnv = coderProviderKeyInfo(provider).env;
+  if (!process.env[keyEnv]) {
     process.stderr.write(
-      '\n' +
-        pc.yellow('⚠ Setup incomplete: ') +
-        'the override flagged above wins over what was just written, so runs will NOT use this ' +
-        'config until you remove or fix it. Then re-run ' +
-        pc.cyan('triss coder init') +
-        '.\n',
-    );
-    throw new Error(
-      'Coder setup incomplete: remove or fix the higher-precedence model override, then re-run `triss coder init`.',
+      pc.yellow(
+        `  ⚠ ${keyEnv} is not set — runs will fail until you set it: ` +
+          `triss config set ${keyEnv}\n`,
+      ),
     );
   }
   process.stderr.write(
@@ -637,7 +655,7 @@ async function setupKey(path, provider = 'zai') {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup({ scope, provider } = {}, deps = {}) {
+export async function runCoderSetup({ scope, provider, inheritedModels } = {}, deps = {}) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
   // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
@@ -685,14 +703,44 @@ export async function runCoderSetup({ scope, provider } = {}, deps = {}) {
   // right after a successful Zen setup.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
   const { model, smallModel } = await resolveInitModels(providerInfo, deps, existing);
-  const configAudit = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel);
-  if (configAudit.blocking) {
+  let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel).blocking;
+  // Cross-scope audit: opencode resolves config from the run's cwd upward, so a
+  // project ./opencode.json overrides the global one. Writing --global while a
+  // project file exists means THAT file (its small_model / bash policy) governs
+  // runs — audit it too, or init reports clean while runs misbehave.
+  if (resolvedScope === 'global') {
+    const projectCfg = opencodeConfigPath('local');
+    if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
+      const otherAudit = auditExistingConfig(projectCfg, providerInfo, {
+        note: '(project scope — higher precedence than the global config, so it governs runs)',
+      });
+      blocking = blocking || otherAudit.blocking;
+    }
+  }
+  if (blocking) {
     throw new Error(
       'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
     );
   }
   persistCoderModels(resolvedScope, model, smallModel);
   scaffoldAgentTemplates(resolvedScope);
+  // Pin-shadow check runs HERE (not only in runCoderInit) so the wizard's
+  // postSetup path is covered too. A shell export needs inheritedModels (only
+  // runCoderInit captures it pre-loadEnvFiles); the .env-file shadow is detected
+  // from disk regardless, so the wizard at least sees that.
+  if (warnIfPinShadowed(resolvedScope, { model, smallModel }, inheritedModels || {})) {
+    process.stderr.write(
+      '\n' +
+        pc.yellow('⚠ Setup incomplete: ') +
+        'the override flagged above wins over what was just written, so runs will NOT use this ' +
+        'config until you remove or fix it. Then re-run ' +
+        pc.cyan('triss coder init') +
+        '.\n',
+    );
+    throw new Error(
+      'Coder setup incomplete: remove or fix the higher-precedence model override reported above, then re-run `triss coder init`.',
+    );
+  }
   return { model, smallModel };
 }
 
@@ -990,28 +1038,36 @@ function warnIfProviderMismatch(path, providerInfo) {
 }
 
 // Audits an existing opencode.json (the no-clobber path never rewrites it) for
-// the two things a fresh config would guarantee but a user's file might not:
+// what a fresh config would guarantee but a user's file might not:
 //   1. the deny-first bash policy — without permission.bash["*"]="deny" the
 //      agent (run with --auto, which auto-approves every "ask") can execute
-//      arbitrary shell commands; and
-//   2. the small_model provider — opencode has no run-time small-model flag, so
-//      triss can't override a stale small_model; a cross-provider one is read
-//      straight from the file and won't authenticate with the run's key.
-// Emits a specific warning for each problem; never throws or edits the file.
-function auditExistingConfig(path, providerInfo) {
+//      arbitrary shell commands;
+//   2. the small_model *provider* — opencode has no run-time small-model flag,
+//      so triss can't override a stale small_model; a cross-provider one is read
+//      straight from the file and won't authenticate with the run's key
+//      (blocking); and
+//   3. a small_model *plan-level* mismatch — same credential kind but a
+//      different prefix than the main model (e.g. `zai-coding-plan/*` main with
+//      a `zai/*` small): both use ZHIPU but hit different Z.AI bases, the
+//      original infinite-retry trap (warn).
+// `opts.note` is a short precedence description prepended to warnings when the
+// file audited isn't the one just written (see the cross-scope audit in
+// runCoderSetup). Emits a specific warning per problem; never edits the file.
+function auditExistingConfig(path, providerInfo, opts = {}) {
+  const where = opts.note ? `${path} ${opts.note}` : path;
   let existing;
   try {
     existing = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     process.stderr.write(
-      pc.yellow(`  ⚠ ${path} exists but is not valid JSON — leaving it; runs may misbehave.\n`),
+      pc.yellow(`  ⚠ ${where} exists but is not valid JSON — leaving it; runs may misbehave.\n`),
     );
     return { blocking: true };
   }
   if (existing?.permission?.bash?.['*'] !== 'deny') {
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${path} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
+        `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
           'with --auto — every "ask" permission is auto-approved, so without an explicit deny-first ' +
           'allowlist it can run arbitrary shell commands. Add the policy, or delete opencode.json and ' +
           're-run init to regenerate it.\n',
@@ -1019,15 +1075,25 @@ function auditExistingConfig(path, providerInfo) {
     );
   }
   const wantEnv = kindKeyEnv(providerInfo.kind);
+  const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
   let blocking = false;
   if (small && coderModelCredential(small).env !== wantEnv) {
     blocking = true;
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${path} sets small_model="${small}", which is not a ${coderInitCatalogue(providerInfo).noun} ` +
+        `  ⚠ ${where} sets small_model="${small}", which is not a ${coderInitCatalogue(providerInfo).noun} ` +
           "model. opencode reads small_model from this file (triss cannot override it at run time), so the " +
           "run's key won't authenticate it. Update small_model, or delete opencode.json and re-run init.\n",
+      ),
+    );
+  } else if (model && small && model.split('/')[0] !== small.split('/')[0]) {
+    // Same credential kind but different plan/prefix — still the wrong base.
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${where} sets model="${model}" but small_model="${small}" — different provider prefixes. ` +
+          'opencode reads small_model from this file (triss cannot override it at run time), so a key that ' +
+          "serves one prefix may not serve the other. Align small_model's prefix with the main model.\n",
       ),
     );
   }
