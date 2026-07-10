@@ -274,7 +274,10 @@ zen-only setup runs on `OPENCODE_API_KEY` alone. `triss coder run` forwards
 whichever key the model needs to the engine subprocess and gates on it
 before spawning. The `crush` engine speaks Z.AI only and always needs
 `ZHIPU_API_KEY`. `triss status` / `triss_coder_status` show both keys, and
-the coder MCP tools surface once **either** is set.
+the coder MCP tools surface once **either** is set. Run
+`triss coder init --provider opencode-zen` to set up a Zen model interactively
+(key + `opencode.json`); full details are in
+[opencode-zen.md](opencode-zen.md).
 
 **Engines.** `opencode` (default) enforces a deny-first per-command bash
 allowlist via `opencode.json` (curated safe commands only) that actually

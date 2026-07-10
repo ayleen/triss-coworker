@@ -270,8 +270,9 @@ override for self-hosted instances):
   `triss_gitlab_update` `triss_gitlab_comment`
 
 Exposed **when a provider credential is set** — `ZHIPU_API_KEY` (Z.AI GLM,
-the default) **or** `OPENCODE_API_KEY` (OpenCode Zen). Setup: `triss coder
-init` or `triss config wizard coder`.
+the default) **or** `OPENCODE_API_KEY` (OpenCode Zen — see
+[opencode-zen.md](opencode-zen.md)). Setup: `triss coder init`
+(`--provider opencode-zen` for Zen) or `triss config wizard coder`.
 
 - `triss_coder_run` — delegate an implementation task to a coding
   agent (default `opencode` engine; `engine: "crush"` selects the crush
