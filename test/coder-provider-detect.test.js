@@ -208,7 +208,12 @@ test(
     const configDir = join(home, '.config', 'opencode');
     mkdirSync(configDir, { recursive: true });
     const configPath = join(configDir, 'opencode.json');
-    const original = JSON.stringify({ model: 'zai-coding-plan/glm-5.2', small_model: 'zai-coding-plan/glm-5-turbo' });
+    // A main-model prefix mismatch is a (non-blocking) warning; keep small_model
+    // out so the (blocking) stale-small_model audit doesn't mask what's tested.
+    const original = JSON.stringify({
+      model: 'zai-coding-plan/glm-5.2',
+      permission: { bash: { '*': 'deny' } },
+    });
     writeFileSync(configPath, original);
 
     process.env.ZHIPU_API_KEY = 'zk-test-key';
@@ -233,7 +238,10 @@ test(
     const configDir = join(home, '.config', 'opencode');
     mkdirSync(configDir, { recursive: true });
     const configPath = join(configDir, 'opencode.json');
-    writeFileSync(configPath, JSON.stringify({ model: 'zai-coding-plan/glm-5.2' }));
+    writeFileSync(
+      configPath,
+      JSON.stringify({ model: 'zai-coding-plan/glm-5.2', permission: { bash: { '*': 'deny' } } }),
+    );
 
     process.env.ZHIPU_API_KEY = 'zk-test-key';
     await runCoderSetup(
@@ -251,7 +259,10 @@ test(
   withTmpHome(async ({ home, captured }) => {
     const configDir = join(home, '.config', 'opencode');
     mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'opencode.json'), JSON.stringify({ model: 'custom/whatever' }));
+    writeFileSync(
+      join(configDir, 'opencode.json'),
+      JSON.stringify({ model: 'custom/whatever', permission: { bash: { '*': 'deny' } } }),
+    );
 
     process.env.ZHIPU_API_KEY = 'zk-test-key';
     await runCoderSetup(
