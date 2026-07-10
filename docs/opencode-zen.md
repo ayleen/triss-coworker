@@ -64,10 +64,20 @@ and picks the first still-available model from a priority list:
 `hy3-free` (Tencent Hunyuan 3, 295B MoE) stays the preferred main default while
 the promo lasts; `north-mini-code-free` (trained for repo-level agentic coding)
 is the small/fast default. The interactive picker only offers models the live
-catalogue actually lists. **If the catalogue can't be fetched** (no key,
-non-200, offline), init falls back to the built-in list but prints a clear
-warning that availability is **not verified** — if a run then fails immediately,
-switch to a model listed at <https://opencode.ai/docs/zen/>.
+catalogue actually lists. The catalogue is authoritative when it's fetched:
+
+- **A stale pin is dropped, not trusted.** A `TRISS_CODER_MODEL` preset (or an
+  existing `opencode.json` model) that the live catalogue no longer lists — e.g.
+  an `opencode/hy3-free` a previous init wrote before the promo ended — is
+  **ignored** (warned), and init picks an available model instead. Any id the
+  catalogue *does* list is honoured verbatim, so a paid/other Zen id still works.
+- **None of the known free models left ⇒ init blocks.** If the catalogue is
+  fetched but lists none of the models above, init **fails** (non-zero) rather
+  than pinning a gone default — set `TRISS_CODER_MODEL=opencode/<id>` to a model
+  from <https://opencode.ai/docs/zen/> and re-run.
+- **If the catalogue can't be fetched** (no key, non-200, offline), init falls
+  back to the built-in list but prints a clear warning that availability is
+  **not verified** — if a run then fails immediately, switch to a listed model.
 
 This priority list is intentionally short and free‑only. The **full Zen
 catalogue is large and moves** (paid GPT‑5.x, Claude, Gemini, Qwen, Kimi, GLM…

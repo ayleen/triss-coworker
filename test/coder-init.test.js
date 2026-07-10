@@ -828,6 +828,75 @@ test(
 );
 
 test(
+  'runCoderInit --provider opencode-zen: drops a stale TRISS_CODER_MODEL preset the live catalogue no longer lists (P1-round6)',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // A previous init pinned hy3-free into the global .env FILE (not a shell
+    // export); loadEnvFiles will load it as a preset. The promo has since ended
+    // and the live catalogue no longer offers it, so the preset must NOT be
+    // honored verbatim — init picks an available model instead.
+    const cfgDir = join(home, '.config', 'triss');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, '.env'),
+      'TRISS_CODER_MODEL=opencode/hy3-free\nTRISS_CODER_SMALL_MODEL=opencode/hy3-free\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+      },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free', 'the gone hy3-free preset must be dropped');
+    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
+    assert.match(captured.join(''), /not in the current OpenCode Zen catalogue/);
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: drops an existing opencode.json model the live catalogue no longer lists (P1-round6)',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free', permission: { bash: { '*': 'deny' } } }) + '\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+      },
+    );
+    // The stale existing model is not re-pinned; an available one takes over.
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: BLOCKS (non-zero) when a verified catalogue lists none of triss\'s known free models (P1-round6)',
+  withTmpHome(async () => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    // Catalogue successfully fetched, but only a model triss doesn't know —
+    // there is nothing safe to pin, so init must fail rather than fabricate a
+    // gone default.
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-zen' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue(['gpt-5.5']) },
+        ),
+      /none of triss's known free OpenCode Zen models are in the current catalogue/,
+    );
+  }),
+);
+
+test(
   'runCoderInit: does NOT reuse an existing zai model whose plan differs from the detected plan (P1-b)',
   withTmpHome(async ({ home }) => {
     process.env.ZHIPU_API_KEY = 'zk-fake';
