@@ -73,7 +73,7 @@ test('init --provider opencode-zen pins a model that a SEPARATE `status` process
     // 2) a FRESH process resolves the pinned model (no TRISS_CODER_MODEL in env).
     const status = runCli(['status'], { home, project, env: { OPENCODE_API_KEY: 'sk-zen-fake' } });
     assert.equal(status.status, 0, `status failed: ${status.stderr}`);
-    assert.match(status.stdout, /default model\s+opencode\/hy3-free/);
+    assert.match(status.stdout, /default model[^\n]*opencode\/hy3-free/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });
@@ -100,7 +100,7 @@ test('init --global warns AND a separate process confirms a local .triss.env rea
     // A fresh process indeed resolves the LOCAL Z.AI model, not the global pin —
     // proving the shadow the warning describes is real.
     const status = runCli(['status'], { home, project, env: { OPENCODE_API_KEY: 'sk-zen-fake' } });
-    assert.match(status.stdout, /default model\s+zai-coding-plan\/glm-5\.2/);
+    assert.match(status.stdout, /default model[^\n]*zai-coding-plan\/glm-5\.2/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });

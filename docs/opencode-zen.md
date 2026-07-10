@@ -72,8 +72,9 @@ export TRISS_CODER_MODEL=opencode/<any-zen-id>
 triss coder run "..." --model opencode/<any-zen-id>
 ```
 
-`triss coder status` prints `OPENCODE_API_KEY` presence and the resolved
-default model, so you can confirm what a bare `triss coder run` will use.
+`triss status` (Coder block) prints `OPENCODE_API_KEY` presence and the
+resolved default model, so you can confirm what a bare `triss coder run` will
+use. (Over MCP the same is in `triss_coder_status`.)
 
 ## Ways to configure it
 
@@ -103,7 +104,7 @@ Two things it will **not** silently do:
   next process — a `TRISS_CODER_MODEL` **exported in your shell** (beats every
   `.env`), or a project `./.triss.env` when you wrote `--global` — init warns,
   reports *"Setup incomplete"*, and exits non-zero. Remove or fix that override,
-  then re-run. (Check with `triss coder status` → *default model*.)
+  then re-run. (Check with `triss status` → Coder block → *default model*.)
 - **Existing `opencode.json`.** It is never overwritten. Instead init *audits*
   it and warns when: it lacks the deny‑first bash policy
   (`permission.bash["*"]="deny"` — important because runs use `--auto`, which
@@ -166,7 +167,7 @@ Pass `model: "opencode/hy3-free"` to `triss_coder_run`, or set
 ## Verifying it works
 
 ```bash
-triss coder status            # OPENCODE_API_KEY: configured, default model, engine version
+triss status                  # Coder block: OPENCODE_API_KEY, default model, engine version
 triss coder run "Reply with exactly: OK"
 ```
 
