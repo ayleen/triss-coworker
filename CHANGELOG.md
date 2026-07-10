@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-07-10
+
+### Added
+
+- **OpenCode Zen provider for `triss coder`.** The default `opencode` engine
+  is no longer limited to Z.AI GLM — it can run any model served by
+  [OpenCode Zen](https://opencode.ai/docs/zen/) (`opencode/<id>`, e.g. the free
+  `opencode/hy3-free` / Tencent Hunyuan 3) by authenticating with a new
+  `OPENCODE_API_KEY`. Credentials are provider-scoped: a run forwards **only**
+  the key its model needs, so a Zen-only machine needs no `ZHIPU_API_KEY`. Z.AI
+  GLM stays the default provider; `crush` remains Z.AI-only. (#12)
+- `triss coder init --provider opencode-zen` — guided Zen setup: prompts for
+  `OPENCODE_API_KEY`, resolves the model against the **live Zen catalogue**
+  (`GET /zen/v1/models`, first-available from a free-model priority list), writes
+  `opencode.json` (deny-first bash policy + agent templates), and pins the chosen
+  model into `TRISS_CODER_MODEL` so a bare `triss coder run` works. Provider is
+  auto-inferred from a preset/single credential when the flag is omitted. (#12)
+- `OPENCODE_API_KEY` is a first-class, optional, masked secret on the coder
+  manifest — surfaced in `triss status`, the `config` wizard, and the MCP coder
+  tools (which now light up on `ZHIPU_API_KEY` **or** `OPENCODE_API_KEY`). (#12)
+- `--allow-unsafe-bash` on `triss coder init` — explicit opt-in to proceed when
+  an existing `opencode.json` has no deny-first bash policy. (#12)
+- New `docs/opencode-zen.md` deep-dive (auth, live catalogue, precedence, setup
+  gates, privacy, MCP, verification). (#12)
+
+### Changed
+
+- `triss coder init` / `config wizard coder` now **fail (non-zero)** instead of
+  reporting a misleading success on an unrunnable setup: a missing provider key,
+  a pin shadowed by a shell export or higher-precedence `.env`, or an
+  existing/cross-scope `opencode.json` that is unsafe (no deny-first policy) or
+  unusable (a `small_model` that is cross-provider, cross-plan, or no longer in
+  the live catalogue). Config and templates are still written, so fixing the
+  cause and re-running is a clean idempotent completion. (#12)
+
+### Security
+
+- Resolved 8 CodeQL code-scanning alerts (input validation and safe handling in
+  `completion.js`, `_contract.js`, `handlers.js`, `secrets.js`, and hardened the
+  `publish` / `test` GitHub workflows).
+- Rewrote `stripHtml` as a state machine and removed HTML-entity decoding to
+  eliminate a double-unescape flagged by CodeQL.
+
 ## [0.23.0] — 2026-07-07
 
 ### Added
