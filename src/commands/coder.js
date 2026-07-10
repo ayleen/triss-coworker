@@ -366,8 +366,7 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   // verbatim just because its provider prefix matches. When the catalogue is
   // unverified (available null) we can't reject anything.
   const zenAvailable = providerInfo.kind === 'opencode-zen' ? cat.available : null;
-  const bareId = (m) => String(m).split('/').slice(1).join('/');
-  const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(bareId(m));
+  const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(providerModelId(m));
 
   const pickOne = async (envVar, existingVal, label, idx, def, fallbackFull) => {
     // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
@@ -466,7 +465,11 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
       );
     }
   }
-  return { model, smallModel };
+  // zenAvailable (the live Zen catalogue Set, or null when unverified/non-zen)
+  // is returned so runCoderSetup's cross-scope audit can check a DIFFERENT
+  // scope's small_model for catalogue presence — exact equality with this
+  // scope's resolvedSmall is only meaningful for the scope being configured.
+  return { model, smallModel, zenAvailable };
 }
 
 // Normalizes a --provider flag value (with aliases) to 'zai' | 'opencode-zen',
@@ -579,6 +582,13 @@ export function coderModelCredential(model) {
 const KNOWN_PROVIDER_PREFIXES = new Set(['zai-coding-plan', 'zai', 'opencode']);
 function isKnownProviderPrefix(model) {
   return KNOWN_PROVIDER_PREFIXES.has(String(model || '').split('/')[0]);
+}
+
+// The bare model id of a provider-prefixed model string (everything after the
+// first `/`): `opencode/hy3-free` -> `hy3-free`. Used to check a model against
+// the live OpenCode Zen catalogue, whose ids are bare.
+function providerModelId(model) {
+  return String(model || '').split('/').slice(1).join('/');
 }
 
 // The coder tools/status surface as soon as ANY provider credential is
@@ -875,21 +885,25 @@ export async function runCoderSetup({ scope, provider, inheritedModels, allowUns
   // a bare run falling back to the GLM default (and demanding ZHIPU_API_KEY)
   // right after a successful Zen setup.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
-  const { model, smallModel } = await resolveInitModels(providerInfo, deps, existing);
+  const { model, smallModel, zenAvailable } = await resolveInitModels(providerInfo, deps, existing);
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
   }).blocking;
   // Cross-scope audit: opencode resolves config from the run's cwd upward, so a
   // project ./opencode.json overrides the global one. Writing --global while a
   // project file exists means THAT file (its small_model / bash policy) governs
-  // runs — audit it too, or init reports clean while runs misbehave.
+  // runs — audit it too, or init reports clean while runs misbehave. Its
+  // small_model belongs to a DIFFERENT scope, so we check catalogue presence +
+  // provider/plan compat (zenAvailable), NOT exact equality with the global
+  // resolvedSmall — a valid in-catalogue project small_model that merely differs
+  // from the global default is fine.
   if (resolvedScope === 'global') {
     const projectCfg = opencodeConfigPath('local');
     if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
       const otherAudit = auditExistingConfig(projectCfg, providerInfo, {
         note: '(project scope — higher precedence than the global config, so it governs runs)',
         allowUnsafeBash,
-        resolvedSmall: smallModel,
+        zenAvailable,
       });
       blocking = blocking || otherAudit.blocking;
     }
@@ -1311,12 +1325,13 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
       ),
     );
   } else if (small && opts.resolvedSmall && small !== opts.resolvedSmall) {
-    // Same provider/plan, but the file's small_model is NOT the one init just
-    // resolved — e.g. a previous init's opencode/hy3-free that the live Zen
-    // catalogue no longer lists, so resolveInitModels dropped it in favour of an
-    // available model. opencode reads small_model from THIS file (triss has no
-    // run-time small-model flag), so the stale/gone model keeps being used and
-    // the new pin is cosmetic. Blocking — no-clobber won't fix it silently.
+    // OWN-SCOPE ONLY (opts.resolvedSmall is the value init resolved for THIS
+    // scope). Same provider/plan, but the file's small_model isn't the resolved
+    // one — e.g. a previous init's opencode/hy3-free that the live Zen catalogue
+    // no longer lists, so resolveInitModels dropped it in favour of an available
+    // model. opencode reads small_model from THIS file (triss has no run-time
+    // small-model flag), so the stale/gone model keeps being used and the new
+    // pin is cosmetic. Blocking — no-clobber won't fix it silently.
     blocking = true;
     process.stderr.write(
       pc.yellow(
@@ -1324,6 +1339,27 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
           '(the old one is no longer selected — likely dropped from the OpenCode Zen catalogue). opencode ' +
           'reads small_model from this file and triss cannot override it at run time, so runs keep using ' +
           `the stale model. Set small_model="${opts.resolvedSmall}", or delete opencode.json and re-run init.\n`,
+      ),
+    );
+  } else if (
+    small &&
+    opts.zenAvailable &&
+    coderModelCredential(small).env === 'OPENCODE_API_KEY' &&
+    !opts.zenAvailable.has(providerModelId(small))
+  ) {
+    // CROSS-SCOPE (opts.zenAvailable is the live Zen catalogue). A DIFFERENT
+    // scope's file is being audited, so exact equality with the scope-under-
+    // config's resolvedSmall is meaningless — a valid in-catalogue small_model
+    // that merely differs from this init's default is fine. What DOES break a
+    // run is a Zen small_model the catalogue no longer lists (opencode reads it
+    // from this higher-precedence file and triss can't override it). Block that.
+    blocking = true;
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${where} sets small_model="${small}", which the live OpenCode Zen catalogue no longer lists ` +
+          '(free models are temporary). opencode reads small_model from this file and triss cannot override ' +
+          'it at run time, so runs will fail. Update small_model to a listed model, or delete opencode.json ' +
+          'and re-run init.\n',
       ),
     );
   }
