@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.2] — 2026-07-15
+
+### Changed
+
+- Bumped the pinned `@phpcraftdream/crush` version for the `triss coder` crush
+  engine from `0.1.3` to `0.1.6` (`CRUSH_PIN_DEFAULT`). Override with
+  `TRISS_CODER_CRUSH_VERSION` as before. Re-verified live against `0.1.6`
+  (clean `crush version v0.1.6`, single JSON envelope, `ZHIPU_API_KEY`→`ZAI_API_KEY`
+  env bridge, `--restrict-run` CLI-flag allowlist enforcement, and disposable
+  worktree isolation all unchanged). Updated the default across `.env.example`,
+  `docs/configuration.md`, `docs/glm-clients.md`, and the CLAUDE/Codex templates.
+  `detect()` still tolerates older binaries non-fatally (a below-pin version
+  prints a yellow warning but runs).
+
 ## [0.24.1] — 2026-07-10
 
 ### Changed

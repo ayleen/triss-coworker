@@ -225,7 +225,7 @@ provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
 `TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.18`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.3`), `TRISS_CODER_CRUSH_RESTRICT`
+(crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT`
 (crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on

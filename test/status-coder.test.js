@@ -125,10 +125,10 @@ test(
     );
     // crush ≥0.1.3 reports a clean semver and detect() parses the numeric
     // core, so the dirty dev string surfaces as the bare `0.0.0` — below the
-    // 0.1.3 pin, so it's flagged yellow with the pin (mirrors opencode's
+    // pin, so it's flagged yellow with the pin (mirrors opencode's
     // below-pin label). The raw +dirty marker no longer appears in the label.
     assert.match(out, /crush\s+0\.0\.0/);
-    assert.match(out, /pin: 0\.1\.3/);
+    assert.match(out, /pin: 0\.1\.6/);
     assert.match(out, /crush\.json \[global\]/);
     assert.match(out, /crush\.json \[local\]/);
   }),

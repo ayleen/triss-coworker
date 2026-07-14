@@ -13,11 +13,14 @@
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 
-// Pin the npm package version. crush ≥0.1.3 reports a clean `crush version
-// v0.1.3` (docs/crush-issues.md "[High] Version string does not match the
-// release" — resolved in 0.1.3), so detect() now parses the semver and
-// compares against this pin. The pin still also drives installHint().
-const CRUSH_PIN_DEFAULT = '0.1.3';
+// Pin the npm package version. The semver-parse fix landed in 0.1.3 (crush
+// ≥0.1.3 reports a clean `crush version vX.Y.Z` — docs/crush-issues.md "[High]
+// Version string does not match the release"), so detect() parses the semver
+// and compares against this pin (installed >= pin). The pin tracks the latest
+// version verified live against the triss adapter (envelope shape, ZHIPU→ZAI
+// env bridge, --restrict-run CLI-flag enforcement, worktree isolation — all
+// re-verified on 0.1.6, 2026-07-15). The pin also drives installHint().
+const CRUSH_PIN_DEFAULT = '0.1.6';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
 // and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>
