@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { readStdin } from '../secrets.js';
@@ -13,7 +13,16 @@ const SYSTEM_PROMPT =
   'under 800 words unless asked otherwise.';
 
 export async function runAsk(opts) {
-  const { paths, urls, stdin, question, maxTokens, model: modelInput, system } = opts;
+  const {
+    paths,
+    urls,
+    stdin,
+    question,
+    maxTokens,
+    model: modelInput,
+    provider: providerInput,
+    system,
+  } = opts;
   if (!question) throw new Error('--question is required');
   if (!paths?.length && !urls?.length && !stdin) {
     throw new Error('Pass at least one of --paths, --urls, or --stdin');
@@ -24,7 +33,8 @@ export async function runAsk(opts) {
     );
   }
 
-  const model = resolveModel(modelInput);
+  const request = resolveModelRequest({ provider: providerInput, model: modelInput });
+  const { provider, model, baseUrl } = request;
 
   let corpus = '';
   let fileCount = 0;
@@ -61,7 +71,9 @@ export async function runAsk(opts) {
   }
 
   process.stderr.write(
-    pc.dim(`[triss/ask] model=${model} sources=${fileCount} bytes=${totalBytes}\n`),
+    pc.dim(
+      `[triss/ask] provider=${provider} model=${model} sources=${fileCount} bytes=${totalBytes}\n`,
+    ),
   );
 
   const messages = [
@@ -74,12 +86,14 @@ export async function runAsk(opts) {
   const resp = useStream
     ? await chatStream({
         model,
+        provider,
+        baseUrl,
         maxTokens,
         messages,
         label: 'triss/ask',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await chat({ model, maxTokens, messages, label: 'triss/ask' });
+    : await chat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/ask' });
 
   const answer = resp.choices?.[0]?.message?.content;
   if (!answer) {

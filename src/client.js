@@ -1,12 +1,20 @@
 import OpenAI from 'openai';
-import { getConfig, requireApiKey } from './config.js';
+import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
 import { logUsage } from './usage.js';
 import { currentCall } from './call-context.js';
+
+const DEFAULT_GLM_BASE_URL = 'https://api.z.ai/api/coding/paas/v4';
 
 // Recreate the OpenAI client per call so a long-lived MCP server picks
 // up `triss config set TRISS_WORKER_API_KEY` changes mid-session. Constructing
 // the client is microseconds — no observable overhead next to a model RTT.
-export function getClient() {
+export function getClient({ provider = 'worker', baseUrl } = {}) {
+  if (provider === 'glm') {
+    return new OpenAI({
+      apiKey: requireGlmApiKey(),
+      baseURL: baseUrl || DEFAULT_GLM_BASE_URL,
+    });
+  }
   const cfg = requireApiKey(getConfig());
   return new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
 }
@@ -25,8 +33,8 @@ function recordUsage(resp, label) {
   });
 }
 
-export async function chat({ model, messages, maxTokens, temperature, label }) {
-  const client = getClient();
+export async function chat({ provider, baseUrl, model, messages, maxTokens, temperature, label }) {
+  const client = getClient({ provider, baseUrl });
   try {
     const resp = await client.chat.completions.create({
       model,
@@ -40,11 +48,12 @@ export async function chat({ model, messages, maxTokens, temperature, label }) {
     const status = err?.status || err?.response?.status;
     const body = err?.error?.message || err?.message || String(err);
     if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
+      const hint = provider === 'glm'
+        ? '→ Pass --provider glm --model glm-5.2 (or zai/<model> for a pay-as-you-go key).\n'
+        : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n' +
+          '→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n';
       throw new Error(
-        `Model "${model}" not accepted by the provider.\n` +
-          `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n` +
-          `→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n` +
-          `Original error: ${body}`,
+        `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
         { cause: err },
       );
     }
@@ -63,8 +72,17 @@ export function reportUsage(resp, label = 'worker') {
 // from the final chunk (requires stream_options.include_usage). Returns
 // the full assembled text and the OpenAI-style response shape so callers
 // can reuse reportUsage().
-export async function chatStream({ model, messages, maxTokens, temperature, label, onChunk }) {
-  const client = getClient();
+export async function chatStream({
+  provider,
+  baseUrl,
+  model,
+  messages,
+  maxTokens,
+  temperature,
+  label,
+  onChunk,
+}) {
+  const client = getClient({ provider, baseUrl });
   let stream;
   try {
     stream = await client.chat.completions.create({
@@ -79,10 +97,11 @@ export async function chatStream({ model, messages, maxTokens, temperature, labe
     const status = err?.status || err?.response?.status;
     const body = err?.error?.message || err?.message || String(err);
     if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
+      const hint = provider === 'glm'
+        ? '→ Pass --provider glm --model glm-5.2 (or zai/<model> for a pay-as-you-go key).\n'
+        : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL.\n';
       throw new Error(
-        `Model "${model}" not accepted by the provider.\n` +
-          `→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL.\n` +
-          `Original error: ${body}`,
+        `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
         { cause: err },
       );
     }

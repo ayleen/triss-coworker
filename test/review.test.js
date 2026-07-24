@@ -273,3 +273,44 @@ test('REV-01: gitDiff returns non-empty diff after adding a commit', async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('REV-06: MCP review core forwards the selected inference provider', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/provider-routing']);
+    addChange(dir, 'provider.js', 'export const provider = "glm";\n');
+    process.chdir(dir);
+
+    let captured;
+    const { runReviewCore } = await import('../src/mcp/review-core.js');
+    const result = await runReviewCore({
+      base: 'main',
+      skipIssue: true,
+      provider: 'glm',
+      model: 'pro',
+      maxTokens: 1234,
+      reviewSystem: 'Review.',
+      callModel: async (request) => {
+        captured = request;
+        return 'reviewed';
+      },
+    });
+
+    assert.equal(result, 'reviewed');
+    assert.equal(captured.provider, 'glm');
+    assert.equal(captured.model, 'pro');
+    assert.equal(captured.maxTokens, 1234);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

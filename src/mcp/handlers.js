@@ -1,8 +1,8 @@
 // MCP tool handlers — thin wrappers that return text instead of printing
 // to stdout. Each handler keeps its scope small and is testable on its own.
 
-import { chat as deepseekChat, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { chat as workerChat, reportUsage } from '../client.js';
+import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
@@ -21,9 +21,10 @@ const REVIEW_SYSTEM = `You are a senior code reviewer. Identify bugs,
 regressions, security issues, missing tests, and edge cases. Quote
 file:line citations. One bullet per issue, no diff summary.`;
 
-async function callModel({ model, messages, maxTokens = 4096 }) {
-  const resp = await deepseekChat({
-    model: resolveModel(model),
+async function callModel({ provider, model, messages, maxTokens = 4096 }) {
+  const request = resolveModelRequest({ provider, model });
+  const resp = await workerChat({
+    ...request,
     messages,
     maxTokens,
   });
@@ -42,7 +43,7 @@ export async function chatHandler({ prompt, system, model, max_tokens }) {
   return callModel({ model, messages, maxTokens: max_tokens });
 }
 
-export async function askHandler({ paths, urls, question, model, max_tokens, system }) {
+export async function askHandler({ paths, urls, question, provider, model, max_tokens, system }) {
   if (!question) throw new Error('question is required');
   if (!paths?.length && !urls?.length) {
     throw new Error('Pass at least one of paths or urls');
@@ -61,6 +62,7 @@ export async function askHandler({ paths, urls, question, model, max_tokens, sys
     }
   }
   return callModel({
+    provider,
     model,
     maxTokens: max_tokens || 8192,
     messages: [
@@ -91,7 +93,15 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
   });
 }
 
-export async function reviewHandler({ pr, base, skip_issue, question, model, max_tokens }) {
+export async function reviewHandler({
+  pr,
+  base,
+  skip_issue,
+  question,
+  provider,
+  model,
+  max_tokens,
+}) {
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
   return runReviewCore({
@@ -99,6 +109,7 @@ export async function reviewHandler({ pr, base, skip_issue, question, model, max
     base,
     skipIssue: skip_issue,
     question,
+    provider,
     model: model || 'pro',
     maxTokens: max_tokens || 8192,
     reviewSystem: REVIEW_SYSTEM,

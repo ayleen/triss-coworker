@@ -48,3 +48,15 @@ export function requireApiKey(cfg = getConfig()) {
   }
   return cfg;
 }
+
+export function requireGlmApiKey() {
+  loadEnvFiles();
+  const apiKey = process.env.ZHIPU_API_KEY || '';
+  if (!apiKey) {
+    throw new Error(
+      'No GLM API key found.\n' +
+        'Run `triss config set ZHIPU_API_KEY` to set one, or export ZHIPU_API_KEY.',
+    );
+  }
+  return apiKey;
+}

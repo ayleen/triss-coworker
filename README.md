@@ -288,6 +288,10 @@ triss ask --paths src/auth.ts src/db.ts \
 triss ask --paths "src/**/*.ts" \
           --question "Find SQL injection risks" \
           --model pro --max-tokens 16384
+
+triss ask --paths "src/**/*.ts" \
+          --question "Find SQL injection risks" \
+          --provider glm --model pro
 ```
 
 Typical output is a focused answer with cited file paths, not a raw file dump.
@@ -391,6 +395,7 @@ triss review                 # current branch vs auto-detected base
 triss review 123             # GitHub PR #123 (requires `gh` CLI)
 triss review --base develop  # explicit base
 triss review --skip-issue    # don't try ticket lookup
+triss review --provider glm  # same review flow, one-shot GLM inference
 ```
 
 Defaults to the `pro` preset because review needs reasoning. Output is
@@ -581,6 +586,22 @@ different provider, override the names without touching code. Triss only
 requires an OpenAI-compatible chat-completions endpoint.
 
 You can also pass any model id directly: `--model deepseek-v4-pro`.
+
+`ask` and `review` can route the same one-shot request to GLM without invoking
+the agentic `coder` runtime:
+
+```bash
+triss ask --paths ... --question "..." --provider glm --model flash
+triss review --provider glm --model pro
+triss review --provider glm --model zai/glm-5.2  # pay-as-you-go endpoint
+```
+
+For GLM, `flash` maps to `glm-5-turbo` and `pro` to `glm-5.2`.
+`ZHIPU_API_KEY` is reused. Prefix an explicit model with `zai-coding-plan/`
+or `zai/` to select the subscription or pay-as-you-go endpoint; otherwise
+Triss inherits the prefix from `TRISS_CODER_MODEL` and falls back to the
+coding-plan endpoint. `triss coder` stays separate because it is an agent
+runtime with tools, sessions, and worktree isolation.
 
 ### Provider recipes
 

@@ -161,10 +161,10 @@ function versionSh(stdout) {
   };
 }
 
-test('detectCrush: clean `crush version v0.1.6` (== pin) -> found true, version "0.1.6" (bare), satisfiesPin true', () => {
-  const det = detectCrush(versionSh('crush version v0.1.6\n'));
+test('detectCrush: clean `crush version v0.1.7` (== pin) -> found true, version "0.1.7" (bare), satisfiesPin true', () => {
+  const det = detectCrush(versionSh('crush version v0.1.7\n'));
   assert.equal(det.found, true);
-  assert.equal(det.version, '0.1.6');
+  assert.equal(det.version, '0.1.7');
   assert.equal(det.satisfiesPin, true);
 });
 
@@ -713,7 +713,7 @@ function crushWritingModelsSh() {
   const sh = (cmd, argv) => {
     calls.push({ cmd, argv });
     if (cmd === 'crush' && argv[0] === '--version') {
-      return { status: 0, stdout: 'crush version v0.1.6\n', stderr: '', error: null };
+      return { status: 0, stdout: 'crush version v0.1.7\n', stderr: '', error: null };
     }
     if (cmd === 'crush' && argv[0] === 'models' && argv[1] === 'use') {
       const scopeFlag = argv[argv.length - 1];
