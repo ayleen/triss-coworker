@@ -66,11 +66,12 @@ program
 
 program
   .command('ask')
-  .description('Delegate bulk reading (files, URLs, and/or piped stdin) to DeepSeek; returns a structured summary')
+  .description('Delegate bulk reading to the configured worker or GLM; returns a structured summary')
   .option('-p, --paths <paths...>', 'files or globs to read')
   .option('-u, --urls <urls...>', 'http(s) URLs to fetch and convert to markdown')
   .option('--stdin', 'read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)')
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
+  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), or glm')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
   .option('--system <text>', 'override the system prompt')
@@ -128,10 +129,11 @@ program
 
 program
   .command('review [pr]')
-  .description('Code review via DeepSeek. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
+  .description('Code review via the configured worker or GLM. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
   .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
   .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
   .option('-q, --question <text>', 'override the default review question')
+  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), or glm')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
   .option('--no-stream', 'disable streaming output')

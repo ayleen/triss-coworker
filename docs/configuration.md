@@ -241,17 +241,17 @@ self-hosted endpoints).
 | `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
 
-### Coder (GLM coding agent)
+### GLM and coder
 
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
-| `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for GLM models — <https://z.ai/manage-apikey/apikey-list> |
+| `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
 | `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.18`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
-| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.7`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
@@ -264,6 +264,13 @@ exists, `init` still runs detection and warns (without touching the
 file) when the existing `model` prefix doesn't match what the key
 verified against — that mismatch is what makes opencode retry a model
 call it can never complete.
+
+`triss ask` and `triss review` can use the same key without spawning a coding
+agent: pass `--provider glm`. Their `flash`/`pro` presets map to
+`glm-5-turbo`/`glm-5.2`. A provider-prefixed model selects the endpoint
+explicitly (`zai-coding-plan/glm-5.2` for a subscription key,
+`zai/glm-5.2` for pay-as-you-go); a bare model id inherits the prefix from
+`TRISS_CODER_MODEL`, then falls back to `zai-coding-plan`.
 
 ¹ **Credentials are provider-specific.** A run needs the one key its
 resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need

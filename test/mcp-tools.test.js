@@ -115,6 +115,18 @@ test('toMcpToolList strips handler functions', async () => {
   }
 });
 
+test('ask and review MCP tools expose worker/deepseek/glm provider routing', async () => {
+  const tools = await listTools();
+  for (const name of ['triss_ask', 'triss_review']) {
+    const tool = tools.find((entry) => entry.name === name);
+    assert.deepEqual(tool.inputSchema.properties.provider.enum, [
+      'worker',
+      'deepseek',
+      'glm',
+    ]);
+  }
+});
+
 test('listTools loads project-local .triss.env so per-project credentials work', async () => {
   // Regression test: previously listTools read process.env without first
   // loading .env files, so a .triss.env with ATLASSIAN_* in the cwd was

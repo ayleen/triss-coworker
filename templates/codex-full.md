@@ -35,6 +35,9 @@ reference. Do **not** delegate:
 Default preset is `flash` (cheap). Use `--model pro` for harder analysis
 or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
+For one-shot GLM analysis, use `triss ask ... --provider glm` or
+`triss review --provider glm`; `--model flash|pro` maps to
+`glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
 
 ## `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
 
@@ -82,7 +85,7 @@ Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
 `zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
 `1.17.18`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
+(crush pin override, default `0.1.7`), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
 set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on

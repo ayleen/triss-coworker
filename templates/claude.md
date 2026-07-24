@@ -22,6 +22,9 @@ default opencode engine enforces a working deny-first bash allowlist; crush
 CLI-flag allowlist on top. The opencode engine can also run OpenCode Zen
 models (e.g. the free `--model opencode/hy3-free`, set `OPENCODE_API_KEY`)
 instead of Z.AI GLM.
+For one-shot analysis through the standard tools, pass `provider: "glm"` to
+`triss_ask` or `triss_review` (CLI: `--provider glm`). Keep `triss coder` for
+tool-using, sessionful coding runs.
 See `triss agent-help` for flags and the envelope it returns.
 
 For the full reference (examples, model presets, tracker integrations like

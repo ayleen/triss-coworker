@@ -135,6 +135,9 @@ triss fetch https://api-docs.example.com/changelog
 - `--model flash` (default) — cheap, fast, good for bulk reads.
 - `--model pro` — pricier, smarter, use for harder analysis or generation.
 - `--model <full-name>` — pin to any model id (e.g. `deepseek-v4-flash`).
+- `triss ask ... --provider glm` / `triss review --provider glm` — one-shot
+  GLM analysis with the same commands; `flash|pro` maps to
+  `glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
 
 Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 `TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
@@ -225,7 +228,7 @@ provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
 `TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.18`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT`
+(crush pin override, default `0.1.7`), `TRISS_CODER_CRUSH_RESTRICT`
 (crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on

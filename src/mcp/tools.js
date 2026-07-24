@@ -89,6 +89,11 @@ const CORE_TOOLS = [
         paths: { type: 'array', items: { type: 'string' }, description: 'File paths or globs' },
         urls: { type: 'array', items: { type: 'string' }, description: 'http(s) URLs' },
         question: { type: 'string', description: 'Specific question to answer' },
+        provider: {
+          type: 'string',
+          enum: ['worker', 'deepseek', 'glm'],
+          description: 'Inference provider (default: worker; deepseek is an alias)',
+        },
         model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'number' },
         system: { type: 'string', description: 'Optional system prompt override' },
@@ -118,7 +123,7 @@ const CORE_TOOLS = [
   {
     name: 'triss_review',
     description:
-      'Code review via DeepSeek. Without `pr` reviews the current branch vs ' +
+      'Code review via the worker model or GLM. Without `pr` reviews the current branch vs ' +
       'auto-detected base; with `pr` uses GitHub CLI. Auto-detects Jira/' +
       'Linear ticket keys in branch/PR title. Defaults to the pro preset.',
     inputSchema: {
@@ -128,6 +133,11 @@ const CORE_TOOLS = [
         base: { type: 'string', description: 'Base branch (default: auto-detect)' },
         skip_issue: { type: 'boolean', description: 'Skip linked-ticket lookup' },
         question: { type: 'string', description: 'Override the review question' },
+        provider: {
+          type: 'string',
+          enum: ['worker', 'deepseek', 'glm'],
+          description: 'Inference provider (default: worker; deepseek is an alias)',
+        },
         model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'number' },
       },

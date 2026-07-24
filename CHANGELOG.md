@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `triss ask` and `triss review` now accept `--provider glm` (also available
+  as the `provider` field on `triss_ask` / `triss_review` MCP tools). They reuse
+  `ZHIPU_API_KEY` for direct OpenAI-compatible chat completions, while the
+  existing `worker` provider remains the default and `deepseek` is an alias.
+  `--model flash|pro` maps to `glm-5-turbo|glm-5.2`; explicit
+  `zai-coding-plan/<model>` / `zai/<model>` prefixes select the subscription or
+  pay-as-you-go endpoint. `triss coder` remains the separate agentic path.
+
+### Changed
+
+- Bumped the `@phpcraftdream/crush` default pin from `0.1.6` to `0.1.7`.
+  The 0.1.7 package metadata is prepared on `PHPCraftdream/crush` main; live
+  npm install verification remains gated on publication of that version.
+
 ## [0.24.2] — 2026-07-15
 
 ### Changed

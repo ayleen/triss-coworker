@@ -19,8 +19,10 @@ import { spawnSync as nodeSpawnSync } from 'node:child_process';
 // and compares against this pin (installed >= pin). The pin tracks the latest
 // version verified live against the triss adapter (envelope shape, ZHIPU→ZAI
 // env bridge, --restrict-run CLI-flag enforcement, worktree isolation — all
-// re-verified on 0.1.6, 2026-07-15). The pin also drives installHint().
-const CRUSH_PIN_DEFAULT = '0.1.6';
+// verified on 0.1.6; 0.1.7 carries the next upstream-triage batch and is the
+// package version prepared on PHPCraftdream/crush main. The pin also drives
+// installHint().
+const CRUSH_PIN_DEFAULT = '0.1.7';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
 // and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>

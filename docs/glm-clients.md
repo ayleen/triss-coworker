@@ -48,7 +48,7 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3).
 | | **opencode** (engine #1, default) | **crush** (engine #2) |
 |---|---|---|
 | Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
-| npm package | `opencode-ai` (pinned `1.17.18`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
+| npm package | `opencode-ai` (pinned `1.17.18`) | `@phpcraftdream/crush` (pinned `0.1.7`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
 | Key it reads | `ZHIPU_API_KEY` (native); `OPENCODE_API_KEY` for `opencode/…` Zen models | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
 | Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`) **and** OpenCode Zen (`opencode/…`, e.g. `opencode/hy3-free`) | Z.AI GLM only |
@@ -280,7 +280,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
 | `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.17.18`). |
-| `TRISS_CODER_CRUSH_VERSION` | no | Pin a different `@phpcraftdream/crush` version (default `0.1.6`). |
+| `TRISS_CODER_CRUSH_VERSION` | no | Pin a different `@phpcraftdream/crush` version (default `0.1.7`). |
 | `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 
 All are documented in `.env.example`; this table is the authoritative

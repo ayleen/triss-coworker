@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { resolveModelRequest } from '../models.js';
 import { shouldStream } from './chat.js';
 import {
   currentBranch,
@@ -33,7 +33,11 @@ const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
 
 export async function runReview(prNumber, opts) {
-  const model = resolveModel(opts.model || 'pro');
+  const request = resolveModelRequest({
+    provider: opts.provider,
+    model: opts.model || 'pro',
+  });
+  const { provider, model, baseUrl } = request;
 
   let title;
   let description = '';
@@ -94,7 +98,10 @@ export async function runReview(prNumber, opts) {
   const corpus = sections.join('\n\n');
 
   process.stderr.write(
-    pc.dim(`[triss/review] model=${model} bytes=${corpus.length} base=${baseRef} head=${headRef}\n`),
+    pc.dim(
+      `[triss/review] provider=${provider} model=${model} bytes=${corpus.length} ` +
+        `base=${baseRef} head=${headRef}\n`,
+    ),
   );
 
   const messages = [
@@ -107,12 +114,14 @@ export async function runReview(prNumber, opts) {
   const resp = useStream
     ? await chatStream({
         model,
+        provider,
+        baseUrl,
         maxTokens,
         messages,
         label: 'triss/review',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await chat({ model, maxTokens, messages, label: 'triss/review' });
+    : await chat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/review' });
 
   const out = resp.choices?.[0]?.message?.content;
   if (!out) {

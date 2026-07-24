@@ -19,6 +19,7 @@ export async function runReviewCore({
   base,
   skipIssue,
   question,
+  provider,
   model,
   maxTokens,
   reviewSystem,
@@ -79,6 +80,7 @@ export async function runReviewCore({
   ].filter(Boolean);
 
   return callModel({
+    provider,
     model,
     maxTokens,
     messages: [

@@ -44,6 +44,9 @@ reference. Do **not** delegate:
 Default preset is `flash` (cheap). Use `--model pro` for harder analysis
 or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
+For one-shot GLM analysis, use `triss ask ... --provider glm` or
+`triss review --provider glm`; `--model flash|pro` maps to
+`glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
 
 ## Tracker integrations
 
