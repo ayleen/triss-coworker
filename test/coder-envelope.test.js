@@ -358,7 +358,7 @@ test(
 );
 
 test(
-  'runCoderRun: usage.js DEFAULT_PRICES has zai-coding-plan entries at $0 so logUsage never guesses a real cost',
+  'runCoderRun: usage.js treats any zai-coding-plan model as known plan-metered usage',
   withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG_CWD: '0' }, async () => {
     const { estimateCost } = await import('../src/usage.js');
     const cost = estimateCost({

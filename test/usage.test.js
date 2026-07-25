@@ -38,6 +38,23 @@ test('estimateCost distinguishes the known free coding-plan endpoint from unknow
   assert.equal(estimateCost({ ...usage, model: 'zai/glm-5.2' }), null);
 });
 
+test('all coding-plan model ids are known free unless an explicit price override is set', () => {
+  const model = 'zai-coding-plan/glm-5.1';
+  const envKey = 'TRISS_PRICE_ZAI_CODING_PLAN_GLM_5_1';
+  const before = process.env[envKey];
+  const usage = { model, prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
+  try {
+    delete process.env[envKey];
+    assert.equal(estimateCost(usage), 0);
+
+    process.env[envKey] = '0.000001,0.0000001,0.000005';
+    assert.ok(Math.abs(estimateCost(usage) - 0.0015) < 1e-9);
+  } finally {
+    if (before === undefined) delete process.env[envKey];
+    else process.env[envKey] = before;
+  }
+});
+
 test('estimateCost honours TRISS_PRICE_<MODEL> env override', () => {
   const before = process.env.TRISS_PRICE_FAKE_MODEL;
   process.env.TRISS_PRICE_FAKE_MODEL = '0.000001,0.0000001,0.000005';

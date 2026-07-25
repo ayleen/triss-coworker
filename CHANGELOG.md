@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown. Existing log entries are not rewritten: older bare GLM model ids and
   their previously recorded numeric costs remain unchanged.
 
+### Fixed
+
+- Long-lived MCP processes now refresh file-backed `TRISS_CODER_MODEL` and
+  `ZHIPU_API_KEY` values between calls, including edits and removals, while
+  preserving the precedence of values supplied by the parent environment.
+- Every model routed through the `zai-coding-plan/` subscription endpoint is
+  treated as known plan-metered usage instead of requiring a hardcoded model
+  allowlist. Explicit `TRISS_PRICE_<MODEL>` overrides still take precedence.
+
 ## [0.24.2] — 2026-07-15
 
 ### Changed
