@@ -36,6 +36,14 @@ export function maybeRotate(file) {
   }
 }
 
+// Coding Plan calls are metered by the subscription rather than billed per
+// token. PAYG `zai/...` prices remain unknown unless explicitly configured.
+const CODING_PLAN_PRICE = {
+  input_cache_miss: 0,
+  input_cache_hit: 0,
+  output: 0,
+};
+
 // DeepSeek list prices as of 2026-07-03, USD per token. Override via env
 // if pricing changes or you point Triss at a different provider.
 const DEFAULT_PRICES = {
@@ -49,20 +57,6 @@ const DEFAULT_PRICES = {
     input_cache_hit: 0.003625e-6,
     output: 0.87e-6,
   },
-  // `zai-coding-plan` subscription models used by direct GLM calls and
-  // `triss coder run` are metered by the plan rather than billed per token;
-  // Phase 0 recon reported cost:0. PAYG `zai/...` prices are intentionally
-  // absent: look up current prices at https://docs.z.ai — do not guess.
-  'zai-coding-plan/glm-5.2': {
-    input_cache_miss: 0,
-    input_cache_hit: 0,
-    output: 0,
-  },
-  'zai-coding-plan/glm-5-turbo': {
-    input_cache_miss: 0,
-    input_cache_hit: 0,
-    output: 0,
-  },
 };
 
 function priceFor(model) {
@@ -75,6 +69,10 @@ function priceFor(model) {
       return { input_cache_miss: miss, input_cache_hit: hit, output: out };
     }
   }
+  // Subscription use is metered by the plan, regardless of the particular
+  // GLM model id. Keep this after the override so a user can explicitly
+  // account for a plan model if their contract changes.
+  if (String(model).startsWith('zai-coding-plan/')) return CODING_PLAN_PRICE;
   return DEFAULT_PRICES[model] || null;
 }
 
