@@ -194,15 +194,24 @@ restarting Claude Code.
 The set of MCP tools is **filtered by which integrations are configured**.
 Run `triss status` to see readiness.
 
-Always exposed (require only `TRISS_WORKER_API_KEY`):
+Core tools are always listed. Model calls default to the worker and require
+`TRISS_WORKER_API_KEY`:
 
 - `triss_chat` — bare prompt to the worker model
-- `triss_ask` — read files/URLs and answer a question
+- `triss_ask` — read files/URLs and answer a question; accepts an optional
+  `provider` field: `worker` (default), `deepseek` (an alias for `worker`),
+  or `glm`
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
-- `triss_review` — code review on current branch or a GitHub PR
+- `triss_review` — code review on current branch or a GitHub PR; accepts the
+  same optional `provider` field as `triss_ask`
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness
+
+For `triss_ask` and `triss_review`, `provider: "glm"` requires
+`ZHIPU_API_KEY` rather than `TRISS_WORKER_API_KEY`. Their `flash` and `pro`
+presets select `glm-5-turbo` and `glm-5.2`; use `zai-coding-plan/<model>` for
+the subscription endpoint or `zai/<model>` for pay-as-you-go.
 
 Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
 (both Jira and Confluence reuse the same Atlassian credentials):
@@ -368,9 +377,10 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | triss mcp serve
 the `mcpServers` table in `~/.claude.json` is read at startup, so a
 fresh `triss mcp install` requires a session restart to take effect.
 
-**"Triss listed but tools/list is empty"** — `triss status` to check
-the API key. The MCP server connects regardless, but the model-using
-tools (`triss_chat`, `triss_ask`, …) need a working DeepSeek key.
+**"Triss listed but a model call fails"** — `triss status` to check the
+provider's API key. Core tools are always listed: their default `worker`
+route needs `TRISS_WORKER_API_KEY`, while `triss_ask` and `triss_review` with
+`provider: "glm"` need `ZHIPU_API_KEY`.
 
 **"Jira tools missing in this project"** — Triss couldn't find the
 ATLASSIAN_* triple. Either your global `~/.config/triss/.env` has them
@@ -411,6 +421,11 @@ Every MCP tool call gets its own `call_id` (UUIDv4) written to
 `~/.cache/triss/usage.jsonl` alongside the existing model/tokens/cost
 fields. Dashboards (e.g. tokentelemetry) can group records per
 invocation.
+
+GLM records keep their resolved endpoint prefix (`zai-coding-plan/` or
+`zai/`). Subscription calls therefore retain the known `$0` accounting;
+PAYG calls without `TRISS_PRICE_ZAI_<MODEL>` pricing are recorded with
+`cost_usd: null` and displayed by `triss usage` as `unknown`, not as free.
 
 To attribute all calls from one MCP server process to a single outer
 session, set `TRISS_PARENT_CALL_ID` in the server's `env` block — every

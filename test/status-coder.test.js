@@ -128,7 +128,7 @@ test(
     // pin, so it's flagged yellow with the pin (mirrors opencode's
     // below-pin label). The raw +dirty marker no longer appears in the label.
     assert.match(out, /crush\s+0\.0\.0/);
-    assert.match(out, /pin: 0\.1\.7/);
+    assert.match(out, /pin: 0\.1\.6/);
     assert.match(out, /crush\.json \[global\]/);
     assert.match(out, /crush\.json \[local\]/);
   }),

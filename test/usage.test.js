@@ -25,11 +25,17 @@ test('estimateCost applies the right per-token rates', () => {
   assert.ok(Math.abs(cost - 0.00014056) < 1e-9, `unexpected cost ${cost}`);
 });
 
-test('estimateCost returns 0 for unknown models (no crash)', () => {
+test('estimateCost returns null for unknown models instead of treating them as free', () => {
   assert.equal(
     estimateCost({ model: 'mystery-model', prompt_tokens: 100, cached_tokens: 0, completion_tokens: 50 }),
-    0,
+    null,
   );
+});
+
+test('estimateCost distinguishes the known free coding-plan endpoint from unknown PAYG pricing', () => {
+  const usage = { prompt_tokens: 643, cached_tokens: 0, completion_tokens: 53 };
+  assert.equal(estimateCost({ ...usage, model: 'zai-coding-plan/glm-5.2' }), 0);
+  assert.equal(estimateCost({ ...usage, model: 'zai/glm-5.2' }), null);
 });
 
 test('estimateCost honours TRISS_PRICE_<MODEL> env override', () => {
@@ -60,8 +66,27 @@ test('summarize aggregates totals and group buckets', () => {
   assert.equal(total.calls, 3);
   assert.equal(total.prompt_tokens, 1300);
   assert.ok(Math.abs(total.cost_usd - 0.00110) < 1e-9);
+  assert.ok(Math.abs(total.known_cost_usd - 0.00110) < 1e-9);
   assert.equal(groups.get('/a').calls, 2);
   assert.equal(groups.get('/b').calls, 1);
+  assert.equal(total.known_cost_calls, 3);
+  assert.equal(total.unknown_cost_calls, 0);
+});
+
+test('summarize keeps unknown costs out of known totals and records their presence', () => {
+  const records = [
+    { model: 'zai-coding-plan/glm-5.2', prompt_tokens: 100, cached_tokens: 0, completion_tokens: 50, cost_usd: 0, cwd: '/plan' },
+    { model: 'zai/glm-5.2', prompt_tokens: 200, cached_tokens: 0, completion_tokens: 75, cost_usd: null, cwd: '/payg' },
+  ];
+  const { total, groups } = summarize(records, { groupBy: 'cwd' });
+  assert.equal(total.cost_usd, null);
+  assert.equal(total.known_cost_usd, 0);
+  assert.equal(total.known_cost_calls, 1);
+  assert.equal(total.unknown_cost_calls, 1);
+  assert.equal(groups.get('/plan').unknown_cost_calls, 0);
+  assert.equal(groups.get('/payg').cost_usd, null);
+  assert.equal(groups.get('/payg').known_cost_usd, 0);
+  assert.equal(groups.get('/payg').unknown_cost_calls, 1);
 });
 
 test('parsePeriod parses common units', () => {

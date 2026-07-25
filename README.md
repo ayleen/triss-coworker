@@ -339,7 +339,7 @@ triss usage --json                   # raw log records
 triss usage --reset                  # clear the log
 ```
 
-Every worker call (CLI **and** MCP) appends one record to
+Every model call (CLI **and** MCP) appends one record to
 `~/.cache/triss/usage.jsonl` with model, tokens, cached tokens, computed
 USD cost, working directory, a label like `triss/ask`, and a per-invocation
 `call_id` (UUIDv4). An optional `parent_call_id` lets a host group several
@@ -347,9 +347,12 @@ Triss calls under a single outer session — set `TRISS_PARENT_CALL_ID` in
 the environment that launches Triss (e.g. in your MCP server's `env`
 block) and every record from that process carries it. External dashboards
 (e.g. tokentelemetry) can group by either field. List-price defaults for
-DeepSeek are baked in; override per-model with
-`TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token). Disable tracking
-entirely with `TRISS_USAGE_LOG=0`.
+DeepSeek are baked in. GLM records retain `zai-coding-plan/` or `zai/` so
+subscription usage stays known `$0` while unpriced PAYG usage is shown as
+`unknown`, never as free. Override per-model with
+`TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token), for example
+`TRISS_PRICE_ZAI_GLM_5_2=...`. Disable tracking entirely with
+`TRISS_USAGE_LOG=0`.
 
 ### Streaming output
 

@@ -90,6 +90,15 @@ test('GLM routing rejects unrelated provider-prefixed model ids', () => {
   );
 });
 
+test('GLM routing rejects empty zai model ids', () => {
+  for (const model of ['zai/', 'zai-coding-plan/']) {
+    assert.throws(
+      () => resolveModelRequest({ provider: 'glm', model }),
+      /GLM model id cannot be empty/,
+    );
+  }
+});
+
 test('getClient uses ZHIPU_API_KEY for the GLM provider', () => {
   withEnv({ ZHIPU_API_KEY: 'zk-test', TRISS_WORKER_API_KEY: undefined }, () => {
     const client = getClient({

@@ -15,13 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing `worker` provider remains the default and `deepseek` is an alias.
   `--model flash|pro` maps to `glm-5-turbo|glm-5.2`; explicit
   `zai-coding-plan/<model>` / `zai/<model>` prefixes select the subscription or
-  pay-as-you-go endpoint. `triss coder` remains the separate agentic path.
-
-### Changed
-
-- Bumped the `@phpcraftdream/crush` default pin from `0.1.6` to `0.1.7`.
-  The 0.1.7 package metadata is prepared on `PHPCraftdream/crush` main; live
-  npm install verification remains gated on publication of that version.
+  pay-as-you-go endpoint. Usage records retain that endpoint identity:
+  subscription calls remain known `$0`, while PAYG calls without a configured
+  price are reported as unknown instead of silently appearing free.
+  `triss coder` remains the separate agentic path.
 
 ## [0.24.2] — 2026-07-15
 

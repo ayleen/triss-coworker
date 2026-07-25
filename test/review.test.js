@@ -274,7 +274,7 @@ test('REV-01: gitDiff returns non-empty diff after adding a commit', async () =>
   }
 });
 
-test('REV-06: MCP review core forwards the selected inference provider', async () => {
+test('REV-06: MCP review core forwards the selected inference provider and model', async () => {
   const dir = makeTmpDir();
   const originalCwd = process.cwd();
 
@@ -296,7 +296,7 @@ test('REV-06: MCP review core forwards the selected inference provider', async (
       base: 'main',
       skipIssue: true,
       provider: 'glm',
-      model: 'pro',
+      model: 'zai/glm-5.2',
       maxTokens: 1234,
       reviewSystem: 'Review.',
       callModel: async (request) => {
@@ -307,7 +307,7 @@ test('REV-06: MCP review core forwards the selected inference provider', async (
 
     assert.equal(result, 'reviewed');
     assert.equal(captured.provider, 'glm');
-    assert.equal(captured.model, 'pro');
+    assert.equal(captured.model, 'zai/glm-5.2');
     assert.equal(captured.maxTokens, 1234);
   } finally {
     process.chdir(originalCwd);

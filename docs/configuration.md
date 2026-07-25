@@ -251,7 +251,7 @@ self-hosted endpoints).
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.18`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
-| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.7`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
@@ -344,7 +344,7 @@ are unaffected.
 | `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
 | `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
 | `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |
-| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. for promo or non-DeepSeek providers) |
+| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price report `unknown`, not `$0` |
 | `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
 | `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
 | `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
@@ -374,7 +374,10 @@ baked-in DeepSeek list prices (e.g. you point Triss at a different
 provider, or want the discounted rate), set
 `TRISS_PRICE_<MODEL>=<input_cache_miss>,<input_cache_hit>,<output>` in
 USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
-applies the 75% promotional pricing to the pro preset.
+applies the 75% promotional pricing to the pro preset. PAYG GLM calls use the
+canonical `zai/<model>` id, so `zai/glm-5.2` maps to
+`TRISS_PRICE_ZAI_GLM_5_2`; without that override their cost is explicitly
+unknown.
 
 **Claude Code integration step in the wizard** — split by mode:
 
