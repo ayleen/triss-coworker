@@ -12,6 +12,7 @@
 // member shape.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
 // Pin the npm package version. The semver-parse fix landed in 0.1.3 (crush
 // ≥0.1.3 reports a clean `crush version vX.Y.Z` — docs/crush-issues.md "[High]
@@ -252,7 +253,7 @@ export function crushDefaultModelsHint() {
     small: CRUSH_SMALL_ATOM,
     note:
       `Configure with \`crush models use ${CRUSH_LARGE_ATOM} ${CRUSH_SMALL_ATOM}\` (writes crush.json). ` +
-      'Provider: built-in zai (coding-plan endpoint, https://api.z.ai/api/coding/paas/v4).',
+      `Provider: built-in zai (coding-plan endpoint, ${ZAI_CODING_PLAN_BASE_URL}).`,
   };
 }
 

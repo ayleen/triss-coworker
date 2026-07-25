@@ -18,7 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pay-as-you-go endpoint. Usage records retain that endpoint identity:
   subscription calls remain known `$0`, while PAYG calls without a configured
   price are reported as unknown instead of silently appearing free.
-  `triss coder` remains the separate agentic path.
+  Provider selection is intentionally scoped to `ask` and `review`;
+  `chat`, `fetch`, `write`, and `commit-msg` keep their existing worker route,
+  while `triss coder` remains the separate agentic path.
+
+### Changed
+
+- Usage JSONL records keep `cost_usd` numeric for compatibility with existing
+  dashboards and add `cost_usd_known: false` when no model price is configured.
+  `triss usage` excludes those zeros from known totals and reports them as
+  unknown. Existing log entries are not rewritten: older bare GLM model ids and
+  their previously recorded numeric costs remain unchanged.
 
 ## [0.24.2] — 2026-07-15
 

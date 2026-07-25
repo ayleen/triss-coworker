@@ -423,9 +423,10 @@ fields. Dashboards (e.g. tokentelemetry) can group records per
 invocation.
 
 GLM records keep their resolved endpoint prefix (`zai-coding-plan/` or
-`zai/`). Subscription calls therefore retain the known `$0` accounting;
-PAYG calls without `TRISS_PRICE_ZAI_<MODEL>` pricing are recorded with
-`cost_usd: null` and displayed by `triss usage` as `unknown`, not as free.
+`zai/`). Subscription calls therefore retain the known `$0` accounting.
+PAYG calls without `TRISS_PRICE_ZAI_<MODEL>` pricing keep numeric
+`cost_usd: 0` for JSONL compatibility, add `cost_usd_known: false`, and are
+displayed by `triss usage` as `unknown`, not as free.
 
 To attribute all calls from one MCP server process to a single outer
 session, set `TRISS_PARENT_CALL_ID` in the server's `env` block — every

@@ -9,6 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -86,6 +87,39 @@ test('MCP-H-02c: askHandler forwards GLM provider and model to model resolution'
     }),
     /GLM model id cannot be empty/,
   );
+});
+
+test('MCP-H-02d: askHandler forwards the resolved GLM route to chat', async () => {
+  const { askHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-02d=${Date.now()}`
+  );
+  let resolutionInput;
+  let chatInput;
+
+  const result = await askHandler(
+    {
+      paths: ['package.json'],
+      question: 'What is this?',
+      provider: 'glm',
+      model: 'zai/glm-5.2',
+    },
+    {
+      resolveModelRequest(input) {
+        resolutionInput = input;
+        return { provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL };
+      },
+      async chat(input) {
+        chatInput = input;
+        return { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] };
+      },
+    },
+  );
+
+  assert.deepEqual(resolutionInput, { provider: 'glm', model: 'zai/glm-5.2' });
+  assert.equal(chatInput.provider, 'glm');
+  assert.equal(chatInput.model, 'glm-5.2');
+  assert.equal(chatInput.baseUrl, ZAI_PAYG_BASE_URL);
+  assert.match(result, /^ok/);
 });
 
 // ─── MCP-H-03: fetchHandler with/without question ───────────────────────────

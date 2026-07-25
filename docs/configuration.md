@@ -377,7 +377,9 @@ USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
 applies the 75% promotional pricing to the pro preset. PAYG GLM calls use the
 canonical `zai/<model>` id, so `zai/glm-5.2` maps to
 `TRISS_PRICE_ZAI_GLM_5_2`; without that override their cost is explicitly
-unknown.
+unknown. Usage JSONL keeps `cost_usd` numeric for compatibility and marks these
+records with `cost_usd_known: false`; existing historical records are not
+relabelled.
 
 **Claude Code integration step in the wizard** — split by mode:
 

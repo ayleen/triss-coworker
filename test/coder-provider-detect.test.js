@@ -19,9 +19,10 @@ import { join } from 'node:path';
 
 import { OPENCODE_PIN, detectZaiProvider, runCoderSetup, runCoderInit } from '../src/commands/coder.js';
 import { setVar } from '../src/secrets.js';
-
-const CODING_PLAN_BASE = 'https://api.z.ai/api/coding/paas/v4';
-const PAYG_BASE = 'https://api.z.ai/api/paas/v4';
+import {
+  ZAI_CODING_PLAN_BASE_URL as CODING_PLAN_BASE,
+  ZAI_PAYG_BASE_URL as PAYG_BASE,
+} from '../src/zai.js';
 
 function fakeSpawnAlreadyInstalled(cmd, args) {
   if (cmd === 'opencode' && args[0] === '--version') {

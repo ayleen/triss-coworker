@@ -21,9 +21,11 @@ const REVIEW_SYSTEM = `You are a senior code reviewer. Identify bugs,
 regressions, security issues, missing tests, and edge cases. Quote
 file:line citations. One bullet per issue, no diff summary.`;
 
-async function callModel({ provider, model, messages, maxTokens = 4096 }) {
-  const request = resolveModelRequest({ provider, model });
-  const resp = await workerChat({
+async function callModel({ provider, model, messages, maxTokens = 4096 }, deps = {}) {
+  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
+  const sendChat = deps.chat || workerChat;
+  const request = resolveRequest({ provider, model });
+  const resp = await sendChat({
     ...request,
     messages,
     maxTokens,
@@ -43,7 +45,10 @@ export async function chatHandler({ prompt, system, model, max_tokens }) {
   return callModel({ model, messages, maxTokens: max_tokens });
 }
 
-export async function askHandler({ paths, urls, question, provider, model, max_tokens, system }) {
+export async function askHandler(
+  { paths, urls, question, provider, model, max_tokens, system },
+  deps = {},
+) {
   if (!question) throw new Error('question is required');
   if (!paths?.length && !urls?.length) {
     throw new Error('Pass at least one of paths or urls');
@@ -61,16 +66,19 @@ export async function askHandler({ paths, urls, question, provider, model, max_t
         `<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`;
     }
   }
-  return callModel({
-    provider,
-    model,
-    maxTokens: max_tokens || 8192,
-    messages: [
-      { role: 'system', content: system || ASK_SYSTEM },
-      { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
-      { role: 'user', content: question },
-    ],
-  });
+  return callModel(
+    {
+      provider,
+      model,
+      maxTokens: max_tokens || 8192,
+      messages: [
+        { role: 'system', content: system || ASK_SYSTEM },
+        { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
+        { role: 'user', content: question },
+      ],
+    },
+    deps,
+  );
 }
 
 export async function fetchHandler({ urls, question, model, max_tokens }) {

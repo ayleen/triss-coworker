@@ -51,6 +51,10 @@ import { projectRoot } from '../safety.js';
 import { logUsage } from '../usage.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
+import {
+  ZAI_CODING_PLAN_BASE_URL,
+  ZAI_PAYG_BASE_URL,
+} from '../zai.js';
 // crush is the SECOND coding engine behind `--engine crush`. The adapter is
 // pure (detect/argv/env/parse/map); this module owns the engine-agnostic
 // orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
@@ -107,8 +111,6 @@ export function resolveCoderEngine(opts = {}) {
 // spec. So the cheapest *verifiable* probe is a real chat completion with
 // `max_tokens: 1`, tried against coding-plan first (the more common key
 // type observed in recon), falling back to pay-as-you-go.
-const ZAI_CODING_PLAN_BASE = 'https://api.z.ai/api/coding/paas/v4';
-const ZAI_PAYG_BASE = 'https://api.z.ai/api/paas/v4';
 const ZAI_PROBE_MODEL = 'glm-5-turbo';
 const ZAI_PROBE_TIMEOUT_MS = 10_000;
 
@@ -142,8 +144,8 @@ async function probeZaiBase(fetchImpl, base, key) {
 export async function detectZaiProvider(fetchImpl = globalThis.fetch) {
   const key = process.env.ZHIPU_API_KEY;
   if (!key) return null;
-  if (await probeZaiBase(fetchImpl, ZAI_CODING_PLAN_BASE, key)) return 'zai-coding-plan';
-  if (await probeZaiBase(fetchImpl, ZAI_PAYG_BASE, key)) return 'zai';
+  if (await probeZaiBase(fetchImpl, ZAI_CODING_PLAN_BASE_URL, key)) return 'zai-coding-plan';
+  if (await probeZaiBase(fetchImpl, ZAI_PAYG_BASE_URL, key)) return 'zai';
   return null;
 }
 

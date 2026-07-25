@@ -81,8 +81,8 @@ function priceFor(model) {
 export function estimateCost(record) {
   const p = priceFor(record.model);
   // A missing price is not a free call. Keep it distinct from the known
-  // $0 coding-plan prices so `triss usage` never reports unmetered models as
-  // a paid provider that happened to cost nothing.
+  // $0 coding-plan prices; logUsage preserves the numeric cost_usd schema
+  // and records this distinction separately as cost_usd_known.
   if (!p) return null;
   const cached = record.cached_tokens ?? 0;
   const fresh = Math.max(0, record.prompt_tokens - cached);
@@ -117,7 +117,11 @@ export function logUsage({
   // Per-project breakdown is opt-in via cwd; some users sync this log
   // across machines and prefer to omit absolute paths.
   if (process.env.TRISS_USAGE_LOG_CWD !== '0') record.cwd = process.cwd();
-  record.cost_usd = estimateCost(record);
+  const estimatedCost = estimateCost(record);
+  // Keep cost_usd numeric for existing JSONL consumers. New readers should
+  // inspect cost_usd_known before treating a zero as a known-free call.
+  record.cost_usd = estimatedCost ?? 0;
+  record.cost_usd_known = estimatedCost !== null;
   try {
     mkdirSync(dirname(USAGE_FILE), { recursive: true });
     maybeRotate(USAGE_FILE);
@@ -173,11 +177,13 @@ export function summarize(records, { groupBy } = {}) {
     unknown_cost_calls: 0,
   };
   const groups = new Map();
+  const hasKnownCost = (record) =>
+    record.cost_usd_known !== false && Number.isFinite(record.cost_usd);
   for (const r of records) {
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
-    if (Number.isFinite(r.cost_usd)) {
+    if (hasKnownCost(r)) {
       total.cost_usd += r.cost_usd;
       total.known_cost_usd += r.cost_usd;
       total.known_cost_calls++;
@@ -200,7 +206,7 @@ export function summarize(records, { groupBy } = {}) {
       g.prompt_tokens += r.prompt_tokens || 0;
       g.cached_tokens += r.cached_tokens || 0;
       g.completion_tokens += r.completion_tokens || 0;
-      if (Number.isFinite(r.cost_usd)) {
+      if (hasKnownCost(r)) {
         g.cost_usd += r.cost_usd;
         g.known_cost_usd += r.cost_usd;
         g.known_cost_calls++;
@@ -210,12 +216,7 @@ export function summarize(records, { groupBy } = {}) {
       groups.set(key, g);
     }
   }
-  // Keep the old numeric field for fully priced histories, but make a mixed
-  // or unpriced aggregate explicit. known_cost_usd remains the useful
-  // subtotal for renderers and integrations that choose to show it.
-  if (total.unknown_cost_calls) total.cost_usd = null;
-  for (const group of groups.values()) {
-    if (group.unknown_cost_calls) group.cost_usd = null;
-  }
+  // cost_usd remains a numeric subtotal for backward compatibility.
+  // unknown_cost_calls tells newer renderers that it is not a complete total.
   return { total, groups };
 }
