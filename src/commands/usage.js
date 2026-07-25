@@ -26,7 +26,6 @@ export async function runUsage(opts) {
   const groupBy = opts.byProject ? 'cwd' : opts.byModel ? 'model' : opts.byLabel ? 'label' : null;
   const { total, groups } = summarize(filtered, { groupBy });
 
-  const fmt = (n) => '$' + n.toFixed(4);
   const fmtTok = (n) => n.toLocaleString();
 
   process.stdout.write(
@@ -37,18 +36,20 @@ export async function runUsage(opts) {
   process.stdout.write(
     `  prompt:     ${fmtTok(total.prompt_tokens)} (${fmtTok(total.cached_tokens)} cached)\n` +
       `  completion: ${fmtTok(total.completion_tokens)}\n` +
-      `  cost:       ${pc.green(fmt(total.cost_usd))}\n`,
+      `  cost:       ${formatCost(total)}\n`,
   );
 
   if (groupBy && groups.size) {
     process.stdout.write('\n' + pc.bold(`By ${groupBy}:`) + '\n');
-    const sorted = [...groups.entries()].sort((a, b) => b[1].cost_usd - a[1].cost_usd);
+    const sorted = [...groups.entries()].sort(
+      (a, b) => (b[1].known_cost_usd ?? b[1].cost_usd ?? 0) - (a[1].known_cost_usd ?? a[1].cost_usd ?? 0),
+    );
     for (const [key, g] of sorted) {
       const shortKey = groupBy === 'cwd' ? shortenCwd(key) : key;
       process.stdout.write(
         `  ${shortKey.padEnd(40)} ${String(g.calls).padStart(5)} calls   ` +
           `${fmtTok(g.prompt_tokens).padStart(10)} in / ${fmtTok(g.completion_tokens).padStart(8)} out   ` +
-          pc.green(fmt(g.cost_usd)) +
+          formatCost(g) +
           '\n',
       );
     }
@@ -62,6 +63,14 @@ export async function runUsage(opts) {
       ) +
       '\n',
   );
+}
+
+export function formatCost(summary) {
+  const knownCost = summary.known_cost_usd ?? summary.cost_usd ?? 0;
+  const known = pc.green('$' + knownCost.toFixed(4));
+  if (!summary.unknown_cost_calls) return known;
+  const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no price configured)`;
+  return summary.known_cost_calls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
 }
 
 function humanPeriod(sinceMs) {

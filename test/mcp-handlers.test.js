@@ -72,6 +72,22 @@ test('MCP-H-02b: askHandler throws "question is required" when question is missi
   }
 });
 
+test('MCP-H-02c: askHandler forwards GLM provider and model to model resolution', async () => {
+  const { askHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-02c=${Date.now()}`
+  );
+
+  await assert.rejects(
+    () => askHandler({
+      paths: ['not-read-because-model-resolution-runs-first'],
+      question: 'What is this?',
+      provider: 'glm',
+      model: 'zai/',
+    }),
+    /GLM model id cannot be empty/,
+  );
+});
+
 // ─── MCP-H-03: fetchHandler with/without question ───────────────────────────
 
 test('MCP-H-04: jiraSearchHandler formats issues and without question returns corpus', async () => {

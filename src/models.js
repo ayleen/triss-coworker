@@ -30,8 +30,7 @@ function glmProviderPrefix(input) {
   return prefix === 'zai' || prefix === 'zai-coding-plan' ? prefix : null;
 }
 
-function resolveGlmModel(input) {
-  const cfg = getConfig();
+function resolveGlmModel(input, cfg) {
   const selected = input || (cfg.defaultPreset === 'pro' ? 'pro' : 'flash');
   const key = String(selected).toLowerCase();
   if (key === 'flash') return GLM_FLASH_MODEL;
@@ -53,13 +52,13 @@ export function resolveModelRequest({ provider: providerInput, model: modelInput
     return { provider, model: resolveModel(modelInput) };
   }
 
-  // Ensure project/global .env files are loaded before deriving the endpoint
-  // from TRISS_CODER_MODEL. getConfig() is intentionally cheap and uncached.
-  getConfig();
+  // Load project/global .env files once before deriving the endpoint from
+  // TRISS_CODER_MODEL and resolving the default GLM preset.
+  const cfg = getConfig();
   const explicitPrefix = glmProviderPrefix(modelInput);
   const configuredPrefix = glmProviderPrefix(process.env.TRISS_CODER_MODEL);
   const endpoint = explicitPrefix || configuredPrefix || 'zai-coding-plan';
-  const model = resolveGlmModel(modelInput);
+  const model = resolveGlmModel(modelInput, cfg);
   if (!String(model).trim()) {
     throw new Error('GLM model id cannot be empty.');
   }

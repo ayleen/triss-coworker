@@ -49,11 +49,10 @@ const DEFAULT_PRICES = {
     input_cache_hit: 0.003625e-6,
     output: 0.87e-6,
   },
-  // `zai-coding-plan` (subscription) models used by `triss coder run` —
-  // every event observed during Phase 0 recon reported cost:0 for this
-  // provider (metered, not per-token). If a future ZHIPU_API_KEY targets
-  // the pay-as-you-go `zai/...` provider instead, look up real prices at
-  // https://docs.z.ai — do not guess.
+  // `zai-coding-plan` subscription models used by direct GLM calls and
+  // `triss coder run` are metered by the plan rather than billed per token;
+  // Phase 0 recon reported cost:0. PAYG `zai/...` prices are intentionally
+  // absent: look up current prices at https://docs.z.ai — do not guess.
   'zai-coding-plan/glm-5.2': {
     input_cache_miss: 0,
     input_cache_hit: 0,
@@ -81,7 +80,10 @@ function priceFor(model) {
 
 export function estimateCost(record) {
   const p = priceFor(record.model);
-  if (!p) return 0;
+  // A missing price is not a free call. Keep it distinct from the known
+  // $0 coding-plan prices so `triss usage` never reports unmetered models as
+  // a paid provider that happened to cost nothing.
+  if (!p) return null;
   const cached = record.cached_tokens ?? 0;
   const fresh = Math.max(0, record.prompt_tokens - cached);
   return (
@@ -166,23 +168,54 @@ export function summarize(records, { groupBy } = {}) {
     cached_tokens: 0,
     completion_tokens: 0,
     cost_usd: 0,
+    known_cost_usd: 0,
+    known_cost_calls: 0,
+    unknown_cost_calls: 0,
   };
   const groups = new Map();
   for (const r of records) {
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
-    total.cost_usd += r.cost_usd || 0;
+    if (Number.isFinite(r.cost_usd)) {
+      total.cost_usd += r.cost_usd;
+      total.known_cost_usd += r.cost_usd;
+      total.known_cost_calls++;
+    } else {
+      total.unknown_cost_calls++;
+    }
     if (groupBy) {
       const key = String(r[groupBy] ?? '(unknown)');
-      const g = groups.get(key) || { calls: 0, prompt_tokens: 0, cached_tokens: 0, completion_tokens: 0, cost_usd: 0 };
+      const g = groups.get(key) || {
+        calls: 0,
+        prompt_tokens: 0,
+        cached_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        known_cost_usd: 0,
+        known_cost_calls: 0,
+        unknown_cost_calls: 0,
+      };
       g.calls++;
       g.prompt_tokens += r.prompt_tokens || 0;
       g.cached_tokens += r.cached_tokens || 0;
       g.completion_tokens += r.completion_tokens || 0;
-      g.cost_usd += r.cost_usd || 0;
+      if (Number.isFinite(r.cost_usd)) {
+        g.cost_usd += r.cost_usd;
+        g.known_cost_usd += r.cost_usd;
+        g.known_cost_calls++;
+      } else {
+        g.unknown_cost_calls++;
+      }
       groups.set(key, g);
     }
+  }
+  // Keep the old numeric field for fully priced histories, but make a mixed
+  // or unpriced aggregate explicit. known_cost_usd remains the useful
+  // subtotal for renderers and integrations that choose to show it.
+  if (total.unknown_cost_calls) total.cost_usd = null;
+  for (const group of groups.values()) {
+    if (group.unknown_cost_calls) group.cost_usd = null;
   }
   return { total, groups };
 }
