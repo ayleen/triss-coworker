@@ -6,6 +6,10 @@ import {
   resolveModelRequest,
   resolveProvider,
 } from '../src/models.js';
+import {
+  ZAI_CODING_PLAN_BASE_URL,
+  ZAI_PAYG_BASE_URL,
+} from '../src/zai.js';
 
 function withEnv(values, fn) {
   const before = {};
@@ -58,17 +62,17 @@ test('GLM routing maps presets and provider prefixes to the correct endpoint', (
     assert.deepEqual(resolveModelRequest({ provider: 'glm' }), {
       provider: 'glm',
       model: 'glm-5-turbo',
-      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      baseUrl: ZAI_CODING_PLAN_BASE_URL,
     });
     assert.deepEqual(resolveModelRequest({ provider: 'glm', model: 'pro' }), {
       provider: 'glm',
       model: 'glm-5.2',
-      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      baseUrl: ZAI_CODING_PLAN_BASE_URL,
     });
     assert.deepEqual(resolveModelRequest({ provider: 'glm', model: 'zai/glm-5.2' }), {
       provider: 'glm',
       model: 'glm-5.2',
-      baseUrl: 'https://api.z.ai/api/paas/v4',
+      baseUrl: ZAI_PAYG_BASE_URL,
     });
   });
 });
@@ -78,7 +82,7 @@ test('GLM routing inherits the configured coder endpoint for bare model ids', ()
     assert.deepEqual(resolveModelRequest({ provider: 'glm', model: 'glm-4.7' }), {
       provider: 'glm',
       model: 'glm-4.7',
-      baseUrl: 'https://api.z.ai/api/paas/v4',
+      baseUrl: ZAI_PAYG_BASE_URL,
     });
   });
 });
@@ -103,17 +107,17 @@ test('getClient uses ZHIPU_API_KEY for the GLM provider', () => {
   withEnv({ ZHIPU_API_KEY: 'zk-test', TRISS_WORKER_API_KEY: undefined }, () => {
     const client = getClient({
       provider: 'glm',
-      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      baseUrl: ZAI_CODING_PLAN_BASE_URL,
     });
     assert.equal(client.apiKey, 'zk-test');
-    assert.equal(client.baseURL, 'https://api.z.ai/api/coding/paas/v4');
+    assert.equal(client.baseURL, ZAI_CODING_PLAN_BASE_URL);
   });
 });
 
 test('getClient never falls back to OpenAI when a GLM route omits baseUrl', () => {
   withEnv({ ZHIPU_API_KEY: 'zk-test' }, () => {
     const client = getClient({ provider: 'glm' });
-    assert.equal(client.baseURL, 'https://api.z.ai/api/coding/paas/v4');
+    assert.equal(client.baseURL, ZAI_CODING_PLAN_BASE_URL);
   });
 });
 

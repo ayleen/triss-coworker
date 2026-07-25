@@ -76,17 +76,26 @@ test('summarize aggregates totals and group buckets', () => {
 test('summarize keeps unknown costs out of known totals and records their presence', () => {
   const records = [
     { model: 'zai-coding-plan/glm-5.2', prompt_tokens: 100, cached_tokens: 0, completion_tokens: 50, cost_usd: 0, cwd: '/plan' },
-    { model: 'zai/glm-5.2', prompt_tokens: 200, cached_tokens: 0, completion_tokens: 75, cost_usd: null, cwd: '/payg' },
+    { model: 'zai/glm-5.2', prompt_tokens: 200, cached_tokens: 0, completion_tokens: 75, cost_usd: 0, cost_usd_known: false, cwd: '/payg' },
   ];
   const { total, groups } = summarize(records, { groupBy: 'cwd' });
-  assert.equal(total.cost_usd, null);
+  assert.equal(total.cost_usd, 0);
   assert.equal(total.known_cost_usd, 0);
   assert.equal(total.known_cost_calls, 1);
   assert.equal(total.unknown_cost_calls, 1);
   assert.equal(groups.get('/plan').unknown_cost_calls, 0);
-  assert.equal(groups.get('/payg').cost_usd, null);
+  assert.equal(groups.get('/payg').cost_usd, 0);
   assert.equal(groups.get('/payg').known_cost_usd, 0);
   assert.equal(groups.get('/payg').unknown_cost_calls, 1);
+});
+
+test('summarize preserves legacy numeric records that predate cost_usd_known', () => {
+  const { total } = summarize([
+    { model: 'glm-5-turbo', prompt_tokens: 10, completion_tokens: 5, cost_usd: 0 },
+  ]);
+  assert.equal(total.cost_usd, 0);
+  assert.equal(total.known_cost_calls, 1);
+  assert.equal(total.unknown_cost_calls, 0);
 });
 
 test('parsePeriod parses common units', () => {
@@ -195,4 +204,15 @@ test('logUsage records explicit call_id and parent_call_id', () => {
   });
   assert.equal(r.call_id, 'fixed-call-id');
   assert.equal(r.parent_call_id, 'fixed-parent-id');
+});
+
+test('logUsage keeps cost_usd numeric and marks an unpriced model as unknown', () => {
+  const r = logUsage({
+    model: 'zai/glm-5.2',
+    prompt_tokens: 10,
+    completion_tokens: 5,
+    label: 'unknown-price',
+  });
+  assert.equal(r.cost_usd, 0);
+  assert.equal(r.cost_usd_known, false);
 });

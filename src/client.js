@@ -2,19 +2,16 @@ import OpenAI from 'openai';
 import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
 import { logUsage } from './usage.js';
 import { currentCall } from './call-context.js';
-
-const DEFAULT_GLM_BASE_URL = 'https://api.z.ai/api/coding/paas/v4';
-const GLM_PAYG_BASE_URL = 'https://api.z.ai/api/paas/v4';
+import {
+  ZAI_CODING_PLAN_BASE_URL,
+  normalizeZaiBaseUrl,
+  zaiPrefixForBaseUrl,
+} from './zai.js';
 
 export function billingModelFor({ provider, baseUrl, model }) {
   if (provider !== 'glm') return model || '(unknown)';
 
-  const normalizedBaseUrl = String(baseUrl || DEFAULT_GLM_BASE_URL).replace(/\/+$/, '');
-  const prefix = normalizedBaseUrl === GLM_PAYG_BASE_URL
-    ? 'zai'
-    : normalizedBaseUrl === DEFAULT_GLM_BASE_URL
-      ? 'zai-coding-plan'
-      : null;
+  const prefix = zaiPrefixForBaseUrl(baseUrl);
   if (!prefix || !model) return model || '(unknown)';
 
   // Z.AI responses currently return a bare model id, but avoid duplicating a
@@ -24,7 +21,7 @@ export function billingModelFor({ provider, baseUrl, model }) {
 }
 
 export function glmRouteHint(baseUrl) {
-  const endpoint = String(baseUrl || DEFAULT_GLM_BASE_URL).replace(/\/+$/, '');
+  const endpoint = normalizeZaiBaseUrl(baseUrl);
   return (
     `This request resolved to ${endpoint}. A bare GLM model id uses the resolved endpoint. ` +
     'Use zai/<model> for pay-as-you-go or zai-coding-plan/<model> for the subscription endpoint.'
@@ -38,7 +35,7 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
   if (provider === 'glm') {
     return new OpenAI({
       apiKey: requireGlmApiKey(),
-      baseURL: baseUrl || DEFAULT_GLM_BASE_URL,
+      baseURL: baseUrl || ZAI_CODING_PLAN_BASE_URL,
     });
   }
   const cfg = requireApiKey(getConfig());
@@ -59,6 +56,29 @@ function recordUsage(resp, label, request = {}) {
   });
 }
 
+export function providerRequestError(err, { provider, baseUrl, model }) {
+  const status = err?.status || err?.response?.status;
+  const body = err?.error?.message || err?.message || String(err);
+  if (provider === 'glm' && (status === 401 || status === 403)) {
+    return new Error(
+      `GLM request for model "${model}" was rejected (HTTP ${status}). ${glmRouteHint(baseUrl)} ` +
+      `Check that ZHIPU_API_KEY is valid for that endpoint. Original error: ${body}`,
+      { cause: err },
+    );
+  }
+  if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
+    const hint = provider === 'glm'
+      ? `→ Pass --provider glm --model glm-5.2. ${glmRouteHint(baseUrl)}\n`
+      : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n' +
+        '→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n';
+    return new Error(
+      `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
+      { cause: err },
+    );
+  }
+  return err;
+}
+
 export async function chat({ provider, baseUrl, model, messages, maxTokens, temperature, label }) {
   const client = getClient({ provider, baseUrl });
   try {
@@ -71,26 +91,7 @@ export async function chat({ provider, baseUrl, model, messages, maxTokens, temp
     recordUsage(resp, label || 'chat', { provider, baseUrl, model });
     return resp;
   } catch (err) {
-    const status = err?.status || err?.response?.status;
-    const body = err?.error?.message || err?.message || String(err);
-    if (provider === 'glm' && (status === 401 || status === 403)) {
-      throw new Error(
-        `GLM request for model "${model}" was rejected (HTTP ${status}). ${glmRouteHint(baseUrl)} ` +
-        `Check that ZHIPU_API_KEY is valid for that endpoint. Original error: ${body}`,
-        { cause: err },
-      );
-    }
-    if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
-      const hint = provider === 'glm'
-        ? `→ Pass --provider glm --model glm-5.2. ${glmRouteHint(baseUrl)}\n`
-        : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n' +
-          '→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n';
-      throw new Error(
-        `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
-        { cause: err },
-      );
-    }
-    throw err;
+    throw providerRequestError(err, { provider, baseUrl, model });
   }
 }
 
@@ -127,25 +128,7 @@ export async function chatStream({
       stream_options: { include_usage: true },
     });
   } catch (err) {
-    const status = err?.status || err?.response?.status;
-    const body = err?.error?.message || err?.message || String(err);
-    if (provider === 'glm' && (status === 401 || status === 403)) {
-      throw new Error(
-        `GLM request for model "${model}" was rejected (HTTP ${status}). ${glmRouteHint(baseUrl)} ` +
-        `Check that ZHIPU_API_KEY is valid for that endpoint. Original error: ${body}`,
-        { cause: err },
-      );
-    }
-    if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
-      const hint = provider === 'glm'
-        ? `→ Pass --provider glm --model glm-5.2. ${glmRouteHint(baseUrl)}\n`
-        : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL.\n';
-      throw new Error(
-        `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
-        { cause: err },
-      );
-    }
-    throw err;
+    throw providerRequestError(err, { provider, baseUrl, model });
   }
 
   let text = '';

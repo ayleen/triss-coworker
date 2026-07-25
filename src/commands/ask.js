@@ -12,7 +12,7 @@ const SYSTEM_PROMPT =
   'when relevant. Output structured bullets, not prose. Keep your answer ' +
   'under 800 words unless asked otherwise.';
 
-export async function runAsk(opts) {
+export async function runAsk(opts, deps = {}) {
   const {
     paths,
     urls,
@@ -33,7 +33,10 @@ export async function runAsk(opts) {
     );
   }
 
-  const request = resolveModelRequest({ provider: providerInput, model: modelInput });
+  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
+  const sendChat = deps.chat || chat;
+  const sendChatStream = deps.chatStream || chatStream;
+  const request = resolveRequest({ provider: providerInput, model: modelInput });
   const { provider, model, baseUrl } = request;
 
   let corpus = '';
@@ -84,7 +87,7 @@ export async function runAsk(opts) {
 
   const useStream = shouldStream(opts);
   const resp = useStream
-    ? await chatStream({
+    ? await sendChatStream({
         model,
         provider,
         baseUrl,
@@ -93,7 +96,7 @@ export async function runAsk(opts) {
         label: 'triss/ask',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await chat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/ask' });
+    : await sendChat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/ask' });
 
   const answer = resp.choices?.[0]?.message?.content;
   if (!answer) {

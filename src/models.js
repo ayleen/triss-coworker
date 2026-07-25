@@ -1,7 +1,8 @@
 import { getConfig } from './config.js';
-
-const GLM_CODING_PLAN_BASE_URL = 'https://api.z.ai/api/coding/paas/v4';
-const GLM_PAYG_BASE_URL = 'https://api.z.ai/api/paas/v4';
+import {
+  ZAI_CODING_PLAN_BASE_URL,
+  ZAI_PAYG_BASE_URL,
+} from './zai.js';
 const GLM_FLASH_MODEL = 'glm-5-turbo';
 const GLM_PRO_MODEL = 'glm-5.2';
 
@@ -65,7 +66,7 @@ export function resolveModelRequest({ provider: providerInput, model: modelInput
   return {
     provider,
     model,
-    baseUrl: endpoint === 'zai' ? GLM_PAYG_BASE_URL : GLM_CODING_PLAN_BASE_URL,
+    baseUrl: endpoint === 'zai' ? ZAI_PAYG_BASE_URL : ZAI_CODING_PLAN_BASE_URL,
   };
 }
 
