@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import OpenAI from 'openai';
 import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
@@ -102,9 +102,13 @@ export function providerRequestError(err, { provider, baseUrl, model }) {
 // per key. Keyed by a key fingerprint so `triss config set ZHIPU_API_KEY`
 // mid-session invalidates it; the key itself is never stored.
 let glmDiscovery = null;
+const glmDiscoveryHmacKey = randomBytes(32);
 
 function keyFingerprint(key) {
-  return createHash('sha256').update(String(key)).digest('hex').slice(0, 12);
+  // A process-local HMAC keeps the cached identifier unlinkable outside this
+  // process. A plain fast hash would let anyone who observes the fingerprint
+  // verify guesses for a leaked/weak API key offline.
+  return createHmac('sha256', glmDiscoveryHmacKey).update(String(key)).digest('hex');
 }
 
 // Test seam + escape hatch for a process that swaps keys without restarting.
