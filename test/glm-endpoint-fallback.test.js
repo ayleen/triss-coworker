@@ -75,15 +75,18 @@ test('the discovered endpoint is reused, so the probe is paid for once per proce
   assert.equal(second.warnings.length, 0);
 });
 
-test('a changed API key invalidates the discovery instead of routing the new key blindly', async () => {
+test('a rotated key self-corrects when the cached endpoint rejects it', async () => {
   resetGlmEndpointDiscovery();
   const first = harness({ failOn: [{ baseUrl: ZAI_CODING_PLAN_BASE_URL, status: 401 }] });
   await withGlmEndpointFallback(defaultRequest, first.run, first.deps);
 
-  const rotated = harness({ key: 'zk-rotated' });
+  const rotated = harness({
+    key: 'zk-rotated',
+    failOn: [{ baseUrl: ZAI_PAYG_BASE_URL, status: 401 }],
+  });
   const { baseUrl } = await withGlmEndpointFallback(defaultRequest, rotated.run, rotated.deps);
 
-  assert.deepEqual(rotated.calls, [ZAI_CODING_PLAN_BASE_URL]);
+  assert.deepEqual(rotated.calls, [ZAI_PAYG_BASE_URL, ZAI_CODING_PLAN_BASE_URL]);
   assert.equal(baseUrl, ZAI_CODING_PLAN_BASE_URL);
 });
 
