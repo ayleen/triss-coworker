@@ -12,7 +12,15 @@ const SYSTEM_PROMPT =
   'when relevant. Output structured bullets, not prose. Keep your answer ' +
   'under 800 words unless asked otherwise.';
 
-export async function runAsk(opts, deps = {}) {
+// Commander passes its Command instance as a second action argument. Keep the
+// production entrypoint opts-only so that instance can never be mistaken for
+// injectable dependencies.
+export async function runAsk(opts) {
+  return runAskWithDeps(opts);
+}
+
+// Test-only seam for deterministic model-call assertions.
+export async function runAskWithDeps(opts, deps = {}) {
   const {
     paths,
     urls,

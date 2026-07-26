@@ -187,7 +187,15 @@ or use the other project's credentials.
 `.env` files are re-read on every `tools/list` request, so adding a
 new credential to `.triss.env` mid-session means the next time the
 agent (or `claude /mcp`) lists tools, the new ones show up without
-restarting Claude Code.
+restarting Claude Code. Replacing or removing an integration credential that
+is already loaded still requires restarting that MCP process.
+
+GLM calls have a narrower per-call refresh path: `triss_ask` and
+`triss_review` with `provider: "glm"` re-read file-backed
+`TRISS_CODER_MODEL` and `ZHIPU_API_KEY` before each call. Edits and removals
+take effect without restarting the MCP server, except that values supplied by
+the parent environment continue to win. This does not change the existing
+`tools/list` refresh behaviour for other integrations.
 
 ## What tools are exposed
 
@@ -424,9 +432,10 @@ invocation.
 
 GLM records keep their resolved endpoint prefix (`zai-coding-plan/` or
 `zai/`). Subscription calls therefore retain the known `$0` accounting.
-PAYG calls without `TRISS_PRICE_ZAI_<MODEL>` pricing keep numeric
-`cost_usd: 0` for JSONL compatibility, add `cost_usd_known: false`, and are
-displayed by `triss usage` as `unknown`, not as free.
+PAYG calls and any other unpriced model, including `opencode/*` OpenCode Zen,
+keep numeric `cost_usd: 0` for JSONL compatibility, add
+`cost_usd_known: false`, and are displayed by `triss usage` as `unknown`, not
+as free. Set the matching `TRISS_PRICE_<MODEL_ID>` override to account for one.
 
 To attribute all calls from one MCP server process to a single outer
 session, set `TRISS_PARENT_CALL_ID` in the server's `env` block — every

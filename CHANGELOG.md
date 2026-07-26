@@ -27,8 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Usage JSONL records keep `cost_usd` numeric for compatibility with existing
   dashboards and add `cost_usd_known: false` when no model price is configured.
   `triss usage` excludes those zeros from known totals and reports them as
-  unknown. Existing log entries are not rewritten: older bare GLM model ids and
-  their previously recorded numeric costs remain unchanged.
+  unknown. This includes unpriced `opencode/*` OpenCode Zen models; configure
+  `TRISS_PRICE_<MODEL_ID>` to account for one. Existing log entries are not
+  rewritten: older bare GLM model ids and their previously recorded numeric
+  costs remain unchanged.
 
 ### Fixed
 

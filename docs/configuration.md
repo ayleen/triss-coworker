@@ -218,12 +218,21 @@ env:
 
 You added `.triss.env` to a project after Claude Code was already
 running there. As of v0.9.3, **no restart needed** — `.env` files are
-re-read on every `tools/list` request, so the next time the agent or
-`claude /mcp` lists tools, the new ones appear (or disappear).
+re-read on every `tools/list` request, so newly added integration
+credentials can expose their tools on the next listing. Replacing or removing
+an integration credential that is already loaded still requires restarting
+that MCP process.
 
 The only thing that requires a restart is the *initial* MCP-server
 registration — i.e. running `triss mcp install` for the first time.
-After that, credential changes are live.
+After that, newly added credentials are discovered live.
+
+Separately, GLM calls (`triss_ask` / `triss_review` with `provider: "glm"`)
+re-read file-backed `TRISS_CODER_MODEL` and `ZHIPU_API_KEY` on each call.
+Editing or removing either value in `.triss.env` takes effect on the next GLM
+call without restarting the MCP server. Values supplied by the parent process
+environment still take precedence. This is a GLM per-call guarantee; it does
+not extend the tool-catalogue reload behaviour above to every integration.
 
 ## Environment reference
 
@@ -344,7 +353,7 @@ are unaffected.
 | `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
 | `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
 | `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |
-| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price report `unknown`, not `$0` |
+| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price, including `opencode/*` Zen models, report `unknown`, not `$0` |
 | `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
 | `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
 | `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
@@ -377,9 +386,11 @@ USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
 applies the 75% promotional pricing to the pro preset. PAYG GLM calls use the
 canonical `zai/<model>` id, so `zai/glm-5.2` maps to
 `TRISS_PRICE_ZAI_GLM_5_2`; without that override their cost is explicitly
-unknown. Usage JSONL keeps `cost_usd` numeric for compatibility and marks these
-records with `cost_usd_known: false`; existing historical records are not
-relabelled.
+unknown. The same is true for every other unpriced model, including
+`opencode/*` OpenCode Zen models; set its matching `TRISS_PRICE_<MODEL_ID>`
+override to account for it. Usage JSONL keeps `cost_usd` numeric for
+compatibility and marks these records with `cost_usd_known: false`; existing
+historical records are not relabelled.
 
 **Claude Code integration step in the wizard** — split by mode:
 

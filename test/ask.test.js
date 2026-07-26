@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAsk } from '../src/commands/ask.js';
+import { runAsk, runAskWithDeps } from '../src/commands/ask.js';
 import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 test('ASK-01: runAsk forwards GLM provider and model to model resolution', async () => {
@@ -15,7 +15,7 @@ test('ASK-01: runAsk forwards GLM provider and model to model resolution', async
   );
 });
 
-test('ASK-02: runAsk forwards the resolved provider, model, and base URL to chat', async () => {
+test('ASK-02: runAskWithDeps forwards the resolved provider, model, and base URL to chat', async () => {
   let resolutionInput;
   let chatInput;
   const stdoutWrite = process.stdout.write;
@@ -23,7 +23,7 @@ test('ASK-02: runAsk forwards the resolved provider, model, and base URL to chat
   process.stdout.write = () => true;
   process.stderr.write = () => true;
   try {
-    await runAsk(
+    await runAskWithDeps(
       {
         paths: ['package.json'],
         question: 'What is this?',
@@ -52,4 +52,27 @@ test('ASK-02: runAsk forwards the resolved provider, model, and base URL to chat
   assert.equal(chatInput.model, 'glm-5.2');
   assert.equal(chatInput.baseUrl, ZAI_PAYG_BASE_URL);
   assert.equal(chatInput.label, 'triss/ask');
+});
+
+test('ASK-03: runAsk ignores Commander-like second arguments with dependency-shaped fields', async () => {
+  const commanderArg = {
+    chat() {
+      throw new Error('Commander arg was used as chat deps');
+    },
+    chatStream() {
+      throw new Error('Commander arg was used as chatStream deps');
+    },
+    resolveModelRequest() {
+      throw new Error('Commander arg was used as resolver deps');
+    },
+  };
+  await assert.rejects(
+    () => runAsk({
+      paths: ['not-read-because-model-resolution-runs-first'],
+      question: 'What is this?',
+      provider: 'glm',
+      model: 'zai/',
+    }, commanderArg),
+    /GLM model id cannot be empty/,
+  );
 });
