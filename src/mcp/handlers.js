@@ -1012,9 +1012,21 @@ export async function commitMsgHandler({ type, scope, conventional = true, model
 
 // ─── status ─────────────────────────────────────────────────────────────────
 
+export function describeGlmRoutingLines(glm) {
+  const source = glm.endpointSource === 'config'
+    ? `pinned by TRISS_CODER_MODEL=${glm.coderModel}`
+    : 'default — a rejected call retries the other endpoint once and remembers the winner';
+  return [
+    'GLM (provider "glm"):',
+    `  ZHIPU_API_KEY: ${glm.keyConfigured ? 'configured' : 'missing'}`,
+    `  Endpoint: ${glm.baseUrl} (${glm.endpoint}, ${source})`,
+    `  Presets: ${glm.presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
+  ];
+}
+
 export async function statusHandler() {
   const { getConfig } = await import('../config.js');
-  const { listPresets } = await import('../models.js');
+  const { listPresets, describeGlmRouting } = await import('../models.js');
   const { loadIntegrations, envReadiness, getCoreManifest } = await import('../integrations/_registry.js');
   const { projectRoot, pathsRestricted } = await import('../safety.js');
   const { activeEnvFiles } = await import('../secrets.js');
@@ -1025,14 +1037,18 @@ export async function statusHandler() {
   const root = projectRoot();
   const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
-    `API base: ${cfg.baseUrl}`,
-    `API key:  ${cfg.apiKey ? cfg.apiKey.slice(0, 4) + '…' + cfg.apiKey.slice(-4) : '(missing)'}`,
+    `Worker API base: ${cfg.baseUrl}`,
+    `Worker API key:  ${cfg.apiKey ? cfg.apiKey.slice(0, 4) + '…' + cfg.apiKey.slice(-4) : '(missing)'}`,
     `Default preset: ${cfg.defaultPreset}`,
     `Project root: ${root} (from ${rootSource})`,
     `Path sandbox: ${pathsRestricted() ? 'on' : 'off'}`,
     `Env files:`,
     ...activeEnvFiles().map((f) => `  ${f.scope}: ${f.path} (${f.exists ? 'loaded' : 'absent'})`),
-    `Presets: ${presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
+    `Worker presets: ${presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
+    // A GLM-only setup has no worker key at all, so the worker lines above say
+    // "(missing)" while provider:"glm" calls work fine. Spell out that route
+    // separately instead of letting the reader infer it from a worker field.
+    ...describeGlmRoutingLines(describeGlmRouting()),
     `Integrations:`,
     ...all.map((m) => {
       const r = envReadiness(m);

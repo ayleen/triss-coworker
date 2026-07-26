@@ -136,8 +136,10 @@ triss fetch https://api-docs.example.com/changelog
 - `--model pro` — pricier, smarter, use for harder analysis or generation.
 - `--model <full-name>` — pin to any model id (e.g. `deepseek-v4-flash`).
 - `triss ask ... --provider glm` / `triss review --provider glm` — one-shot
-  GLM analysis with the same commands; `flash|pro` maps to
-  `glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
+  GLM analysis with the same commands. `pro` is `glm-5.2`; `flash` is
+  `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go.
+  If nothing pinned the endpoint, a rejected call retries the other one and
+  says so. Keep `triss coder` for agentic coding runs.
 
 Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 `TRISS_WORKER_PRO_MODEL` env vars (no code changes required).

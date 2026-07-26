@@ -6,9 +6,9 @@ import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
 import { getConfig } from '../config.js';
 // Circular import: coder.js's config.js dependency chain already involves
 // this kind of cycle (see the comment in src/commands/coder.js next to
-// its `chooseScope` import) — safe here too since CODER_MANIFEST is only
-// read inside listTools(), never at module-eval time.
-import { CODER_MANIFEST, coderCredentialReady } from '../commands/coder.js';
+// its `chooseScope` import) — safe here too since coderCredentialReady is
+// only called inside listTools(), never at module-eval time.
+import { coderCredentialReady } from '../commands/coder.js';
 import {
   askHandler,
   chatHandler,

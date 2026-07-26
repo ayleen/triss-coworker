@@ -57,6 +57,19 @@ const DEFAULT_PRICES = {
     input_cache_hit: 0.003625e-6,
     output: 0.87e-6,
   },
+  // Z.AI pay-as-you-go list prices as of 2026-07-26 (docs.z.ai pricing
+  // overview), USD per token. Only the models both Z.AI endpoints advertise
+  // via GET /models are listed — anything else stays `unknown` rather than
+  // being guessed at. Coding Plan calls are handled by CODING_PLAN_PRICE
+  // above, since the subscription meters by quota, not tokens.
+  'zai/glm-4.5': { input_cache_miss: 0.6e-6, input_cache_hit: 0.11e-6, output: 2.2e-6 },
+  'zai/glm-4.5-air': { input_cache_miss: 0.2e-6, input_cache_hit: 0.03e-6, output: 1.1e-6 },
+  'zai/glm-4.6': { input_cache_miss: 0.6e-6, input_cache_hit: 0.11e-6, output: 2.2e-6 },
+  'zai/glm-4.7': { input_cache_miss: 0.6e-6, input_cache_hit: 0.11e-6, output: 2.2e-6 },
+  'zai/glm-5': { input_cache_miss: 1.0e-6, input_cache_hit: 0.2e-6, output: 3.2e-6 },
+  'zai/glm-5-turbo': { input_cache_miss: 1.2e-6, input_cache_hit: 0.24e-6, output: 4.0e-6 },
+  'zai/glm-5.1': { input_cache_miss: 1.4e-6, input_cache_hit: 0.26e-6, output: 4.4e-6 },
+  'zai/glm-5.2': { input_cache_miss: 1.4e-6, input_cache_hit: 0.26e-6, output: 4.4e-6 },
 };
 
 function priceFor(model) {

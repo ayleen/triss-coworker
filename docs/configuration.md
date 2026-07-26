@@ -275,11 +275,28 @@ verified against — that mismatch is what makes opencode retry a model
 call it can never complete.
 
 `triss ask` and `triss review` can use the same key without spawning a coding
-agent: pass `--provider glm`. Their `flash`/`pro` presets map to
-`glm-5-turbo`/`glm-5.2`. A provider-prefixed model selects the endpoint
-explicitly (`zai-coding-plan/glm-5.2` for a subscription key,
-`zai/glm-5.2` for pay-as-you-go); a bare model id inherits the prefix from
+agent: pass `--provider glm`. `pro` maps to `glm-5.2` on both endpoints;
+`flash` maps to `glm-4.7` on `zai-coding-plan` and `glm-4.5-air` on `zai`,
+because the subscription endpoint answers a `glm-4.5-air` request with
+`glm-4.7` and a preset should name the model that actually runs. A
+provider-prefixed model selects the endpoint explicitly
+(`zai-coding-plan/glm-5.2` for a subscription key, `zai/glm-5.2` for
+pay-as-you-go), and a prefix may carry a preset too — `zai/flash` means "the
+pay-as-you-go flash model". A bare model id inherits the prefix from
 `TRISS_CODER_MODEL`, then falls back to `zai-coding-plan`.
+
+**Endpoint auto-correction.** A Z.AI key carries no marker of which plan it
+belongs to, so an unpinned `zai-coding-plan` route is a guess. When nothing
+pinned the endpoint — no explicit prefix, no `TRISS_CODER_MODEL` — and the
+call is rejected with `401`, `403`, or `429` (Z.AI answers a plan mismatch
+with "Insufficient balance or no resource package"), Triss retries the request
+once on the other endpoint. If that works, it warns on stderr and reuses that
+endpoint for the rest of the process; the discovery is dropped when the key
+changes. An explicitly prefixed or `TRISS_CODER_MODEL`-pinned endpoint is
+never second-guessed. Pin one to skip the probe entirely — and note that a
+pinned endpoint also selects that endpoint's presets. `triss status` and the
+`triss_status` MCP tool print the resolved endpoint, its source, and the
+preset models.
 
 ¹ **Credentials are provider-specific.** A run needs the one key its
 resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need
@@ -384,11 +401,15 @@ provider, or want the discounted rate), set
 `TRISS_PRICE_<MODEL>=<input_cache_miss>,<input_cache_hit>,<output>` in
 USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
 applies the 75% promotional pricing to the pro preset. PAYG GLM calls use the
-canonical `zai/<model>` id, so `zai/glm-5.2` maps to
-`TRISS_PRICE_ZAI_GLM_5_2`; without that override their cost is explicitly
-unknown. The same is true for every other unpriced model, including
-`opencode/*` OpenCode Zen models; set its matching `TRISS_PRICE_<MODEL_ID>`
-override to account for it. Usage JSONL keeps `cost_usd` numeric for
+canonical `zai/<model>` id and ship with Z.AI's published list prices for the
+models both endpoints advertise (`glm-4.5`, `glm-4.5-air`, `glm-4.6`,
+`glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1`, `glm-5.2`), so a PAYG cost is
+reported, not guessed. Override any of them the same way — `zai/glm-5.2` maps
+to `TRISS_PRICE_ZAI_GLM_5_2`. Subscription (`zai-coding-plan/*`) calls stay
+`$0` because the plan meters by quota rather than tokens. Any model outside
+that catalogue — a newly released GLM id, `opencode/*` OpenCode Zen models —
+is explicitly unknown until you set its matching `TRISS_PRICE_<MODEL_ID>`
+override. Usage JSONL keeps `cost_usd` numeric for
 compatibility and marks these records with `cost_usd_known: false`; existing
 historical records are not relabelled.
 

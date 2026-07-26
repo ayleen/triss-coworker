@@ -604,12 +604,24 @@ triss review --provider glm --model pro
 triss review --provider glm --model zai/glm-5.2  # pay-as-you-go endpoint
 ```
 
-For GLM, `flash` maps to `glm-5-turbo` and `pro` to `glm-5.2`.
+For GLM, `pro` maps to `glm-5.2` on both endpoints, while `flash` — the cheap
+bulk-read tier — maps to `glm-4.7` on the subscription endpoint and to
+`glm-4.5-air` ($0.20/$1.10 per 1M) on pay-as-you-go. The subscription endpoint
+serves a `glm-4.5-air` request as `glm-4.7`, so the preset names what actually
+runs there.
+
 `ZHIPU_API_KEY` is reused. Prefix an explicit model with `zai-coding-plan/`
 or `zai/` to select the subscription or pay-as-you-go endpoint; otherwise
 Triss inherits the prefix from `TRISS_CODER_MODEL` and falls back to the
-coding-plan endpoint. `triss coder` stays separate because it is an agent
-runtime with tools, sessions, and worktree isolation.
+coding-plan endpoint. A Z.AI key does not say which plan it belongs to, so
+when nothing pinned the endpoint and the call comes back `401`/`403`/`429`,
+Triss retries once on the other endpoint, prints which one worked, and reuses
+it for the rest of the process. Pin it (`TRISS_CODER_MODEL=zai/glm-5.2`, or run
+`triss coder init`) to skip that probe. `triss status` shows the resolved
+endpoint, where it came from, and the presets it selects.
+
+`triss coder` stays separate because it is an agent runtime with tools,
+sessions, and worktree isolation.
 
 ### Provider recipes
 

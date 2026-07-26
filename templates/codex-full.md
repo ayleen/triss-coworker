@@ -36,8 +36,10 @@ Default preset is `flash` (cheap). Use `--model pro` for harder analysis
 or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
 For one-shot GLM analysis, use `triss ask ... --provider glm` or
-`triss review --provider glm`; `--model flash|pro` maps to
-`glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
+`triss review --provider glm`. `--model pro` is `glm-5.2`; `--model flash` is
+`glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go. An
+unpinned endpoint is auto-corrected once if the key belongs to the other plan.
+Keep `triss coder` for agentic coding runs.
 
 ## `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
 
