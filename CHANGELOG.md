@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every model routed through the `zai-coding-plan/` subscription endpoint is
   treated as known plan-metered usage instead of requiring a hardcoded model
   allowlist. Explicit `TRISS_PRICE_<MODEL>` overrides still take precedence.
+- A GLM `HTTP 429` now carries the resolved-endpoint hint instead of surfacing
+  Z.AI's bare "Insufficient balance or no resource package" text. That reply is
+  what a subscription key gets on the pay-as-you-go endpoint, so the message now
+  names both the balance and the wrong-plan cause.
 
 ## [0.24.2] — 2026-07-15
 

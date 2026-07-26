@@ -54,7 +54,7 @@ test('GLM usage model keeps the endpoint prefix returned by model routing', () =
 });
 
 test('provider request errors share GLM endpoint guidance across status classes', () => {
-  for (const status of [401, 403, 404]) {
+  for (const status of [401, 403, 404, 429]) {
     const cause = Object.assign(new Error('provider rejected request'), { status });
     const error = providerRequestError(cause, {
       provider: 'glm',
@@ -65,4 +65,28 @@ test('provider request errors share GLM endpoint guidance across status classes'
     assert.match(error.message, /zai\/<model>/);
     assert.match(error.message, new RegExp(status === 404 ? 'not accepted' : `HTTP ${status}`));
   }
+});
+
+test('a GLM 429 names both the balance and the wrong-endpoint cause, keeping the provider text', () => {
+  // Z.AI answers a Coding Plan key on the PAYG endpoint with a billing
+  // message, so the endpoint hint must survive alongside the original body.
+  const cause = Object.assign(
+    new Error('429 Insufficient balance or no resource package. Please recharge.'),
+    { status: 429 },
+  );
+  const error = providerRequestError(cause, {
+    provider: 'glm',
+    baseUrl: ZAI_PAYG_BASE_URL,
+    model: 'glm-5-turbo',
+  });
+  assert.match(error.message, /HTTP 429/);
+  assert.match(error.message, new RegExp(ZAI_PAYG_BASE_URL));
+  assert.match(error.message, /no balance\/quota left/);
+  assert.match(error.message, /belongs to the other plan/);
+  assert.match(error.message, /Insufficient balance or no resource package/);
+});
+
+test('a worker 429 is passed through untouched', () => {
+  const cause = Object.assign(new Error('rate limited'), { status: 429 });
+  assert.equal(providerRequestError(cause, { provider: 'worker', model: 'deepseek-v4-pro' }), cause);
 });

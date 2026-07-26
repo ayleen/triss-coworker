@@ -56,13 +56,25 @@ function recordUsage(resp, label, request = {}) {
   });
 }
 
+// Statuses Z.AI returns when the key does not match the endpoint the request
+// resolved to. 429 belongs here despite reading as a rate limit: a Coding Plan
+// key sent to the PAYG endpoint answers "Insufficient balance or no resource
+// package. Please recharge." — a billing message for what is really a routing
+// mismatch, so the endpoint hint matters more there than anywhere else.
+const GLM_ROUTE_STATUSES = new Set([401, 403, 429]);
+
 export function providerRequestError(err, { provider, baseUrl, model }) {
   const status = err?.status || err?.response?.status;
   const body = err?.error?.message || err?.message || String(err);
-  if (provider === 'glm' && (status === 401 || status === 403)) {
+  if (provider === 'glm' && GLM_ROUTE_STATUSES.has(status)) {
+    // A genuine 429 (quota or rate limit on the right endpoint) is also
+    // possible, so name both causes instead of asserting the key is wrong.
+    const advice = status === 429
+      ? 'Either that endpoint has no balance/quota left, or the key belongs to the other plan.'
+      : 'Check that ZHIPU_API_KEY is valid for that endpoint.';
     return new Error(
       `GLM request for model "${model}" was rejected (HTTP ${status}). ${glmRouteHint(baseUrl)} ` +
-      `Check that ZHIPU_API_KEY is valid for that endpoint. Original error: ${body}`,
+      `${advice} Original error: ${body}`,
       { cause: err },
     );
   }
