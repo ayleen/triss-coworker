@@ -61,19 +61,40 @@ function makeDirs() {
 test('init --provider opencode-zen pins a model that a SEPARATE `status` process resolves', () => {
   const { home, project } = makeDirs();
   try {
+    // Keep the cross-process contract deterministic while exercising the
+    // catalogue-driven fallback after the temporary hy3 model disappears.
+    const fetchMock = join(home, 'mock-zen-fetch.mjs');
+    writeFileSync(
+      fetchMock,
+      `globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ data: [
+    { id: 'deepseek-v4-flash-free' },
+    { id: 'north-mini-code-free' },
+  ] }),
+});\n`,
+    );
+    const env = {
+      OPENCODE_API_KEY: 'sk-zen-fake',
+      NODE_OPTIONS: `--import=${fetchMock}`,
+    };
+
     // 1) init in one process — OPENCODE key present, no ZHIPU.
     const init = runCli(['coder', 'init', '--global', '--provider', 'opencode-zen'], {
       home,
       project,
-      env: { OPENCODE_API_KEY: 'sk-zen-fake' },
+      env,
     });
     assert.equal(init.status, 0, `init failed: ${init.stderr}`);
-    assert.match(init.stderr, /pinned TRISS_CODER_MODEL=opencode\/hy3-free/);
+    const pinned = init.stderr.match(/pinned TRISS_CODER_MODEL=(opencode\/[\w.-]+)/);
+    assert.ok(pinned, `init did not report an OpenCode Zen model pin: ${init.stderr}`);
 
     // 2) a FRESH process resolves the pinned model (no TRISS_CODER_MODEL in env).
-    const status = runCli(['status'], { home, project, env: { OPENCODE_API_KEY: 'sk-zen-fake' } });
+    const status = runCli(['status'], { home, project, env });
     assert.equal(status.status, 0, `status failed: ${status.stderr}`);
-    assert.match(status.stdout, /default model[^\n]*opencode\/hy3-free/);
+    const resolved = status.stdout.match(/default model[^\n]*(opencode\/[\w.-]+)/);
+    assert.ok(resolved, `status did not report an OpenCode Zen default model: ${status.stdout}`);
+    assert.equal(resolved[1], pinned[1], 'the fresh process must resolve the model pinned by init');
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });
