@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-27
+
 ### Added
 
 - `triss ask` and `triss review` now accept `--provider glm` (also available
@@ -48,9 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key used to fail outright against the `zai-coding-plan` default. Such a call
   is now retried once on the other endpoint; the working one is reported on
   stderr and reused for the rest of the process, and re-probed if the key
-  changes. Endpoints pinned by an explicit prefix or `TRISS_CODER_MODEL` are
-  never second-guessed, and a key that works on neither endpoint still surfaces
-  the original rejection.
+  changes. The cache stores only the working endpoint, never the API key or a
+  fingerprint derived from it. Endpoints pinned by an explicit prefix or
+  `TRISS_CODER_MODEL` are never second-guessed, and a key that works on neither
+  endpoint still surfaces the original rejection.
 - A preset behind a provider prefix is resolved instead of being sent
   verbatim: `zai/flash` previously reached the provider as the literal model
   id `flash`.
