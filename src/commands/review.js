@@ -37,7 +37,7 @@ export async function runReview(prNumber, opts) {
     provider: opts.provider,
     model: opts.model || 'pro',
   });
-  const { provider, model, baseUrl } = request;
+  const { provider, model } = request;
 
   let title;
   let description = '';
@@ -113,15 +113,13 @@ export async function runReview(prNumber, opts) {
   const useStream = shouldStream(opts);
   const resp = useStream
     ? await chatStream({
-        model,
-        provider,
-        baseUrl,
+        ...request,
         maxTokens,
         messages,
         label: 'triss/review',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await chat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/review' });
+    : await chat({ ...request, maxTokens, messages, label: 'triss/review' });
 
   const out = resp.choices?.[0]?.message?.content;
   if (!out) {

@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
-import { listPresets } from '../models.js';
+import { listPresets, describeGlmRouting } from '../models.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
@@ -35,11 +35,30 @@ export async function runStatus(deps = {}) {
     `  Project root: ${root} ${rootSource}`,
     `  Path sandbox: ${pathsRestricted() ? pc.green('on') : pc.dim('off (CLI mode)')}`,
     '',
-    pc.bold('Model presets'),
+    pc.bold('Model presets') + pc.dim('  (worker — the default provider)'),
   ];
   for (const p of presets) {
     const tag = p.isDefault ? pc.green(' (default)') : '';
     lines.push(`  ${p.preset.padEnd(6)} → ${p.model}${tag}`);
+  }
+
+  // Presets resolve differently per provider, and a GLM-only user has no
+  // worker key at all — so where `--provider glm` actually lands gets its own
+  // block rather than being implied by the worker rows above.
+  const glm = describeGlmRouting();
+  lines.push('');
+  lines.push(pc.bold('GLM routing') + pc.dim('  (--provider glm)'));
+  lines.push(
+    `  key         : ${glm.keyConfigured ? pc.green('ZHIPU_API_KEY set') : pc.red('ZHIPU_API_KEY missing')}`,
+  );
+  lines.push(`  endpoint    : ${glm.baseUrl} ${pc.dim(`[${glm.endpoint}]`)}`);
+  lines.push(
+    glm.endpointSource === 'config'
+      ? `  selected by : ${pc.dim(`TRISS_CODER_MODEL=${glm.coderModel}`)}`
+      : `  selected by : ${pc.dim('default — a rejected call retries the other endpoint once')}`,
+  );
+  for (const p of glm.presets) {
+    lines.push(`  ${p.preset.padEnd(12)}→ ${p.model}`);
   }
 
   lines.push('');

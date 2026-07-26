@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
+import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
 import { logUsage } from './usage.js';
 import { currentCall } from './call-context.js';
 import {
   ZAI_CODING_PLAN_BASE_URL,
   normalizeZaiBaseUrl,
+  siblingZaiBaseUrl,
   zaiPrefixForBaseUrl,
 } from './zai.js';
 
@@ -91,20 +94,87 @@ export function providerRequestError(err, { provider, baseUrl, model }) {
   return err;
 }
 
-export async function chat({ provider, baseUrl, model, messages, maxTokens, temperature, label }) {
-  const client = getClient({ provider, baseUrl });
+// A Z.AI key authenticates against exactly one of the two endpoints and
+// carries no marker of which, so a call routed by the `zai-coding-plan`
+// default is a guess. When that guess is rejected with a routing status we
+// retry once on the sibling endpoint and remember the winner for the rest of
+// the process — a long-lived MCP server pays for the discovery at most once
+// per key. Keyed by a key fingerprint so `triss config set ZHIPU_API_KEY`
+// mid-session invalidates it; the key itself is never stored.
+let glmDiscovery = null;
+
+function keyFingerprint(key) {
+  return createHash('sha256').update(String(key)).digest('hex').slice(0, 12);
+}
+
+// Test seam + escape hatch for a process that swaps keys without restarting.
+export function resetGlmEndpointDiscovery() {
+  glmDiscovery = null;
+}
+
+function statusOf(err) {
+  return err?.status || err?.response?.status;
+}
+
+export async function withGlmEndpointFallback(request, run, deps = {}) {
+  const warn = deps.warn || ((line) => process.stderr.write(pc.dim(line)));
+  const readKey = deps.requireGlmApiKey || requireGlmApiKey;
+  const provisional = request.provider === 'glm' && request.endpointSource === 'default';
+  const fingerprint = provisional ? keyFingerprint(readKey()) : null;
+  const baseUrl = provisional && glmDiscovery?.fingerprint === fingerprint
+    ? glmDiscovery.baseUrl
+    : request.baseUrl;
+
   try {
-    const resp = await client.chat.completions.create({
-      model,
-      messages,
-      max_tokens: maxTokens,
-      temperature: temperature ?? 0.2,
-    });
-    recordUsage(resp, label || 'chat', { provider, baseUrl, model });
-    return resp;
+    return { result: await run(baseUrl), baseUrl };
   } catch (err) {
-    throw providerRequestError(err, { provider, baseUrl, model });
+    const sibling = provisional && GLM_ROUTE_STATUSES.has(statusOf(err))
+      ? siblingZaiBaseUrl(baseUrl)
+      : null;
+    if (!sibling) throw providerRequestError(err, { ...request, baseUrl });
+
+    let result;
+    try {
+      result = await run(sibling);
+    } catch {
+      // The key works on neither endpoint, so the sibling's rejection says
+      // nothing new — surface the original one, which already carries the
+      // endpoint hint for the route the user actually asked for.
+      throw providerRequestError(err, { ...request, baseUrl });
+    }
+    glmDiscovery = { fingerprint, baseUrl: sibling };
+    warn(
+      `[triss] ZHIPU_API_KEY was rejected by ${normalizeZaiBaseUrl(baseUrl)} (HTTP ${statusOf(err)}) ` +
+        `but works on ${sibling}. Using that endpoint for the rest of this process. ` +
+        `Pin it with TRISS_CODER_MODEL=${zaiPrefixForBaseUrl(sibling)}/<model> ` +
+        'or run `triss coder init` to skip this probe.\n',
+    );
+    return { result, baseUrl: sibling };
   }
+}
+
+export async function chat({
+  provider,
+  baseUrl,
+  model,
+  endpointSource,
+  messages,
+  maxTokens,
+  temperature,
+  label,
+}) {
+  const { result: resp, baseUrl: usedBaseUrl } = await withGlmEndpointFallback(
+    { provider, baseUrl, model, endpointSource },
+    (url) =>
+      getClient({ provider, baseUrl: url }).chat.completions.create({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: temperature ?? 0.2,
+      }),
+  );
+  recordUsage(resp, label || 'chat', { provider, baseUrl: usedBaseUrl, model });
+  return resp;
 }
 
 export function reportUsage(resp, label = 'worker') {
@@ -122,26 +192,28 @@ export async function chatStream({
   provider,
   baseUrl,
   model,
+  endpointSource,
   messages,
   maxTokens,
   temperature,
   label,
   onChunk,
 }) {
-  const client = getClient({ provider, baseUrl });
-  let stream;
-  try {
-    stream = await client.chat.completions.create({
-      model,
-      messages,
-      max_tokens: maxTokens,
-      temperature: temperature ?? 0.2,
-      stream: true,
-      stream_options: { include_usage: true },
-    });
-  } catch (err) {
-    throw providerRequestError(err, { provider, baseUrl, model });
-  }
+  // The endpoint rejects a mismatched key while opening the stream, so the
+  // fallback wraps creation only — nothing has been emitted to the caller yet
+  // at that point, which is what makes retrying on the sibling safe.
+  const { result: stream, baseUrl: usedBaseUrl } = await withGlmEndpointFallback(
+    { provider, baseUrl, model, endpointSource },
+    (url) =>
+      getClient({ provider, baseUrl: url }).chat.completions.create({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: temperature ?? 0.2,
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+  );
 
   let text = '';
   let lastChunk = null;
@@ -159,6 +231,6 @@ export async function chatStream({
     choices: [{ message: { content: text }, finish_reason: lastChunk?.choices?.[0]?.finish_reason ?? 'stop' }],
     usage: lastChunk?.usage,
   };
-  recordUsage(fakeResp, label || 'chat-stream', { provider, baseUrl, model });
+  recordUsage(fakeResp, label || 'chat-stream', { provider, baseUrl: usedBaseUrl, model });
   return fakeResp;
 }

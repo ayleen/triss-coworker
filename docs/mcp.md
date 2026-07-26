@@ -214,12 +214,23 @@ Core tools are always listed. Model calls default to the worker and require
   same optional `provider` field as `triss_ask`
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
-- `triss_status` — current configuration and integration readiness
+- `triss_status` — current configuration and integration readiness, including a
+  GLM block: whether `ZHIPU_API_KEY` is set, the endpoint a `provider: "glm"`
+  call resolves to, what selected it, and the preset models. A GLM-only server
+  has no worker key, so the worker rows say `(missing)` while GLM calls work —
+  the two are labelled separately for that reason.
 
 For `triss_ask` and `triss_review`, `provider: "glm"` requires
-`ZHIPU_API_KEY` rather than `TRISS_WORKER_API_KEY`. Their `flash` and `pro`
-presets select `glm-5-turbo` and `glm-5.2`; use `zai-coding-plan/<model>` for
-the subscription endpoint or `zai/<model>` for pay-as-you-go.
+`ZHIPU_API_KEY` rather than `TRISS_WORKER_API_KEY`. `pro` selects `glm-5.2` on
+both endpoints; `flash` selects `glm-4.7` on the subscription endpoint and
+`glm-4.5-air` on pay-as-you-go (the subscription endpoint serves an
+`glm-4.5-air` request as `glm-4.7`). Use `zai-coding-plan/<model>` for the
+subscription endpoint or `zai/<model>` for pay-as-you-go — a prefix may carry
+a preset, so `zai/flash` is valid. When neither the request nor
+`TRISS_CODER_MODEL` pinned an endpoint and the call is rejected with
+`401`/`403`/`429`, the server retries once on the other endpoint and reuses
+whichever one works for the rest of the process (re-probed if the key
+changes). A pinned endpoint is never second-guessed.
 
 Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
 (both Jira and Confluence reuse the same Atlassian credentials):
@@ -430,12 +441,15 @@ Every MCP tool call gets its own `call_id` (UUIDv4) written to
 fields. Dashboards (e.g. tokentelemetry) can group records per
 invocation.
 
-GLM records keep their resolved endpoint prefix (`zai-coding-plan/` or
-`zai/`). Subscription calls therefore retain the known `$0` accounting.
-PAYG calls and any other unpriced model, including `opencode/*` OpenCode Zen,
-keep numeric `cost_usd: 0` for JSONL compatibility, add
-`cost_usd_known: false`, and are displayed by `triss usage` as `unknown`, not
-as free. Set the matching `TRISS_PRICE_<MODEL_ID>` override to account for one.
+GLM records keep the endpoint the call actually used (`zai-coding-plan/` or
+`zai/`) — including after an endpoint auto-correction, so a retried call is
+billed to the endpoint that served it. Subscription calls retain the known
+`$0` accounting (the plan meters by quota), and PAYG calls carry Z.AI's
+published list prices for the catalogue models. Anything still unpriced —
+a GLM id outside that catalogue, `opencode/*` OpenCode Zen — keeps numeric
+`cost_usd: 0` for JSONL compatibility, adds `cost_usd_known: false`, and is
+displayed by `triss usage` as `unknown`, not as free. Set the matching
+`TRISS_PRICE_<MODEL_ID>` override to account for one.
 
 To attribute all calls from one MCP server process to a single outer
 session, set `TRISS_PARENT_CALL_ID` in the server's `env` block — every

@@ -13,11 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the `provider` field on `triss_ask` / `triss_review` MCP tools). They reuse
   `ZHIPU_API_KEY` for direct OpenAI-compatible chat completions, while the
   existing `worker` provider remains the default and `deepseek` is an alias.
-  `--model flash|pro` maps to `glm-5-turbo|glm-5.2`; explicit
-  `zai-coding-plan/<model>` / `zai/<model>` prefixes select the subscription or
-  pay-as-you-go endpoint. Usage records retain that endpoint identity:
-  subscription calls remain known `$0`, while PAYG calls without a configured
-  price are reported as unknown instead of silently appearing free.
+  `--model pro` maps to `glm-5.2`, and `--model flash` — Triss's cheap
+  bulk-read tier — maps to `glm-4.7` on the subscription endpoint and
+  `glm-4.5-air` on pay-as-you-go. Explicit `zai-coding-plan/<model>` /
+  `zai/<model>` prefixes select the endpoint, and may carry a preset
+  (`zai/flash`). Usage records retain that endpoint identity: subscription
+  calls remain known `$0` because the plan meters by quota, while PAYG calls
+  are priced from Z.AI's published rates.
+- `triss status` and the `triss_status` MCP tool print a GLM routing block:
+  whether `ZHIPU_API_KEY` is set, the endpoint a `--provider glm` call resolves
+  to, what selected it, and that endpoint's preset models. Worker credential
+  rows are now labelled as such, so a GLM-only setup no longer reads as
+  unconfigured just because it has no worker key.
+- Pay-as-you-go GLM models now ship with Z.AI's published list prices, so
+  `triss usage` reports a real cost for them instead of `unknown`.
   Provider selection is intentionally scoped to `ask` and `review`;
   `chat`, `fetch`, `write`, and `commit-msg` keep their existing worker route,
   while `triss coder` remains the separate agentic path.
@@ -34,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A GLM call that nothing pinned to an endpoint is no longer a one-shot guess.
+  A Z.AI key carries no marker of which plan it belongs to, so a pay-as-you-go
+  key used to fail outright against the `zai-coding-plan` default. Such a call
+  is now retried once on the other endpoint; the working one is reported on
+  stderr and reused for the rest of the process, and re-probed if the key
+  changes. Endpoints pinned by an explicit prefix or `TRISS_CODER_MODEL` are
+  never second-guessed, and a key that works on neither endpoint still surfaces
+  the original rejection.
+- A preset behind a provider prefix is resolved instead of being sent
+  verbatim: `zai/flash` previously reached the provider as the literal model
+  id `flash`.
 - Long-lived MCP processes now refresh file-backed `TRISS_CODER_MODEL` and
   `ZHIPU_API_KEY` values between calls, including edits and removals, while
   preserving the precedence of values supplied by the parent environment.

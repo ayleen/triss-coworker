@@ -45,7 +45,7 @@ export async function runAskWithDeps(opts, deps = {}) {
   const sendChat = deps.chat || chat;
   const sendChatStream = deps.chatStream || chatStream;
   const request = resolveRequest({ provider: providerInput, model: modelInput });
-  const { provider, model, baseUrl } = request;
+  const { provider, model } = request;
 
   let corpus = '';
   let fileCount = 0;
@@ -96,15 +96,13 @@ export async function runAskWithDeps(opts, deps = {}) {
   const useStream = shouldStream(opts);
   const resp = useStream
     ? await sendChatStream({
-        model,
-        provider,
-        baseUrl,
+        ...request,
         maxTokens,
         messages,
         label: 'triss/ask',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await sendChat({ provider, baseUrl, model, maxTokens, messages, label: 'triss/ask' });
+    : await sendChat({ ...request, maxTokens, messages, label: 'triss/ask' });
 
   const answer = resp.choices?.[0]?.message?.content;
   if (!answer) {

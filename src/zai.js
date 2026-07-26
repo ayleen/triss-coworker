@@ -11,3 +11,18 @@ export function zaiPrefixForBaseUrl(baseUrl) {
   if (normalized === ZAI_CODING_PLAN_BASE_URL) return 'zai-coding-plan';
   return null;
 }
+
+export function zaiBaseUrlForPrefix(prefix) {
+  return prefix === 'zai' ? ZAI_PAYG_BASE_URL : ZAI_CODING_PLAN_BASE_URL;
+}
+
+// The other endpoint of the pair. A Z.AI key authenticates against exactly one
+// of them, so this is what an unrouted call falls back to. Returns null for a
+// base URL that is not one of the two (a custom/self-hosted gateway), where
+// there is no sibling to guess at.
+export function siblingZaiBaseUrl(baseUrl) {
+  const prefix = zaiPrefixForBaseUrl(baseUrl);
+  if (prefix === 'zai') return ZAI_CODING_PLAN_BASE_URL;
+  if (prefix === 'zai-coding-plan') return ZAI_PAYG_BASE_URL;
+  return null;
+}

@@ -32,10 +32,22 @@ test('estimateCost returns null for unknown models instead of treating them as f
   );
 });
 
-test('estimateCost distinguishes the known free coding-plan endpoint from unknown PAYG pricing', () => {
+test('estimateCost distinguishes the free coding-plan endpoint from priced PAYG calls', () => {
   const usage = { prompt_tokens: 643, cached_tokens: 0, completion_tokens: 53 };
   assert.equal(estimateCost({ ...usage, model: 'zai-coding-plan/glm-5.2' }), 0);
-  assert.equal(estimateCost({ ...usage, model: 'zai/glm-5.2' }), null);
+  // PAYG bills per token: 643 × $1.40/1M + 53 × $4.40/1M.
+  const payg = estimateCost({ ...usage, model: 'zai/glm-5.2' });
+  assert.ok(Math.abs(payg - (643 * 1.4e-6 + 53 * 4.4e-6)) < 1e-12);
+  // A model outside the published catalogue stays unknown rather than $0.
+  assert.equal(estimateCost({ ...usage, model: 'zai/glm-unreleased' }), null);
+});
+
+test('the GLM flash preset is priced well below the turbo tier it replaced', () => {
+  const usage = { prompt_tokens: 100_000, cached_tokens: 0, completion_tokens: 4_000 };
+  const air = estimateCost({ ...usage, model: 'zai/glm-4.5-air' });
+  const turbo = estimateCost({ ...usage, model: 'zai/glm-5-turbo' });
+  assert.ok(air > 0 && turbo > 0);
+  assert.ok(air * 4 < turbo, `expected air (${air}) to be well under turbo (${turbo})`);
 });
 
 test('all coding-plan model ids are known free unless an explicit price override is set', () => {
@@ -225,7 +237,7 @@ test('logUsage records explicit call_id and parent_call_id', () => {
 
 test('logUsage keeps cost_usd numeric and marks an unpriced model as unknown', () => {
   const r = logUsage({
-    model: 'zai/glm-5.2',
+    model: 'zai/glm-unreleased',
     prompt_tokens: 10,
     completion_tokens: 5,
     label: 'unknown-price',

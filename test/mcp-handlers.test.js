@@ -344,3 +344,50 @@ test('MCP-H-07: confluencePageHandler converts ADF body to readable text', async
     restore();
   }
 });
+
+// ─── MCP-H-08: triss_status describes the GLM route, not just the worker ────
+
+test('MCP-H-08: statusHandler reports GLM readiness, endpoint, and presets', async () => {
+  const restore = snapshot([...WORKER_VARS]);
+  // A GLM-only setup: no worker key at all. The worker rows say "(missing)"
+  // while provider:"glm" calls still work, so the GLM block has to stand alone.
+  delete process.env.TRISS_WORKER_API_KEY;
+
+  const { statusHandler, describeGlmRoutingLines } = await import(
+    `../src/mcp/handlers.js?mcp-h-08=${Date.now()}`
+  );
+
+  try {
+    const text = await statusHandler();
+    assert.match(text, /GLM \(provider "glm"\):/);
+    assert.match(text, /ZHIPU_API_KEY: (configured|missing)/);
+    assert.match(text, /Endpoint: https:\/\/api\.z\.ai\//);
+    assert.match(text, /Presets: flash=glm-(4\.7|4\.5-air), pro=glm-5\.2/);
+    // The worker credential lines must name their provider, so a GLM-only
+    // setup cannot read a worker "(missing)" as GLM being unconfigured.
+    assert.match(text, /Worker API key:/);
+    assert.match(text, /Worker presets: flash=/);
+
+    const pinned = describeGlmRoutingLines({
+      keyConfigured: true,
+      endpoint: 'zai',
+      endpointSource: 'config',
+      coderModel: 'zai/glm-5.2',
+      baseUrl: 'https://api.z.ai/api/paas/v4',
+      presets: [{ preset: 'flash', model: 'glm-4.5-air' }],
+    }).join('\n');
+    assert.match(pinned, /pinned by TRISS_CODER_MODEL=zai\/glm-5\.2/);
+
+    const bare = describeGlmRoutingLines({
+      keyConfigured: false,
+      endpoint: 'zai-coding-plan',
+      endpointSource: 'default',
+      coderModel: null,
+      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      presets: [{ preset: 'pro', model: 'glm-5.2' }],
+    }).join('\n');
+    assert.match(bare, /default — a rejected call retries the other endpoint once/);
+  } finally {
+    restore();
+  }
+});
