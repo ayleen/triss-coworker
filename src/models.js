@@ -1,4 +1,4 @@
-import { getConfig } from './config.js';
+import { getConfig, readGlmConfigSnapshot } from './config.js';
 import {
   ZAI_CODING_PLAN_BASE_URL,
   ZAI_PAYG_BASE_URL,
@@ -53,11 +53,12 @@ export function resolveModelRequest({ provider: providerInput, model: modelInput
     return { provider, model: resolveModel(modelInput) };
   }
 
-  // Load project/global .env files once before deriving the endpoint from
-  // TRISS_CODER_MODEL and resolving the default GLM preset.
+  // The shared config still provides the worker/preset defaults. GLM endpoint
+  // selection uses a reloadable snapshot so file edits do not become stale
+  // process.env values in a long-lived MCP server.
   const cfg = getConfig();
   const explicitPrefix = glmProviderPrefix(modelInput);
-  const configuredPrefix = glmProviderPrefix(process.env.TRISS_CODER_MODEL);
+  const configuredPrefix = glmProviderPrefix(readGlmConfigSnapshot().coderModel);
   const endpoint = explicitPrefix || configuredPrefix || 'zai-coding-plan';
   const model = resolveGlmModel(modelInput, cfg);
   if (!String(model).trim()) {
