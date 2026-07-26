@@ -2,44 +2,52 @@ import dotenv from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles } from './secrets.js';
 
-// Values loaded from a .triss.env file are tracked separately from genuine
-// process environment entries. This lets a long-lived MCP server refresh an
-// edited file without treating its own previous injection as a shell override.
-const fileBackedEnv = new Map();
+const GLM_ENV_KEYS = ['TRISS_CODER_MODEL', 'ZHIPU_API_KEY'];
+
+// This snapshot is taken before this module ever calls loadEnvFiles(), so it
+// contains only values inherited by the process. The reloadable GLM path must
+// not mistake dotenv's global process.env injection for a shell override.
+const parentGlmEnv = Object.freeze(
+  Object.fromEntries(GLM_ENV_KEYS.map((key) => [key, process.env[key]])),
+);
 
 export function loadEnvFiles() {
   // Precedence: process.env > project .triss.env > global ~/.config/triss/.env.
-  // Read low-to-high so a local project value replaces a global file value.
-  const fileValues = new Map();
-  for (const f of [...activeEnvFiles()].reverse()) {
+  // dotenv with override:false only fills *missing* keys, so the first call
+  // (project) wins over the second (global), and real process env wins over
+  // both. Keep this long-standing shared behavior for every non-GLM caller.
+  for (const f of activeEnvFiles()) {
+    if (f.exists) dotenv.config({ path: f.path, override: false, quiet: true });
+  }
+}
+
+// Reads the GLM-only settings without changing process.env. Unlike the shared
+// loader above, this is safe to call repeatedly in a long-lived MCP process:
+// edited/deleted file values are reflected on every invocation. Test seams are
+// deliberately optional so production callers use the real parent snapshot
+// and active files while the parsing/precedence contract stays unit-testable.
+export function readGlmConfigSnapshot({
+  parentEnv = parentGlmEnv,
+  files = activeEnvFiles(),
+  readFile = readFileSync,
+} = {}) {
+  const fileValues = {};
+  // activeEnvFiles is local-first; merge global then local so local wins per key.
+  for (const f of [...files].reverse()) {
     if (!f.exists) continue;
     try {
-      for (const [key, value] of Object.entries(dotenv.parse(readFileSync(f.path)))) {
-        fileValues.set(key, value);
+      const parsed = dotenv.parse(readFile(f.path));
+      for (const key of GLM_ENV_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(parsed, key)) fileValues[key] = parsed[key];
       }
     } catch {
-      // Keep dotenv.config's historical best-effort handling for unreadable
-      // or malformed files; an unavailable env file must not break a request.
+      // Match dotenv.config's best-effort behavior for an unreadable file.
     }
   }
-
-  // Before applying the fresh snapshot, remove values owned by the prior
-  // file load. Setup commands update both the file and process.env, so a
-  // changed process value that matches the new file still remains file-owned.
-  // A value different from both snapshots is a runtime override and is kept.
-  for (const [key, oldValue] of fileBackedEnv) {
-    const currentValue = process.env[key];
-    if (currentValue === oldValue || currentValue === fileValues.get(key)) {
-      delete process.env[key];
-    }
-  }
-  fileBackedEnv.clear();
-
-  for (const [key, value] of fileValues) {
-    if (process.env[key] !== undefined) continue;
-    process.env[key] = value;
-    fileBackedEnv.set(key, value);
-  }
+  return {
+    coderModel: parentEnv.TRISS_CODER_MODEL ?? fileValues.TRISS_CODER_MODEL ?? '',
+    apiKey: parentEnv.ZHIPU_API_KEY ?? fileValues.ZHIPU_API_KEY ?? '',
+  };
 }
 
 export function getConfig() {
@@ -75,8 +83,7 @@ export function requireApiKey(cfg = getConfig()) {
 }
 
 export function requireGlmApiKey() {
-  loadEnvFiles();
-  const apiKey = process.env.ZHIPU_API_KEY || '';
+  const { apiKey } = readGlmConfigSnapshot();
   if (!apiKey) {
     throw new Error(
       'No GLM API key found.\n' +
