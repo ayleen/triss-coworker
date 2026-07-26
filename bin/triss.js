@@ -76,7 +76,9 @@ program
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
   .option('--system <text>', 'override the system prompt')
   .option('--no-stream', "disable streaming output (default streams when stdout is a TTY)")
-  .action(wrap(runAsk));
+  // Commander also supplies its Command instance to action handlers. Adapt
+  // at the CLI boundary so runAsk receives only its documented options.
+  .action((opts) => wrap(runAsk)(opts));
 
 program
   .command('write')

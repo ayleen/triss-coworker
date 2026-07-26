@@ -349,8 +349,10 @@ block) and every record from that process carries it. External dashboards
 (e.g. tokentelemetry) can group by either field. List-price defaults for
 DeepSeek are baked in. GLM records retain `zai-coding-plan/` or `zai/` so
 subscription usage stays known `$0` while unpriced PAYG usage is shown as
-`unknown`, never as free. The JSONL keeps `cost_usd` numeric for dashboard
-compatibility and marks unpriced records with `cost_usd_known: false`.
+`unknown`, never as free. Any other unpriced model, including `opencode/*`
+OpenCode Zen, is also `unknown` unless configured with a matching
+`TRISS_PRICE_<MODEL_ID>` override. The JSONL keeps `cost_usd` numeric for
+dashboard compatibility and marks unpriced records with `cost_usd_known: false`.
 Existing records are not migrated, so older bare GLM model ids remain as
 originally logged. Override per-model with
 `TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token), for example

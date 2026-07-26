@@ -56,7 +56,10 @@ export async function runStatus(deps = {}) {
     const tag = r.ready
       ? pc.green('✓ ready')
       : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
-    lines.push(`  ${m.name.padEnd(10)} ${tag}`);
+    // The `coder` manifest remains the config-wizard target, but its Z.AI
+    // credential now also enables one-shot GLM ask/review calls.
+    const statusName = m.name === CODER_MANIFEST.name ? 'GLM/coder' : m.name;
+    lines.push(`  ${statusName.padEnd(10)} ${tag}`);
     for (const e of m.envVars || []) {
       const present = process.env[e.name];
       const source = varSource.get(e.name);

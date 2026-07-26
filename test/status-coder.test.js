@@ -90,7 +90,7 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
     assert.doesNotMatch(out, /^Coder$/m);
     assert.doesNotMatch(out, /default engine/);
     // The generic manifest row (env var readiness) still shows.
-    assert.match(out, /coder\s+⚠ missing ZHIPU_API_KEY/);
+    assert.match(out, /GLM\/coder\s+⚠ missing ZHIPU_API_KEY/);
   } finally {
     process.chdir(origCwd);
     process.env.HOME = origHome;
@@ -104,6 +104,7 @@ test(
   'runStatus: the coder block appears with both engines + the default-engine indicator when ZHIPU_API_KEY is configured',
   withTmpKey(async () => {
     const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '1.17.18' }) }))());
+    assert.match(out, /GLM\/coder\s+✓ ready/);
     assert.match(out, /^Coder$/m);
     assert.match(out, /default engine\s+opencode/);
     assert.match(out, /worktrees \(\.triss\/wt\)/);
