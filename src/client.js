@@ -1,4 +1,3 @@
-import { createHmac, randomBytes } from 'node:crypto';
 import OpenAI from 'openai';
 import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
@@ -99,21 +98,14 @@ export function providerRequestError(err, { provider, baseUrl, model }) {
 // default is a guess. When that guess is rejected with a routing status we
 // retry once on the sibling endpoint and remember the winner for the rest of
 // the process — a long-lived MCP server pays for the discovery at most once
-// per key. Keyed by a key fingerprint so `triss config set ZHIPU_API_KEY`
-// mid-session invalidates it; the key itself is never stored.
-let glmDiscovery = null;
-const glmDiscoveryHmacKey = randomBytes(32);
-
-function keyFingerprint(key) {
-  // A process-local HMAC keeps the cached identifier unlinkable outside this
-  // process. A plain fast hash would let anyone who observes the fingerprint
-  // verify guesses for a leaked/weak API key offline.
-  return createHmac('sha256', glmDiscoveryHmacKey).update(String(key)).digest('hex');
-}
+// per process. Only the endpoint is cached: the API key is never retained or
+// fingerprinted. If the key changes and belongs to the other endpoint, the
+// cached route is rejected and this same one-retry path corrects it.
+let glmDiscoveredBaseUrl = null;
 
 // Test seam + escape hatch for a process that swaps keys without restarting.
 export function resetGlmEndpointDiscovery() {
-  glmDiscovery = null;
+  glmDiscoveredBaseUrl = null;
 }
 
 function statusOf(err) {
@@ -122,11 +114,9 @@ function statusOf(err) {
 
 export async function withGlmEndpointFallback(request, run, deps = {}) {
   const warn = deps.warn || ((line) => process.stderr.write(pc.dim(line)));
-  const readKey = deps.requireGlmApiKey || requireGlmApiKey;
   const provisional = request.provider === 'glm' && request.endpointSource === 'default';
-  const fingerprint = provisional ? keyFingerprint(readKey()) : null;
-  const baseUrl = provisional && glmDiscovery?.fingerprint === fingerprint
-    ? glmDiscovery.baseUrl
+  const baseUrl = provisional && glmDiscoveredBaseUrl
+    ? glmDiscoveredBaseUrl
     : request.baseUrl;
 
   try {
@@ -146,7 +136,7 @@ export async function withGlmEndpointFallback(request, run, deps = {}) {
       // endpoint hint for the route the user actually asked for.
       throw providerRequestError(err, { ...request, baseUrl });
     }
-    glmDiscovery = { fingerprint, baseUrl: sibling };
+    glmDiscoveredBaseUrl = sibling;
     warn(
       `[triss] ZHIPU_API_KEY was rejected by ${normalizeZaiBaseUrl(baseUrl)} (HTTP ${statusOf(err)}) ` +
         `but works on ${sibling}. Using that endpoint for the rest of this process. ` +
