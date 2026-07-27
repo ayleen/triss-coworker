@@ -177,10 +177,14 @@ export function describeGlmRouting() {
 // `--provider kimi` call would go, without making a network call.
 export function describeKimiRouting() {
   const { apiKey, baseUrl } = readKimiConfigSnapshot();
+  // A degenerate TRISS_KIMI_BASE_URL ("///", whitespace) normalizes to the
+  // default endpoint, so it must be reported as default too — the raw
+  // string's truthiness would label the default URL "[TRISS_KIMI_BASE_URL]".
+  const configured = Boolean(String(baseUrl ?? '').trim().replace(/\/+$/, ''));
   return {
     keyConfigured: Boolean(apiKey),
     baseUrl: normalizeKimiBaseUrl(baseUrl),
-    baseUrlSource: baseUrl ? 'config' : 'default',
+    baseUrlSource: configured ? 'config' : 'default',
     presets: Object.entries(KIMI_PRESETS).map(([preset, model]) => ({ preset, model })),
   };
 }

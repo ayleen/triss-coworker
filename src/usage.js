@@ -82,9 +82,14 @@ const DEFAULT_PRICES = {
 };
 
 function priceFor(model) {
+  // Coder runs log Moonshot models with opencode's provider prefix
+  // (moonshotai/kimi-k3, moonshotai-cn/…); ask/review logs the same ids bare.
+  // Strip the prefix FIRST so one DEFAULT_PRICES row — and one
+  // TRISS_PRICE_<MODEL_ID> override — covers both routes.
+  const bare = String(model).replace(/^moonshotai(?:-cn)?\//, '');
   // Allow env overrides like TRISS_PRICE_<MODELID>=<miss>,<hit>,<out>
   // (uppercase model id with non-alphanumerics → '_')
-  const envKey = 'TRISS_PRICE_' + model.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  const envKey = 'TRISS_PRICE_' + bare.toUpperCase().replace(/[^A-Z0-9]/g, '_');
   if (process.env[envKey]) {
     const [miss, hit, out] = process.env[envKey].split(',').map(Number);
     if (!Number.isNaN(miss + hit + out)) {
@@ -94,12 +99,8 @@ function priceFor(model) {
   // Subscription use is metered by the plan, regardless of the particular
   // model id. Keep this after the override so a user can explicitly
   // account for a plan model if their contract changes.
-  if (String(model).startsWith('zai-coding-plan/')) return CODING_PLAN_PRICE;
-  if (String(model).startsWith('kimi-for-coding/')) return CODING_PLAN_PRICE;
-  // Coder runs log Moonshot models with opencode's provider prefix
-  // (moonshotai/kimi-k3, moonshotai-cn/…); ask/review logs the same ids bare.
-  // Strip the prefix so one DEFAULT_PRICES row covers both routes.
-  const bare = String(model).replace(/^moonshotai(?:-cn)?\//, '');
+  if (bare.startsWith('zai-coding-plan/')) return CODING_PLAN_PRICE;
+  if (bare.startsWith('kimi-for-coding/')) return CODING_PLAN_PRICE;
   return DEFAULT_PRICES[bare] || null;
 }
 

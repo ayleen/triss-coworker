@@ -679,6 +679,83 @@ test(
   }),
 );
 
+// The kimi-for-coding kind mirrors the moonshot coverage: it is the riskier
+// of the two (different credential env AND a different upstream protocol), so
+// every moonshot guarantee is asserted for it as well.
+
+test(
+  'runCoderInit: a lone KIMI_API_KEY (no other keys, no preset) infers the kimi-for-coding provider without prompting',
+  withTmpHome(async ({ home }) => {
+    process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'kimi-for-coding/k3');
+  }),
+);
+
+test(
+  'runCoderInit --provider kimi-for-coding without KIMI_API_KEY fails with the missing-key gate (non-TTY)',
+  withTmpHome(async () => {
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'kimi-for-coding' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /Coder setup incomplete: KIMI_API_KEY is not set/,
+    );
+  }),
+);
+
+test(
+  'runCoderInit --engine crush --provider kimi-for-coding is rejected — crush speaks Z.AI GLM only',
+  withTmpHome(async () => {
+    process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, engine: 'crush', provider: 'kimi-for-coding' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /crush engine supports Z\.AI GLM only/,
+    );
+  }),
+);
+
+test(
+  'runCoderInit --provider kimi-for-coding: an existing GLM opencode.json is flagged as a provider mismatch and never edited',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';
+    const configDir = join(home, '.config', 'opencode');
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, 'opencode.json');
+    const custom = JSON.stringify({
+      model: 'zai-coding-plan/glm-5.2',
+      small_model: 'zai-coding-plan/glm-5-turbo',
+      permission: { bash: { '*': 'deny' } },
+    });
+    writeFileSync(configPath, custom);
+
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'kimi-for-coding' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /Coder setup incomplete/,
+    );
+    const out = captured.join('');
+    assert.match(out, /does not match the Kimi for Coding provider/);
+    assert.match(out, /kimi-for-coding\/<id>/);
+    assert.equal(readFileSync(configPath, 'utf8'), custom, 'existing config must be preserved verbatim');
+  }),
+);
+
 test(
   'runCoderInit --provider moonshot: an existing GLM opencode.json is flagged as a provider mismatch and never edited',
   withTmpHome(async ({ home, captured }) => {

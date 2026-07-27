@@ -63,6 +63,27 @@ test('estimateCost prices Kimi models bare and prefixed, and keeps the subscript
   assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k99' }), null);
 });
 
+test('a TRISS_PRICE override for a Kimi id applies to both the bare and the prefixed form', () => {
+  // ask/review logs `kimi-k3`; coder runs log `moonshotai/kimi-k3`. Both are
+  // the same billed model, so ONE override key must cover both routes.
+  const envKey = 'TRISS_PRICE_KIMI_K3';
+  const before = process.env[envKey];
+  const usage = { prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
+  try {
+    process.env[envKey] = '0.000001,0.0000001,0.000005';
+    const expected = 1000 * 0.000001 + 100 * 0.000005;
+    for (const model of ['kimi-k3', 'moonshotai/kimi-k3', 'moonshotai-cn/kimi-k3']) {
+      assert.ok(
+        Math.abs(estimateCost({ ...usage, model }) - expected) < 1e-9,
+        `override must apply to ${model}`,
+      );
+    }
+  } finally {
+    if (before === undefined) delete process.env[envKey];
+    else process.env[envKey] = before;
+  }
+});
+
 test('the GLM flash preset is priced well below the turbo tier it replaced', () => {
   const usage = { prompt_tokens: 100_000, cached_tokens: 0, completion_tokens: 4_000 };
   const air = estimateCost({ ...usage, model: 'zai/glm-4.5-air' });

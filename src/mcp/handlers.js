@@ -957,6 +957,8 @@ export async function coderStatusHandler() {
   const lines = [
     `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush; crush bridges it to ZAI_API_KEY at run time)`,
     `OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? 'configured' : 'not set'} (optional — unlocks OpenCode Zen models like opencode/hy3-free on the opencode engine)`,
+    `MOONSHOT_API_KEY: ${process.env.MOONSHOT_API_KEY ? 'configured' : 'not set'} (optional — unlocks Moonshot Kimi models like moonshotai/kimi-k2.7-code on the opencode engine)`,
+    `KIMI_API_KEY: ${process.env.KIMI_API_KEY ? 'configured' : 'not set'} (optional — unlocks Kimi for Coding subscription models like kimi-for-coding/k3 on the opencode engine)`,
     `Default engine: ${status.defaultEngine}`,
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — from TRISS_CODER_MODEL, used by a bare opencode-engine run (crush ignores it and uses its own GLM atoms)`,
     status.engineVersion
