@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-07-27
+
 ### Added
 
 - **Kimi (Moonshot AI) as a first-class inference provider.** `triss ask` and
-  `triss review` accept `--provider kimi` (alias `moonshot`; also the
-  `provider` field on the `triss_ask` / `triss_review` MCP tools), using
+  `triss review` accept `--provider kimi` (aliases `moonshot`, `moonshotai`;
+  also the `provider` field on the `triss_ask` / `triss_review` MCP tools), using
   `MOONSHOT_API_KEY` against the OpenAI-compatible
   `https://api.moonshot.ai/v1` endpoint. `--model pro` maps to `kimi-k3` —
   Moonshot's flagship open-weights model (released 2026-07-16, weights
@@ -51,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 1.18.4 specifically improved Kimi model handling).
 - The `coder` row in `triss status` is labelled `coder` (previously
   `GLM/coder`) now that it fronts GLM, Kimi, and OpenCode Zen credentials.
+- The npm tarball no longer ships `docs/promo/` (marketing drafts); the
+  package `files` list excludes it explicitly.
+- A bare `triss coder run` that fails on a missing `ZHIPU_API_KEY` now names
+  the working `--model` path when another provider's key (Zen/Kimi) is
+  configured, and Kimi 429 responses carry a rate-limit/balance hint.
 
 ## [0.25.0] — 2026-07-27
 
@@ -773,7 +780,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/ayleen/triss-coworker/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/ayleen/triss-coworker/compare/v0.24.2...v0.25.0
+[0.24.2]: https://github.com/ayleen/triss-coworker/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/ayleen/triss-coworker/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/ayleen/triss-coworker/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/ayleen/triss-coworker/compare/v0.22.4...v0.23.0
