@@ -633,6 +633,27 @@ test(
 );
 
 test(
+  'runCoderInit: a moonshotai-cn/* preset pins the small model to the SAME regional prefix, and re-init stays idempotent',
+  withTmpHome(async ({ home }) => {
+    // The CN and intl Moonshot hosts are separate accounts, so a
+    // moonshotai-cn/* main paired with a moonshotai/* small default would be
+    // unservable by one key — and auditExistingConfig would then block the
+    // very next `coder init` run on the mixed prefixes it wrote itself.
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    process.env.TRISS_CODER_MODEL = 'moonshotai-cn/kimi-k3';
+    const deps = { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() };
+    await runCoderInit({ global: true, provider: 'moonshot' }, deps);
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'moonshotai-cn/kimi-k3');
+    assert.equal(config.small_model, 'moonshotai-cn/kimi-k2.6');
+    // Idempotency: the pair init just wrote must pass its own audit.
+    await runCoderInit({ global: true, provider: 'moonshot' }, deps);
+  }),
+);
+
+test(
   'runCoderInit: TRISS_CODER_MODEL=kimi-for-coding/* infers the subscription provider and is honored verbatim',
   withTmpHome(async ({ home }) => {
     process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';

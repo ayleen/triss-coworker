@@ -11,6 +11,7 @@
     "src/",
     "templates/",
     "docs/",
+    "!docs/promo/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

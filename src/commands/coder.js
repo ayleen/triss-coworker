@@ -431,7 +431,10 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   const zenAvailable = providerInfo.kind === 'opencode-zen' ? cat.available : null;
   const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(providerModelId(m));
 
-  const pickOne = async (envVar, existingVal, label, idx, def, fallbackFull) => {
+  // `prefix` is the provider prefix used for picker/default resolutions of
+  // THIS field; it defaults to the catalogue's canonical prefix but the small
+  // model passes the resolved main model's prefix instead (see below).
+  const pickOne = async (envVar, existingVal, label, idx, def, fallbackFull, prefix = cat.prefix) => {
     // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
     //    KIND (the user set it deliberately). Warn — but still use it — if its
     //    plan prefix doesn't match the detected Z.AI plan.
@@ -492,9 +495,9 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     //       there is no fallback either do we block with an actionable message
     //       rather than fabricating a model the catalogue said is gone.
     if (interactive && cat.choices.length) {
-      return `${cat.prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`;
+      return `${prefix}/${await choose(`  ${label} ${cat.noun} model for opencode.json?`, cat.choices, { defaultIndex: idx })}`;
     }
-    if (def) return `${cat.prefix}/${def}`;
+    if (def) return `${prefix}/${def}`;
     if (fallbackFull) return fallbackFull;
     throw new Error(
       `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
@@ -504,6 +507,15 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   };
 
   const model = await pickOne('TRISS_CODER_MODEL', existing.model, 'Main', cat.mainIdx, cat.mainDefault, null);
+  // The small model must share the MAIN model's provider/plan prefix when the
+  // main fits the chosen provider: an honored moonshotai-cn/* main would
+  // otherwise pair with the catalogue's default `moonshotai/` small — a
+  // cross-host mix one key cannot serve, which auditExistingConfig rightly
+  // blocks on the NEXT init run (breaking idempotency). A main that does NOT
+  // fit (a cross-plan zai preset honored with its loud warning) keeps the
+  // catalogue prefix — the endpoint the key actually verified against.
+  const mainPrefix = String(model).split('/')[0];
+  const smallPrefix = modelFitsProvider(model, providerInfo) ? mainPrefix : cat.prefix;
   // The resolved main model is the small model's last-resort fallback (see the
   // block above) so a paid/custom in-catalogue main pick never dead-ends here.
   const smallModel = await pickOne(
@@ -513,6 +525,7 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     cat.smallIdx,
     cat.smallDefault,
     model,
+    smallPrefix,
   );
   // A preset/existing model with a prefix triss doesn't recognize is routed to
   // ZHIPU_API_KEY by default (coderModelCredential) and can never be served —
@@ -2793,7 +2806,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         KIMI_API_KEY:
           ' (set KIMI_API_KEY to use Kimi for Coding subscription models like kimi-for-coding/k3)',
       }[cred.env] || '';
-    throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}`);
+    // A bare opencode-engine run resolves the GLM default model, so it demands
+    // ZHIPU_API_KEY even when another provider's key IS configured — and that
+    // key would serve a run today via an explicit model. Name that path
+    // instead of dead-ending a Kimi/Zen-only setup on a Z.AI message.
+    const ALT_MODEL_HINTS = {
+      OPENCODE_API_KEY: 'opencode/hy3-free',
+      MOONSHOT_API_KEY: 'moonshotai/kimi-k2.7-code',
+      KIMI_API_KEY: 'kimi-for-coding/k3',
+    };
+    const altKey =
+      engine !== 'crush' && cred.env === 'ZHIPU_API_KEY'
+        ? Object.keys(ALT_MODEL_HINTS).find((k) => process.env[k])
+        : null;
+    const alt = altKey
+      ? ` ${altKey} is set, so a run works now with --model ${ALT_MODEL_HINTS[altKey]}; \`triss coder init\` makes it the default.`
+      : '';
+    throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);

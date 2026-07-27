@@ -62,8 +62,12 @@ export async function runStatus(deps = {}) {
   }
 
   // Kimi mirrors the GLM block: one endpoint, so the only routing fact worth
-  // showing besides the key is whether TRISS_KIMI_BASE_URL overrides it.
+  // showing besides the key is whether TRISS_KIMI_BASE_URL overrides it — and
+  // from WHERE. A project .triss.env can redirect the endpoint (and thus where
+  // MOONSHOT_API_KEY is sent), so name the file scope like the credential rows
+  // do rather than hiding the override behind a bare env-var name.
   const kimi = describeKimiRouting();
+  const kimiUrlScope = varSource.get('TRISS_KIMI_BASE_URL') || 'env';
   lines.push('');
   lines.push(pc.bold('Kimi routing') + pc.dim('  (--provider kimi)'));
   lines.push(
@@ -71,7 +75,7 @@ export async function runStatus(deps = {}) {
   );
   lines.push(
     `  endpoint    : ${kimi.baseUrl} ${pc.dim(
-      kimi.baseUrlSource === 'config' ? '[TRISS_KIMI_BASE_URL]' : '[default]',
+      kimi.baseUrlSource === 'config' ? `[TRISS_KIMI_BASE_URL · ${kimiUrlScope}]` : '[default]',
     )}`,
   );
   for (const p of kimi.presets) {
