@@ -122,7 +122,8 @@ Things it will **not** silently do (each **exits non-zero** so you can't miss a
 half-broken setup — the config/templates are still written, so fixing the cause
 and re-running is a clean idempotent completion):
 
-- **Missing key.** If the provider's key (`OPENCODE_API_KEY` / `ZHIPU_API_KEY`)
+- **Missing key.** If the provider's key (`OPENCODE_API_KEY` / `ZHIPU_API_KEY` /
+  `MOONSHOT_API_KEY` / `KIMI_API_KEY`)
   isn't set by the end of init, it fails rather than printing a green "Done." the
   next run contradicts with "<KEY> is not set".
 - **Shadowed pin.** If a higher‑precedence source will override the pin in the
@@ -160,15 +161,20 @@ conflict.
 
 Provider resolution when you don't pass `--provider`:
 
-1. explicit `--provider zai|opencode-zen` wins;
-2. else a `TRISS_CODER_MODEL` preset decides (an `opencode/*` prefix ⇒ Zen);
-3. else a single already‑set credential is taken as intent (only
-   `OPENCODE_API_KEY` set ⇒ Zen; only `ZHIPU_API_KEY` ⇒ Z.AI);
-4. else, on a TTY, you're asked;
+1. explicit `--provider zai|opencode-zen|moonshot|kimi-for-coding` wins;
+2. else a `TRISS_CODER_MODEL` preset decides by its prefix (`opencode/*` ⇒
+   Zen; `moonshotai/*`, `moonshotai-cn/*` ⇒ Moonshot; `kimi-for-coding/*` ⇒
+   Kimi for Coding; `zai*/…` ⇒ Z.AI);
+3. else **exactly one** already‑set credential among `ZHIPU_API_KEY`,
+   `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, and `KIMI_API_KEY` is taken as
+   intent;
+4. else (none set, or two or more set), on a TTY, you're asked;
 5. else the default, `zai`.
 
-So an existing Z.AI user is never re‑prompted; a fresh user on a terminal is
-offered the choice; `--provider` always forces it.
+So a user with a single provider configured is never re‑prompted; one with
+several credentials (say Z.AI **and** Moonshot) is asked which to configure,
+unless a `TRISS_CODER_MODEL` preset or `--provider` already answers it; a
+fresh user on a terminal is offered the choice.
 
 ### 2. Environment variables
 
@@ -202,8 +208,9 @@ trying a Zen model against an otherwise Z.AI setup.
 
 ## Over MCP
 
-The `triss_coder_run` / `triss_coder_status` tools appear as soon as **either**
-`ZHIPU_API_KEY` **or** `OPENCODE_API_KEY` is set (`coderCredentialReady()`).
+The `triss_coder_run` / `triss_coder_status` tools appear as soon as **any**
+provider credential is set — `ZHIPU_API_KEY`, `OPENCODE_API_KEY`,
+`MOONSHOT_API_KEY`, or `KIMI_API_KEY` (`coderCredentialReady()`).
 Pass `model: "opencode/hy3-free"` to `triss_coder_run`, or set
 `TRISS_CODER_MODEL` so a bare call defaults to it. See
 [mcp.md](mcp.md#what-tools-are-exposed).
@@ -244,12 +251,14 @@ model. Before pointing a free Zen model at private code:
 
 ## Limitations & notes
 
-- **opencode engine only.** `--engine crush --provider opencode-zen` (or a crush
-  run with `--model opencode/*`) is rejected up front — crush bridges
-  `ZHIPU_API_KEY → ZAI_API_KEY` and cannot serve Zen models.
+- **opencode engine only.** `--engine crush` with any non-`zai` `--provider`
+  (or a crush run with a `--model` whose prefix needs a non-Z.AI key —
+  `opencode/*`, `moonshotai/*`, `kimi-for-coding/*`) is rejected up front —
+  crush bridges `ZHIPU_API_KEY → ZAI_API_KEY` and serves GLM only.
 - **Readiness** (`triss status` "ready" marker, wizard "required") stays keyed
-  to `ZHIPU_API_KEY`, since Z.AI is the default provider. A Zen‑only setup shows
-  `ZHIPU_API_KEY` as missing but still runs — that's expected.
+  to `ZHIPU_API_KEY`, since Z.AI is the default provider. A Zen‑only (or
+  Kimi‑only) setup shows `ZHIPU_API_KEY` as missing but still runs — that's
+  expected.
 - **Free tier is promotional.** If a free model is retired or rate‑limited, the
   run fails at the engine; switch `TRISS_CODER_MODEL` to another id.
 - **Key hygiene.** Never commit `.triss.env`; `triss config set --local` adds it

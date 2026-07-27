@@ -34,7 +34,9 @@ export function resolveProvider(input) {
   const provider = String(input || 'worker').toLowerCase();
   if (provider === 'worker' || provider === 'deepseek') return 'worker';
   if (provider === 'glm') return 'glm';
-  if (provider === 'kimi' || provider === 'moonshot') return 'kimi';
+  // `moonshotai` is accepted for parity with `triss coder init --provider` —
+  // the same alias set must work on both commands.
+  if (provider === 'kimi' || provider === 'moonshot' || provider === 'moonshotai') return 'kimi';
   throw new Error(
     `Unknown inference provider "${input}" — valid values: worker, deepseek, glm, kimi, moonshot.`,
   );

@@ -181,6 +181,56 @@ test(
   }),
 );
 
+test('runCoderRun: a bare run without ZHIPU_API_KEY names the configured alternative provider path', async () => {
+  // A Kimi-only setup (MOONSHOT_API_KEY, no init yet) resolves the GLM
+  // default model on a bare run — the error must point at the working
+  // --model path instead of dead-ending on a Z.AI-only message.
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'triss-run-nokey-'));
+  const KEYS = ['ZHIPU_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY', 'OPENCODE_API_KEY', 'TRISS_CODER_MODEL', 'HOME', 'TRISS_PROJECT_ROOT'];
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  // Isolated HOME/project root so loadEnvFiles() cannot re-inject the repo's
+  // real ZHIPU_API_KEY from .triss.env.
+  process.env.HOME = dir;
+  process.env.TRISS_PROJECT_ROOT = dir;
+  delete process.env.ZHIPU_API_KEY;
+  delete process.env.KIMI_API_KEY;
+  delete process.env.OPENCODE_API_KEY;
+  delete process.env.TRISS_CODER_MODEL;
+  process.env.MOONSHOT_API_KEY = 'mk-fake-test-key';
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun(
+          'do something',
+          {},
+          {
+            spawn: () => {
+              throw new Error('must not spawn');
+            },
+            spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          },
+        ),
+      (err) => {
+        assert.match(err.message, /ZHIPU_API_KEY is not set/);
+        assert.match(
+          err.message,
+          /MOONSHOT_API_KEY is set, so a run works now with --model moonshotai\/kimi-k2\.7-code/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test(
   'runCoderRun: a single top-level {"type":"error",...} line (parseable) yields an envelope with exit_reason "error", not a throw',
   withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {

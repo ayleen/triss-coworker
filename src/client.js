@@ -87,6 +87,15 @@ export function providerRequestError(err, { provider, baseUrl, model }) {
       { cause: err },
     );
   }
+  if (provider === 'kimi' && status === 429) {
+    return new Error(
+      `Kimi request for model "${model}" was throttled (HTTP 429). ` +
+        'Either the Moonshot account is rate limited or its balance/quota is exhausted — ' +
+        'check the account at https://platform.kimi.ai/. ' +
+        `Original error: ${body}`,
+      { cause: err },
+    );
+  }
   if (provider === 'glm' && GLM_ROUTE_STATUSES.has(status)) {
     // A genuine 429 (quota or rate limit on the right endpoint) is also
     // possible, so name both causes instead of asserting the key is wrong.

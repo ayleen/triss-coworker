@@ -42,6 +42,8 @@ test('resolveProvider keeps the existing worker default and accepts deepseek/moo
   assert.equal(resolveProvider('GLM'), 'glm');
   assert.equal(resolveProvider('kimi'), 'kimi');
   assert.equal(resolveProvider('Moonshot'), 'kimi');
+  // Parity with `triss coder init --provider` aliases.
+  assert.equal(resolveProvider('moonshotai'), 'kimi');
   assert.throws(() => resolveProvider('other'), /valid values: worker, deepseek, glm, kimi, moonshot/);
 });
 
@@ -311,8 +313,10 @@ test('Kimi provider errors carry the MOONSHOT_API_KEY hint on auth failures and 
   );
   assert.match(notFound.message, /--provider kimi --model kimi-k3/);
 
-  // A Kimi 429 is a genuine rate limit — it must NOT be rewritten into a
-  // routing-style auth hint (there is no sibling endpoint to blame).
+  // A Kimi 429 is a genuine rate limit / balance problem — it gets a quota
+  // hint, never a routing-style auth hint (there is no sibling endpoint to
+  // blame, so the key is not the suspect).
   const limited = providerRequestError(Object.assign(new Error('too many requests'), { status: 429 }), request);
+  assert.match(limited.message, /rate limited or its balance\/quota is exhausted/);
   assert.doesNotMatch(String(limited.message), /MOONSHOT_API_KEY/);
 });
