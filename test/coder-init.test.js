@@ -680,6 +680,37 @@ test(
 );
 
 test(
+  'runCoderInit --provider moonshot: an existing GLM opencode.json is flagged as a provider mismatch and never edited',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    const configDir = join(home, '.config', 'opencode');
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, 'opencode.json');
+    // Deny-first policy present so the ONLY audit problem is the cross-provider
+    // small_model; the mismatch warning on `model` must still be printed.
+    const custom = JSON.stringify({
+      model: 'zai-coding-plan/glm-5.2',
+      small_model: 'zai-coding-plan/glm-5-turbo',
+      permission: { bash: { '*': 'deny' } },
+    });
+    writeFileSync(configPath, custom);
+
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'moonshot' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /Coder setup incomplete/,
+    );
+    const out = captured.join('');
+    assert.match(out, /does not match the Moonshot Kimi provider/);
+    assert.match(out, /moonshotai\/<id>/);
+    assert.equal(readFileSync(configPath, 'utf8'), custom, 'existing config must be preserved verbatim');
+  }),
+);
+
+test(
   'runCoderInit --provider opencode-zen: an explicit provider beats a stale cross-provider TRISS_CODER_MODEL (P1)',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';

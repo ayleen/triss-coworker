@@ -8,5 +8,9 @@
 export const MOONSHOT_BASE_URL = 'https://api.moonshot.ai/v1';
 
 export function normalizeKimiBaseUrl(baseUrl) {
-  return String(baseUrl || MOONSHOT_BASE_URL).replace(/\/+$/, '');
+  // Trim + strip trailing slashes FIRST, then fall back: a degenerate
+  // TRISS_KIMI_BASE_URL like "///" or "   " must resolve to the default, not
+  // hand the OpenAI client an empty baseURL.
+  const normalized = String(baseUrl ?? '').trim().replace(/\/+$/, '');
+  return normalized || MOONSHOT_BASE_URL;
 }

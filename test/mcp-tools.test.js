@@ -115,6 +115,32 @@ test('toMcpToolList strips handler functions', async () => {
   }
 });
 
+test('describeKimiRoutingLines names the key, endpoint source, and presets', async () => {
+  const { describeKimiRoutingLines } = await import('../src/mcp/handlers.js');
+  const lines = describeKimiRoutingLines({
+    keyConfigured: true,
+    baseUrl: 'https://api.moonshot.cn/v1',
+    baseUrlSource: 'config',
+    presets: [
+      { preset: 'flash', model: 'kimi-k2.6' },
+      { preset: 'pro', model: 'kimi-k3' },
+    ],
+  });
+  assert.equal(lines[0], 'Kimi (provider "kimi"):');
+  assert.match(lines[1], /MOONSHOT_API_KEY: configured/);
+  assert.match(lines[2], /https:\/\/api\.moonshot\.cn\/v1 \(from TRISS_KIMI_BASE_URL\)/);
+  assert.match(lines[3], /flash=kimi-k2\.6, pro=kimi-k3/);
+
+  const bare = describeKimiRoutingLines({
+    keyConfigured: false,
+    baseUrl: 'https://api.moonshot.ai/v1',
+    baseUrlSource: 'default',
+    presets: [],
+  });
+  assert.match(bare[1], /MOONSHOT_API_KEY: missing/);
+  assert.match(bare[2], /\(default\)/);
+});
+
 test('ask and review MCP tools expose worker/deepseek/glm/kimi provider routing', async () => {
   const tools = await listTools();
   for (const name of ['triss_ask', 'triss_review']) {

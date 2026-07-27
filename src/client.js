@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey, requireKimiApiKey } from './config.js';
-import { MOONSHOT_BASE_URL, normalizeKimiBaseUrl } from './moonshot.js';
+import { normalizeKimiBaseUrl } from './moonshot.js';
 import { logUsage } from './usage.js';
 import { currentCall } from './call-context.js';
 import {
@@ -44,7 +44,9 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
   if (provider === 'kimi') {
     return new OpenAI({
       apiKey: requireKimiApiKey(),
-      baseURL: baseUrl || MOONSHOT_BASE_URL,
+      // resolveModelRequest already normalizes, but normalize here too so a
+      // direct caller with a trailing-slash/blank baseUrl gets the same URL.
+      baseURL: normalizeKimiBaseUrl(baseUrl),
     });
   }
   const cfg = requireApiKey(getConfig());

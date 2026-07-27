@@ -15,7 +15,7 @@ import {
   ZAI_CODING_PLAN_BASE_URL,
   ZAI_PAYG_BASE_URL,
 } from '../src/zai.js';
-import { MOONSHOT_BASE_URL } from '../src/moonshot.js';
+import { MOONSHOT_BASE_URL, normalizeKimiBaseUrl } from '../src/moonshot.js';
 import { providerRequestError } from '../src/client.js';
 
 function withEnv(values, fn) {
@@ -230,6 +230,15 @@ test('Kimi routing rejects blank model ids', () => {
   );
 });
 
+test('normalizeKimiBaseUrl falls back to the default on degenerate values', () => {
+  // "///" is truthy, so a naive `input || default` would pass an empty
+  // baseURL to the OpenAI client after slash-stripping.
+  for (const bad of [undefined, null, '', '   ', '///', ' /// ']) {
+    assert.equal(normalizeKimiBaseUrl(bad), MOONSHOT_BASE_URL);
+  }
+  assert.equal(normalizeKimiBaseUrl('https://api.moonshot.cn/v1/'), 'https://api.moonshot.cn/v1');
+});
+
 // Mirrors the GLM snapshot test: TRISS_KIMI_BASE_URL comes from the reloadable
 // provider snapshot, so a config pin can only be exercised through a real env
 // file in a child process.
@@ -282,9 +291,12 @@ test('a TRISS_KIMI_BASE_URL pin overrides the endpoint, and its absence falls ba
 
 test('Kimi provider errors carry the MOONSHOT_API_KEY hint on auth failures and model names on 404', () => {
   const request = { provider: 'kimi', baseUrl: MOONSHOT_BASE_URL, model: 'kimi-k3' };
-  const auth = providerRequestError(Object.assign(new Error('unauthorized'), { status: 401 }), request);
-  assert.match(auth.message, /Check that MOONSHOT_API_KEY is valid/);
-  assert.match(auth.message, /api\.moonshot\.ai/);
+  for (const status of [401, 403]) {
+    const auth = providerRequestError(Object.assign(new Error('unauthorized'), { status }), request);
+    assert.match(auth.message, /Check that MOONSHOT_API_KEY is valid/);
+    assert.match(auth.message, /api\.moonshot\.ai/);
+    assert.match(auth.message, new RegExp(`HTTP ${status}`));
+  }
 
   const notFound = providerRequestError(
     Object.assign(new Error('model not found'), { status: 404 }),
