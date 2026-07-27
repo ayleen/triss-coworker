@@ -19,7 +19,10 @@ import { runStatus } from '../src/commands/status.js';
 import { OPENCODE_PIN } from '../src/commands/coder.js';
 import { stripAnsi } from './_ansi.js';
 
-const PIN_RE = OPENCODE_PIN.replace(/\./g, '\\.');
+// Full regex-metacharacter escape (not just dots) — a partial escape is the
+// exact incomplete-sanitization pattern CodeQL flags, and a future pin string
+// is not guaranteed to stay [0-9.] forever.
+const PIN_RE = OPENCODE_PIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function captureStdout(fn) {
   return async () => {
