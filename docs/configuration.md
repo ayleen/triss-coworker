@@ -427,7 +427,9 @@ reported, not guessed. Override any of them the same way — `zai/glm-5.2` maps
 to `TRISS_PRICE_ZAI_GLM_5_2`. Kimi PAYG models ship with Moonshot's list
 prices (`kimi-k3`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`,
 `kimi-k2.6`), matched whether the id is logged bare (ask/review) or with
-opencode's `moonshotai/` / `moonshotai-cn/` prefix (coder runs).
+opencode's `moonshotai/` / `moonshotai-cn/` prefix (coder runs) — and a
+`TRISS_PRICE_<MODEL_ID>` override keyed on the bare id
+(`TRISS_PRICE_KIMI_K3`) covers both forms the same way.
 Subscription calls — `zai-coding-plan/*` and `kimi-for-coding/*` — stay
 `$0` because the plan meters by quota rather than tokens. Any model outside
 those catalogues — a newly released GLM/Kimi id, `opencode/*` OpenCode Zen

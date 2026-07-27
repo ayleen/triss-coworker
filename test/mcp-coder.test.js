@@ -79,10 +79,18 @@ function withIsolatedEnv(vars, fn) {
 // ─── listTools gating ────────────────────────────────────────────────────────
 
 test(
-  'listTools: triss_coder_* tools are hidden when NEITHER provider key is set',
-  // Both credentials cleared — gating is coderCredentialReady() (either key),
-  // so an ambient OPENCODE_API_KEY would otherwise keep the tools visible.
-  withIsolatedEnv({ ZHIPU_API_KEY: undefined, OPENCODE_API_KEY: undefined }, async () => {
+  'listTools: triss_coder_* tools are hidden when NO provider key is set',
+  // All four credentials cleared — gating is coderCredentialReady() (any key),
+  // so an ambient OPENCODE/MOONSHOT/KIMI key would otherwise keep the tools
+  // visible.
+  withIsolatedEnv(
+    {
+      ZHIPU_API_KEY: undefined,
+      OPENCODE_API_KEY: undefined,
+      MOONSHOT_API_KEY: undefined,
+      KIMI_API_KEY: undefined,
+    },
+    async () => {
     // Run from an empty tmp HOME/cwd so no .triss.env / global .env can
     // reintroduce a key via getConfig()'s loadEnvFiles() call.
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-mcp-coder-nokey-')));
@@ -102,7 +110,8 @@ test(
       process.env.HOME = origHome;
       rmSync(dir, { recursive: true, force: true });
     }
-  }),
+    },
+  ),
 );
 
 test(
@@ -151,11 +160,28 @@ test(
     const text = await coderStatusHandler();
     assert.match(text, /ZHIPU_API_KEY: configured/);
     assert.ok(!text.includes('zk-super-secret-value-do-not-print'), 'the raw key must never appear in tool output');
+    // Every provider credential the tool's description promises must have a
+    // presence line — a Kimi/Moonshot-only user needs the signal too.
+    assert.match(text, /MOONSHOT_API_KEY: (configured|not set)/);
+    assert.match(text, /KIMI_API_KEY: (configured|not set)/);
     assert.match(text, /Engine:/);
     assert.match(text, /opencode\.json \[global\]/);
     assert.match(text, /opencode\.json \[local\]/);
     assert.match(text, /Worktrees \(\.triss\/wt\): \d+ live/);
   }),
+);
+
+test(
+  'coderStatusHandler: a Moonshot-only setup reports its key as configured, never the value',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: undefined, MOONSHOT_API_KEY: 'mk-super-secret-value-do-not-print' },
+    async () => {
+      const text = await coderStatusHandler();
+      assert.match(text, /ZHIPU_API_KEY: missing/);
+      assert.match(text, /MOONSHOT_API_KEY: configured/);
+      assert.ok(!text.includes('mk-super-secret-value-do-not-print'), 'the raw key must never appear in tool output');
+    },
+  ),
 );
 
 test(

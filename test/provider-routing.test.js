@@ -261,9 +261,13 @@ test('a TRISS_KIMI_BASE_URL pin overrides the endpoint, and its absence falls ba
     const envPath = join(process.env.TRISS_PROJECT_ROOT, '.triss.env');
     const pinnedRequest = resolveModelRequest({ provider: 'kimi', model: 'pro' });
     const pinned = describeKimiRouting();
+    // A degenerate override must fall back to the default endpoint AND be
+    // reported as default, not "[TRISS_KIMI_BASE_URL]".
+    writeFileSync(envPath, 'TRISS_KIMI_BASE_URL=///\\n');
+    const degenerate = describeKimiRouting();
     writeFileSync(envPath, '');
     const bare = describeKimiRouting();
-    console.log(JSON.stringify({ pinnedRequest, pinned, bare }));
+    console.log(JSON.stringify({ pinnedRequest, pinned, degenerate, bare }));
   `;
 
   try {
@@ -273,12 +277,15 @@ test('a TRISS_KIMI_BASE_URL pin overrides the endpoint, and its absence falls ba
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
-    const { pinnedRequest, pinned, bare } = JSON.parse(result.stdout);
+    const { pinnedRequest, pinned, degenerate, bare } = JSON.parse(result.stdout);
 
     // Trailing slash normalized away; the pin routes the actual request.
     assert.equal(pinnedRequest.baseUrl, 'https://api.moonshot.cn/v1');
     assert.equal(pinned.keyConfigured, true);
     assert.equal(pinned.baseUrlSource, 'config');
+
+    assert.equal(degenerate.baseUrl, MOONSHOT_BASE_URL);
+    assert.equal(degenerate.baseUrlSource, 'default');
 
     assert.equal(bare.keyConfigured, false);
     assert.equal(bare.baseUrlSource, 'default');
