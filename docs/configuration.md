@@ -258,7 +258,7 @@ self-hosted endpoints).
 | `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
 | `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
-| `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key |
+| `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen, `moonshotai/kimi-k2.7-code` for Moonshot, `kimi-for-coding/k3` for the Kimi subscription |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |

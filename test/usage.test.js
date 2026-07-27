@@ -51,6 +51,11 @@ test('estimateCost prices Kimi models bare and prefixed, and keeps the subscript
   assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k3' }), bare);
   assert.equal(estimateCost({ ...usage, model: 'moonshotai-cn/kimi-k2.6' }),
     estimateCost({ ...usage, model: 'kimi-k2.6' }));
+  // The coder defaults are priced too, at their distinct list rates (the
+  // highspeed variant is exactly 2× the code model).
+  const code = estimateCost({ ...usage, model: 'kimi-k2.7-code' });
+  assert.ok(Math.abs(code - (1000 * 0.95e-6 + 100 * 4.0e-6)) < 1e-12);
+  assert.equal(estimateCost({ ...usage, model: 'kimi-k2.7-code-highspeed' }), code * 2);
   // The Kimi for Coding subscription is metered by the plan — known-free, like
   // the Z.AI coding plan, not "unknown".
   assert.equal(estimateCost({ ...usage, model: 'kimi-for-coding/k3' }), 0);

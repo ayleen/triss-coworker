@@ -108,6 +108,15 @@ test(
   withTmpKey(async () => {
     const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: OPENCODE_PIN }) }))());
     assert.match(out, /coder\s+✓ ready/);
+    // The Kimi routing block renders regardless of which keys are set. The
+    // key state is asserted loosely — the reloadable snapshot honors a
+    // MOONSHOT_API_KEY exported in the developer's shell, which this harness
+    // cannot unfreeze — but the block, endpoint, and presets are fixed.
+    assert.match(out, /Kimi routing\s+\(--provider kimi\)/);
+    assert.match(out, /MOONSHOT_API_KEY (set|missing)/);
+    assert.match(out, /https:\/\/api\.moonshot\.ai\/v1 \[default\]/);
+    assert.match(out, /flash\s+→ kimi-k2\.6/);
+    assert.match(out, /pro\s+→ kimi-k3/);
     assert.match(out, /^Coder$/m);
     assert.match(out, /default engine\s+opencode/);
     assert.match(out, /worktrees \(\.triss\/wt\)/);
