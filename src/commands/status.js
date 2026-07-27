@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
-import { listPresets, describeGlmRouting } from '../models.js';
+import { listPresets, describeGlmRouting, describeKimiRouting } from '../models.js';
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
@@ -61,6 +61,23 @@ export async function runStatus(deps = {}) {
     lines.push(`  ${p.preset.padEnd(12)}→ ${p.model}`);
   }
 
+  // Kimi mirrors the GLM block: one endpoint, so the only routing fact worth
+  // showing besides the key is whether TRISS_KIMI_BASE_URL overrides it.
+  const kimi = describeKimiRouting();
+  lines.push('');
+  lines.push(pc.bold('Kimi routing') + pc.dim('  (--provider kimi)'));
+  lines.push(
+    `  key         : ${kimi.keyConfigured ? pc.green('MOONSHOT_API_KEY set') : pc.red('MOONSHOT_API_KEY missing')}`,
+  );
+  lines.push(
+    `  endpoint    : ${kimi.baseUrl} ${pc.dim(
+      kimi.baseUrlSource === 'config' ? '[TRISS_KIMI_BASE_URL]' : '[default]',
+    )}`,
+  );
+  for (const p of kimi.presets) {
+    lines.push(`  ${p.preset.padEnd(12)}→ ${p.model}`);
+  }
+
   lines.push('');
   lines.push(pc.bold('Env files'));
   for (const f of activeEnvFiles()) {
@@ -75,10 +92,10 @@ export async function runStatus(deps = {}) {
     const tag = r.ready
       ? pc.green('✓ ready')
       : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
-    // The `coder` manifest remains the config-wizard target, but its Z.AI
-    // credential now also enables one-shot GLM ask/review calls.
-    const statusName = m.name === CODER_MANIFEST.name ? 'GLM/coder' : m.name;
-    lines.push(`  ${statusName.padEnd(10)} ${tag}`);
+    // The `coder` manifest remains the config-wizard target; its Z.AI and
+    // Moonshot credentials also enable one-shot GLM/Kimi ask/review calls
+    // (spelled out in the routing blocks above), so the row is just "coder".
+    lines.push(`  ${m.name.padEnd(10)} ${tag}`);
     for (const e of m.envVars || []) {
       const present = process.env[e.name];
       const source = varSource.get(e.name);

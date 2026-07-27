@@ -27,6 +27,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { OPENCODE_PIN } from '../src/commands/coder.js';
+
 const BIN = join(new URL('.', import.meta.url).pathname, '..', 'bin', 'triss.js');
 
 // Run the real CLI in a clean, isolated environment (empty HOME/project so no
@@ -53,7 +55,7 @@ function makeDirs() {
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   const opencode = join(bin, 'opencode');
-  writeFileSync(opencode, '#!/bin/sh\nprintf "1.17.18\\n"\n');
+  writeFileSync(opencode, `#!/bin/sh\nprintf "${OPENCODE_PIN}\\n"\n`);
   chmodSync(opencode, 0o755);
   return { home, project };
 }

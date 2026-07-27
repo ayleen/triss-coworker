@@ -115,7 +115,7 @@ test('toMcpToolList strips handler functions', async () => {
   }
 });
 
-test('ask and review MCP tools expose worker/deepseek/glm provider routing', async () => {
+test('ask and review MCP tools expose worker/deepseek/glm/kimi provider routing', async () => {
   const tools = await listTools();
   for (const name of ['triss_ask', 'triss_review']) {
     const tool = tools.find((entry) => entry.name === name);
@@ -123,6 +123,8 @@ test('ask and review MCP tools expose worker/deepseek/glm provider routing', asy
       'worker',
       'deepseek',
       'glm',
+      'kimi',
+      'moonshot',
     ]);
   }
 });

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import pc from 'picocolors';
-import { getConfig, requireApiKey, requireGlmApiKey } from './config.js';
+import { getConfig, requireApiKey, requireGlmApiKey, requireKimiApiKey } from './config.js';
+import { MOONSHOT_BASE_URL, normalizeKimiBaseUrl } from './moonshot.js';
 import { logUsage } from './usage.js';
 import { currentCall } from './call-context.js';
 import {
@@ -40,6 +41,12 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
       baseURL: baseUrl || ZAI_CODING_PLAN_BASE_URL,
     });
   }
+  if (provider === 'kimi') {
+    return new OpenAI({
+      apiKey: requireKimiApiKey(),
+      baseURL: baseUrl || MOONSHOT_BASE_URL,
+    });
+  }
   const cfg = requireApiKey(getConfig());
   return new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
 }
@@ -68,6 +75,16 @@ const GLM_ROUTE_STATUSES = new Set([401, 403, 429]);
 export function providerRequestError(err, { provider, baseUrl, model }) {
   const status = err?.status || err?.response?.status;
   const body = err?.error?.message || err?.message || String(err);
+  // Kimi has a single endpoint, so unlike GLM a 401/403 can only mean the key
+  // itself; a 429 is a genuine rate limit / balance problem, not a routing one.
+  if (provider === 'kimi' && (status === 401 || status === 403)) {
+    return new Error(
+      `Kimi request for model "${model}" was rejected (HTTP ${status}). ` +
+        `Check that MOONSHOT_API_KEY is valid for ${normalizeKimiBaseUrl(baseUrl)}. ` +
+        `Original error: ${body}`,
+      { cause: err },
+    );
+  }
   if (provider === 'glm' && GLM_ROUTE_STATUSES.has(status)) {
     // A genuine 429 (quota or rate limit on the right endpoint) is also
     // possible, so name both causes instead of asserting the key is wrong.
@@ -83,8 +100,10 @@ export function providerRequestError(err, { provider, baseUrl, model }) {
   if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
     const hint = provider === 'glm'
       ? `→ Pass --provider glm --model glm-5.2. ${glmRouteHint(baseUrl)}\n`
-      : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n' +
-        '→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n';
+      : provider === 'kimi'
+        ? '→ Pass --provider kimi --model kimi-k3 (or kimi-k2.7-code / kimi-k2.6), or use the flash/pro presets.\n'
+        : '→ Override with --model <name> or set TRISS_WORKER_FLASH_MODEL / TRISS_WORKER_PRO_MODEL in your env.\n' +
+          '→ Current DeepSeek model names: deepseek-v4-flash, deepseek-v4-pro.\n';
     return new Error(
       `Model "${model}" not accepted by the provider.\n${hint}Original error: ${body}`,
       { cause: err },

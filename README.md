@@ -236,10 +236,12 @@ The exposed tool set is **filtered by configured credentials**:
 - **`triss_linear_*`** when `LINEAR_API_KEY` is set.
 - **`triss_github_*`** when `GITHUB_TOKEN` is set (or `gh` CLI logged in).
 - **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
-- **`triss_coder_run` + `triss_coder_status`** when `ZHIPU_API_KEY` is set
+- **`triss_coder_run` + `triss_coder_status`** when any coder provider key is
+  set — `ZHIPU_API_KEY` (Z.AI GLM), `OPENCODE_API_KEY` (OpenCode Zen),
+  `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
   (`opencode` default, or `crush`); its timeout defaults to
-  1500s (25 min) over MCP, above the CLI's 900s, since GLM runs are
+  1500s (25 min) over MCP, above the CLI's 900s, since coding runs are
   expected to be long; override per call via the `timeout` arg. For
   runs that may exceed it, use `triss coder run` on the CLI instead.
 
@@ -269,8 +271,8 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key (Z.AI GLM, or `--provider opencode-zen` for free OpenCode Zen models like `hy3`), `opencode.json` / crush models + `permissions.run` policy, agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model` | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the GLM coding agent and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key (Z.AI GLM default; `--provider opencode-zen` for free OpenCode Zen models like `hy3`; `--provider moonshot` for Kimi pay-as-you-go; `--provider kimi-for-coding` for the Kimi subscription), `opencode.json` / crush models + `permissions.run` policy, agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model` | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the coding agent (GLM, Kimi, or Zen models) and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
@@ -292,6 +294,10 @@ triss ask --paths "src/**/*.ts" \
 triss ask --paths "src/**/*.ts" \
           --question "Find SQL injection risks" \
           --provider glm --model pro
+
+triss ask --paths "src/**/*.ts" \
+          --question "Find SQL injection risks" \
+          --provider kimi --model pro    # Kimi K3 via MOONSHOT_API_KEY
 ```
 
 Typical output is a focused answer with cited file paths, not a raw file dump.
@@ -404,6 +410,7 @@ triss review 123             # GitHub PR #123 (requires `gh` CLI)
 triss review --base develop  # explicit base
 triss review --skip-issue    # don't try ticket lookup
 triss review --provider glm  # same review flow, one-shot GLM inference
+triss review --provider kimi # …or Kimi (pro preset = kimi-k3)
 ```
 
 Defaults to the `pro` preset because review needs reasoning. Output is
@@ -443,9 +450,10 @@ default timeout, configurable via `--timeout <ms>`.
 
 ### `triss coder`
 
-Delegates an implementation task to a GLM coding agent (the `opencode`
-engine by default; `crush` is an alternative — see **Engines** below)
-instead of the primary model writing the code itself.
+Delegates an implementation task to a cheap coding agent — GLM, Kimi, or
+OpenCode Zen models (the `opencode` engine by default; `crush` is an
+alternative — see **Engines** below) instead of the primary model writing
+the code itself.
 
 ```bash
 triss coder init                                  # once: key, opencode.json, agent templates
@@ -456,11 +464,17 @@ triss coder clean                                 # remove finished isolation wo
 ```
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
-(default) or **OpenCode Zen** (`--provider opencode-zen`, free models incl.
-Hunyuan `hy3`). For Z.AI it probes which plan your key works with (subscription
-vs. pay-as-you-go) and writes the matching model prefix; for Zen it saves an
-`OPENCODE_API_KEY` and writes an `opencode/<id>` model. Either way it lets you
-pick the model interactively. See the **Providers** section below and
+(default), **OpenCode Zen** (`--provider opencode-zen`, free models incl.
+Hunyuan `hy3`), **Moonshot Kimi** (`--provider moonshot`, pay-as-you-go
+`moonshotai/*` models like `kimi-k2.7-code`), or **Kimi for Coding**
+(`--provider kimi-for-coding`, the flat-rate subscription serving Kimi K3).
+For Z.AI it probes which plan your key works with (subscription vs.
+pay-as-you-go) and writes the matching model prefix; for Zen it saves an
+`OPENCODE_API_KEY` and writes an `opencode/<id>` model; the two Kimi
+providers need no probe at all — their plans use different keys
+(`MOONSHOT_API_KEY` vs `KIMI_API_KEY`), so the choice already names the
+endpoint. Either way it lets you pick the model interactively. See the
+**Providers** section below and
 [docs/opencode-zen.md](docs/opencode-zen.md) for the OpenCode Zen deep‑dive.
 
 Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
@@ -494,9 +508,14 @@ natively; triss also forwards it as `ZAI_API_KEY` for older binaries; see
 
 **Providers** — the `opencode` engine isn't limited to Z.AI. The required
 API key follows the model's `<provider>/` prefix: `zai-coding-plan/*` and
-`zai/*` (GLM) use `ZHIPU_API_KEY`, while `opencode/*` models — served free by
+`zai/*` (GLM) use `ZHIPU_API_KEY`; `opencode/*` models — served free by
 [OpenCode Zen](https://opencode.ai/docs/zen/), e.g. **`opencode/hy3-free`**
-(Tencent Hunyuan 3) — use `OPENCODE_API_KEY`. To point coder at a Zen model:
+(Tencent Hunyuan 3) — use `OPENCODE_API_KEY`; `moonshotai/*` (and the
+China-mainland `moonshotai-cn/*`) Kimi models use `MOONSHOT_API_KEY`; and
+`kimi-for-coding/*` models — the flat-rate
+[Kimi for Coding](https://www.kimi.com/code/docs/en/) subscription, e.g.
+**`kimi-for-coding/k3`** (Kimi K3) — use `KIMI_API_KEY`. To point coder at
+a Zen model:
 
 ```bash
 triss coder init --provider opencode-zen         # guided: key + opencode.json
@@ -509,10 +528,21 @@ triss coder run "add input validation to /signup"
 triss coder run "..." --model opencode/hy3-free
 ```
 
+Kimi works the same way:
+
+```bash
+triss coder init --provider moonshot             # pay-as-you-go: kimi-k2.7-code default
+triss coder init --provider kimi-for-coding      # subscription: Kimi K3 on a flat plan
+# …or per-run, without changing the default:
+triss coder run "..." --model moonshotai/kimi-k3
+triss coder run "..." --model kimi-for-coding/k3
+```
+
 `triss coder run` passes the resolved model to opencode with `--model` and
 forwards only the key that model needs, so a Zen run works with
-`OPENCODE_API_KEY` alone — no Z.AI key required. The deny-first `opencode.json`
-bash policy applies to Zen runs too. Any Zen model id works via
+`OPENCODE_API_KEY` alone and a Kimi run with `MOONSHOT_API_KEY` /
+`KIMI_API_KEY` alone — no Z.AI key required. The deny-first `opencode.json`
+bash policy applies to every provider. Any Zen model id works via
 `TRISS_CODER_MODEL=opencode/<id>` / `--model`, not just the free ones the
 picker lists. (The `crush` engine speaks Z.AI only.) Full details, the model
 catalogue, and every configuration path are in
@@ -595,13 +625,15 @@ requires an OpenAI-compatible chat-completions endpoint.
 
 You can also pass any model id directly: `--model deepseek-v4-pro`.
 
-`ask` and `review` can route the same one-shot request to GLM without invoking
-the agentic `coder` runtime:
+`ask` and `review` can route the same one-shot request to GLM or Kimi without
+invoking the agentic `coder` runtime:
 
 ```bash
 triss ask --paths ... --question "..." --provider glm --model flash
 triss review --provider glm --model pro
 triss review --provider glm --model zai/glm-5.2  # pay-as-you-go endpoint
+triss review --provider kimi                     # pro preset → kimi-k3
+triss ask --paths ... --question "..." --provider kimi --model flash  # kimi-k2.6
 ```
 
 For GLM, `pro` maps to `glm-5.2` on both endpoints, while `flash` — the cheap
@@ -620,6 +652,17 @@ it for the rest of the process. Pin it (`TRISS_CODER_MODEL=zai/glm-5.2`, or run
 `triss coder init`) to skip that probe. `triss status` shows the resolved
 endpoint, where it came from, and the presets it selects.
 
+For Kimi (`--provider kimi`, alias `moonshot`), `pro` maps to **`kimi-k3`** —
+Moonshot's flagship open-weights model ($3.00/$15.00 per 1M tokens, cache-hit
+input $0.30) — and `flash` to `kimi-k2.6` ($0.95/$4.00, cache-hit $0.16), the
+cheapest current-generation model on the platform. `MOONSHOT_API_KEY` is
+reused from the coder setup, there is a single OpenAI-compatible endpoint
+(`https://api.moonshot.ai/v1`; set `TRISS_KIMI_BASE_URL` for the
+China-mainland `api.moonshot.cn`), and model ids are passed bare —
+`--model kimi-k2.7-code`. The Kimi for Coding subscription is coder-only: its
+endpoint speaks the Anthropic protocol, which ask/review's OpenAI client
+cannot use.
+
 `triss coder` stays separate because it is an agent runtime with tools,
 sessions, and worktree isolation.
 
@@ -631,12 +674,17 @@ triss config set TRISS_WORKER_API_KEY                     # masked prompt
 # That's it — BASE_URL / FLASH / PRO use the current DeepSeek V4 defaults.
 ```
 
-#### Kimi / Moonshot
+#### Kimi / Moonshot (first-class)
+```bash
+triss config set MOONSHOT_API_KEY                         # masked prompt
+triss ask --provider kimi ...                             # flash=kimi-k2.6, pro=kimi-k3
+```
+Or replace the worker entirely (keeps `--provider` free for something else):
 ```bash
 triss config set TRISS_WORKER_API_KEY $MOONSHOT_API_KEY
 triss config set TRISS_WORKER_BASE_URL https://api.moonshot.ai/v1
-triss config set TRISS_WORKER_FLASH_MODEL kimi-k2.5
-triss config set TRISS_WORKER_PRO_MODEL kimi-k2.5
+triss config set TRISS_WORKER_FLASH_MODEL kimi-k2.6
+triss config set TRISS_WORKER_PRO_MODEL kimi-k3
 ```
 
 #### Ollama (local, free)

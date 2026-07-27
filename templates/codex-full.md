@@ -39,9 +39,11 @@ For one-shot GLM analysis, use `triss ask ... --provider glm` or
 `triss review --provider glm`. `--model pro` is `glm-5.2`; `--model flash` is
 `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go. An
 unpinned endpoint is auto-corrected once if the key belongs to the other plan.
+For Kimi, use `--provider kimi` (needs `MOONSHOT_API_KEY`): `pro` is
+`kimi-k3`, `flash` is `kimi-k2.6` — one endpoint, bare model ids.
 Keep `triss coder` for agentic coding runs.
 
-## `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
+## `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
 
 Setup once per machine/project: `triss coder init` (installs the opencode
 engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
@@ -50,7 +52,11 @@ policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 opencode engine also runs **OpenCode Zen** models (`opencode/*`, e.g. the free
 `opencode/hy3-free`): `triss coder init --provider opencode-zen` sets it up with
 `OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — see
-`docs/opencode-zen.md`.
+`docs/opencode-zen.md` — and **Moonshot Kimi** models:
+`triss coder init --provider moonshot` (pay-as-you-go `moonshotai/*`, e.g.
+`moonshotai/kimi-k2.7-code`, `MOONSHOT_API_KEY`) or
+`triss coder init --provider kimi-for-coding` (flat-rate subscription
+`kimi-for-coding/*`, e.g. `kimi-for-coding/k3`, `KIMI_API_KEY`).
 
 Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 [--agent <name>] [--model <p/m>] [--isolate] [--no-isolate]
@@ -83,10 +89,12 @@ native session ids). Both share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads
 it natively; triss also forwards it as `ZAI_API_KEY` for older binaries). See
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
 
-Env: `ZHIPU_API_KEY` (required), `TRISS_CODER_MODEL` /
+Env: `ZHIPU_API_KEY` (required for the default GLM provider;
+`OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other
+providers), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
 `zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
-`1.17.18`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
+`1.18.7`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
 (crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
 set `1` to opt INTO the CLI allowlist; default unset/OFF).
 

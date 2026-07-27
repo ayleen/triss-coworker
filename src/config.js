@@ -2,13 +2,20 @@ import dotenv from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles } from './secrets.js';
 
-const GLM_ENV_KEYS = ['TRISS_CODER_MODEL', 'ZHIPU_API_KEY'];
+// Every provider setting served by the reloadable snapshot below — the GLM
+// pair plus the Kimi (Moonshot) key and base-URL override.
+const PROVIDER_ENV_KEYS = [
+  'TRISS_CODER_MODEL',
+  'ZHIPU_API_KEY',
+  'MOONSHOT_API_KEY',
+  'TRISS_KIMI_BASE_URL',
+];
 
 // This snapshot is taken before this module ever calls loadEnvFiles(), so it
-// contains only values inherited by the process. The reloadable GLM path must
-// not mistake dotenv's global process.env injection for a shell override.
-const parentGlmEnv = Object.freeze(
-  Object.fromEntries(GLM_ENV_KEYS.map((key) => [key, process.env[key]])),
+// contains only values inherited by the process. The reloadable provider path
+// must not mistake dotenv's global process.env injection for a shell override.
+const parentProviderEnv = Object.freeze(
+  Object.fromEntries(PROVIDER_ENV_KEYS.map((key) => [key, process.env[key]])),
 );
 
 export function loadEnvFiles() {
@@ -21,13 +28,14 @@ export function loadEnvFiles() {
   }
 }
 
-// Reads the GLM-only settings without changing process.env. Unlike the shared
-// loader above, this is safe to call repeatedly in a long-lived MCP process:
-// edited/deleted file values are reflected on every invocation. Test seams are
-// deliberately optional so production callers use the real parent snapshot
-// and active files while the parsing/precedence contract stays unit-testable.
-export function readGlmConfigSnapshot({
-  parentEnv = parentGlmEnv,
+// Reads the per-provider settings without changing process.env. Unlike the
+// shared loader above, this is safe to call repeatedly in a long-lived MCP
+// process: edited/deleted file values are reflected on every invocation. Test
+// seams are deliberately optional so production callers use the real parent
+// snapshot and active files while the parsing/precedence contract stays
+// unit-testable.
+function readProviderEnvSnapshot({
+  parentEnv = parentProviderEnv,
   files = activeEnvFiles(),
   readFile = readFileSync,
 } = {}) {
@@ -37,16 +45,30 @@ export function readGlmConfigSnapshot({
     if (!f.exists) continue;
     try {
       const parsed = dotenv.parse(readFile(f.path));
-      for (const key of GLM_ENV_KEYS) {
+      for (const key of PROVIDER_ENV_KEYS) {
         if (Object.prototype.hasOwnProperty.call(parsed, key)) fileValues[key] = parsed[key];
       }
     } catch {
       // Match dotenv.config's best-effort behavior for an unreadable file.
     }
   }
+  const pick = (key) => parentEnv[key] ?? fileValues[key] ?? '';
+  return { pick };
+}
+
+export function readGlmConfigSnapshot(seams = {}) {
+  const { pick } = readProviderEnvSnapshot(seams);
   return {
-    coderModel: parentEnv.TRISS_CODER_MODEL ?? fileValues.TRISS_CODER_MODEL ?? '',
-    apiKey: parentEnv.ZHIPU_API_KEY ?? fileValues.ZHIPU_API_KEY ?? '',
+    coderModel: pick('TRISS_CODER_MODEL'),
+    apiKey: pick('ZHIPU_API_KEY'),
+  };
+}
+
+export function readKimiConfigSnapshot(seams = {}) {
+  const { pick } = readProviderEnvSnapshot(seams);
+  return {
+    apiKey: pick('MOONSHOT_API_KEY'),
+    baseUrl: pick('TRISS_KIMI_BASE_URL'),
   };
 }
 
@@ -88,6 +110,17 @@ export function requireGlmApiKey() {
     throw new Error(
       'No GLM API key found.\n' +
         'Run `triss config set ZHIPU_API_KEY` to set one, or export ZHIPU_API_KEY.',
+    );
+  }
+  return apiKey;
+}
+
+export function requireKimiApiKey() {
+  const { apiKey } = readKimiConfigSnapshot();
+  if (!apiKey) {
+    throw new Error(
+      'No Kimi (Moonshot) API key found.\n' +
+        'Run `triss config set MOONSHOT_API_KEY` to set one, or export MOONSHOT_API_KEY.',
     );
   }
   return apiKey;

@@ -190,12 +190,14 @@ agent (or `claude /mcp`) lists tools, the new ones show up without
 restarting Claude Code. Replacing or removing an integration credential that
 is already loaded still requires restarting that MCP process.
 
-GLM calls have a narrower per-call refresh path: `triss_ask` and
+GLM and Kimi calls have a narrower per-call refresh path: `triss_ask` and
 `triss_review` with `provider: "glm"` re-read file-backed
-`TRISS_CODER_MODEL` and `ZHIPU_API_KEY` before each call. Edits and removals
-take effect without restarting the MCP server, except that values supplied by
-the parent environment continue to win. This does not change the existing
-`tools/list` refresh behaviour for other integrations.
+`TRISS_CODER_MODEL` and `ZHIPU_API_KEY` before each call, and with
+`provider: "kimi"` re-read `MOONSHOT_API_KEY` and `TRISS_KIMI_BASE_URL`.
+Edits and removals take effect without restarting the MCP server, except
+that values supplied by the parent environment continue to win. This does
+not change the existing `tools/list` refresh behaviour for other
+integrations.
 
 ## What tools are exposed
 
@@ -208,17 +210,19 @@ Core tools are always listed. Model calls default to the worker and require
 - `triss_chat` — bare prompt to the worker model
 - `triss_ask` — read files/URLs and answer a question; accepts an optional
   `provider` field: `worker` (default), `deepseek` (an alias for `worker`),
-  or `glm`
+  `glm`, or `kimi` (`moonshot` is an alias)
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
 - `triss_review` — code review on current branch or a GitHub PR; accepts the
   same optional `provider` field as `triss_ask`
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness, including a
-  GLM block: whether `ZHIPU_API_KEY` is set, the endpoint a `provider: "glm"`
-  call resolves to, what selected it, and the preset models. A GLM-only server
-  has no worker key, so the worker rows say `(missing)` while GLM calls work —
-  the two are labelled separately for that reason.
+  GLM block — whether `ZHIPU_API_KEY` is set, the endpoint a `provider: "glm"`
+  call resolves to, what selected it, and the preset models — and a Kimi block
+  (`MOONSHOT_API_KEY` presence, the resolved endpoint, presets). A GLM- or
+  Kimi-only server has no worker key, so the worker rows say `(missing)` while
+  those provider calls work — the routes are labelled separately for that
+  reason.
 
 For `triss_ask` and `triss_review`, `provider: "glm"` requires
 `ZHIPU_API_KEY` rather than `TRISS_WORKER_API_KEY`. `pro` selects `glm-5.2` on
@@ -231,6 +235,16 @@ a preset, so `zai/flash` is valid. When neither the request nor
 `401`/`403`/`429`, the server retries once on the other endpoint and reuses
 whichever one works for the rest of the process (re-probed if the key
 changes). A pinned endpoint is never second-guessed.
+
+For `provider: "kimi"`, `MOONSHOT_API_KEY` is required instead. `pro` selects
+`kimi-k3` (the flagship) and `flash` selects `kimi-k2.6` (the cheapest
+current-generation model). There is a single OpenAI-compatible endpoint
+(`https://api.moonshot.ai/v1`; override with `TRISS_KIMI_BASE_URL`, e.g. for
+the China-mainland `api.moonshot.cn`), so model ids are passed bare — no
+prefix grammar and no endpoint auto-correction to reason about. The Kimi for
+Coding subscription is not usable here: its endpoint speaks the Anthropic
+protocol, which these tools' OpenAI client cannot speak — it works through
+`triss_coder_run` instead.
 
 Exposed **only when ATLASSIAN_BASE_URL/EMAIL/API_TOKEN are all set**
 (both Jira and Confluence reuse the same Atlassian credentials):
@@ -298,9 +312,11 @@ override for self-hosted instances):
   `triss_gitlab_update` `triss_gitlab_comment`
 
 Exposed **when a provider credential is set** — `ZHIPU_API_KEY` (Z.AI GLM,
-the default) **or** `OPENCODE_API_KEY` (OpenCode Zen — see
-[opencode-zen.md](opencode-zen.md)). Setup: `triss coder init`
-(`--provider opencode-zen` for Zen) or `triss config wizard coder`.
+the default), `OPENCODE_API_KEY` (OpenCode Zen — see
+[opencode-zen.md](opencode-zen.md)), `MOONSHOT_API_KEY` (Moonshot Kimi
+pay-as-you-go), **or** `KIMI_API_KEY` (Kimi for Coding subscription).
+Setup: `triss coder init` (`--provider opencode-zen`, `--provider moonshot`,
+or `--provider kimi-for-coding`) or `triss config wizard coder`.
 
 - `triss_coder_run` — delegate an implementation task to a coding
   agent (default `opencode` engine; `engine: "crush"` selects the crush
@@ -315,13 +331,16 @@ the default) **or** `OPENCODE_API_KEY` (OpenCode Zen — see
   isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
   `permissions.run` config is inert and denied bash deadlocks, so the
   worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
-  string — a Z.AI GLM (`zai-coding-plan/glm-5.2`) or an OpenCode Zen model
-  (`opencode/hy3-free`, which needs `OPENCODE_API_KEY`); triss forwards only
-  the key that model's provider requires.
+  string — a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
+  (`opencode/hy3-free`, needs `OPENCODE_API_KEY`), a Moonshot Kimi model
+  (`moonshotai/kimi-k2.7-code`, needs `MOONSHOT_API_KEY`), or a Kimi for
+  Coding model (`kimi-for-coding/k3`, needs `KIMI_API_KEY`); triss forwards
+  only the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
   state (`opencode` vs the pinned version, `crush` presence), which
-  `opencode.json` / `crush.json` files exist, `ZHIPU_API_KEY` /
-  `OPENCODE_API_KEY` presence (never the value), and how many isolation
+  `opencode.json` / `crush.json` files exist, provider key presence
+  (`ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
+  `KIMI_API_KEY` — never the value), and how many isolation
   worktrees are live.
 
 **Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
@@ -399,7 +418,8 @@ fresh `triss mcp install` requires a session restart to take effect.
 **"Triss listed but a model call fails"** — `triss status` to check the
 provider's API key. Core tools are always listed: their default `worker`
 route needs `TRISS_WORKER_API_KEY`, while `triss_ask` and `triss_review` with
-`provider: "glm"` need `ZHIPU_API_KEY`.
+`provider: "glm"` need `ZHIPU_API_KEY` and with `provider: "kimi"` need
+`MOONSHOT_API_KEY`.
 
 **"Jira tools missing in this project"** — Triss couldn't find the
 ATLASSIAN_* triple. Either your global `~/.config/triss/.env` has them
@@ -443,12 +463,15 @@ invocation.
 
 GLM records keep the endpoint the call actually used (`zai-coding-plan/` or
 `zai/`) — including after an endpoint auto-correction, so a retried call is
-billed to the endpoint that served it. Subscription calls retain the known
-`$0` accounting (the plan meters by quota), and PAYG calls carry Z.AI's
-published list prices for the catalogue models. Anything still unpriced —
-a GLM id outside that catalogue, `opencode/*` OpenCode Zen — keeps numeric
-`cost_usd: 0` for JSONL compatibility, adds `cost_usd_known: false`, and is
-displayed by `triss usage` as `unknown`, not as free. Set the matching
+billed to the endpoint that served it. Subscription calls (Z.AI Coding Plan,
+`kimi-for-coding/*`) retain the known `$0` accounting (the plan meters by
+quota), and PAYG calls carry the providers' published list prices for the
+catalogue models — Kimi ids are priced whether logged bare (`kimi-k3`, from
+ask/review) or with opencode's prefix (`moonshotai/kimi-k3`, from coder
+runs). Anything still unpriced — a GLM id outside that catalogue,
+`opencode/*` OpenCode Zen — keeps numeric `cost_usd: 0` for JSONL
+compatibility, adds `cost_usd_known: false`, and is displayed by
+`triss usage` as `unknown`, not as free. Set the matching
 `TRISS_PRICE_<MODEL_ID>` override to account for one.
 
 To attribute all calls from one MCP server process to a single outer

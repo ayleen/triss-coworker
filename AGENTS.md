@@ -46,7 +46,9 @@ or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
 `TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
 For one-shot GLM analysis, use `triss ask ... --provider glm` or
 `triss review --provider glm`; `--model flash|pro` maps to
-`glm-5-turbo|glm-5.2`. Keep `triss coder` for agentic coding runs.
+`glm-4.7|glm-5.2` on the subscription endpoint. For Kimi, use
+`--provider kimi`; `flash|pro` maps to `kimi-k2.6|kimi-k3`
+(needs `MOONSHOT_API_KEY`). Keep `triss coder` for agentic coding runs.
 
 ## Tracker integrations
 

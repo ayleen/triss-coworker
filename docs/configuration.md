@@ -122,7 +122,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
-| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` (Z.AI GLM); `OPENCODE_API_KEY` optional (OpenCode Zen, e.g. `opencode/hy3-free`) |
+| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` (Z.AI GLM); the others optional — `OPENCODE_API_KEY` (OpenCode Zen), `MOONSHOT_API_KEY` (Moonshot Kimi), `KIMI_API_KEY` (Kimi for Coding) |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -250,15 +250,18 @@ self-hosted endpoints).
 | `TRISS_WORKER_PRO_MODEL`    | no       | `deepseek-v4-pro`                | Override the `pro` preset             |
 | `TRISS_DEFAULT_MODEL`   | no       | `flash`                          | Which preset is used when no `--model`|
 
-### GLM and coder
+### GLM, Kimi, and coder
 
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
 | `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen |
+| `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
+| `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
+| `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen, `moonshotai/kimi-k2.7-code` for Moonshot, `kimi-for-coding/k3` for the Kimi subscription |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
-| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.17.18`           | Pin override for the `opencode-ai` npm install |
+| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
@@ -285,6 +288,16 @@ pay-as-you-go), and a prefix may carry a preset too — `zai/flash` means "the
 pay-as-you-go flash model". A bare model id inherits the prefix from
 `TRISS_CODER_MODEL`, then falls back to `zai-coding-plan`.
 
+`--provider kimi` (alias `moonshot`) works the same way with
+`MOONSHOT_API_KEY`: `pro` maps to `kimi-k3` (the flagship) and `flash` to
+`kimi-k2.6` (the cheapest current-generation model). Kimi has a single
+OpenAI-compatible endpoint, so model ids are passed bare — there is no
+prefix grammar and no endpoint auto-correction. `TRISS_KIMI_BASE_URL`
+points the route at a different host (e.g. `https://api.moonshot.cn/v1`).
+The Kimi for Coding subscription (`KIMI_API_KEY`) is coder-only — its
+endpoint speaks the Anthropic protocol, which ask/review's OpenAI client
+cannot use.
+
 **Endpoint auto-correction.** A Z.AI key carries no marker of which plan it
 belongs to, so an unpinned `zai-coding-plan` route is a guess. When nothing
 pinned the endpoint — no explicit prefix, no `TRISS_CODER_MODEL` — and the
@@ -301,16 +314,22 @@ preset models.
 ¹ **Credentials are provider-specific.** A run needs the one key its
 resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need
 `ZHIPU_API_KEY`; `opencode/*` OpenCode Zen models (e.g. the free
-`opencode/hy3-free`) need `OPENCODE_API_KEY`. So `ZHIPU_API_KEY` is
+`opencode/hy3-free`) need `OPENCODE_API_KEY`; `moonshotai/*` and
+`moonshotai-cn/*` Kimi models need `MOONSHOT_API_KEY`; `kimi-for-coding/*`
+subscription models need `KIMI_API_KEY`. So `ZHIPU_API_KEY` is
 "required" only in the sense that it is the default provider's key — a
-zen-only setup runs on `OPENCODE_API_KEY` alone. `triss coder run` forwards
+zen-only setup runs on `OPENCODE_API_KEY` alone, a Kimi-only setup on its
+Kimi key alone. `triss coder run` forwards
 whichever key the model needs to the engine subprocess and gates on it
 before spawning. The `crush` engine speaks Z.AI only and always needs
-`ZHIPU_API_KEY`. `triss status` / `triss_coder_status` show both keys, and
-the coder MCP tools surface once **either** is set. Run
-`triss coder init --provider opencode-zen` to set up a Zen model interactively
-(key + `opencode.json`); full details are in
-[opencode-zen.md](opencode-zen.md).
+`ZHIPU_API_KEY`. `triss status` / `triss_coder_status` show all provider
+keys, and the coder MCP tools surface once **any** is set. Run
+`triss coder init --provider opencode-zen` (or `--provider moonshot` /
+`--provider kimi-for-coding`) to set up a non-GLM model interactively
+(key + `opencode.json`); Zen details are in
+[opencode-zen.md](opencode-zen.md). The two Kimi providers need no
+endpoint probe: their plans use different keys, so the provider choice
+already names the endpoint.
 
 **Engines.** `opencode` (default) enforces a deny-first per-command bash
 allowlist via `opencode.json` (curated safe commands only) that actually
@@ -405,10 +424,14 @@ canonical `zai/<model>` id and ship with Z.AI's published list prices for the
 models both endpoints advertise (`glm-4.5`, `glm-4.5-air`, `glm-4.6`,
 `glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1`, `glm-5.2`), so a PAYG cost is
 reported, not guessed. Override any of them the same way — `zai/glm-5.2` maps
-to `TRISS_PRICE_ZAI_GLM_5_2`. Subscription (`zai-coding-plan/*`) calls stay
+to `TRISS_PRICE_ZAI_GLM_5_2`. Kimi PAYG models ship with Moonshot's list
+prices (`kimi-k3`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`,
+`kimi-k2.6`), matched whether the id is logged bare (ask/review) or with
+opencode's `moonshotai/` / `moonshotai-cn/` prefix (coder runs).
+Subscription calls — `zai-coding-plan/*` and `kimi-for-coding/*` — stay
 `$0` because the plan meters by quota rather than tokens. Any model outside
-that catalogue — a newly released GLM id, `opencode/*` OpenCode Zen models —
-is explicitly unknown until you set its matching `TRISS_PRICE_<MODEL_ID>`
+those catalogues — a newly released GLM/Kimi id, `opencode/*` OpenCode Zen
+models — is explicitly unknown until you set its matching `TRISS_PRICE_<MODEL_ID>`
 override. Usage JSONL keeps `cost_usd` numeric for
 compatibility and marks these records with `cost_usd_known: false`; existing
 historical records are not relabelled.

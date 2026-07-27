@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   glmPresetModels,
+  kimiPresetModels,
   resolveModel,
   resolveModelRequest,
   resolveProvider,
@@ -14,6 +15,8 @@ import {
   ZAI_CODING_PLAN_BASE_URL,
   ZAI_PAYG_BASE_URL,
 } from '../src/zai.js';
+import { MOONSHOT_BASE_URL } from '../src/moonshot.js';
+import { providerRequestError } from '../src/client.js';
 
 function withEnv(values, fn) {
   const before = {};
@@ -32,12 +35,14 @@ function withEnv(values, fn) {
   }
 }
 
-test('resolveProvider keeps the existing worker default and accepts deepseek as an alias', () => {
+test('resolveProvider keeps the existing worker default and accepts deepseek/moonshot as aliases', () => {
   assert.equal(resolveProvider(), 'worker');
   assert.equal(resolveProvider('worker'), 'worker');
   assert.equal(resolveProvider('deepseek'), 'worker');
   assert.equal(resolveProvider('GLM'), 'glm');
-  assert.throws(() => resolveProvider('other'), /valid values: worker, deepseek, glm/);
+  assert.equal(resolveProvider('kimi'), 'kimi');
+  assert.equal(resolveProvider('Moonshot'), 'kimi');
+  assert.throws(() => resolveProvider('other'), /valid values: worker, deepseek, glm, kimi, moonshot/);
 });
 
 test('worker routing preserves the existing preset and custom-model semantics', () => {
@@ -179,4 +184,116 @@ test('GLM routing rejects empty zai model ids', () => {
       /GLM model id cannot be empty/,
     );
   }
+});
+
+// ─── Kimi (Moonshot) ─────────────────────────────────────────────────────────
+
+test('Kimi routing maps presets to the single Moonshot endpoint', () => {
+  withEnv({ TRISS_DEFAULT_MODEL: 'flash' }, () => {
+    assert.deepEqual(resolveModelRequest({ provider: 'kimi' }), {
+      provider: 'kimi',
+      model: 'kimi-k2.6',
+      baseUrl: MOONSHOT_BASE_URL,
+    });
+    assert.deepEqual(resolveModelRequest({ provider: 'moonshot', model: 'pro' }), {
+      provider: 'kimi',
+      model: 'kimi-k3',
+      baseUrl: MOONSHOT_BASE_URL,
+    });
+    assert.equal(
+      resolveModelRequest({ provider: 'kimi', model: 'kimi-k2.7-code' }).model,
+      'kimi-k2.7-code',
+    );
+  });
+});
+
+test('the Kimi pro preset names the K3 flagship and flash stays on the cheap general model', () => {
+  // `pro` exists to reach "the smartest open-weights model" (kimi-k3);
+  // `flash` is the cheap bulk-read tier, so it must NOT regress to k3
+  // ($3.00/M input) or to the highspeed variant (2× the code model's price).
+  assert.deepEqual(kimiPresetModels(), { flash: 'kimi-k2.6', pro: 'kimi-k3' });
+});
+
+test('Kimi routing rejects provider-prefixed model ids with the bare-id hint', () => {
+  for (const model of ['moonshotai/kimi-k3', 'kimi-for-coding/k3', 'zai/glm-5.2']) {
+    assert.throws(
+      () => resolveModelRequest({ provider: 'kimi', model }),
+      /Kimi models take no provider prefix/,
+    );
+  }
+});
+
+test('Kimi routing rejects blank model ids', () => {
+  assert.throws(
+    () => resolveModelRequest({ provider: 'kimi', model: '   ' }),
+    /Kimi model id cannot be empty/,
+  );
+});
+
+// Mirrors the GLM snapshot test: TRISS_KIMI_BASE_URL comes from the reloadable
+// provider snapshot, so a config pin can only be exercised through a real env
+// file in a child process.
+test('a TRISS_KIMI_BASE_URL pin overrides the endpoint, and its absence falls back to the default', () => {
+  const home = mkdtempSync(join(tmpdir(), 'triss-kimi-routing-home-'));
+  const project = mkdtempSync(join(tmpdir(), 'triss-kimi-routing-project-'));
+  writeFileSync(
+    join(project, '.triss.env'),
+    'TRISS_KIMI_BASE_URL=https://api.moonshot.cn/v1/\nMOONSHOT_API_KEY=mk-test\n',
+  );
+
+  const childEnv = { ...process.env, HOME: home, TRISS_PROJECT_ROOT: project };
+  delete childEnv.MOONSHOT_API_KEY;
+  delete childEnv.TRISS_KIMI_BASE_URL;
+  const script = `
+    import { writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { describeKimiRouting, resolveModelRequest } from './src/models.js';
+
+    const envPath = join(process.env.TRISS_PROJECT_ROOT, '.triss.env');
+    const pinnedRequest = resolveModelRequest({ provider: 'kimi', model: 'pro' });
+    const pinned = describeKimiRouting();
+    writeFileSync(envPath, '');
+    const bare = describeKimiRouting();
+    console.log(JSON.stringify({ pinnedRequest, pinned, bare }));
+  `;
+
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+      cwd: process.cwd(),
+      env: childEnv,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const { pinnedRequest, pinned, bare } = JSON.parse(result.stdout);
+
+    // Trailing slash normalized away; the pin routes the actual request.
+    assert.equal(pinnedRequest.baseUrl, 'https://api.moonshot.cn/v1');
+    assert.equal(pinned.keyConfigured, true);
+    assert.equal(pinned.baseUrlSource, 'config');
+
+    assert.equal(bare.keyConfigured, false);
+    assert.equal(bare.baseUrlSource, 'default');
+    assert.equal(bare.baseUrl, MOONSHOT_BASE_URL);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('Kimi provider errors carry the MOONSHOT_API_KEY hint on auth failures and model names on 404', () => {
+  const request = { provider: 'kimi', baseUrl: MOONSHOT_BASE_URL, model: 'kimi-k3' };
+  const auth = providerRequestError(Object.assign(new Error('unauthorized'), { status: 401 }), request);
+  assert.match(auth.message, /Check that MOONSHOT_API_KEY is valid/);
+  assert.match(auth.message, /api\.moonshot\.ai/);
+
+  const notFound = providerRequestError(
+    Object.assign(new Error('model not found'), { status: 404 }),
+    request,
+  );
+  assert.match(notFound.message, /--provider kimi --model kimi-k3/);
+
+  // A Kimi 429 is a genuine rate limit — it must NOT be rewritten into a
+  // routing-style auth hint (there is no sibling endpoint to blame).
+  const limited = providerRequestError(Object.assign(new Error('too many requests'), { status: 429 }), request);
+  assert.doesNotMatch(String(limited.message), /MOONSHOT_API_KEY/);
 });

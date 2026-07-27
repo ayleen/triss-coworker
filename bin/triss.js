@@ -66,12 +66,12 @@ program
 
 program
   .command('ask')
-  .description('Delegate bulk reading to the configured worker or GLM; returns a structured summary')
+  .description('Delegate bulk reading to the configured worker, GLM, or Kimi; returns a structured summary')
   .option('-p, --paths <paths...>', 'files or globs to read')
   .option('-u, --urls <urls...>', 'http(s) URLs to fetch and convert to markdown')
   .option('--stdin', 'read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)')
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
-  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), or glm')
+  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
   .option('--system <text>', 'override the system prompt')
@@ -131,11 +131,11 @@ program
 
 program
   .command('review [pr]')
-  .description('Code review via the configured worker or GLM. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
+  .description('Code review via the configured worker, GLM, or Kimi. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
   .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
   .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
   .option('-q, --question <text>', 'override the default review question')
-  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), or glm')
+  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
   .option('--no-stream', 'disable streaming output')
@@ -235,13 +235,13 @@ coder
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
-  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default) or opencode-zen (free models incl. hy3)')
+  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default), opencode-zen (free models incl. hy3), moonshot (Kimi pay-as-you-go), or kimi-for-coding (subscription)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .action(wrap(runCoderInit));
 
 coder
   .command('run [prompt]')
-  .description('Spawn a GLM coding agent (opencode default, or --engine crush) and print a JSON envelope to stdout')
+  .description('Spawn a coding agent — GLM, Kimi, or Zen models (opencode default, or --engine crush) — and print a JSON envelope to stdout')
   .option('--engine <name>', 'coding engine: opencode (default) or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
