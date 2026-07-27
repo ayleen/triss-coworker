@@ -16,7 +16,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runStatus } from '../src/commands/status.js';
+import { OPENCODE_PIN } from '../src/commands/coder.js';
 import { stripAnsi } from './_ansi.js';
+
+const PIN_RE = OPENCODE_PIN.replace(/\./g, '\\.');
 
 function captureStdout(fn) {
   return async () => {
@@ -90,7 +93,7 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
     assert.doesNotMatch(out, /^Coder$/m);
     assert.doesNotMatch(out, /default engine/);
     // The generic manifest row (env var readiness) still shows.
-    assert.match(out, /GLM\/coder\s+⚠ missing ZHIPU_API_KEY/);
+    assert.match(out, /coder\s+⚠ missing ZHIPU_API_KEY/);
   } finally {
     process.chdir(origCwd);
     process.env.HOME = origHome;
@@ -103,13 +106,13 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
 test(
   'runStatus: the coder block appears with both engines + the default-engine indicator when ZHIPU_API_KEY is configured',
   withTmpKey(async () => {
-    const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '1.17.18' }) }))());
-    assert.match(out, /GLM\/coder\s+✓ ready/);
+    const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: OPENCODE_PIN }) }))());
+    assert.match(out, /coder\s+✓ ready/);
     assert.match(out, /^Coder$/m);
     assert.match(out, /default engine\s+opencode/);
     assert.match(out, /worktrees \(\.triss\/wt\)/);
     // opencode section.
-    assert.match(out, /opencode\s+1\.17\.18/);
+    assert.match(out, new RegExp(`opencode\\s+${PIN_RE}`));
     assert.match(out, /opencode\.json \[global\]/);
     // crush section (absent here — fake didn't report a crush version).
     assert.match(out, /crush\s+not installed/);

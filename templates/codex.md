@@ -21,10 +21,13 @@ default opencode engine enforces a working deny-first bash allowlist; crush
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
 CLI-flag allowlist on top. The opencode engine can also run OpenCode Zen
 models (e.g. the free `--model opencode/hy3-free`, set `OPENCODE_API_KEY`)
-instead of Z.AI GLM.
-For one-shot analysis through the standard tools, pass `provider: "glm"` to
-`triss_ask` or `triss_review` (CLI: `--provider glm`). Keep `triss coder` for
-tool-using, sessionful coding runs.
+or Moonshot Kimi models (`--model moonshotai/kimi-k2.7-code` with
+`MOONSHOT_API_KEY`, or the flat-rate `--model kimi-for-coding/k3` with
+`KIMI_API_KEY`) instead of Z.AI GLM.
+For one-shot analysis through the standard tools, pass `provider: "glm"` or
+`provider: "kimi"` to `triss_ask` or `triss_review` (CLI: `--provider glm` /
+`--provider kimi`; Kimi presets: flash=kimi-k2.6, pro=kimi-k3). Keep
+`triss coder` for tool-using, sessionful coding runs.
 See `triss agent-help --target codex` for flags and the envelope it
 returns.
 

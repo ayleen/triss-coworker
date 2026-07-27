@@ -62,6 +62,8 @@ function withTmpHome(fn) {
     const origTTY = process.stdin.isTTY;
     const origZhipu = process.env.ZHIPU_API_KEY;
     const origZen = process.env.OPENCODE_API_KEY;
+    const origMoonshot = process.env.MOONSHOT_API_KEY;
+    const origKimi = process.env.KIMI_API_KEY;
     const origModel = process.env.TRISS_CODER_MODEL;
     const origSmall = process.env.TRISS_CODER_SMALL_MODEL;
     const origRoot = process.env.TRISS_PROJECT_ROOT;
@@ -77,6 +79,8 @@ function withTmpHome(fn) {
     // and so init pinning TRISS_CODER_MODEL can't leak into the next test.
     delete process.env.ZHIPU_API_KEY;
     delete process.env.OPENCODE_API_KEY;
+    delete process.env.MOONSHOT_API_KEY;
+    delete process.env.KIMI_API_KEY;
     delete process.env.TRISS_CODER_MODEL;
     delete process.env.TRISS_CODER_SMALL_MODEL;
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
@@ -108,6 +112,10 @@ function withTmpHome(fn) {
       else process.env.ZHIPU_API_KEY = origZhipu;
       if (origZen === undefined) delete process.env.OPENCODE_API_KEY;
       else process.env.OPENCODE_API_KEY = origZen;
+      if (origMoonshot === undefined) delete process.env.MOONSHOT_API_KEY;
+      else process.env.MOONSHOT_API_KEY = origMoonshot;
+      if (origKimi === undefined) delete process.env.KIMI_API_KEY;
+      else process.env.KIMI_API_KEY = origKimi;
       if (origModel === undefined) delete process.env.TRISS_CODER_MODEL;
       else process.env.TRISS_CODER_MODEL = origModel;
       if (origSmall === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -119,22 +127,24 @@ function withTmpHome(fn) {
 
 // ─── manifest shape ──────────────────────────────────────────────────────────
 
-test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required + OPENCODE_API_KEY optional, both secret', () => {
+test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required + the other provider keys optional, all secret', () => {
   assert.equal(CODER_MANIFEST.name, 'coder');
   assert.equal(CODER_MANIFEST.key, undefined);
-  assert.equal(CODER_MANIFEST.envVars.length, 2);
+  assert.equal(CODER_MANIFEST.envVars.length, 4);
 
   const zhipu = CODER_MANIFEST.envVars.find((e) => e.name === 'ZHIPU_API_KEY');
   assert.ok(zhipu, 'ZHIPU_API_KEY declared');
   assert.equal(zhipu.required, true);
   assert.equal(zhipu.secret, true);
 
-  // OpenCode Zen key — optional (readiness stays governed by ZHIPU_API_KEY),
-  // secret so it is masked in status/config output.
-  const oc = CODER_MANIFEST.envVars.find((e) => e.name === 'OPENCODE_API_KEY');
-  assert.ok(oc, 'OPENCODE_API_KEY declared');
-  assert.equal(oc.required, false);
-  assert.equal(oc.secret, true);
+  // The other provider keys — optional (readiness stays governed by
+  // ZHIPU_API_KEY), secret so they are masked in status/config output.
+  for (const name of ['OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
+    const v = CODER_MANIFEST.envVars.find((e) => e.name === name);
+    assert.ok(v, `${name} declared`);
+    assert.equal(v.required, false);
+    assert.equal(v.secret, true);
+  }
 
   assert.equal(typeof CODER_MANIFEST.postSetup, 'function');
 });
@@ -554,6 +564,118 @@ test(
     );
     assert.equal(config.model, 'opencode/hy3-free');
     assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+  }),
+);
+
+// ─── Moonshot Kimi providers ─────────────────────────────────────────────────
+
+test(
+  'runCoderInit --provider moonshot: writes moonshotai models, pins them, and never probes Z.AI or Zen',
+  withTmpHome(async ({ home }) => {
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    let fetched = false;
+    await runCoderInit(
+      { global: true, provider: 'moonshot' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        // The two Kimi kinds name their endpoint through the credential env, so
+        // init must not make ANY network call (no Z.AI probe, no Zen catalogue).
+        fetch: async () => {
+          fetched = true;
+          return { ok: false };
+        },
+      },
+    );
+    assert.equal(fetched, false, 'moonshot init must not call fetch');
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'moonshotai/kimi-k2.7-code');
+    assert.equal(config.small_model, 'moonshotai/kimi-k2.6');
+    assert.equal(config.permission.bash['*'], 'deny');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'moonshotai/kimi-k2.7-code');
+    const env = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
+    assert.match(env, /^TRISS_CODER_MODEL=moonshotai\/kimi-k2\.7-code$/m);
+    assert.match(env, /^TRISS_CODER_SMALL_MODEL=moonshotai\/kimi-k2\.6$/m);
+  }),
+);
+
+test(
+  'runCoderInit --provider kimi-for-coding: writes the subscription models under the kimi-for-coding prefix',
+  withTmpHome(async ({ home }) => {
+    process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';
+    await runCoderInit(
+      { global: true, provider: 'kimi-for-coding' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'kimi-for-coding/k3');
+    assert.equal(config.small_model, 'kimi-for-coding/kimi-for-coding-highspeed');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'kimi-for-coding/k3');
+  }),
+);
+
+test(
+  'runCoderInit: a lone MOONSHOT_API_KEY (no other keys, no preset) infers the moonshot provider without prompting',
+  withTmpHome(async ({ home }) => {
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'moonshotai/kimi-k2.7-code');
+  }),
+);
+
+test(
+  'runCoderInit: TRISS_CODER_MODEL=kimi-for-coding/* infers the subscription provider and is honored verbatim',
+  withTmpHome(async ({ home }) => {
+    process.env.KIMI_API_KEY = 'sk-kimi-coding-fake';
+    process.env.TRISS_CODER_MODEL = 'kimi-for-coding/k3-256k';
+    await runCoderInit(
+      { global: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'kimi-for-coding/k3-256k');
+    // Small model not preset -> the provider's silent default, not a GLM one.
+    assert.equal(config.small_model, 'kimi-for-coding/kimi-for-coding-highspeed');
+  }),
+);
+
+test(
+  'runCoderInit --provider moonshot without MOONSHOT_API_KEY fails with the missing-key gate (non-TTY)',
+  withTmpHome(async () => {
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'moonshot' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /Coder setup incomplete: MOONSHOT_API_KEY is not set/,
+    );
+  }),
+);
+
+test(
+  'runCoderInit --engine crush --provider moonshot is rejected — crush speaks Z.AI GLM only',
+  withTmpHome(async () => {
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, engine: 'crush', provider: 'moonshot' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+        ),
+      /crush engine supports Z\.AI GLM only/,
+    );
   }),
 );
 

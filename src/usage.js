@@ -36,8 +36,9 @@ export function maybeRotate(file) {
   }
 }
 
-// Coding Plan calls are metered by the subscription rather than billed per
-// token. PAYG `zai/...` prices remain unknown unless explicitly configured.
+// Subscription calls (Z.AI Coding Plan, Kimi for Coding) are metered by the
+// plan rather than billed per token. PAYG `zai/...` prices remain unknown
+// unless explicitly configured.
 const CODING_PLAN_PRICE = {
   input_cache_miss: 0,
   input_cache_hit: 0,
@@ -70,6 +71,14 @@ const DEFAULT_PRICES = {
   'zai/glm-5-turbo': { input_cache_miss: 1.2e-6, input_cache_hit: 0.24e-6, output: 4.0e-6 },
   'zai/glm-5.1': { input_cache_miss: 1.4e-6, input_cache_hit: 0.26e-6, output: 4.4e-6 },
   'zai/glm-5.2': { input_cache_miss: 1.4e-6, input_cache_hit: 0.26e-6, output: 4.4e-6 },
+  // Kimi (Moonshot) list prices as of 2026-07-27 (platform.kimi.ai/docs/pricing),
+  // USD per token. Keyed bare — the single Moonshot endpoint returns bare model
+  // ids, and a worker pointed at api.moonshot.ai logs the same ids, so one row
+  // prices both routes.
+  'kimi-k3': { input_cache_miss: 3.0e-6, input_cache_hit: 0.3e-6, output: 15.0e-6 },
+  'kimi-k2.7-code': { input_cache_miss: 0.95e-6, input_cache_hit: 0.19e-6, output: 4.0e-6 },
+  'kimi-k2.7-code-highspeed': { input_cache_miss: 1.9e-6, input_cache_hit: 0.38e-6, output: 8.0e-6 },
+  'kimi-k2.6': { input_cache_miss: 0.95e-6, input_cache_hit: 0.16e-6, output: 4.0e-6 },
 };
 
 function priceFor(model) {
@@ -83,10 +92,15 @@ function priceFor(model) {
     }
   }
   // Subscription use is metered by the plan, regardless of the particular
-  // GLM model id. Keep this after the override so a user can explicitly
+  // model id. Keep this after the override so a user can explicitly
   // account for a plan model if their contract changes.
   if (String(model).startsWith('zai-coding-plan/')) return CODING_PLAN_PRICE;
-  return DEFAULT_PRICES[model] || null;
+  if (String(model).startsWith('kimi-for-coding/')) return CODING_PLAN_PRICE;
+  // Coder runs log Moonshot models with opencode's provider prefix
+  // (moonshotai/kimi-k3, moonshotai-cn/…); ask/review logs the same ids bare.
+  // Strip the prefix so one DEFAULT_PRICES row covers both routes.
+  const bare = String(model).replace(/^moonshotai(?:-cn)?\//, '');
+  return DEFAULT_PRICES[bare] || null;
 }
 
 export function estimateCost(record) {

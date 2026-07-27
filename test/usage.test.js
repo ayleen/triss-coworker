@@ -42,6 +42,22 @@ test('estimateCost distinguishes the free coding-plan endpoint from priced PAYG 
   assert.equal(estimateCost({ ...usage, model: 'zai/glm-unreleased' }), null);
 });
 
+test('estimateCost prices Kimi models bare and prefixed, and keeps the subscription free', () => {
+  const usage = { prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
+  // ask/review logs bare ids; coder runs log opencode's moonshotai/ prefix —
+  // both must resolve to the same DEFAULT_PRICES row.
+  const bare = estimateCost({ ...usage, model: 'kimi-k3' });
+  assert.ok(Math.abs(bare - (1000 * 3.0e-6 + 100 * 15.0e-6)) < 1e-12);
+  assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k3' }), bare);
+  assert.equal(estimateCost({ ...usage, model: 'moonshotai-cn/kimi-k2.6' }),
+    estimateCost({ ...usage, model: 'kimi-k2.6' }));
+  // The Kimi for Coding subscription is metered by the plan — known-free, like
+  // the Z.AI coding plan, not "unknown".
+  assert.equal(estimateCost({ ...usage, model: 'kimi-for-coding/k3' }), 0);
+  // An unpublished Moonshot model stays unknown rather than $0.
+  assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k99' }), null);
+});
+
 test('the GLM flash preset is priced well below the turbo tier it replaced', () => {
   const usage = { prompt_tokens: 100_000, cached_tokens: 0, completion_tokens: 4_000 };
   const air = estimateCost({ ...usage, model: 'zai/glm-4.5-air' });

@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Kimi (Moonshot AI) as a first-class inference provider.** `triss ask` and
+  `triss review` accept `--provider kimi` (alias `moonshot`; also the
+  `provider` field on the `triss_ask` / `triss_review` MCP tools), using
+  `MOONSHOT_API_KEY` against the OpenAI-compatible
+  `https://api.moonshot.ai/v1` endpoint. `--model pro` maps to `kimi-k3` —
+  Moonshot's flagship open-weights model (released 2026-07-16, weights
+  published 2026-07-26) — and `--model flash` to `kimi-k2.6`, the cheapest
+  current-generation model. Model ids are passed bare: Kimi has a single
+  endpoint, so there is no prefix grammar and no endpoint auto-correction.
+  `TRISS_KIMI_BASE_URL` points the route at a different host (e.g. the
+  China-mainland `api.moonshot.cn`). Both settings live in the reloadable
+  provider snapshot, so a long-lived MCP server picks up edits without a
+  restart.
+- **Kimi in `triss coder`.** `triss coder init --provider moonshot` sets up
+  pay-as-you-go `moonshotai/*` models (default main `moonshotai/kimi-k2.7-code`,
+  small `moonshotai/kimi-k2.6`), and `--provider kimi-for-coding` sets up the
+  flat-rate Kimi for Coding subscription (`kimi-for-coding/k3` — Kimi K3 —
+  with `KIMI_API_KEY`). Unlike Z.AI there is no plan probe: the two Kimi plans
+  use different credential envs, so the provider choice already names the
+  endpoint. Runs forward only the key the resolved model needs; a Kimi-only
+  machine needs no `ZHIPU_API_KEY`. The `moonshotai-cn/*` prefix is recognised
+  for China-mainland pins. The crush engine remains Z.AI-only and now rejects
+  any non-GLM model override explicitly.
+- `triss status` / `triss_status` print a Kimi routing block (key presence,
+  resolved endpoint and its source, preset models), and
+  `triss_coder_run` / `triss_coder_status` surface once any provider
+  credential is set — `ZHIPU_API_KEY`, `OPENCODE_API_KEY`,
+  `MOONSHOT_API_KEY`, or `KIMI_API_KEY`.
+- Kimi list prices (fetched 2026-07-27 from platform.kimi.ai) ship built-in
+  for `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.7-code-highspeed`, and
+  `kimi-k2.6`, matched whether the id is logged bare (ask/review) or under
+  opencode's `moonshotai/` / `moonshotai-cn/` prefix (coder runs).
+  `kimi-for-coding/*` subscription calls are accounted as known `$0` — the
+  plan meters by quota, like the Z.AI Coding Plan.
+
+### Changed
+
+- The opencode engine pin was bumped from 1.17.18 to 1.18.7 (2026-07-27
+  release; the 1.18.x line is bugfix/Desktop work with no `run` CLI changes,
+  and 1.18.4 specifically improved Kimi model handling).
+- The `coder` row in `triss status` is labelled `coder` (previously
+  `GLM/coder`) now that it fronts GLM, Kimi, and OpenCode Zen credentials.
+
 ## [0.25.0] — 2026-07-27
 
 ### Added

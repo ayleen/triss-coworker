@@ -140,11 +140,14 @@ triss fetch https://api-docs.example.com/changelog
   `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go.
   If nothing pinned the endpoint, a rejected call retries the other one and
   says so. Keep `triss coder` for agentic coding runs.
+- `--provider kimi` (alias `moonshot`) — same one-shot flow on Moonshot's
+  Kimi models with `MOONSHOT_API_KEY`. `pro` is `kimi-k3` (the flagship);
+  `flash` is `kimi-k2.6`. One endpoint, bare model ids, no endpoint probing.
 
 Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 `TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
 
-### `triss coder` — delegate a coding task to a GLM agent (default opencode engine)
+### `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
 Setup once per machine/project:
 
 ```bash
@@ -182,7 +185,7 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 ```json
 {
   "engine": "opencode",
-  "engine_version": "1.17.18",
+  "engine_version": "1.18.7",
   "session_id": "ses_0d7b5c721ffeouI80ItCOxAJ3g",
   "exit_reason": "end_turn | error | timeout | killed",
   "final_text": "...",
@@ -222,13 +225,19 @@ forwards it as `ZAI_API_KEY` for older binaries. See
 Configure via `triss coder init` or `triss config wizard coder`. The opencode
 engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
 sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/hy3-free`) with `OPENCODE_API_KEY` — see `docs/opencode-zen.md`. A
-Zen run forwards only `OPENCODE_API_KEY`, so a Zen-only machine needs no
+`opencode/hy3-free`) with `OPENCODE_API_KEY` — see `docs/opencode-zen.md` —
+and `--provider moonshot` / `--provider kimi-for-coding` set up **Moonshot
+Kimi** models: pay-as-you-go `moonshotai/*` (e.g. `moonshotai/kimi-k2.7-code`)
+with `MOONSHOT_API_KEY`, or the flat-rate subscription `kimi-for-coding/*`
+(e.g. `kimi-for-coding/k3` — Kimi K3) with `KIMI_API_KEY`. Each run forwards
+only the key its model needs, so a Zen- or Kimi-only machine needs no
 `ZHIPU_API_KEY`. Env vars: `ZHIPU_API_KEY` (required for GLM; the default
 provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
+`MOONSHOT_API_KEY` / `KIMI_API_KEY` (optional — unlock `moonshotai/*` /
+`kimi-for-coding/*` Kimi models),
 `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
-`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.17.18`),
+`TRISS_CODER_OPENCODE_VERSION` (pin override, default `1.18.7`),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
 (crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT`
 (crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).

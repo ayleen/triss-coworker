@@ -1024,9 +1024,19 @@ export function describeGlmRoutingLines(glm) {
   ];
 }
 
+export function describeKimiRoutingLines(kimi) {
+  const source = kimi.baseUrlSource === 'config' ? 'from TRISS_KIMI_BASE_URL' : 'default';
+  return [
+    'Kimi (provider "kimi"):',
+    `  MOONSHOT_API_KEY: ${kimi.keyConfigured ? 'configured' : 'missing'}`,
+    `  Endpoint: ${kimi.baseUrl} (${source})`,
+    `  Presets: ${kimi.presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
+  ];
+}
+
 export async function statusHandler() {
   const { getConfig } = await import('../config.js');
-  const { listPresets, describeGlmRouting } = await import('../models.js');
+  const { listPresets, describeGlmRouting, describeKimiRouting } = await import('../models.js');
   const { loadIntegrations, envReadiness, getCoreManifest } = await import('../integrations/_registry.js');
   const { projectRoot, pathsRestricted } = await import('../safety.js');
   const { activeEnvFiles } = await import('../secrets.js');
@@ -1048,7 +1058,9 @@ export async function statusHandler() {
     // A GLM-only setup has no worker key at all, so the worker lines above say
     // "(missing)" while provider:"glm" calls work fine. Spell out that route
     // separately instead of letting the reader infer it from a worker field.
+    // Same for Kimi (provider "kimi").
     ...describeGlmRoutingLines(describeGlmRouting()),
+    ...describeKimiRoutingLines(describeKimiRouting()),
     `Integrations:`,
     ...all.map((m) => {
       const r = envReadiness(m);

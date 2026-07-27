@@ -48,10 +48,10 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3).
 | | **opencode** (engine #1, default) | **crush** (engine #2) |
 |---|---|---|
 | Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
-| npm package | `opencode-ai` (pinned `1.17.18`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
+| npm package | `opencode-ai` (pinned `1.18.7`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
 | Key it reads | `ZHIPU_API_KEY` (native); `OPENCODE_API_KEY` for `opencode/…` Zen models | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`) **and** OpenCode Zen (`opencode/…`, e.g. `opencode/hy3-free`) | Z.AI GLM only |
+| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`), OpenCode Zen (`opencode/…`, e.g. `opencode/hy3-free`), **and** Moonshot Kimi (`moonshotai/…` PAYG, `kimi-for-coding/…` subscription — see README's Providers section) | Z.AI GLM only |
 | Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix; Zen models resolve via opencode's built-in `opencode` provider | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
@@ -279,7 +279,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default) or `crush`. |
 | `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
-| `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.17.18`). |
+| `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.18.7`). |
 | `TRISS_CODER_CRUSH_VERSION` | no | Pin a different `@phpcraftdream/crush` version (default `0.1.6`). |
 | `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 

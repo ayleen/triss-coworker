@@ -91,8 +91,9 @@ const CORE_TOOLS = [
         question: { type: 'string', description: 'Specific question to answer' },
         provider: {
           type: 'string',
-          enum: ['worker', 'deepseek', 'glm'],
-          description: 'Inference provider (default: worker; deepseek is an alias)',
+          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
+          description:
+            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
         },
         model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'number' },
@@ -123,7 +124,7 @@ const CORE_TOOLS = [
   {
     name: 'triss_review',
     description:
-      'Code review via the worker model or GLM. Without `pr` reviews the current branch vs ' +
+      'Code review via the worker model, GLM, or Kimi. Without `pr` reviews the current branch vs ' +
       'auto-detected base; with `pr` uses GitHub CLI. Auto-detects Jira/' +
       'Linear ticket keys in branch/PR title. Defaults to the pro preset.',
     inputSchema: {
@@ -135,8 +136,9 @@ const CORE_TOOLS = [
         question: { type: 'string', description: 'Override the review question' },
         provider: {
           type: 'string',
-          enum: ['worker', 'deepseek', 'glm'],
-          description: 'Inference provider (default: worker; deepseek is an alias)',
+          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
+          description:
+            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
         },
         model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'number' },
@@ -818,17 +820,18 @@ const GITLAB_TOOLS = [
 
 // Pseudo-manifest tool (see src/commands/coder.js's CODER_MANIFEST) — not
 // a tracker integration, so it's gated on coderCredentialReady() directly
-// below (ZHIPU_API_KEY or OPENCODE_API_KEY) rather than via
-// loadIntegrations()'s `ready` set.
+// below (ZHIPU_API_KEY, OPENCODE_API_KEY, MOONSHOT_API_KEY, or KIMI_API_KEY)
+// rather than via loadIntegrations()'s `ready` set.
 const CODER_TOOLS = [
   {
     name: 'triss_coder_run',
     description:
-      'Delegate an implementation task to a GLM coding agent (opencode ' +
-      'engine, set up via `triss coder init`). Returns a JSON envelope: ' +
+      'Delegate an implementation task to a coding agent — GLM, Kimi, or ' +
+      'OpenCode Zen models (opencode engine, set up via `triss coder init`). ' +
+      'Returns a JSON envelope: ' +
       '{engine, engine_version, session_id, exit_reason, final_text, ' +
       'files_changed, diff_stat, worktree, usage, warnings}. This tool\'s ' +
-      'timeout defaults to 1500s (25 min) since GLM runs over MCP are ' +
+      'timeout defaults to 1500s (25 min) since coding runs over MCP are ' +
       'expected to be long; override per call via the `timeout` arg. For ' +
       'runs that may exceed that, use `triss coder run` on the CLI ' +
       '(optionally backgrounded).',
@@ -848,7 +851,7 @@ const CODER_TOOLS = [
         },
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
         agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
-        model: { type: 'string', description: 'Override the model for this run only, as <provider>/<id> — e.g. a Z.AI GLM (zai-coding-plan/glm-5.2) or an OpenCode Zen model (opencode/hy3-free, needs OPENCODE_API_KEY)' },
+        model: { type: 'string', description: 'Override the model for this run only, as <provider>/<id> — e.g. a Z.AI GLM (zai-coding-plan/glm-5.2), an OpenCode Zen model (opencode/hy3-free, needs OPENCODE_API_KEY), a Moonshot Kimi model (moonshotai/kimi-k2.7-code, needs MOONSHOT_API_KEY), or a Kimi for Coding model (kimi-for-coding/k3, needs KIMI_API_KEY)' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
@@ -860,7 +863,8 @@ const CODER_TOOLS = [
   {
     name: 'triss_coder_status',
     description:
-      'Show the coding agent setup: ZHIPU_API_KEY / OPENCODE_API_KEY presence, ' +
+      'Show the coding agent setup: provider key presence (ZHIPU_API_KEY / ' +
+      'OPENCODE_API_KEY / MOONSHOT_API_KEY / KIMI_API_KEY), ' +
       'the default engine, each engine (opencode + crush) version/install ' +
       'state, which opencode.json / crush.json config files exist, and how ' +
       'many isolation worktrees are currently live.',
@@ -881,10 +885,11 @@ export async function listTools() {
   if (ready.has('github')) tools.push(...GITHUB_TOOLS);
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
-  // Coder tools surface once EITHER provider credential is set: ZHIPU_API_KEY
-  // (Z.AI GLM, the default) or OPENCODE_API_KEY (OpenCode Zen). envReadiness
-  // only tracks the required ZHIPU key, so a zen-only user (opencode/hy3-free
-  // via OPENCODE_API_KEY) would otherwise never see triss_coder_run.
+  // Coder tools surface once ANY provider credential is set: ZHIPU_API_KEY
+  // (Z.AI GLM, the default), OPENCODE_API_KEY (OpenCode Zen), MOONSHOT_API_KEY
+  // (Moonshot Kimi), or KIMI_API_KEY (Kimi for Coding). envReadiness only
+  // tracks the required ZHIPU key, so a user on any other single provider
+  // would otherwise never see triss_coder_run.
   if (coderCredentialReady()) tools.push(...CODER_TOOLS);
   return tools;
 }
