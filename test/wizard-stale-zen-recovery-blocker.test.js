@@ -62,8 +62,16 @@ function captureOut() {
 function shellParseTrissArgv(command) {
   const captureDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-sh-parse-')));
   const captureFile = join(captureDir, 'argv');
-  const script = `triss() { printf '%s\\0' "$@" > '${captureFile}'; }; ${command}`;
-  const r = spawnSync('/bin/sh', ['-c', script], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 10_000 });
+  // Keep environment-derived temp paths out of the shell program. A fixed
+  // relative output name plus cwd gives the same execution-level quoting proof
+  // without constructing shell syntax from an uncontrolled absolute path.
+  const script = `triss() { printf '%s\\0' "$@" > ./argv; }; ${command}`;
+  const r = spawnSync('/bin/sh', ['-c', script], {
+    cwd: captureDir,
+    env: { PATH: '/usr/bin:/bin' },
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
   const out = r.status === 0 && existsSync(captureFile) ? readFileSync(captureFile, 'utf8') : '';
   rmSync(captureDir, { recursive: true, force: true });
   return out.split('\0').slice(0, -1);
