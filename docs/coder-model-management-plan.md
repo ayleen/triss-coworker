@@ -30,7 +30,7 @@ management and recovery workflow.
 
 | Engine | Supported providers | Persistent model store |
 | --- | --- | --- |
-| `opencode` | Z.AI GLM, OpenCode Zen, Moonshot Kimi, Kimi for Coding | `opencode.json` plus `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` |
+| `opencode` | Triss worker (OpenAI-compatible), Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot Kimi, Kimi for Coding | `opencode.json` plus `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` |
 | `crush` | Z.AI GLM only | crush large/fast model roles in `crush.json` |
 
 OpenCode Zen is not an engine and `hy3-free` was not a GLM model. It was one

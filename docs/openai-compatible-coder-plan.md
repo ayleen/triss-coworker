@@ -46,9 +46,9 @@ creating a second API-key namespace.
   `coder model set`, status, the config wizard, MCP, and shell completion.
 - Preserve provider-key isolation: a worker-provider run receives only
   `TRISS_WORKER_API_KEY`, never every configured provider key.
-- Preserve unknown `opencode.json` fields, the deny-first bash policy, and
-  transactional rollback guarantees while adding the provider definition and
-  model pins.
+- Preserve unknown `opencode.json` fields and the deny-first bash policy, and
+  use a locked atomic write while adding the provider definition and model
+  pins.
 - Reuse the worker key, base URL, and model presets directly, without copying
   or duplicating the secret.
 
@@ -121,7 +121,7 @@ triss config set TRISS_WORKER_BASE_URL https://example.test/v1
 triss config set TRISS_WORKER_FLASH_MODEL example-code-model
 triss coder init --provider worker --global
 
-# Read-only state and optional catalogue result.
+# Read-only state from the configured worker profile.
 triss coder models --provider worker
 
 # Persistent switch within the configured custom provider.
@@ -141,45 +141,43 @@ continue to require a qualified id.
 
 ## Discovery and validation
 
-An OpenAI-compatible server is not required to expose `GET /models`.
-Initialization therefore performs a non-billable best-effort catalogue read
-and retains the full outcome instead of treating every failure as success:
+An OpenAI-compatible server is not required to expose `GET /models`, and its
+catalogue authentication or response shape may differ from Chat Completions.
+Triss therefore does not probe a generic worker endpoint during setup. The
+configured `TRISS_WORKER_FLASH_MODEL` and `TRISS_WORKER_PRO_MODEL` values form
+the authoritative local model list and are the only ids written into the
+managed OpenCode provider. `coder models` reports that list with catalogue
+status `not-supported`, and `coder model set` rejects ids outside it.
 
-- `available`: a valid, non-empty model list; both selected ids must be listed;
-- `unauthenticated` / `forbidden`: HTTP 401/403 blocks setup;
-- `not-supported`: HTTP 404/405 allows explicitly supplied model ids with an
-  unverified warning;
-- `empty`: a valid empty catalogue is authoritative and blocks setup;
-- `invalid`: malformed JSON, malformed entries, redirects outside the
-  configured origin, or another non-retryable response blocks setup;
-- `transient`: transport failures and HTTP 408/429/500/502/503/504 block by
-  default and require explicit `--allow-unverified` to continue.
+Setup validates the profile locally: the base URL must be absolute, remote
+hosts require HTTPS, loopback HTTP is allowed, and credentials, query strings,
+or fragments may not be embedded in the URL. It never sends a
+`chat/completions` request because that can incur cost and send content to the
+provider. A real minimal `coder run` is the live acceptance test after
+configuration and reports the provider's exact runtime error on failure.
 
-Setup never sends a chat/completions request because that can incur cost and
-send content to the provider. A real minimal `coder run` is the live acceptance
-test after configuration.
+## Existing-config and atomic-write rules
 
-## Existing-config and transaction rules
+Custom-provider setup cannot use only the historical create-only behavior: an
+existing file needs the provider definition in addition to model pins. For an
+existing `opencode.json`, setup follows these rules:
 
-Custom-provider setup cannot use the historical create-only
-`writeOpencodeConfig()` path: an existing file needs the provider definition in
-addition to model pins. The operation must instead use the model-management
-transaction guarantees:
-
-1. Acquire the same cross-process filesystem lock before reading either file.
+1. Acquire a sibling exclusive filesystem lock before reading the file.
 2. Parse and audit the effective `opencode.json`; malformed JSON or a missing
    deny-first policy blocks unless the existing explicit safety override
    applies.
-3. Reject a collision on `provider["triss-worker"]` when the existing
-   definition is not exactly compatible. V1 never silently replaces it.
-4. Plan one mutation containing only `model`, `small_model`, and
-   `provider["triss-worker"]`, while preserving every unrelated field and byte
-   convention supported by the existing transaction layer.
+3. Reject a collision on `provider["triss-worker"]` unless it has the exact
+   Triss-managed shape. A managed definition may be refreshed when the worker
+   endpoint or flash/pro settings change; unknown fields and literal keys
+   block replacement.
+4. Mutate only `model`, `small_model`, and `provider["triss-worker"]`, while
+   preserving unrelated fields, indentation, newline convention, and file
+   mode; publish through a same-directory temporary file and atomic rename.
 5. Persist only the coder model pins in the selected Triss env scope; never
    duplicate or rewrite the existing worker secret/profile.
-6. Audit the committed files and effective higher-precedence config. On any
-   failure, roll back both config and env changes without deleting concurrent
-   user edits.
+6. Audit effective higher-precedence config before writes. If a later env-pin
+   write fails, setup reports failure and can be rerun safely; it does not
+   claim a cross-file transaction across `opencode.json` and the env file.
 
 An identical provider definition is idempotent. A provider entry that uses a
 literal API key is a blocking security finding; Triss must not copy, print, or
@@ -189,11 +187,11 @@ silently preserve that secret as its managed definition.
 
 1. Add RED tests for worker base-URL validation, closed-enum routing,
    DeepSeek config generation, credential isolation, and Crush rejection.
-2. Add RED transaction tests for a new file, a safe existing file, idempotency,
-   provider collision, malformed JSON, missing deny-first policy, rollback,
-   and higher-precedence shadowing.
-3. Add RED catalogue tests for 200/non-empty, 200/empty, 401, 403, 404/405,
-   malformed 200, redirect, transient transport, and retryable HTTP outcomes.
+2. Add RED atomic-write tests for a new file, a safe existing file,
+   idempotency, provider collision, malformed JSON, missing deny-first policy,
+   managed-profile refresh, and higher-precedence shadowing.
+3. Add RED model-management tests proving that discovery is local, performs no
+   network request, and accepts only the configured flash/pro ids.
 4. Implement the minimum provider metadata, custom profile resolver, config
    builder, transaction extension, and run-time credential mapping.
 5. Update CLI/wizard/MCP/help, `.env.example`, README, configuration docs, and
@@ -211,20 +209,19 @@ silently preserve that secret as its managed definition.
   DeepSeek into generic routing logic.
 - The generated provider block uses `@ai-sdk/openai-compatible`, the exact
   normalized worker base URL, and `{env:TRISS_WORKER_API_KEY}`.
-- An existing safe config is updated transactionally and retains unknown
-  fields and its permission policy; a conflicting provider entry is unchanged
-  and blocks setup.
+- An existing safe config is updated under a lock with atomic replacement and
+  retains unknown fields and its permission policy; a conflicting provider
+  entry is unchanged and blocks setup.
 - Main and small model prefixes must equal `triss-worker`.
 - A worker-provider run succeeds with only `TRISS_WORKER_API_KEY` configured
   and forwards only that provider key.
 - Missing custom credentials, invalid profile metadata, insecure remote HTTP,
   cross-provider model pairs, and Crush usage fail before spawning OpenCode.
-- Catalogue authorization, empty, invalid, redirect, and non-retryable errors
-  fail closed. Only unsupported catalogues and explicitly allowed transient
-  failures can use user-supplied model ids without catalogue verification.
+- No generic catalogue request is made. Only the configured worker flash/pro
+  ids can be selected or persisted by Triss.
 - Existing Z.AI, OpenCode Zen, OpenCode Go, Moonshot, and Kimi behavior remains
   unchanged.
 - DeepSeek live acceptance completes through its official API and reports the
   exact provider error if the endpoint rejects the request.
 - User-facing documentation explains the one-profile v1 limit, secret
-  boundary, optional catalogue, and Chat Completions-only scope.
+  boundary, local model list, and Chat Completions-only scope.

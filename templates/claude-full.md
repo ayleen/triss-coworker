@@ -153,7 +153,7 @@ Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
 Setup once per machine/project:
 
 ```bash
-triss coder init             # installs the opencode engine, sets ZHIPU_API_KEY,
+triss coder init             # installs the opencode engine, configures the selected provider key,
                               # writes opencode.json (deny-first bash policy) and
                               # .opencode/agents/{coder,researcher}.md
 ```
