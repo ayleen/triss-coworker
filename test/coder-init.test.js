@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import {
   CODER_MANIFEST,
@@ -28,6 +29,17 @@ import {
   runCoderInit,
   runCoderSetup,
 } from '../src/commands/coder.js';
+
+test('CLI: coder init --help explains the explicit Go provider requirement and alias', () => {
+  const result = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'bin', 'triss.js'), 'coder', 'init', '--help'],
+    { encoding: 'utf8' },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--allow-unverified[\s\S]*requires explicit --provider opencode-go \(alias: go\)/i);
+});
 
 function makeTmpHome() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-coder-')));
