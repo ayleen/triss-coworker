@@ -41,7 +41,8 @@ behind the same adapter interface. crush is always fed `ZHIPU_API_KEY`
 (bridged to `ZAI_API_KEY`); opencode is fed whichever key its resolved model
 needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen or Go (§3),
 `MOONSHOT_API_KEY` for `moonshotai/*` Kimi, `KIMI_API_KEY` for
-`kimi-for-coding/*`.
+`kimi-for-coding/*`, or `TRISS_WORKER_API_KEY` for the managed
+`triss-worker/*` OpenAI-compatible provider.
 
 ---
 
@@ -52,9 +53,9 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen or Go (§
 | Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
 | npm package | `opencode-ai` (pinned `1.18.7`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
-| Key it reads | `ZHIPU_API_KEY` (native); shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Providers | Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](opencode-go.md)), and Moonshot Kimi | Z.AI GLM only |
-| Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix; Zen/Kimi models resolve via opencode's built-in `opencode` / `moonshotai` / `kimi-for-coding` providers | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
+| Key it reads | `TRISS_WORKER_API_KEY` for `triss-worker/…`; `ZHIPU_API_KEY` for GLM; shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
+| Providers | Triss worker (`triss-worker/…`, OpenAI-compatible), Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](opencode-go.md)), Moonshot Kimi, and Kimi for Coding | Z.AI GLM only |
+| Provider config | `opencode.json` with a provider-qualified model prefix. Triss writes `provider["triss-worker"]` with `@ai-sdk/openai-compatible`; Zen/Kimi models resolve via OpenCode's built-in providers | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
 | Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
@@ -310,7 +311,8 @@ derived from model ids):
 | `zai-coding-plan/glm-5.2` | `glm5_2` | large / smart |
 | `zai-coding-plan/glm-5-turbo` | `glm5_turbo` | small / fast |
 
-`zai/*` PAYG, every non-Z.AI prefix, and OpenCode Zen / Moonshot / Kimi models
+`zai/*` PAYG, every non-Z.AI prefix, and Triss worker / OpenCode Zen / Go /
+Moonshot / Kimi models
 are rejected before crush spawns, with an exact opencode alternative. Configured
 via `crush models use glm5_2 glm5_turbo`; `--role smart|fast` selects the atom
 at run time.

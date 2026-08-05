@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -213,6 +214,26 @@ test(
 );
 
 test(
+  'planModelChange rejects worker models outside the configured flash/pro profile',
+  withWorkerEnv(async () => {
+    const plan = await planModelChange({
+      engine: 'opencode',
+      provider: 'worker',
+      scope: 'global',
+      main: 'triss-worker/not-configured',
+      small: 'triss-worker/deepseek-v4-flash',
+    });
+    assert.equal(plan.ok, false);
+    assert.ok(
+      plan.diagnostics.some(
+        (d) => d.code === 'unavailable' && d.role === 'main' && d.value === 'triss-worker/not-configured',
+      ),
+      `expected an unavailable main-model diagnostic, got ${JSON.stringify(plan.diagnostics)}`,
+    );
+  }),
+);
+
+test(
   'a lone TRISS_WORKER_API_KEY never infers the worker provider implicitly',
   withWorkerEnv(async () => {
     // withWorkerEnv sets ONLY the worker key among provider credentials — and
@@ -293,8 +314,8 @@ test(
     const path = join(home, '.config', 'opencode', 'opencode.json');
     mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
     writeFileSync(path, JSON.stringify({
-      model: 'triss-worker/deepseek-v4-flash',
-      small_model: 'triss-worker/deepseek-v4-flash',
+      model: 'zai-coding-plan/glm-5.2',
+      small_model: 'zai-coding-plan/glm-5-turbo',
       permission: { bash: { '*': 'deny', 'git status': 'allow' } },
       foreign: { keep: true },
     }, null, 2) + '\n');
@@ -304,6 +325,8 @@ test(
       { spawnSync: fakeSpawnSync },
     );
     const config = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(config.model, 'triss-worker/deepseek-v4-flash');
+    assert.equal(config.small_model, 'triss-worker/deepseek-v4-flash');
     assert.equal(config.foreign.keep, true);
     assert.equal(config.permission.bash['git status'], 'allow');
     assert.equal(config.provider['triss-worker'].options.apiKey, '{env:TRISS_WORKER_API_KEY}');
@@ -337,6 +360,76 @@ test(
       /existing opencode\.json issues/i,
     );
     assert.equal(readFileSync(path, 'utf8'), original);
+  }),
+);
+
+test(
+  'worker init does not overwrite extra fields in a provider it does not fully manage',
+  withWorkerEnv(async ({ home }) => {
+    const path = join(home, '.config', 'opencode', 'opencode.json');
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    const original = JSON.stringify({
+      model: 'triss-worker/deepseek-v4-flash',
+      small_model: 'triss-worker/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+      provider: {
+        'triss-worker': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Triss worker (OpenAI-compatible)',
+          options: {
+            baseURL: 'https://api.deepseek.com/v1',
+            apiKey: '{env:TRISS_WORKER_API_KEY}',
+            headers: { 'X-Custom': 'preserve-me' },
+          },
+          models: { 'deepseek-v4-flash': { name: 'deepseek-v4-flash' } },
+        },
+      },
+    }, null, 2) + '\n';
+    writeFileSync(path, original);
+
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      /existing opencode\.json issues/i,
+    );
+    assert.equal(readFileSync(path, 'utf8'), original);
+  }),
+);
+
+test(
+  'worker re-init updates a previously Triss-managed endpoint and model profile',
+  withWorkerEnv(async ({ home }) => {
+    await runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync });
+    process.env.TRISS_WORKER_BASE_URL = 'https://openrouter.ai/api/v1';
+    process.env.TRISS_WORKER_FLASH_MODEL = 'deepseek/deepseek-chat';
+    process.env.TRISS_WORKER_PRO_MODEL = 'openai/gpt-5';
+    delete process.env.TRISS_CODER_MODEL;
+    delete process.env.TRISS_CODER_SMALL_MODEL;
+
+    await runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync });
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'triss-worker/deepseek/deepseek-chat');
+    assert.equal(config.provider['triss-worker'].options.baseURL, 'https://openrouter.ai/api/v1');
+    assert.deepEqual(Object.keys(config.provider['triss-worker'].models), [
+      'deepseek/deepseek-chat',
+      'openai/gpt-5',
+    ]);
+  }),
+);
+
+test(
+  'worker init rejects a base URL that could persist embedded secrets',
+  withWorkerEnv(async ({ home }) => {
+    process.env.TRISS_WORKER_BASE_URL = 'https://user:secret@example.test/v1?token=leak';
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      /embedded credentials, query parameters, and fragments are not allowed/i,
+    );
+    assert.equal(
+      existsSync(join(home, '.config', 'opencode', 'opencode.json')),
+      false,
+    );
   }),
 );
 

@@ -1300,6 +1300,30 @@ export async function planModelChange(input = {}, deps = {}) {
         value: small,
       });
     }
+  } else if (cat.status === 'not-supported' && provider === 'worker') {
+    // Generic OpenAI-compatible endpoints are not required to expose
+    // GET /models. For the Triss-managed provider, the worker flash/pro
+    // profile is the authoritative local allowlist because those are also
+    // the only model ids written into opencode.json.
+    const list = new Set(cat.models || []);
+    if (main && !list.has(main)) {
+      diagnostics.push({
+        code: 'unavailable',
+        severity: 'error',
+        scope: 'model',
+        role: 'main',
+        value: main,
+      });
+    }
+    if (small && !list.has(small)) {
+      diagnostics.push({
+        code: 'unavailable',
+        severity: 'error',
+        scope: 'model',
+        role: 'small',
+        value: small,
+      });
+    }
   } else if (cat.status === 'not-supported') {
     // No catalogue API exists for this provider. Credential and local
     // provider/plan-prefix validation above are authoritative for this route;

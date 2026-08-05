@@ -30,6 +30,7 @@ import {
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import readline from 'node:readline';
 import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
@@ -443,6 +444,11 @@ function workerCoderProfile() {
     throw new Error(`Invalid TRISS_WORKER_BASE_URL "${baseUrl}" — expected an absolute HTTP(S) URL.`);
   }
   const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(
+      'Invalid TRISS_WORKER_BASE_URL — embedded credentials, query parameters, and fragments are not allowed.',
+    );
+  }
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
     throw new Error(
       `Unsafe TRISS_WORKER_BASE_URL "${baseUrl}" — remote OpenAI-compatible endpoints must use HTTPS.`,
@@ -581,7 +587,10 @@ function modelMatchesKind(model, kind) {
 function modelFitsProvider(model, providerInfo) {
   if (!model) return false;
   const prefix = String(model).split('/')[0];
-  if (providerInfo.kind === 'worker') return prefix === 'triss-worker';
+  if (providerInfo.kind === 'worker') {
+    const profile = providerInfo.workerProfile || workerCoderProfile();
+    return prefix === 'triss-worker' && profile.models.includes(providerModelId(model));
+  }
   if (providerInfo.kind === 'opencode-zen') return prefix === 'opencode';
   if (providerInfo.kind === 'opencode-go') return prefix === 'opencode-go';
   // Both Moonshot PAYG hosts share MOONSHOT_API_KEY, so either regional prefix
@@ -645,8 +654,14 @@ async function resolveInitModels(
     providerInfo.kind === 'opencode-zen' || providerInfo.kind === 'opencode-go'
       ? cat.available
       : null;
-  const providerVerifiedAbsent = (m) =>
-    !!providerAvailable && !!m && !providerAvailable.has(providerModelId(m));
+  const providerVerifiedAbsent = (m) => {
+    if (!m) return false;
+    if (providerInfo.kind === 'worker') {
+      const profile = providerInfo.workerProfile || workerCoderProfile();
+      return !profile.models.includes(providerModelId(m));
+    }
+    return !!providerAvailable && !providerAvailable.has(providerModelId(m));
+  };
 
   // `prefix` is the provider prefix used for picker/default resolutions of
   // THIS field; it defaults to the catalogue's canonical prefix but the small
@@ -663,7 +678,8 @@ async function resolveInitModels(
           // fall through to an available model instead of pinning a dead id.
           process.stderr.write(
             pc.yellow(
-              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} catalogue; ` +
+              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} ` +
+                `${providerInfo.kind === 'worker' ? 'model settings' : 'catalogue'}; ` +
                 'selecting an available model instead.\n',
             ),
           );
@@ -1886,6 +1902,25 @@ function workerProviderDefinition(providerInfo, model, smallModel) {
   };
 }
 
+function isManagedWorkerProvider(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!isDeepStrictEqual(Object.keys(value).sort(), ['models', 'name', 'npm', 'options'])) return false;
+  if (value.npm !== '@ai-sdk/openai-compatible') return false;
+  if (value.name !== 'Triss worker (OpenAI-compatible)') return false;
+  if (!value.options || typeof value.options !== 'object' || Array.isArray(value.options)) return false;
+  if (!isDeepStrictEqual(Object.keys(value.options).sort(), ['apiKey', 'baseURL'])) return false;
+  if (value.options.apiKey !== '{env:TRISS_WORKER_API_KEY}') return false;
+  if (typeof value.options.baseURL !== 'string') return false;
+  if (!value.models || typeof value.models !== 'object' || Array.isArray(value.models)) return false;
+  return Object.entries(value.models).every(([id, model]) => (
+    model &&
+    typeof model === 'object' &&
+    !Array.isArray(model) &&
+    isDeepStrictEqual(Object.keys(model), ['name']) &&
+    model.name === id
+  ));
+}
+
 function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
   const lockPath = `${path}.triss-worker.lock`;
   let lockFd;
@@ -1904,6 +1939,7 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
+      allowModelReplacement: true,
     });
     if (audit.blocking) return audit;
 
@@ -1921,18 +1957,26 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
       ? providers['triss-worker']
       : undefined;
     if (current !== undefined) {
-      if (JSON.stringify(current) === JSON.stringify(expected)) return { blocking: false };
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
-        ),
-      );
-      return { blocking: true };
+      if (!isManagedWorkerProvider(current)) {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
+          ),
+        );
+        return { blocking: true };
+      }
+      if (
+        isDeepStrictEqual(current, expected) &&
+        config.model === model &&
+        config.small_model === smallModel
+      ) return { blocking: false };
     }
     if (providers !== undefined && (typeof providers !== 'object' || providers === null || Array.isArray(providers))) {
       process.stderr.write(pc.yellow(`  ⚠ ${path} has a non-object provider field — refusing to replace it.\n`));
       return { blocking: true };
     }
+    config.model = model;
+    config.small_model = smallModel;
     config.provider = { ...(providers || {}), 'triss-worker': expected };
     const newline = raw.includes('\r\n') ? '\r\n' : '\n';
     const indent = raw.match(/\r?\n([ \t]+)"/)?.[1] || '  ';
@@ -1948,7 +1992,7 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
       try { if (existsSync(temp)) rmSync(temp); } catch {}
       throw error;
     }
-    process.stderr.write(pc.green(`  ✓ added provider["triss-worker"] to ${path}\n`));
+    process.stderr.write(pc.green(`  ✓ configured provider["triss-worker"] in ${path}\n`));
     return { blocking: false };
   } finally {
     try { if (lockFd !== undefined) closeSync(lockFd); } catch {}
@@ -2150,6 +2194,9 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
   }
   const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
+  if (opts.allowModelReplacement) {
+    return { blocking };
+  }
   if (small && coderModelCredential(small).provider !== providerInfo.kind) {
     blocking = true;
     process.stderr.write(
@@ -2231,10 +2278,10 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     process.stderr.write(
       pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
     );
-    warnIfProviderMismatch(path, providerInfo);
     if (providerInfo.kind === 'worker') {
       return mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts);
     }
+    warnIfProviderMismatch(path, providerInfo);
     return auditExistingConfig(path, providerInfo, {
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,

@@ -48,7 +48,7 @@ Keep `triss coder` for agentic coding runs.
 ## `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
 
 Setup once per machine/project: `triss coder init` (installs the opencode
-engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
+engine, configures the selected provider key, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 (or set `TRISS_CODER_ENGINE=crush`) to target the crush engine instead. The
 opencode engine can reuse the existing OpenAI-compatible worker profile with
