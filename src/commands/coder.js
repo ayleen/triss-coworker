@@ -1171,7 +1171,8 @@ export async function runCoderInit(opts = {}, deps = {}) {
     && explicitProvider !== 'opencode-go'
   ) {
     throw new Error(
-      '`--allow-unverified` on `triss coder init` is supported only with explicit `--provider opencode-go`.',
+      '`--allow-unverified` on `triss coder init` requires explicit `--provider opencode-go` ' +
+        '(alias: `--provider go`).',
     );
   }
   const provider = engine === 'crush'
