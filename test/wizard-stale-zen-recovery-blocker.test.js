@@ -24,7 +24,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -56,25 +56,44 @@ function captureOut() {
   return { text: () => c.join(''), restore() { process.stdout.write = o; process.stderr.write = e; } };
 }
 
-// Parse a printed `triss ...` command the way /bin/sh would, returning the argv
-// (the leading `triss` token is consumed by the shell-function shadow). NUL-
-// delimited capture so quoted values with spaces/newlines survive as one token.
+// Parse the single-quoted POSIX command format emitted by formatShellCommand.
+// This intentionally does not invoke `/bin/sh -c`: the emitted recovery text
+// is data under test, and turning it back into a shell program would create an
+// avoidable command-injection surface in the test harness itself.
 function shellParseTrissArgv(command) {
-  const captureDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-sh-parse-')));
-  const captureFile = join(captureDir, 'argv');
-  // Keep environment-derived temp paths out of the shell program. A fixed
-  // relative output name plus cwd gives the same execution-level quoting proof
-  // without constructing shell syntax from an uncontrolled absolute path.
-  const script = `triss() { printf '%s\\0' "$@" > ./argv; }; ${command}`;
-  const r = spawnSync('/bin/sh', ['-c', script], {
-    cwd: captureDir,
-    env: { PATH: '/usr/bin:/bin' },
-    encoding: 'utf8',
-    timeout: 10_000,
-  });
-  const out = r.status === 0 && existsSync(captureFile) ? readFileSync(captureFile, 'utf8') : '';
-  rmSync(captureDir, { recursive: true, force: true });
-  return out.split('\0').slice(0, -1);
+  const argv = [];
+  let token = '';
+  let started = false;
+  let quoted = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quoted) {
+      if (ch === "'") quoted = false;
+      else token += ch;
+      continue;
+    }
+    if (ch === "'") {
+      quoted = true;
+      started = true;
+    } else if (ch === '\\') {
+      if (i + 1 >= command.length) throw new Error('invalid trailing backslash in recovery command');
+      token += command[++i];
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) {
+        argv.push(token);
+        token = '';
+        started = false;
+      }
+    } else {
+      token += ch;
+      started = true;
+    }
+  }
+  if (quoted) throw new Error('unterminated single quote in recovery command');
+  if (started) argv.push(token);
+  if (argv[0] !== 'triss') throw new Error('recovery command must start with triss');
+  return argv.slice(1);
 }
 
 function argAfter(argv, flag) {
