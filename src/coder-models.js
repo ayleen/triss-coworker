@@ -189,7 +189,7 @@ function opencodeConfigPath(scope) {
 function validateWorkerProviderConfig(scope, models, diagnostics) {
   const path = opencodeConfigPath(scope);
   const scopeFlag = scope === 'local' ? '--local' : '--global';
-  const command = `triss coder init --provider worker ${scopeFlag}`;
+  const command = `triss coder init --engine opencode --provider worker ${scopeFlag}`;
   let config;
   try {
     config = JSON.parse(readFileSync(path, 'utf8'));
