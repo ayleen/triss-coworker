@@ -289,7 +289,13 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch, { stric
     // Preserve Zen init's historical leniency: valid ids remain useful even
     // when an unrelated entry is malformed. Go stays strict because an
     // authoritative subscription catalogue controls fail-closed setup.
-    const ids = new Set(body.data.map((entry) => entry && entry.id).filter(Boolean));
+    const ids = new Set();
+    for (const entry of body.data) {
+      if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string') continue;
+      const id = entry.id.trim();
+      if (!id || id !== entry.id || /\s/.test(id)) continue;
+      ids.add(id);
+    }
     return ids.size ? { kind: 'available', ids } : { kind: 'empty' };
   }
 
@@ -1149,11 +1155,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
   };
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
+  const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
   // The provider choice applies to the opencode engine only — crush speaks
   // Z.AI GLM exclusively (it bridges ZHIPU_API_KEY -> ZAI_API_KEY). A
   // non-zai --provider with --engine crush is a contradiction, so reject
   // it rather than silently ignoring the flag.
-  if (engine === 'crush' && opts.provider && normalizeProviderFlag(opts.provider) !== 'zai') {
+  if (engine === 'crush' && explicitProvider && explicitProvider !== 'zai') {
     throw new Error(
       `The crush engine supports Z.AI GLM only — \`--provider ${opts.provider}\` requires the ` +
         'opencode engine. Drop --engine crush (or use --provider zai).',
@@ -1161,13 +1168,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
   }
   if (
     opts.allowUnverified
-    && (!opts.provider || normalizeProviderFlag(opts.provider) !== 'opencode-go')
+    && explicitProvider !== 'opencode-go'
   ) {
     throw new Error(
       '`--allow-unverified` on `triss coder init` is supported only with explicit `--provider opencode-go`.',
     );
   }
-  const provider = engine === 'crush' ? 'zai' : await resolveInitProvider(opts, deps);
+  const provider = engine === 'crush'
+    ? 'zai'
+    : explicitProvider || await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const path = ensureEnvFile(scope);

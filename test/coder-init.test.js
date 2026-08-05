@@ -868,24 +868,39 @@ test(
     let prompted = false;
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     try {
-      await assert.rejects(
-        () =>
-          runCoderInit(
-            { global: true, allowUnverified: true },
-            {
-              spawnSync: fakeSpawnAlreadyInstalled,
-              promptChoice: async () => {
-                prompted = true;
-                return 'opencode-go';
+      for (const provider of [undefined, 'opencode-zen', 'zai']) {
+        await assert.rejects(
+          () =>
+            runCoderInit(
+              { global: true, allowUnverified: true, ...(provider ? { provider } : {}) },
+              {
+                spawnSync: fakeSpawnAlreadyInstalled,
+                promptChoice: async () => {
+                  prompted = true;
+                  return 'opencode-go';
+                },
               },
-            },
-          ),
-        /--allow-unverified.*explicit.*--provider opencode-go/i,
-      );
+            ),
+          /--allow-unverified.*explicit.*--provider opencode-go/i,
+        );
+      }
       assert.equal(prompted, false);
     } finally {
       Object.defineProperty(process.stdin, 'isTTY', { value: originalTTY, configurable: true });
     }
+  }),
+);
+
+test(
+  'runCoderInit: --provider go alias and --allow-unverified resolve directly to OpenCode Go',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-fake';
+    await runCoderInit(
+      { global: true, provider: 'go', allowUnverified: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeGoCatalogue() },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
   }),
 );
 
