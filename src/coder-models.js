@@ -102,6 +102,11 @@ const ZEN_MODELS_TIMEOUT_MS = 10_000;
 // OPENCODE_API_KEY with Zen but is a distinct provider with its own model
 // prefix (`opencode-go/`). Same URL/base as fetchGoModelIds in coder.js.
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
+const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+
+function isTransientOpenCodeReadError(error) {
+  return error instanceof TypeError || error?.name === 'AbortError' || error?.name === 'TimeoutError';
+}
 
 // Preference order for recommending Zen models from a verified catalogue
 // (matches coder.js's documented ZEN_*_PRIORITY). Both roles default to the
@@ -435,8 +440,10 @@ export async function resolveProviderIntent(input = {}, _deps = {}) {
 // ─── listProviderModels ──────────────────────────────────────────────────────
 //
 // Lists a provider's catalogue through the injected fetch. Returns a stable
-// status: 'ok' | 'unauthenticated' | 'timeout' | 'http-error' | 'parse-error'
-// | 'not-supported'. 'not-supported' covers any provider without a list API
+// Zen status: 'ok' | 'unauthenticated' | 'timeout' | 'http-error' |
+// 'parse-error' | 'not-supported'. Go additionally preserves 'forbidden',
+// 'empty', 'transient', and 'invalid' so --allow-unverified can never bypass
+// an authoritative denial or malformed response. 'not-supported' covers any provider without a list API
 // (e.g. Z.AI, which only exposes a chat-completions probe) — never a fabricated
 // network error. The result never contains the raw credential.
 export async function listProviderModels(input = {}, deps = {}) {
@@ -458,35 +465,67 @@ export async function listProviderModels(input = {}, deps = {}) {
     return { engine, provider, status: 'unauthenticated', models: [] };
   }
   const fetchImpl = deps.fetch || globalThis.fetch;
+  const isGo = provider === 'opencode-go';
   try {
     const res = await fetchImpl(meta.url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(ZEN_MODELS_TIMEOUT_MS),
     });
+    if (!res || typeof res !== 'object') {
+      return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
+    }
     if (!res.ok) {
-      return res.status === 401
-        ? { engine, provider, status: 'unauthenticated', models: [] }
-        : { engine, provider, status: 'http-error', httpStatus: res.status, models: [] };
+      if (res.status === 401) {
+        return { engine, provider, status: 'unauthenticated', models: [] };
+      }
+      if (isGo) {
+        if (res.status === 403) {
+          return { engine, provider, status: 'forbidden', httpStatus: res.status, models: [] };
+        }
+        if (GO_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(Number(res.status))) {
+          return { engine, provider, status: 'transient', httpStatus: res.status, models: [] };
+        }
+        return { engine, provider, status: 'invalid', httpStatus: res.status, models: [] };
+      }
+      return { engine, provider, status: 'http-error', httpStatus: res.status, models: [] };
+    }
+    if (typeof res.json !== 'function') {
+      return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
     }
     let body;
     try {
       body = await res.json();
-    } catch {
-      return { engine, provider, status: 'parse-error', models: [] };
+    } catch (error) {
+      if (isGo && isTransientOpenCodeReadError(error)) {
+        return { engine, provider, status: 'transient', models: [] };
+      }
+      return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
     }
     // OpenCode catalogue HTTP 200 payload must have a parseable complete model array.
     // Missing data, non-array data, or malformed entries result in parse-error
     if (!body || typeof body !== 'object') {
-      return { engine, provider, status: 'parse-error', models: [] };
+      return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
     }
     if (!Array.isArray(body.data)) {
-      return { engine, provider, status: 'parse-error', models: [] };
+      return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
     }
     const data = body.data;
+    if (isGo && data.length === 0) {
+      return { engine, provider, status: 'empty', models: [] };
+    }
     // Verify all model entries have required id field; otherwise parse-error
     for (const m of data) {
       if (!m || typeof m.id === 'undefined' || m.id === null) {
-        return { engine, provider, status: 'parse-error', models: [] };
+        return { engine, provider, status: isGo ? 'invalid' : 'parse-error', models: [] };
+      }
+      if (isGo) {
+        if (typeof m !== 'object' || typeof m.id !== 'string') {
+          return { engine, provider, status: 'invalid', models: [] };
+        }
+        const id = m.id.trim();
+        if (!id || id !== m.id || /\s/.test(id)) {
+          return { engine, provider, status: 'invalid', models: [] };
+        }
       }
     }
     const rawIds = data.map((m) => m && m.id).filter(Boolean);
@@ -506,7 +545,7 @@ export async function listProviderModels(input = {}, deps = {}) {
   } catch {
     // Network/AbortSignal rejection (timeout, DNS, connection) — surfaces as a
     // not-verified catalogue state callers may bypass with --allow-unverified.
-    return { engine, provider, status: 'timeout', models: [] };
+    return { engine, provider, status: isGo ? 'transient' : 'timeout', models: [] };
   }
 }
 
@@ -565,7 +604,7 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   const credential = { env: credEnv, ready: !!process.env[credEnv] };
 
   const cat = await listProviderModels({ engine, provider }, deps);
-  const verified = cat.status === 'ok';
+  const verified = cat.status === 'ok' || cat.status === 'empty';
   const catalogue = verified ? new Set(cat.models || []) : null;
 
   // A configured model over a NOT-verified catalogue (timeout / http-error /
@@ -1234,6 +1273,37 @@ export async function planModelChange(input = {}, deps = {}) {
     // No catalogue API exists for this provider. Credential and local
     // provider/plan-prefix validation above are authoritative for this route;
     // there is no remote list to bypass with --allow-unverified.
+  } else if (provider === 'opencode-go') {
+    if (cat.status === 'unauthenticated') {
+      diagnostics.push({ code: 'unauthenticated', severity: 'error', scope: 'catalogue' });
+    } else if (cat.status === 'forbidden') {
+      diagnostics.push({ code: 'forbidden', severity: 'error', scope: 'catalogue' });
+    } else if (cat.status === 'empty') {
+      diagnostics.push({ code: 'catalogue-empty', severity: 'error', scope: 'catalogue' });
+    } else if (cat.status === 'invalid') {
+      diagnostics.push({
+        code: 'catalogue-invalid',
+        severity: 'error',
+        scope: 'catalogue',
+        status: cat.httpStatus,
+      });
+    } else if (cat.status === 'transient') {
+      if (!allowUnverified) {
+        diagnostics.push({
+          code: 'catalogue-not-verified',
+          severity: 'error',
+          scope: 'catalogue',
+          status: cat.status,
+        });
+      }
+    } else {
+      diagnostics.push({
+        code: 'catalogue-invalid',
+        severity: 'error',
+        scope: 'catalogue',
+        status: cat.status,
+      });
+    }
   } else if (cat.status === 'unauthenticated') {
     // Auth is never bypassable — allow-unverified must not grant access.
     diagnostics.push({

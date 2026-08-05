@@ -475,13 +475,13 @@ binaries. (opencode can alternatively run OpenCode Zen `opencode/*` models on
 
 **Safety escape hatches.** `--allow-unverified` lets `init` / `triss coder
 model set` pin a model Triss cannot confirm against the live provider
-catalogue, but only within a narrow window: you must pass **both** an
-explicit main and an explicit small, the matching **credential must be
-present**, and the lookup failure must be a **timeout**, **HTTP error**, or
-**parse error**. It never applies to an **unauthenticated** call (missing or
-rejected key) or to the **authoritative catalogue being unavailable** — in
-those cases the pin is rejected outright. Use it only for a known-good
-private mirror; it never relaxes credential checks.
+catalogue, but only within a narrow window. For OpenCode Go, it accepts only
+transport failures and HTTP 408/429/500/502/503/504; 401, 403, an empty
+catalogue, malformed data, and every other HTTP error remain blocking. For
+legacy Zen model management, the accepted not-verified states remain timeout,
+HTTP error, or parse error. `model set` additionally requires explicit main and
+small models plus the matching credential. The flag never relaxes credential
+checks or an authoritative unavailable result.
 `--allow-unsafe-bash` does **not** lift or rewrite the bash policy. It
 permits exactly one thing: **model-field repair** of an existing OpenCode
 config that was written *without* the canonical deny-first policy, while

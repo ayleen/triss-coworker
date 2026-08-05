@@ -484,6 +484,70 @@ test(
 );
 
 test(
+  'planModelChange --allow-unverified: OpenCode Go permits only transport and retryable HTTP outcomes',
+  withTmpHome(async ({ home }) => {
+    seedGlobalConfig(home, {
+      model: 'opencode-go/deepseek-v4-flash',
+      small_model: 'opencode-go/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+    });
+    process.env.OPENCODE_API_KEY = 'sk-go-fake';
+    const svc = await loadService();
+    const input = {
+      engine: 'opencode',
+      scope: 'global',
+      provider: 'opencode-go',
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'opencode-go/deepseek-v4-flash',
+      allowUnverified: true,
+    };
+    const response = (ok, status, body) => async () => ({
+      ok,
+      status,
+      json: async () => body,
+    });
+    const blocked = [
+      { name: '401', fetch: httpErrorFetch(401), status: 'unauthenticated' },
+      { name: '403', fetch: httpErrorFetch(403), status: 'forbidden' },
+      { name: 'empty', fetch: response(true, 200, { data: [] }), status: 'empty' },
+      { name: 'malformed JSON', fetch: malformedFetch(), status: 'invalid' },
+      { name: '404', fetch: httpErrorFetch(404), status: 'invalid' },
+      { name: '501', fetch: httpErrorFetch(501), status: 'invalid' },
+      {
+        name: 'whitespace id',
+        fetch: response(true, 200, { data: [{ id: '   ' }] }),
+        status: 'invalid',
+      },
+      {
+        name: 'mixed malformed entries',
+        fetch: response(true, 200, { data: [{ id: 'deepseek-v4-flash' }, null] }),
+        status: 'invalid',
+      },
+    ];
+    for (const c of blocked) {
+      const plan = await svc.planModelChange(input, { fetch: c.fetch });
+      assert.equal(plan.catalogue.status, c.status, `${c.name}: structured status`);
+      assert.equal(plan.ok, false, `${c.name}: --allow-unverified must not bypass the outcome`);
+    }
+
+    const bodyTimeout = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        const error = new TypeError('terminated while reading body');
+        throw error;
+      },
+    });
+    const allowed = [timeoutFetch(), bodyTimeout, ...[408, 429, 500, 502, 503, 504].map(httpErrorFetch)];
+    for (const fetch of allowed) {
+      const plan = await svc.planModelChange(input, { fetch });
+      assert.equal(plan.catalogue.status, 'transient');
+      assert.equal(plan.ok, true, 'explicit opt-in must accept only a transient Go catalogue outcome');
+    }
+  }),
+);
+
+test(
   'planModelChange: a main-only public request leaves small_model out of the mutation shape',
   withTmpHome(async ({ home }) => {
     seedGlobalConfig(home, {

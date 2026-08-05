@@ -236,6 +236,10 @@ const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
 const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
+function isTransientOpenCodeReadError(error) {
+  return error instanceof TypeError || error?.name === 'AbortError' || error?.name === 'TimeoutError';
+}
+
 // Zen keeps its historical Set-or-null contract. Go consumes the structured
 // outcome directly so authenticated denials and an authoritative empty
 // catalogue can never be mistaken for a temporary offline condition.
@@ -274,18 +278,29 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
   let body;
   try {
     body = await res.json();
-  } catch {
-    return { kind: 'invalid', reason: 'parse' };
+  } catch (error) {
+    return isTransientOpenCodeReadError(error)
+      ? { kind: 'transient', reason: 'transport' }
+      : { kind: 'invalid', reason: 'parse' };
   }
   if (!body || !Array.isArray(body.data)) return { kind: 'invalid', reason: 'shape' };
   if (body.data.length === 0) return { kind: 'empty' };
 
-  const ids = new Set(body.data.map((m) => m && m.id).filter((id) => typeof id === 'string' && id));
-  if (!ids.size) return { kind: 'invalid', reason: 'shape' };
+  const ids = new Set();
+  for (const entry of body.data) {
+    if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string') {
+      return { kind: 'invalid', reason: 'shape' };
+    }
+    const id = entry.id.trim();
+    if (!id || id !== entry.id || /\s/.test(id)) {
+      return { kind: 'invalid', reason: 'shape' };
+    }
+    ids.add(id);
+  }
   return { kind: 'available', ids };
 }
 
-function resolveGoCatalogue(outcome, { allowUnverified = false } = {}) {
+function resolveGoCatalogue(outcome, { allowUnverified = false, scope = 'global' } = {}) {
   if (outcome.kind === 'missing-key') {
     throw new Error(
       'Coder setup incomplete: OPENCODE_API_KEY is not set, so the OpenCode Go catalogue cannot be verified.',
@@ -317,8 +332,9 @@ function resolveGoCatalogue(outcome, { allowUnverified = false } = {}) {
   if (outcome.kind === 'transient') {
     const detail = outcome.reason === 'http' ? `HTTP ${outcome.status}` : 'network or timeout failure';
     if (!allowUnverified) {
+      const scopeFlag = scope === 'local' ? '--local' : '--global';
       throw new Error(
-        `Coder setup incomplete: OpenCode Go catalogue is temporarily unavailable (${detail}); retry, or re-run with --allow-unverified only if you intentionally accept an unverified built-in model fallback.`,
+        `Coder setup incomplete: OpenCode Go catalogue is temporarily unavailable (${detail}); retry, or intentionally accept an unverified built-in model fallback with: triss coder init --provider opencode-go --allow-unverified ${scopeFlag}`,
       );
     }
     process.stderr.write(
@@ -537,14 +553,22 @@ function readOpencodeModels(path) {
 //   3. the interactive picker (TTY);
 //   4. the provider's silent default.
 // `existing` is readOpencodeModels(opencode.json) from the caller.
-async function resolveInitModels(providerInfo, deps = {}, existing = {}, { allowUnverified = false } = {}) {
+async function resolveInitModels(
+  providerInfo,
+  deps = {},
+  existing = {},
+  { allowUnverified = false, scope = 'global' } = {},
+) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
   const openCodeCatalogue =
     providerInfo.kind === 'opencode-zen'
       ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch))
       : providerInfo.kind === 'opencode-go'
-        ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch), { allowUnverified })
+        ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch), {
+            allowUnverified,
+            scope,
+          })
         : undefined;
   const cat = coderInitCatalogue(providerInfo, openCodeCatalogue);
   const choose = deps.promptChoice || promptChoice;
@@ -1393,7 +1417,7 @@ export async function runCoderSetup(
     providerInfo,
     deps,
     existing,
-    { allowUnverified },
+    { allowUnverified, scope: resolvedScope },
   );
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
