@@ -78,11 +78,22 @@ The provider alias `opencode` remains Zen; it is not accepted as a Go alias.
 Crush rejects both an explicit Go provider and any `opencode-go/*` model before
 spawning an engine.
 
-Catalogue availability uses the existing model-management states:
+Go initialization preserves the authenticated catalogue outcome instead of
+collapsing every failure into an offline default:
 
-- `available`: an authenticated, parseable Go catalogue contains the id;
-- `unavailable`: that authoritative catalogue omits the id;
-- `not verified`: authentication, timeout, HTTP, or parsing failure.
+- `available`: HTTP 200 contains a parseable, non-empty model list;
+- `unauthenticated`: HTTP 401 blocks setup and asks for a valid workspace key;
+- `forbidden`: HTTP 403 blocks setup and asks for Go entitlement/workspace
+  access;
+- `empty`: HTTP 200 with `data: []` is authoritative and blocks setup;
+- `invalid`: malformed JSON, an invalid response shape, or a non-transient HTTP
+  error blocks setup;
+- `transient`: network/timeout failures, HTTP 429, and HTTP 5xx block by
+  default. `coder init --allow-unverified` is the only way to accept the
+  built-in Go model fallback for these transient outcomes.
+
+`--allow-unverified` never bypasses 401, 403, an authoritative empty
+catalogue, or an invalid response.
 
 An inference-time subscription, quota, or regional-opt-in rejection is not a
 catalogue failure. It is returned as the original OpenCode error and the local
@@ -118,6 +129,10 @@ configuration remains unchanged.
   `opencode-go/*` ids.
 - Explicit Go init uses the live catalogue, pins a Go main/small pair, and does
   not probe Z.AI or Zen.
+- Go init fails before writing model configuration on HTTP 401, HTTP 403, a
+  valid empty catalogue, or an invalid catalogue response.
+- An unverified built-in Go fallback is available only for transport, HTTP 429,
+  or HTTP 5xx failures and only with explicit `--allow-unverified`.
 - Model management rejects Zen/Go mixed pairs despite their shared key.
 - Crush rejects Go before spawning.
 - Existing Zen, Z.AI, Moonshot, and Kimi tests remain green.

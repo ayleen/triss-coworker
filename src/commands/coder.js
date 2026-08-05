@@ -235,41 +235,94 @@ const GO_MAIN_PRIORITY = ['deepseek-v4-flash'];
 const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
 
-// Fetches the set of currently-offered OpenCode Zen model ids, or null if it
-// can't be verified (no key, non-200, network/parse error). Injectable
-// `fetchImpl` mirrors the Z.AI probe (tests pass a fake; never a live call).
+// Zen keeps its historical Set-or-null contract. Go consumes the structured
+// outcome directly so authenticated denials and an authoritative empty
+// catalogue can never be mistaken for a temporary offline condition.
 async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
-  return fetchOpenCodeModelIds(ZEN_MODELS_URL, fetchImpl);
+  const outcome = await fetchOpenCodeCatalogue(ZEN_MODELS_URL, fetchImpl);
+  return outcome.kind === 'available' ? outcome.ids : null;
 }
 
-async function fetchGoModelIds(fetchImpl = globalThis.fetch) {
-  return fetchOpenCodeModelIds(GO_MODELS_URL, fetchImpl);
+async function fetchGoCatalogue(fetchImpl = globalThis.fetch) {
+  return fetchOpenCodeCatalogue(GO_MODELS_URL, fetchImpl);
 }
 
-async function fetchOpenCodeModelIds(url, fetchImpl = globalThis.fetch) {
+async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
   const key = process.env.OPENCODE_API_KEY;
-  if (!key) return null;
+  if (!key) return { kind: 'missing-key' };
+  let res;
   try {
-    const res = await fetchImpl(url, {
+    res = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(ZEN_MODELS_TIMEOUT_MS),
     });
-    if (!res.ok) return null;
-    const body = await res.json();
-    const data = Array.isArray(body?.data) ? body.data : [];
-    const ids = new Set(data.map((m) => m && m.id).filter(Boolean));
-    return ids.size ? ids : null;
   } catch {
-    return null;
+    return { kind: 'transient', reason: 'transport' };
   }
+
+  const status = Number(res?.status);
+  if (!res?.ok) {
+    if (status === 401) return { kind: 'unauthenticated', status };
+    if (status === 403) return { kind: 'forbidden', status };
+    if (status === 429 || status >= 500) return { kind: 'transient', reason: 'http', status };
+    return { kind: 'invalid', reason: 'http', status: Number.isFinite(status) ? status : null };
+  }
+
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return { kind: 'invalid', reason: 'parse' };
+  }
+  if (!body || !Array.isArray(body.data)) return { kind: 'invalid', reason: 'shape' };
+  if (body.data.length === 0) return { kind: 'empty' };
+
+  const ids = new Set(body.data.map((m) => m && m.id).filter((id) => typeof id === 'string' && id));
+  if (!ids.size) return { kind: 'invalid', reason: 'shape' };
+  return { kind: 'available', ids };
 }
 
-function resolveGoCatalogue(available) {
-  if (!available) {
+function resolveGoCatalogue(outcome, { allowUnverified = false } = {}) {
+  if (outcome.kind === 'missing-key') {
+    throw new Error(
+      'Coder setup incomplete: OPENCODE_API_KEY is not set, so the OpenCode Go catalogue cannot be verified.',
+    );
+  }
+  if (outcome.kind === 'unauthenticated') {
+    throw new Error(
+      'Coder setup incomplete: OpenCode Go catalogue returned HTTP 401; verify OPENCODE_API_KEY is a valid workspace key, then re-run.',
+    );
+  }
+  if (outcome.kind === 'forbidden') {
+    throw new Error(
+      'Coder setup incomplete: OpenCode Go catalogue returned HTTP 403; verify the workspace has an active Go entitlement and catalogue access, then re-run.',
+    );
+  }
+  if (outcome.kind === 'empty') {
+    throw new Error(
+      'Coder setup incomplete: OpenCode Go catalogue returned no models; verify the active Go subscription and workspace availability, then re-run.',
+    );
+  }
+  if (outcome.kind === 'invalid') {
+    const detail = outcome.reason === 'http' && outcome.status
+      ? ` (HTTP ${outcome.status})`
+      : '';
+    throw new Error(
+      `Coder setup incomplete: OpenCode Go catalogue response is invalid${detail}; retry after checking the provider status.`,
+    );
+  }
+  if (outcome.kind === 'transient') {
+    const detail = outcome.reason === 'http' ? `HTTP ${outcome.status}` : 'network or timeout failure';
+    if (!allowUnverified) {
+      throw new Error(
+        `Coder setup incomplete: OpenCode Go catalogue is temporarily unavailable (${detail}); retry, or re-run with --allow-unverified only if you intentionally accept an unverified built-in model fallback.`,
+      );
+    }
     process.stderr.write(
       pc.yellow(
-        '  ⚠ could not fetch the OpenCode Go catalogue — using the built-in DeepSeek V4 Flash ' +
-          'default; availability is NOT verified. Check the subscription and workspace settings at ' +
+        `  ⚠ OpenCode Go catalogue is temporarily unavailable (${detail}) — ` +
+          'using the built-in DeepSeek V4 Flash default because --allow-unverified was set; ' +
+          'availability is NOT verified. Check the subscription and workspace settings at ' +
           'https://opencode.ai/docs/go/.\n',
       ),
     );
@@ -280,6 +333,7 @@ function resolveGoCatalogue(available) {
       smallDefault: GO_SMALL_PRIORITY[0],
     };
   }
+  const available = outcome.ids;
   const firstAvailable = (priority) => priority.find((id) => available.has(id));
   const known = new Map(GO_MODEL_CHOICES.map((choice) => [choice.value, choice]));
   const orderedIds = [
@@ -475,14 +529,14 @@ function readOpencodeModels(path) {
 //   3. the interactive picker (TTY);
 //   4. the provider's silent default.
 // `existing` is readOpencodeModels(opencode.json) from the caller.
-async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
+async function resolveInitModels(providerInfo, deps = {}, existing = {}, { allowUnverified = false } = {}) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
   const openCodeCatalogue =
     providerInfo.kind === 'opencode-zen'
       ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch))
       : providerInfo.kind === 'opencode-go'
-        ? resolveGoCatalogue(await fetchGoModelIds(deps.fetch || globalThis.fetch))
+        ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch), { allowUnverified })
         : undefined;
   const cat = coderInitCatalogue(providerInfo, openCodeCatalogue);
   const choose = deps.promptChoice || promptChoice;
@@ -1133,7 +1187,16 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
     // this path and the wizard's postSetup path fail the same way.
-    await runCoderSetup({ scope, provider, inheritedModels, allowUnsafeBash: opts.allowUnsafeBash }, deps);
+    await runCoderSetup(
+      {
+        scope,
+        provider,
+        inheritedModels,
+        allowUnsafeBash: opts.allowUnsafeBash,
+        allowUnverified: opts.allowUnverified,
+      },
+      deps,
+    );
   }
   // The setup isn't runnable if the provider's key never got set (a skipped or
   // empty prompt, or a non-TTY run with nothing in the env) — fail rather than
@@ -1220,7 +1283,10 @@ async function setupKey(path, provider = 'zai') {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup({ scope, provider, engine, inheritedModels, allowUnsafeBash } = {}, deps = {}) {
+export async function runCoderSetup(
+  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified } = {},
+  deps = {},
+) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
   // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
@@ -1314,6 +1380,7 @@ export async function runCoderSetup({ scope, provider, engine, inheritedModels, 
     providerInfo,
     deps,
     existing,
+    { allowUnverified },
   );
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
