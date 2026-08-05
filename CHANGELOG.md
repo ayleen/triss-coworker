@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Coder model management.** `triss coder models` discovers the effective
+  model configuration and live provider catalogue; `triss coder model set`
+  safely switches persistent main/small model pairs with wizard diagnostics,
+  transactional writes, and retained-record rollback recovery.
+
 ## [0.26.0] — 2026-07-27
 
 ### Added

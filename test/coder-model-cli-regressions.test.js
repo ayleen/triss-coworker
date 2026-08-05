@@ -13,7 +13,7 @@ const { join, resolve } = path;
 
 const BIN = resolve("bin/triss.js");
 
-test("coder model set canonical pair writes global opencode config without clobbering custom keys", () => {
+test("coder model set canonical Z.AI pair succeeds without --allow-unverified and without clobbering custom keys", () => {
   const home = mkdtempSync(join(tmpdir(), "triss-coder-model-cli-"));
   const trissDir = join(home, ".config", "triss");
   const opencodeDir = join(home, ".config", "opencode");
@@ -59,7 +59,6 @@ test("coder model set canonical pair writes global opencode config without clobb
         "--engine",
         "opencode",
         "--global",
-        "--allow-unverified",
         "--allow-unsafe-bash",
         "--yes",
       ],
@@ -70,8 +69,10 @@ test("coder model set canonical pair writes global opencode config without clobb
     assert.equal(
       result.status,
       0,
-      `triss exited with status ${result.status}\n--- stdout ---\n${result.stdout || "(empty)"}\n--- stderr ---\n${result.stderr || "(empty)"}`
+      `canonical Z.AI must succeed without --allow-unverified; triss exited with status ${result.status}\n--- stdout ---\n${result.stdout || "(empty)"}\n--- stderr ---\n${result.stderr || "(empty)"}`
     );
+    assert.doesNotMatch(result.stderr, /catalogue-not-verified|--allow-unverified/i,
+      "a provider with no catalogue API must not ask for an inapplicable verification override");
 
     const config = JSON.parse(readFileSync(opencodeConfigPath, "utf8"));
 

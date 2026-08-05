@@ -551,7 +551,7 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
 // resolveInitProvider and the crush guard so both accept the SAME alias set
 // (glm/z.ai/zhipu -> zai; opencode/zen -> opencode-zen; kimi/moonshotai ->
 // moonshot; kimi-coding/kimi-code -> kimi-for-coding).
-function normalizeProviderFlag(raw) {
+export function normalizeProviderFlag(raw) {
   const v = String(raw).trim().toLowerCase();
   if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
   if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
@@ -1150,29 +1150,29 @@ export async function runCoderSetup({ scope, provider, engine, inheritedModels, 
     );
     const keyEnv = 'ZHIPU_API_KEY';
     if (!process.env[keyEnv]) {
-    process.stderr.write(
-      pc.yellow(
-        `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
-      ),
-    );
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
+        ),
+      );
+      throw new Error(
+        `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+      );
+    }
+    // The wizard configures the Z.AI credential but does NOT seed crush models
+    // (crush models use) or the permissions.run policy — those steps live in
+    // `triss coder init --engine crush`. Report a structured incomplete result
+    // and the EXACT next command instead of returning {} (which let the wizard
+    // print a generic green "Done." over an unconfigured engine).
+    // The recovery command MUST include the selected scope flag (--local or --global)
+    // for exact reproducibility.
+    const scopeFlag = scope === 'local' ? '--local' : '--global';
     throw new Error(
-      `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+      'Coder (crush engine) setup incomplete: the wizard saved the Z.AI credential but did not ' +
+        'seed crush models or the permissions.run policy. Complete setup with the exact command:\n' +
+        `  triss coder init --engine crush ${scopeFlag}`,
     );
   }
-  // The wizard configures the Z.AI credential but does NOT seed crush models
-  // (crush models use) or the permissions.run policy — those steps live in
-  // `triss coder init --engine crush`. Report a structured incomplete result
-  // and the EXACT next command instead of returning {} (which let the wizard
-  // print a generic green "Done." over an unconfigured engine).
-  // The recovery command MUST include the selected scope flag (--local or --global)
-  // for exact reproducibility.
-  const scopeFlag = scope === 'local' ? '--local' : '--global';
-  throw new Error(
-    'Coder (crush engine) setup incomplete: the wizard saved the Z.AI credential but did not ' +
-      'seed crush models or the permissions.run policy. Complete setup with the exact command:\n' +
-      `  triss coder init --engine crush ${scopeFlag}`,
-  );
-}
   // The wizard postSetup path passes no provider — infer it from the
   // configured model/credential (no prompt) so a preset zen model is honored.
   const resolvedProvider = provider || inferCoderProvider();

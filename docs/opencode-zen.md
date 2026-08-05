@@ -270,6 +270,9 @@ credential is present, and `catalogue_status` is `timeout`, `http-error`, or
 `parse-error` — never for an **unauthenticated** result, a missing or rejected
 credential, or an authoritative `unavailable`; `--allow-unsafe-bash` permits model-field repair
 when an existing config lacks the deny-first policy (it never installs one).
+Providers without a catalogue API report `not-supported`; that status proceeds
+after local credential/prefix validation and does not require or consume
+`--allow-unverified`.
 
 ### 3. Environment variables
 

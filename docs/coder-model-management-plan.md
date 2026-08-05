@@ -133,6 +133,9 @@ State definitions are normative:
 
 `--allow-unverified` may apply only to `not verified`; it must never override an
 authoritative `unavailable` result.
+`not-supported` is not a failed verification: it means the provider exposes no
+catalogue API. Once credential and local provider/plan-prefix checks pass, a
+switch for that provider proceeds without `--allow-unverified`.
 
 `--json` must expose a stable machine-readable object with `engine`,
 `provider`, `scope`, `current`, `credential`, `available_models`, `recommended`,
@@ -246,6 +249,11 @@ The command must:
     the distinct reason and exact `unset` command for each. If any write or
     final audit fails, restore all touched files from backups and report their
     paths.
+    The shared apply service performs the same global-to-local shadow preflight
+    before creating a transaction record or staging either target. Existing
+    project env/config overrides fail without mutation; the post-commit audit
+    remains required to catch a project override created during the
+    transaction.
 11. Re-run the same compatibility and precedence audit used by init. A green
     result must mean that a fresh `triss coder run` resolves the selected model.
 12. Print the effective model pair, provider, engine, and a rollback command.
@@ -254,6 +262,11 @@ The command must:
 the required credential is present, and catalogue status is `timeout`,
 `http-error`, or `parse-error`. It never bypasses `unauthenticated` or an
 authoritative `unavailable` result. Non-interactive use requires `--yes` too.
+
+For the public service API, omitted `small` means "preserve the currently
+configured small role and persisted small pin". It must not serialize
+`undefined`, delete `small_model`, or remove the small env pin. An explicit
+CLI repair may still resolve and submit both roles.
 
 `--allow-unsafe-bash` has the same narrow meaning as on `coder init`: it permits
 model-field repair while preserving an existing OpenCode config that lacks the
@@ -1207,13 +1220,12 @@ Contract:
   it), and the service MUST export a safe test seam `lockPathFor(engine,
   scope)` returning the absolute lock file path, so deterministic tests can
   observe/hold it with no `sleep`-based timing.
-- Fail CLOSED on an existing/stale lock: when the lock cannot be acquired
-  because it is already held (by another live writer or left stale by a
-  crashed one), the operation MUST abort with a structured `lock-held`
-  diagnostic that names the lock PATH and gives MANUAL guidance, write NOTHING,
-  and exit non-zero. The operation MUST NOT auto-break/force-remove a lock it
-  does not own — a held lock is treated as another live writer until a human
-  decides otherwise.
+- Fail CLOSED on a live, malformed, unreadable, or indeterminate lock. A lock
+  containing a valid Triss token may be reclaimed only when its recorded PID
+  is proven dead (`process.kill(pid, 0)` reports `ESRCH`) and the token is still
+  unchanged. Otherwise the operation aborts with a structured `lock-held`
+  diagnostic that names the lock PATH and gives MANUAL guidance, writes
+  NOTHING, and exits non-zero.
 - CAS/hash safety from Blocker 6 still applies: even with the lock, the apply
   MUST detect an on-disk hash divergence at commit time and abort rather than
   clobber.

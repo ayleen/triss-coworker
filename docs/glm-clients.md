@@ -171,6 +171,10 @@ credential is present, and
 `catalogue_status` is `timeout`, `http-error`, or `parse-error`. It is **never**
 accepted for `catalogue_status: unauthenticated` (no credential to trust) or for
 an authoritative `unavailable` model — those are conclusive, not "unverified".
+`catalogue_status: not-supported` is different: the provider has no catalogue
+API, so there is no remote list to bypass. After credential, provider-prefix,
+and plan-prefix validation succeeds, the switch proceeds without
+`--allow-unverified`.
 
 `triss status` never makes a network request — it points you here for live
 verification. Crush and providers without a catalogue API report
@@ -243,6 +247,10 @@ triss coder model set --engine opencode --provider zai --global
 triss coder model set zai-coding-plan/glm-5.2 \
   --small zai-coding-plan/glm-5-turbo --engine crush --global --yes
 ```
+
+Provider aliases are normalized consistently for every engine. For example,
+`--provider glm`, `--provider z.ai`, and `--provider zhipu` are equivalent to
+`--provider zai`, including with `--engine crush`.
 
 Engine and one scope flag (`--global` / `--local`) are required for a
 non-interactive persistent write. Main and small must share compatible

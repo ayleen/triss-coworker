@@ -221,6 +221,55 @@ test(
   }),
 );
 
+test(
+  'main-only transaction: applies only the main role, preserves the prior small config/env/in-process value, and rollback restores both roles',
+  withTmpHome(async ({ home }) => {
+    const SECRET = 'sk-main-only';
+    const OLD_MAIN = 'opencode/old-main';
+    const OLD_SMALL = 'opencode/old-small';
+    const NEW_MAIN = 'opencode/new-main';
+    seedDenyFirst(home, OLD_MAIN, OLD_SMALL);
+    seedTrissEnv(home, `OPENCODE_API_KEY=${SECRET}\nTRISS_CODER_MODEL=${OLD_MAIN}\nTRISS_CODER_SMALL_MODEL=${OLD_SMALL}\n`);
+    process.env.OPENCODE_API_KEY = SECRET;
+    // This is an in-process consumer's current intent. A main-only write must
+    // not turn it into the literal string "undefined" or delete it.
+    process.env.TRISS_CODER_SMALL_MODEL = OLD_SMALL;
+
+    const svc = await loadService();
+    const plan = await svc.planModelChange(
+      { engine: 'opencode', scope: 'global', provider: 'opencode-zen', main: NEW_MAIN },
+      { fetch: zenListFetch(['new-main']) },
+    );
+    assert.equal(plan.ok, true, `main-only plan must be valid: ${JSON.stringify(plan.diagnostics)}`);
+
+    // The plan-shape contract is asserted separately in
+    // coder-model-management.test.js. Feed the intended public shape here so
+    // this transaction test reaches the apply/audit/rollback behaviour too.
+    const applied = await svc.applyModelChange(
+      { ...plan, changes: { model: NEW_MAIN }, confirmed: true },
+      { fetch: zenListFetch(['new-main']), backupRoot: backupRootUnder(home) },
+    );
+    assert.equal(applied.ok, true, `main-only apply must succeed: ${JSON.stringify(applied)}`);
+    const afterConfig = JSON.parse(readFileSync(globalConfigPath(home), 'utf8'));
+    assert.equal(afterConfig.model, NEW_MAIN);
+    assert.equal(afterConfig.small_model, OLD_SMALL, 'main-only apply must preserve the configured small role');
+    const afterEnv = readFileSync(trissEnvPath(home), 'utf8');
+    assert.match(afterEnv, new RegExp(`^TRISS_CODER_MODEL=${NEW_MAIN}$`, 'm'));
+    assert.match(afterEnv, new RegExp(`^TRISS_CODER_SMALL_MODEL=${OLD_SMALL}$`, 'm'));
+    assert.equal(process.env.TRISS_CODER_SMALL_MODEL, OLD_SMALL,
+      'main-only apply must preserve the in-process small-model intent');
+
+    const rollback = await svc.rollbackModelChange({ from: applied.transaction.dir, scope: 'global' });
+    assert.equal(rollback.ok, true, `rollback must succeed: ${JSON.stringify(rollback)}`);
+    const rolledBackConfig = JSON.parse(readFileSync(globalConfigPath(home), 'utf8'));
+    assert.equal(rolledBackConfig.model, OLD_MAIN);
+    assert.equal(rolledBackConfig.small_model, OLD_SMALL);
+    const rolledBackEnv = readFileSync(trissEnvPath(home), 'utf8');
+    assert.match(rolledBackEnv, new RegExp(`^TRISS_CODER_MODEL=${OLD_MAIN}$`, 'm'));
+    assert.match(rolledBackEnv, new RegExp(`^TRISS_CODER_SMALL_MODEL=${OLD_SMALL}$`, 'm'));
+  }),
+);
+
 // ════════════════════════════════════════════════════════════════════════════
 // #2 injected failure AFTER config rename — full rollback, no orphan temp
 // ════════════════════════════════════════════════════════════════════════════

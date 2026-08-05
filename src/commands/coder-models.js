@@ -43,7 +43,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
-import { resolveCoderEngine } from './coder.js';
+import { normalizeProviderFlag, resolveCoderEngine } from './coder.js';
 import { projectRoot } from '../safety.js';
 import { getEnvFilePath, readEnvFile } from '../secrets.js';
 import {
@@ -128,10 +128,9 @@ export async function runCoderModels(opts = {}) {
   // and no catalogue fetch. The service reads actual crush.json files and reports
   // real role values with distinct source/scope, never synthetic null.
   if (engine === 'crush') {
-    const scope = opts.local ? 'local' : undefined;
-    const state = await inspectCoderModelState({ engine: 'crush', provider: 'zai', scope, shellSnapshot }, {});
+    const state = await inspectCoderModelState({ engine: 'crush', provider: 'zai', shellSnapshot }, {});
     if (opts.json) {
-      process.stdout.write(JSON.stringify(state, null, 2) + '\n');
+      process.stdout.write(JSON.stringify(state) + '\n');
       return 0;
     }
     renderModelsHuman(state);
@@ -311,7 +310,8 @@ export async function runCoderModelSet(mainArg, opts = {}) {
   if (engine === 'crush') {
     // Crush engine only supports 'zai' provider (Z.AI GLM). Reject any other
     // provider BEFORE spawn/write to avoid spurious failures.
-    if (opts.provider && opts.provider !== 'zai') {
+    const crushProvider = opts.provider ? normalizeProviderFlag(opts.provider) : 'zai';
+    if (crushProvider !== 'zai') {
       process.stderr.write(
         pc.red(
           `✗ Crush engine only supports the 'zai' provider (Z.AI GLM).\n` +
@@ -640,14 +640,15 @@ function renderPlanDiagnostics(plan) {
       pc.red(`  ✗ ${d.code} (${where})${detail}\n`),
     );
   }
+  const catalogueStatus = plan.catalogue?.status || 'unknown';
+  const catalogueGuidance = catalogueStatus === 'not-supported'
+    ? '  This provider has no catalogue API; --allow-unverified is neither required nor used.\n' +
+      '  Fix the model, credential, policy, or precedence issue shown above and re-run.\n'
+    : '  Fix the flagged issue(s) and re-run; --allow-unverified only bypasses a\n' +
+      '  not-verified catalogue (timeout/http-error/parse-error), never auth or an\n' +
+      '  authoritative unavailable result.\n';
   process.stderr.write(
-    pc.dim(
-      '  Catalogue status for this attempt: ' +
-        (plan.catalogue?.status || 'unknown') +
-        '.\n  Fix the flagged issue(s) and re-run; --allow-unverified only bypasses a\n' +
-        '  not-verified catalogue (timeout/http-error/parse-error), never auth or an\n' +
-        '  authoritative unavailable result.\n',
-    ),
+    pc.dim(`  Catalogue status for this attempt: ${catalogueStatus}.\n${catalogueGuidance}`),
   );
 }
 
