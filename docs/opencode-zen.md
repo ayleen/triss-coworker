@@ -59,10 +59,11 @@ safety layer.
 
 ## Model catalogue
 
-The Zen catalogue is **live and authoritative**. Triss never trusts a hardcoded
-model id as a default — it reads `GET https://opencode.ai/zen/v1/models` and
-treats whatever that endpoint returns (authenticated) as the truth. Discover it
-on demand:
+The Zen catalogue is **live and authoritative whenever it is reachable**.
+Triss reads `GET https://opencode.ai/zen/v1/models` and treats whatever that
+endpoint returns (authenticated) as the truth; the hardcoded priority list is
+used only as the explicitly unverified offline fallback described below.
+Discover the live catalogue on demand:
 
 ```bash
 triss coder models --engine opencode --provider opencode-zen

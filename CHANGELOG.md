@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- OpenCode Zen setup now defaults to `opencode/deepseek-v4-flash-free` instead
-  of the retired `opencode/hy3-free`, and existing provider/model mismatches
-  produce actionable recovery choices without silently switching providers.
+- OpenCode Zen's preferred/offline-fallback pair now starts with
+  `opencode/deepseek-v4-flash-free` instead of the retired
+  `opencode/hy3-free`; the live catalogue remains authoritative. Existing
+  provider/model mismatches produce actionable recovery choices without
+  silently switching providers.
 
 ### Fixed
 

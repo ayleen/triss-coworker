@@ -588,8 +588,9 @@ triss coder model set --engine crush --local \
   zai-coding-plan/glm-5.2 --small zai-coding-plan/glm-5-turbo --yes
 ```
 
-**Discovering models.** `triss coder models` lists what each
-engine/provider offers, with filters and a machine-readable form:
+**Discovering models.** `triss coder models` lists what the resolved
+engine/provider offers for that invocation, with filters and a
+machine-readable form:
 
 ```bash
 triss coder models                          # current effective engine/provider
