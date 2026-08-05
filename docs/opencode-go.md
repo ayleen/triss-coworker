@@ -18,6 +18,19 @@ deny-first `opencode.json`, and pins the selected main and small models. The
 current default is `opencode-go/deepseek-v4-flash` when the catalogue offers
 it.
 
+Initialization fails closed when the catalogue returns HTTP 401/403, malformed
+data, or a successful but empty `data: []` response. Network/timeout failures,
+HTTP 429, and HTTP 5xx also block by default. If the account was already
+verified and you deliberately want the built-in DeepSeek fallback during a
+temporary provider outage, opt in explicitly:
+
+```bash
+triss coder init --provider opencode-go --allow-unverified --global
+```
+
+This flag never bypasses authentication, authorization, empty-catalogue, or
+malformed-response failures.
+
 Zen and Go share the same environment variable, but they are separate
 providers:
 
@@ -62,11 +75,15 @@ and leaves local configuration unchanged.
 
 - `OPENCODE_API_KEY is not set`: run `triss coder init --provider opencode-go`
   or store the key with `triss config set OPENCODE_API_KEY`.
-- Catalogue is `unauthenticated`: verify that the key belongs to the intended
+- Catalogue returned HTTP 401: verify that the key belongs to the intended
   OpenCode workspace.
-- Catalogue is `not verified`: retry after checking connectivity; persistent
-  changes remain fail-closed unless explicitly allowed by the model-management
-  command.
+- Catalogue returned HTTP 403: verify that the workspace has OpenCode Go
+  entitlement and permits access to the Go catalogue.
+- Catalogue is empty: treat it as authoritative; check subscription/workspace
+  availability rather than pinning a built-in model.
+- Catalogue is temporarily unavailable: retry after checking connectivity, or
+  use `--allow-unverified` only when accepting an unverified built-in fallback
+  is intentional.
 - `RegionError`: enable the required hosting region in the OpenCode workspace
   only after accepting its data-residency implications, then retry the run.
 - Zen/Go main-small mismatch: choose two models with the same prefix even
