@@ -191,6 +191,28 @@ test(
   }),
 );
 
+test(
+  'resolveProviderIntent: explicit OpenCode Go provider or model prefix selects Go while a lone shared key remains Zen',
+  withTmpHome(async () => {
+    process.env.OPENCODE_API_KEY = 'sk-shared';
+    const svc = await loadService();
+
+    assert.equal(
+      (await svc.resolveProviderIntent({ engine: 'opencode', provider: 'opencode-go' }, {})).provider,
+      'opencode-go',
+    );
+    assert.equal(
+      (await svc.resolveProviderIntent({ engine: 'opencode', main: 'opencode-go/deepseek-v4-flash' }, {})).provider,
+      'opencode-go',
+    );
+    assert.equal(
+      (await svc.resolveProviderIntent({ engine: 'opencode' }, {})).provider,
+      'opencode-zen',
+      'the shared key alone must preserve historical Zen inference',
+    );
+  }),
+);
+
 // ════════════════════════════════════════════════════════════════════════════
 // listProviderModels — every catalogue state from injected fetch fixtures
 // ════════════════════════════════════════════════════════════════════════════
@@ -216,6 +238,90 @@ test(
     // A provider with no catalogue API surfaces as not-supported, never a fabricated network error.
     const zai = await svc.listProviderModels({ engine: 'opencode', provider: 'zai' }, { fetch: zenListFetch([]) });
     assert.equal(zai.status, 'not-supported', 'a provider without a catalogue API must report not-supported');
+  }),
+);
+
+test(
+  'listProviderModels: OpenCode Go uses the Go endpoint and normalizes ids with the opencode-go prefix',
+  withTmpHome(async () => {
+    process.env.OPENCODE_API_KEY = 'sk-shared';
+    const svc = await loadService();
+    let requestedUrl;
+    let authorization;
+    const fetch = async (url, init) => {
+      requestedUrl = String(url);
+      authorization = init?.headers?.Authorization;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          object: 'list',
+          data: [{ id: 'deepseek-v4-flash' }, { id: 'opencode-go/already-prefixed' }],
+        }),
+      };
+    };
+
+    const result = await svc.listProviderModels(
+      { engine: 'opencode', provider: 'opencode-go' },
+      { fetch },
+    );
+
+    assert.equal(requestedUrl, 'https://opencode.ai/zen/go/v1/models');
+    assert.equal(authorization, 'Bearer sk-shared');
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(result.models, [
+      'opencode-go/deepseek-v4-flash',
+      'opencode-go/already-prefixed',
+    ]);
+    assert.equal(JSON.stringify(result).includes('sk-shared'), false);
+  }),
+);
+
+test(
+  'inspectCoderModelState: OpenCode Go recommends DeepSeek V4 Flash even when catalogue order differs',
+  withTmpHome(async ({ home }) => {
+    seedGlobalConfig(home, {
+      model: 'opencode-go/deepseek-v4-flash',
+      small_model: 'opencode-go/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+    });
+    process.env.OPENCODE_API_KEY = 'sk-shared';
+    const svc = await loadService();
+    const state = await svc.inspectCoderModelState(
+      { engine: 'opencode', provider: 'opencode-go' },
+      { fetch: zenListFetch(['minimax-m3', 'deepseek-v4-flash', 'glm-5.2']) },
+    );
+
+    assert.deepEqual(state.recommended, {
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'opencode-go/deepseek-v4-flash',
+    });
+  }),
+);
+
+test(
+  'planModelChange: rejects a Zen/Go mixed pair even though both use OPENCODE_API_KEY',
+  withTmpHome(async ({ home }) => {
+    seedGlobalConfig(home, {
+      model: 'opencode/deepseek-v4-flash-free',
+      small_model: 'opencode/deepseek-v4-flash-free',
+      permission: { bash: { '*': 'deny' } },
+    });
+    process.env.OPENCODE_API_KEY = 'sk-shared';
+    const svc = await loadService();
+    const plan = await svc.planModelChange(
+      {
+        engine: 'opencode',
+        scope: 'global',
+        provider: 'opencode-go',
+        main: 'opencode-go/deepseek-v4-flash',
+        small: 'opencode/deepseek-v4-flash-free',
+      },
+      { fetch: zenListFetch(['deepseek-v4-flash']) },
+    );
+
+    assert.equal(plan.ok, false);
+    assert.ok(plan.diagnostics.length > 0);
   }),
 );
 

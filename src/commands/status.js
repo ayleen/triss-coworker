@@ -12,7 +12,7 @@ import { CODER_MANIFEST, describeCoderStatus, coderCredentialReady } from './cod
 // of truth for both the coder tag and the per-provider readiness rows below.
 const CODER_PROVIDERS = [
   { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
-  { label: 'opencode-zen', env: 'OPENCODE_API_KEY' },
+  { label: 'opencode-zen/go', env: 'OPENCODE_API_KEY' },
   { label: 'moonshot', env: 'MOONSHOT_API_KEY' },
   { label: 'kimi-for-coding', env: 'KIMI_API_KEY' },
 ];

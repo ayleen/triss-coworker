@@ -39,7 +39,7 @@ see §3). It **drives a local agent binary** and parses the one JSON
 envelope that binary prints. There are two such binaries ("engines"), both
 behind the same adapter interface. crush is always fed `ZHIPU_API_KEY`
 (bridged to `ZAI_API_KEY`); opencode is fed whichever key its resolved model
-needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3),
+needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen or Go (§3),
 `MOONSHOT_API_KEY` for `moonshotai/*` Kimi, `KIMI_API_KEY` for
 `kimi-for-coding/*`.
 
@@ -52,8 +52,8 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3),
 | Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
 | npm package | `opencode-ai` (pinned `1.18.7`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
-| Key it reads | `ZHIPU_API_KEY` (native); `OPENCODE_API_KEY` for `opencode/…` Zen models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`), OpenCode Zen (`opencode/…` — free ids are promotional and OpenCode-only; see [opencode-zen.md](opencode-zen.md)), **and** Moonshot Kimi (`moonshotai/…` PAYG, `kimi-for-coding/…` subscription) | Z.AI GLM only |
+| Key it reads | `ZHIPU_API_KEY` (native); shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
+| Providers | Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](opencode-go.md)), and Moonshot Kimi | Z.AI GLM only |
 | Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix; Zen/Kimi models resolve via opencode's built-in `opencode` / `moonshotai` / `kimi-for-coding` providers | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
@@ -98,22 +98,22 @@ Z.AI GLM — the default and crush's only provider — is configured from a
 single secret, `ZHIPU_API_KEY` (get it at
 <https://z.ai/manage-apikey/apikey-list>). It is the only **required** env var
 for the coder subsystem (`CODER_MANIFEST`) when GLM is the chosen provider.
-The `opencode` engine can also run [OpenCode Zen](https://opencode.ai/docs/zen/)
-`opencode/*` models (free ids are promotional and OpenCode-only); those
-authenticate with an optional `OPENCODE_API_KEY` instead.
+The `opencode` engine can also run OpenCode Zen `opencode/*` and paid OpenCode
+Go `opencode-go/*` models; both authenticate with `OPENCODE_API_KEY`, but use
+separate catalogues and provider identities.
 `coderModelCredential(model)` maps a resolved model's `<provider>/` prefix to
 the key it needs, and `triss coder run` gates on exactly that key before
-spawning — so a zen-only setup runs on `OPENCODE_API_KEY` alone. **Setup
+spawning — so a Zen- or Go-only setup runs on `OPENCODE_API_KEY` alone. **Setup
 resolves engine then provider before requesting any credential**, so a Zen /
-Moonshot / Kimi flow is never asked for `ZHIPU_API_KEY`. See
-[opencode-zen.md](opencode-zen.md) for the Zen model catalogue and every way to
-configure it.
+Go / Moonshot / Kimi flow is never asked for `ZHIPU_API_KEY`. See
+[opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md) for the
+catalogues and configuration paths.
 
 ### Minimal subprocess environment
 The engine subprocess never inherits your full environment. `buildEngineEnv()`
 copies only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL` plus the **single**
 provider key the resolved model needs — `ZHIPU_API_KEY` for GLM or
-`OPENCODE_API_KEY` for an `opencode/*` Zen model, never both, so a run only ever
+`OPENCODE_API_KEY` for an `opencode/*` or `opencode-go/*` model, never both, so a run only ever
 carries the credential its own provider uses. For crush, the adapter instead
 maps `ZHIPU_API_KEY → ZAI_API_KEY` in the spawn env (`buildCrushSpawnEnv`)
 because crush's built-in `zai` provider historically read only `ZAI_API_KEY`.

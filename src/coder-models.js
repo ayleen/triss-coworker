@@ -73,9 +73,12 @@ const _DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // The credential env each provider KIND reads. Mirrors the KIND_KEY_ENVS map
 // in coder.js; kept local so this service owns the "no silent fallback" rule
 // without coupling to coder.js's internals. The Z.AI plan sub-prefixes
-// (`zai-coding-plan` vs `zai`) both authenticate via ZHIPU_API_KEY.
+// (`zai-coding-plan` vs `zai`) both authenticate via ZHIPU_API_KEY. OpenCode
+// Go shares OPENCODE_API_KEY with Zen but is a distinct provider kind (a lone
+// key still infers Zen for backward compatibility — see CRED_TO_PROVIDER).
 const PROVIDER_CRED_ENV = {
   'opencode-zen': 'OPENCODE_API_KEY',
+  'opencode-go': 'OPENCODE_API_KEY',
   zai: 'ZHIPU_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
   'kimi-for-coding': 'KIMI_API_KEY',
@@ -90,10 +93,15 @@ const CRED_TO_PROVIDER = [
   ['KIMI_API_KEY', 'kimi-for-coding'],
 ];
 
-// OpenCode Zen catalogue endpoint (the only provider with a list API). Same
-// URL/base the existing fetchZenModelIds client in coder.js uses.
+// OpenCode Zen catalogue endpoint. Same URL/base the existing
+// fetchZenModelIds client in coder.js uses.
 const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
 const ZEN_MODELS_TIMEOUT_MS = 10_000;
+
+// OpenCode Go catalogue endpoint — a paid subscription that shares
+// OPENCODE_API_KEY with Zen but is a distinct provider with its own model
+// prefix (`opencode-go/`). Same URL/base as fetchGoModelIds in coder.js.
+const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
 
 // Preference order for recommending Zen models from a verified catalogue
 // (matches coder.js's documented ZEN_*_PRIORITY). Both roles default to the
@@ -103,6 +111,8 @@ const ZEN_MAIN_PRIORITY = [
   'opencode/north-mini-code-free',
 ];
 const ZEN_SMALL_PRIORITY = ['opencode/deepseek-v4-flash-free', 'opencode/north-mini-code-free'];
+const GO_MAIN_PRIORITY = ['opencode-go/deepseek-v4-flash'];
+const GO_SMALL_PRIORITY = ['opencode-go/deepseek-v4-flash'];
 
 function providerCredEnv(provider) {
   return PROVIDER_CRED_ENV[provider] || 'ZHIPU_API_KEY';
@@ -110,25 +120,30 @@ function providerCredEnv(provider) {
 
 // Normalizes a --provider flag value (with aliases) to a canonical provider
 // kind. Mirrors coder.js's normalizeProviderFlag alias set so the CLI flag
-// and this service accept the SAME aliases.
+// and this service accept the SAME aliases. `opencode` remains Zen; it is
+// NOT accepted as a Go alias.
 function normalizeProvider(raw) {
   const v = String(raw).trim().toLowerCase();
   if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
   if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
+  if (['opencode-go', 'go'].includes(v)) return 'opencode-go';
   if (['moonshot', 'kimi', 'moonshotai'].includes(v)) return 'moonshot';
   if (['kimi-for-coding', 'kimi-coding', 'kimi-code'].includes(v)) return 'kimi-for-coding';
   throw new Error(
-    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, moonshot, kimi-for-coding.`,
+    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
   );
 }
 
 // Whether a raw model prefix (the segment before the first `/`) belongs to
 // `provider`. Both Z.AI plan prefixes (`zai` and `zai-coding-plan`) fit the
 // `zai` kind; the plan-level pairing is enforced separately by the
-// same-prefix rule in planModelChange.
+// same-prefix rule in planModelChange. Go and Zen share the OpenCode key but
+// use distinct prefixes (`opencode-go` vs `opencode`), so a Zen model never
+// fits the Go provider even though both authenticate via OPENCODE_API_KEY.
 function prefixFitsProvider(prefix, provider) {
   if (!prefix) return false;
   if (provider === 'opencode-zen') return prefix === 'opencode';
+  if (provider === 'opencode-go') return prefix === 'opencode-go';
   if (provider === 'moonshot') return prefix === 'moonshotai' || prefix === 'moonshotai-cn';
   if (provider === 'kimi-for-coding') return prefix === 'kimi-for-coding';
   if (provider === 'zai') return prefix === 'zai' || prefix === 'zai-coding-plan';
@@ -142,6 +157,7 @@ function prefixFitsProvider(prefix, provider) {
 function prefixToProvider(prefix) {
   if (!prefix) return null;
   if (prefix === 'opencode') return 'opencode-zen';
+  if (prefix === 'opencode-go') return 'opencode-go';
   if (prefix === 'moonshotai' || prefix === 'moonshotai-cn') return 'moonshot';
   if (prefix === 'kimi-for-coding') return 'kimi-for-coding';
   if (prefix === 'zai' || prefix === 'zai-coding-plan') return 'zai';
@@ -426,7 +442,14 @@ export async function resolveProviderIntent(input = {}, _deps = {}) {
 export async function listProviderModels(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
   const provider = input.provider;
-  const meta = provider === 'opencode-zen' ? { url: ZEN_MODELS_URL, credEnv: 'OPENCODE_API_KEY' } : null;
+  // The two OpenCode providers are the only ones with a list API; Go has its
+  // own catalogue endpoint but authenticates with the same OPENCODE_API_KEY.
+  const meta =
+    provider === 'opencode-zen'
+      ? { url: ZEN_MODELS_URL, credEnv: 'OPENCODE_API_KEY', prefix: 'opencode' }
+      : provider === 'opencode-go'
+        ? { url: GO_MODELS_URL, credEnv: 'OPENCODE_API_KEY', prefix: 'opencode-go' }
+        : null;
   if (!meta) {
     return { engine, provider, status: 'not-supported', models: [] };
   }
@@ -451,7 +474,7 @@ export async function listProviderModels(input = {}, deps = {}) {
     } catch {
       return { engine, provider, status: 'parse-error', models: [] };
     }
-    // OpenCode Zen HTTP 200 payload must have parseable complete model array
+    // OpenCode catalogue HTTP 200 payload must have a parseable complete model array.
     // Missing data, non-array data, or malformed entries result in parse-error
     if (!body || typeof body !== 'object') {
       return { engine, provider, status: 'parse-error', models: [] };
@@ -467,16 +490,18 @@ export async function listProviderModels(input = {}, deps = {}) {
       }
     }
     const rawIds = data.map((m) => m && m.id).filter(Boolean);
-    // The OpenCode Zen `/models` API returns BARE ids (e.g.
-    // `deepseek-v4-flash-free`); every public/config surface in triss uses the
-    // canonical `opencode/<id>` form. Normalize here so inspection,
-    // recommendation, availability, and recovery all see canonical ids
-    // consistently. Idempotent: an already-prefixed id is left intact (legacy
-    // fixtures and any future prefixed response pass through unchanged).
-    const models =
-      provider === 'opencode-zen'
-        ? rawIds.map((id) => (String(id).startsWith('opencode/') ? String(id) : `opencode/${id}`))
-        : rawIds;
+    // The OpenCode `/models` APIs return BARE ids (e.g. `deepseek-v4-flash`
+    // or `deepseek-v4-flash-free`); every public/config surface in triss uses
+    // the canonical `opencode/<id>` / `opencode-go/<id>` form. Normalize here
+    // so inspection, recommendation, availability, and recovery all see
+    // canonical ids consistently. Idempotent: an already-prefixed id is left
+    // intact (legacy fixtures and any future prefixed response pass through
+    // unchanged).
+    const models = meta.prefix
+      ? rawIds.map((id) =>
+          String(id).startsWith(`${meta.prefix}/`) ? String(id) : `${meta.prefix}/${id}`,
+        )
+      : rawIds;
     return { engine, provider, status: 'ok', models };
   } catch {
     // Network/AbortSignal rejection (timeout, DNS, connection) — surfaces as a
@@ -636,6 +661,11 @@ function pickRecommended(models, provider) {
   if (provider === 'opencode-zen') {
     const main = ZEN_MAIN_PRIORITY.find((m) => models.includes(m)) || models[0];
     const small = ZEN_SMALL_PRIORITY.find((m) => models.includes(m)) || main;
+    return { main, small };
+  }
+  if (provider === 'opencode-go') {
+    const main = GO_MAIN_PRIORITY.find((m) => models.includes(m)) || models[0];
+    const small = GO_SMALL_PRIORITY.find((m) => models.includes(m)) || main;
     return { main, small };
   }
   return { main: models[0], small: models[0] };

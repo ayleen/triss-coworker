@@ -20,7 +20,8 @@ default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
 CLI-flag allowlist on top. The opencode engine can also run OpenCode Zen
-models (e.g. the free `--model opencode/deepseek-v4-flash-free`, set `OPENCODE_API_KEY`)
+models (e.g. `--model opencode/deepseek-v4-flash-free`) or paid OpenCode Go
+models (e.g. `--model opencode-go/deepseek-v4-flash`), both with `OPENCODE_API_KEY`,
 or Moonshot Kimi models (`--model moonshotai/kimi-k2.7-code` with
 `MOONSHOT_API_KEY`, or the flat-rate `--model kimi-for-coding/k3` with
 `KIMI_API_KEY`) instead of Z.AI GLM.

@@ -477,6 +477,55 @@ function fakeZenCatalogue(
   };
 }
 
+function fakeGoCatalogue(ids = ['deepseek-v4-flash']) {
+  return async (url) => {
+    if (String(url).includes('/zen/go/v1/models')) {
+      return { ok: true, json: async () => ({ object: 'list', data: ids.map((id) => ({ id })) }) };
+    }
+    throw new Error(`unexpected fetch (only the OpenCode Go catalogue is allowed): ${url}`);
+  };
+}
+
+test(
+  'runCoderInit --provider opencode-go: writes and pins DeepSeek V4 Flash from the Go catalogue',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-fake';
+    await runCoderInit(
+      { global: true, provider: 'opencode-go' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeGoCatalogue() },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
+    assert.equal(config.small_model, 'opencode-go/deepseek-v4-flash');
+    assert.equal(config.permission.bash['*'], 'deny');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode-go/deepseek-v4-flash');
+    const env = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
+    assert.match(env, /^TRISS_CODER_MODEL=opencode-go\/deepseek-v4-flash$/m);
+    assert.match(env, /^TRISS_CODER_SMALL_MODEL=opencode-go\/deepseek-v4-flash$/m);
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-go: uses the first live Go model when DeepSeek V4 Flash is absent',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-fake';
+    await runCoderInit(
+      { global: true, provider: 'opencode-go' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeGoCatalogue(['minimax-m3', 'glm-5.2']),
+      },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode-go/minimax-m3');
+    assert.equal(config.small_model, 'opencode-go/minimax-m3');
+  }),
+);
+
 test(
   'runCoderInit --provider opencode-zen: writes an opencode config from the live catalogue and skips Z.AI detection',
   withTmpHome(async ({ home }) => {
@@ -983,6 +1032,38 @@ test(
     assert.match(out, /cannot override it at run time/);
     assert.doesNotMatch(out, /pinned TRISS_CODER_MODEL/);
     assert.doesNotMatch(out, /Done\./);
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-go: rejects a Zen small_model despite the shared OPENCODE_API_KEY',
+  withTmpHome(async ({ home, captured }) => {
+    process.env.OPENCODE_API_KEY = 'sk-shared-fake';
+    const cfgDir = join(home, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, 'opencode.json'),
+      JSON.stringify({
+        model: 'opencode-go/deepseek-v4-flash',
+        small_model: 'opencode/deepseek-v4-flash-free',
+        permission: { bash: { '*': 'deny' } },
+      }) + '\n',
+    );
+
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-go' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeGoCatalogue() },
+        ),
+      /existing opencode\.json issues/,
+    );
+    const out = captured.join('');
+    assert.match(out, /coder \(opencode engine · OpenCode Go\)/);
+    assert.match(
+      out,
+      /small_model="opencode\/deepseek-v4-flash-free", which is not a OpenCode Go model/,
+    );
   }),
 );
 
