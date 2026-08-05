@@ -28,6 +28,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSy
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stripAnsi } from './_ansi.js';
 
 const BIN = join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'bin', 'triss.js');
 
@@ -134,7 +135,7 @@ test(
       Object.defineProperty(process.stdin, 'isTTY', { value: saved.isTTY, configurable: true });
     }
 
-    const report = cap.text() + (thrown ? `\n${thrown.stack || String(thrown)}` : '');
+    const report = stripAnsi(cap.text() + (thrown ? `\n${thrown.stack || String(thrown)}` : ''));
 
     // 1. Extract the printed `triss coder model set ...` recovery line.
     const setLineMatch = report.match(/^[ \t]*triss coder model set .+$/m);

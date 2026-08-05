@@ -64,6 +64,15 @@ function writeFakeCrush(binDir, log, code = 0) {
   chmodSync(p, 0o755);
 }
 
+function writeFailingCrushThatLeavesConfig(binDir, log, code = 7) {
+  const p = join(binDir, 'crush');
+  writeFileSync(
+    p,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nmkdir -p "$HOME/.local/share/crush"\nprintf '%s\\n' 'partial-or-concurrent-bytes' > "$HOME/.local/share/crush/crush.json"\nexit ${code}\n`,
+  );
+  chmodSync(p, 0o755);
+}
+
 // Spawns the REAL bin/triss.js with a bare env: temp HOME, fake crush first on
 // PATH, NO inherited operator creds. A single fake ZHIPU key is re-seeded so a
 // rejection can only be driven by the MODEL value, not a missing credential.
@@ -174,6 +183,31 @@ test('crush model set: a nonzero crush exit is surfaced as a `crush models use` 
       `crush must be spawned with the canonical argv even on failure; log was "${readLog(log)}"`);
     assert.match(r.stderr, /crush models use/,
       'the failure message must name the failing `crush models use` surface');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('crush model set: first-time failing Crush write reports retained partial state, record, and manual recovery without claiming rollback', () => {
+  const { home } = makeSandbox();
+  const log = join(home, 'crush.log');
+  const configPath = join(home, '.local', 'share', 'crush', 'crush.json');
+  writeFailingCrushThatLeavesConfig(join(home, 'bin'), log);
+  try {
+    const r = runCli(
+      ['coder', 'model', 'set', CANON_MAIN, '--small', CANON_SMALL, '--engine', 'crush', '--global', '--yes'],
+      { home },
+    );
+    assert.equal(r.status, 3, `partial state must use exit 3; stderr:\n${r.stderr}`);
+    assert.equal(readLog(log), EXPECTED_ARGV);
+    assert.equal(existsSync(configPath), true, 'the ownership-unproven file must remain untouched');
+    assert.match(r.stderr, /partial-state-retained/i);
+    assert.ok(r.stderr.includes(configPath), 'stderr must name the exact retained config path');
+    assert.match(r.stderr, /record:/i);
+    assert.match(r.stderr, /inspect/i);
+    assert.match(r.stderr, /remove/i);
+    assert.doesNotMatch(r.stderr, /rolled back|rollback succeeded/i);
+    assert.doesNotMatch(r.stderr, /rollback:\s*triss coder model rollback/i);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

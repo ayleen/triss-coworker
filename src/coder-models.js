@@ -58,7 +58,7 @@ import { projectRoot } from './safety.js';
 // applyModelChange snapshots and restores TRISS_CODER_MODEL /
 // TRISS_CODER_SMALL_MODEL through this path. Safe to import: secrets.js has no
 // module-eval side effects that reach back into this module.
-import { getEnvFilePath, readEnvFile } from './secrets.js';
+import { getEnvFilePath, parseEnvText, readEnvFile } from './secrets.js';
 // Reuse the canonical provider-from-model parser so the prefix→credential
 // mapping stays in one place. Safe to import: coder.js has no module-eval
 // side effects, and we only call this pure helper (never its fetch paths).
@@ -235,42 +235,57 @@ function resolveRuntimeMain(shellSnapshot) {
 // local crush.json role -> global crush.json role -> default (null).
 // Never returns synthetic null when the config file exists and is parseable.
 // NOTE: Physical Crush config uses models.large and models.small (NOT models.fast).
+function readJsonConfigLayer(path, scope) {
+  if (!existsSync(path)) return { config: null, error: null, path, scope };
+  try {
+    return { config: JSON.parse(readFileSync(path, 'utf8')) || {}, error: null, path, scope };
+  } catch {
+    return {
+      config: null,
+      error: {
+        code: 'config-parse-error',
+        severity: 'error',
+        scope,
+        path,
+        message: `Could not parse ${path} as JSON. Fix or restore this file before using a lower-precedence config.`,
+      },
+      path,
+      scope,
+    };
+  }
+}
+
+function parseErrorRole(layer) {
+  return {
+    value: null,
+    source_path: layer.path,
+    scope: layer.scope,
+    parse_error: layer.error,
+  };
+}
+
 function resolveCrushRoles() {
   const globalPath = join(process.env.HOME || homedir(), '.local', 'share', 'crush', 'crush.json');
   const localPath = join(projectRoot(), '.crush', 'crush.json');
 
-  let globalConfig = null;
-  let localConfig = null;
-
-  if (existsSync(globalPath)) {
-    try {
-      globalConfig = JSON.parse(readFileSync(globalPath, 'utf8')) || {};
-    } catch {
-      // Malformed — treat as absent.
-    }
-  }
-
-  if (existsSync(localPath)) {
-    try {
-      localConfig = JSON.parse(readFileSync(localPath, 'utf8')) || {};
-    } catch {
-      // Malformed — treat as absent.
-    }
-  }
+  const globalLayer = readJsonConfigLayer(globalPath, 'global');
+  const localLayer = readJsonConfigLayer(localPath, 'local');
 
   const resolveRole = (role) => {
     // Local config role wins if present.
-    if (localConfig?.models?.[role]) {
+    if (localLayer.error) return parseErrorRole(localLayer);
+    if (localLayer.config?.models?.[role]) {
       return {
-        value: localConfig.models[role],
+        value: localLayer.config.models[role],
         source_path: localPath,
         scope: 'local',
       };
     }
     // Global config role wins if present.
-    if (globalConfig?.models?.[role]) {
+    if (globalLayer.error) return parseErrorRole(globalLayer);
+    if (globalLayer.config?.models?.[role]) {
       return {
-        value: globalConfig.models[role],
+        value: globalLayer.config.models[role],
         source_path: globalPath,
         scope: 'global',
       };
@@ -296,38 +311,24 @@ function resolveOpenCodeConfigRoles() {
   const globalPath = opencodeConfigPath('global');
   const localPath = opencodeConfigPath('local');
 
-  let globalConfig = null;
-  let localConfig = null;
-
-  if (existsSync(globalPath)) {
-    try {
-      globalConfig = JSON.parse(readFileSync(globalPath, 'utf8')) || {};
-    } catch {
-      // Malformed — treat as absent.
-    }
-  }
-
-  if (existsSync(localPath)) {
-    try {
-      localConfig = JSON.parse(readFileSync(localPath, 'utf8')) || {};
-    } catch {
-      // Malformed — treat as absent.
-    }
-  }
+  const globalLayer = readJsonConfigLayer(globalPath, 'global');
+  const localLayer = readJsonConfigLayer(localPath, 'local');
 
   const resolveRole = (field) => {
     // Local config field wins if present.
-    if (localConfig && typeof localConfig[field] === 'string') {
+    if (localLayer.error) return parseErrorRole(localLayer);
+    if (localLayer.config && typeof localLayer.config[field] === 'string') {
       return {
-        value: localConfig[field],
+        value: localLayer.config[field],
         source_path: localPath,
         scope: 'local',
       };
     }
     // Global config field wins if present.
-    if (globalConfig && typeof globalConfig[field] === 'string') {
+    if (globalLayer.error) return parseErrorRole(globalLayer);
+    if (globalLayer.config && typeof globalLayer.config[field] === 'string') {
       return {
-        value: globalConfig[field],
+        value: globalLayer.config[field],
         source_path: globalPath,
         scope: 'global',
       };
@@ -509,12 +510,15 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   let runtimeMain;
   let configMain;
   let configuredSmall;
+  const configParseErrors = [];
 
   if (engine === 'crush') {
     // Crush: read actual crush.json files.
     const crushRoles = resolveCrushRoles();
     runtimeMain = { value: crushRoles.main.value, source_path: crushRoles.main.source_path, scope: crushRoles.main.scope };
     configuredSmall = { value: crushRoles.small.value, source_path: crushRoles.small.source_path, scope: crushRoles.small.scope };
+    if (crushRoles.main.parse_error) configParseErrors.push(crushRoles.main.parse_error);
+    if (crushRoles.small.parse_error) configParseErrors.push(crushRoles.small.parse_error);
     // Crush has no separate config_main field — runtime main IS the config.
     configMain = null;
   } else {
@@ -528,6 +532,8 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     const configRoles = resolveOpenCodeConfigRoles();
     configMain = { value: configRoles.main.value, source_path: configRoles.main.source_path, scope: configRoles.main.scope };
     configuredSmall = { value: configRoles.small.value, source_path: configRoles.small.source_path, scope: configRoles.small.scope };
+    if (configRoles.main.parse_error) configParseErrors.push(configRoles.main.parse_error);
+    if (configRoles.small.parse_error) configParseErrors.push(configRoles.small.parse_error);
   }
 
   const credEnv = providerCredEnv(provider);
@@ -564,6 +570,12 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   const recommended = pickRecommended(available_models, provider);
 
   const warnings = [];
+  const seenParsePaths = new Set();
+  for (const parseError of configParseErrors) {
+    if (seenParsePaths.has(parseError.path)) continue;
+    seenParsePaths.add(parseError.path);
+    warnings.push(parseError);
+  }
   // For OpenCode, warn about config_main and configuredSmall availability, not runtimeMain.
   // runtimeMain may be a different provider (e.g. GLM shell override) and should not trigger
   // "configured-model-unavailable" against the selected provider's catalogue.
@@ -602,7 +614,12 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   };
 
   // For OpenCode, add config_main when runtime main differs from config main.
-  if (engine !== 'crush' && configMain && configMain.value !== null && configMain.value !== runtimeMain.value) {
+  if (
+    engine !== 'crush'
+    && configMain
+    && (configMain.value !== null || configParseErrors.length > 0)
+    && configMain.value !== runtimeMain.value
+  ) {
     result.config_main = describeRole(configMain);
   }
 
@@ -820,22 +837,6 @@ function writeSecureFile(path, content) {
   try { chmodSync(path, 0o600); } catch { /* best-effort */ }
 }
 
-// Reads a single var from an env-file body, stripping one layer of matching
-// surrounding quotes. Returns null if absent (caller treats null as "unset").
-function readEnvVar(text, key) {
-  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, 'im');
-  const m = re.exec(text);
-  if (!m) return null;
-  let value = m[1];
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    value = value.slice(1, -1);
-  }
-  return value;
-}
-
 // Reads the two model pins from an env file. Always returns both keys; value
 // is null when the file or pin is absent (used for "restore or unset" logic).
 function readModelPins(envPath) {
@@ -843,9 +844,10 @@ function readModelPins(envPath) {
     return { TRISS_CODER_MODEL: null, TRISS_CODER_SMALL_MODEL: null };
   }
   const text = readFileSync(envPath, 'utf8');
+  const vars = parseEnvText(text).vars;
   return {
-    TRISS_CODER_MODEL: readEnvVar(text, 'TRISS_CODER_MODEL'),
-    TRISS_CODER_SMALL_MODEL: readEnvVar(text, 'TRISS_CODER_SMALL_MODEL'),
+    TRISS_CODER_MODEL: vars.TRISS_CODER_MODEL ?? null,
+    TRISS_CODER_SMALL_MODEL: vars.TRISS_CODER_SMALL_MODEL ?? null,
   };
 }
 
@@ -871,9 +873,9 @@ function applyEnvPins(text, pins) {
   const handled = {};
   const updated = lines.map((line) => {
     for (const key of Object.keys(pins)) {
-      if (handled[key]) continue;
       const re = new RegExp(`^\\s*${key}\\s*=`, 'i');
       if (re.test(line)) {
+        if (handled[key]) return null;
         handled[key] = true;
         return pins[key] == null ? null : formatEnvLine(key, pins[key]);
       }
@@ -1904,7 +1906,7 @@ function snapshotCrushConfig(configPath) {
 // them into a structured rollback-failed (exitCode 3) result with manual
 // recovery paths. opts.failRollback forces a throw for deterministic tests.
 function restoreCrushConfig(configPath, snap, opts = {}) {
-  if (!configPath || !snap) return;
+  if (!configPath || !snap) return { restored: false, retained: false };
   if (opts.failRollback) {
     throw new Error('injected rollback failure (deps.failRollback)');
   }
@@ -1924,9 +1926,12 @@ function restoreCrushConfig(configPath, snap, opts = {}) {
         { cause: err },
       );
     }
+    return { restored: true, retained: false };
   }
   // existed:false → leave any file in place (ownership unprovable on a failing
   // spawn). The caller surfaces rollback-failed / manual recovery as needed.
+  const retained = existsSync(configPath);
+  return { restored: !retained, retained };
 }
 
 export async function applyCrushModelChange(plan = {}, deps = {}) {
@@ -2009,7 +2014,26 @@ export async function applyCrushModelChange(plan = {}, deps = {}) {
   // of swallowing the restoration failure behind the bare crush error.
   const compensate = (causeMsg) => {
     try {
-      restoreCrushConfig(configPath, configSnap, { failRollback: !!deps.failRollback });
+      const restoration = restoreCrushConfig(configPath, configSnap, { failRollback: !!deps.failRollback });
+      if (restoration.retained) {
+        return {
+          ok: false,
+          exitCode: 3,
+          reason: 'partial-state-retained',
+          engine: 'crush',
+          scope,
+          path: configPath,
+          transaction: txInfo,
+          restorePaths,
+          manualRecovery: [
+            `Inspect the retained Crush config before making another change: ${configPath}`,
+            `If inspection confirms it is only the failed partial write, remove it manually: rm ${posixSingleQuote(configPath)}`,
+            `Keep the transaction record for diagnosis: ${recordPath}`,
+          ],
+          error: `Crush failed and left ${configPath}; Triss retained it because ownership of those bytes cannot be proved.`,
+          cause: causeMsg,
+        };
+      }
     } catch (restoreErr) {
       return {
         ok: false,

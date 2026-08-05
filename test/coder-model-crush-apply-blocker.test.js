@@ -195,17 +195,24 @@ test(
       return { status: 7, stdout: '', stderr: 'partial', error: null };
     };
 
-    let thrown = null;
-    try {
-      await svc.applyCrushModelChange(plan, {
-        sh: failSh,
-        configPath,
-        backupRoot: join(home, 'backups'),
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    assert.ok(thrown, 'a nonzero crush command must remain fatal');
+    const result = await svc.applyCrushModelChange(plan, {
+      sh: failSh,
+      configPath,
+      backupRoot: join(home, 'backups'),
+    });
+    assert.equal(result.ok, false, 'a nonzero crush command must remain fatal');
+    assert.equal(result.exitCode, 3);
+    assert.equal(result.reason, 'partial-state-retained');
+    assert.equal(result.path, configPath, 'the structured failure must name the retained live config');
+    assert.ok(result.transaction?.dir, 'the protected transaction record must be retained and named');
+    assert.ok(
+      Array.isArray(result.manualRecovery)
+        && result.manualRecovery.some((line) => line.includes(configPath))
+        && result.manualRecovery.some((line) => /inspect/i.test(line))
+        && result.manualRecovery.some((line) => /remove/i.test(line)),
+      `manual recovery must explain how to inspect/remove the retained file: ${JSON.stringify(result)}`,
+    );
+    assert.equal(result.rollbackCommand, undefined, 'an unsafe rollback command must not be offered');
     // The file MUST still exist — compensation must not have removed it.
     assert.equal(
       existsSync(configPath),

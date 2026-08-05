@@ -149,6 +149,13 @@ values are strings or `null`. Crush and providers without a catalogue API use
 `triss status` perform a network request; it may point users to
 `triss coder models` for live verification.
 
+If an effective OpenCode or Crush JSON layer exists but is malformed,
+inspection MUST NOT silently fall through to a lower-precedence file. The
+affected role keeps the malformed file's exact `source_path`/scope with an
+unset value, and `warnings` contains a structured `config-parse-error`
+(`severity: error`) naming that path. Human output must show the same path and
+message.
+
 For OpenCode Zen, reuse the authenticated
 `GET https://opencode.ai/zen/v1/models` path already used during init. The live
 API is authoritative for availability; hardcoded free-model priorities are
@@ -227,7 +234,11 @@ The command must:
    update the engine's model fields/roles.
 10. Stage the engine config and persisted Triss env pin files (`.triss.env` or
     the global env file), validate their parsed result, then commit them as one
-    logical transaction. Shell-exported model variables are read-only signals.
+    logical transaction. Env loading is last-assignment-wins, so rendering,
+    snapshots, post-commit audit, and rollback MUST use that same parser.
+    Updating either model pin removes every duplicate occurrence and writes
+    exactly one canonical assignment; unsetting removes every occurrence.
+    Shell-exported model variables are read-only signals.
     A different `TRISS_CODER_MODEL` is a runtime shadow and blocks before
     writing. A different `TRISS_CODER_SMALL_MODEL` does not shadow a fresh run,
     but is a separate `management-intent-conflict` because the next init could
@@ -1101,6 +1112,13 @@ Contract:
   only the original crush error.
 - Compensation and rollback share the same hash-verify-then-act discipline so
   no path deletes state it did not create.
+- When the pre-call snapshot is `existed:false` and a failing Crush process
+  leaves a file whose ownership cannot be proved, compensation MUST return a
+  structured `partial-state-retained` failure (exit 3), not normal success or a
+  bare spawn error. The result and CLI output name the live config path and
+  retained transaction record and give explicit inspect/remove guidance. They
+  MUST NOT claim rollback succeeded or emit a rollback command that cannot
+  safely remove the unowned file.
 
 RED signal today: `restoreCrushConfig` does `rmSync(configPath, {force:true})`
 unconditionally when `!snap.existed`, removing any file at that path

@@ -167,6 +167,60 @@ test(
   }),
 );
 
+test(
+  'review-1 duplicate env pins: apply and rollback use runtime last-assignment-wins semantics and leave one canonical assignment per model key',
+  withTmpHome(async ({ home }) => {
+    const SECRET = 'sk-duplicate-pins';
+    seedGlobalConfig(home, {
+      model: 'opencode/old-last-main',
+      small_model: 'opencode/old-last-small',
+      permission: { bash: { '*': 'deny' } },
+    });
+    seedTrissEnv(
+      home,
+      [
+        `OPENCODE_API_KEY=${SECRET}`,
+        'TRISS_CODER_MODEL=opencode/old-first-main',
+        'TRISS_CODER_SMALL_MODEL=opencode/old-first-small',
+        'KEEP=this-line',
+        'TRISS_CODER_MODEL=opencode/old-last-main',
+        'TRISS_CODER_SMALL_MODEL=opencode/old-last-small',
+        '',
+      ].join('\n'),
+    );
+    process.env.OPENCODE_API_KEY = SECRET;
+
+    const svc = await loadService();
+    const plan = await svc.planModelChange(OC(...NEW), { fetch: newFetch() });
+    assert.equal(plan.ok, true, 'precondition: verified duplicate-pin switch must plan ok');
+    const result = await svc.applyModelChange(
+      { ...plan, confirmed: true },
+      { fetch: newFetch(), backupRoot: backupRootUnder(home) },
+    );
+    assert.equal(result.ok, true, `apply must succeed: ${JSON.stringify(result)}`);
+
+    const applied = readFileSync(trissEnvPath(home), 'utf8');
+    assert.equal((applied.match(/^TRISS_CODER_MODEL=/gm) || []).length, 1, 'apply must collapse duplicate main pins');
+    assert.equal((applied.match(/^TRISS_CODER_SMALL_MODEL=/gm) || []).length, 1, 'apply must collapse duplicate small pins');
+    assert.match(applied, /^TRISS_CODER_MODEL=opencode\/new-main$/m);
+    assert.match(applied, /^TRISS_CODER_SMALL_MODEL=opencode\/new-small$/m);
+    assert.match(applied, /^KEEP=this-line$/m, 'unrelated env lines must remain');
+
+    const snapshot = JSON.parse(readFileSync(result.transaction.envSnapshotPath, 'utf8'));
+    assert.deepEqual(snapshot, {
+      TRISS_CODER_MODEL: 'opencode/old-last-main',
+      TRISS_CODER_SMALL_MODEL: 'opencode/old-last-small',
+    }, 'rollback snapshot must capture the runtime-winning last assignments');
+
+    await svc.rollbackModelChange({ from: result.transaction.dir, scope: 'global' });
+    const rolledBack = readFileSync(trissEnvPath(home), 'utf8');
+    assert.equal((rolledBack.match(/^TRISS_CODER_MODEL=/gm) || []).length, 1, 'rollback must leave one main pin');
+    assert.equal((rolledBack.match(/^TRISS_CODER_SMALL_MODEL=/gm) || []).length, 1, 'rollback must leave one small pin');
+    assert.match(rolledBack, /^TRISS_CODER_MODEL=opencode\/old-last-main$/m);
+    assert.match(rolledBack, /^TRISS_CODER_SMALL_MODEL=opencode\/old-last-small$/m);
+  }),
+);
+
 // ════════════════════════════════════════════════════════════════════════════
 // #2 injected failure AFTER config rename — full rollback, no orphan temp
 // ════════════════════════════════════════════════════════════════════════════

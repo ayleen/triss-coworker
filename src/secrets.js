@@ -61,9 +61,7 @@ export function activeEnvFiles() {
   ];
 }
 
-export function readEnvFile(path) {
-  if (!existsSync(path)) return { vars: {}, lines: [] };
-  const raw = readFileSync(path, 'utf8');
+export function parseEnvText(raw) {
   const lines = raw.split('\n');
   const vars = {};
   for (const line of lines) {
@@ -80,6 +78,11 @@ export function readEnvFile(path) {
     vars[m[1]] = value;
   }
   return { vars, lines };
+}
+
+export function readEnvFile(path) {
+  if (!existsSync(path)) return { vars: {}, lines: [] };
+  return parseEnvText(readFileSync(path, 'utf8'));
 }
 
 // Set or update a variable in the env file, preserving order of existing
