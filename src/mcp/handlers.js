@@ -1,7 +1,7 @@
 // MCP tool handlers — thin wrappers that return text instead of printing
 // to stdout. Each handler keeps its scope small and is testable on its own.
 
-import { chat as workerChat, reportUsage } from '../client.js';
+import { chat as workerChat, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
@@ -30,7 +30,7 @@ async function callModel({ provider, model, messages, maxTokens = 4096 }, deps =
     messages,
     maxTokens,
   });
-  const text = resp.choices?.[0]?.message?.content;
+  const text = responseText(resp);
   if (!text) throw new Error('Worker returned empty response — increase max_tokens');
   return text + '\n\n' + reportUsage(resp, 'triss');
 }

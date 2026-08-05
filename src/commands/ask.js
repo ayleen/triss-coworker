@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { chat, chatStream, reportUsage } from '../client.js';
+import { chat, chatStream, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
@@ -104,7 +104,7 @@ export async function runAskWithDeps(opts, deps = {}) {
       })
     : await sendChat({ ...request, maxTokens, messages, label: 'triss/ask' });
 
-  const answer = resp.choices?.[0]?.message?.content;
+  const answer = responseText(resp);
   if (!answer) {
     process.stderr.write(
       pc.red(
@@ -117,4 +117,5 @@ export async function runAskWithDeps(opts, deps = {}) {
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask') + '\n'));
+  return answer;
 }

@@ -122,6 +122,30 @@ test('MCP-H-02d: askHandler forwards the resolved GLM route to chat', async () =
   assert.match(result, /^ok/);
 });
 
+test('MCP-H-02e: one-shot MCP model calls preserve a top-level final_text response', async () => {
+  const { askHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-02e=${Date.now()}`
+  );
+
+  const result = await askHandler(
+    {
+      paths: ['package.json'],
+      question: 'Review this.',
+      provider: 'glm',
+      model: 'flash',
+    },
+    {
+      resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+      chat: async () => ({
+        final_text: 'No issues found.',
+        usage: { prompt_tokens: 10, completion_tokens: 4 },
+      }),
+    },
+  );
+
+  assert.match(result, /^No issues found\./);
+});
+
 // ─── MCP-H-03: fetchHandler with/without question ───────────────────────────
 
 test('MCP-H-04: jiraSearchHandler formats issues and without question returns corpus', async () => {

@@ -314,3 +314,47 @@ test('REV-06: MCP review core forwards the selected inference provider and model
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('REV-07: CLI review preserves a successful GLM top-level final_text response', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  const captured = [];
+  const originalWrite = process.stdout.write;
+
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/final-text']);
+    addChange(dir, 'final-text.js', 'export const fixed = true;\n');
+    process.chdir(dir);
+    process.stdout.write = (chunk) => {
+      captured.push(String(chunk));
+      return true;
+    };
+
+    const { runReviewWithDeps } = await import('../src/commands/review.js');
+    const result = await runReviewWithDeps(
+      undefined,
+      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', noStream: true },
+      {
+        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+        chat: async () => ({
+          final_text: 'No issues found.',
+          usage: { prompt_tokens: 10, completion_tokens: 4 },
+        }),
+      },
+    );
+
+    assert.equal(result, 'No issues found.');
+    assert.match(captured.join(''), /No issues found\./);
+  } finally {
+    process.stdout.write = originalWrite;
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
