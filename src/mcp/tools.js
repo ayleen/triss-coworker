@@ -851,7 +851,7 @@ const CODER_TOOLS = [
         },
         continue: { type: 'boolean', description: 'Continue the most recent opencode session' },
         agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
-        model: { type: 'string', description: 'Override the model for this run only, as <provider>/<id> — e.g. a Z.AI GLM (zai-coding-plan/glm-5.2), an OpenCode Zen model (opencode/hy3-free, needs OPENCODE_API_KEY), a Moonshot Kimi model (moonshotai/kimi-k2.7-code, needs MOONSHOT_API_KEY), or a Kimi for Coding model (kimi-for-coding/k3, needs KIMI_API_KEY)' },
+        model: { type: 'string', description: 'Override the model for this run only, as <provider>/<id> — e.g. a Z.AI GLM (zai-coding-plan/glm-5.2), an OpenCode Zen model (opencode/deepseek-v4-flash-free, needs OPENCODE_API_KEY), a Moonshot Kimi model (moonshotai/kimi-k2.7-code, needs MOONSHOT_API_KEY), or a Kimi for Coding model (kimi-for-coding/k3, needs KIMI_API_KEY)' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },

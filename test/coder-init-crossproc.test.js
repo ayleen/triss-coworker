@@ -134,14 +134,19 @@ test('the REAL `config wizard coder` path FAILS (non-zero) when no provider key 
   const { home, project } = makeDirs();
   try {
     // Drive the ACTUAL wizard with NO ZHIPU/OPENCODE key in the env and empty
-    // stdin (so the key prompt is skipped). The missing-key gate lives in
-    // runCoderSetup — the wizard's postSetup path — so this must exit non-zero,
-    // not print a green "Done." a later `coder run` contradicts.
+    // stdin (so the key prompt is skipped). Failure occurs in provider
+    // resolution BEFORE the credential prompt / postSetup — with no key and no
+    // --coder-provider flag the chosen provider is ambiguous, so this must exit
+    // non-zero and point at the provider-selection flags, not print a green
+    // "Done." a later `coder run` contradicts.
     const wiz = runCli(['config', 'wizard', 'coder', '--global'], { home, project, env: {} });
     assert.equal(wiz.status, 1, `wizard must exit non-zero without a provider key: ${wiz.stderr}`);
     const out = wiz.stdout + wiz.stderr;
-    assert.match(out, /coder post-setup failed/);
-    assert.match(out, /ZHIPU_API_KEY is not set/);
+    assert.match(out, /provider.*(?:required|ambiguous)|(?:required|ambiguous).*provider/i);
+    assert.match(out, /--coder-engine opencode/);
+    assert.match(out, /--coder-provider zai/);
+    assert.match(out, /--coder-provider opencode-zen/);
+    assert.doesNotMatch(out, /\b(?:sk|zk|oc)-[A-Za-z0-9]{10,}\b/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });

@@ -57,6 +57,7 @@ triss config wizard --standard            # straight into Standard
 triss config wizard --advanced            # straight into Advanced
 triss config wizard linear                # targeted: only Linear, no mode prompt
 triss config wizard linear --local        # targeted, project-local
+triss config wizard coder --coder-engine crush --coder-provider glm   # coder setup
 triss config wizard --advanced --force    # re-prompt for already-set keys
 ```
 
@@ -73,6 +74,13 @@ Behaviour:
   `*PASS*`).
 - Uses every integration's `envVars` declaration — when you add a new
   integration, the Advanced wizard picks up its variables for free.
+- The `coder` target takes `--coder-engine <engine>` and
+  `--coder-provider <provider>` (note: `triss coder init` keeps `--engine` /
+  `--provider`). Engine resolves as explicit `--coder-engine` → effective
+  `TRISS_CODER_ENGINE` → one unambiguous config file → TTY prompt; provider
+  resolves after the engine and before any credential prompt. Noninteractive
+  and ambiguous, it **fails with the exact commands to retry** — it never
+  silently picks a default.
 
 ### `triss config set <KEY> [value]`
 
@@ -122,7 +130,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
-| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss coder init` — engine, `opencode.json`, agent templates) | `ZHIPU_API_KEY` (Z.AI GLM); the others optional — `OPENCODE_API_KEY` (OpenCode Zen), `MOONSHOT_API_KEY` (Moonshot Kimi), `KIMI_API_KEY` (Kimi for Coding) |
+| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>` — resolves engine, then provider, then prompts only the selected provider's key; writes `opencode.json`/`crush.json` + agent templates) | the **selected provider's** key — `ZHIPU_API_KEY` (`glm`), `OPENCODE_API_KEY` (`opencode-zen`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`); only the resolved one is required, the rest optional |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -255,12 +263,12 @@ self-hosted endpoints).
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
-| `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks `opencode/*` models like `opencode/hy3-free` — <https://opencode.ai/docs/zen/> |
+| `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks the live `opencode/*` catalogue. **Do not pin a stale free id** (the `hy3-*` free tier has gone stale before); resolve a current model with `triss coder models` and re-pin it — <https://opencode.ai/docs/zen/> |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
 | `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved model, passed to opencode via `--model` (and written to `opencode.json` by `init`). Use `opencode/hy3-free` for OpenCode Zen, `moonshotai/kimi-k2.7-code` for Moonshot, `kimi-for-coding/k3` for the Kimi subscription |
-| `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast model written to `opencode.json`|
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model` (and written to `opencode.json` `model` by `init`/`triss coder model set`). `moonshotai/kimi-k2.7-code` for Moonshot, `kimi-for-coding/k3` for the Kimi subscription. For Zen pick a live id via `triss coder models` — never hardcode a permanent free replacement (see the stale-model note) |
+| `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
@@ -313,8 +321,9 @@ preset models.
 
 ¹ **Credentials are provider-specific.** A run needs the one key its
 resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need
-`ZHIPU_API_KEY`; `opencode/*` OpenCode Zen models (e.g. the free
-`opencode/hy3-free`) need `OPENCODE_API_KEY`; `moonshotai/*` and
+`ZHIPU_API_KEY`; `opencode/*` OpenCode Zen models need `OPENCODE_API_KEY`
+(resolve a live id with `triss coder models` — the free tier rotates, so a
+pinned id goes stale; see the stale-model note); `moonshotai/*` and
 `moonshotai-cn/*` Kimi models need `MOONSHOT_API_KEY`; `kimi-for-coding/*`
 subscription models need `KIMI_API_KEY`. So `ZHIPU_API_KEY` is
 "required" only in the sense that it is the default provider's key — a
@@ -331,7 +340,117 @@ keys, and the coder MCP tools surface once **any** is set. Run
 endpoint probe: their plans use different keys, so the provider choice
 already names the endpoint.
 
-**Engines.** `opencode` (default) enforces a deny-first per-command bash
+### Coder model roles & precedence
+
+Each engine resolves two roles, and the source that wins differs by role and
+by engine. Triss's `TRISS_CODER_*` vars are **management/init knobs**, not
+always-on runtime overrides; whether one is even read at runtime depends on
+the engine and role.
+
+- **opencode** resolves a **main** and a **small** role.
+- **crush** resolves a **large** and a **fast** role.
+
+**Triss OpenCode `main`** (the model triss forwards to the engine via
+`--model`), highest first:
+
+1. `--model` flag on `triss coder run` (one-run override, this run only)
+2. `TRISS_CODER_MODEL` exported in the shell (`process.env`) — a **runtime
+   shadow**: it wins for this process without persisting
+3. `TRISS_CODER_MODEL` in the **project** env file (`./.triss.env`)
+4. `TRISS_CODER_MODEL` in the **global** env file (`~/.config/triss/.env`)
+5. the built-in default (`zai-coding-plan/glm-5.2`, or the detected plan
+   prefix)
+
+**OpenCode `small`** (management/init intent), highest first: project
+`opencode.json` `small_model` → global `opencode.json` → the built-in
+default.
+
+**Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
+`triss coder run`): `opencode.json` is the source of truth — project
+`opencode.json` → global `opencode.json` → default — plus opencode's own
+flags/config. Triss's `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` are
+**not** read by a bare `opencode` invocation; triss only reads them at
+init/run/management time and (for the triss-mediated `main`) forwards the
+resolved value via `--model`.
+
+**Crush roles:** crush resolves a **large** and a **fast** role from
+`crush.json` against the `ZHIPU_API_KEY` triss forwards. The `--model` flag
+on `triss coder run` is a one-run override of the **large** role; otherwise
+the configured large role wins. Persistently — with no one-run override —
+crush reads project `crush.json` (large/fast) → global → the built-in
+defaults. **Crush ignores Triss pins at runtime**: `TRISS_CODER_MODEL` /
+`TRISS_CODER_SMALL_MODEL` are management intent only — land a change with
+`triss coder init` or `triss coder model set`, which writes it into
+`crush.json`. A shell `export TRISS_CODER_MODEL=…` does **not** shadow a
+crush run.
+
+So: a **shell main pin** (`export TRISS_CODER_MODEL=…`) is a runtime shadow
+*for the opencode engine only* — handy for a one-off try, gone when the
+shell closes; crush ignores it. A **shell small pin**
+(`export TRISS_CODER_SMALL_MODEL=…`) never shadows a running role; it
+expresses management/init intent, so if it disagrees with the persisted
+`small_model` / fast role it is a **conflict** — reconcile it with
+`triss coder model set` rather than expecting it to take over the next run.
+
+### Coder model management commands
+
+**`triss coder models`** — lists the **live** provider catalogue (the models
+the resolved provider actually offers right now) and a JSON status (`--json`)
+of what is pinned, where, and the resolved engine/provider/endpoint. **Keys
+are never printed** — only masked/omitted key presence and its source. Use
+it to pick a current id before pinning anything.
+
+**`triss coder model set [<main>]`** — persistently changes the **main and
+small** roles in the target engine's config (`opencode.json`
+`model`/`small_model`, or `crush.json`'s large/fast roles). The main model
+is **positional**; the small model is `--small <id>`; select the engine
+with `--engine <engine>` and the scope with exactly one of `--global` /
+`--local`. (There is no `--scope`, `--models`, or `--main` flag.) It is
+transactional: it stages a backup in a **0700 transaction directory**, the
+backup file itself is **0600**, and it **rolls back** on any failure. The
+backup captures the config file's bytes and mode plus **only the model
+pins** read from env — never the whole env block and never any API key
+(keys stay in `.triss.env`; the config file never receives them).
+Noninteractive mutation is locked down: it requires an explicit `--engine`,
+exactly one scope flag (`--global` or `--local`), an explicit main
+(positional) **and** `--small`, plus `--yes`; omit any of those and, on a
+TTY, triss prompts for it.
+
+**`triss coder init`** — takes `--engine <engine>` and `--provider
+<provider>` (the `triss config wizard coder` counterpart uses
+`--coder-engine` / `--coder-provider`). Engine and provider resolve in a
+fixed order so only the right single key is prompted:
+
+1. **Engine** first: explicit `--engine` flag → effective
+   `TRISS_CODER_ENGINE` → one unambiguous config file (an existing
+   `crush.json` alone infers `crush`) → on a TTY, a prompt. Noninteractive
+   and still ambiguous (no selector, no env, more than one config), it
+   **fails with the exact commands to retry** rather than silently
+   defaulting — give it `--engine` (or export `TRISS_CODER_ENGINE`) to
+   proceed unattended.
+2. **Provider** next, *after* the engine and *before* any credential
+   prompt: `--provider` (`glm`, `opencode-zen`, `moonshot`,
+   `kimi-for-coding`) → the engine's default for the keys already set.
+3. Triss then prompts for **only** that provider's key and writes the
+   matching `opencode.json`/`crush.json`.
+
+**Stale-model incident — don't hardcode a Zen free id.** Zen rotates its
+free tier, so a previously-working pinned id (the `opencode/hy3-*` free
+model) went stale mid-session: once Zen withdrew/renamed that id, configs
+that hard-pinned it started failing. The fix is a **live** replacement
+workflow, never a permanent hardcoded one — `triss coder models` (with
+`OPENCODE_API_KEY` set) → copy a *currently* offered `opencode/*` id →
+`triss coder model set --engine opencode …` to re-pin main and small. Don't
+record "the new free model" in docs or scripts either; that id goes stale
+too. Always resolve against the live catalogue.
+
+**Engines.** Engine resolution is fixed and identical across the two entry
+points (only the flag name differs — `--coder-engine` on
+`triss config wizard coder`, `--engine` on `triss coder init`): explicit
+selector → effective `TRISS_CODER_ENGINE` → one unambiguous config file
+(an existing `crush.json` alone infers `crush`) → on a TTY, a prompt;
+noninteractive and ambiguous, it **fails with the exact commands to retry**
+rather than silently defaulting. `opencode` (default) enforces a deny-first per-command bash
 allowlist via `opencode.json` (curated safe commands only) that actually
 works. `crush` (`--engine crush` or `TRISS_CODER_ENGINE=crush`; npm
 `@phpcraftdream/crush` ≥0.1.3, bin `crush`) has a **weaker, interim** safety
@@ -353,6 +472,22 @@ lose. For Z.AI GLM, both engines share the single `ZHIPU_API_KEY` — crush
 ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY` for older
 binaries. (opencode can alternatively run OpenCode Zen `opencode/*` models on
 `OPENCODE_API_KEY` — see the coder env-var table above.)
+
+**Safety escape hatches.** `--allow-unverified` lets `init` / `triss coder
+model set` pin a model Triss cannot confirm against the live provider
+catalogue, but only within a narrow window: you must pass **both** an
+explicit main and an explicit small, the matching **credential must be
+present**, and the lookup failure must be a **timeout**, **HTTP error**, or
+**parse error**. It never applies to an **unauthenticated** call (missing or
+rejected key) or to the **authoritative catalogue being unavailable** — in
+those cases the pin is rejected outright. Use it only for a known-good
+private mirror; it never relaxes credential checks.
+`--allow-unsafe-bash` does **not** lift or rewrite the bash policy. It
+permits exactly one thing: **model-field repair** of an existing OpenCode
+config that was written *without* the canonical deny-first policy, while
+**preserving** that config as-is. It is scoped to the opencode engine,
+never touches keys, and in noninteractive use must be paired with `--yes`.
+
 See `docs/crush-restrict-issues.md` for the live-verified bug facts and
 `docs/crush-issues.md` for the fuller list of crush caveats.
 

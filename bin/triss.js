@@ -39,6 +39,7 @@ import {
   runUnset,
 } from '../src/commands/config.js';
 import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.js';
+import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
 
@@ -181,6 +182,8 @@ config
   .option('-f, --force', 're-prompt for keys that are already set')
   .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
+  .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, or crush). `coder init` uses --engine')
+  .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, opencode-zen, moonshot, kimi-for-coding). `coder init` uses --provider')
   .action(wrap(runWizard));
 
 config
@@ -227,7 +230,7 @@ config
 
 const coder = program
   .command('coder')
-  .description('Run a GLM coding agent (opencode or crush engine)');
+  .description('Run a coding agent (OpenCode or Crush engine)');
 
 coder
   .command('init')
@@ -235,7 +238,7 @@ coder
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
-  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default), opencode-zen (free models incl. hy3), moonshot (Kimi pay-as-you-go), or kimi-for-coding (subscription)')
+  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default), opencode-zen (free rotating models — discover with `triss coder models`), moonshot (Kimi pay-as-you-go), or kimi-for-coding (subscription)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .action(wrap(runCoderInit));
 
@@ -246,7 +249,7 @@ coder
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
   .option('--agent <name>', 'opencode agent template to use', 'coder')
-  .option('--model <p/m>', 'override the model for this run only')
+  .option('--model <p/m>', 'override the MAIN model for this one run only (does not change small_model or repair persistent config; use `triss coder model set` for that)')
   .option('--isolate', 'run in a disposable git worktree under .triss/wt/<slug>')
   .option('--no-isolate', 'disable worktree isolation (opencode defaults to OFF; crush defaults to ON)')
   .option('--restrict', 'crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)')
@@ -262,6 +265,51 @@ coder
   .description('Remove finished .triss/wt isolation worktrees (branches with no diff vs the default branch)')
   .option('--all', 'force-remove every worktree under .triss/wt, regardless of diff state')
   .action(wrap(runCoderClean));
+
+coder
+  .command('models')
+  .description('List current + live coder models, provider compatibility, and credential readiness (read-only)\n\n' +
+    'Configuration sources:\n' +
+    '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global)\n' +
+    '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
+  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--provider <name>', 'provider kind: zai, opencode-zen, moonshot, or kimi-for-coding')
+  .option('--json', 'print the stable machine-readable state object (no secrets)')
+  .action(wrap(runCoderModels));
+
+// `coder model` is a command GROUP whose only leaf today is `set`. Registered
+// as a nested group so `triss coder model set --help` prints its OWN usage line
+// (`Usage: triss coder model set ...`) rather than the parent `coder` usage.
+const coderModel = coder
+  .command('model')
+  .description('Inspect or change persistent coder models (e.g. `triss coder model set`)');
+
+coderModel
+  .command('set [main-model]')
+  .description(
+    'Persistently switch the coder main/small models for one engine+scope (non-interactive; needs --yes to write). ' +
+      'A one-run main override is `triss coder run --model` (main-only, not a persistent repair).\n\n' +
+      'Engines and configuration targets:\n' +
+      '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global); runtime main follows TRISS_CODER_MODEL env precedence, config main is opencode.json.model\n' +
+      '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)'
+  )
+  .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
+  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--provider <name>', 'provider kind: zai, opencode-zen, moonshot, or kimi-for-coding')
+  .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
+  .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')
+  .option('--allow-unverified', 'proceed past a not-verified catalogue (timeout/http-error/parse-error) ONLY — never auth or an authoritative unavailable result')
+  .option('--allow-unsafe-bash', 'proceed even if the existing opencode.json lacks the deny-first bash policy')
+  .option('--yes', 'non-interactive confirmation: apply the planned switch (required to write; without it the plan is printed and nothing is changed)')
+  .action((mainModel, opts) => wrap(runCoderModelSet)(mainModel, opts));
+
+coderModel
+  .command('rollback')
+  .description('Restore retained transaction record (opencode.json / crush.json + env pins)')
+  .requiredOption('--from <absolute-record-dir>', 'absolute path to the retained transaction record directory')
+  .option('-g, --global', 'restore to the global scope (~/.config/opencode/ or ~/.local/share/crush/)')
+  .option('-l, --local', 'restore to the project scope (./opencode.json or ./.crush/crush.json)')
+  .action((opts) => wrap(runCoderModelRollback)(opts.from, opts));
 
 function wrap(fn) {
   return async (...args) => {

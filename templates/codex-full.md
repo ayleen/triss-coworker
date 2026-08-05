@@ -50,9 +50,9 @@ engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 (or set `TRISS_CODER_ENGINE=crush`) to target the crush engine instead. The
 opencode engine also runs **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/hy3-free`): `triss coder init --provider opencode-zen` sets it up with
-`OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — see
-`docs/opencode-zen.md` — and **Moonshot Kimi** models:
+`opencode/deepseek-v4-flash-free`): `triss coder init --provider opencode-zen` sets it up with
+`OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — run
+`triss coder models` to see current offerings — and **Moonshot Kimi** models:
 `triss coder init --provider moonshot` (pay-as-you-go `moonshotai/*`, e.g.
 `moonshotai/kimi-k2.7-code`, `MOONSHOT_API_KEY`) or
 `triss coder init --provider kimi-for-coding` (flat-rate subscription

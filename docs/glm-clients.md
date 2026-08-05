@@ -53,7 +53,7 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen (§3),
 | npm package | `opencode-ai` (pinned `1.18.7`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
 | Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
 | Key it reads | `ZHIPU_API_KEY` (native); `OPENCODE_API_KEY` for `opencode/…` Zen models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`), OpenCode Zen (`opencode/…`, e.g. `opencode/hy3-free`), **and** Moonshot Kimi (`moonshotai/…` PAYG, `kimi-for-coding/…` subscription — see README's Providers section) | Z.AI GLM only |
+| Providers | Z.AI GLM (`zai-coding-plan/…`, `zai/…`), OpenCode Zen (`opencode/…` — free ids are promotional and OpenCode-only; see [opencode-zen.md](opencode-zen.md)), **and** Moonshot Kimi (`moonshotai/…` PAYG, `kimi-for-coding/…` subscription) | Z.AI GLM only |
 | Provider config | `opencode.json` with a `zai-coding-plan/…` (or `zai/…`) model prefix; Zen/Kimi models resolve via opencode's built-in `opencode` / `moonshotai` / `kimi-for-coding` providers | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
@@ -97,14 +97,17 @@ bugs, crush can become the default without caveats.
 Z.AI GLM — the default and crush's only provider — is configured from a
 single secret, `ZHIPU_API_KEY` (get it at
 <https://z.ai/manage-apikey/apikey-list>). It is the only **required** env var
-for the coder subsystem (`CODER_MANIFEST`). The `opencode` engine can also run
-[OpenCode Zen](https://opencode.ai/docs/zen/) `opencode/*` models (e.g. the
-free `opencode/hy3-free`); those authenticate with an optional
-`OPENCODE_API_KEY` instead. `coderModelCredential(model)` maps a resolved
-model's `<provider>/` prefix to the key it needs, and `triss coder run` gates
-on exactly that key before spawning — so a zen-only setup runs on
-`OPENCODE_API_KEY` alone. See [opencode-zen.md](opencode-zen.md) for the Zen
-model catalogue and every way to configure it.
+for the coder subsystem (`CODER_MANIFEST`) when GLM is the chosen provider.
+The `opencode` engine can also run [OpenCode Zen](https://opencode.ai/docs/zen/)
+`opencode/*` models (free ids are promotional and OpenCode-only); those
+authenticate with an optional `OPENCODE_API_KEY` instead.
+`coderModelCredential(model)` maps a resolved model's `<provider>/` prefix to
+the key it needs, and `triss coder run` gates on exactly that key before
+spawning — so a zen-only setup runs on `OPENCODE_API_KEY` alone. **Setup
+resolves engine then provider before requesting any credential**, so a Zen /
+Moonshot / Kimi flow is never asked for `ZHIPU_API_KEY`. See
+[opencode-zen.md](opencode-zen.md) for the Zen model catalogue and every way to
+configure it.
 
 ### Minimal subprocess environment
 The engine subprocess never inherits your full environment. `buildEngineEnv()`
@@ -139,40 +142,169 @@ everything else goes through the engine binary.
 
 ## 4. Model selection
 
-GLM models offered/verified: **`glm-5.2`** (recommended default large),
-**`glm-5-turbo`** (default small/fast), **`glm-4.7`**.
+GLM models verified: **`glm-5.2`** (recommended large/main), **`glm-5-turbo`**
+(default small/fast), **`glm-4.7`**.
 
-Precedence for the models resolved at init time (per field), highest first:
+### Discovery and states
 
-- **Env override** — a `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` preset,
-  taken verbatim, **but only if it belongs to the chosen provider**. An explicit
-  `--provider` beats a stale cross-provider preset: e.g. `--provider
-  opencode-zen` with a leftover `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2`
-  ignores (and warns about) the preset rather than writing it. Matching example:
-  `TRISS_CODER_MODEL=opencode/hy3-free` (OpenCode Zen; needs `OPENCODE_API_KEY`).
+```bash
+triss coder models [--engine <opencode|crush>] [--provider <name>] [--json]
+```
+
+Reports the current main + small models, the winning source for each role
+(shown separately; they can differ), each model's **compatibility**, credential
+readiness (no secrets printed), and a live **availability** per model:
+
+- **`available`** — authenticated, parseable catalogue response contains the id;
+- **`unavailable`** — authenticated, parseable response returns a complete list
+  without the id (authoritative: the model is gone; `--allow-unverified` can
+  never override this);
+- **`not verified`** — the catalogue could not be authoritatively read. The
+  cause is one of timeout, auth failure, non-2xx, or parse failure. A
+  network/parse failure is never proof of removal — but neither is it proof the
+  model is live.
+
+`--allow-unverified` narrows *which* `not verified` you may proceed past. It is
+accepted **only** when all of these hold: an explicit positional main model
+**and** explicit `--small` model are supplied, the resolved provider's
+credential is present, and
+`catalogue_status` is `timeout`, `http-error`, or `parse-error`. It is **never**
+accepted for `catalogue_status: unauthenticated` (no credential to trust) or for
+an authoritative `unavailable` model — those are conclusive, not "unverified".
+
+`triss status` never makes a network request — it points you here for live
+verification. Crush and providers without a catalogue API report
+`catalogue_status: not-supported`, never a fabricated error.
+
+### `triss coder models --json` public contract
+
+`--json` prints one stable object. The contract is **additive only**: new keys
+may appear, but existing keys keep their names and shape.
+
+```json
+{
+  "engine": "opencode | crush",
+  "provider": "zai-coding-plan | zai | opencode | moonshotai | kimi-for-coding",
+  "scope": "global | local",
+  "current": {
+    "main":  { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" },
+    "small": { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" }
+  },
+  "config_main": { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" },
+  "credential":       { "env": "ZHIPU_API_KEY", "ready": true },
+  "available_models": ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5-turbo"],
+  "recommended":      { "main": "…", "small": "…" },
+  "catalogue_status": "ok | not-supported | unauthenticated | timeout | http-error | parse-error",
+  "warnings": [
+    { "code": "…", "severity": "info | warn | error", "message": "…", "scope": "main | small | credential | catalogue" }
+  ]
+}
+```
+
+Shape rules:
+
+- **`current.main`** represents the effective **runtime** main model (resolved like
+  `triss coder run`: shell `TRISS_CODER_MODEL` → project `.triss.env` → global Triss
+  env → built-in default), **not** the config-only `opencode.json.model`.
+- **`config_main`** is an optional field that appears only for OpenCode when
+  `current.main` differs from the config-only `opencode.json.model` value. It
+  carries the same shape as `current.main` and documents the config-only value
+  for visibility and debugging. When `current.main` equals the config value, this
+  field is omitted.
+- **`current.small`** reports the actual configured small model from
+  `opencode.json.small_model` (or `crush.json` for crush) with its source/scope.
+- Each role object carries exactly `value`, `scope`, `source_path`,
+  `availability`, `compatibility` — every one a string or `null`
+  (e.g. `source_path` is `null` for a run-only override or the built-in default;
+  `compatibility` is `null` when the catalogue could not be read).
+  `availability` ∈ `available` / `unavailable` / `not-verified`.
+- **`credential`** carries only `env` (the variable name) and `ready` (bool) —
+  **never** the secret value.
+- **`recommended`** is `{ main, small }` when a verified pair is known, else
+  `null`.
+- **`warnings[]`** items are `code`, `severity`, `message`, `scope`, with
+  `severity` exactly one of `info` / `warn` / `error`.
+- **`catalogue_status`** is exactly one of `ok`, `not-supported`,
+  `unauthenticated`, `timeout`, `http-error`, `parse-error`. A provider with no
+  catalogue API (crush; non-Z.AI providers without a list endpoint) uses
+  `not-supported`, never a fabricated `ok`.
+
+The human (non-`--json`) output is the same facts pretty-printed: it shows each
+model's `compatibility`, lists the main and small winning sources **separately**,
+and prints the credential-readiness and `catalogue_status` line.
+
+### Persistent switch (one transactional command)
+
+```bash
+# Interactive GLM switch through opencode:
+triss coder model set --engine opencode --provider zai --global
+
+# Non-interactive persistent GLM roles through crush (adapter maps to atoms):
+triss coder model set zai-coding-plan/glm-5.2 \
+  --small zai-coding-plan/glm-5-turbo --engine crush --global --yes
+```
+
+Engine and one scope flag (`--global` / `--local`) are required for a
+non-interactive persistent write. Main and small must share compatible
+credentials and, for Z.AI, the same verified plan prefix. The command preserves
+every unrelated config field and the full safety policy, writes atomically with
+a backup under `~/.config/triss/backups/coder-model/`, re-audits, and prints the
+effective pair plus a rollback command. `--allow-unsafe-bash` permits
+model-field repair when an existing config lacks the deny-first policy.
+
+### Init-time precedence (per field, highest first)
+
+- **Env override** — `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`, verbatim,
+  **but only if it belongs to the chosen provider**. An explicit `--provider`
+  beats a stale cross-provider preset (e.g. `--provider opencode-zen` with a
+  leftover `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2` ignores and warns).
 - **Existing `opencode.json`** — a model already in the file that matches the
-  chosen provider is reused (so a re-run is idempotent and pins what's
-  configured, without re-prompting).
-- **Interactive** — on a TTY, `triss coder init` prompts you to pick the main
-  and small model.
-- **Default** — `zai-coding-plan/glm-5.2` (large) / `zai-coding-plan/glm-5-turbo`
-  (small), or `opencode/hy3-free` for a Zen setup; the Z.AI prefix comes from
-  plan detection (§3).
+  chosen provider is reused (idempotent).
+- **Interactive** — on a TTY, init prompts for main and small.
+- **Default** — `zai-coding-plan/glm-5.2` (large) / `glm-5-turbo` (small); the
+  Z.AI prefix comes from plan detection (§3).
 
-The resolved model is written to `opencode.json` (if absent) **and pinned into
-`TRISS_CODER_MODEL`** in the chosen `.env` — that pin, not `opencode.json`, is
-what a bare run reads (see §4's per-run note). init warns and exits non-zero if
-a higher-precedence source (a shell export, or a project `.triss.env` under a
-`--global` write) would shadow the pin.
+Role/runtime precedence is split (not one flat list): a Triss **main** run
+follows one-run override → shell `TRISS_CODER_MODEL` → project env → global env
+→ default; **small/fast** is read straight from `opencode.json.small_model`
+because Triss cannot pass a small-model flag at run time; a **direct**
+`opencode run` reads `opencode.json.model`. `triss coder models` reports the
+winning source per role; a shell/project override that would shadow a persistent
+change is reported with the exact `unset` / `--local` alternative (no `--force`).
 
-Per-run override: `--model <provider/model>` (CLI) or `model` (MCP) changes
-the model for **one** invocation only, without touching config. opencode
-always receives `--model` explicitly (never left to infer from a stray
-config file).
+### Per-run override (main only)
 
-crush maps models to **roles**: `--role smart` → large atom (`glm5_2`),
-`--role fast` → small atom (`glm5_turbo`), configured via
-`crush models use glm5_2 glm5_turbo`.
+`--model <provider/model>` (CLI) or `model` (MCP) changes the **main** model for
+**one** invocation only. It does not rewrite `small_model` and is not a
+persistent repair — it cannot fix a stale or cross-provider `small_model`, so
+use `triss coder model set` for that.
+
+### Stale-model recovery
+
+If a configured model is **authoritatively `unavailable`** (e.g. a retired
+OpenCode Zen free id), the wizard shows an interactive recovery screen with live
+replacements before failing; non-interactively it prints the stale model, how
+availability was established, the recommended pair, any higher-precedence
+override, and one exact `triss coder model set ... --yes` command, then exits
+non-zero without mutating anything. See [opencode-zen.md](opencode-zen.md) for
+the Zen-specific flow. GLM itself is never retired this way — it stays reachable
+through both engines.
+
+### Crush canonical GLM mapping
+
+Crush is fixed to the Z.AI **coding-plan** endpoint and accepts only this
+verified public pair (the adapter owns the translation; atom names are never
+derived from model ids):
+
+| Public Triss ID | Crush atom | Role |
+|---|---|---|
+| `zai-coding-plan/glm-5.2` | `glm5_2` | large / smart |
+| `zai-coding-plan/glm-5-turbo` | `glm5_turbo` | small / fast |
+
+`zai/*` PAYG, every non-Z.AI prefix, and OpenCode Zen / Moonshot / Kimi models
+are rejected before crush spawns, with an exact opencode alternative. Configured
+via `crush models use glm5_2 glm5_turbo`; `--role smart|fast` selects the atom
+at run time.
 
 ---
 

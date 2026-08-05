@@ -467,7 +467,7 @@ test(
 // else — chiefly the Z.AI chat/completions plan probe, which a Zen setup must
 // never run. Default ids include all of triss's known free models.
 function fakeZenCatalogue(
-  ids = ['hy3-free', 'north-mini-code-free', 'deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'mimo-v2.5-free'],
+  ids = ['north-mini-code-free', 'deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'mimo-v2.5-free'],
 ) {
   return async (url) => {
     if (String(url).includes('/zen/v1/models')) {
@@ -488,9 +488,9 @@ test(
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
-    // Catalogue-driven defaults: hy3-free main, north-mini-code-free small.
-    assert.equal(config.model, 'opencode/hy3-free');
-    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    // Catalogue-driven defaults: deepseek-v4-flash-free for both roles.
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
     // The deny-first bash policy still applies to a Zen setup.
     assert.equal(config.permission.bash['*'], 'deny');
   }),
@@ -511,7 +511,7 @@ test(
     assert.equal(config.model, 'opencode/nemotron-3-ultra-free');
     // Small model not preset -> falls back to the zen small default (from the
     // live catalogue), not the GLM one.
-    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -526,7 +526,7 @@ test(
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
-    assert.equal(config.model, 'opencode/hy3-free');
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -542,10 +542,10 @@ test(
     // opencode.json), so init must pin it — otherwise a bare run would fall
     // back to zai-coding-plan/glm-5.2 and demand ZHIPU_API_KEY right after a
     // successful Zen init. Pinned both in-process and in the .env file.
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
     const env = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
-    assert.match(env, /^TRISS_CODER_MODEL=opencode\/hy3-free$/m);
-    assert.match(env, /^TRISS_CODER_SMALL_MODEL=opencode\/north-mini-code-free$/m);
+    assert.match(env, /^TRISS_CODER_MODEL=opencode\/deepseek-v4-flash-free$/m);
+    assert.match(env, /^TRISS_CODER_SMALL_MODEL=opencode\/deepseek-v4-flash-free$/m);
   }),
 );
 
@@ -562,8 +562,8 @@ test(
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
-    assert.equal(config.model, 'opencode/hy3-free');
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -827,10 +827,10 @@ test(
     const config = JSON.parse(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
-    assert.equal(config.model, 'opencode/hy3-free', 'the GLM preset must be ignored for a Zen setup');
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free', 'the GLM preset must be ignored for a Zen setup');
     // Pin is overwritten to the provider-correct model (both env + .env).
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
-    assert.match(readFileSync(join(home, '.config', 'triss', '.env'), 'utf8'), /TRISS_CODER_MODEL=opencode\/hy3-free/);
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
+    assert.match(readFileSync(join(home, '.config', 'triss', '.env'), 'utf8'), /TRISS_CODER_MODEL=opencode\/deepseek-v4-flash-free/);
     assert.match(captured.join(''), /ignoring TRISS_CODER_MODEL=zai-coding-plan\/glm-5\.2/);
   }),
 );
@@ -941,7 +941,7 @@ test(
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(
       join(cfgDir, 'opencode.json'),
-      JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free' }) + '\n',
+      JSON.stringify({ model: 'opencode/deepseek-v4-flash-free', small_model: 'opencode/deepseek-v4-flash-free' }) + '\n',
     );
     // Explicit opt-in — the run must complete despite the missing policy.
     await runCoderInit(
@@ -950,7 +950,7 @@ test(
     );
     const out = captured.join('');
     assert.match(out, /proceeding because --allow-unsafe-bash was passed/);
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -1067,14 +1067,14 @@ test(
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Project-scope opencode.json with a correct deny-policy and an in-catalogue
-    // small_model that isn't the global default (north). It's valid — the run
+    // small_model that isn't the global default (DeepSeek). It's valid — the run
     // will use it fine — so the cross-scope audit must NOT flag it stale just
     // because it differs from the global resolvedSmall (the round-7 regression).
     writeFileSync(
       join(home, 'opencode.json'),
       JSON.stringify({
         model: 'opencode/deepseek-v4-flash-free',
-        small_model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/north-mini-code-free',
         permission: { bash: { '*': 'deny' } },
       }) + '\n',
     );
@@ -1083,7 +1083,7 @@ test(
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     // Global pin uses the global default; init completes (no false block).
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/hy3-free');
+    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -1140,17 +1140,17 @@ test(
   'runCoderInit --provider opencode-zen: picks the first AVAILABLE model from the priority list (P1-a)',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
-    // Catalogue without hy3-free — main should fall to the next priority.
+    // The live catalogue contains the top priority, so both roles select DeepSeek.
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
       {
         spawnSync: fakeSpawnAlreadyInstalled,
-        fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'north-mini-code-free']),
+        fetch: fakeZenCatalogue(['deepseek-v4-flash-free', 'mimo-v2.5-free']),
       },
     );
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
     assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
-    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
   }),
 );
 
@@ -1166,7 +1166,7 @@ test(
     );
     assert.match(captured.join(''), /could not fetch the OpenCode Zen catalogue .* availability is NOT verified/s);
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
-    assert.equal(config.model, 'opencode/hy3-free'); // static fallback
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free'); // static fallback
   }),
 );
 
@@ -1193,7 +1193,7 @@ test(
     );
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
     assert.equal(config.model, 'opencode/deepseek-v4-flash-free', 'the gone hy3-free preset must be dropped');
-    assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
     assert.equal(process.env.TRISS_CODER_MODEL, 'opencode/deepseek-v4-flash-free');
     assert.match(captured.join(''), /not in the current OpenCode Zen catalogue/);
   }),
@@ -1251,7 +1251,7 @@ test(
         ),
       /Coder setup incomplete/,
     );
-    assert.match(captured.join(''), /init resolved small_model="opencode\/north-mini-code-free"/);
+    assert.match(captured.join(''), /init resolved small_model="opencode\/deepseek-v4-flash-free"/);
   }),
 );
 
@@ -1320,10 +1320,15 @@ test(
   'runCoderInit: FAILS (non-zero) when the provider key is never set (P2-a)',
   withTmpHome(async ({ home }) => {
     // No ZHIPU_API_KEY, non-TTY (key prompt returns empty) -> setup unusable.
+    // Provider is explicit (`--provider zai`) so the provider-intent gate is
+    // unambiguous and this test stays focused on the missing-KEY failure: under
+    // the docs-first contract, a non-TTY run with ZERO credentials and no
+    // --provider now fails on provider ambiguity BEFORE any write, which would
+    // mask the missing-key path this test exists to cover.
     await assert.rejects(
       () =>
         runCoderInit(
-          { global: true },
+          { global: true, provider: 'zai' },
           { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
         ),
       /ZHIPU_API_KEY is not set/,
@@ -1355,15 +1360,15 @@ test(
             questionsAsked.push(choices);
             // Q1 = provider (return zen); Q2 = main model; Q3 = small model.
             if (questionsAsked.length === 1) return 'opencode-zen';
-            return choices[0].value; // hy3-free for both model picks
+            return choices[0].value; // deepseek-v4-flash-free for both model picks
           },
         },
       );
       const config = JSON.parse(
         readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
       );
-      assert.equal(config.model, 'opencode/hy3-free');
-      assert.equal(config.small_model, 'opencode/hy3-free');
+      assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+      assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
       assert.equal(questionsAsked.length, 3, 'provider + main + small = 3 prompts');
     } finally {
       Object.defineProperty(process.stdin, 'isTTY', { value: origTTY, configurable: true });

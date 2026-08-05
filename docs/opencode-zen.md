@@ -6,10 +6,16 @@ curated, OpenAI‑compatible gateway that ships with the `opencode` binary — b
 pointing the coder at an `opencode/<id>` model and authenticating with an
 `OPENCODE_API_KEY`.
 
-The headline is the **free tier**: models like **`opencode/hy3-free`** (Tencent
-Hunyuan 3, a 295B MoE) cost $0 in/out. Free access is time‑limited by OpenCode
-Zen's own pricing (hy3‑free was listed free through ~2026‑07‑21 at the time of
-writing — check current terms), so treat the free window as promotional.
+The headline is the **free tier**: a rotating set of models (e.g. Tencent
+Hunyuan 3, DeepSeek V4, North Mini Code) that OpenCode Zen serves at $0 in/out.
+Free access is **OpenCode-engine-only** — the `crush` engine cannot run Zen
+models — and it is **live-catalogue driven**: the exact free ids change over
+time, so Triss never hardcodes one as a default. Treat every free id as
+promotional. `opencode/hy3-free` (Hunyuan 3, a 295B MoE) was the first free id
+and **may already be gone from the catalogue** — the authenticated
+`GET https://opencode.ai/zen/v1/models` list is authoritative. GLM itself is
+unaffected by any Zen free-model churn and stays reachable through either
+engine (see [glm-clients.md](glm-clients.md)).
 
 > The `crush` engine speaks Z.AI GLM only. Everything below is the `opencode`
 > engine. See [glm-clients.md](glm-clients.md) for the two‑engine overview and
@@ -19,17 +25,18 @@ writing — check current terms), so treat the free window as promotional.
 ## TL;DR
 
 ```bash
-# Guided setup (writes OPENCODE_API_KEY + opencode.json):
+# Guided setup (resolves engine + provider first, then asks for OPENCODE_API_KEY):
 triss coder init --provider opencode-zen
 
-# …or by hand:
-triss config set OPENCODE_API_KEY <key>
-export TRISS_CODER_MODEL=opencode/hy3-free
-export TRISS_CODER_SMALL_MODEL=opencode/hy3-free
+# Discover which Zen models are live right now (states: available/unavailable/not verified):
+triss coder models --engine opencode --provider opencode-zen
 
-# Run (default model), or override just this run:
-triss coder run "add input validation to /signup"
-triss coder run "..." --model opencode/hy3-free
+# Persist a main + small pair in one transactional write (backups kept):
+triss coder model set opencode/<main> --small opencode/<small> \
+  --engine opencode --provider opencode-zen --global --yes
+
+# Per-run main-model override only (does not touch small_model):
+triss coder run "..." --model opencode/<id>
 ```
 
 ## How authentication works
@@ -39,7 +46,7 @@ triss coder run "..." --model opencode/hy3-free
 | Provider prefix | `opencode` (opencode's built‑in Zen provider — no custom `provider` block in `opencode.json` needed) |
 | API base | `https://opencode.ai/zen/v1` (OpenAI‑compatible) |
 | Credential | `OPENCODE_API_KEY` (get a key from <https://opencode.ai/docs/zen/>) |
-| Model id | `opencode/<id>`, e.g. `opencode/hy3-free` |
+| Model id | `opencode/<id>` — discover live ids with `triss coder models` |
 
 `triss coder run` passes the resolved model to opencode with `--model` and
 forwards **only** the key that model's provider needs
@@ -52,71 +59,130 @@ safety layer.
 
 ## Model catalogue
 
-Free Zen models are **temporary/promotional**, so init doesn't trust a hardcoded
-default — it fetches the live catalogue (`GET https://opencode.ai/zen/v1/models`)
-and picks the first still-available model from a priority list:
-
-| Role | Priority order (first available wins) |
-|---|---|
-| main | `hy3-free` → `deepseek-v4-flash-free` → `north-mini-code-free` → `nemotron-3-ultra-free` → `mimo-v2.5-free` |
-| small | `north-mini-code-free` → `deepseek-v4-flash-free` → `mimo-v2.5-free` |
-
-`hy3-free` (Tencent Hunyuan 3, 295B MoE) stays the preferred main default while
-the promo lasts; `north-mini-code-free` (trained for repo-level agentic coding)
-is the small/fast default. The interactive picker only offers models the live
-catalogue actually lists. The catalogue is authoritative when it's fetched:
-
-- **A stale pin is dropped, not trusted.** A `TRISS_CODER_MODEL` preset (or an
-  existing `opencode.json` model) that the live catalogue no longer lists — e.g.
-  an `opencode/hy3-free` a previous init wrote before the promo ended — is
-  **ignored** (warned), and init picks an available model instead. Any id the
-  catalogue *does* list is honoured verbatim, so a paid/other Zen id still works.
-- **None of the known free models left ⇒ init blocks.** If the catalogue is
-  fetched but lists none of the models above, init **fails** (non-zero) rather
-  than pinning a gone default — set `TRISS_CODER_MODEL=opencode/<id>` to a model
-  from <https://opencode.ai/docs/zen/> and re-run. **One variable is enough:**
-  the model you pick as `TRISS_CODER_MODEL` also becomes the small/fast model
-  when the catalogue offers no known small default, so a single
-  `TRISS_CODER_MODEL=opencode/gpt-5.5` (say) doesn't dead-end on `small_model`.
-- **If the catalogue can't be fetched** (no key, non-200, offline), init falls
-  back to the built-in list but prints a clear warning that availability is
-  **not verified** — if a run then fails immediately, switch to a listed model.
-
-This priority list is intentionally short and free‑only. The **full Zen
-catalogue is large and moves** (paid GPT‑5.x, Claude, Gemini, Qwen, Kimi, GLM…
-mirrors), so any other id is reachable verbatim without a triss change:
+The Zen catalogue is **live and authoritative**. Triss never trusts a hardcoded
+model id as a default — it reads `GET https://opencode.ai/zen/v1/models` and
+treats whatever that endpoint returns (authenticated) as the truth. Discover it
+on demand:
 
 ```bash
-export TRISS_CODER_MODEL=opencode/<any-zen-id>
-# or per run:
-triss coder run "..." --model opencode/<any-zen-id>
+triss coder models --engine opencode --provider opencode-zen
 ```
 
-`triss status` (Coder block) prints `OPENCODE_API_KEY` presence and the
-resolved default model, so you can confirm what a bare `triss coder run` will
-use. (Over MCP the same is in `triss_coder_status`.)
+Each model is reported with an explicit **state**:
+
+- **`available`** — the authenticated catalogue returned a parseable list that
+  contains the id;
+- **`unavailable`** — the authenticated catalogue returned a complete list that
+  does **not** contain the id. This is authoritative: the model is gone, and
+  `--allow-unverified` can never override it;
+- **`not verified`** — the request timed out, authentication failed, the
+  response was non-2xx, or there was no parseable list. A network failure is
+  **never** proof of removal. `--allow-unverified` is accepted **only** when
+  both roles are explicit, the credential is present, and the underlying
+  `catalogue_status` is `timeout`, `http-error`, or `parse-error`; it never
+  bypasses an **unauthenticated** result, a missing or rejected credential, or
+  an authoritative `unavailable`.
+
+`triss status` never makes a network request; it points you to
+`triss coder models` for live verification.
+
+### Free models are temporary and OpenCode-only
+
+Free Zen ids are promotional, rotate over time, and run on the `opencode` engine
+only — `crush` cannot serve them. `opencode/hy3-free` (Tencent Hunyuan 3, 295B
+MoE) was the first free id and **may already be absent from the live catalogue**
+(the 2026-08-03 incident on record is exactly this case). When a free model is
+retired it simply drops out of the list; your `OPENCODE_API_KEY` and GLM
+configuration are untouched, and GLM stays reachable through either engine (see
+[glm-clients.md](glm-clients.md)).
+
+### init, recovery, and the offline fallback
+
+`triss coder init` and the wizard fetch the live catalogue and pin an available
+model. The priority list below is an **offline fallback only** — used when the
+catalogue can't be fetched, and always labelled **not verified**:
+
+| Role | Offline priority (first available wins; the live list may differ) |
+|---|---|
+| main | `deepseek-v4-flash-free` → `north-mini-code-free` → `nemotron-3-ultra-free` → `mimo-v2.5-free` |
+| small | `deepseek-v4-flash-free` → `north-mini-code-free` → `mimo-v2.5-free` |
+
+The interactive picker only offers models the live catalogue actually lists.
+
+If the configured model is **authoritatively `unavailable`** — a stale pin, for
+example an `opencode/hy3-free` a previous init wrote before the promo ended —
+the interactive picker drops it and the wizard shows a recovery screen before
+failing:
+
+```text
+OpenCode Zen model unavailable
+
+  Current main:  opencode/hy3-free        unavailable
+  Current small: opencode/hy3-free        unavailable
+  Config:        ~/.config/opencode/opencode.json
+
+Available replacements:
+  1. opencode/<current-recommended-main>   recommended main
+  2. opencode/<current-recommended-small>  recommended small
+  3. Choose other available Zen models
+  4. Switch this OpenCode config to another provider
+  5. Keep the file unchanged and show recovery commands
+  6. Skip coder setup and continue the full wizard
+```
+
+Choosing a replacement runs the same transactional writer as
+`triss coder model set` (below), preserving custom config fields and the
+deny-first policy. **Non-interactively nothing is changed silently** — you get
+the stale model, how availability was established, the recommended pair, any
+higher-precedence override still in play, and one exact command:
+
+```bash
+triss coder model set opencode/<main> --small opencode/<small> \
+  --engine opencode --provider opencode-zen --global --yes
+```
+
+If the live catalogue lists none of the known free models, init blocks rather
+than pinning a gone default — set an explicit id and re-run.
+
+Any id the catalogue *does* list is honoured verbatim — the full Zen catalogue
+is large and moves (paid GPT, Claude, Gemini, Qwen, Kimi, GLM mirrors), so a
+paid or other Zen id needs no triss change:
+
+```bash
+export TRISS_CODER_MODEL=opencode/<any-zen-id>   # example — verify with: triss coder models
+```
 
 ## Ways to configure it
 
-Precedence for a run is always: `--model` (CLI) / `model` (MCP) **>**
-`TRISS_CODER_MODEL` **>** the built-in default (`zai-coding-plan/glm-5.2`).
-`triss coder run` **always** passes `--model` explicitly and does **not** read
-`opencode.json`'s `model` field — so `triss coder init` pins the model you pick
-into `TRISS_CODER_MODEL` (in the chosen `.env`) to make a bare run use it. The
-`model` field in `opencode.json` is what a *direct* `opencode run` (invoked
-without triss) would use, and it carries the deny-first bash policy either way.
-Pick whichever configuration path fits.
+Role precedence is **engine- and role-specific**, not one flat list. For the
+`opencode` engine: the **main** role on a Triss run follows a one-run `--model`
+override → shell `TRISS_CODER_MODEL` → project `.triss.env` → global Triss env
+→ built-in default; **small/fast** is read straight from
+`opencode.json.small_model` (project → global → opencode default) because Triss
+cannot pass a small-model flag at run time; a **direct** `opencode run` reads
+`opencode.json.model`. `triss coder run` always passes `--model` explicitly and
+does not read `opencode.json`'s `model` field — so `triss coder init` pins the
+model you pick into `TRISS_CODER_MODEL` (in the chosen `.env`) to make a bare
+run use it, and that `opencode.json` `model` field is what a *direct*
+`opencode run` (invoked without triss) would use. It carries the deny-first
+bash policy either way. `triss coder models` reports the winning source for
+each role separately; a shell or project override that would shadow a
+persistent change is reported with the exact `unset` / `--local` alternative
+(there is no `--force`). Pick whichever configuration path fits.
 
 ### 1. `triss coder init --provider opencode-zen` (recommended)
 
-Prompts for `OPENCODE_API_KEY`, lets you pick a Zen model (defaults to
-`hy3-free`), writes `opencode.json` with `model: "opencode/<id>"` plus the
-deny‑first bash policy and the coder/researcher agent templates, **and pins the
-chosen model into `TRISS_CODER_MODEL`** in the same `.env` (so a bare
-`triss coder run` uses it — see the precedence note above). It ignores a
-`TRISS_CODER_MODEL` preset that belongs to a *different* provider than the one
-you selected (warned, not written), so `--provider opencode-zen` always beats a
-stale Z.AI preset. Idempotent — re‑run anytime.
+Resolves **engine first, then provider, then asks for only that provider's
+credential** — a Zen setup prompts for `OPENCODE_API_KEY` and never marks
+`ZHIPU_API_KEY` as required. It lets you pick a Zen model from the live
+catalogue (no hardcoded default), writes `opencode.json` with
+`model: "opencode/<id>"` plus the deny-first bash policy and the
+coder/researcher agent templates, **and pins the chosen model into
+`TRISS_CODER_MODEL`** in the same `.env` (so a bare `triss coder run` uses it —
+see the precedence note above). It ignores a `TRISS_CODER_MODEL` preset that
+belongs to a *different* provider than the one you selected (warned, not
+written), so `--provider opencode-zen` always beats a stale Z.AI preset.
+Idempotent — re-run anytime.
 
 Things it will **not** silently do (each **exits non-zero** so you can't miss a
 half-broken setup — the config/templates are still written, so fixing the cause
@@ -145,8 +211,8 @@ and re-running is a clean idempotent completion):
       `small_model` that isn't the one init just resolved (e.g. an
       `opencode/hy3-free` the live catalogue no longer lists). opencode reads
       `small_model` from the file, so the stale/gone model keeps being used —
-      set `small_model` to the resolved value, or delete `opencode.json` and
-      re-run.
+      repair it with `triss coder model set ... --small <id>` rather than
+      editing or deleting `opencode.json` by hand.
 
   The audit also covers a **project `./opencode.json`** when you write `--global`
   (opencode resolves the project file over the global one at run time). Since
@@ -159,51 +225,92 @@ These gates apply to **`triss config wizard coder`** too, not just `triss coder
 init` — the wizard runs the same setup and exits non-zero on a blocking
 conflict.
 
-Provider resolution when you don't pass `--provider`:
+Engine and provider are resolved **before** any credential is requested. When
+you don't pass them explicitly:
 
-1. explicit `--provider zai|opencode-zen|moonshot|kimi-for-coding` wins;
-2. else a `TRISS_CODER_MODEL` preset decides by its prefix (`opencode/*` ⇒
-   Zen; `moonshotai/*`, `moonshotai-cn/*` ⇒ Moonshot; `kimi-for-coding/*` ⇒
-   Kimi for Coding; `zai*/…` ⇒ Z.AI);
-3. else **exactly one** already‑set credential among `ZHIPU_API_KEY`,
-   `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, and `KIMI_API_KEY` is taken as
-   intent;
-4. else (none set, or two or more set), on a TTY, you're asked;
-5. else the default, `zai`.
+1. **Engine** — `--engine` / `--coder-engine` → effective `TRISS_CODER_ENGINE`
+   → the engine implied by an existing config when only one is present →
+   interactive prompt → non-interactive failure with exact OpenCode/Crush
+   commands. (`crush` fixes the provider to Z.AI and rejects any other.)
+2. **Provider** (once the engine is known) — explicit `--provider` /
+   `--coder-provider` / model prefix → `TRISS_CODER_MODEL` prefix → provider
+   prefix in the effective engine config → exactly one configured credential →
+   interactive prompt → non-interactive failure with an exact `--provider`
+   command.
 
-So a user with a single provider configured is never re‑prompted; one with
-several credentials (say Z.AI **and** Moonshot) is asked which to configure,
-unless a `TRISS_CODER_MODEL` preset or `--provider` already answers it; a
-fresh user on a terminal is offered the choice.
+Zero or multiple credentials is **ambiguous** — Triss never silently falls back
+to Z.AI in that case. It reports the conflicting signals (no secret values) and
+asks on a TTY, or exits non-zero with the exact command. So a user with a
+single provider configured is never re-prompted; one with several credentials
+is asked which to configure unless a prefix or flag already answers it.
 
-### 2. Environment variables
+### 2. `triss coder model set` — persistent main + small switch
+
+The first-class way to change what a bare run uses, transactionally:
+
+```bash
+# Interactive: fetch the live Zen catalogue and choose both roles.
+triss coder model set --engine opencode --provider opencode-zen --global
+
+# Non-interactive persistent Zen switch.
+triss coder model set opencode/<main> --small opencode/<small> \
+  --engine opencode --provider opencode-zen --global --yes
+```
+
+Engine and one scope flag (`--global` / `--local`) are **required** for a
+non-interactive persistent write (passing both exits non-zero without writing).
+It fetches the live catalogue, requires main and small to share compatible
+credentials (and the same verified plan prefix for Z.AI), preserves every
+unknown `opencode.json` field and the full permission policy, writes via a
+sibling-temp + atomic rename, keeps a backup under
+`~/.config/triss/backups/coder-model/`, re-audits so a fresh run resolves the
+selected pair, and prints the effective pair plus a rollback command.
+`--allow-unverified` is accepted only when both roles are explicit, the
+credential is present, and `catalogue_status` is `timeout`, `http-error`, or
+`parse-error` — never for an **unauthenticated** result, a missing or rejected
+credential, or an authoritative `unavailable`; `--allow-unsafe-bash` permits model-field repair
+when an existing config lacks the deny-first policy (it never installs one).
+
+### 3. Environment variables
 
 ```bash
 export OPENCODE_API_KEY=<key>              # in your shell, or via triss config set
-export TRISS_CODER_MODEL=opencode/hy3-free
-export TRISS_CODER_SMALL_MODEL=opencode/hy3-free
+export TRISS_CODER_MODEL=opencode/<id>     # main; the prefix selects the provider
+export TRISS_CODER_SMALL_MODEL=opencode/<id>
 ```
 
-`OPENCODE_API_KEY` is also loaded from `./.triss.env` (project) or
+A shell `TRISS_CODER_MODEL` is a **runtime override** for the main role and
+will shadow any file-based pin. `TRISS_CODER_SMALL_MODEL` is **persisted
+intent** — Triss cannot pass a small-model flag to opencode at run time, so it
+does not override `small_model` live, but the next init/model-set could restore
+it, so it blocks a persistent `model set` (`management-intent-conflict`) until
+unset. `OPENCODE_API_KEY` is also loaded from `./.triss.env` (project) or
 `~/.config/triss/.env` (global), like every other triss secret.
 
-### 3. `triss config` / the wizard
+### 4. `triss config` / the wizard
 
 ```bash
 triss config set OPENCODE_API_KEY <key>        # masked, saved to the chosen scope
-triss config wizard coder                      # prompts OPENCODE_API_KEY (optional) too
+triss config wizard coder \
+  --coder-engine opencode --coder-provider opencode-zen
 ```
 
-`OPENCODE_API_KEY` is a declared, optional, secret var on the coder manifest,
-so it shows up in `triss status` and the wizard, and is masked everywhere.
+The wizard resolves engine and provider before any credential prompt (the
+`--coder-engine` / `--coder-provider` flags are coder-specific so they can't be
+confused with worker or integration providers). Zen, Moonshot, and Kimi flows
+neither prompt for nor write `ZHIPU_API_KEY`. `OPENCODE_API_KEY` is a declared,
+optional, secret var on the coder manifest, so it shows up in `triss status`
+and the wizard, and is masked everywhere.
 
-### 4. Per‑run override
+### 5. Per-run override
 
 ```bash
-triss coder run "quick fix" --model opencode/hy3-free
+triss coder run "quick fix" --model opencode/<id>
 ```
 
-Changes the model for one invocation without touching config — handy for
+Changes the **main** model for **one** invocation only — it does not rewrite
+`small_model` and is not a persistent repair, so it cannot fix a stale or
+cross-provider `small_model` (use `triss coder model set` for that). Handy for
 trying a Zen model against an otherwise Z.AI setup.
 
 ## Over MCP
@@ -211,7 +318,7 @@ trying a Zen model against an otherwise Z.AI setup.
 The `triss_coder_run` / `triss_coder_status` tools appear as soon as **any**
 provider credential is set — `ZHIPU_API_KEY`, `OPENCODE_API_KEY`,
 `MOONSHOT_API_KEY`, or `KIMI_API_KEY` (`coderCredentialReady()`).
-Pass `model: "opencode/hy3-free"` to `triss_coder_run`, or set
+Pass `model: "opencode/<id>"` to `triss_coder_run`, or set
 `TRISS_CODER_MODEL` so a bare call defaults to it. See
 [mcp.md](mcp.md#what-tools-are-exposed).
 
@@ -226,7 +333,7 @@ A healthy Zen run returns the usual envelope with `engine: "opencode"` and your
 chosen model, e.g.:
 
 ```json
-{"engine":"opencode","engine_version":"1.17.x","model":"opencode/hy3-free",
+{"engine":"opencode","engine_version":"1.18.x","model":"opencode/<id>",
  "exit_reason":"end_turn","final_text":"OK", ...}
 ```
 
@@ -254,12 +361,15 @@ model. Before pointing a free Zen model at private code:
 - **opencode engine only.** `--engine crush` with any non-`zai` `--provider`
   (or a crush run with a `--model` whose prefix needs a non-Z.AI key —
   `opencode/*`, `moonshotai/*`, `kimi-for-coding/*`) is rejected up front —
-  crush bridges `ZHIPU_API_KEY → ZAI_API_KEY` and serves GLM only.
-- **Readiness** (`triss status` "ready" marker, wizard "required") stays keyed
-  to `ZHIPU_API_KEY`, since Z.AI is the default provider. A Zen‑only (or
-  Kimi‑only) setup shows `ZHIPU_API_KEY` as missing but still runs — that's
-  expected.
-- **Free tier is promotional.** If a free model is retired or rate‑limited, the
-  run fails at the engine; switch `TRISS_CODER_MODEL` to another id.
+  crush bridges `ZHIPU_API_KEY → ZAI_API_KEY` and serves GLM only. GLM itself
+  is always reachable through either engine.
+- **Readiness is provider-aware.** A Zen-only setup with a valid
+  `OPENCODE_API_KEY` is ready without `ZHIPU_API_KEY` (and likewise Moonshot
+  without `ZHIPU`, Kimi without `ZHIPU`). `triss status` marks each provider
+  ready from its own credential and makes no network request — use
+  `triss coder models` for live catalogue verification.
+- **Free tier is promotional.** If a free model is retired or rate-limited, the
+  run fails at the engine; recover with `triss coder models` (see live ids and
+  their state) and `triss coder model set` (persist a replacement pair).
 - **Key hygiene.** Never commit `.triss.env`; `triss config set --local` adds it
   to `.gitignore`. The key is masked in status output and never logged.
