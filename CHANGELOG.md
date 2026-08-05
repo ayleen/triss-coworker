@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Raise the minimum MCP SDK to 1.30.0 and refresh its Hono/Ajv transitive
+  dependencies, plus ESLint's brace expansion dependency, to patched versions.
+  A clean install now reports zero known npm audit vulnerabilities.
+
 ## [0.27.0] — 2026-08-05
 
 ### Added
