@@ -7,12 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-08-05
+
 ### Added
 
 - **Coder model management.** `triss coder models` discovers the effective
   model configuration and live provider catalogue; `triss coder model set`
   safely switches persistent main/small model pairs with wizard diagnostics,
   transactional writes, and retained-record rollback recovery.
+
+### Changed
+
+- OpenCode Zen setup now defaults to `opencode/deepseek-v4-flash-free` instead
+  of the retired `opencode/hy3-free`, and existing provider/model mismatches
+  produce actionable recovery choices without silently switching providers.
+
+### Fixed
+
+- One-shot `ask` and `review` responses now preserve providers' top-level
+  `final_text` instead of reporting an empty result after a successful call.
+- GLM model switching no longer requires `--allow-unverified` when the provider
+  has no catalogue API; Crush accepts the documented Z.AI aliases, omitted
+  small-model values are preserved, and locks owned by dead processes can be
+  reclaimed safely.
 
 ## [0.26.0] — 2026-07-27
 
@@ -787,7 +804,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/ayleen/triss-coworker/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/ayleen/triss-coworker/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/ayleen/triss-coworker/compare/v0.24.2...v0.25.0
 [0.24.2]: https://github.com/ayleen/triss-coworker/compare/v0.24.1...v0.24.2
