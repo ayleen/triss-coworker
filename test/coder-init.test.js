@@ -867,7 +867,7 @@ test(
           { global: true, provider: 'moonshot', allowUnverified: true },
           { spawnSync: fakeSpawnAlreadyInstalled },
         ),
-      /--allow-unverified.*supported only.*--provider opencode-go/i,
+      /--allow-unverified.*requires explicit.*--provider opencode-go.*alias:.*--provider go/is,
     );
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
   }),
