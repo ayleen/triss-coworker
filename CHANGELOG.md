@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-08-06
+
+### Added
+
+- **OpenCode Go as a first-class coder provider.** `triss coder init`, model
+  discovery and switching, coder runs, status/MCP surfaces, help, and generated
+  agent guidance now support paid `opencode-go/*` models through the shared
+  `OPENCODE_API_KEY`. Zen and Go remain separate provider identities, and
+  `opencode-go/deepseek-v4-flash` is preferred when the authenticated Go
+  catalogue offers it.
+
+### Changed
+
+- Agent review guidance now recommends at least 16,384 output tokens for
+  full-diff reviews, including generated Triss initialization instructions.
+- OpenCode Go setup fails closed on authentication/authorization failures,
+  invalid or authoritative-empty catalogues, and non-retryable HTTP responses.
+  An unverified built-in fallback is available only through an explicit
+  `--allow-unverified` opt-in for transport and retryable provider failures.
+
+### Fixed
+
+- Model recovery retains executable commands for Z.AI, Moonshot, and Kimi for
+  Coding providers that intentionally expose no catalogue API, while rejecting
+  missing or cross-provider model pairs and never fabricating recovery commands
+  for failed catalogue verification.
+
 ## [0.27.1] — 2026-08-05
 
 ### Security
