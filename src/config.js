@@ -9,6 +9,10 @@ const PROVIDER_ENV_KEYS = [
   'ZHIPU_API_KEY',
   'MOONSHOT_API_KEY',
   'TRISS_KIMI_BASE_URL',
+  'TRISS_WORKER_API_KEY',
+  'TRISS_WORKER_BASE_URL',
+  'TRISS_WORKER_FLASH_MODEL',
+  'TRISS_WORKER_PRO_MODEL',
 ];
 
 // This snapshot is taken before this module ever calls loadEnvFiles(), so it
@@ -38,10 +42,15 @@ function readProviderEnvSnapshot({
   parentEnv = parentProviderEnv,
   files = activeEnvFiles(),
   readFile = readFileSync,
+  scope = 'effective',
 } = {}) {
   const fileValues = {};
-  // activeEnvFiles is local-first; merge global then local so local wins per key.
-  for (const f of [...files].reverse()) {
+  // activeEnvFiles is local-first. A global write must ignore project values;
+  // an effective/local read merges global then local so the project wins.
+  const selectedFiles = scope === 'global'
+    ? files.filter((file) => file.scope === 'global')
+    : files;
+  for (const f of [...selectedFiles].reverse()) {
     if (!f.exists) continue;
     try {
       const parsed = dotenv.parse(readFile(f.path));
@@ -69,6 +78,27 @@ export function readKimiConfigSnapshot(seams = {}) {
   return {
     apiKey: pick('MOONSHOT_API_KEY'),
     baseUrl: pick('TRISS_KIMI_BASE_URL'),
+  };
+}
+
+export function captureWorkerShellSnapshot() {
+  return Object.fromEntries(
+    [
+      'TRISS_WORKER_API_KEY',
+      'TRISS_WORKER_BASE_URL',
+      'TRISS_WORKER_FLASH_MODEL',
+      'TRISS_WORKER_PRO_MODEL',
+    ].map((key) => [key, process.env[key]]),
+  );
+}
+
+export function readWorkerConfigSnapshot({ scope = 'effective', ...seams } = {}) {
+  const { pick } = readProviderEnvSnapshot({ ...seams, scope });
+  return {
+    apiKey: pick('TRISS_WORKER_API_KEY'),
+    baseUrl: pick('TRISS_WORKER_BASE_URL'),
+    flashModel: pick('TRISS_WORKER_FLASH_MODEL'),
+    proModel: pick('TRISS_WORKER_PRO_MODEL'),
   };
 }
 

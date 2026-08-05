@@ -30,6 +30,19 @@ test('core tools are always exposed', async () => {
   }
 });
 
+test('coder status tool documents the OpenAI-compatible worker credential', async () => {
+  const restore = snapshot(['TRISS_WORKER_API_KEY']);
+  process.env.TRISS_WORKER_API_KEY = 'sk-worker-test';
+  try {
+    const tools = await listTools();
+    const status = tools.find((tool) => tool.name === 'triss_coder_status');
+    assert.ok(status, 'worker credential should expose triss_coder_status');
+    assert.match(status.description, /TRISS_WORKER_API_KEY/);
+  } finally {
+    restore();
+  }
+});
+
 test('jira tools are hidden when ATLASSIAN_* env is missing', async () => {
   const restore = snapshot(JIRA_VARS);
   for (const v of JIRA_VARS) delete process.env[v];

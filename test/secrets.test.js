@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readEnvFile, setVar, unsetVar, addToGitignore, getEnvFilePath } from '../src/secrets.js';
-import { readGlmConfigSnapshot } from '../src/config.js';
+import { readGlmConfigSnapshot, readWorkerConfigSnapshot } from '../src/config.js';
 
 function tmpFile() {
   const dir = mkdtempSync(join(tmpdir(), 'triss-test-'));
@@ -163,6 +163,55 @@ test('readGlmConfigSnapshot falls back to global values when local file is unrea
     coderModel: 'zai/glm-5.2',
     apiKey: 'zk-global',
   });
+});
+
+test('readWorkerConfigSnapshot separates global and local profiles while shell values win', () => {
+  const files = [
+    { scope: 'local', path: '/project/.triss.env', exists: true },
+    { scope: 'global', path: '/home/.config/triss/.env', exists: true },
+  ];
+  const contents = new Map([
+    ['/project/.triss.env', [
+      'TRISS_WORKER_API_KEY=local-key',
+      'TRISS_WORKER_BASE_URL=https://local.example/v1',
+      'TRISS_WORKER_FLASH_MODEL=local-flash',
+    ].join('\n')],
+    ['/home/.config/triss/.env', [
+      'TRISS_WORKER_API_KEY=global-key',
+      'TRISS_WORKER_BASE_URL=https://global.example/v1',
+      'TRISS_WORKER_FLASH_MODEL=global-flash',
+      'TRISS_WORKER_PRO_MODEL=global-pro',
+    ].join('\n')],
+  ]);
+  const readFile = (path) => contents.get(path);
+
+  assert.deepEqual(
+    readWorkerConfigSnapshot({ scope: 'global', parentEnv: {}, files, readFile }),
+    {
+      apiKey: 'global-key',
+      baseUrl: 'https://global.example/v1',
+      flashModel: 'global-flash',
+      proModel: 'global-pro',
+    },
+  );
+  assert.deepEqual(
+    readWorkerConfigSnapshot({ scope: 'local', parentEnv: {}, files, readFile }),
+    {
+      apiKey: 'local-key',
+      baseUrl: 'https://local.example/v1',
+      flashModel: 'local-flash',
+      proModel: 'global-pro',
+    },
+  );
+  assert.equal(
+    readWorkerConfigSnapshot({
+      scope: 'global',
+      parentEnv: { TRISS_WORKER_BASE_URL: 'https://shell.example/v1' },
+      files,
+      readFile,
+    }).baseUrl,
+    'https://shell.example/v1',
+  );
 });
 
 test('reloadable GLM config drives consecutive model routes and client keys', () => {

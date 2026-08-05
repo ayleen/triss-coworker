@@ -191,6 +191,57 @@ test('MCP-H-04: jiraSearchHandler formats issues and without question returns co
   }
 });
 
+test('MCP-H-04b: jira issue output and summarization corpus exclude worker credential state', async () => {
+  const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
+  process.env.TRISS_WORKER_API_KEY = 'sk-worker-present';
+  process.env.ATLASSIAN_BASE_URL = 'https://example.atlassian.net';
+  process.env.ATLASSIAN_EMAIL = 'user@example.com';
+  process.env.ATLASSIAN_API_TOKEN = 'tok123';
+  const issue = {
+    key: 'PROJ-9',
+    fields: {
+      summary: 'Keep tracker output isolated',
+      issuetype: { name: 'Bug' },
+      status: { name: 'Open' },
+      assignee: null,
+      description: null,
+    },
+  };
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => JSON.stringify(issue),
+  });
+  const { jiraIssueHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-04b=${Date.now()}`
+  );
+
+  try {
+    const plain = await jiraIssueHandler({ key: 'PROJ-9' });
+    assert.match(plain, /Key: PROJ-9/);
+    assert.doesNotMatch(plain, /TRISS_WORKER_API_KEY|configured|not set/);
+
+    let capturedMessages;
+    const summarized = await jiraIssueHandler(
+      { key: 'PROJ-9', question: 'Summarize.' },
+      {
+        resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-flash' }),
+        chat: async ({ messages }) => {
+          capturedMessages = messages;
+          return { final_text: 'summary', usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        },
+      },
+    );
+    assert.match(summarized, /^summary/);
+    const corpus = capturedMessages.map((m) => m.content).join('\n');
+    assert.match(corpus, /Key: PROJ-9/);
+    assert.doesNotMatch(corpus, /TRISS_WORKER_API_KEY|configured|not set/);
+  } finally {
+    restore();
+  }
+});
+
 test('MCP-H-05: jiraCreateHandler calls createIssue with right fields and returns "✓ Created"', async () => {
   const restore = snapshot([...WORKER_VARS, ...ATLASSIAN_VARS]);
   process.env.TRISS_WORKER_API_KEY = 'sk-test';

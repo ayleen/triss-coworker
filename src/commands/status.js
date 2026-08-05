@@ -4,18 +4,8 @@ import { listPresets, describeGlmRouting, describeKimiRouting } from '../models.
 import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
-import { CODER_MANIFEST, describeCoderStatus, coderCredentialReady } from './coder.js';
-
-// The four upstream providers a `triss coder` run can land on. Any one set
-// makes the coder row "ready" — not just ZHIPU_API_KEY (the historical
-// default). Kept here rather than in coder.js so status has a single source
-// of truth for both the coder tag and the per-provider readiness rows below.
-const CODER_PROVIDERS = [
-  { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
-  { label: 'opencode-zen/go', env: 'OPENCODE_API_KEY' },
-  { label: 'moonshot', env: 'MOONSHOT_API_KEY' },
-  { label: 'kimi-for-coding', env: 'KIMI_API_KEY' },
-];
+import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
+import { CODER_PROVIDER_CREDENTIALS, coderCredentialReady } from '../coder-providers.js';
 
 export async function runStatus(deps = {}) {
   const cfg = getConfig();
@@ -107,14 +97,14 @@ export async function runStatus(deps = {}) {
     let tag;
     if (m.name === 'coder') {
       // The coder manifest's own envVars grammar can only mark one set of
-      // keys required, so it under-reports readiness: any ONE of the four
+      // keys required, so it under-reports readiness: any ONE of the five
       // coder providers is enough to run `triss coder`. Resolve the tag from
-      // CODER_PROVIDERS instead, and when nothing is set, name all four
+      // shared provider metadata instead, and when nothing is set, name all five
       // (provider-aware) rather than only ZHIPU_API_KEY.
-      const anyProviderSet = CODER_PROVIDERS.some((p) => process.env[p.env]);
+      const anyProviderSet = coderCredentialReady();
       tag = anyProviderSet
         ? pc.green('✓ ready')
-        : pc.yellow(`⚠ missing ${CODER_PROVIDERS.map((p) => p.env).join(', ')}`);
+        : pc.yellow(`⚠ missing ${CODER_PROVIDER_CREDENTIALS.map((p) => p.env).join(', ')}`);
     } else {
       tag = r.ready
         ? pc.green('✓ ready')
@@ -137,10 +127,10 @@ export async function runStatus(deps = {}) {
   // Explicit per-provider coder readiness — one line each, no key values.
   // Complements the manifest row (which folds all providers into one tag)
   // and the per-envVar rows (which only exist for keys the manifest lists).
-  // Lets a user see at a glance which of the four upstreams are wired.
+  // Lets a user see at a glance which of the five upstreams are wired.
   lines.push('');
   lines.push(pc.bold('Coder providers') + pc.dim('  (any one enables `triss coder`)'));
-  for (const p of CODER_PROVIDERS) {
+  for (const p of CODER_PROVIDER_CREDENTIALS) {
     const present = process.env[p.env];
     const tag = present ? pc.green('ready') : pc.red('missing');
     lines.push(`  ${p.label.padEnd(16)} ${p.env.padEnd(20)} ${tag}`);
