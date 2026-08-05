@@ -29,6 +29,7 @@ import {
   realpathSync,
   rmSync,
   readFileSync,
+  existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,6 +53,7 @@ const ENV_VARS = ['ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI
 const globalConfigPath = (home) => join(home, '.config', 'opencode', 'opencode.json');
 const trissEnvPath = (home) => join(home, '.config', 'triss', '.env');
 const projectEnvPath = (project) => join(project, '.triss.env');
+const projectConfigPath = (project) => join(project, 'opencode.json');
 const networkBlockedFetch = () => { throw new Error('CONTRACT: tests inject deps.fetch — globalThis.fetch is blocked (no network).'); };
 
 function makeTmpHome() {
@@ -69,6 +71,7 @@ function makeTmpProject() {
 const seedGlobalConfig = (home, obj) => writeFileSync(globalConfigPath(home), JSON.stringify(obj, null, 2) + '\n');
 const seedTrissEnv = (home, text) => writeFileSync(trissEnvPath(home), text);
 const seedProjectEnv = (project, text) => writeFileSync(projectEnvPath(project), text);
+const seedProjectConfig = (project, obj) => writeFileSync(projectConfigPath(project), JSON.stringify(obj, null, 2) + '\n');
 const backupRootUnder = (home) => realpathSync(mkdtempSync(join(home, 'backup-root-')));
 
 function withTmpHome(fn) {
@@ -193,6 +196,10 @@ test(
     seedProjectEnv(project, `OPENCODE_API_KEY=${SECRET}\nTRISS_CODER_MODEL=${SHADOW_MODEL}\nTRISS_CODER_SMALL_MODEL=opencode/shadow-small\n`);
 
     const cfgPath = globalConfigPath(home);
+    const envPath = trissEnvPath(home);
+    const configBefore = readFileSync(cfgPath, 'utf8');
+    const envBefore = readFileSync(envPath, 'utf8');
+    const backupRoot = join(home, 'must-not-exist-before-preflight');
 
     const svc = await loadService();
     const plan = await svc.planModelChange(OC(...NEW), { fetch: newFetch() });
@@ -202,7 +209,7 @@ test(
       { ...plan, confirmed: true },
       {
         fetch: newFetch(),
-        backupRoot: backupRootUnder(home),
+        backupRoot,
       },
     );
 
@@ -211,19 +218,88 @@ test(
     // - The preflight cross-scope shadow audit should detect the existing project .triss.env
     // - The global files should remain unchanged
 
-    assert.equal(
-      result.ok,
-      false,
-      'CONTRACT RED: apply must fail when existing project .triss.env shadows global scope',
-    );
+    assert.equal(result.ok, false, 'CONTRACT RED: apply must fail when existing project .triss.env shadows global scope');
+    assert.equal(result.reason, 'cross-scope-shadow', 'the service must reject an already-present shadow before transaction staging');
+    assert.equal(result.exitCode, 1, 'an existing shadow is a preflight refusal, not a post-commit rollback');
 
     // The global config should remain unchanged (never committed)
-    const finalConfig = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    assert.equal(
-      finalConfig.model,
-      'opencode/old-main',
-      'CONTRACT RED: global config must remain unchanged on preflight shadow detection',
+    assert.equal(readFileSync(cfgPath, 'utf8'), configBefore, 'preflight refusal must leave global config byte-identical');
+    assert.equal(readFileSync(envPath, 'utf8'), envBefore, 'preflight refusal must leave global pins byte-identical');
+    assert.equal(existsSync(backupRoot), false, 'preflight refusal must happen before transaction-record creation');
+  }),
+);
+
+test(
+  'RED: direct global apply rejects an existing local opencode.json model/small shadow before transaction staging',
+  withTmpHome(async ({ home, project }) => {
+    const SECRET = 'sk-secret-local-config-shadow';
+    seedDenyFirst(home);
+    seedTrissEnv(home, `OPENCODE_API_KEY=${SECRET}\nTRISS_CODER_MODEL=opencode/old-main\nTRISS_CODER_SMALL_MODEL=opencode/old-small\n`);
+    process.env.OPENCODE_API_KEY = SECRET;
+    seedProjectConfig(project, {
+      model: SHADOW_MODEL,
+      small_model: 'opencode/shadow-small',
+      permission: { bash: { '*': 'deny' } },
+    });
+
+    const cfgPath = globalConfigPath(home);
+    const envPath = trissEnvPath(home);
+    const configBefore = readFileSync(cfgPath, 'utf8');
+    const envBefore = readFileSync(envPath, 'utf8');
+    const backupRoot = join(home, 'must-not-stage-local-config-shadow');
+    const svc = await loadService();
+    const plan = await svc.planModelChange(OC(...NEW), { fetch: newFetch() });
+    assert.equal(plan.ok, true, 'precondition: verified pair plans ok');
+
+    const result = await svc.applyModelChange(
+      { ...plan, confirmed: true },
+      { fetch: newFetch(), backupRoot },
     );
+
+    assert.equal(result.ok, false, 'a local config role that wins over global must block direct service apply');
+    assert.equal(result.reason, 'cross-scope-shadow');
+    assert.equal(result.exitCode, 1);
+    assert.equal(readFileSync(cfgPath, 'utf8'), configBefore, 'global config must not be renamed before the local-config preflight completes');
+    assert.equal(readFileSync(envPath, 'utf8'), envBefore, 'global env must not be renamed before the local-config preflight completes');
+    assert.equal(existsSync(backupRoot), false, 'no transaction record may be allocated for an existing local config shadow');
+  }),
+);
+
+test(
+  'RED: a local opencode.json small-model shadow created before final audit rolls back the global direct apply',
+  withTmpHome(async ({ home, project }) => {
+    const SECRET = 'sk-secret-local-config-race';
+    seedDenyFirst(home);
+    seedTrissEnv(home, `OPENCODE_API_KEY=${SECRET}\nTRISS_CODER_MODEL=opencode/old-main\nTRISS_CODER_SMALL_MODEL=opencode/old-small\n`);
+    process.env.OPENCODE_API_KEY = SECRET;
+    const cfgPath = globalConfigPath(home);
+    const envPath = trissEnvPath(home);
+    const configBefore = readFileSync(cfgPath, 'utf8');
+    const envBefore = readFileSync(envPath, 'utf8');
+    const svc = await loadService();
+    const plan = await svc.planModelChange(OC(...NEW), { fetch: newFetch() });
+    assert.equal(plan.ok, true, 'precondition: verified pair plans ok');
+
+    const result = await svc.applyModelChange(
+      { ...plan, confirmed: true },
+      {
+        fetch: newFetch(),
+        backupRoot: backupRootUnder(home),
+        onBeforeFinalAudit: () => {
+          seedProjectConfig(project, {
+            model: NEW[0],
+            small_model: 'opencode/shadow-small',
+            permission: { bash: { '*': 'deny' } },
+          });
+        },
+      },
+    );
+
+    assert.equal(result.ok, false, 'a local small_model that appears during global apply must fail final effective-role audit');
+    assert.equal(result.exitCode, 2, 'the late shadow must take the existing rollback path');
+    assert.equal(readFileSync(cfgPath, 'utf8'), configBefore, 'late local small shadow must roll the global config back');
+    assert.equal(readFileSync(envPath, 'utf8'), envBefore, 'late local small shadow must roll the global pins back');
+    assert.ok(readFileSync(projectConfigPath(project), 'utf8').includes('opencode/shadow-small'), 'the external local config must be preserved');
   }),
 );
 

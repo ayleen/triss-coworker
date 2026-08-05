@@ -118,6 +118,14 @@ function holdLock(path) {
   return true;
 }
 
+// Writes an explicit owner token without touching the current test process.
+// The future implementation must use an injected liveness probe for this
+// deterministic contract; tests must never signal/kill the node:test runner.
+function writeLockToken(path, token) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, token, { mode: 0o600 });
+}
+
 // ─── A1: default apply holds a real lock; a concurrent second apply cannot write ─
 test(
   'Corrective-A1: with the default lock pre-held, applyModelChange (empty deps, the CLI shape) FAILS CLOSED (lock-held, writes nothing); after release a subsequent apply succeeds',
@@ -257,6 +265,93 @@ test(
       false,
       'the default lock MUST be released after an errored apply + rollback (never held forever by a crashed writer in-process)',
     );
+  }),
+);
+
+// ─── A3b: stale owner liveness (no signals to this test runner) ─────────────
+test(
+  'Corrective-A3b: a valid dead-PID default-lock token is reclaimed through the injected liveness probe without signalling this test runner',
+  withTmpHome(async ({ home }) => {
+    const svc = await loadService();
+    const lockPath = svc.lockPathFor('opencode', 'global');
+    const probes = [];
+
+    // A dead writer can leave a syntactically valid sentinel behind. The
+    // implementation must recover it without TTL guessing or a signal sent to
+    // this process. `isLockPidAlive` is intentionally a test-only dependency
+    // seam; production uses its platform liveness probe.
+    writeLockToken(lockPath, 'pid=424242;ts=0;r=dead-owner-token');
+    const reclaimed = await svc.applyModelChange(
+      confirmedPlan('global', 'opencode/reclaimed-main', 'opencode/reclaimed-small'),
+      {
+        backupRoot: join(home, 'bk-dead-owner'),
+        isLockPidAlive: (pid) => {
+          probes.push(pid);
+          return false;
+        },
+      },
+    );
+    assert.equal(reclaimed.ok, true, `a dead owner token must be reclaimed; got ${JSON.stringify(reclaimed)}`);
+    assert.deepEqual(probes, [424242], 'the stale token PID must be checked through the deterministic liveness seam');
+    assert.equal(JSON.parse(readFileSync(cfgPath(home), 'utf8')).model, 'opencode/reclaimed-main');
+  }),
+);
+
+test(
+  'Corrective-A3c: a valid live-PID default-lock token remains fail-closed after liveness probe',
+  withTmpHome(async ({ home }) => {
+    const svc = await loadService();
+    const lockPath = svc.lockPathFor('opencode', 'global');
+    const before = readFileSync(cfgPath(home), 'utf8');
+    // A positive liveness result is never auto-broken, even though it carries
+    // the same token shape. It must abort before a transaction/write.
+    writeLockToken(lockPath, 'pid=525252;ts=0;r=live-owner-token');
+    let liveProbeCalls = 0;
+    const live = await svc.applyModelChange(
+      confirmedPlan('global', 'opencode/must-not-write', 'opencode/must-not-write-small'),
+      {
+        backupRoot: join(home, 'bk-live-owner'),
+        isLockPidAlive: (pid) => {
+          liveProbeCalls += 1;
+          return pid === 525252;
+        },
+      },
+    );
+    assert.equal(live.ok, false, 'a live owner must remain fail-closed');
+    assert.equal(live.reason, 'lock-held');
+    assert.equal(liveProbeCalls, 1, 'the live owner PID must be probed rather than treated as an anonymous stale sentinel');
+    assert.equal(
+      readFileSync(cfgPath(home), 'utf8'),
+      before,
+      'a live owner must prevent every target write',
+    );
+  }),
+);
+
+test(
+  'Corrective-A3d: a malformed default-lock token remains fail-closed and is never passed to the liveness probe',
+  withTmpHome(async ({ home }) => {
+    const svc = await loadService();
+    const lockPath = svc.lockPathFor('opencode', 'global');
+    const before = readFileSync(cfgPath(home), 'utf8');
+    // An unknown/malformed token is never eligible for automatic recovery and
+    // must not invoke the PID probe at all.
+    writeLockToken(lockPath, 'not-a-triss-lock-token');
+    let malformedProbeCalls = 0;
+    const malformed = await svc.applyModelChange(
+      confirmedPlan('global', 'opencode/malformed-must-not-write', 'opencode/malformed-must-not-write-small'),
+      {
+        backupRoot: join(home, 'bk-malformed-owner'),
+        isLockPidAlive: () => {
+          malformedProbeCalls += 1;
+          return false;
+        },
+      },
+    );
+    assert.equal(malformed.ok, false, 'an unknown lock token must remain fail-closed');
+    assert.equal(malformed.reason, 'lock-held');
+    assert.equal(malformedProbeCalls, 0, 'a malformed token must never be guessed/reclaimed through PID liveness');
+    assert.equal(readFileSync(cfgPath(home), 'utf8'), before, 'a malformed lock token must prevent every target write');
   }),
 );
 

@@ -142,6 +142,28 @@ test('crush model set: canonical Z.AI pair --global --yes spawns `crush models u
   }
 });
 
+test('crush model set: Z.AI provider aliases glm, z.ai, zhipu, and Zai normalize before the engine guard and spawn the exact argv', () => {
+  for (const provider of ['glm', 'z.ai', 'zhipu', 'Zai']) {
+    const { home } = makeSandbox();
+    const log = join(home, 'crush.log');
+    writeFakeCrush(join(home, 'bin'), log, 0);
+    try {
+      const r = runCli(
+        [
+          'coder', 'model', 'set', CANON_MAIN, '--small', CANON_SMALL,
+          '--engine', 'crush', '--provider', provider, '--global', '--yes',
+        ],
+        { home },
+      );
+      assert.equal(r.status, 0, `${provider}: valid Z.AI alias must not be rejected; stderr:\n${r.stderr}`);
+      assert.equal(readLog(log), EXPECTED_ARGV,
+        `${provider}: normalized alias must spawn the canonical, array-safe Crush argv`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
 // ─── 2. invalid Zen / PAYG input -> rejected BEFORE spawn (log stays empty) ─────
 test('crush model set: Zen main and PAYG (zai/) main are rejected before any spawn — log stays empty, via validation not the generic gap (RED)', () => {
   for (const [name, main] of [['Zen', 'opencode/hy3-free'], ['PAYG (zai/)', 'zai/glm-5.2']]) {

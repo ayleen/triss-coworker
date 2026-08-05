@@ -741,29 +741,71 @@ export function lockPathFor(engine, scope) {
 // handle's lock (token-verified). Throws a structured LOCK_HELD error (carrying
 // the absolute lock path + manual guidance) when the lock is already held; the
 // caller turns that into a lock-held result/diagnostic. Never auto-breaks.
-function acquireDefaultLock(engine, scope) {
+function defaultLockPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return !(err && err.code === 'ESRCH');
+  }
+}
+
+function reclaimDeadLock(lockPath, isPidAlive) {
+  let token;
+  try { token = readFileSync(lockPath, 'utf8'); } catch { return false; }
+  const match = /^pid=([1-9]\d*);ts=\d+;r=[A-Za-z0-9-]+$/.exec(token);
+  if (!match) return false;
+  const pid = Number(match[1]);
+  let alive;
+  try { alive = isPidAlive(pid); } catch { return false; }
+  if (alive !== false) return false;
+
+  // Verify the exact token again immediately before unlinking. Unknown or
+  // replaced locks remain fail-closed.
+  let current;
+  try { current = readFileSync(lockPath, 'utf8'); } catch { return false; }
+  if (current !== token) return false;
+  try {
+    rmSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireDefaultLock(engine, scope, opts = {}) {
   const lockPath = lockPathFor(engine, scope);
   const lockDir = dirname(lockPath);
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   try { chmodSync(lockDir, 0o700); } catch { /* best-effort: umask may have widened */ }
   const token = `pid=${process.pid};ts=${Date.now()};r=${randomBytes(8).toString('hex')}`;
   let fd;
-  try {
-    fd = openSync(lockPath, 'wx', 0o600); // O_CREAT | O_EXCL — atomic cross-process acquire
-  } catch (err) {
-    if (err && err.code === 'EEXIST') {
-      const held = new Error(
-        `model-change lock-held: another writer holds the lock at ${lockPath} ` +
-          `(engine=${engine}, scope=${scope}). Re-run once it completes; or, if you are certain no ` +
-          `triss process is writing models, remove the stale lock file manually: rm ${posixSingleQuote(lockPath)}`,
-      );
-      held.code = 'LOCK_HELD';
-      held.lockPath = lockPath;
-      held.engine = engine;
-      held.scope = scope;
-      throw held;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fd = openSync(lockPath, 'wx', 0o600); // O_CREAT | O_EXCL — atomic cross-process acquire
+      break;
+    } catch (err) {
+      if (
+        err && err.code === 'EEXIST'
+        && attempt === 0
+        && reclaimDeadLock(lockPath, opts.isPidAlive || defaultLockPidAlive)
+      ) {
+        continue;
+      }
+      if (err && err.code === 'EEXIST') {
+        const held = new Error(
+          `model-change lock-held: another writer holds the lock at ${lockPath} ` +
+            `(engine=${engine}, scope=${scope}). Re-run once it completes; or, if you are certain no ` +
+            `triss process is writing models, remove the stale lock file manually: rm ${posixSingleQuote(lockPath)}`,
+        );
+        held.code = 'LOCK_HELD';
+        held.lockPath = lockPath;
+        held.engine = engine;
+        held.scope = scope;
+        throw held;
+      }
+      throw err;
     }
-    throw err;
   }
   try {
     writeSync(fd, token);
@@ -1044,7 +1086,7 @@ export function buildRollbackCommand(txDir, scope) {
 // cross-provider pairs, Z.AI coding-plan/PAYG prefix mismatches, a missing
 // provider credential, an unauthenticated catalogue, and an authoritative
 // catalogue absence. `allowUnverified` bypasses ONLY not-verified catalogue
-// states (timeout/http-error/parse-error/not-supported): never unauthenticated,
+// states (timeout/http-error/parse-error): never unauthenticated,
 // never a model the verified catalogue says is absent.
 export async function planModelChange(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
@@ -1158,6 +1200,10 @@ export async function planModelChange(input = {}, deps = {}) {
         value: small,
       });
     }
+  } else if (cat.status === 'not-supported') {
+    // No catalogue API exists for this provider. Credential and local
+    // provider/plan-prefix validation above are authoritative for this route;
+    // there is no remote list to bypass with --allow-unverified.
   } else if (cat.status === 'unauthenticated') {
     // Auth is never bypassable — allow-unverified must not grant access.
     diagnostics.push({
@@ -1166,7 +1212,7 @@ export async function planModelChange(input = {}, deps = {}) {
       scope: 'catalogue',
     });
   } else if (!allowUnverified) {
-    // not-verified (timeout/http-error/parse-error/not-supported) and the
+    // not-verified (timeout/http-error/parse-error) and the
     // caller did not opt into an unverified switch: refuse rather than pin a
     // model we could not confirm exists.
     diagnostics.push({
@@ -1254,7 +1300,9 @@ export async function planModelChange(input = {}, deps = {}) {
     allowUnsafeBash,
     diagnostics,
     catalogue: { status: cat.status },
-    changes: ok ? { model: main, small_model: small } : null,
+    changes: ok
+      ? { model: main, ...(small !== undefined ? { small_model: small } : {}) }
+      : null,
   };
 }
 
@@ -1299,6 +1347,71 @@ function checkDenyFirstBash(scope, allowUnsafeBash, diagnostics, ctx) {
   return false;
 }
 
+function inspectModelChangeCrossScope(scope, main, small) {
+  if (scope !== 'global') return [];
+  const findings = [];
+  const localEnvPath = getEnvFilePath('local');
+  const localMain = readEnvFile(localEnvPath).vars.TRISS_CODER_MODEL;
+  if (localMain && localMain !== main) {
+    findings.push({
+      code: 'cross-scope-shadow',
+      severity: 'error',
+      scope: 'local',
+      role: 'main',
+      source_path: localEnvPath,
+      value: localMain,
+      proposed: main,
+    });
+  }
+
+  const localConfigPath = opencodeConfigPath('local');
+  if (!existsSync(localConfigPath)) return findings;
+  let localConfig;
+  try {
+    localConfig = JSON.parse(readFileSync(localConfigPath, 'utf8'));
+  } catch {
+    findings.push({
+      code: 'cross-scope-config-invalid',
+      severity: 'error',
+      scope: 'local',
+      source_path: localConfigPath,
+    });
+    return findings;
+  }
+  if (!localConfig || typeof localConfig !== 'object' || Array.isArray(localConfig)) {
+    findings.push({
+      code: 'cross-scope-config-invalid',
+      severity: 'error',
+      scope: 'local',
+      source_path: localConfigPath,
+    });
+    return findings;
+  }
+  if (typeof localConfig.model === 'string' && localConfig.model !== main) {
+    findings.push({
+      code: 'cross-scope-shadow',
+      severity: 'error',
+      scope: 'local',
+      role: 'config_main',
+      source_path: localConfigPath,
+      value: localConfig.model,
+      proposed: main,
+    });
+  }
+  if (typeof localConfig.small_model === 'string' && localConfig.small_model !== small) {
+    findings.push({
+      code: 'cross-scope-shadow',
+      severity: 'error',
+      scope: 'local',
+      role: 'small',
+      source_path: localConfigPath,
+      value: localConfig.small_model,
+      proposed: small,
+    });
+  }
+  return findings;
+}
+
 // ─── applyModelChange ────────────────────────────────────────────────────────
 //
 // Transactional read-modify-write of opencode.json + the two Triss env pins
@@ -1325,7 +1438,12 @@ export async function applyModelChange(plan = {}, deps = {}) {
   if (!plan.confirmed) {
     return { ok: false, reason: 'declined', diagnostics: [] };
   }
-  const changes = plan.changes || { model: plan.main, small_model: plan.small };
+  const changes = plan.changes
+    ? { ...plan.changes }
+    : {
+        model: plan.main,
+        ...(plan.small !== undefined ? { small_model: plan.small } : {}),
+      };
   const scope = plan.scope || 'global';
   const configPath = opencodeConfigPath(scope);
   const envPath = getEnvFilePath(scope);
@@ -1359,7 +1477,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
     }
   } else {
     try {
-      lockHandle = acquireDefaultLock(lockEngine, scope);
+      lockHandle = acquireDefaultLock(lockEngine, scope, { isPidAlive: deps.isLockPidAlive });
     } catch (lockErr) {
       return {
         ok: false,
@@ -1403,6 +1521,24 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
     return { ok: false, reason: 'malformed-config', path: configPath, scope };
   }
 
+  const changesSmall = Object.prototype.hasOwnProperty.call(changes, 'small_model');
+  const intendedSmall = changesSmall ? changes.small_model : (obj.small_model ?? null);
+  const crossScopeFindings = inspectModelChangeCrossScope(
+    scope,
+    changes.model,
+    intendedSmall,
+  );
+  if (crossScopeFindings.length > 0) {
+    return {
+      ok: false,
+      exitCode: 1,
+      reason: 'cross-scope-shadow',
+      scope,
+      path: configPath,
+      diagnostics: crossScopeFindings,
+    };
+  }
+
   // Snapshot the pre-transaction state. The config bytes/mode go into a
   // 0600 backup file; the manifest records the absolute path / existed /
   // original mode / content hash; the env snapshot records ONLY the two
@@ -1422,7 +1558,7 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
   // model values.
   const fmt = detectFormat(rawConfig);
   obj.model = changes.model;
-  obj.small_model = changes.small_model;
+  if (changesSmall) obj.small_model = changes.small_model;
   let configOut = JSON.stringify(obj, null, fmt.indent);
   if (fmt.eol === '\r\n') configOut = configOut.replace(/\n/g, '\r\n');
   if (fmt.trailingNewline) configOut += fmt.eol;
@@ -1432,7 +1568,7 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
   const envCur = envExisted ? readFileSync(envPath, 'utf8') : '';
   const envOut = applyEnvPins(envCur, {
     TRISS_CODER_MODEL: changes.model,
-    TRISS_CODER_SMALL_MODEL: changes.small_model,
+    ...(changesSmall ? { TRISS_CODER_SMALL_MODEL: changes.small_model } : {}),
   });
 
   // Allocate the collision-resistant transaction record and write the
@@ -1587,7 +1723,7 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
         `actual ${parsedConfig.model}). File was modified after commit.`
       );
     }
-    if (parsedConfig.small_model !== changes.small_model) {
+    if (changesSmall && parsedConfig.small_model !== changes.small_model) {
       throw new Error(
         `Post-commit audit failed: opencode.json small_model field mismatch (expected ${changes.small_model}, ` +
         `actual ${parsedConfig.small_model}). File was modified after commit.`
@@ -1602,7 +1738,7 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
         `actual ${actualPins.TRISS_CODER_MODEL}). File was modified after commit.`
       );
     }
-    if (actualPins.TRISS_CODER_SMALL_MODEL !== changes.small_model) {
+    if (changesSmall && actualPins.TRISS_CODER_SMALL_MODEL !== changes.small_model) {
       throw new Error(
         `Post-commit audit failed: env TRISS_CODER_SMALL_MODEL pin mismatch (expected ${changes.small_model}, ` +
         `actual ${actualPins.TRISS_CODER_SMALL_MODEL}). File was modified after commit.`
@@ -1630,10 +1766,37 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
       );
     }
 
+    const effectiveConfig = resolveOpenCodeConfigRoles();
+    const effectiveConfigErrors = [effectiveConfig.main.parse_error, effectiveConfig.small.parse_error]
+      .filter(Boolean);
+    if (effectiveConfigErrors.length > 0) {
+      throw new Error(
+        `Post-commit audit failed: a higher-precedence OpenCode config became malformed at ` +
+        `${effectiveConfigErrors[0].path}. Transaction rolled back.`,
+      );
+    }
+    if (effectiveConfig.main.value && effectiveConfig.main.value !== changes.model) {
+      throw new Error(
+        `Post-commit audit failed: OpenCode config main shadow detected. Effective model is ` +
+        `"${effectiveConfig.main.value}" from ${effectiveConfig.main.source_path}, expected ` +
+        `"${changes.model}". Transaction rolled back.`,
+      );
+    }
+    if (effectiveConfig.small.value !== intendedSmall) {
+      throw new Error(
+        `Post-commit audit failed: OpenCode small-model shadow detected. Effective small model is ` +
+        `"${effectiveConfig.small.value}" from ${effectiveConfig.small.source_path}, expected ` +
+        `"${intendedSmall}". Transaction rolled back.`,
+      );
+    }
+
     // Reflect the new pins into process.env so an in-process consumer (MCP
     // server, follow-up planModelChange) sees them immediately.
     process.env.TRISS_CODER_MODEL = changes.model;
-    process.env.TRISS_CODER_SMALL_MODEL = changes.small_model;
+    if (changesSmall) {
+      if (changes.small_model == null) delete process.env.TRISS_CODER_SMALL_MODEL;
+      else process.env.TRISS_CODER_SMALL_MODEL = changes.small_model;
+    }
   } catch (failure) {
     // Best-effort: scrub any orphan sibling temp before rolling back. The
     // plan requires "no orphan temp containing env bytes" on every path.
@@ -1697,7 +1860,7 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
     path: configPath,
     envPath,
     model: changes.model,
-    small_model: changes.small_model,
+    small_model: intendedSmall,
     transaction,
     rollbackCommand: buildRollbackCommand(txDir, scope),
   };
@@ -1955,7 +2118,9 @@ export async function applyCrushModelChange(plan = {}, deps = {}) {
   // reason:'lock-held') naming the lock path + manual guidance — no writes, no spawn.
   let lockHandle;
   try {
-    lockHandle = deps.lock ? deps.lock('crush', scope) : acquireDefaultLock('crush', scope);
+    lockHandle = deps.lock
+      ? deps.lock('crush', scope)
+      : acquireDefaultLock('crush', scope, { isPidAlive: deps.isLockPidAlive });
   } catch (lockErr) {
     return {
       ok: false,
@@ -2458,7 +2623,11 @@ function readRollbackManifest(manifestPath) {
 export async function rollbackModelChange(input = {}, deps = {}) {
   const from = input.from;
   const scope = input.scope;
-  const { lock = acquireDefaultLock } = deps;
+  const lock = deps.lock || ((engine, lockScope) => acquireDefaultLock(
+    engine,
+    lockScope,
+    { isPidAlive: deps.isLockPidAlive },
+  ));
 
   // 0. input.from: required, nonempty, absolute, and an existing directory.
   if (typeof from !== 'string' || from.trim() === '') {

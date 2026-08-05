@@ -337,6 +337,67 @@ test(
   }),
 );
 
+test(
+  'planModelChange: a Z.AI provider without a catalogue API accepts a compatible pair without --allow-unverified, while a Zen timeout still requires it',
+  withTmpHome(async ({ home }) => {
+    seedGlobalConfig(home, {
+      model: 'zai-coding-plan/glm-5.2',
+      small_model: 'zai-coding-plan/glm-5-turbo',
+      permission: { bash: { '*': 'deny' } },
+    });
+    const svc = await loadService();
+
+    // Z.AI exposes no model-list API. There is therefore nothing remotely
+    // unavailable to override: a valid local prefix/plan pair must proceed
+    // after its credential gate without the network-failure escape hatch.
+    process.env.ZHIPU_API_KEY = 'zk-fake';
+    const zai = await svc.planModelChange({
+      engine: 'opencode',
+      scope: 'global',
+      provider: 'zai',
+      main: 'zai-coding-plan/glm-5.2',
+      small: 'zai-coding-plan/glm-5-turbo',
+    }, { fetch: networkBlockedFetch });
+    assert.equal(zai.catalogue.status, 'not-supported');
+    assert.equal(zai.ok, true, `not-supported must not require --allow-unverified: ${JSON.stringify(zai.diagnostics)}`);
+
+    // A real transient Zen failure is different: it has a catalogue which
+    // could not be checked and must remain gated until the explicit opt-in.
+    process.env.OPENCODE_API_KEY = 'sk-fake';
+    const zenInput = {
+      engine: 'opencode', scope: 'global', provider: 'opencode-zen',
+      main: 'opencode/new-main', small: 'opencode/new-small',
+    };
+    const blocked = await svc.planModelChange(zenInput, { fetch: timeoutFetch() });
+    assert.equal(blocked.catalogue.status, 'timeout');
+    assert.equal(blocked.ok, false, 'a timeout must still require --allow-unverified');
+    assert.ok(blocked.diagnostics.some((d) => d.code === 'catalogue-not-verified'));
+    const allowed = await svc.planModelChange({ ...zenInput, allowUnverified: true }, { fetch: timeoutFetch() });
+    assert.equal(allowed.ok, true, 'the explicit flag must remain available for a transient timeout');
+  }),
+);
+
+test(
+  'planModelChange: a main-only public request leaves small_model out of the mutation shape',
+  withTmpHome(async ({ home }) => {
+    seedGlobalConfig(home, {
+      model: 'opencode/old-main',
+      small_model: 'opencode/old-small',
+      permission: { bash: { '*': 'deny' } },
+    });
+    process.env.OPENCODE_API_KEY = 'sk-fake';
+    const svc = await loadService();
+    const plan = await svc.planModelChange({
+      engine: 'opencode', scope: 'global', provider: 'opencode-zen', main: 'opencode/new-main',
+    }, { fetch: zenListFetch(['new-main']) });
+
+    assert.equal(plan.ok, true, `main-only requests are documented as valid: ${JSON.stringify(plan.diagnostics)}`);
+    assert.equal(plan.small, undefined, 'the public plan keeps the omitted role distinguishable from a supplied model');
+    assert.deepEqual(plan.changes, { model: 'opencode/new-main' },
+      'an omitted small role must mean preserve-existing, not an undefined write/delete');
+  }),
+);
+
 // ════════════════════════════════════════════════════════════════════════════
 // applyModelChange — no mutation on DECLINE, on MALFORMED config; success
 // preserves custom fields, deny-first policy, and file format
