@@ -130,7 +130,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
-| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>`) | the **selected provider's** key — `ZHIPU_API_KEY` (`glm`), shared `OPENCODE_API_KEY` (`opencode-zen` or `opencode-go`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`) |
+| `coder`    | `TRISS_WORKER_API_KEY`, `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>`) | the **selected provider's** key — existing `TRISS_WORKER_API_KEY` (`worker`), `ZHIPU_API_KEY` (`glm`), shared `OPENCODE_API_KEY` (`opencode-zen` or `opencode-go`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`) |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -267,7 +267,7 @@ self-hosted endpoints).
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
 | `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Go uses `opencode-go/<id>`; Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
@@ -429,10 +429,15 @@ fixed order so only the right single key is prompted:
    defaulting — give it `--engine` (or export `TRISS_CODER_ENGINE`) to
    proceed unattended.
 2. **Provider** next, *after* the engine and *before* any credential
-   prompt: `--provider` (`glm`, `opencode-zen`, `opencode-go`, `moonshot`,
+   prompt: `--provider` (`glm`, `worker`, `opencode-zen`, `opencode-go`, `moonshot`,
    `kimi-for-coding`) → the engine's default for the keys already set.
 3. Triss then prompts for **only** that provider's key and writes the
    matching `opencode.json`/`crush.json`.
+
+`--provider worker` is OpenCode-only and reuses the existing
+`TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, and worker flash/pro model
+settings. It creates `triss-worker/*` model pins and does not introduce or copy
+another secret. V1 supports one active worker profile and Chat Completions.
 
 **Stale-model incident — don't hardcode a Zen free id.** Zen rotates its
 free tier, so a previously-working pinned id (the `opencode/hy3-*` free

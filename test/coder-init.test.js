@@ -142,7 +142,7 @@ function withTmpHome(fn) {
 test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required + the other provider keys optional, all secret', () => {
   assert.equal(CODER_MANIFEST.name, 'coder');
   assert.equal(CODER_MANIFEST.key, undefined);
-  assert.equal(CODER_MANIFEST.envVars.length, 4);
+  assert.equal(CODER_MANIFEST.envVars.length, 5);
 
   const zhipu = CODER_MANIFEST.envVars.find((e) => e.name === 'ZHIPU_API_KEY');
   assert.ok(zhipu, 'ZHIPU_API_KEY declared');
@@ -151,7 +151,7 @@ test('CODER_MANIFEST uses "name" (not "key") and declares ZHIPU_API_KEY required
 
   // The other provider keys — optional (readiness stays governed by
   // ZHIPU_API_KEY), secret so they are masked in status/config output.
-  for (const name of ['OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
+  for (const name of ['TRISS_WORKER_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
     const v = CODER_MANIFEST.envVars.find((e) => e.name === name);
     assert.ok(v, `${name} declared`);
     assert.equal(v.required, false);

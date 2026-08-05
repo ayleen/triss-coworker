@@ -225,6 +225,9 @@ forwards it as `ZAI_API_KEY` for older binaries. See
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
 
 Configure via `triss coder init` or `triss config wizard coder`. The opencode
+engine can reuse the existing OpenAI-compatible worker profile with
+`--provider worker`; `triss-worker/*` models use `TRISS_WORKER_API_KEY` and
+`TRISS_WORKER_BASE_URL` directly, with no second coder key. The opencode
 engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
 sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
 `opencode/deepseek-v4-flash-free`) with `OPENCODE_API_KEY` — run `triss coder models` to see current offerings.

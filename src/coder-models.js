@@ -80,7 +80,12 @@ const _DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // (`zai-coding-plan` vs `zai`) both authenticate via ZHIPU_API_KEY. OpenCode
 // Go shares OPENCODE_API_KEY with Zen but is a distinct provider kind (a lone
 // key still infers Zen for backward compatibility — see CRED_TO_PROVIDER).
+// The worker kind authenticates via TRISS_WORKER_API_KEY but is DELIBERATELY
+// absent from CRED_TO_PROVIDER: nearly every Triss user has that key, so it
+// must never be treated as implicit provider intent — worker is only selected
+// by an explicit --provider flag or an explicit `triss-worker/` model prefix.
 const PROVIDER_CRED_ENV = {
+  worker: 'TRISS_WORKER_API_KEY',
   'opencode-zen': 'OPENCODE_API_KEY',
   'opencode-go': 'OPENCODE_API_KEY',
   zai: 'ZHIPU_API_KEY',
@@ -129,12 +134,13 @@ function providerCredEnv(provider) {
 function normalizeProvider(raw) {
   const v = String(raw).trim().toLowerCase();
   if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
+  if (['worker', 'openai', 'openai-compatible'].includes(v)) return 'worker';
   if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
   if (['opencode-go', 'go'].includes(v)) return 'opencode-go';
   if (['moonshot', 'kimi', 'moonshotai'].includes(v)) return 'moonshot';
   if (['kimi-for-coding', 'kimi-coding', 'kimi-code'].includes(v)) return 'kimi-for-coding';
   throw new Error(
-    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
+    `Unknown --provider "${raw}" — valid values: zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
   );
 }
 
@@ -146,6 +152,7 @@ function normalizeProvider(raw) {
 // fits the Go provider even though both authenticate via OPENCODE_API_KEY.
 function prefixFitsProvider(prefix, provider) {
   if (!prefix) return false;
+  if (provider === 'worker') return prefix === 'triss-worker';
   if (provider === 'opencode-zen') return prefix === 'opencode';
   if (provider === 'opencode-go') return prefix === 'opencode-go';
   if (provider === 'moonshot') return prefix === 'moonshotai' || prefix === 'moonshotai-cn';
@@ -160,6 +167,7 @@ function prefixFitsProvider(prefix, provider) {
 // Inverse of prefixFitsProvider for the explicit-prefix intent path.
 function prefixToProvider(prefix) {
   if (!prefix) return null;
+  if (prefix === 'triss-worker') return 'worker';
   if (prefix === 'opencode') return 'opencode-zen';
   if (prefix === 'opencode-go') return 'opencode-go';
   if (prefix === 'moonshotai' || prefix === 'moonshotai-cn') return 'moonshot';
@@ -448,6 +456,15 @@ export async function resolveProviderIntent(input = {}, _deps = {}) {
 export async function listProviderModels(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
   const provider = input.provider;
+  if (provider === 'worker') {
+    const configured = [
+      process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash',
+      process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro',
+    ];
+    const models = [...new Set(configured.map((id) => String(id).trim()).filter(Boolean))]
+      .map((id) => `triss-worker/${id}`);
+    return { engine, provider, status: 'not-supported', models };
+  }
   // The two OpenCode providers are the only ones with a list API; Go has its
   // own catalogue endpoint but authenticates with the same OPENCODE_API_KEY.
   const meta =
@@ -629,7 +646,7 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     compatibility: compatibility(role.value),
   });
 
-  const available_models = verified ? cat.models || [] : [];
+  const available_models = provider === 'worker' ? cat.models || [] : verified ? cat.models || [] : [];
   const recommended = pickRecommended(available_models, provider);
 
   const warnings = [];

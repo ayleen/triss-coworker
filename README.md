@@ -237,7 +237,8 @@ The exposed tool set is **filtered by configured credentials**:
 - **`triss_github_*`** when `GITHUB_TOKEN` is set (or `gh` CLI logged in).
 - **`triss_gitlab_*`** when `GITLAB_TOKEN` is set.
 - **`triss_coder_run` + `triss_coder_status`** when any coder provider key is
-  set — `ZHIPU_API_KEY` (Z.AI GLM), `OPENCODE_API_KEY` (OpenCode Zen or Go),
+  set — `TRISS_WORKER_API_KEY` (the existing OpenAI-compatible worker),
+  `ZHIPU_API_KEY` (Z.AI GLM), `OPENCODE_API_KEY` (OpenCode Zen or Go),
   `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
   (`opencode` default, or `crush`); its timeout defaults to
@@ -271,8 +272,8 @@ and writing**.
 | `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key (Z.AI GLM default; `--provider opencode-zen` for free rotating Zen models; `--provider opencode-go` for the paid OpenCode Go subscription; `--provider moonshot` / `kimi-for-coding` for Kimi), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the coding agent (GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
@@ -453,7 +454,8 @@ default timeout, configurable via `--timeout <ms>`.
 
 ### `triss coder`
 
-Delegates an implementation task to a cheap coding agent — GLM, Kimi,
+Delegates an implementation task to a cheap coding agent — the existing
+OpenAI-compatible Triss worker, GLM, Kimi,
 OpenCode Zen, or OpenCode Go models (the `opencode` engine by default; `crush` is an
 alternative — see **Engines** below) instead of the primary model writing
 the code itself.
@@ -467,7 +469,8 @@ triss coder clean                                 # remove finished isolation wo
 ```
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
-(default), **OpenCode Zen** (`--provider opencode-zen`, free rotating
+(default), the existing **Triss worker** (`--provider worker`, aliases
+`openai` / `openai-compatible`), **OpenCode Zen** (`--provider opencode-zen`, free rotating
 models), **OpenCode Go** (`--provider opencode-go`, paid subscription),
 **Moonshot Kimi** (`--provider moonshot`, pay-as-you-go
 `moonshotai/*` models like `kimi-k2.7-code`), or **Kimi for Coding**
@@ -513,7 +516,9 @@ natively; triss also forwards it as `ZAI_API_KEY` for older binaries; see
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
 
 **Providers** — the `opencode` engine isn't limited to Z.AI. The required
-API key follows the model's `<provider>/` prefix: `zai-coding-plan/*` and
+API key follows the model's `<provider>/` prefix: `triss-worker/*` reuses
+the existing `TRISS_WORKER_API_KEY` + `TRISS_WORKER_BASE_URL` profile;
+`zai-coding-plan/*` and
 `zai/*` (GLM) use `ZHIPU_API_KEY`; `opencode/*` models — served free by
 [OpenCode Zen](https://opencode.ai/docs/zen/) — and paid `opencode-go/*`
 models use the shared `OPENCODE_API_KEY`;
@@ -522,6 +527,14 @@ models use the shared `OPENCODE_API_KEY`;
 [Kimi for Coding](https://www.kimi.com/code/docs/en/) subscription, e.g.
 **`kimi-for-coding/k3`** (Kimi K3) — use `KIMI_API_KEY`. Zen ids rotate
 freely, so discover the current id and pass it rather than hard-coding one:
+
+```bash
+triss coder init --provider worker
+triss coder run "mechanical task" --model triss-worker/deepseek-v4-flash
+```
+
+The worker route uses Chat Completions through `@ai-sdk/openai-compatible`.
+It creates no second API key and is supported by the OpenCode engine only.
 
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json
@@ -581,19 +594,19 @@ confusion is conflating them:
 - **Engine** = *how* the agent is launched: `opencode` (default) or
   `crush`. Set at `triss coder init --engine …` or per run with
   `triss coder run --engine …`.
-- **Provider** = *which* API serves the model: Z.AI GLM, OpenCode Zen, OpenCode Go,
+- **Provider** = *which* API serves the model: Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go,
   Moonshot Kimi, Kimi for Coding. Set at `triss coder init --provider …`.
 
 Not every engine speaks every provider:
 
 | Engine     | Providers served                                  |
 | ---------- | ------------------------------------------------- |
-| `opencode` | Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
+| `opencode` | Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
 | `crush`    | Z.AI GLM (coding-plan only)                       |
 
 `triss coder init` drives setup in that order — **engine, then provider,
 then it asks for only that provider's credential** and writes the matching
-model prefix (`opencode/<id>`, `opencode-go/<id>`, `zai-coding-plan/*`, `moonshotai/*`, or
+model prefix (`triss-worker/<id>`, `opencode/<id>`, `opencode-go/<id>`, `zai-coding-plan/*`, `moonshotai/*`, or
 `kimi-for-coding/*`).
 
 **Choosing a model.** `--model` on `triss coder run` is a

@@ -19,7 +19,10 @@ separate GLM coding agent instead of writing it yourself (setup once via
 default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
-CLI-flag allowlist on top. The opencode engine can also run OpenCode Zen
+CLI-flag allowlist on top. The opencode engine can also run the existing
+OpenAI-compatible worker profile (`triss coder init --provider
+worker`, model `triss-worker/<TRISS_WORKER_FLASH_MODEL>`, using the existing
+`TRISS_WORKER_API_KEY` and `TRISS_WORKER_BASE_URL`), OpenCode Zen
 models (e.g. `--model opencode/deepseek-v4-flash-free`) or paid OpenCode Go
 models (e.g. `--model opencode-go/deepseek-v4-flash`), both with `OPENCODE_API_KEY`,
 or Moonshot Kimi models (`--model moonshotai/kimi-k2.7-code` with

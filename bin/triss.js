@@ -183,7 +183,7 @@ config
   .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
   .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, or crush). `coder init` uses --engine')
-  .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
+  .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
   .action(wrap(runWizard));
 
 config
@@ -238,14 +238,14 @@ coder
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
-  .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default), opencode-zen (free rotating models), opencode-go (paid Go subscription), moonshot (Kimi pay-as-you-go), or kimi-for-coding (subscription)')
+  .option('--provider <name>', 'opencode engine model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .action(wrap(runCoderInit));
 
 coder
   .command('run [prompt]')
-  .description('Spawn a coding agent — GLM, Kimi, OpenCode Zen, or OpenCode Go models (opencode default, or --engine crush) — and print a JSON envelope to stdout')
+  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default, or --engine crush) — and print a JSON envelope to stdout')
   .option('--engine <name>', 'coding engine: opencode (default) or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
@@ -274,7 +274,7 @@ coder
     '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global)\n' +
     '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
   .option('--engine <name>', 'coding engine: opencode (default) or crush')
-  .option('--provider <name>', 'provider kind: zai, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
+  .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--json', 'print the stable machine-readable state object (no secrets)')
   .action(wrap(runCoderModels));
 
@@ -296,7 +296,7 @@ coderModel
   )
   .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
   .option('--engine <name>', 'coding engine: opencode (default) or crush')
-  .option('--provider <name>', 'provider kind: zai, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
+  .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
   .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')
   .option('--allow-unverified', 'with explicit main + --small, bypass only a provider-defined transient catalogue failure (Go: transport or HTTP 408/429/500/502/503/504; Zen: timeout/http-error/parse-error; never auth or authoritative failure)')

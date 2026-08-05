@@ -23,6 +23,9 @@ import {
   fstatSync,
   readSync,
   closeSync,
+  rmSync,
+  statSync,
+  chmodSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
@@ -422,11 +425,41 @@ function resolveZenCatalogue(available) {
 // Init-time picker choices for the provider itself (opencode engine only).
 const CODER_PROVIDER_CHOICES = [
   { label: 'Z.AI GLM (glm-5.2, …) — needs a Z.AI key', value: 'zai' },
+  { label: 'Triss worker (OpenAI-compatible) — reuses the worker key and endpoint', value: 'worker' },
   { label: 'OpenCode Zen (free models incl. DeepSeek V4 Flash) — needs an OpenCode key', value: 'opencode-zen' },
   { label: 'OpenCode Go subscription (DeepSeek V4 Flash) — uses an OpenCode key', value: 'opencode-go' },
   { label: 'Moonshot Kimi pay-as-you-go (kimi-k2.7-code, kimi-k3) — needs a Moonshot key', value: 'moonshot' },
   { label: 'Kimi for Coding subscription (K3) — needs a Kimi for Coding key', value: 'kimi-for-coding' },
 ];
+
+function workerCoderProfile() {
+  const baseUrl = String(process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1')
+    .trim()
+    .replace(/\/+$/, '');
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error(`Invalid TRISS_WORKER_BASE_URL "${baseUrl}" — expected an absolute HTTP(S) URL.`);
+  }
+  const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new Error(
+      `Unsafe TRISS_WORKER_BASE_URL "${baseUrl}" — remote OpenAI-compatible endpoints must use HTTPS.`,
+    );
+  }
+  const flashModel = String(process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash').trim();
+  const proModel = String(process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro').trim();
+  for (const [env, value] of [
+    ['TRISS_WORKER_FLASH_MODEL', flashModel],
+    ['TRISS_WORKER_PRO_MODEL', proModel],
+  ]) {
+    if (!value || /\s/.test(value)) {
+      throw new Error(`Invalid ${env} — model ids must be non-empty and contain no whitespace.`);
+    }
+  }
+  return { baseUrl, flashModel, proModel, models: [...new Set([flashModel, proModel])] };
+}
 
 // Resolves the per-provider init catalogue: the model prefix written into
 // opencode.json, the picker choices, and the silent (non-TTY) defaults.
@@ -439,6 +472,19 @@ const CODER_PROVIDER_CHOICES = [
 // `openCodeCatalogue` supplies the live-verified defaults/choices for either
 // OpenCode provider; it is omitted for providers without that catalogue flow.
 function coderInitCatalogue(providerInfo, openCodeCatalogue) {
+  if (providerInfo.kind === 'worker') {
+    const profile = providerInfo.workerProfile || workerCoderProfile();
+    const choices = profile.models.map((value) => ({ label: value, value }));
+    return {
+      prefix: 'triss-worker',
+      choices,
+      mainDefault: profile.flashModel,
+      smallDefault: profile.flashModel,
+      mainIdx: 0,
+      smallIdx: 0,
+      noun: 'Triss worker',
+    };
+  }
   if (providerInfo.kind === 'moonshot') {
     return {
       prefix: 'moonshotai',
@@ -513,6 +559,7 @@ function coderInitCatalogue(providerInfo, openCodeCatalogue) {
 // The credential env a provider KIND uses (not the plan sub-prefix) — so a
 // preset is judged by provider, not by exact string.
 const KIND_KEY_ENVS = {
+  worker: 'TRISS_WORKER_API_KEY',
   'opencode-zen': 'OPENCODE_API_KEY',
   'opencode-go': 'OPENCODE_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
@@ -534,6 +581,7 @@ function modelMatchesKind(model, kind) {
 function modelFitsProvider(model, providerInfo) {
   if (!model) return false;
   const prefix = String(model).split('/')[0];
+  if (providerInfo.kind === 'worker') return prefix === 'triss-worker';
   if (providerInfo.kind === 'opencode-zen') return prefix === 'opencode';
   if (providerInfo.kind === 'opencode-go') return prefix === 'opencode-go';
   // Both Moonshot PAYG hosts share MOONSHOT_API_KEY, so either regional prefix
@@ -711,7 +759,7 @@ async function resolveInitModels(
       process.stderr.write(
         pc.yellow(
           `  ⚠ ${field} resolved to "${m}", whose provider prefix triss doesn't recognize ` +
-            '(known: zai-coding-plan/*, zai/*, opencode/*, opencode-go/*, moonshotai/*, moonshotai-cn/*, ' +
+            '(known: triss-worker/*, zai-coding-plan/*, zai/*, opencode/*, opencode-go/*, moonshotai/*, moonshotai-cn/*, ' +
             'kimi-for-coding/*). Runs will send it the ZHIPU_API_KEY by ' +
             'default and likely retry forever — set a model with a known prefix.\n',
         ),
@@ -737,12 +785,13 @@ async function resolveInitModels(
 export function normalizeProviderFlag(raw) {
   const v = String(raw).trim().toLowerCase();
   if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
+  if (['worker', 'openai', 'openai-compatible'].includes(v)) return 'worker';
   if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
   if (['opencode-go', 'go'].includes(v)) return 'opencode-go';
   if (['moonshot', 'kimi', 'moonshotai'].includes(v)) return 'moonshot';
   if (['kimi-for-coding', 'kimi-coding', 'kimi-code'].includes(v)) return 'kimi-for-coding';
   throw new Error(
-    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
+    `Unknown --provider "${raw}" — valid values: zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
   );
 }
 
@@ -784,6 +833,7 @@ function inferCoderProvider() {
     `Coder provider intent is ambiguous or missing. ${keyNames ? `Multiple credentials are set: ${keyNames}.` : 'No provider credential is set.'} ` +
       'Disambiguate by re-running with one of:\n' +
       '  triss config wizard coder --coder-provider zai\n' +
+      '  triss config wizard coder --coder-provider worker\n' +
       '  triss config wizard coder --coder-provider opencode-zen\n' +
       '  triss config wizard coder --coder-provider opencode-go\n' +
       '  triss config wizard coder --coder-provider moonshot\n' +
@@ -814,6 +864,7 @@ async function resolveInitProvider(opts, deps = {}) {
       'preset, and not exactly one provider credential (zero or several are set). `triss coder init` ' +
       'will not silently default to Z.AI. Re-run with one of:\n' +
       '  triss coder init --provider zai\n' +
+      '  triss coder init --provider worker\n' +
       '  triss coder init --provider opencode-zen\n' +
       '  triss coder init --provider opencode-go\n' +
       '  triss coder init --provider moonshot\n' +
@@ -914,6 +965,7 @@ async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
       'are set). The wizard will not silently default to Z.AI. Disambiguate by re-running with ' +
       'one of:\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider zai\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider worker\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider opencode-zen\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider opencode-go\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider moonshot\n' +
@@ -923,6 +975,12 @@ async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
 
 // Per-provider key descriptor for setupKey / the init prompt.
 function coderProviderKeyInfo(provider) {
+  if (provider === 'worker') {
+    return {
+      env: 'TRISS_WORKER_API_KEY',
+      doc: 'Existing OpenAI-compatible worker API key (TRISS_WORKER_BASE_URL selects the endpoint)',
+    };
+  }
   if (provider === 'opencode-zen') {
     return {
       env: 'OPENCODE_API_KEY',
@@ -993,6 +1051,7 @@ function coderSmallModel() {
 // its credential is always ZHIPU regardless of the model string.
 export function coderModelCredential(model) {
   const provider = String(model || '').split('/')[0];
+  if (provider === 'triss-worker') return { env: 'TRISS_WORKER_API_KEY', provider: 'worker' };
   if (provider === 'opencode') return { env: 'OPENCODE_API_KEY', provider: 'opencode-zen' };
   if (provider === 'opencode-go') return { env: 'OPENCODE_API_KEY', provider: 'opencode-go' };
   if (provider === 'moonshotai' || provider === 'moonshotai-cn') {
@@ -1006,6 +1065,7 @@ export function coderModelCredential(model) {
 // routed to ZHIPU_API_KEY by coderModelCredential's default, which then can't
 // serve it — a silent infinite-retry trap. Used to warn at init time.
 const KNOWN_PROVIDER_PREFIXES = new Set([
+  'triss-worker',
   'zai-coding-plan',
   'zai',
   'opencode',
@@ -1041,6 +1101,7 @@ function posixSingleQuote(value) {
 // key, so callers that must also light up for a zen-only setup OR this in.
 export function coderCredentialReady() {
   return !!(
+    process.env.TRISS_WORKER_API_KEY ||
     process.env.ZHIPU_API_KEY ||
     process.env.OPENCODE_API_KEY ||
     process.env.MOONSHOT_API_KEY ||
@@ -1057,8 +1118,14 @@ export function coderCredentialReady() {
 // requires that (see src/integrations/_contract.js validateManifest).
 export const CODER_MANIFEST = {
   name: 'coder',
-  description: 'Coding agent — GLM, Kimi, OpenCode Zen, or OpenCode Go models (opencode or crush engine)',
+  description: 'Coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go models (opencode or crush engine)',
   envVars: [
+    {
+      name: 'TRISS_WORKER_API_KEY',
+      required: false,
+      secret: true,
+      doc: 'Existing OpenAI-compatible worker key for triss-worker/* coder models',
+    },
     {
       name: 'ZHIPU_API_KEY',
       required: true,
@@ -1398,6 +1465,7 @@ export async function runCoderSetup(
   const sh = deps.spawnSync || nodeSpawnSync;
   const noun =
     {
+      worker: 'Triss worker',
       'opencode-zen': 'OpenCode Zen',
       'opencode-go': 'OpenCode Go',
       moonshot: 'Moonshot Kimi',
@@ -1424,7 +1492,11 @@ export async function runCoderSetup(
     resolvedProvider === 'zai'
       ? await detectAndReportZaiProvider(deps.fetch || globalThis.fetch)
       : null;
-  const providerInfo = { kind: resolvedProvider, detectedZai };
+  const providerInfo = {
+    kind: resolvedProvider,
+    detectedZai,
+    ...(resolvedProvider === 'worker' ? { workerProfile: workerCoderProfile() } : {}),
+  };
   // Resolve the model ONCE, up front, honoring only presets/config that belong
   // to the chosen provider — then write opencode.json (if absent) and pin
   // TRISS_CODER_MODEL from the SAME resolved value. This has to happen even when
@@ -1768,8 +1840,8 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
-function opencodeConfigTemplate(model, smallModel) {
-  return {
+function opencodeConfigTemplate(model, smallModel, providerInfo) {
+  const config = {
     $schema: 'https://opencode.ai/config.json',
     model,
     small_model: smallModel,
@@ -1788,6 +1860,100 @@ function opencodeConfigTemplate(model, smallModel) {
       websearch: 'deny',
     },
   };
+  if (providerInfo?.kind === 'worker') {
+    config.provider = {
+      'triss-worker': workerProviderDefinition(providerInfo, model, smallModel),
+    };
+  }
+  return config;
+}
+
+function workerProviderDefinition(providerInfo, model, smallModel) {
+  const profile = providerInfo.workerProfile || workerCoderProfile();
+  const modelIds = [...new Set([
+    ...profile.models,
+    providerModelId(model),
+    providerModelId(smallModel),
+  ].filter(Boolean))];
+  return {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'Triss worker (OpenAI-compatible)',
+    options: {
+      baseURL: profile.baseUrl,
+      apiKey: '{env:TRISS_WORKER_API_KEY}',
+    },
+    models: Object.fromEntries(modelIds.map((id) => [id, { name: id }])),
+  };
+}
+
+function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
+  const lockPath = `${path}.triss-worker.lock`;
+  let lockFd;
+  try {
+    lockFd = openSync(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new Error(`Coder setup is already modifying ${path}; retry after the other process finishes.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    const audit = auditExistingConfig(path, providerInfo, {
+      allowUnsafeBash: opts.allowUnsafeBash,
+      resolvedSmall: smallModel,
+      providerAvailable: opts.providerAvailable,
+    });
+    if (audit.blocking) return audit;
+
+    let raw;
+    let config;
+    try {
+      raw = readFileSync(path, 'utf8');
+      config = JSON.parse(raw);
+    } catch {
+      return { blocking: true };
+    }
+    const expected = workerProviderDefinition(providerInfo, model, smallModel);
+    const providers = config.provider;
+    const current = providers && typeof providers === 'object' && !Array.isArray(providers)
+      ? providers['triss-worker']
+      : undefined;
+    if (current !== undefined) {
+      if (JSON.stringify(current) === JSON.stringify(expected)) return { blocking: false };
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
+        ),
+      );
+      return { blocking: true };
+    }
+    if (providers !== undefined && (typeof providers !== 'object' || providers === null || Array.isArray(providers))) {
+      process.stderr.write(pc.yellow(`  ⚠ ${path} has a non-object provider field — refusing to replace it.\n`));
+      return { blocking: true };
+    }
+    config.provider = { ...(providers || {}), 'triss-worker': expected };
+    const newline = raw.includes('\r\n') ? '\r\n' : '\n';
+    const indent = raw.match(/\r?\n([ \t]+)"/)?.[1] || '  ';
+    const trailing = raw.endsWith('\r\n') || raw.endsWith('\n');
+    const rendered = JSON.stringify(config, null, indent).replace(/\n/g, newline) + (trailing ? newline : '');
+    const temp = `${path}.triss-worker-${randomBytes(6).toString('hex')}.tmp`;
+    const mode = statSync(path).mode & 0o777;
+    try {
+      writeFileSync(temp, rendered, { mode, flag: 'wx' });
+      chmodSync(temp, mode);
+      renameSync(temp, path);
+    } catch (error) {
+      try { if (existsSync(temp)) rmSync(temp); } catch {}
+      throw error;
+    }
+    process.stderr.write(pc.green(`  ✓ added provider["triss-worker"] to ${path}\n`));
+    return { blocking: false };
+  } finally {
+    try { if (lockFd !== undefined) closeSync(lockFd); } catch {}
+    try { if (existsSync(lockPath)) rmSync(lockPath); } catch {}
+  }
 }
 
 // If the caller already has an opencode.json (the no-clobber path never
@@ -1801,7 +1967,9 @@ function warnIfProviderMismatch(path, providerInfo) {
   // Prefixes that belong to the provider being configured. Empty means there
   // is nothing to compare against (a zai kind whose plan probe failed).
   const expected =
-    providerInfo.kind === 'opencode-zen'
+    providerInfo.kind === 'worker'
+      ? ['triss-worker']
+      : providerInfo.kind === 'opencode-zen'
       ? ['opencode']
       : providerInfo.kind === 'opencode-go'
         ? ['opencode-go']
@@ -2064,6 +2232,9 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
       pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
     );
     warnIfProviderMismatch(path, providerInfo);
+    if (providerInfo.kind === 'worker') {
+      return mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts);
+    }
     return auditExistingConfig(path, providerInfo, {
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
@@ -2071,7 +2242,7 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     });
   }
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel), null, 2) + '\n');
+  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
   return { blocking: false };
 }
@@ -3328,7 +3499,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env !== 'ZHIPU_API_KEY') {
     throw new Error(
       `The crush engine speaks Z.AI GLM only — it cannot run the non-GLM model "${modelOverride}". ` +
-        'Use the opencode engine (drop --engine crush) for opencode/*, opencode-go/*, moonshotai/*, or ' +
+        'Use the opencode engine (drop --engine crush) for triss-worker/*, opencode/*, opencode-go/*, moonshotai/*, or ' +
         'kimi-for-coding/* models, or choose a GLM model.',
     );
   }
@@ -3336,7 +3507,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
   if (!process.env[cred.env]) {
     const suffix =
-      cred.provider === 'opencode-go'
+      cred.provider === 'worker'
+        ? ' (set TRISS_WORKER_API_KEY and run `triss coder init --provider worker` to use the existing OpenAI-compatible worker profile)'
+        : cred.provider === 'opencode-go'
         ? ' (set OPENCODE_API_KEY to use OpenCode Go models — run `triss coder models --provider opencode-go` to see current offerings)'
         : {
             OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models — run `triss coder models` to see current offerings)',
