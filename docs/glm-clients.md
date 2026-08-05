@@ -336,6 +336,11 @@ successful-response text contract accepts both OpenAI-compatible
 complete final answer, not metadata: CLI must print it and MCP must return it.
 Only a response containing neither form is considered empty.
 
+For GLM 5.2 code review, use `triss review --provider glm --model pro
+--max-tokens 16384` as the minimum. The generic 8192-token default can be
+consumed by reasoning before a verdict is emitted, especially for large diffs.
+When reviewing a focused remediation, narrow `--base` to that commit as well.
+
 ### 5.2 Engine choice
 `--engine opencode|crush` (per call) or `TRISS_CODER_ENGINE=<name>` (default
 for the shell/CI). `--engine` beats the env beats the built-in default

@@ -29,6 +29,9 @@ For one-shot analysis through the standard tools, pass `provider: "glm"` or
 `provider: "kimi"` to `triss_ask` or `triss_review` (CLI: `--provider glm` /
 `--provider kimi`; Kimi presets: flash=kimi-k2.6, pro=kimi-k3). Keep
 `triss coder` for tool-using, sessionful coding runs.
+For GLM 5.2 code review, use at least
+`triss review --provider glm --model pro --max-tokens 16384`; the generic
+8192-token default can be exhausted by reasoning and return an empty verdict.
 See `triss agent-help --target codex` for flags and the envelope it
 returns.
 

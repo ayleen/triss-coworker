@@ -20,9 +20,9 @@ it.
 
 Initialization fails closed when the catalogue returns HTTP 401/403, malformed
 data, or a successful but empty `data: []` response. Network/timeout failures,
-HTTP 429, and HTTP 5xx also block by default. If the account was already
-verified and you deliberately want the built-in DeepSeek fallback during a
-temporary provider outage, opt in explicitly:
+HTTP 429, and HTTP 500/502/503/504 also block by default. If the account was
+already verified and you deliberately want the built-in DeepSeek fallback
+during a temporary provider outage, opt in explicitly:
 
 ```bash
 triss coder init --provider opencode-go --allow-unverified --global

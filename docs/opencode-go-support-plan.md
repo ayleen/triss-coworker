@@ -88,9 +88,9 @@ collapsing every failure into an offline default:
 - `empty`: HTTP 200 with `data: []` is authoritative and blocks setup;
 - `invalid`: malformed JSON, an invalid response shape, or a non-transient HTTP
   error blocks setup;
-- `transient`: network/timeout failures, HTTP 429, and HTTP 5xx block by
-  default. `coder init --allow-unverified` is the only way to accept the
-  built-in Go model fallback for these transient outcomes.
+- `transient`: network/timeout failures, HTTP 429, and HTTP
+  500/502/503/504 block by default. `coder init --allow-unverified` is the only
+  way to accept the built-in Go model fallback for these transient outcomes.
 
 `--allow-unverified` never bypasses 401, 403, an authoritative empty
 catalogue, or an invalid response.
@@ -132,7 +132,8 @@ configuration remains unchanged.
 - Go init fails before writing model configuration on HTTP 401, HTTP 403, a
   valid empty catalogue, or an invalid catalogue response.
 - An unverified built-in Go fallback is available only for transport, HTTP 429,
-  or HTTP 5xx failures and only with explicit `--allow-unverified`.
+  or HTTP 500/502/503/504 failures and only with explicit
+  `--allow-unverified`.
 - Model management rejects Zen/Go mixed pairs despite their shared key.
 - Crush rejects Go before spawning.
 - Existing Zen, Z.AI, Moonshot, and Kimi tests remain green.

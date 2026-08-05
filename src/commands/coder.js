@@ -234,6 +234,7 @@ const GO_MODEL_CHOICES = [
 const GO_MAIN_PRIORITY = ['deepseek-v4-flash'];
 const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
+const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 // Zen keeps its historical Set-or-null contract. Go consumes the structured
 // outcome directly so authenticated denials and an authoritative empty
@@ -262,9 +263,11 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
 
   const status = Number(res?.status);
   if (!res?.ok) {
-    if (status === 401) return { kind: 'unauthenticated', status };
-    if (status === 403) return { kind: 'forbidden', status };
-    if (status === 429 || status >= 500) return { kind: 'transient', reason: 'http', status };
+    if (status === 401) return { kind: 'unauthenticated' };
+    if (status === 403) return { kind: 'forbidden' };
+    if (GO_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(status)) {
+      return { kind: 'transient', reason: 'http', status };
+    }
     return { kind: 'invalid', reason: 'http', status: Number.isFinite(status) ? status : null };
   }
 
@@ -1121,6 +1124,11 @@ export async function runCoderInit(opts = {}, deps = {}) {
     );
   }
   const provider = engine === 'crush' ? 'zai' : await resolveInitProvider(opts, deps);
+  if (opts.allowUnverified && provider !== 'opencode-go') {
+    throw new Error(
+      '`--allow-unverified` on `triss coder init` is supported only with `--provider opencode-go`.',
+    );
+  }
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const path = ensureEnvFile(scope);
