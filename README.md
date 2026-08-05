@@ -541,7 +541,7 @@ A configured key does not by itself prove that the Go subscription or the
 workspace regional-hosting opt-in is active. Triss leaves those account
 settings untouched and reports inference-time provider errors verbatim. Go
 init fails closed on 401/403, malformed responses, and an authoritative empty
-catalogue. Temporary network, 429, or 500/502/503/504 failures require an explicit
+catalogue. Temporary network or HTTP 408/429/500/502/503/504 failures require an explicit
 `triss coder init --allow-unverified` before Triss will use its built-in Go fallback.
 
 Kimi works the same way:

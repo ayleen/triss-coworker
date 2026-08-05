@@ -756,6 +756,51 @@ test(
 );
 
 test(
+  'runCoderInit --provider opencode-go: every remaining retryable HTTP status requires explicit --allow-unverified',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-retryable-statuses';
+    for (const status of [408, 500, 502, 504]) {
+      const unavailable = async () => ({ ok: false, status });
+      await assert.rejects(
+        () =>
+          runCoderInit(
+            { global: true, provider: 'opencode-go' },
+            { spawnSync: fakeSpawnAlreadyInstalled, fetch: unavailable },
+          ),
+        new RegExp(`temporarily unavailable \\(HTTP ${status}\\).*--allow-unverified`, 'i'),
+      );
+      await runCoderInit(
+        { global: true, provider: 'opencode-go', allowUnverified: true },
+        { spawnSync: fakeSpawnAlreadyInstalled, fetch: unavailable },
+      );
+    }
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
+  }),
+);
+
+test(
+  'runCoderSetup --provider opencode-go: direct wizard/postSetup path fails closed on a transient catalogue error',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-wizard-temporary';
+    await assert.rejects(
+      () =>
+        runCoderSetup(
+          { scope: 'global', provider: 'opencode-go' },
+          {
+            spawnSync: fakeSpawnAlreadyInstalled,
+            fetch: async () => ({ ok: false, status: 503 }),
+          },
+        ),
+      /temporarily unavailable \(HTTP 503\).*--allow-unverified/i,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+  }),
+);
+
+test(
   'runCoderInit: --allow-unverified is rejected for non-Go providers',
   withTmpHome(async ({ home }) => {
     process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';

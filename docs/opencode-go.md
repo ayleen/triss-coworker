@@ -19,8 +19,8 @@ current default is `opencode-go/deepseek-v4-flash` when the catalogue offers
 it.
 
 Initialization fails closed when the catalogue returns HTTP 401/403, malformed
-data, or a successful but empty `data: []` response. Network/timeout failures,
-HTTP 429, and HTTP 500/502/503/504 also block by default. If the account was
+data, or a successful but empty `data: []` response. Network/timeout failures
+and HTTP 408/429/500/502/503/504 also block by default. If the account was
 already verified and you deliberately want the built-in DeepSeek fallback
 during a temporary provider outage, opt in explicitly:
 

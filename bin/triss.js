@@ -239,7 +239,7 @@ coder
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
   .option('--provider <name>', 'opencode engine model provider: zai (Z.AI GLM, default), opencode-zen (free rotating models), opencode-go (paid Go subscription), moonshot (Kimi pay-as-you-go), or kimi-for-coding (subscription)')
-  .option('--allow-unverified', 'OpenCode Go only: allow the built-in model fallback after a temporary network, HTTP 429, or HTTP 500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
+  .option('--allow-unverified', 'OpenCode Go only: allow the built-in model fallback after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .action(wrap(runCoderInit));
 

@@ -234,7 +234,7 @@ const GO_MODEL_CHOICES = [
 const GO_MAIN_PRIORITY = ['deepseek-v4-flash'];
 const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
-const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 // Zen keeps its historical Set-or-null contract. Go consumes the structured
 // outcome directly so authenticated denials and an authoritative empty
@@ -335,6 +335,11 @@ function resolveGoCatalogue(outcome, { allowUnverified = false } = {}) {
       mainDefault: GO_MAIN_PRIORITY[0],
       smallDefault: GO_SMALL_PRIORITY[0],
     };
+  }
+  if (outcome.kind !== 'available' || !(outcome.ids instanceof Set)) {
+    throw new Error(
+      'Coder setup incomplete: OpenCode Go catalogue returned an unknown internal outcome; update Triss or retry with a supported version.',
+    );
   }
   const available = outcome.ids;
   const firstAvailable = (priority) => priority.find((id) => available.has(id));
