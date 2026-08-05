@@ -51,6 +51,9 @@ Setup once per machine/project: `triss coder init` (installs the opencode
 engine, sets `ZHIPU_API_KEY`, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 (or set `TRISS_CODER_ENGINE=crush`) to target the crush engine instead. The
+opencode engine can reuse the existing OpenAI-compatible worker profile with
+`triss coder init --provider worker`; models use `triss-worker/*` and the same
+`TRISS_WORKER_API_KEY` / `TRISS_WORKER_BASE_URL` (no second key). The
 opencode engine also runs **OpenCode Zen** models (`opencode/*`, e.g. the free
 `opencode/deepseek-v4-flash-free`): `triss coder init --provider opencode-zen` sets it up with
 `OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — run

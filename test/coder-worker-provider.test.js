@@ -1,0 +1,386 @@
+/**
+ * RED contract for exposing the existing OpenAI-compatible worker profile to
+ * the OpenCode coder engine. No network request uses a real credential.
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+
+import {
+  coderModelCredential,
+  normalizeProviderFlag,
+  OPENCODE_PIN,
+  runCoderInit,
+  runCoderRun,
+} from '../src/commands/coder.js';
+import {
+  inspectCoderModelState,
+  listProviderModels,
+  planModelChange,
+  resolveProviderIntent,
+} from '../src/coder-models.js';
+
+const FIXTURE_PATH = join(
+  new URL('.', import.meta.url).pathname,
+  'fixtures',
+  'opencode-run-events.ndjson',
+);
+
+function fakeSpawn(onSpawn) {
+  const fixture = readFileSync(FIXTURE_PATH, 'utf8');
+  return (cmd, argv, opts) => {
+    onSpawn?.(cmd, argv, opts);
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(fixture);
+      child.stderr.end('');
+      setImmediate(() => child.emit('close', 0, null));
+    });
+    return child;
+  };
+}
+
+function fakeSpawnSync(cmd, args) {
+  if (cmd === 'opencode' && args[0] === '--version') {
+    return { status: 0, stdout: OPENCODE_PIN, error: null };
+  }
+  return { status: 1, stdout: '', error: null };
+}
+
+function withWorkerEnv(fn) {
+  return async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-worker-coder-')));
+    mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+    writeFileSync(join(home, '.config', 'triss', '.env'), '');
+    const managed = [
+      'HOME',
+      'TRISS_PROJECT_ROOT',
+      'TRISS_USAGE_LOG',
+      'TRISS_WORKER_API_KEY',
+      'TRISS_WORKER_BASE_URL',
+      'TRISS_WORKER_FLASH_MODEL',
+      'TRISS_WORKER_PRO_MODEL',
+      'TRISS_CODER_MODEL',
+      'TRISS_CODER_SMALL_MODEL',
+      'ZHIPU_API_KEY',
+      'OPENCODE_API_KEY',
+      'MOONSHOT_API_KEY',
+      'KIMI_API_KEY',
+    ];
+    const saved = Object.fromEntries(managed.map((key) => [key, process.env[key]]));
+    for (const key of managed) delete process.env[key];
+    Object.assign(process.env, {
+      HOME: home,
+      TRISS_PROJECT_ROOT: home,
+      TRISS_USAGE_LOG: '0',
+      TRISS_WORKER_API_KEY: 'sk-worker-fake',
+      TRISS_WORKER_BASE_URL: 'https://api.deepseek.com/v1',
+      TRISS_WORKER_FLASH_MODEL: 'deepseek-v4-flash',
+      TRISS_WORKER_PRO_MODEL: 'deepseek-v4-pro',
+    });
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      await fn({ home });
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+      for (const key of managed) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+}
+
+test('worker aliases normalize to one OpenAI-compatible coder provider kind', () => {
+  for (const alias of ['worker', 'openai', 'openai-compatible']) {
+    assert.equal(normalizeProviderFlag(alias), 'worker');
+  }
+});
+
+test('triss-worker/* resolves to the existing worker key, not a new credential', () => {
+  assert.deepEqual(coderModelCredential('triss-worker/deepseek-v4-flash'), {
+    env: 'TRISS_WORKER_API_KEY',
+    provider: 'worker',
+  });
+});
+
+test('model management resolves worker aliases and triss-worker model intent', async () => {
+  assert.equal(
+    (await resolveProviderIntent({ engine: 'opencode', provider: 'openai-compatible' })).provider,
+    'worker',
+  );
+  assert.equal(
+    (await resolveProviderIntent({ engine: 'opencode', main: 'triss-worker/deepseek-v4-flash' })).provider,
+    'worker',
+  );
+});
+
+test(
+  'worker model listing uses configured presets and never fetches a catalogue',
+  withWorkerEnv(async () => {
+    let fetched = false;
+    const result = await listProviderModels(
+      { engine: 'opencode', provider: 'worker' },
+      { fetch: async () => {
+        fetched = true;
+        throw new Error('must not fetch');
+      } },
+    );
+    assert.equal(result.status, 'not-supported');
+    assert.deepEqual(result.models, [
+      'triss-worker/deepseek-v4-flash',
+      'triss-worker/deepseek-v4-pro',
+    ]);
+    assert.equal(fetched, false);
+  }),
+);
+
+test(
+  'planModelChange accepts a same-prefix worker main/small with TRISS_WORKER_API_KEY and never fetches a catalogue',
+  withWorkerEnv(async () => {
+    let fetched = false;
+    const plan = await planModelChange(
+      {
+        engine: 'opencode',
+        provider: 'worker',
+        scope: 'global',
+        main: 'triss-worker/deepseek-v4-pro',
+        small: 'triss-worker/deepseek-v4-flash',
+      },
+      {
+        fetch: async () => {
+          fetched = true;
+          throw new Error('must not fetch');
+        },
+      },
+    );
+    assert.equal(plan.ok, true, JSON.stringify(plan.diagnostics));
+    assert.equal(plan.catalogue.status, 'not-supported');
+    assert.deepEqual(plan.changes, {
+      model: 'triss-worker/deepseek-v4-pro',
+      small_model: 'triss-worker/deepseek-v4-flash',
+    });
+    assert.equal(fetched, false);
+  }),
+);
+
+test(
+  'planModelChange rejects a worker switch without TRISS_WORKER_API_KEY',
+  withWorkerEnv(async () => {
+    delete process.env.TRISS_WORKER_API_KEY;
+    let fetched = false;
+    const plan = await planModelChange(
+      {
+        engine: 'opencode',
+        provider: 'worker',
+        scope: 'global',
+        main: 'triss-worker/deepseek-v4-flash',
+        small: 'triss-worker/deepseek-v4-flash',
+      },
+      {
+        fetch: async () => {
+          fetched = true;
+          throw new Error('must not fetch');
+        },
+      },
+    );
+    assert.equal(plan.ok, false);
+    assert.ok(
+      plan.diagnostics.some(
+        (d) => d.code === 'missing-credential' && d.env === 'TRISS_WORKER_API_KEY',
+      ),
+      `expected a missing-credential diagnostic for TRISS_WORKER_API_KEY, got ${JSON.stringify(plan.diagnostics)}`,
+    );
+    assert.equal(fetched, false);
+  }),
+);
+
+test(
+  'a lone TRISS_WORKER_API_KEY never infers the worker provider implicitly',
+  withWorkerEnv(async () => {
+    // withWorkerEnv sets ONLY the worker key among provider credentials — and
+    // nearly every Triss user has that key, so it must not be treated as intent.
+    const intent = await resolveProviderIntent({ engine: 'opencode' });
+    assert.equal(intent.ok, false);
+    assert.equal(intent.provider, null);
+    assert.equal(intent.source, 'none');
+    assert.ok(intent.diagnostics.some((d) => d.code === 'no-credential'));
+
+    // Alongside another provider's key the worker key must not pollute the
+    // credential scan: the single other credential still wins.
+    process.env.ZHIPU_API_KEY = 'sk-zhipu-fake';
+    const withZai = await resolveProviderIntent({ engine: 'opencode' });
+    assert.equal(withZai.provider, 'zai');
+    assert.equal(withZai.source, 'credential');
+  }),
+);
+
+test(
+  'worker inspection exposes the two configured models with catalogue not-supported and never fetches',
+  withWorkerEnv(async () => {
+    let fetched = false;
+    const state = await inspectCoderModelState(
+      { engine: 'opencode', provider: 'worker' },
+      {
+        fetch: async () => {
+          fetched = true;
+          throw new Error('must not fetch');
+        },
+      },
+    );
+    assert.equal(state.catalogue_status, 'not-supported');
+    assert.deepEqual(state.available_models, [
+      'triss-worker/deepseek-v4-flash',
+      'triss-worker/deepseek-v4-pro',
+    ]);
+    assert.deepEqual(state.credential, { env: 'TRISS_WORKER_API_KEY', ready: true });
+    assert.equal(fetched, false);
+  }),
+);
+
+test(
+  'coder init --provider worker writes an env-backed OpenCode provider and pins flash',
+  withWorkerEnv(async ({ home }) => {
+    await runCoderInit(
+      { global: true, provider: 'worker' },
+      {
+        spawnSync: fakeSpawnSync,
+        fetch: async () => ({ status: 404, ok: false, json: async () => ({}) }),
+      },
+    );
+
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'triss-worker/deepseek-v4-flash');
+    assert.equal(config.small_model, 'triss-worker/deepseek-v4-flash');
+    assert.deepEqual(config.provider['triss-worker'], {
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Triss worker (OpenAI-compatible)',
+      options: {
+        baseURL: 'https://api.deepseek.com/v1',
+        apiKey: '{env:TRISS_WORKER_API_KEY}',
+      },
+      models: {
+        'deepseek-v4-flash': { name: 'deepseek-v4-flash' },
+        'deepseek-v4-pro': { name: 'deepseek-v4-pro' },
+      },
+    });
+    assert.equal(JSON.stringify(config).includes('sk-worker-fake'), false);
+  }),
+);
+
+test(
+  'worker init surgically adds its provider to a safe existing config',
+  withWorkerEnv(async ({ home }) => {
+    const path = join(home, '.config', 'opencode', 'opencode.json');
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    writeFileSync(path, JSON.stringify({
+      model: 'triss-worker/deepseek-v4-flash',
+      small_model: 'triss-worker/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny', 'git status': 'allow' } },
+      foreign: { keep: true },
+    }, null, 2) + '\n');
+
+    await runCoderInit(
+      { global: true, provider: 'worker' },
+      { spawnSync: fakeSpawnSync },
+    );
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(config.foreign.keep, true);
+    assert.equal(config.permission.bash['git status'], 'allow');
+    assert.equal(config.provider['triss-worker'].options.apiKey, '{env:TRISS_WORKER_API_KEY}');
+  }),
+);
+
+test(
+  'worker init blocks a conflicting triss-worker provider without changing the file',
+  withWorkerEnv(async ({ home }) => {
+    const path = join(home, '.config', 'opencode', 'opencode.json');
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    const original = JSON.stringify({
+      model: 'triss-worker/deepseek-v4-flash',
+      small_model: 'triss-worker/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+      provider: {
+        'triss-worker': {
+          npm: '@ai-sdk/openai-compatible',
+          options: { baseURL: 'https://attacker.invalid/v1', apiKey: 'literal-secret' },
+          models: { 'deepseek-v4-flash': {} },
+        },
+      },
+    }, null, 2) + '\n';
+    writeFileSync(path, original);
+
+    await assert.rejects(
+      () => runCoderInit(
+        { global: true, provider: 'worker' },
+        { spawnSync: fakeSpawnSync },
+      ),
+      /existing opencode\.json issues/i,
+    );
+    assert.equal(readFileSync(path, 'utf8'), original);
+  }),
+);
+
+test(
+  'worker coder run forwards only TRISS_WORKER_API_KEY',
+  withWorkerEnv(async () => {
+    let childEnv;
+    await runCoderRun(
+      'mechanical task',
+      { model: 'triss-worker/deepseek-v4-flash' },
+      {
+        spawn: fakeSpawn((_cmd, _argv, opts) => {
+          childEnv = opts.env;
+        }),
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: () => true,
+      },
+    );
+    assert.equal(childEnv.TRISS_WORKER_API_KEY, 'sk-worker-fake');
+    for (const key of ['ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
+      assert.equal(key in childEnv, false);
+    }
+  }),
+);
+
+test(
+  'Crush rejects triss-worker models before spawning',
+  withWorkerEnv(async () => {
+    let spawned = false;
+    await assert.rejects(
+      () => runCoderRun(
+        'mechanical task',
+        { engine: 'crush', model: 'triss-worker/deepseek-v4-flash' },
+        {
+          spawn: () => {
+            spawned = true;
+            throw new Error('must not spawn');
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: () => true,
+        },
+      ),
+      /crush engine speaks Z\.AI GLM only/,
+    );
+    assert.equal(spawned, false);
+  }),
+);

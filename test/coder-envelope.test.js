@@ -316,9 +316,11 @@ test('runCoderRun: throws when ZHIPU_API_KEY is not set, before spawning anythin
   const origHome = process.env.HOME;
   const origRoot = process.env.TRISS_PROJECT_ROOT;
   const origKey = process.env.ZHIPU_API_KEY;
+  const origModel = process.env.TRISS_CODER_MODEL;
   process.env.HOME = emptyHome;
   process.env.TRISS_PROJECT_ROOT = emptyHome;
   delete process.env.ZHIPU_API_KEY;
+  delete process.env.TRISS_CODER_MODEL;
   try {
     let spawned = false;
     await assert.rejects(
@@ -342,6 +344,8 @@ test('runCoderRun: throws when ZHIPU_API_KEY is not set, before spawning anythin
     else process.env.TRISS_PROJECT_ROOT = origRoot;
     if (origKey === undefined) delete process.env.ZHIPU_API_KEY;
     else process.env.ZHIPU_API_KEY = origKey;
+    if (origModel === undefined) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = origModel;
     rmSync(emptyHome, { recursive: true, force: true });
   }
 });

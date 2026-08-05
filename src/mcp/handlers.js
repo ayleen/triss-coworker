@@ -207,6 +207,7 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
   const issue = await jira.getIssue(key);
   const f = issue.fields || {};
   const lines = [
+    `TRISS_WORKER_API_KEY: ${process.env.TRISS_WORKER_API_KEY ? 'configured' : 'not set'} (reused by triss-worker/* OpenAI-compatible coder models)`,
     `Key: ${issue.key}`,
     `Summary: ${f.summary}`,
     `Type: ${f.issuetype?.name}`,
