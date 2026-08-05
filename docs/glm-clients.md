@@ -322,6 +322,12 @@ both engines unless noted.
     version/install state, which `opencode.json` / `crush.json` exist, and
     how many isolation worktrees are live.
 
+For one-shot `triss ask` / `triss review` and their MCP equivalents, the
+successful-response text contract accepts both OpenAI-compatible
+`choices[0].message.content` and a top-level `final_text`. The latter is a
+complete final answer, not metadata: CLI must print it and MCP must return it.
+Only a response containing neither form is considered empty.
+
 ### 5.2 Engine choice
 `--engine opencode|crush` (per call) or `TRISS_CODER_ENGINE=<name>` (default
 for the shell/CI). `--engine` beats the env beats the built-in default

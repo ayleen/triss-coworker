@@ -208,6 +208,19 @@ export function reportUsage(resp, label = 'worker') {
   return `[${label}: ${u.prompt_tokens} in (${cached} cached) / ${u.completion_tokens} out | finish: ${resp.choices?.[0]?.finish_reason ?? 'n/a'}]`;
 }
 
+// Successful one-shot providers are not perfectly uniform. OpenAI-compatible
+// chat completions use choices[0].message.content, while some GLM-compatible
+// responses expose the completed assistant answer as top-level final_text.
+// Normalize both without rewriting the provider payload or confusing an
+// absent answer with an intentionally short one.
+export function responseText(resp) {
+  const content = resp?.choices?.[0]?.message?.content;
+  if (typeof content === 'string' && content.length > 0) return content;
+  const finalText = resp?.final_text;
+  if (typeof finalText === 'string' && finalText.length > 0) return finalText;
+  return '';
+}
+
 // Streaming variant: yields content chunks as they arrive, captures usage
 // from the final chunk (requires stream_options.include_usage). Returns
 // the full assembled text and the OpenAI-style response shape so callers

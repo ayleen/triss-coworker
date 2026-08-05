@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { chat, chatStream, reportUsage } from '../client.js';
+import { chat, chatStream, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import { shouldStream } from './chat.js';
 import {
@@ -33,7 +33,17 @@ const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
 
 export async function runReview(prNumber, opts) {
-  const request = resolveModelRequest({
+  return runReviewWithDeps(prNumber, opts);
+}
+
+// Test seam matching ask.js: the production entry point cannot accidentally
+// receive Commander's extra action argument as dependencies, while focused
+// tests can inject the provider response without making a network call.
+export async function runReviewWithDeps(prNumber, opts, deps = {}) {
+  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
+  const sendChat = deps.chat || chat;
+  const sendChatStream = deps.chatStream || chatStream;
+  const request = resolveRequest({
     provider: opts.provider,
     model: opts.model || 'pro',
   });
@@ -112,16 +122,16 @@ export async function runReview(prNumber, opts) {
   const maxTokens = parseInt(opts.maxTokens, 10) || 8192;
   const useStream = shouldStream(opts);
   const resp = useStream
-    ? await chatStream({
+    ? await sendChatStream({
         ...request,
         maxTokens,
         messages,
         label: 'triss/review',
         onChunk: (d) => process.stdout.write(d),
       })
-    : await chat({ ...request, maxTokens, messages, label: 'triss/review' });
+    : await sendChat({ ...request, maxTokens, messages, label: 'triss/review' });
 
-  const out = resp.choices?.[0]?.message?.content;
+  const out = responseText(resp);
   if (!out) {
     process.stderr.write(pc.red('[triss/review] empty response — try --max-tokens 16384\n'));
     process.exit(1);
@@ -129,6 +139,7 @@ export async function runReview(prNumber, opts) {
   if (!useStream) process.stdout.write(out + '\n');
   else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review') + '\n'));
+  return out;
 }
 
 async function tryLoadLinkedIssue(key) {

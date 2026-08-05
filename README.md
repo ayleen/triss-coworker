@@ -699,6 +699,12 @@ triss review --provider kimi                     # pro preset → kimi-k3
 triss ask --paths ... --question "..." --provider kimi --model flash  # kimi-k2.6
 ```
 
+One-shot `ask` / `review` output is provider-shape tolerant: Triss emits the
+assistant text whether the successful response carries OpenAI-style
+`choices[0].message.content` or a top-level `final_text`. A present
+`final_text` must never be treated as an empty response or dropped by the CLI
+or MCP renderer.
+
 For GLM, `pro` maps to `glm-5.2` on both endpoints, while `flash` — the cheap
 bulk-read tier — maps to `glm-4.7` on the subscription endpoint and to
 `glm-4.5-air` ($0.20/$1.10 per 1M) on pay-as-you-go. The subscription endpoint

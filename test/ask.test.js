@@ -76,3 +76,43 @@ test('ASK-03: runAsk ignores Commander-like second arguments with dependency-sha
     /GLM model id cannot be empty/,
   );
 });
+
+test('ASK-04: CLI ask preserves a successful GLM top-level final_text response', async () => {
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const processExit = process.exit;
+  const captured = [];
+  process.stdout.write = (chunk) => {
+    captured.push(String(chunk));
+    return true;
+  };
+  process.stderr.write = () => true;
+  process.exit = (code) => {
+    throw new Error(`unexpected process.exit(${code})`);
+  };
+
+  try {
+    await runAskWithDeps(
+      {
+        paths: ['package.json'],
+        question: 'What is this?',
+        provider: 'glm',
+        model: 'flash',
+        stream: false,
+      },
+      {
+        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+        chat: async () => ({
+          final_text: 'The final answer.',
+          usage: { prompt_tokens: 10, completion_tokens: 4 },
+        }),
+      },
+    );
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exit = processExit;
+  }
+
+  assert.match(captured.join(''), /The final answer\./);
+});
