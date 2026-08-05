@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1] — 2026-08-05
+
 ### Security
 
 - Raise the minimum MCP SDK to 1.30.0 and refresh its Hono/Ajv transitive
