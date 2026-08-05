@@ -438,6 +438,8 @@ fixed order so only the right single key is prompted:
 `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, and worker flash/pro model
 settings. It creates `triss-worker/*` model pins and does not introduce or copy
 another secret. V1 supports one active worker profile and Chat Completions.
+Rerun `triss coder init --provider worker` after changing the base URL or
+flash/pro model ids so the managed OpenCode provider stays in sync.
 
 **Stale-model incident — don't hardcode a Zen free id.** Zen rotates its
 free tier, so a previously-working pinned id (the `opencode/hy3-*` free

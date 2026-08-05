@@ -186,6 +186,55 @@ function opencodeConfigPath(scope) {
     : join(homedir(), '.config', 'opencode', 'opencode.json');
 }
 
+function validateWorkerProviderConfig(scope, models, diagnostics) {
+  const path = opencodeConfigPath(scope);
+  const scopeFlag = scope === 'local' ? '--local' : '--global';
+  const command = `triss coder init --provider worker ${scopeFlag}`;
+  let config;
+  try {
+    config = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    diagnostics.push({
+      code: 'worker-provider-not-configured',
+      severity: 'error',
+      scope: 'provider-config',
+      path,
+      command,
+      message: `Run \`${command}\` before switching Triss worker models.`,
+    });
+    return;
+  }
+  const provider = config?.provider?.['triss-worker'];
+  const expectedBaseUrl = String(
+    process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1',
+  ).trim().replace(/\/+$/, '');
+  const providerReady =
+    provider &&
+    typeof provider === 'object' &&
+    !Array.isArray(provider) &&
+    provider.npm === '@ai-sdk/openai-compatible' &&
+    provider.options &&
+    typeof provider.options === 'object' &&
+    !Array.isArray(provider.options) &&
+    provider.options.apiKey === '{env:TRISS_WORKER_API_KEY}' &&
+    provider.options.baseURL === expectedBaseUrl &&
+    provider.models &&
+    typeof provider.models === 'object' &&
+    !Array.isArray(provider.models);
+  const bareIds = models.filter(Boolean).map((model) => String(model).slice('triss-worker/'.length));
+  if (providerReady && bareIds.every((id) => Object.hasOwn(provider.models, id))) return;
+  diagnostics.push({
+    code: 'worker-provider-not-configured',
+    severity: 'error',
+    scope: 'provider-config',
+    path,
+    command,
+    message:
+      'The selected opencode.json does not contain the current env-backed Triss worker provider ' +
+      `and model definitions. Run \`${command}\` to refresh it before switching models.`,
+  });
+}
+
 // Resolves the EFFECTIVE scope for read-only inspection. An explicit
 // 'global'/'local' is honored as-is; an absent scope resolves project-over-
 // global because opencode reads config from the run cwd upward, so a project
@@ -1376,6 +1425,10 @@ export async function planModelChange(input = {}, deps = {}) {
       scope: 'catalogue',
       status: cat.status,
     });
+  }
+
+  if (provider === 'worker') {
+    validateWorkerProviderConfig(scope, [main, small], diagnostics);
   }
 
   // 5. Runtime shadow / management-intent conflict (plan §10 lines 220–225).

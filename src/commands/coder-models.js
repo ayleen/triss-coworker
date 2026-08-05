@@ -645,6 +645,7 @@ function renderPlanDiagnostics(plan) {
     process.stderr.write(
       pc.red(`  ✗ ${d.code} (${where})${detail}\n`),
     );
+    if (d.command) process.stderr.write(pc.cyan(`    ${d.command}\n`));
   }
   const catalogueStatus = plan.catalogue?.status || 'unknown';
   const catalogueGuidance =

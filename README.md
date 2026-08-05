@@ -535,6 +535,9 @@ triss coder run "mechanical task" --model triss-worker/deepseek-v4-flash
 
 The worker route uses Chat Completions through `@ai-sdk/openai-compatible`.
 It creates no second API key and is supported by the OpenCode engine only.
+After changing the worker base URL or flash/pro model ids, rerun
+`triss coder init --provider worker`; `coder model set --provider worker`
+fails closed until the matching env-backed provider block is present.
 
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json

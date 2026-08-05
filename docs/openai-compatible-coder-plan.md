@@ -125,6 +125,7 @@ triss coder init --provider worker --global
 triss coder models --provider worker
 
 # Persistent switch within the configured custom provider.
+# Run init again first whenever the worker endpoint or flash/pro ids change.
 triss coder model set triss-worker/deepseek-v4-pro \
   --small triss-worker/deepseek-v4-flash \
   --provider worker --engine opencode --global --yes
@@ -147,7 +148,9 @@ Triss therefore does not probe a generic worker endpoint during setup. The
 configured `TRISS_WORKER_FLASH_MODEL` and `TRISS_WORKER_PRO_MODEL` values form
 the authoritative local model list and are the only ids written into the
 managed OpenCode provider. `coder models` reports that list with catalogue
-status `not-supported`, and `coder model set` rejects ids outside it.
+status `not-supported`. `coder model set` rejects ids outside it and also
+requires the selected `opencode.json` to contain the matching env-backed
+provider definition; `coder init --provider worker` creates or refreshes it.
 
 Setup validates the profile locally: the base URL must be absolute, remote
 hosts require HTTPS, loopback HTTP is allowed, and credentials, query strings,
@@ -175,9 +178,11 @@ existing `opencode.json`, setup follows these rules:
    mode; publish through a same-directory temporary file and atomic rename.
 5. Persist only the coder model pins in the selected Triss env scope; never
    duplicate or rewrite the existing worker secret/profile.
-6. Audit effective higher-precedence config before writes. If a later env-pin
-   write fails, setup reports failure and can be rerun safely; it does not
-   claim a cross-file transaction across `opencode.json` and the env file.
+6. Audit effective higher-precedence config as part of setup. A blocking
+   finding stops completion, although the selected-scope atomic config update
+   may already be present and is safe to rerun. If a later env-pin write fails,
+   setup reports failure and can likewise be rerun; it does not claim a
+   cross-file transaction across `opencode.json` and the env file.
 
 An identical provider definition is idempotent. A provider entry that uses a
 literal API key is a blocking security finding; Triss must not copy, print, or
@@ -213,6 +218,9 @@ silently preserve that secret as its managed definition.
   retains unknown fields and its permission policy; a conflicting provider
   entry is unchanged and blocks setup.
 - Main and small model prefixes must equal `triss-worker`.
+- `coder model set --provider worker` fails with an exact init command unless
+  the target scope already contains the current env-backed worker provider and
+  both requested model definitions.
 - A worker-provider run succeeds with only `TRISS_WORKER_API_KEY` configured
   and forwards only that provider key.
 - Missing custom credentials, invalid profile metadata, insecure remote HTTP,

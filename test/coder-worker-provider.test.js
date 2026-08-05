@@ -63,6 +63,27 @@ function fakeSpawnSync(cmd, args) {
   return { status: 1, stdout: '', error: null };
 }
 
+function writeManagedWorkerConfig(home, models = ['deepseek-v4-flash', 'deepseek-v4-pro']) {
+  const path = join(home, '.config', 'opencode', 'opencode.json');
+  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  writeFileSync(path, JSON.stringify({
+    model: `triss-worker/${models[0]}`,
+    small_model: `triss-worker/${models[0]}`,
+    permission: { bash: { '*': 'deny' } },
+    provider: {
+      'triss-worker': {
+        npm: '@ai-sdk/openai-compatible',
+        name: 'Triss worker (OpenAI-compatible)',
+        options: {
+          baseURL: 'https://api.deepseek.com/v1',
+          apiKey: '{env:TRISS_WORKER_API_KEY}',
+        },
+        models: Object.fromEntries(models.map((id) => [id, { name: id }])),
+      },
+    },
+  }, null, 2) + '\n');
+}
+
 function withWorkerEnv(fn) {
   return async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-worker-coder-')));
@@ -155,7 +176,8 @@ test(
 
 test(
   'planModelChange accepts a same-prefix worker main/small with TRISS_WORKER_API_KEY and never fetches a catalogue',
-  withWorkerEnv(async () => {
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
     let fetched = false;
     const plan = await planModelChange(
       {
@@ -179,6 +201,27 @@ test(
       small_model: 'triss-worker/deepseek-v4-flash',
     });
     assert.equal(fetched, false);
+  }),
+);
+
+test(
+  'planModelChange blocks worker model set until coder init has installed the provider block',
+  withWorkerEnv(async () => {
+    const plan = await planModelChange({
+      engine: 'opencode',
+      provider: 'worker',
+      scope: 'global',
+      main: 'triss-worker/deepseek-v4-pro',
+      small: 'triss-worker/deepseek-v4-flash',
+    });
+    assert.equal(plan.ok, false);
+    assert.ok(
+      plan.diagnostics.some(
+        (d) => d.code === 'worker-provider-not-configured' &&
+          d.command === 'triss coder init --provider worker --global',
+      ),
+      `expected worker-provider-not-configured, got ${JSON.stringify(plan.diagnostics)}`,
+    );
   }),
 );
 
@@ -215,7 +258,8 @@ test(
 
 test(
   'planModelChange rejects worker models outside the configured flash/pro profile',
-  withWorkerEnv(async () => {
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
     const plan = await planModelChange({
       engine: 'opencode',
       provider: 'worker',
