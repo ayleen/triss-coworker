@@ -33,7 +33,13 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import readline from 'node:readline';
 import pc from 'picocolors';
-import { loadEnvFiles } from '../config.js';
+import {
+  captureWorkerShellSnapshot,
+  loadEnvFiles,
+  readWorkerConfigSnapshot,
+} from '../config.js';
+import { acquireCoderMutationLock } from '../coder-lock.js';
+export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
 // because both sides only touch the imported bindings inside function
 // bodies (never at module-eval time), so it doesn't matter which module
@@ -433,8 +439,8 @@ const CODER_PROVIDER_CHOICES = [
   { label: 'Kimi for Coding subscription (K3) — needs a Kimi for Coding key', value: 'kimi-for-coding' },
 ];
 
-function workerCoderProfile() {
-  const baseUrl = String(process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1')
+function workerCoderProfile(settings = readWorkerConfigSnapshot()) {
+  const baseUrl = String(settings.baseUrl || 'https://api.deepseek.com/v1')
     .trim()
     .replace(/\/+$/, '');
   let parsed;
@@ -454,8 +460,8 @@ function workerCoderProfile() {
       `Unsafe TRISS_WORKER_BASE_URL "${baseUrl}" — remote OpenAI-compatible endpoints must use HTTPS.`,
     );
   }
-  const flashModel = String(process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash').trim();
-  const proModel = String(process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro').trim();
+  const flashModel = String(settings.flashModel || 'deepseek-v4-flash').trim();
+  const proModel = String(settings.proModel || 'deepseek-v4-pro').trim();
   for (const [env, value] of [
     ['TRISS_WORKER_FLASH_MODEL', flashModel],
     ['TRISS_WORKER_PRO_MODEL', proModel],
@@ -1115,16 +1121,6 @@ function posixSingleQuote(value) {
 // present: ZHIPU_API_KEY (Z.AI GLM — the default) or OPENCODE_API_KEY
 // (OpenCode Zen). envReadiness(CODER_MANIFEST) only tracks the required ZHIPU
 // key, so callers that must also light up for a zen-only setup OR this in.
-export function coderCredentialReady() {
-  return !!(
-    process.env.TRISS_WORKER_API_KEY ||
-    process.env.ZHIPU_API_KEY ||
-    process.env.OPENCODE_API_KEY ||
-    process.env.MOONSHOT_API_KEY ||
-    process.env.KIMI_API_KEY
-  );
-}
-
 // ─── wizard manifest ─────────────────────────────────────────────────────────
 
 // Pseudo-manifest so `triss config wizard` / `triss status` can surface
@@ -1236,6 +1232,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     model: process.env.TRISS_CODER_MODEL,
     smallModel: process.env.TRISS_CODER_SMALL_MODEL,
   };
+  const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
@@ -1264,7 +1261,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const path = ensureEnvFile(scope);
-  await setupKey(path, provider);
+  const scopedWorker = provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
+    : null;
+  await setupKey(path, provider, provider === 'worker' ? { existing: scopedWorker?.apiKey } : {});
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -1334,6 +1334,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
         inheritedModels,
         allowUnsafeBash: opts.allowUnsafeBash,
         allowUnverified: opts.allowUnverified,
+        workerShellEnv,
       },
       deps,
     );
@@ -1344,7 +1345,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
   // Config + templates are already on disk, so re-running after setting the key
   // is a clean, idempotent completion.
   const keyEnv = coderProviderKeyInfo(provider).env;
-  if (!process.env[keyEnv]) {
+  const selectedKey = provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv }).apiKey
+    : process.env[keyEnv];
+  if (!selectedKey) {
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
@@ -1396,9 +1400,11 @@ function warnIfPinShadowed(scope, pinned, inherited) {
   return shadowed;
 }
 
-async function setupKey(path, provider = 'zai') {
+async function setupKey(path, provider = 'zai', opts = {}) {
   const info = coderProviderKeyInfo(provider);
-  const existing = process.env[info.env];
+  const existing = Object.prototype.hasOwnProperty.call(opts, 'existing')
+    ? opts.existing
+    : process.env[info.env];
   if (existing) {
     process.stderr.write(pc.dim(`  ✓ ${info.env} already set (${maskValue(existing)}) — skipping\n`));
     return;
@@ -1423,8 +1429,29 @@ async function setupKey(path, provider = 'zai') {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup(
-  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified } = {},
+export async function runCoderSetup(input = {}, deps = {}) {
+  loadEnvFiles();
+  const resolvedScope = input.scope || 'global';
+  const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
+  if (input.engine === 'crush') {
+    return runCoderSetupUnlocked({ ...input, scope: resolvedScope, provider: resolvedProvider }, deps);
+  }
+
+  const lockHandle = typeof deps.lock === 'function'
+    ? deps.lock('opencode', resolvedScope)
+    : acquireCoderMutationLock('opencode', resolvedScope, { isPidAlive: deps.isLockPidAlive });
+  try {
+    return await runCoderSetupUnlocked(
+      { ...input, scope: resolvedScope, provider: resolvedProvider },
+      deps,
+    );
+  } finally {
+    if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
+  }
+}
+
+async function runCoderSetupUnlocked(
+  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified, workerShellEnv } = {},
   deps = {},
 ) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
@@ -1511,7 +1538,13 @@ export async function runCoderSetup(
   const providerInfo = {
     kind: resolvedProvider,
     detectedZai,
-    ...(resolvedProvider === 'worker' ? { workerProfile: workerCoderProfile() } : {}),
+    ...(resolvedProvider === 'worker'
+      ? {
+          workerProfile: workerCoderProfile(
+            readWorkerConfigSnapshot({ scope: resolvedScope, parentEnv: workerShellEnv }),
+          ),
+        }
+      : {}),
   };
   // Resolve the model ONCE, up front, honoring only presets/config that belong
   // to the chosen provider — then write opencode.json (if absent) and pin
@@ -1527,6 +1560,26 @@ export async function runCoderSetup(
     existing,
     { allowUnverified, scope: resolvedScope },
   );
+  const projectCfg = opencodeConfigPath('local');
+  let projectWorkerAudit = null;
+  if (
+    resolvedProvider === 'worker' &&
+    resolvedScope === 'global' &&
+    existsSync(projectCfg) &&
+    projectCfg !== opencodeConfigPath('global')
+  ) {
+    projectWorkerAudit = auditExistingConfig(projectCfg, providerInfo, {
+      note: '(project scope — higher precedence than the global config, so it governs runs)',
+      allowUnsafeBash,
+      expectedWorkerProvider: workerProviderDefinition(providerInfo, model, smallModel),
+      workerModels: new Set(providerInfo.workerProfile.models.map((id) => `triss-worker/${id}`)),
+    });
+    if (projectWorkerAudit.blocking) {
+      throw new Error(
+        'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
+      );
+    }
+  }
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
     providerAvailable,
@@ -1549,18 +1602,17 @@ export async function runCoderSetup(
   // resolvedSmall — a valid in-catalogue project small_model that merely differs
   // from the global default is fine.
   if (resolvedScope === 'global') {
-    const projectCfg = opencodeConfigPath('local');
     if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
       // The stale-Zen incident most often lives in this higher-precedence
       // project file (a previous init pinned opencode/hy3-free here before the
       // promo model was retired). Report it with the same recovery commands.
       emitZenStaleIncident(projectCfg, readOpencodeModels(projectCfg), { model, smallModel }, zenAvailable, 'local', deps);
-      const otherAudit = auditExistingConfig(projectCfg, providerInfo, {
-        note: '(project scope — higher precedence than the global config, so it governs runs)',
-        allowUnsafeBash,
-        zenAvailable,
-        providerAvailable,
-      });
+      const otherAudit = projectWorkerAudit || auditExistingConfig(projectCfg, providerInfo, {
+          note: '(project scope — higher precedence than the global config, so it governs runs)',
+          allowUnsafeBash,
+          zenAvailable,
+          providerAvailable,
+        });
       blocking = blocking || otherAudit.blocking;
     }
   }
@@ -1584,7 +1636,10 @@ export async function runCoderSetup(
   // contradicts with "<KEY> is not set". Config + templates are already on
   // disk, so re-running after setting the key is a clean idempotent completion.
   const keyEnv = coderProviderKeyInfo(resolvedProvider).env;
-  if (!process.env[keyEnv]) {
+  const selectedKey = resolvedProvider === 'worker'
+    ? readWorkerConfigSnapshot({ scope: resolvedScope, parentEnv: workerShellEnv }).apiKey
+    : process.env[keyEnv];
+  if (!selectedKey) {
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
@@ -1921,83 +1976,116 @@ function isManagedWorkerProvider(value) {
   ));
 }
 
-function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
-  const lockPath = `${path}.triss-worker.lock`;
-  let lockFd;
+function readWorkerConfigLayer(scope) {
+  const path = opencodeConfigPath(scope);
+  if (!existsSync(path)) return { path, exists: false, config: null };
   try {
-    lockFd = openSync(lockPath, 'wx', 0o600);
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      throw new Error(`Coder setup is already modifying ${path}; retry after the other process finishes.`, {
-        cause: error,
-      });
-    }
-    throw error;
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('not an object');
+    return { path, exists: true, config };
+  } catch {
+    return { path, exists: true, config: null };
   }
-  try {
-    const audit = auditExistingConfig(path, providerInfo, {
+}
+
+function validateWorkerRunConfiguration(model, settings) {
+  const profile = workerCoderProfile(settings);
+  const allowed = new Set(profile.models.map((id) => `triss-worker/${id}`));
+  const local = readWorkerConfigLayer('local');
+  const global = readWorkerConfigLayer('global');
+  const localProvider = local.config?.provider?.['triss-worker'];
+  const globalProvider = global.config?.provider?.['triss-worker'];
+  const effectiveProvider = localProvider === undefined ? globalProvider : localProvider;
+  const effectiveScope = localProvider === undefined ? 'global' : 'local';
+  const expected = workerProviderDefinition(
+    { kind: 'worker', workerProfile: profile },
+    `triss-worker/${profile.flashModel}`,
+    `triss-worker/${profile.flashModel}`,
+  );
+  const effectiveModel = typeof local.config?.model === 'string'
+    ? local.config.model
+    : global.config?.model;
+  const effectiveSmall = typeof local.config?.small_model === 'string'
+    ? local.config.small_model
+    : global.config?.small_model;
+  const invalidLayer = (local.exists && !local.config) || (global.exists && !global.config);
+  const modelsValid = [model, effectiveModel, effectiveSmall]
+    .filter(Boolean)
+    .every((value) => allowed.has(value));
+  if (!invalidLayer && modelsValid && isDeepStrictEqual(effectiveProvider, expected)) {
+    return { apiKey: settings.apiKey, scope: effectiveScope, profile };
+  }
+
+  const recoveryScope = localProvider !== undefined || (local.exists && (
+    typeof local.config?.model === 'string' || typeof local.config?.small_model === 'string'
+  )) ? 'local' : 'global';
+  const command = `triss coder init --engine opencode --provider worker --${recoveryScope}`;
+  throw new Error(
+    'The effective OpenCode triss-worker provider, endpoint, or flash/pro model allowlist is missing ' +
+      `or stale. Refresh it before the credential is forwarded:\n  ${command}`,
+  );
+}
+
+function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
+  const audit = auditExistingConfig(path, providerInfo, {
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
       allowModelReplacement: true,
-    });
-    if (audit.blocking) return audit;
+  });
+  if (audit.blocking) return audit;
 
-    let raw;
-    let config;
-    try {
-      raw = readFileSync(path, 'utf8');
-      config = JSON.parse(raw);
-    } catch {
-      return { blocking: true };
-    }
-    const expected = workerProviderDefinition(providerInfo, model, smallModel);
-    const providers = config.provider;
-    const current = providers && typeof providers === 'object' && !Array.isArray(providers)
-      ? providers['triss-worker']
-      : undefined;
-    if (current !== undefined) {
-      if (!isManagedWorkerProvider(current)) {
-        process.stderr.write(
-          pc.yellow(
-            `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
-          ),
-        );
-        return { blocking: true };
-      }
-      if (
-        isDeepStrictEqual(current, expected) &&
-        config.model === model &&
-        config.small_model === smallModel
-      ) return { blocking: false };
-    }
-    if (providers !== undefined && (typeof providers !== 'object' || providers === null || Array.isArray(providers))) {
-      process.stderr.write(pc.yellow(`  ⚠ ${path} has a non-object provider field — refusing to replace it.\n`));
-      return { blocking: true };
-    }
-    config.model = model;
-    config.small_model = smallModel;
-    config.provider = { ...(providers || {}), 'triss-worker': expected };
-    const newline = raw.includes('\r\n') ? '\r\n' : '\n';
-    const indent = raw.match(/\r?\n([ \t]+)"/)?.[1] || '  ';
-    const trailing = raw.endsWith('\r\n') || raw.endsWith('\n');
-    const rendered = JSON.stringify(config, null, indent).replace(/\n/g, newline) + (trailing ? newline : '');
-    const temp = `${path}.triss-worker-${randomBytes(6).toString('hex')}.tmp`;
-    const mode = statSync(path).mode & 0o777;
-    try {
-      writeFileSync(temp, rendered, { mode, flag: 'wx' });
-      chmodSync(temp, mode);
-      renameSync(temp, path);
-    } catch (error) {
-      try { if (existsSync(temp)) rmSync(temp); } catch {}
-      throw error;
-    }
-    process.stderr.write(pc.green(`  ✓ configured provider["triss-worker"] in ${path}\n`));
-    return { blocking: false };
-  } finally {
-    try { if (lockFd !== undefined) closeSync(lockFd); } catch {}
-    try { if (existsSync(lockPath)) rmSync(lockPath); } catch {}
+  let raw;
+  let config;
+  try {
+    raw = readFileSync(path, 'utf8');
+    config = JSON.parse(raw);
+  } catch {
+    return { blocking: true };
   }
+  const expected = workerProviderDefinition(providerInfo, model, smallModel);
+  const providers = config.provider;
+  const current = providers && typeof providers === 'object' && !Array.isArray(providers)
+    ? providers['triss-worker']
+    : undefined;
+  if (current !== undefined) {
+    if (!isManagedWorkerProvider(current)) {
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
+        ),
+      );
+      return { blocking: true };
+    }
+    if (
+      isDeepStrictEqual(current, expected) &&
+      config.model === model &&
+      config.small_model === smallModel
+    ) return { blocking: false };
+  }
+  if (providers !== undefined && (typeof providers !== 'object' || providers === null || Array.isArray(providers))) {
+    process.stderr.write(pc.yellow(`  ⚠ ${path} has a non-object provider field — refusing to replace it.\n`));
+    return { blocking: true };
+  }
+  config.model = model;
+  config.small_model = smallModel;
+  config.provider = { ...(providers || {}), 'triss-worker': expected };
+  const newline = raw.includes('\r\n') ? '\r\n' : '\n';
+  const indent = raw.match(/\r?\n([ \t]+)"/)?.[1] || '  ';
+  const trailing = raw.endsWith('\r\n') || raw.endsWith('\n');
+  const rendered = JSON.stringify(config, null, indent).replace(/\n/g, newline) + (trailing ? newline : '');
+  const temp = `${path}.triss-worker-${randomBytes(6).toString('hex')}.tmp`;
+  const mode = statSync(path).mode & 0o777;
+  try {
+    writeFileSync(temp, rendered, { mode, flag: 'wx' });
+    chmodSync(temp, mode);
+    renameSync(temp, path);
+  } catch (error) {
+    try { if (existsSync(temp)) rmSync(temp); } catch {}
+    throw error;
+  }
+  process.stderr.write(pc.green(`  ✓ configured provider["triss-worker"] in ${path}\n`));
+  return { blocking: false };
 }
 
 // If the caller already has an opencode.json (the no-clobber path never
@@ -2194,6 +2282,33 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
   }
   const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
+  if (providerInfo.kind === 'worker' && opts.expectedWorkerProvider) {
+    const providers = existing.provider;
+    const current = providers && typeof providers === 'object' && !Array.isArray(providers)
+      ? providers['triss-worker']
+      : undefined;
+    if (current !== undefined && !isDeepStrictEqual(current, opts.expectedWorkerProvider)) {
+      blocking = true;
+      process.stderr.write(
+        pc.yellow(
+          `  ⚠ ${where} overrides provider["triss-worker"] with an endpoint, credential binding, package, ` +
+            'or model map that differs from the selected worker profile. Refresh that project config before ' +
+            'using the global worker key.\n',
+        ),
+      );
+    }
+    for (const [role, value] of [['model', model], ['small_model', small]]) {
+      if (value && !opts.workerModels?.has(value)) {
+        blocking = true;
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ ${where} sets ${role}="${value}", which is outside the selected Triss worker ` +
+              'flash/pro allowlist. Re-run worker init for project scope or remove the override.\n',
+          ),
+        );
+      }
+    }
+  }
   if (opts.allowModelReplacement) {
     return { blocking };
   }
@@ -2671,12 +2786,13 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
 // only that key is forwarded, so a Zen run never carries the Z.AI key and vice
 // versa, even when both are configured. Included only when actually set — an
 // unconfigured credential never appears.
-function buildEngineEnv(credEnv) {
+function buildEngineEnv(credEnv, credentialValue) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (process.env[key] != null) env[key] = process.env[key];
   }
-  if (credEnv && process.env[credEnv]) env[credEnv] = process.env[credEnv];
+  const value = credentialValue === undefined ? process.env[credEnv] : credentialValue;
+  if (credEnv && value) env[credEnv] = value;
   return env;
 }
 
@@ -3487,6 +3603,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     throw new Error('triss coder run is POSIX-only for now (Windows is not supported).');
   }
 
+  const workerShellEnv = captureWorkerShellSnapshot();
   const engine = resolveCoderEngine(opts);
   loadEnvFiles();
   const sh = deps.spawnSync || nodeSpawnSync;
@@ -3552,7 +3669,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
 
   const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
-  if (!process.env[cred.env]) {
+  const workerSettings = cred.provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope: 'effective', parentEnv: workerShellEnv })
+    : null;
+  const credentialValue = workerSettings ? workerSettings.apiKey : process.env[cred.env];
+  if (!credentialValue) {
     const suffix =
       cred.provider === 'worker'
         ? ' (set TRISS_WORKER_API_KEY and run `triss coder init --provider worker` to use the existing OpenAI-compatible worker profile)'
@@ -3582,6 +3703,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ? ` ${altKey} is set, so a run works now with --model ${ALT_MODEL_HINTS[altKey]}; \`triss coder init\` makes it the default.`
       : '';
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
+  }
+  if (engine === 'opencode' && cred.provider === 'worker') {
+    validateWorkerRunConfiguration(modelUsed, workerSettings);
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
@@ -3614,7 +3738,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     cont: !!opts.continue,
     dir,
   });
-  const env = buildEngineEnv(cred.env);
+  const env = buildEngineEnv(cred.env, credentialValue);
   const engineVersion = detectOpencodeVersion(sh) || opencodeVersionPin();
 
   process.stderr.write(

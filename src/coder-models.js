@@ -53,6 +53,9 @@ import { dirname, join, basename, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { projectRoot } from './safety.js';
+import { readWorkerConfigSnapshot } from './config.js';
+import { acquireCoderMutationLock } from './coder-lock.js';
+export { lockPathFor } from './coder-lock.js';
 // getEnvFilePath resolves the per-scope Triss env-pin file (global
 // ~/.config/triss/.env or local <projectRoot>/.triss.env). The transactional
 // applyModelChange snapshots and restores TRISS_CODER_MODEL /
@@ -205,9 +208,10 @@ function validateWorkerProviderConfig(scope, models, diagnostics) {
     return;
   }
   const provider = config?.provider?.['triss-worker'];
-  const expectedBaseUrl = String(
-    process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1',
-  ).trim().replace(/\/+$/, '');
+  const worker = readWorkerConfigSnapshot({ scope });
+  const expectedBaseUrl = String(worker.baseUrl || 'https://api.deepseek.com/v1')
+    .trim()
+    .replace(/\/+$/, '');
   const providerReady =
     provider &&
     typeof provider === 'object' &&
@@ -506,9 +510,10 @@ export async function listProviderModels(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
   const provider = input.provider;
   if (provider === 'worker') {
+    const worker = readWorkerConfigSnapshot({ scope: input.scope || 'effective' });
     const configured = [
-      process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash',
-      process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro',
+      worker.flashModel || 'deepseek-v4-flash',
+      worker.proModel || 'deepseek-v4-pro',
     ];
     const models = [...new Set(configured.map((id) => String(id).trim()).filter(Boolean))]
       .map((id) => `triss-worker/${id}`);
@@ -668,7 +673,7 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   const credEnv = providerCredEnv(provider);
   const credential = { env: credEnv, ready: !!process.env[credEnv] };
 
-  const cat = await listProviderModels({ engine, provider }, deps);
+  const cat = await listProviderModels({ engine, provider, scope: input.scope }, deps);
   const verified = cat.status === 'ok' || cat.status === 'empty';
   const catalogue = verified ? new Set(cat.models || []) : null;
 
@@ -849,135 +854,6 @@ export function posixSingleQuote(value) {
 const SAFE_TOKEN = /^[a-zA-Z0-9._/:-]+$/;
 export function formatShellCommand(argv) {
   return argv.map((arg) => (SAFE_TOKEN.test(String(arg)) ? String(arg) : posixSingleQuote(arg))).join(' ');
-}
-
-// ─── default cross-process filesystem lock (Corrective Blocker A) ────────────
-//
-// applyModelChange/rollbackModelChange MUST hold an exclusive (engine, scope)
-// lock for EVERY real mutation — not only when a test injects deps.lock (the
-// CLI calls applyModelChange(..., {}) with empty deps). The default lock is a
-// real O_EXCL sentinel file under ~/.config/triss/locks so two triss processes
-// (or a set + a concurrent rollback) cannot interleave their config/env
-// commits. A held/stale lock is fail-CLOSED (structured lock-held + the lock
-// path + manual guidance); an unknown lock is NEVER auto-broken. Release
-// removes only the lock owned by THIS handle (token-verified before unlink), so
-// a stale lock left by a crashed writer is not silently clobbered and a
-// replacement lock created after release is not removed.
-
-// Sanitizes an engine/scope segment for the lock filename. The values come from
-// a known set (engine ∈ {opencode, crush}, scope ∈ {global, local}) but are
-// scrubbed defensively against any caller-supplied string to rule out path
-// traversal.
-function sanitizeLockSegment(value) {
-  const v = String(value == null ? '' : value).trim().toLowerCase();
-  const cleaned = v.replace(/[^a-z0-9-]/g, '-');
-  return cleaned || 'unknown';
-}
-
-// Absolute path of the default (engine, scope) lock file. Exported as the safe
-// test seam so deterministic tests can pre-hold/observe it with no sleeps.
-export function lockPathFor(engine, scope) {
-  return join(
-    homedir(),
-    '.config',
-    'triss',
-    'locks',
-    `coder-${sanitizeLockSegment(engine)}-${sanitizeLockSegment(scope)}.lock`,
-  );
-}
-
-// Acquires the default lock. Returns a handle whose release() removes ONLY this
-// handle's lock (token-verified). Throws a structured LOCK_HELD error (carrying
-// the absolute lock path + manual guidance) when the lock is already held; the
-// caller turns that into a lock-held result/diagnostic. Never auto-breaks.
-function defaultLockPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return !(err && err.code === 'ESRCH');
-  }
-}
-
-function reclaimDeadLock(lockPath, isPidAlive) {
-  let token;
-  try { token = readFileSync(lockPath, 'utf8'); } catch { return false; }
-  const match = /^pid=([1-9]\d*);ts=\d+;r=[A-Za-z0-9-]+$/.exec(token);
-  if (!match) return false;
-  const pid = Number(match[1]);
-  let alive;
-  try { alive = isPidAlive(pid); } catch { return false; }
-  if (alive !== false) return false;
-
-  // Verify the exact token again immediately before unlinking. Unknown or
-  // replaced locks remain fail-closed.
-  let current;
-  try { current = readFileSync(lockPath, 'utf8'); } catch { return false; }
-  if (current !== token) return false;
-  try {
-    rmSync(lockPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function acquireDefaultLock(engine, scope, opts = {}) {
-  const lockPath = lockPathFor(engine, scope);
-  const lockDir = dirname(lockPath);
-  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
-  try { chmodSync(lockDir, 0o700); } catch { /* best-effort: umask may have widened */ }
-  const token = `pid=${process.pid};ts=${Date.now()};r=${randomBytes(8).toString('hex')}`;
-  let fd;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fd = openSync(lockPath, 'wx', 0o600); // O_CREAT | O_EXCL — atomic cross-process acquire
-      break;
-    } catch (err) {
-      if (
-        err && err.code === 'EEXIST'
-        && attempt === 0
-        && reclaimDeadLock(lockPath, opts.isPidAlive || defaultLockPidAlive)
-      ) {
-        continue;
-      }
-      if (err && err.code === 'EEXIST') {
-        const held = new Error(
-          `model-change lock-held: another writer holds the lock at ${lockPath} ` +
-            `(engine=${engine}, scope=${scope}). Re-run once it completes; or, if you are certain no ` +
-            `triss process is writing models, remove the stale lock file manually: rm ${posixSingleQuote(lockPath)}`,
-        );
-        held.code = 'LOCK_HELD';
-        held.lockPath = lockPath;
-        held.engine = engine;
-        held.scope = scope;
-        throw held;
-      }
-      throw err;
-    }
-  }
-  try {
-    writeSync(fd, token);
-  } finally {
-    closeSync(fd);
-  }
-  try { chmodSync(lockPath, 0o600); } catch { /* best-effort */ }
-  let released = false;
-  return {
-    path: lockPath,
-    token,
-    release() {
-      if (released) return;
-      released = true;
-      // Remove ONLY the lock we own: re-read and verify the token matches, so
-      // a replacement lock another writer created (after we released) or a
-      // stale lock we do not own is never unlinked.
-      let current;
-      try { current = readFileSync(lockPath, 'utf8'); } catch { return; /* already gone */ }
-      if (current !== token) return;
-      try { rmSync(lockPath, { force: true }); } catch { /* best-effort */ }
-    },
-  };
 }
 
 // The backup root for transaction records: explicit deps.backupRoot (tests) or
@@ -1328,7 +1204,7 @@ export async function planModelChange(input = {}, deps = {}) {
   }
 
   // 4. Catalogue verification.
-  const cat = await listProviderModels({ engine, provider }, deps);
+  const cat = await listProviderModels({ engine, provider, scope }, deps);
   if (cat.status === 'ok') {
     const list = new Set(cat.models || []);
     if (main && !list.has(main)) {
@@ -1663,7 +1539,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
   //
   // deps.lock is an OVERRIDE seam for deterministic unit tests. When deps.lock
   // is a function the apply uses it. Otherwise (the real CLI passes {}) the
-  // apply uses the BUILT-IN default filesystem lock (acquireDefaultLock) —
+  // apply uses the BUILT-IN shared filesystem lock (acquireCoderMutationLock) —
   // absence of deps.lock MUST NEVER mean unlocked. A held/stale default lock
   // surfaces a structured lock-held result naming the lock path + manual
   // guidance; nothing is written.
@@ -1685,7 +1561,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
     }
   } else {
     try {
-      lockHandle = acquireDefaultLock(lockEngine, scope, { isPidAlive: deps.isLockPidAlive });
+      lockHandle = acquireCoderMutationLock(lockEngine, scope, { isPidAlive: deps.isLockPidAlive });
     } catch (lockErr) {
       return {
         ok: false,
@@ -2351,7 +2227,7 @@ export async function applyCrushModelChange(plan = {}, deps = {}) {
   try {
     lockHandle = deps.lock
       ? deps.lock('crush', scope)
-      : acquireDefaultLock('crush', scope, { isPidAlive: deps.isLockPidAlive });
+      : acquireCoderMutationLock('crush', scope, { isPidAlive: deps.isLockPidAlive });
   } catch (lockErr) {
     return {
       ok: false,
@@ -2854,7 +2730,7 @@ function readRollbackManifest(manifestPath) {
 export async function rollbackModelChange(input = {}, deps = {}) {
   const from = input.from;
   const scope = input.scope;
-  const lock = deps.lock || ((engine, lockScope) => acquireDefaultLock(
+  const lock = deps.lock || ((engine, lockScope) => acquireCoderMutationLock(
     engine,
     lockScope,
     { isPidAlive: deps.isLockPidAlive },

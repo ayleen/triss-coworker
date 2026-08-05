@@ -439,7 +439,12 @@ fixed order so only the right single key is prompted:
 settings. It creates `triss-worker/*` model pins and does not introduce or copy
 another secret. V1 supports one active worker profile and Chat Completions.
 Rerun `triss coder init --provider worker` after changing the base URL or
-flash/pro model ids so the managed OpenCode provider stays in sync.
+flash/pro model ids so the managed OpenCode provider stays in sync. `--global`
+reads the global worker profile rather than project-local values; parent-shell
+exports remain explicit overrides. Before a worker run forwards the key, Triss
+checks the effective project/global provider, endpoint, and complete model
+allowlist and fails with a scope-specific init command if they are stale. Init,
+model changes, and rollback share one `(engine, scope)` mutation lock.
 
 **Stale-model incident — don't hardcode a Zen free id.** Zen rotates its
 free tier, so a previously-working pinned id (the `opencode/hy3-*` free

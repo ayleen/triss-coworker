@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
@@ -29,6 +29,7 @@ import {
 import {
   inspectCoderModelState,
   listProviderModels,
+  lockPathFor,
   planModelChange,
   resolveProviderIntent,
 } from '../src/coder-models.js';
@@ -63,9 +64,16 @@ function fakeSpawnSync(cmd, args) {
   return { status: 1, stdout: '', error: null };
 }
 
-function writeManagedWorkerConfig(home, models = ['deepseek-v4-flash', 'deepseek-v4-pro']) {
-  const path = join(home, '.config', 'opencode', 'opencode.json');
-  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+function writeManagedWorkerConfig(
+  home,
+  models = ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  baseURL = 'https://api.deepseek.com/v1',
+  scope = 'global',
+) {
+  const path = scope === 'local'
+    ? join(home, 'opencode.json')
+    : join(home, '.config', 'opencode', 'opencode.json');
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({
     model: `triss-worker/${models[0]}`,
     small_model: `triss-worker/${models[0]}`,
@@ -75,7 +83,7 @@ function writeManagedWorkerConfig(home, models = ['deepseek-v4-flash', 'deepseek
         npm: '@ai-sdk/openai-compatible',
         name: 'Triss worker (OpenAI-compatible)',
         options: {
-          baseURL: 'https://api.deepseek.com/v1',
+          baseURL,
           apiKey: '{env:TRISS_WORKER_API_KEY}',
         },
         models: Object.fromEntries(models.map((id) => [id, { name: id }])),
@@ -353,6 +361,79 @@ test(
 );
 
 test(
+  'global worker init ignores a divergent project profile and uses global key endpoint and models',
+  withWorkerEnv(async ({ home }) => {
+    for (const key of [
+      'TRISS_WORKER_API_KEY',
+      'TRISS_WORKER_BASE_URL',
+      'TRISS_WORKER_FLASH_MODEL',
+      'TRISS_WORKER_PRO_MODEL',
+    ]) delete process.env[key];
+    writeFileSync(join(home, '.config', 'triss', '.env'), [
+      'TRISS_WORKER_API_KEY=sk-global',
+      'TRISS_WORKER_BASE_URL=https://global.example/v1',
+      'TRISS_WORKER_FLASH_MODEL=global-flash',
+      'TRISS_WORKER_PRO_MODEL=global-pro',
+      '',
+    ].join('\n'));
+    writeFileSync(join(home, '.triss.env'), [
+      'TRISS_WORKER_API_KEY=sk-local',
+      'TRISS_WORKER_BASE_URL=https://local.example/v1',
+      'TRISS_WORKER_FLASH_MODEL=local-flash',
+      'TRISS_WORKER_PRO_MODEL=local-pro',
+      '',
+    ].join('\n'));
+
+    await runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync });
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.provider['triss-worker'].options.baseURL, 'https://global.example/v1');
+    assert.deepEqual(Object.keys(config.provider['triss-worker'].models), [
+      'global-flash',
+      'global-pro',
+    ]);
+    assert.equal(config.model, 'triss-worker/global-flash');
+  }),
+);
+
+test(
+  'global worker init blocks a conflicting higher-precedence project provider and model',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(
+      home,
+      ['local-only', 'deepseek-v4-flash'],
+      'https://wrong-endpoint.example/v1',
+      'local',
+    );
+    const globalPath = join(home, '.config', 'opencode', 'opencode.json');
+
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      /existing opencode\.json issues/i,
+    );
+    assert.equal(existsSync(globalPath), false, 'global config must not be published after failed effective audit');
+  }),
+);
+
+test(
+  'worker init uses the shared opencode scope lock, including new-config creation',
+  withWorkerEnv(async ({ home }) => {
+    const lockPath = lockPathFor('opencode', 'global');
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, `pid=${process.pid};ts=1;r=liveowner`, { mode: 0o600 });
+    const configPath = join(home, '.config', 'opencode', 'opencode.json');
+
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      /lock-held/i,
+    );
+    assert.equal(existsSync(configPath), false);
+    assert.equal(existsSync(`${configPath}.triss-worker.lock`), false);
+  }),
+);
+
+test(
   'worker init surgically adds its provider to a safe existing config',
   withWorkerEnv(async ({ home }) => {
     const path = join(home, '.config', 'opencode', 'opencode.json');
@@ -479,7 +560,8 @@ test(
 
 test(
   'worker coder run forwards only TRISS_WORKER_API_KEY',
-  withWorkerEnv(async () => {
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
     let childEnv;
     await runCoderRun(
       'mechanical task',
@@ -496,6 +578,54 @@ test(
     for (const key of ['ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
       assert.equal(key in childEnv, false);
     }
+  }),
+);
+
+test(
+  'worker coder run fails before spawn when the managed provider is missing',
+  withWorkerEnv(async () => {
+    let spawned = false;
+    await assert.rejects(
+      () => runCoderRun(
+        'mechanical task',
+        { model: 'triss-worker/deepseek-v4-flash' },
+        {
+          spawn: () => {
+            spawned = true;
+            throw new Error('must not spawn');
+          },
+          spawnSync: fakeSpawnSync,
+          stdoutWrite: () => true,
+        },
+      ),
+      /triss coder init --engine opencode --provider worker --global/i,
+    );
+    assert.equal(spawned, false);
+  }),
+);
+
+test(
+  'worker coder run fails before spawn when the endpoint or selected model is stale',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home, ['deepseek-v4-flash', 'deepseek-v4-pro'], 'https://old.example/v1');
+    process.env.TRISS_WORKER_BASE_URL = 'https://new.example/v1';
+    let spawned = false;
+    await assert.rejects(
+      () => runCoderRun(
+        'mechanical task',
+        { model: 'triss-worker/not-configured' },
+        {
+          spawn: () => {
+            spawned = true;
+            throw new Error('must not spawn');
+          },
+          spawnSync: fakeSpawnSync,
+          stdoutWrite: () => true,
+        },
+      ),
+      /triss coder init --engine opencode --provider worker --global/i,
+    );
+    assert.equal(spawned, false);
   }),
 );
 

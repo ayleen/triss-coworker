@@ -68,7 +68,7 @@ function withTmpHome(fn) {
 
 // O_EXCL-create a sentinel lock file at `path` (simulates another LIVE writer
 // holding the default lock), creating the lock dir first (mirroring
-// acquireDefaultLock). Returns true on success.
+// acquireCoderMutationLock). Returns true on success.
 function holdLock(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   let fd;

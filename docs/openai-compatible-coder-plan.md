@@ -233,3 +233,27 @@ silently preserve that secret as its managed definition.
   exact provider error if the endpoint rejects the request.
 - User-facing documentation explains the one-profile v1 limit, secret
   boundary, local model list, and Chat Completions-only scope.
+
+## PR review remediation contract
+
+The implementation must preserve these additional invariants across init,
+model management, and run:
+
+1. Worker settings are resolved for the requested scope. A global operation
+   reads the global Triss env file only; a local operation reads local values
+   with global fallback. Values inherited from the parent shell override either
+   scope, but dotenv-injected values are never mistaken for shell overrides.
+2. A global setup audits any higher-precedence project
+   `provider["triss-worker"]`. If present, it must exactly match the managed
+   env-backed provider, endpoint, and complete flash/pro model set. Project
+   worker model pins must also belong to that set.
+3. Every worker run validates the effective managed provider, current endpoint,
+   and selected model before isolation or engine spawn. A missing or stale
+   definition fails closed with an engine-explicit, scope-explicit init command.
+4. Worker init, `coder model set`, and rollback use the same
+   `(engine, scope)` filesystem lock, including PID/token ownership and dead-PID
+   recovery. Init holds it from its first config read through the config rename
+   and model-pin persistence; new-file creation is not an unlocked exception.
+5. Worker readiness metadata has one shared source used by status and MCP.
+6. Tracker responses never include coder credential inventory; Jira issue
+   output and summarization corpus are independent of `TRISS_WORKER_API_KEY`.

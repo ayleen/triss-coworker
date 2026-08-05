@@ -96,7 +96,7 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
     assert.doesNotMatch(out, /^Coder$/m);
     assert.doesNotMatch(out, /default engine/);
     // The generic manifest row (env var readiness) still shows.
-    assert.match(out, /coder\s+⚠ missing ZHIPU_API_KEY/);
+    assert.match(out, /coder\s+⚠ missing TRISS_WORKER_API_KEY, ZHIPU_API_KEY/);
   } finally {
     process.chdir(origCwd);
     process.env.HOME = origHome;
@@ -192,13 +192,14 @@ test(
 test(
   'runStatus: any one coder provider key alone marks the generic coder row ready and surfaces exactly one provider-specific ready line (no network)',
   async () => {
-    // The four upstream providers a `triss coder` run can land on — the same
+    // The five upstream providers a `triss coder` run can land on — the same
     // table status.js renders as the "Coder providers" block. Any single key
     // set is enough: status should mark the generic coder manifest row ready,
     // render exactly one provider-specific "<label> <ENV> ready" line for the
-    // configured key (the other three read "missing"), and make NO network
+    // configured key (the other four read "missing"), and make NO network
     // calls while doing so.
     const PROVIDERS = [
+      { label: 'triss-worker', env: 'TRISS_WORKER_API_KEY' },
       { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
       { label: 'opencode-zen/go', env: 'OPENCODE_API_KEY' },
       { label: 'moonshot', env: 'MOONSHOT_API_KEY' },

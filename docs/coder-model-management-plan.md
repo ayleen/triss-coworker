@@ -648,7 +648,7 @@ verification contract as OpenCode applies (Corrective Blocker A):
   released on every exit (success, failure, rollback-failed).
 - `deps.lock` is an OVERRIDE seam for deterministic unit tests ONLY. Absence of
   `deps.lock` MUST NEVER mean unlocked: when `deps.lock` is not supplied the
-  operation MUST use the built-in filesystem lock via `acquireDefaultLock`.
+  operation MUST use the shared filesystem lock via `acquireCoderMutationLock`.
 - The lock seam is `deps.lock(engine, scope)` returning `{ release() }`. When
   `deps.lock` is injected, the apply MUST call it; tests assert acquire happens
   before the config read and release happens after verification completes.

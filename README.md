@@ -537,7 +537,12 @@ The worker route uses Chat Completions through `@ai-sdk/openai-compatible`.
 It creates no second API key and is supported by the OpenCode engine only.
 After changing the worker base URL or flash/pro model ids, rerun
 `triss coder init --provider worker`; `coder model set --provider worker`
-fails closed until the matching env-backed provider block is present.
+fails closed until the matching env-backed provider block is present. Global
+init reads only global worker settings (except genuine shell exports) and
+rejects a conflicting higher-precedence project provider. Every worker run
+revalidates the effective endpoint and model allowlist before forwarding the
+key, and prints an exact scope-specific init command when the saved provider is
+missing or stale.
 
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json

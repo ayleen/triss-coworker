@@ -4,11 +4,8 @@
 
 import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
 import { getConfig } from '../config.js';
-// Circular import: coder.js's config.js dependency chain already involves
-// this kind of cycle (see the comment in src/commands/coder.js next to
-// its `chooseScope` import) — safe here too since coderCredentialReady is
-// only called inside listTools(), never at module-eval time.
-import { coderCredentialReady } from '../commands/coder.js';
+// Shared provider metadata keeps MCP exposure aligned with `triss status`.
+import { coderCredentialReady } from '../coder-providers.js';
 import {
   askHandler,
   chatHandler,
@@ -863,7 +860,7 @@ const CODER_TOOLS = [
   {
     name: 'triss_coder_status',
     description:
-      'Show the coding agent setup: provider key presence (ZHIPU_API_KEY / ' +
+      'Show the coding agent setup: provider key presence (TRISS_WORKER_API_KEY / ZHIPU_API_KEY / ' +
       'OPENCODE_API_KEY / MOONSHOT_API_KEY / KIMI_API_KEY), ' +
       'the default engine, each engine (opencode + crush) version/install ' +
       'state, which opencode.json / crush.json config files exist, and how ' +

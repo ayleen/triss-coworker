@@ -201,13 +201,12 @@ export async function jiraSearchHandler({ jql, question, limit = 50, model, max_
   });
 }
 
-export async function jiraIssueHandler({ key, with_comments, question, model, max_tokens }) {
+export async function jiraIssueHandler({ key, with_comments, question, model, max_tokens }, deps = {}) {
   const { jira } = await import('../integrations/jira/client.js');
   const { adfToText } = await import('../integrations/jira/adf.js');
   const issue = await jira.getIssue(key);
   const f = issue.fields || {};
   const lines = [
-    `TRISS_WORKER_API_KEY: ${process.env.TRISS_WORKER_API_KEY ? 'configured' : 'not set'} (reused by triss-worker/* OpenAI-compatible coder models)`,
     `Key: ${issue.key}`,
     `Summary: ${f.summary}`,
     `Type: ${f.issuetype?.name}`,
@@ -235,7 +234,7 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
       { role: 'user', content: `<jira-issue>\n${text}\n</jira-issue>` },
       { role: 'user', content: question },
     ],
-  });
+  }, deps);
 }
 
 export async function jiraCreateHandler({
