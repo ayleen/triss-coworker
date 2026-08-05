@@ -13,6 +13,63 @@ const { join, resolve } = path;
 
 const BIN = resolve("bin/triss.js");
 
+test("coder model set --allow-unverified requires explicit main and --small", () => {
+  const home = mkdtempSync(join(tmpdir(), "triss-coder-model-explicit-pair-"));
+  const trissDir = join(home, ".config", "triss");
+  const opencodeDir = join(home, ".config", "opencode");
+  mkdirSync(trissDir, { recursive: true });
+  mkdirSync(opencodeDir, { recursive: true });
+  writeFileSync(join(trissDir, ".env"), "");
+
+  const opencodeConfigPath = join(opencodeDir, "opencode.json");
+  const sentinel = JSON.stringify(
+    {
+      model: "zai-coding-plan/glm-5.2",
+      small_model: "zai-coding-plan/glm-5-turbo",
+      permission: { bash: { "*": "deny" } },
+    },
+    null,
+    2,
+  ) + "\n";
+  writeFileSync(opencodeConfigPath, sentinel);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN,
+        "coder",
+        "model",
+        "set",
+        "zai-coding-plan/glm-5.2",
+        "--engine",
+        "opencode",
+        "--global",
+        "--allow-unverified",
+        "--yes",
+      ],
+      {
+        cwd: home,
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          TMPDIR: process.env.TMPDIR || tmpdir(),
+          LANG: process.env.LANG || "en_US.UTF-8",
+          ZHIPU_API_KEY: "fake",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0, "the escape hatch must reject an inherited small role");
+    assert.match(result.stderr, /--allow-unverified.*explicit main.*--small/i);
+    assert.equal(readFileSync(opencodeConfigPath, "utf8"), sentinel, "rejection must not mutate config");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("coder model set canonical Z.AI pair succeeds without --allow-unverified and without clobbering custom keys", () => {
   const home = mkdtempSync(join(tmpdir(), "triss-coder-model-cli-"));
   const trissDir = join(home, ".config", "triss");

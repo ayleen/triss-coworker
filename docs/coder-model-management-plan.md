@@ -211,6 +211,12 @@ even if an environment default currently points to the same engine. This is
 intentionally stricter than read-only commands and older setup flows that
 default to OpenCode/global.
 
+A catalogue-backed model-set recovery command may be generated only from a
+successful, non-empty response with a verified recommended pair. Authentication
+or authorization failures, an authoritative empty catalogue, invalid data, and
+transient failures produce status-specific guidance only; they must never reuse
+a current role from another provider to fabricate a repair command.
+
 **Help text for `coder model set`** must describe both engines and their exact configuration targets:
 - OpenCode: `opencode.json` at project `.crush/crush.json` or global `~/.local/share/crush/crush.json`
 - Show that OpenCode has two separate main model sources (runtime main from env pins vs config main from `opencode.json.model`)

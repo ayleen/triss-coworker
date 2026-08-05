@@ -60,6 +60,12 @@ only transport failures and HTTP 408/429/500/502/503/504 are bypassable. HTTP
 401/403, an empty catalogue, malformed model entries, and every other HTTP
 error remain blocking and cannot mutate the stored pair.
 
+`coder models` prints a model-set recovery command only after a successful,
+non-empty Go catalogue response supplies a verified recommended pair. For
+authentication/authorization failures, an authoritative empty catalogue,
+invalid data, or a transient failure, it reports the specific catalogue state
+without inventing a cross-provider or otherwise unverified repair command.
+
 The run process receives only `OPENCODE_API_KEY`; Z.AI and Kimi credentials
 are not forwarded. Crush remains Z.AI-only and rejects Go models before
 spawning.

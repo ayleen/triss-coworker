@@ -300,6 +300,43 @@ test(
 );
 
 test(
+  'inspect/recovery: non-ok Go catalogues report status-specific warnings and never fabricate a model-set command',
+  withTmpHome(async () => {
+    process.env.OPENCODE_API_KEY = 'sk-shared';
+    const svc = await loadService();
+    const response = (ok, status, body) => async () => ({
+      ok,
+      status,
+      json: async () => body,
+    });
+    const cases = [
+      { status: 'forbidden', fetch: httpErrorFetch(403) },
+      { status: 'empty', fetch: response(true, 200, { data: [] }) },
+      { status: 'invalid', fetch: malformedFetch() },
+      { status: 'transient', fetch: timeoutFetch() },
+    ];
+
+    for (const c of cases) {
+      const state = await svc.inspectCoderModelState(
+        { engine: 'opencode', provider: 'opencode-go' },
+        { fetch: c.fetch },
+      );
+      assert.equal(state.catalogue_status, c.status);
+      assert.ok(
+        state.warnings.some((warning) => warning.code === `catalogue-${c.status}`),
+        `${c.status}: warning must preserve the authoritative catalogue status`,
+      );
+      const recovery = svc.formatModelRecovery(state, {});
+      assert.deepEqual(
+        recovery.commands,
+        [],
+        `${c.status}: no verified Go recommendation means no model-set command`,
+      );
+    }
+  }),
+);
+
+test(
   'planModelChange: rejects a Zen/Go mixed pair even though both use OPENCODE_API_KEY',
   withTmpHome(async ({ home }) => {
     seedGlobalConfig(home, {
