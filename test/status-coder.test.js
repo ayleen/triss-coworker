@@ -200,7 +200,7 @@ test(
     // calls while doing so.
     const PROVIDERS = [
       { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
-      { label: 'opencode-zen', env: 'OPENCODE_API_KEY' },
+      { label: 'opencode-zen/go', env: 'OPENCODE_API_KEY' },
       { label: 'moonshot', env: 'MOONSHOT_API_KEY' },
       { label: 'kimi-for-coding', env: 'KIMI_API_KEY' },
     ];

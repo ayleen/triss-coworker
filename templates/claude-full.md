@@ -225,14 +225,16 @@ forwards it as `ZAI_API_KEY` for older binaries. See
 Configure via `triss coder init` or `triss config wizard coder`. The opencode
 engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
 sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/deepseek-v4-flash-free`) with `OPENCODE_API_KEY` — run `triss coder models` to see current offerings —
-and `--provider moonshot` / `--provider kimi-for-coding` set up **Moonshot
+`opencode/deepseek-v4-flash-free`) with `OPENCODE_API_KEY` — run `triss coder models` to see current offerings.
+The paid `--provider opencode-go` path shares that key but uses distinct
+`opencode-go/*` models such as `opencode-go/deepseek-v4-flash`. The
+`--provider moonshot` / `--provider kimi-for-coding` paths set up **Moonshot
 Kimi** models: pay-as-you-go `moonshotai/*` (e.g. `moonshotai/kimi-k2.7-code`)
 with `MOONSHOT_API_KEY`, or the flat-rate subscription `kimi-for-coding/*`
 (e.g. `kimi-for-coding/k3` — Kimi K3) with `KIMI_API_KEY`. Each run forwards
-only the key its model needs, so a Zen- or Kimi-only machine needs no
+only the key its model needs, so a Zen-, Go-, or Kimi-only machine needs no
 `ZHIPU_API_KEY`. Env vars: `ZHIPU_API_KEY` (required for GLM; the default
-provider), `OPENCODE_API_KEY` (optional — unlocks `opencode/*` Zen models),
+provider), `OPENCODE_API_KEY` (optional — shared by `opencode/*` Zen and `opencode-go/*` Go models),
 `MOONSHOT_API_KEY` / `KIMI_API_KEY` (optional — unlock `moonshotai/*` /
 `kimi-for-coding/*` Kimi models),
 `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`

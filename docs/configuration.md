@@ -130,7 +130,7 @@ Removes a variable.
 | `worker`   | `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, `TRISS_WORKER_FLASH_MODEL`, `TRISS_WORKER_PRO_MODEL` | only `TRISS_WORKER_API_KEY` is required |
 | `jira`     | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`           | all three                                 |
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
-| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>` — resolves engine, then provider, then prompts only the selected provider's key; writes `opencode.json`/`crush.json` + agent templates) | the **selected provider's** key — `ZHIPU_API_KEY` (`glm`), `OPENCODE_API_KEY` (`opencode-zen`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`); only the resolved one is required, the rest optional |
+| `coder`    | `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>`) | the **selected provider's** key — `ZHIPU_API_KEY` (`glm`), shared `OPENCODE_API_KEY` (`opencode-zen` or `opencode-go`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`) |
 
 When you add a new integration (see [extending.md](extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
@@ -263,11 +263,11 @@ self-hosted endpoints).
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
-| `OPENCODE_API_KEY`               | no¹      | —                  | OpenCode Zen key (opencode engine only) — unlocks the live `opencode/*` catalogue. **Do not pin a stale free id** (the `hy3-*` free tier has gone stale before); resolve a current model with `triss coder models` and re-pin it — <https://opencode.ai/docs/zen/> |
+| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engine only). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md). |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
 | `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model` (and written to `opencode.json` `model` by `init`/`triss coder model set`). `moonshotai/kimi-k2.7-code` for Moonshot, `kimi-for-coding/k3` for the Kimi subscription. For Zen pick a live id via `triss coder models` — never hardcode a permanent free replacement (see the stale-model note) |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Go uses `opencode-go/<id>`; Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
@@ -321,22 +321,22 @@ preset models.
 
 ¹ **Credentials are provider-specific.** A run needs the one key its
 resolved model requires: `zai-coding-plan/*` and `zai/*` (GLM) need
-`ZHIPU_API_KEY`; `opencode/*` OpenCode Zen models need `OPENCODE_API_KEY`
-(resolve a live id with `triss coder models` — the free tier rotates, so a
-pinned id goes stale; see the stale-model note); `moonshotai/*` and
+`ZHIPU_API_KEY`; `opencode/*` Zen and `opencode-go/*` Go models need `OPENCODE_API_KEY`
+(resolve live ids with `triss coder models`; Zen's free tier rotates, so its
+pinned ids can go stale); `moonshotai/*` and
 `moonshotai-cn/*` Kimi models need `MOONSHOT_API_KEY`; `kimi-for-coding/*`
 subscription models need `KIMI_API_KEY`. So `ZHIPU_API_KEY` is
 "required" only in the sense that it is the default provider's key — a
-zen-only setup runs on `OPENCODE_API_KEY` alone, a Kimi-only setup on its
+Zen- or Go-only setup runs on `OPENCODE_API_KEY` alone, a Kimi-only setup on its
 Kimi key alone. `triss coder run` forwards
 whichever key the model needs to the engine subprocess and gates on it
 before spawning. The `crush` engine speaks Z.AI only and always needs
 `ZHIPU_API_KEY`. `triss status` / `triss_coder_status` show all provider
 keys, and the coder MCP tools surface once **any** is set. Run
-`triss coder init --provider opencode-zen` (or `--provider moonshot` /
+`triss coder init --provider opencode-zen` / `--provider opencode-go` (or `--provider moonshot` /
 `--provider kimi-for-coding`) to set up a non-GLM model interactively
 (key + `opencode.json`); Zen details are in
-[opencode-zen.md](opencode-zen.md). The two Kimi providers need no
+[opencode-zen.md](opencode-zen.md); Go details are in [opencode-go.md](opencode-go.md). The two Kimi providers need no
 endpoint probe: their plans use different keys, so the provider choice
 already names the endpoint.
 
@@ -429,7 +429,7 @@ fixed order so only the right single key is prompted:
    defaulting — give it `--engine` (or export `TRISS_CODER_ENGINE`) to
    proceed unattended.
 2. **Provider** next, *after* the engine and *before* any credential
-   prompt: `--provider` (`glm`, `opencode-zen`, `moonshot`,
+   prompt: `--provider` (`glm`, `opencode-zen`, `opencode-go`, `moonshot`,
    `kimi-for-coding`) → the engine's default for the keys already set.
 3. Triss then prompts for **only** that provider's key and writes the
    matching `opencode.json`/`crush.json`.

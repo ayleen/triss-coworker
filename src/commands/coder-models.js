@@ -177,7 +177,7 @@ function renderIntentDiagnostics(intent) {
   }
   process.stderr.write(
     pc.dim(
-      '  Pass --provider <name> explicitly: zai, opencode-zen, moonshot, kimi-for-coding.\n',
+      '  Pass --provider <name> explicitly: zai, opencode-zen, opencode-go, moonshot, kimi-for-coding.\n',
     ),
   );
 }

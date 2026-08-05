@@ -228,14 +228,29 @@ const ZEN_SMALL_PRIORITY = ['deepseek-v4-flash-free', 'north-mini-code-free', 'm
 const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
 const ZEN_MODELS_TIMEOUT_MS = 10_000;
 
+const GO_MODEL_CHOICES = [
+  { label: 'deepseek-v4-flash — DeepSeek V4 Flash, 1M context', value: 'deepseek-v4-flash' },
+];
+const GO_MAIN_PRIORITY = ['deepseek-v4-flash'];
+const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
+const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
+
 // Fetches the set of currently-offered OpenCode Zen model ids, or null if it
 // can't be verified (no key, non-200, network/parse error). Injectable
 // `fetchImpl` mirrors the Z.AI probe (tests pass a fake; never a live call).
 async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
+  return fetchOpenCodeModelIds(ZEN_MODELS_URL, fetchImpl);
+}
+
+async function fetchGoModelIds(fetchImpl = globalThis.fetch) {
+  return fetchOpenCodeModelIds(GO_MODELS_URL, fetchImpl);
+}
+
+async function fetchOpenCodeModelIds(url, fetchImpl = globalThis.fetch) {
   const key = process.env.OPENCODE_API_KEY;
   if (!key) return null;
   try {
-    const res = await fetchImpl(ZEN_MODELS_URL, {
+    const res = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(ZEN_MODELS_TIMEOUT_MS),
     });
@@ -247,6 +262,36 @@ async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
   } catch {
     return null;
   }
+}
+
+function resolveGoCatalogue(available) {
+  if (!available) {
+    process.stderr.write(
+      pc.yellow(
+        '  ⚠ could not fetch the OpenCode Go catalogue — using the built-in DeepSeek V4 Flash ' +
+          'default; availability is NOT verified. Check the subscription and workspace settings at ' +
+          'https://opencode.ai/docs/go/.\n',
+      ),
+    );
+    return {
+      available: null,
+      choices: GO_MODEL_CHOICES,
+      mainDefault: GO_MAIN_PRIORITY[0],
+      smallDefault: GO_SMALL_PRIORITY[0],
+    };
+  }
+  const firstAvailable = (priority) => priority.find((id) => available.has(id));
+  const known = new Map(GO_MODEL_CHOICES.map((choice) => [choice.value, choice]));
+  const orderedIds = [
+    ...GO_MAIN_PRIORITY.filter((id) => available.has(id)),
+    ...[...available].filter((id) => !GO_MAIN_PRIORITY.includes(id)),
+  ];
+  const choices = orderedIds.map(
+    (id) => known.get(id) || { label: id, value: id },
+  );
+  const mainDefault = firstAvailable(GO_MAIN_PRIORITY) || orderedIds[0];
+  const smallDefault = firstAvailable(GO_SMALL_PRIORITY) || mainDefault;
+  return { available, choices, mainDefault, smallDefault };
 }
 
 // Resolves a Zen catalogue { available, mainDefault, smallDefault, choices }
@@ -287,6 +332,7 @@ function resolveZenCatalogue(available) {
 const CODER_PROVIDER_CHOICES = [
   { label: 'Z.AI GLM (glm-5.2, …) — needs a Z.AI key', value: 'zai' },
   { label: 'OpenCode Zen (free models incl. DeepSeek V4 Flash) — needs an OpenCode key', value: 'opencode-zen' },
+  { label: 'OpenCode Go subscription (DeepSeek V4 Flash) — uses an OpenCode key', value: 'opencode-go' },
   { label: 'Moonshot Kimi pay-as-you-go (kimi-k2.7-code, kimi-k3) — needs a Moonshot key', value: 'moonshot' },
   { label: 'Kimi for Coding subscription (K3) — needs a Kimi for Coding key', value: 'kimi-for-coding' },
 ];
@@ -299,9 +345,9 @@ const CODER_PROVIDER_CHOICES = [
 // actually authenticates against. The Kimi kinds need no probe at all: the two
 // plans use DIFFERENT credential envs (MOONSHOT_API_KEY vs KIMI_API_KEY), so
 // the chosen kind already names the endpoint.
-// `zenCatalogue` (from resolveZenCatalogue) supplies the live-verified Zen
-// defaults/choices when the kind is opencode-zen; omitted for the others.
-function coderInitCatalogue(providerInfo, zenCatalogue) {
+// `openCodeCatalogue` supplies the live-verified defaults/choices for either
+// OpenCode provider; it is omitted for providers without that catalogue flow.
+function coderInitCatalogue(providerInfo, openCodeCatalogue) {
   if (providerInfo.kind === 'moonshot') {
     return {
       prefix: 'moonshotai',
@@ -325,7 +371,7 @@ function coderInitCatalogue(providerInfo, zenCatalogue) {
     };
   }
   if (providerInfo.kind === 'opencode-zen') {
-    const z = zenCatalogue || {
+    const z = openCodeCatalogue || {
       available: null,
       choices: ZEN_MODEL_CHOICES,
       mainDefault: ZEN_MAIN_PRIORITY[0],
@@ -343,6 +389,25 @@ function coderInitCatalogue(providerInfo, zenCatalogue) {
       available: z.available,
     };
   }
+  if (providerInfo.kind === 'opencode-go') {
+    const go = openCodeCatalogue || {
+      available: null,
+      choices: GO_MODEL_CHOICES,
+      mainDefault: GO_MAIN_PRIORITY[0],
+      smallDefault: GO_SMALL_PRIORITY[0],
+    };
+    const idxOf = (value) => Math.max(0, go.choices.findIndex((choice) => choice.value === value));
+    return {
+      prefix: 'opencode-go',
+      choices: go.choices,
+      mainDefault: go.mainDefault,
+      smallDefault: go.smallDefault,
+      mainIdx: idxOf(go.mainDefault),
+      smallIdx: idxOf(go.smallDefault),
+      noun: 'OpenCode Go',
+      available: go.available,
+    };
+  }
   return {
     prefix: providerInfo.detectedZai || DEFAULT_CODER_MODEL.split('/')[0],
     choices: GLM_MODEL_CHOICES,
@@ -358,6 +423,7 @@ function coderInitCatalogue(providerInfo, zenCatalogue) {
 // preset is judged by provider, not by exact string.
 const KIND_KEY_ENVS = {
   'opencode-zen': 'OPENCODE_API_KEY',
+  'opencode-go': 'OPENCODE_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
   'kimi-for-coding': 'KIMI_API_KEY',
 };
@@ -365,7 +431,7 @@ function kindKeyEnv(kind) {
   return KIND_KEY_ENVS[kind] || 'ZHIPU_API_KEY';
 }
 function modelMatchesKind(model, kind) {
-  return !!model && coderModelCredential(model).env === kindKeyEnv(kind);
+  return !!model && coderModelCredential(model).provider === kind;
 }
 
 // Whether a preset/existing model may be REUSED verbatim for the chosen
@@ -378,6 +444,7 @@ function modelFitsProvider(model, providerInfo) {
   if (!model) return false;
   const prefix = String(model).split('/')[0];
   if (providerInfo.kind === 'opencode-zen') return prefix === 'opencode';
+  if (providerInfo.kind === 'opencode-go') return prefix === 'opencode-go';
   // Both Moonshot PAYG hosts share MOONSHOT_API_KEY, so either regional prefix
   // fits; kimi-for-coding is its own credential and endpoint.
   if (providerInfo.kind === 'moonshot') return prefix === 'moonshotai' || prefix === 'moonshotai-cn';
@@ -411,11 +478,13 @@ function readOpencodeModels(path) {
 async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
-  const zenCatalogue =
+  const openCodeCatalogue =
     providerInfo.kind === 'opencode-zen'
       ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch))
-      : undefined;
-  const cat = coderInitCatalogue(providerInfo, zenCatalogue);
+      : providerInfo.kind === 'opencode-go'
+        ? resolveGoCatalogue(await fetchGoModelIds(deps.fetch || globalThis.fetch))
+        : undefined;
+  const cat = coderInitCatalogue(providerInfo, openCodeCatalogue);
   const choose = deps.promptChoice || promptChoice;
   const interactive = !!process.stdin.isTTY;
 
@@ -425,8 +494,12 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
   // previous init's opencode/hy3-free after the promo ends) must NOT be honored
   // verbatim just because its provider prefix matches. When the catalogue is
   // unverified (available null) we can't reject anything.
-  const zenAvailable = providerInfo.kind === 'opencode-zen' ? cat.available : null;
-  const zenVerifiedAbsent = (m) => !!zenAvailable && !!m && !zenAvailable.has(providerModelId(m));
+  const providerAvailable =
+    providerInfo.kind === 'opencode-zen' || providerInfo.kind === 'opencode-go'
+      ? cat.available
+      : null;
+  const providerVerifiedAbsent = (m) =>
+    !!providerAvailable && !!m && !providerAvailable.has(providerModelId(m));
 
   // `prefix` is the provider prefix used for picker/default resolutions of
   // THIS field; it defaults to the catalogue's canonical prefix but the small
@@ -438,13 +511,13 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     const preset = process.env[envVar];
     if (preset) {
       if (modelMatchesKind(preset, providerInfo.kind)) {
-        if (zenVerifiedAbsent(preset)) {
+        if (providerVerifiedAbsent(preset)) {
           // A stale Zen pin the catalogue no longer lists: don't honor it —
           // fall through to an available model instead of pinning a dead id.
           process.stderr.write(
             pc.yellow(
-              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current OpenCode Zen catalogue ` +
-                '(free models are temporary); selecting an available model instead.\n',
+              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} catalogue; ` +
+                'selecting an available model instead.\n',
             ),
           );
         } else {
@@ -480,7 +553,7 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     //    plan included — so a zai-coding-plan model isn't re-pinned against a
     //    key that verified as pay-as-you-go zai (the infinite-retry trap) — AND
     //    (for Zen) the live catalogue still offers it.
-    if (modelFitsProvider(existingVal, providerInfo) && !zenVerifiedAbsent(existingVal)) {
+    if (modelFitsProvider(existingVal, providerInfo) && !providerVerifiedAbsent(existingVal)) {
       return existingVal;
     }
     // 3./4. picker (TTY, when the catalogue offers choices) or the provider's
@@ -496,10 +569,17 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
     }
     if (def) return `${prefix}/${def}`;
     if (fallbackFull) return fallbackFull;
+    if (cat.noun === 'OpenCode Zen') {
+      throw new Error(
+        `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
+          `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
+          `set ${envVar}=opencode/<id>, then re-run.`,
+      );
+    }
     throw new Error(
-      `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
-        `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
-        `set ${envVar}=opencode/<id>, then re-run.`,
+      `Coder setup incomplete: none of triss's known ${cat.noun} models are in the current ` +
+        `catalogue (for the ${label.toLowerCase()} model). Pick one from the provider catalogue and ` +
+        `set ${envVar}=${cat.prefix}/<id>, then re-run.`,
     );
   };
 
@@ -532,22 +612,26 @@ async function resolveInitModels(providerInfo, deps = {}, existing = {}) {
       process.stderr.write(
         pc.yellow(
           `  ⚠ ${field} resolved to "${m}", whose provider prefix triss doesn't recognize ` +
-            '(known: zai-coding-plan/*, zai/*, opencode/*, moonshotai/*, moonshotai-cn/*, ' +
+            '(known: zai-coding-plan/*, zai/*, opencode/*, opencode-go/*, moonshotai/*, moonshotai-cn/*, ' +
             'kimi-for-coding/*). Runs will send it the ZHIPU_API_KEY by ' +
             'default and likely retry forever — set a model with a known prefix.\n',
         ),
       );
     }
   }
-  // zenAvailable (the live Zen catalogue Set, or null when unverified/non-zen)
-  // is returned so runCoderSetup's cross-scope audit can check a DIFFERENT
-  // scope's small_model for catalogue presence — exact equality with this
-  // scope's resolvedSmall is only meaningful for the scope being configured.
-  return { model, smallModel, zenAvailable };
+  // Return both the legacy Zen-specific view (for the focused stale-Zen
+  // recovery reporter) and the selected provider's catalogue (for generic
+  // cross-scope small-model validation, including Go).
+  return {
+    model,
+    smallModel,
+    zenAvailable: providerInfo.kind === 'opencode-zen' ? providerAvailable : null,
+    providerAvailable,
+  };
 }
 
 // Normalizes a --provider flag value (with aliases) to 'zai' | 'opencode-zen'
-// | 'moonshot' | 'kimi-for-coding', throwing on anything else. Shared by
+// | 'opencode-go' | 'moonshot' | 'kimi-for-coding', throwing on anything else. Shared by
 // resolveInitProvider and the crush guard so both accept the SAME alias set
 // (glm/z.ai/zhipu -> zai; opencode/zen -> opencode-zen; kimi/moonshotai ->
 // moonshot; kimi-coding/kimi-code -> kimi-for-coding).
@@ -555,10 +639,11 @@ export function normalizeProviderFlag(raw) {
   const v = String(raw).trim().toLowerCase();
   if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
   if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
+  if (['opencode-go', 'go'].includes(v)) return 'opencode-go';
   if (['moonshot', 'kimi', 'moonshotai'].includes(v)) return 'moonshot';
   if (['kimi-for-coding', 'kimi-coding', 'kimi-code'].includes(v)) return 'kimi-for-coding';
   throw new Error(
-    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, moonshot, kimi-for-coding.`,
+    `Unknown --provider "${raw}" — valid values: zai, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
   );
 }
 
@@ -601,6 +686,7 @@ function inferCoderProvider() {
       'Disambiguate by re-running with one of:\n' +
       '  triss config wizard coder --coder-provider zai\n' +
       '  triss config wizard coder --coder-provider opencode-zen\n' +
+      '  triss config wizard coder --coder-provider opencode-go\n' +
       '  triss config wizard coder --coder-provider moonshot\n' +
       '  triss config wizard coder --coder-provider kimi-for-coding'
   );
@@ -630,6 +716,7 @@ async function resolveInitProvider(opts, deps = {}) {
       'will not silently default to Z.AI. Re-run with one of:\n' +
       '  triss coder init --provider zai\n' +
       '  triss coder init --provider opencode-zen\n' +
+      '  triss coder init --provider opencode-go\n' +
       '  triss coder init --provider moonshot\n' +
       '  triss coder init --provider kimi-for-coding',
   );
@@ -729,6 +816,7 @@ async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
       'one of:\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider zai\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider opencode-zen\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider opencode-go\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider moonshot\n' +
       '  triss config wizard coder --coder-engine opencode --coder-provider kimi-for-coding',
   );
@@ -740,6 +828,12 @@ function coderProviderKeyInfo(provider) {
     return {
       env: 'OPENCODE_API_KEY',
       doc: 'OpenCode Zen API key — free models (catalogue-driven) — https://opencode.ai/docs/zen/',
+    };
+  }
+  if (provider === 'opencode-go') {
+    return {
+      env: 'OPENCODE_API_KEY',
+      doc: 'OpenCode Go subscription key — https://opencode.ai/docs/go/',
     };
   }
   if (provider === 'moonshot') {
@@ -801,6 +895,7 @@ function coderSmallModel() {
 export function coderModelCredential(model) {
   const provider = String(model || '').split('/')[0];
   if (provider === 'opencode') return { env: 'OPENCODE_API_KEY', provider: 'opencode-zen' };
+  if (provider === 'opencode-go') return { env: 'OPENCODE_API_KEY', provider: 'opencode-go' };
   if (provider === 'moonshotai' || provider === 'moonshotai-cn') {
     return { env: 'MOONSHOT_API_KEY', provider: 'moonshot' };
   }
@@ -815,6 +910,7 @@ const KNOWN_PROVIDER_PREFIXES = new Set([
   'zai-coding-plan',
   'zai',
   'opencode',
+  'opencode-go',
   'moonshotai',
   'moonshotai-cn',
   'kimi-for-coding',
@@ -862,7 +958,7 @@ export function coderCredentialReady() {
 // requires that (see src/integrations/_contract.js validateManifest).
 export const CODER_MANIFEST = {
   name: 'coder',
-  description: 'Coding agent — GLM, Kimi, or OpenCode Zen models (opencode or crush engine)',
+  description: 'Coding agent — GLM, Kimi, OpenCode Zen, or OpenCode Go models (opencode or crush engine)',
   envVars: [
     {
       name: 'ZHIPU_API_KEY',
@@ -879,7 +975,7 @@ export const CODER_MANIFEST = {
       name: 'OPENCODE_API_KEY',
       required: false,
       secret: true,
-      doc: 'OpenCode Zen API key for opencode/* models — https://opencode.ai/docs/zen/',
+      doc: 'OpenCode key for Zen opencode/* and Go opencode-go/* models — https://opencode.ai/docs/go/',
     },
     {
       // Optional: unlocks Moonshot PAYG models (moonshotai/*) for the
@@ -1180,6 +1276,7 @@ export async function runCoderSetup({ scope, provider, engine, inheritedModels, 
   const noun =
     {
       'opencode-zen': 'OpenCode Zen',
+      'opencode-go': 'OpenCode Go',
       moonshot: 'Moonshot Kimi',
       'kimi-for-coding': 'Kimi for Coding',
     }[resolvedProvider] || 'Z.AI GLM';
@@ -1213,9 +1310,14 @@ export async function runCoderSetup({ scope, provider, engine, inheritedModels, 
   // a bare run falling back to the GLM default (and demanding ZHIPU_API_KEY)
   // right after a successful Zen setup.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
-  const { model, smallModel, zenAvailable } = await resolveInitModels(providerInfo, deps, existing);
+  const { model, smallModel, zenAvailable, providerAvailable } = await resolveInitModels(
+    providerInfo,
+    deps,
+    existing,
+  );
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
+    providerAvailable,
   }).blocking;
   // Stale-Zen incident report (own scope). When the opencode.json being audited
   // is pinned to a Zen model the AUTHENTICATED live catalogue no longer offers,
@@ -1245,6 +1347,7 @@ export async function runCoderSetup({ scope, provider, engine, inheritedModels, 
         note: '(project scope — higher precedence than the global config, so it governs runs)',
         allowUnsafeBash,
         zenAvailable,
+        providerAvailable,
       });
       blocking = blocking || otherAudit.blocking;
     }
@@ -1567,22 +1670,24 @@ function opencodeConfigTemplate(model, smallModel) {
 // touches it), still tell them when its `model` provider prefix contradicts
 // the provider being configured — a mismatched prefix is exactly the
 // infinite-retry trap this whole feature exists to catch. `providerInfo` is
-// { kind: 'zai' | 'opencode-zen', detectedZai }: for zai the expected prefix
-// is the detected plan (skip if detection couldn't confirm one); for zen it
-// is the fixed `opencode`.
+// { kind: 'zai' | 'opencode-zen' | 'opencode-go', detectedZai }: for zai the
+// expected prefix is the detected plan (skip if detection couldn't confirm
+// one); the two OpenCode providers use fixed, distinct prefixes.
 function warnIfProviderMismatch(path, providerInfo) {
   // Prefixes that belong to the provider being configured. Empty means there
   // is nothing to compare against (a zai kind whose plan probe failed).
   const expected =
     providerInfo.kind === 'opencode-zen'
       ? ['opencode']
-      : providerInfo.kind === 'moonshot'
-        ? ['moonshotai', 'moonshotai-cn']
-        : providerInfo.kind === 'kimi-for-coding'
-          ? ['kimi-for-coding']
-          : providerInfo.detectedZai
-            ? [providerInfo.detectedZai]
-            : [];
+      : providerInfo.kind === 'opencode-go'
+        ? ['opencode-go']
+        : providerInfo.kind === 'moonshot'
+          ? ['moonshotai', 'moonshotai-cn']
+          : providerInfo.kind === 'kimi-for-coding'
+            ? ['kimi-for-coding']
+            : providerInfo.detectedZai
+              ? [providerInfo.detectedZai]
+              : [];
   if (!expected.length) return; // nothing to compare against
   let existing;
   try {
@@ -1751,10 +1856,9 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
       );
     }
   }
-  const wantEnv = kindKeyEnv(providerInfo.kind);
   const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
-  if (small && coderModelCredential(small).env !== wantEnv) {
+  if (small && coderModelCredential(small).provider !== providerInfo.kind) {
     blocking = true;
     process.stderr.write(
       pc.yellow(
@@ -1786,31 +1890,34 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
     // small-model flag), so the stale/gone model keeps being used and the new
     // pin is cosmetic. Blocking — no-clobber won't fix it silently.
     blocking = true;
+    const cat = coderInitCatalogue(providerInfo);
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${where} sets small_model="${small}", but init resolved small_model="${opts.resolvedSmall}" ` +
-          '(the old one is no longer selected — likely dropped from the OpenCode Zen catalogue). opencode ' +
+          `(the old one is no longer selected — likely dropped from the ${cat.noun} catalogue). opencode ` +
           'reads small_model from this file and triss cannot override it at run time, so runs keep using ' +
           `the stale model. Set small_model="${opts.resolvedSmall}", or delete opencode.json and re-run init.\n`,
       ),
     );
   } else if (
     small &&
-    opts.zenAvailable &&
-    coderModelCredential(small).env === 'OPENCODE_API_KEY' &&
-    !opts.zenAvailable.has(providerModelId(small))
+    opts.providerAvailable &&
+    coderModelCredential(small).provider === providerInfo.kind &&
+    !opts.providerAvailable.has(providerModelId(small))
   ) {
-    // CROSS-SCOPE (opts.zenAvailable is the live Zen catalogue). A DIFFERENT
+    // CROSS-SCOPE (opts.providerAvailable is the live provider catalogue). A DIFFERENT
     // scope's file is being audited, so exact equality with the scope-under-
     // config's resolvedSmall is meaningless — a valid in-catalogue small_model
     // that merely differs from this init's default is fine. What DOES break a
     // run is a Zen small_model the catalogue no longer lists (opencode reads it
     // from this higher-precedence file and triss can't override it). Block that.
     blocking = true;
+    const cat = coderInitCatalogue(providerInfo);
+    const temporary = providerInfo.kind === 'opencode-zen' ? ' (free models are temporary)' : '';
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${where} sets small_model="${small}", which the live OpenCode Zen catalogue no longer lists ` +
-          '(free models are temporary). opencode reads small_model from this file and triss cannot override ' +
+        `  ⚠ ${where} sets small_model="${small}", which the live ${cat.noun} catalogue no longer lists${temporary}. ` +
+          'opencode reads small_model from this file and triss cannot override ' +
           'it at run time, so runs will fail. Update small_model to a listed model, or delete opencode.json ' +
           'and re-run init.\n',
       ),
@@ -1823,7 +1930,8 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
 // runCoderSetup's single resolveInitModels call) plus the deny-first bash
 // policy. Never clobbers an existing file — instead it audits that file (main
 // model provider, small_model provider, deny-first policy) and warns on any
-// problem. `providerInfo` is { kind: 'zai' | 'opencode-zen', detectedZai }.
+// problem. `providerInfo` carries the normalized provider kind and optional
+// detected Z.AI plan prefix.
 function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) {
   const path = opencodeConfigPath(scope);
   if (existsSync(path)) {
@@ -1835,6 +1943,7 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     return auditExistingConfig(path, providerInfo, {
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
+      providerAvailable: opts.providerAvailable,
     });
   }
   mkdirSync(dirname(path), { recursive: true });
@@ -3084,8 +3193,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Provider-aware credential gate. crush only speaks Z.AI (it bridges
   // ZHIPU_API_KEY -> ZAI_API_KEY), so it always needs ZHIPU_API_KEY. For
   // opencode the required key follows the resolved model's provider:
-  // `opencode/*` (OpenCode Zen, e.g. the free opencode/deepseek-v4-flash-free) needs
-  // OPENCODE_API_KEY, every other prefix needs ZHIPU_API_KEY. Keeping the
+  // `opencode/*` (OpenCode Zen) and `opencode-go/*` (OpenCode Go) need the
+  // shared OPENCODE_API_KEY; other provider prefixes use their own keys. Keeping the
   // Z.AI message wording identical preserves the historical error text.
   // crush speaks Z.AI GLM only. An explicit `--model opencode/*` would be
   // forwarded to crush verbatim (buildCrushRunArgv) and fail at the engine
@@ -3095,7 +3204,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env !== 'ZHIPU_API_KEY') {
     throw new Error(
       `The crush engine speaks Z.AI GLM only — it cannot run the non-GLM model "${modelOverride}". ` +
-        'Use the opencode engine (drop --engine crush) for opencode/*, moonshotai/*, or ' +
+        'Use the opencode engine (drop --engine crush) for opencode/*, opencode-go/*, moonshotai/*, or ' +
         'kimi-for-coding/* models, or choose a GLM model.',
     );
   }
@@ -3103,13 +3212,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
   if (!process.env[cred.env]) {
     const suffix =
-      {
-        OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models — run `triss coder models` to see current offerings)',
-        MOONSHOT_API_KEY:
-          ' (set MOONSHOT_API_KEY to use Moonshot Kimi models like moonshotai/kimi-k2.7-code)',
-        KIMI_API_KEY:
-          ' (set KIMI_API_KEY to use Kimi for Coding subscription models like kimi-for-coding/k3)',
-      }[cred.env] || '';
+      cred.provider === 'opencode-go'
+        ? ' (set OPENCODE_API_KEY to use OpenCode Go models — run `triss coder models --provider opencode-go` to see current offerings)'
+        : {
+            OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models — run `triss coder models` to see current offerings)',
+            MOONSHOT_API_KEY:
+              ' (set MOONSHOT_API_KEY to use Moonshot Kimi models like moonshotai/kimi-k2.7-code)',
+            KIMI_API_KEY:
+              ' (set KIMI_API_KEY to use Kimi for Coding subscription models like kimi-for-coding/k3)',
+          }[cred.env] || '';
     // A bare opencode-engine run resolves the GLM default model, so it demands
     // ZHIPU_API_KEY even when another provider's key IS configured — and that
     // key would serve a run today via an explicit model. Name that path

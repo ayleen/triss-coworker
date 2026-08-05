@@ -52,7 +52,9 @@ policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine crush`
 opencode engine also runs **OpenCode Zen** models (`opencode/*`, e.g. the free
 `opencode/deepseek-v4-flash-free`): `triss coder init --provider opencode-zen` sets it up with
 `OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — run
-`triss coder models` to see current offerings — and **Moonshot Kimi** models:
+`triss coder models` to see current offerings. Paid **OpenCode Go** uses the
+same key with a distinct `opencode-go/*` prefix; configure it with
+`triss coder init --provider opencode-go`. The engine also runs **Moonshot Kimi** models:
 `triss coder init --provider moonshot` (pay-as-you-go `moonshotai/*`, e.g.
 `moonshotai/kimi-k2.7-code`, `MOONSHOT_API_KEY`) or
 `triss coder init --provider kimi-for-coding` (flat-rate subscription
