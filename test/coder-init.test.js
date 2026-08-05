@@ -608,6 +608,12 @@ test(
     const invalidFetches = [
       async () => ({ ok: true, status: 200, json: async () => ({ data: 'not-an-array' }) }),
       async () => ({ ok: true, status: 200, json: async () => ({ data: [{ foo: 1 }, null] }) }),
+      async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: '   ' }] }) }),
+      async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'deepseek-v4-flash' }, null, { foo: 1 }] }),
+      }),
       async () => null,
     ];
     for (const fetch of invalidFetches) {
@@ -671,6 +677,40 @@ test(
 );
 
 test(
+  'runCoderInit --provider opencode-go: response-body timeout is transient and requires explicit --allow-unverified',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-body-timeout';
+    const bodyTimeout = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        const error = new Error('body read timed out');
+        error.name = 'AbortError';
+        throw error;
+      },
+    });
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-go' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: bodyTimeout },
+        ),
+      /temporarily unavailable.*triss coder init --provider opencode-go --allow-unverified --global/i,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+
+    await runCoderInit(
+      { global: true, provider: 'opencode-go', allowUnverified: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: bodyTimeout },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
+  }),
+);
+
+test(
   'runCoderInit --provider opencode-go: transport failure requires explicit --allow-unverified',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-go-temporary';
@@ -683,7 +723,7 @@ test(
           { global: true, provider: 'opencode-go' },
           { spawnSync: fakeSpawnAlreadyInstalled, fetch: transportFailure },
         ),
-      /OpenCode Go catalogue is temporarily unavailable.*--allow-unverified/i,
+      /OpenCode Go catalogue is temporarily unavailable.*triss coder init --provider opencode-go --allow-unverified --global/i,
     );
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
 
@@ -785,17 +825,22 @@ test(
   'runCoderSetup --provider opencode-go: direct wizard/postSetup path fails closed on a transient catalogue error',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-go-wizard-temporary';
-    await assert.rejects(
-      () =>
-        runCoderSetup(
-          { scope: 'global', provider: 'opencode-go' },
-          {
-            spawnSync: fakeSpawnAlreadyInstalled,
-            fetch: async () => ({ ok: false, status: 503 }),
-          },
+    for (const scope of ['global', 'local']) {
+      await assert.rejects(
+        () =>
+          runCoderSetup(
+            { scope, provider: 'opencode-go' },
+            {
+              spawnSync: fakeSpawnAlreadyInstalled,
+              fetch: async () => ({ ok: false, status: 503 }),
+            },
+          ),
+        new RegExp(
+          `temporarily unavailable \\(HTTP 503\\).*triss coder init --provider opencode-go --allow-unverified --${scope}`,
+          'i',
         ),
-      /temporarily unavailable \(HTTP 503\).*--allow-unverified/i,
-    );
+      );
+    }
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
   }),
 );

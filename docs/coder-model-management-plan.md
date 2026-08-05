@@ -131,8 +131,11 @@ State definitions are normative:
 - `not verified`: the request times out, authentication fails, returns another
   non-2xx response, or returns a payload without a parseable model list.
 
-`--allow-unverified` may apply only to `not verified`; it must never override an
-authoritative `unavailable` result.
+`--allow-unverified` may apply only to a provider-defined transient/not-verified
+state; it must never override authentication, authorization, invalid data, an
+authoritative empty catalogue, or an authoritative `unavailable` result. For
+OpenCode Go, the bypassable set is transport plus HTTP
+408/429/500/502/503/504 only.
 `not-supported` is not a failed verification: it means the provider exposes no
 catalogue API. Once credential and local provider/plan-prefix checks pass, a
 switch for that provider proceeds without `--allow-unverified`.

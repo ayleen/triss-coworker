@@ -165,12 +165,13 @@ readiness (no secrets printed), and a live **availability** per model:
   model is live.
 
 `--allow-unverified` narrows *which* `not verified` you may proceed past. It is
-accepted **only** when all of these hold: an explicit positional main model
-**and** explicit `--small` model are supplied, the resolved provider's
-credential is present, and
-`catalogue_status` is `timeout`, `http-error`, or `parse-error`. It is **never**
-accepted for `catalogue_status: unauthenticated` (no credential to trust) or for
-an authoritative `unavailable` model — those are conclusive, not "unverified".
+accepted **only** when an explicit positional main model and explicit `--small`
+model are supplied and the provider credential is present. For OpenCode Go,
+only `catalogue_status: transient` is bypassable: transport failures and HTTP
+408/429/500/502/503/504. Go `unauthenticated`, `forbidden`, `empty`, `invalid`,
+and authoritative unavailable states always block. Legacy Zen model management
+continues to allow `timeout`, `http-error`, or `parse-error`; it never accepts
+`unauthenticated` or authoritative `unavailable`.
 `catalogue_status: not-supported` is different: the provider has no catalogue
 API, so there is no remote list to bypass. After credential, provider-prefix,
 and plan-prefix validation succeeds, the switch proceeds without

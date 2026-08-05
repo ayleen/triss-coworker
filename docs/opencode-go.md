@@ -55,6 +55,11 @@ triss coder model set opencode-go/deepseek-v4-flash \
 triss coder run --model opencode-go/deepseek-v4-flash "implement the task"
 ```
 
+The same fail-closed boundary applies to `coder model set --allow-unverified`:
+only transport failures and HTTP 408/429/500/502/503/504 are bypassable. HTTP
+401/403, an empty catalogue, malformed model entries, and every other HTTP
+error remain blocking and cannot mutate the stored pair.
+
 The run process receives only `OPENCODE_API_KEY`; Z.AI and Kimi credentials
 are not forwarded. Crush remains Z.AI-only and rejects Go models before
 spawning.

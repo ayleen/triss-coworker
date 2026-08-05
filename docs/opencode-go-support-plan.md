@@ -131,9 +131,14 @@ configuration remains unchanged.
   not probe Z.AI or Zen.
 - Go init fails before writing model configuration on HTTP 401, HTTP 403, a
   valid empty catalogue, or an invalid catalogue response.
+- Every Go catalogue entry must contain a non-empty, whitespace-free string
+  `id`; mixed valid/malformed arrays are invalid rather than partially trusted.
 - An unverified built-in Go fallback is available only for transport or HTTP
   408/429/500/502/503/504 failures and only with explicit
   `--allow-unverified`.
+- `coder model set --allow-unverified` uses the same Go outcome contract as
+  init and cannot bypass authorization, empty, malformed, or non-retryable HTTP
+  responses.
 - Model management rejects Zen/Go mixed pairs despite their shared key.
 - Crush rejects Go before spawning.
 - Existing Zen, Z.AI, Moonshot, and Kimi tests remain green.

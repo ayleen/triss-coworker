@@ -641,12 +641,17 @@ function renderPlanDiagnostics(plan) {
     );
   }
   const catalogueStatus = plan.catalogue?.status || 'unknown';
-  const catalogueGuidance = catalogueStatus === 'not-supported'
-    ? '  This provider has no catalogue API; --allow-unverified is neither required nor used.\n' +
-      '  Fix the model, credential, policy, or precedence issue shown above and re-run.\n'
-    : '  Fix the flagged issue(s) and re-run; --allow-unverified only bypasses a\n' +
-      '  not-verified catalogue (timeout/http-error/parse-error), never auth or an\n' +
-      '  authoritative unavailable result.\n';
+  const catalogueGuidance =
+    catalogueStatus === 'not-supported'
+      ? '  This provider has no catalogue API; --allow-unverified is neither required nor used.\n' +
+        '  Fix the model, credential, policy, or precedence issue shown above and re-run.\n'
+      : plan.provider === 'opencode-go'
+        ? '  Fix the flagged issue(s) and re-run; for OpenCode Go, --allow-unverified only\n' +
+          '  bypasses transient transport or HTTP 408/429/500/502/503/504 failures. It never\n' +
+          '  bypasses 401/403, an empty catalogue, malformed data, or other HTTP errors.\n'
+        : '  Fix the flagged issue(s) and re-run; --allow-unverified only bypasses a\n' +
+          '  not-verified catalogue (timeout/http-error/parse-error), never auth or an\n' +
+          '  authoritative unavailable result.\n';
   process.stderr.write(
     pc.dim(`  Catalogue status for this attempt: ${catalogueStatus}.\n${catalogueGuidance}`),
   );
