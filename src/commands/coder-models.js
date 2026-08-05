@@ -421,6 +421,12 @@ export async function runCoderModelSet(mainArg, opts = {}) {
         '--small opencode/deepseek-v4-flash-free --engine opencode --global --yes',
     );
   }
+  if (opts.allowUnverified && (!main || !small)) {
+    throw new Error(
+      '`--allow-unverified` requires an explicit main model and explicit --small <model>; ' +
+        'inherited roles are not accepted by this safety escape hatch.',
+    );
+  }
 
   const intent = await resolveProviderIntent({
     engine,

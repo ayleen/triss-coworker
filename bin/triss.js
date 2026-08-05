@@ -299,7 +299,7 @@ coderModel
   .option('--provider <name>', 'provider kind: zai, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
   .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')
-  .option('--allow-unverified', 'proceed past a not-verified catalogue (timeout/http-error/parse-error) ONLY — never auth or an authoritative unavailable result')
+  .option('--allow-unverified', 'with explicit main + --small, bypass only a provider-defined transient catalogue failure (Go: transport or HTTP 408/429/500/502/503/504; Zen: timeout/http-error/parse-error; never auth or authoritative failure)')
   .option('--allow-unsafe-bash', 'proceed even if the existing opencode.json lacks the deny-first bash policy')
   .option('--yes', 'non-interactive confirmation: apply the planned switch (required to write; without it the plan is printed and nothing is changed)')
   .action((mainModel, opts) => wrap(runCoderModelSet)(mainModel, opts));

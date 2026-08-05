@@ -659,7 +659,22 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'small', value: configuredSmall.value, message: `Configured small model ${configuredSmall.value} is not available in the provider's catalogue` });
     }
   }
-  if (!verified && cat.status !== 'not-supported') {
+  if (provider === 'opencode-go' && cat.status !== 'ok' && cat.status !== 'not-supported') {
+    const goMessages = {
+      unauthenticated: 'OpenCode Go catalogue authentication failed',
+      forbidden: 'OpenCode Go catalogue access is forbidden for this workspace',
+      empty: 'OpenCode Go returned an authoritative empty catalogue',
+      invalid: 'OpenCode Go returned an invalid catalogue response',
+      transient: 'OpenCode Go catalogue is temporarily unavailable',
+    };
+    warnings.push({
+      code: `catalogue-${cat.status}`,
+      severity: 'warn',
+      scope: 'catalogue',
+      status: cat.status,
+      message: goMessages[cat.status] || `OpenCode Go catalogue failed: ${cat.status}`,
+    });
+  } else if (!verified && cat.status !== 'not-supported') {
     warnings.push({ code: 'catalogue-not-verified', severity: 'warn', scope: 'catalogue', status: cat.status, message: `Catalogue could not be verified: ${cat.status}` });
   }
 
@@ -1991,8 +2006,6 @@ export function formatModelRecovery(state = {}, _deps = {}) {
   const scopeFlag = state.scope === 'local' ? '--local' : '--global';
   const rec = state.recommended;
   const cur = state.current || {};
-  const mainUnavail = cur.main && cur.main.availability === 'unavailable';
-  const smallUnavail = cur.small && cur.small.availability === 'unavailable';
 
   // For OpenCode: when config_main exists and differs from runtime main,
   // use config_main as the persistent config-main role. If config_main is
@@ -2001,23 +2014,40 @@ export function formatModelRecovery(state = {}, _deps = {}) {
   // GLM shell override) with a Zen small; it chooses the verified recommended
   // Zen main+small pair instead.
   const configMain = state.config_main;
-  const configMainUnavail = configMain && configMain.availability === 'unavailable';
+
+  // A persistent repair may only be proposed from a verified, non-empty live
+  // catalogue. Account, invalid-data, empty, and transient states carry
+  // diagnostics but no speculative model mutation command.
+  if (
+    state.catalogue_status !== 'ok'
+    || !rec?.main
+    || !rec?.small
+    || !prefixFitsProvider(rawPrefix(rec.main), provider)
+    || !prefixFitsProvider(rawPrefix(rec.small), provider)
+  ) {
+    return { commands, diagnostics: state.warnings || [] };
+  }
 
   let mainTarget;
   let smallTarget;
 
   if (configMain) {
-    // config_main exists: use it if available, else use recommended
-    mainTarget = configMainUnavail && rec ? rec.main : configMain.value;
+    // config_main exists: retain it only when this verified catalogue contains
+    // it; otherwise use the verified recommendation.
+    mainTarget = configMain.availability === 'available' ? configMain.value : rec.main;
   } else {
-    // No config_main: fall back to current.main if unavailable, else recommended
-    mainTarget = (mainUnavail && rec && rec.main) || (cur.main && cur.main.value) || (rec && rec.main);
+    // No config_main: never reuse a runtime role from a different provider.
+    mainTarget = cur.main?.availability === 'available' ? cur.main.value : rec.main;
   }
 
-  // For small, always prefer the recommended when unavailable, then the configured value
-  smallTarget = (smallUnavail && rec && rec.small) || (cur.small && cur.small.value) || (rec && rec.small);
+  smallTarget = cur.small?.availability === 'available' ? cur.small.value : rec.small;
 
-  if (mainTarget || smallTarget) {
+  if (
+    mainTarget
+    && smallTarget
+    && prefixFitsProvider(rawPrefix(mainTarget), provider)
+    && prefixFitsProvider(rawPrefix(smallTarget), provider)
+  ) {
     const argv = ['triss', 'coder', 'model', 'set', '--engine', engine];
     if (provider) argv.push('--provider', provider);
     argv.push(scopeFlag);
