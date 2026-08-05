@@ -415,7 +415,10 @@ triss review --provider kimi # …or Kimi (pro preset = kimi-k3)
 
 Defaults to the `pro` preset because review needs reasoning. Output is
 a list of concrete issues with file:line citations — not a diff
-summary. Cost: a 25KB diff review on `pro` runs ~$0.005-0.01 with
+summary. GLM 5.2 reviews should use at least `--max-tokens 16384`; the generic
+8192-token default can be consumed by reasoning and return an empty verdict,
+especially on large diffs. Narrow the base/scope as well when only a remediation
+commit needs review. Cost: a 25KB diff review on `pro` runs ~$0.005-0.01 with
 prompt caching.
 
 Example shape:
@@ -538,8 +541,8 @@ A configured key does not by itself prove that the Go subscription or the
 workspace regional-hosting opt-in is active. Triss leaves those account
 settings untouched and reports inference-time provider errors verbatim. Go
 init fails closed on 401/403, malformed responses, and an authoritative empty
-catalogue. Temporary network, 429, or 5xx failures require an explicit
-`coder init --allow-unverified` before Triss will use its built-in Go fallback.
+catalogue. Temporary network, 429, or 500/502/503/504 failures require an explicit
+`triss coder init --allow-unverified` before Triss will use its built-in Go fallback.
 
 Kimi works the same way:
 
@@ -714,11 +717,16 @@ invoking the agentic `coder` runtime:
 
 ```bash
 triss ask --paths ... --question "..." --provider glm --model flash
-triss review --provider glm --model pro
+triss review --provider glm --model pro --max-tokens 16384
 triss review --provider glm --model zai/glm-5.2  # pay-as-you-go endpoint
 triss review --provider kimi                     # pro preset → kimi-k3
 triss ask --paths ... --question "..." --provider kimi --model flash  # kimi-k2.6
 ```
+
+Use `--max-tokens 16384` as the minimum for GLM 5.2 code review. With the
+generic 8192-token default, internal reasoning can exhaust the budget and leave
+no review verdict; for a large PR, also narrow `--base` to the change that needs
+re-review.
 
 One-shot `ask` / `review` output is provider-shape tolerant: Triss emits the
 assistant text whether the successful response carries OpenAI-style

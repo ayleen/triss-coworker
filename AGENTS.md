@@ -49,6 +49,9 @@ For one-shot GLM analysis, use `triss ask ... --provider glm` or
 `glm-4.7|glm-5.2` on the subscription endpoint. For Kimi, use
 `--provider kimi`; `flash|pro` maps to `kimi-k2.6|kimi-k3`
 (needs `MOONSHOT_API_KEY`). Keep `triss coder` for agentic coding runs.
+For GLM 5.2 code review, use at least
+`triss review --provider glm --model pro --max-tokens 16384`; the generic
+8192-token default can be exhausted by reasoning and return an empty verdict.
 
 ## Tracker integrations
 

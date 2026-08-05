@@ -139,7 +139,9 @@ triss fetch https://api-docs.example.com/changelog
   GLM analysis with the same commands. `pro` is `glm-5.2`; `flash` is
   `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go.
   If nothing pinned the endpoint, a rejected call retries the other one and
-  says so. Keep `triss coder` for agentic coding runs.
+  says so. For GLM 5.2 code review, use `--max-tokens 16384` as the minimum;
+  the generic 8192-token default can be exhausted by reasoning before it emits
+  a verdict. Keep `triss coder` for agentic coding runs.
 - `--provider kimi` (alias `moonshot`) — same one-shot flow on Moonshot's
   Kimi models with `MOONSHOT_API_KEY`. `pro` is `kimi-k3` (the flagship);
   `flash` is `kimi-k2.6`. One endpoint, bare model ids, no endpoint probing.

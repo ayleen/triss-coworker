@@ -527,6 +527,21 @@ test(
 );
 
 test(
+  'runCoderInit --provider opencode-go: missing key blocks setup even with --allow-unverified',
+  withTmpHome(async ({ home }) => {
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-go', allowUnverified: true },
+          { spawnSync: fakeSpawnAlreadyInstalled },
+        ),
+      /OPENCODE_API_KEY is not set.*catalogue cannot be verified/i,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+  }),
+);
+
+test(
   'runCoderInit --provider opencode-go: HTTP 401 blocks setup even with --allow-unverified',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-go-invalid';
@@ -559,7 +574,7 @@ test(
             fetch: async () => ({ ok: false, status: 403 }),
           },
         ),
-      /OpenCode Go catalogue returned HTTP 403.*entitlement|workspace access/i,
+      /OpenCode Go catalogue returned HTTP 403; verify the workspace has an active Go entitlement and catalogue access/i,
     );
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
     assert.equal(process.env.TRISS_CODER_MODEL, undefined);
@@ -579,7 +594,7 @@ test(
             fetch: fakeGoCatalogue([]),
           },
         ),
-      /OpenCode Go catalogue returned no models.*subscription|workspace/i,
+      /OpenCode Go catalogue returned no models; verify the active Go subscription and workspace availability/i,
     );
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
     assert.equal(process.env.TRISS_CODER_MODEL, undefined);
@@ -587,20 +602,45 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-go: invalid HTTP 200 response shape blocks setup even with --allow-unverified',
+  'runCoderInit --provider opencode-go: invalid HTTP responses block setup even with --allow-unverified',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-go-malformed';
-    await assert.rejects(
-      () =>
-        runCoderInit(
-          { global: true, provider: 'opencode-go', allowUnverified: true },
-          {
-            spawnSync: fakeSpawnAlreadyInstalled,
-            fetch: async () => ({ ok: true, status: 200, json: async () => ({ data: 'not-an-array' }) }),
-          },
-        ),
-      /OpenCode Go catalogue response is invalid/i,
-    );
+    const invalidFetches = [
+      async () => ({ ok: true, status: 200, json: async () => ({ data: 'not-an-array' }) }),
+      async () => ({ ok: true, status: 200, json: async () => ({ data: [{ foo: 1 }, null] }) }),
+      async () => null,
+    ];
+    for (const fetch of invalidFetches) {
+      await assert.rejects(
+        () =>
+          runCoderInit(
+            { global: true, provider: 'opencode-go', allowUnverified: true },
+            { spawnSync: fakeSpawnAlreadyInstalled, fetch },
+          ),
+        /OpenCode Go catalogue response is invalid/i,
+      );
+    }
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-go: non-transient HTTP 404/501 cannot be bypassed',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-non-transient';
+    for (const status of [404, 501]) {
+      await assert.rejects(
+        () =>
+          runCoderInit(
+            { global: true, provider: 'opencode-go', allowUnverified: true },
+            {
+              spawnSync: fakeSpawnAlreadyInstalled,
+              fetch: async () => ({ ok: false, status }),
+            },
+          ),
+        new RegExp(`OpenCode Go catalogue response is invalid \\(HTTP ${status}\\)`, 'i'),
+      );
+    }
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
   }),
 );
@@ -632,7 +672,7 @@ test(
 
 test(
   'runCoderInit --provider opencode-go: transport failure requires explicit --allow-unverified',
-  withTmpHome(async ({ home }) => {
+  withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-go-temporary';
     const transportFailure = async () => {
       throw new TypeError('network unavailable');
@@ -656,6 +696,36 @@ test(
     );
     assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
     assert.equal(config.small_model, 'opencode-go/deepseek-v4-flash');
+    assert.match(
+      captured.join(''),
+      /using the built-in DeepSeek V4 Flash default because --allow-unverified was set/i,
+    );
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-go: HTTP 429 is transient and requires explicit --allow-unverified',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-go-rate-limited';
+    const rateLimited = async () => ({ ok: false, status: 429 });
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'opencode-go' },
+          { spawnSync: fakeSpawnAlreadyInstalled, fetch: rateLimited },
+        ),
+      /temporarily unavailable \(HTTP 429\).*--allow-unverified/i,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+
+    await runCoderInit(
+      { global: true, provider: 'opencode-go', allowUnverified: true },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: rateLimited },
+    );
+    const config = JSON.parse(
+      readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
+    );
+    assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
   }),
 );
 
@@ -682,6 +752,22 @@ test(
       readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'),
     );
     assert.equal(config.model, 'opencode-go/deepseek-v4-flash');
+  }),
+);
+
+test(
+  'runCoderInit: --allow-unverified is rejected for non-Go providers',
+  withTmpHome(async ({ home }) => {
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    await assert.rejects(
+      () =>
+        runCoderInit(
+          { global: true, provider: 'moonshot', allowUnverified: true },
+          { spawnSync: fakeSpawnAlreadyInstalled },
+        ),
+      /--allow-unverified.*supported only.*--provider opencode-go/i,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
   }),
 );
 
