@@ -15,6 +15,28 @@ function fixtureProgram() {
   config.command('set').description('cfg set').action(() => {});
   config.command('get').description('cfg get').action(() => {});
 
+  const coder = program.command('coder').description('coder group');
+  coder
+    .command('models')
+    .description('list models')
+    .option('--engine <name>')
+    .option('--provider <name>')
+    .option('--json')
+    .action(() => {});
+  const model = coder.command('model').description('model group');
+  model
+    .command('set')
+    .description('set model')
+    .option('--small')
+    .option('--engine <name>')
+    .option('--provider <name>')
+    .option('--global')
+    .option('--local')
+    .option('--allow-unverified')
+    .option('--allow-unsafe-bash')
+    .option('--yes')
+    .action(() => {});
+
   return program;
 }
 
@@ -57,4 +79,28 @@ test('completion rejects unknown shells', () => {
 
 test('completion requires a program argument', () => {
   assert.throws(() => runCompletion('bash'), /requires the Commander program/);
+});
+
+test('bash completion surfaces coder models and coder model set flags', () => {
+  const program = fixtureProgram();
+  const out = captureStdout(() => runCompletion('bash', program));
+  // `coder models` sits one level under the coder group -> surfaced today.
+  assert.match(out, /models\)[\s\S]*?--engine --provider --json/);
+  // `coder model set` is nested two levels under coder -> not surfaced yet (RED).
+  assert.match(
+    out,
+    /model\)[\s\S]*?--small --engine --provider --global --local --allow-unverified --allow-unsafe-bash --yes/,
+  );
+});
+
+test('zsh completion surfaces coder models and coder model set flags', () => {
+  const program = fixtureProgram();
+  const out = captureStdout(() => runCompletion('zsh', program));
+  // `coder models` subcommand and its flags surface today.
+  assert.match(out, /'models:[^']*'/);
+  assert.match(out, /'--json'/);
+  // `coder model set` is nested two levels under coder -> not surfaced yet (RED).
+  assert.match(out, /'model:[^']*'/);
+  assert.match(out, /'--small'/);
+  assert.match(out, /'--allow-unsafe-bash'/);
 });

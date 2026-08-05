@@ -161,6 +161,20 @@ test(
 );
 
 test(
+  'runStatus: opencode present but version unknown (empty stdout) shows as installed with version unknown, NOT as not installed',
+  withTmpKey(async () => {
+    const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '' }) }))());
+    // opencode should be shown as installed with "(version unknown)" plus the pin
+    assert.match(out, /opencode\s+\(version unknown\)/);
+    assert.match(out, new RegExp(`pin: ${PIN_RE}`));
+    // Should NOT show "not installed"
+    assert.doesNotMatch(out, /opencode\s+not installed/);
+    // crush line still renders independently (not installed since not provided).
+    assert.match(out, /crush\s+not installed/);
+  }),
+);
+
+test(
   'runStatus: the default-engine indicator reflects TRISS_CODER_ENGINE',
   withTmpKey(async () => {
     const saved = process.env.TRISS_CODER_ENGINE;
@@ -173,4 +187,80 @@ test(
       else process.env.TRISS_CODER_ENGINE = saved;
     }
   }),
+);
+
+test(
+  'runStatus: any one coder provider key alone marks the generic coder row ready and surfaces exactly one provider-specific ready line (no network)',
+  async () => {
+    // The four upstream providers a `triss coder` run can land on — the same
+    // table status.js renders as the "Coder providers" block. Any single key
+    // set is enough: status should mark the generic coder manifest row ready,
+    // render exactly one provider-specific "<label> <ENV> ready" line for the
+    // configured key (the other three read "missing"), and make NO network
+    // calls while doing so.
+    const PROVIDERS = [
+      { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
+      { label: 'opencode-zen', env: 'OPENCODE_API_KEY' },
+      { label: 'moonshot', env: 'MOONSHOT_API_KEY' },
+      { label: 'kimi-for-coding', env: 'KIMI_API_KEY' },
+    ];
+    const ALL_ENVS = PROVIDERS.map((p) => p.env);
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    for (const p of PROVIDERS) {
+      // Each iteration gets its own isolated cwd/home, only THIS provider's
+      // key set, and a fetch mock that counts + throws so a stray network
+      // probe fails the test loudly instead of silently passing.
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-status-prov-')));
+      const origCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origVals = Object.fromEntries(ALL_ENVS.map((e) => [e, process.env[e]]));
+      const origFetch = globalThis.fetch;
+      let fetchCalls = 0;
+
+      process.env.HOME = dir;
+      process.chdir(dir);
+      for (const e of ALL_ENVS) {
+        if (e === p.env) process.env[e] = 'prov-fake-test-key';
+        else delete process.env[e];
+      }
+      globalThis.fetch = () => {
+        fetchCalls++;
+        throw new Error(
+          `globalThis.fetch must not be called during triss status (provider ${p.label})`,
+        );
+      };
+
+      try {
+        const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({}) }))());
+        // The generic coder manifest row folds all four providers into one
+        // readiness tag — any one set makes it ready.
+        assert.match(out, /coder\s+✓ ready/);
+        // Exactly one "Coder providers" line reads ready: the one for this key.
+        // Each line is `<label> <ENV> ready|missing`; the other three read
+        // missing, so only the configured provider's line carries "ready".
+        const readyLines = out
+          .split('\n')
+          .filter((l) =>
+            new RegExp(`${escapeRe(p.label)}[^\\n]*${p.env}[^\\n]*ready`).test(l),
+          );
+        assert.equal(
+          readyLines.length,
+          1,
+          `expected one ready provider line for ${p.label}, got:\n${out}`,
+        );
+        // triss status stays fully local — no upstream probes during render.
+        assert.equal(fetchCalls, 0, `status made ${fetchCalls} fetch call(s) for ${p.label}`);
+      } finally {
+        process.chdir(origCwd);
+        process.env.HOME = origHome;
+        for (const e of ALL_ENVS) {
+          if (origVals[e] === undefined) delete process.env[e];
+          else process.env[e] = origVals[e];
+        }
+        globalThis.fetch = origFetch;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  },
 );

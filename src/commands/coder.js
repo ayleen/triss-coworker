@@ -210,24 +210,21 @@ const KIMI_CODING_MODEL_CHOICES = [
 // picker order against the LIVE catalogue (fetchZenModelIds) rather than
 // trusting this static list — it's the offline fallback.
 const ZEN_MODEL_CHOICES = [
-  { label: 'hy3-free — Tencent Hunyuan 3 (free)', value: 'hy3-free' },
   { label: 'deepseek-v4-flash-free — DeepSeek V4 Flash (free)', value: 'deepseek-v4-flash-free' },
   { label: 'north-mini-code-free — repo-level agentic coding (free)', value: 'north-mini-code-free' },
   { label: 'nemotron-3-ultra-free (free)', value: 'nemotron-3-ultra-free' },
   { label: 'mimo-v2.5-free (free)', value: 'mimo-v2.5-free' },
 ];
 // Preference order for the silent (non-TTY) default. First one that the live
-// catalogue actually offers wins. Main favours hy3-free while the promo lasts,
-// then strong general/agentic coders; small favours the compact repo-level
-// north-mini-code, then flash models.
+// catalogue actually offers wins. Both roles default to the current DeepSeek
+// replacement for the retired hy3-free pin, then fall back independently.
 const ZEN_MAIN_PRIORITY = [
-  'hy3-free',
   'deepseek-v4-flash-free',
   'north-mini-code-free',
   'nemotron-3-ultra-free',
   'mimo-v2.5-free',
 ];
-const ZEN_SMALL_PRIORITY = ['north-mini-code-free', 'deepseek-v4-flash-free', 'mimo-v2.5-free'];
+const ZEN_SMALL_PRIORITY = ['deepseek-v4-flash-free', 'north-mini-code-free', 'mimo-v2.5-free'];
 const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
 const ZEN_MODELS_TIMEOUT_MS = 10_000;
 
@@ -289,7 +286,7 @@ function resolveZenCatalogue(available) {
 // Init-time picker choices for the provider itself (opencode engine only).
 const CODER_PROVIDER_CHOICES = [
   { label: 'Z.AI GLM (glm-5.2, …) — needs a Z.AI key', value: 'zai' },
-  { label: 'OpenCode Zen (free models incl. Hunyuan hy3) — needs an OpenCode key', value: 'opencode-zen' },
+  { label: 'OpenCode Zen (free models incl. DeepSeek V4 Flash) — needs an OpenCode key', value: 'opencode-zen' },
   { label: 'Moonshot Kimi pay-as-you-go (kimi-k2.7-code, kimi-k3) — needs a Moonshot key', value: 'moonshot' },
   { label: 'Kimi for Coding subscription (K3) — needs a Kimi for Coding key', value: 'kimi-for-coding' },
 ];
@@ -582,18 +579,40 @@ function providerFromEnv() {
   return configured.length === 1 ? configured[0][0] : null;
 }
 
-// Non-prompting resolution (wizard postSetup path): environment intent, else
-// the historical default (zai).
+// Non-prompting resolution (wizard postSetup path): environment intent ONLY.
+// Throws when ambiguous or missing — this hardening is for direct/non-wizard
+// runCoderSetup and does NOT change resolveInitProvider behavior.
 function inferCoderProvider() {
-  return providerFromEnv() || 'zai';
+  const fromEnv = providerFromEnv();
+  if (fromEnv) return fromEnv;
+
+  // Provider intent is ambiguous or missing. Detect which keys are set to
+  // give a helpful error message.
+  const configuredKeys = [
+    ['zai', 'ZHIPU_API_KEY'],
+    ['opencode-zen', 'OPENCODE_API_KEY'],
+    ['moonshot', 'MOONSHOT_API_KEY'],
+    ['kimi-for-coding', 'KIMI_API_KEY'],
+  ].filter(([, env]) => !!process.env[env]);
+
+  const keyNames = configuredKeys.map(([, env]) => env).join(', ');
+  throw new Error(
+    `Coder provider intent is ambiguous or missing. ${keyNames ? `Multiple credentials are set: ${keyNames}.` : 'No provider credential is set.'} ` +
+      'Disambiguate by re-running with one of:\n' +
+      '  triss config wizard coder --coder-provider zai\n' +
+      '  triss config wizard coder --coder-provider opencode-zen\n' +
+      '  triss config wizard coder --coder-provider moonshot\n' +
+      '  triss config wizard coder --coder-provider kimi-for-coding'
+  );
 }
 
 // The interactive provider resolution for `triss coder init`: explicit
 // --provider flag > environment intent (preset / single credential) > a TTY
-// prompt when genuinely ambiguous > silent default (zai). Inferring from an
-// existing single key means users who already configured one provider aren't
-// re-asked; a fresh user (no key, no preset) on a TTY gets the choice, and
-// --provider always forces it.
+// prompt when genuinely ambiguous. Non-interactive + genuinely ambiguous (zero
+// or several credentials, no flag, no preset) REFUSES to silently default to
+// zai — the historical `return 'zai'` fallback that caused the incident — and
+// instead throws listing the exact per-provider alternatives, BEFORE any
+// spawn/fetch/write. Parity with resolveWizardCoderProvider's WIZ-09 branch.
 async function resolveInitProvider(opts, deps = {}) {
   if (opts.provider) return normalizeProviderFlag(opts.provider);
   const fromEnv = providerFromEnv();
@@ -602,7 +621,117 @@ async function resolveInitProvider(opts, deps = {}) {
     const choose = deps.promptChoice || promptChoice;
     return await choose('  Model provider for the opencode engine?', CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
   }
-  return 'zai';
+  // Non-interactive + genuinely ambiguous (no flag, no preset, zero or several
+  // provider credentials). Fail BEFORE any spawn/fetch/write and list the exact
+  // alternatives; never silently pick zai.
+  throw new Error(
+    'Coder provider is required but ambiguous: no --provider flag, no TRISS_CODER_MODEL ' +
+      'preset, and not exactly one provider credential (zero or several are set). `triss coder init` ' +
+      'will not silently default to Z.AI. Re-run with one of:\n' +
+      '  triss coder init --provider zai\n' +
+      '  triss coder init --provider opencode-zen\n' +
+      '  triss coder init --provider moonshot\n' +
+      '  triss coder init --provider kimi-for-coding',
+  );
+}
+
+// ─── `triss config wizard coder` provider/engine resolution ──────────────────
+//
+// The wizard has its OWN flag surface (--coder-engine / --coder-provider) so a
+// generic `config wizard coder` does NOT collide with `coder init`'s
+// --engine/--provider. Engine is resolved FIRST, provider SECOND — because the
+// crush engine fixes the provider to Z.AI and rejects a conflicting
+// --coder-provider before any credential is iterated. The opencode engine then
+// resolves the provider via a strict intent order (see resolveWizardCoderProvider).
+
+// Resolve + validate the wizard coder engine. --coder-engine beats
+// TRISS_CODER_ENGINE beats the default. An invalid name throws (never a silent
+// fallback) — same contract as resolveCoderEngine, just on the wizard flag.
+function resolveWizardCoderEngine(opts = {}) {
+  const engine = opts.coderEngine || process.env.TRISS_CODER_ENGINE || DEFAULT_CODER_ENGINE;
+  if (!VALID_CODER_ENGINES.includes(engine)) {
+    throw new Error(
+      `Unknown coder engine "${engine}" — valid values: ${VALID_CODER_ENGINES.join(', ')}. ` +
+        'Pass --coder-engine <name> or set TRISS_CODER_ENGINE=<name>.',
+    );
+  }
+  return engine;
+}
+
+// Provider intent implied by the EFFECTIVE opencode.json model prefix (intent
+// #3 in the wizard order). opencode resolves config from cwd upward, so the
+// project (local) file is checked first — that is the file that actually
+// governs runs and the one a stale Zen pin (the incident) lives in. Returns
+// null when there is no opencode.json model to read. Used ONLY by the wizard
+// resolver (coder init keeps its own, credential-first inference).
+function providerFromEngineConfig(engine) {
+  if (engine !== 'opencode') return null;
+  for (const s of ['local', 'global']) {
+    const p = opencodeConfigPath(s);
+    if (existsSync(p)) {
+      const { model } = readOpencodeModels(p);
+      if (model) return coderModelCredential(model).provider;
+    }
+  }
+  return null;
+}
+
+// The wizard provider resolver. Intent order (engine already resolved):
+//   1. explicit --coder-provider flag (or --coder-model prefix)
+//   2. effective TRISS_CODER_MODEL prefix
+//   3. effective engine config (opencode.json) model prefix — the incident hook
+//   4. exactly one configured provider credential
+//   5. a TTY prompt when genuinely ambiguous
+//   6. otherwise (non-interactive + genuinely ambiguous): THROW naming provider
+//      ambiguity and the exact per-provider recovery commands — rather than
+//      silently defaulting to zai. The zai fallback would write a global
+//      opencode.json, pin a Z.AI model into the env file, and demand
+//      ZHIPU_API_KEY against the user's actual intent. Throwing here (inside
+//      resolveWizardCtx, before the env-var loop or postSetup) guarantees the
+//      wizard writes nothing before the failure.
+// Crush short-circuits ALL of this: provider is fixed to zai and a non-zai
+// --coder-provider is rejected before credentials are iterated.
+async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
+  if (engine === 'crush') {
+    const want = opts.coderProvider ? normalizeProviderFlag(opts.coderProvider) : 'zai';
+    if (want !== 'zai') {
+      throw new Error(
+        `The crush engine supports Z.AI GLM only — \`--coder-provider ${opts.coderProvider}\` requires the ` +
+          'opencode engine. Drop --coder-engine crush (or use --coder-provider zai).',
+      );
+    }
+    return 'zai';
+  }
+  if (opts.coderProvider) return normalizeProviderFlag(opts.coderProvider);
+  if (opts.coderModel) return coderModelCredential(opts.coderModel).provider;
+  const preset = process.env.TRISS_CODER_MODEL;
+  if (preset) return coderModelCredential(preset).provider;
+  const fromCfg = providerFromEngineConfig(engine);
+  if (fromCfg) return fromCfg;
+  const fromCreds = providerFromEnv();
+  if (fromCreds) return fromCreds;
+  const interactive = deps && deps.isTTY !== undefined ? !!deps.isTTY : !!process.stdin.isTTY;
+  if (interactive) {
+    const choose = (deps && deps.promptChoice) || promptChoice;
+    return await choose('  Model provider for the opencode engine?', CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
+  }
+  // Non-interactive + genuinely ambiguous (no flag, no preset, no engine config,
+  // and zero or several provider credentials). Refuse to silently default to zai
+  // — that would write a global opencode.json, pin a Z.AI model, and demand
+  // ZHIPU_API_KEY against the user's actual intent. Throw here (before the env-var
+  // loop or postSetup run) so the wizard writes nothing before this failure. The
+  // message lists the exact per-provider recovery commands and no credential
+  // values. WIZ-09.
+  throw new Error(
+    'Coder provider is required but ambiguous: no --coder-provider flag, no TRISS_CODER_MODEL ' +
+      'preset, no opencode.json model, and not exactly one provider credential (zero or several ' +
+      'are set). The wizard will not silently default to Z.AI. Disambiguate by re-running with ' +
+      'one of:\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider zai\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider opencode-zen\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider moonshot\n' +
+      '  triss config wizard coder --coder-engine opencode --coder-provider kimi-for-coding',
+  );
 }
 
 // Per-provider key descriptor for setupKey / the init prompt.
@@ -610,7 +739,7 @@ function coderProviderKeyInfo(provider) {
   if (provider === 'opencode-zen') {
     return {
       env: 'OPENCODE_API_KEY',
-      doc: 'OpenCode Zen API key — free models incl. Hunyuan hy3 — https://opencode.ai/docs/zen/',
+      doc: 'OpenCode Zen API key — free models (catalogue-driven) — https://opencode.ai/docs/zen/',
     };
   }
   if (provider === 'moonshot') {
@@ -660,7 +789,7 @@ function coderSmallModel() {
 }
 
 // Which API key a resolved coder model needs. OpenCode Zen models (provider
-// prefix `opencode/`, e.g. the free `opencode/hy3-free`) authenticate with
+// prefix `opencode/`, e.g. the free `opencode/deepseek-v4-flash-free`) authenticate with
 // OPENCODE_API_KEY; Moonshot PAYG models (`moonshotai/*`, `moonshotai-cn/*`)
 // with MOONSHOT_API_KEY; Kimi for Coding subscription models
 // (`kimi-for-coding/*`) with KIMI_API_KEY; every other prefix — the Z.AI GLM
@@ -701,6 +830,16 @@ function providerModelId(model) {
   return String(model || '').split('/').slice(1).join('/');
 }
 
+// POSIX single-quote a dynamic value for a printed, copy-paste command (model
+// ids in a recovery command). Wraps in '...' and escapes embedded quotes as
+// '\'' so the value parses as one shell argument even with spaces/apostrophes/
+// $();. Mirrors src/coder-models.js#posixSingleQuote without introducing a
+// circular coder.js <-> coder-models.js import.
+function posixSingleQuote(value) {
+  const v = String(value);
+  return `'${v.replace(/'/g, "'\\''")}'`;
+}
+
 // The coder tools/status surface as soon as ANY provider credential is
 // present: ZHIPU_API_KEY (Z.AI GLM — the default) or OPENCODE_API_KEY
 // (OpenCode Zen). envReadiness(CODER_MANIFEST) only tracks the required ZHIPU
@@ -733,14 +872,14 @@ export const CODER_MANIFEST = {
     },
     {
       // Optional: only the opencode engine needs it, and only for
-      // `opencode/*` (OpenCode Zen) models — e.g. the free opencode/hy3-free.
+      // `opencode/*` (OpenCode Zen) models — e.g. the free opencode/deepseek-v4-flash-free.
       // Set TRISS_CODER_MODEL=opencode/<id> (or pass --model) to route a run
       // through it. Readiness stays governed by ZHIPU_API_KEY (the default
       // provider); this key just unlocks the zen provider when present.
       name: 'OPENCODE_API_KEY',
       required: false,
       secret: true,
-      doc: 'OpenCode Zen API key for opencode/* models (e.g. opencode/hy3-free) — https://opencode.ai/docs/zen/',
+      doc: 'OpenCode Zen API key for opencode/* models — https://opencode.ai/docs/zen/',
     },
     {
       // Optional: unlocks Moonshot PAYG models (moonshotai/*) for the
@@ -759,7 +898,23 @@ export const CODER_MANIFEST = {
       doc: 'Kimi for Coding subscription key for kimi-for-coding/* models (e.g. kimi-for-coding/k3) — https://www.kimi.com/code/docs/en/',
     },
   ],
-  postSetup: (ctx) => runCoderSetup(ctx),
+  // Resolves the engine/provider for the wizard BEFORE the generic env-var
+  // loop runs, and narrows that loop to ONLY the resolved provider's
+  // credential — so an explicit `--coder-provider opencode-zen` walks just
+  // OPENCODE_API_KEY and never asks for (or requires) ZHIPU_API_KEY. Engine is
+  // resolved first; provider second. A crush engine + non-zai provider is
+  // rejected HERE (before any credential iteration). The returned `ctx`
+  // (engine/provider) flows into postSetup so runCoderSetup doesn't re-infer.
+  // `deps` (injected fetch/spawnSync/isTTY/outputs) threads through so the
+  // wizard is testable without real network/PATH.
+  resolveWizardCtx: async (wizardOpts, current, deps, { scope, path }) => {
+    const engine = resolveWizardCoderEngine(wizardOpts);
+    const provider = await resolveWizardCoderProvider(wizardOpts, engine, deps);
+    const keyEnv = kindKeyEnv(provider);
+    const envVars = CODER_MANIFEST.envVars.filter((v) => v.name === keyEnv);
+    return { envVars, ctx: { engine, provider, scope, path } };
+  },
+  postSetup: (ctx, deps) => runCoderSetup(ctx, deps),
 };
 
 // ─── agent templates ─────────────────────────────────────────────────────────
@@ -969,7 +1124,7 @@ async function setupKey(path, provider = 'zai') {
 // `deps.confirmInstall` lets tests stub the install-confirmation prompt
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
-export async function runCoderSetup({ scope, provider, inheritedModels, allowUnsafeBash } = {}, deps = {}) {
+export async function runCoderSetup({ scope, provider, engine, inheritedModels, allowUnsafeBash } = {}, deps = {}) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
   // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
@@ -981,10 +1136,46 @@ export async function runCoderSetup({ scope, provider, inheritedModels, allowUns
   // prefix. override:false + uncached (see config.js) makes this a safe,
   // idempotent no-op when the key is already loaded.
   loadEnvFiles();
+  const resolvedScope = scope || 'global';
+  // The wizard resolves engine FIRST, provider SECOND (resolveWizardCtx) and
+  // passes both in. crush fixes provider to Z.AI and rejects conflicts before
+  // this point; reaching here with engine=crush means Z.AI was agreed, so the
+  // crush path only needs the Z.AI credential gate (the full crush model +
+  // permissions setup lives in `triss coder init --engine crush`, which owns
+  // crush.json). opencode.json / agent templates do not apply to crush.
+  if (engine === 'crush') {
+    process.stderr.write('\n' + pc.bold('── coder (crush engine · Z.AI GLM) ──') + '\n');
+    process.stderr.write(
+      pc.dim('  · crush speaks Z.AI GLM only (it bridges ZHIPU_API_KEY -> ZAI_API_KEY at run time)\n'),
+    );
+    const keyEnv = 'ZHIPU_API_KEY';
+    if (!process.env[keyEnv]) {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
+      ),
+    );
+    throw new Error(
+      `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+    );
+  }
+  // The wizard configures the Z.AI credential but does NOT seed crush models
+  // (crush models use) or the permissions.run policy — those steps live in
+  // `triss coder init --engine crush`. Report a structured incomplete result
+  // and the EXACT next command instead of returning {} (which let the wizard
+  // print a generic green "Done." over an unconfigured engine).
+  // The recovery command MUST include the selected scope flag (--local or --global)
+  // for exact reproducibility.
+  const scopeFlag = scope === 'local' ? '--local' : '--global';
+  throw new Error(
+    'Coder (crush engine) setup incomplete: the wizard saved the Z.AI credential but did not ' +
+      'seed crush models or the permissions.run policy. Complete setup with the exact command:\n' +
+      `  triss coder init --engine crush ${scopeFlag}`,
+  );
+}
   // The wizard postSetup path passes no provider — infer it from the
   // configured model/credential (no prompt) so a preset zen model is honored.
   const resolvedProvider = provider || inferCoderProvider();
-  const resolvedScope = scope || 'global';
   const sh = deps.spawnSync || nodeSpawnSync;
   const noun =
     {
@@ -1026,6 +1217,15 @@ export async function runCoderSetup({ scope, provider, inheritedModels, allowUns
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
   }).blocking;
+  // Stale-Zen incident report (own scope). When the opencode.json being audited
+  // is pinned to a Zen model the AUTHENTICATED live catalogue no longer offers,
+  // name the stale id(s) + the current replacement(s) triss just resolved, and
+  // print the EXACT recovery command — instead of silently selecting a fallback
+  // or printing only "fix the issues above". No-clobber is preserved: nothing is
+  // mutated here, the user runs the printed command to recover. `outputs` (an
+  // injected dep array, when present) gets a copy so a headless wizard caller
+  // can read the recovery lines without scraping stderr.
+  emitZenStaleIncident(opencodeConfigPath(resolvedScope), existing, { model, smallModel }, zenAvailable, resolvedScope, deps);
   // Cross-scope audit: opencode resolves config from the run's cwd upward, so a
   // project ./opencode.json overrides the global one. Writing --global while a
   // project file exists means THAT file (its small_model / bash policy) governs
@@ -1037,6 +1237,10 @@ export async function runCoderSetup({ scope, provider, inheritedModels, allowUns
   if (resolvedScope === 'global') {
     const projectCfg = opencodeConfigPath('local');
     if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
+      // The stale-Zen incident most often lives in this higher-precedence
+      // project file (a previous init pinned opencode/hy3-free here before the
+      // promo model was retired). Report it with the same recovery commands.
+      emitZenStaleIncident(projectCfg, readOpencodeModels(projectCfg), { model, smallModel }, zenAvailable, 'local', deps);
       const otherAudit = auditExistingConfig(projectCfg, providerInfo, {
         note: '(project scope — higher precedence than the global config, so it governs runs)',
         allowUnsafeBash,
@@ -1046,6 +1250,12 @@ export async function runCoderSetup({ scope, provider, inheritedModels, allowUns
     }
   }
   if (blocking) {
+    // The stale-Zen incident report above (emitZenStaleIncident) already
+    // printed the stale id(s), the current replacement(s), and the EXACT
+    // recovery commands when applicable — so a blocking audit on a stale Zen
+    // pin surfaces a focused, actionable recovery rather than only this line.
+    // The generic message is retained verbatim because existing contracts
+    // (coder-init P2-round8) match on "existing opencode.json issues".
     throw new Error(
       'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
     );
@@ -1109,20 +1319,30 @@ function persistCoderModels(scope, model, smallModel) {
 
 function detectOpencodeVersion(sh) {
   const r = sh('opencode', ['--version']);
-  if (!r || r.error || r.status !== 0) return null;
-  const out = String(r.stdout || '').trim();
-  return out || null;
+  if (!r || r.error || r.status !== 0) return null; // binary missing or errored
+  // Status 0 means opencode actually ran, so it is INSTALLED — return the
+  // trimmed version string (possibly '' when the build prints nothing or a
+  // minimal spawnSync fake returns empty stdout). Callers that only care about
+  // presence check `!== null`; callers that need a real version see '' (falsy)
+  // for the unknown case. Conflating empty-stdout with "not installed" made the
+  // wizard's stale-Zen incident unreachable when the engine probe was a
+  // minimal fake, pre-empting the catalogue fetch + recovery report.
+  return String(r.stdout || '').trim();
 }
 
 async function ensureEngine(sh, confirmInstall) {
   const pin = opencodeVersionPin();
   const version = detectOpencodeVersion(sh);
-  if (version) {
-    if (version === pin) {
+  if (version !== null) {
+    if (version && version === pin) {
       process.stderr.write(pc.green(`  ✓ opencode ${version} (matches pin)\n`));
-    } else {
+    } else if (version) {
       process.stderr.write(
         pc.yellow(`  ⚠ opencode ${version} found, pinned version is ${pin} (not auto-upgrading)\n`),
+      );
+    } else {
+      process.stderr.write(
+        pc.yellow(`  ⚠ opencode found (version unknown), pinned version is ${pin} (not auto-upgrading)\n`),
       );
     }
     return;
@@ -1392,6 +1612,90 @@ function warnIfProviderMismatch(path, providerInfo) {
         'model/small_model fields, or unset ZHIPU_API_KEY and use a key for the right plan.\n',
     ),
   );
+}
+
+// Stale-Zen incident reporter. When an existing opencode.json (own OR the
+// higher-precedence project file) is pinned to an OpenCode Zen model the
+// AUTHENTICATED live catalogue (`zenAvailable`, a verified Set) no longer
+// lists, this prints a focused recovery block:
+//   - the stale field(s) (model / small_model) with their bare ids,
+//   - the CURRENT replacement id(s) triss just resolved from the catalogue,
+//   - the EXACT recovery commands (`triss coder model set --engine opencode
+//     --provider opencode-zen --<scope>` and the equivalent wizard form).
+// It deliberately does NOT mention selecting a fallback provider — provider
+// intent stays whatever the config/catalogue indicated (the post-incident
+// contract). Returns true when it emitted anything. No-clobber is preserved:
+// this only PRINTS; the user runs the printed command to recover (the blocking
+// throw that follows still uses the generic "existing opencode.json issues"
+// line so existing contracts like coder-init P2-round8 keep matching, while
+// THIS block supplies the actionable recovery detail). `deps.outputs` (when an
+// array) receives the same lines so a headless wizard caller (e.g. an injected
+// deps bag) can read them without scraping stderr.
+function emitZenStaleIncident(path, existingModels, resolved, zenAvailable, fileScope, deps = {}) {
+  if (!zenAvailable || !existingModels) return false;
+  const out = (s) => {
+    process.stderr.write(s);
+    if (Array.isArray(deps && deps.outputs)) deps.outputs.push(typeof s === 'string' ? s : String(s));
+  };
+  const scopeFlag = fileScope === 'local' ? '--local' : '--global';
+  const fields = [];
+  const seen = new Set();
+  const consider = (field, val) => {
+    if (!val) return;
+    const id = providerModelId(val);
+    const prefix = String(val).split('/')[0];
+    // Only Zen models (opencode/* prefix) are in scope for this report, and
+    // only when the catalogue verifiably no longer offers their bare id.
+    if (prefix !== 'opencode' || !id) return;
+    if (zenAvailable.has(id)) return;
+    if (seen.has(field)) return;
+    seen.add(field);
+    fields.push([field, val, id]);
+  };
+  consider('model', existingModels.model);
+  consider('small_model', existingModels.smallModel);
+  if (!fields.length) return false;
+  out(
+    pc.yellow(
+      `\n  ⚠ ${path} is pinned to a stale OpenCode Zen model the authenticated live catalogue no longer offers\n` +
+        '    (free Zen models are temporary). Provider intent stays OpenCode Zen.\n',
+    ),
+  );
+  const replacementFor = (field) => (field === 'model' ? resolved.model : resolved.smallModel);
+  for (const [field, val] of fields) {
+    const rep = replacementFor(field);
+    out(
+      pc.dim(
+        `    · ${field}: ${val} (stale — "${providerModelId(val)}" retired)` +
+          (rep ? ` -> current replacement ${rep}` : ' (no replacement resolved)') +
+          '\n',
+      ),
+    );
+  }
+  // Corrective Blocker B: print exactly ONE executable persistent repair
+  // command — `triss coder model set <canonical-main> --small <canonical-small>
+  // --engine opencode --provider opencode-zen <scope> --yes` — built from the
+  // replacements triss just resolved, POSIX-quoted. The command must apply
+  // through the real CLI (it carries the resolved ids + --yes), must NOT loop
+  // back into the no-clobber wizard, and must not omit the required main. Do
+  // NOT print the repeat `triss config wizard coder` alternative.
+  if (resolved && resolved.model && resolved.smallModel) {
+    out(pc.yellow('  Recover with:\n'));
+    out(
+      pc.cyan(
+        `    triss coder model set ${posixSingleQuote(resolved.model)} --small ${posixSingleQuote(resolved.smallModel)} --engine opencode --provider opencode-zen ${scopeFlag} --yes\n`,
+      ),
+    );
+  } else {
+    out(
+      pc.yellow(
+        '  Recover with `triss coder model set <main> --small <small> --engine opencode --provider opencode-zen ' +
+          `${scopeFlag} --yes` +
+          '` using a current id from `triss coder models --provider opencode-zen`.\n',
+      ),
+    );
+  }
+  return true;
 }
 
 // Audits an existing opencode.json (the no-clobber path never rewrites it) for
@@ -2517,7 +2821,7 @@ function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
 // this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
 // / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
 // envelope shape as the opencode path so callers are engine-agnostic.
-async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolation, slug, timeoutSec }) {
+async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate: _isolate, isolation, slug, timeoutSec }) {
   const modelOverride = opts.model || null;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
   // slug straight through (NO .triss/sessions.json map, unlike opencode).
@@ -2780,7 +3084,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Provider-aware credential gate. crush only speaks Z.AI (it bridges
   // ZHIPU_API_KEY -> ZAI_API_KEY), so it always needs ZHIPU_API_KEY. For
   // opencode the required key follows the resolved model's provider:
-  // `opencode/*` (OpenCode Zen, e.g. the free opencode/hy3-free) needs
+  // `opencode/*` (OpenCode Zen, e.g. the free opencode/deepseek-v4-flash-free) needs
   // OPENCODE_API_KEY, every other prefix needs ZHIPU_API_KEY. Keeping the
   // Z.AI message wording identical preserves the historical error text.
   // crush speaks Z.AI GLM only. An explicit `--model opencode/*` would be
@@ -2800,7 +3104,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (!process.env[cred.env]) {
     const suffix =
       {
-        OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models like opencode/hy3-free)',
+        OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models — run `triss coder models` to see current offerings)',
         MOONSHOT_API_KEY:
           ' (set MOONSHOT_API_KEY to use Moonshot Kimi models like moonshotai/kimi-k2.7-code)',
         KIMI_API_KEY:
@@ -2811,7 +3115,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     // key would serve a run today via an explicit model. Name that path
     // instead of dead-ending a Kimi/Zen-only setup on a Z.AI message.
     const ALT_MODEL_HINTS = {
-      OPENCODE_API_KEY: 'opencode/hy3-free',
+      OPENCODE_API_KEY: 'opencode/deepseek-v4-flash-free',
       MOONSHOT_API_KEY: 'moonshotai/kimi-k2.7-code',
       KIMI_API_KEY: 'kimi-for-coding/k3',
     };

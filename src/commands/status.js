@@ -6,6 +6,17 @@ import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
 import { CODER_MANIFEST, describeCoderStatus, coderCredentialReady } from './coder.js';
 
+// The four upstream providers a `triss coder` run can land on. Any one set
+// makes the coder row "ready" — not just ZHIPU_API_KEY (the historical
+// default). Kept here rather than in coder.js so status has a single source
+// of truth for both the coder tag and the per-provider readiness rows below.
+const CODER_PROVIDERS = [
+  { label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' },
+  { label: 'opencode-zen', env: 'OPENCODE_API_KEY' },
+  { label: 'moonshot', env: 'MOONSHOT_API_KEY' },
+  { label: 'kimi-for-coding', env: 'KIMI_API_KEY' },
+];
+
 export async function runStatus(deps = {}) {
   const cfg = getConfig();
   const presets = listPresets();
@@ -93,9 +104,22 @@ export async function runStatus(deps = {}) {
   lines.push(pc.bold('Credentials & integrations'));
   for (const m of allManifests) {
     const r = envReadiness(m);
-    const tag = r.ready
-      ? pc.green('✓ ready')
-      : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
+    let tag;
+    if (m.name === 'coder') {
+      // The coder manifest's own envVars grammar can only mark one set of
+      // keys required, so it under-reports readiness: any ONE of the four
+      // coder providers is enough to run `triss coder`. Resolve the tag from
+      // CODER_PROVIDERS instead, and when nothing is set, name all four
+      // (provider-aware) rather than only ZHIPU_API_KEY.
+      const anyProviderSet = CODER_PROVIDERS.some((p) => process.env[p.env]);
+      tag = anyProviderSet
+        ? pc.green('✓ ready')
+        : pc.yellow(`⚠ missing ${CODER_PROVIDERS.map((p) => p.env).join(', ')}`);
+    } else {
+      tag = r.ready
+        ? pc.green('✓ ready')
+        : pc.yellow(`⚠ missing ${r.missing.join(', ')}`);
+    }
     // The `coder` manifest remains the config-wizard target; its Z.AI and
     // Moonshot credentials also enable one-shot GLM/Kimi ask/review calls
     // (spelled out in the routing blocks above), so the row is just "coder".
@@ -108,6 +132,18 @@ export async function runStatus(deps = {}) {
       const value = present ? maskValue(present) : pc.dim('(unset)');
       lines.push(`     ${marker} ${e.name.padEnd(28)} ${value} ${sourceTag}`);
     }
+  }
+
+  // Explicit per-provider coder readiness — one line each, no key values.
+  // Complements the manifest row (which folds all providers into one tag)
+  // and the per-envVar rows (which only exist for keys the manifest lists).
+  // Lets a user see at a glance which of the four upstreams are wired.
+  lines.push('');
+  lines.push(pc.bold('Coder providers') + pc.dim('  (any one enables `triss coder`)'));
+  for (const p of CODER_PROVIDERS) {
+    const present = process.env[p.env];
+    const tag = present ? pc.green('ready') : pc.red('missing');
+    lines.push(`  ${p.label.padEnd(16)} ${p.env.padEnd(20)} ${tag}`);
   }
 
   // Richer engine-level view for coder — the manifest row above already
@@ -130,12 +166,15 @@ export async function runStatus(deps = {}) {
     // ignores it and runs its own GLM atoms, so label it as opencode-scoped.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);
     // opencode (engine #1) — version-checked against the pin.
-    const ocMarker = coder.engineVersion ? pc.green('●') : pc.dim('○');
-    const ocLabel = coder.engineVersion
-      ? coder.engineVersion === coder.pin
-        ? `${coder.engineVersion} (matches pin)`
-        : pc.yellow(`${coder.engineVersion} (pin: ${coder.pin})`)
-      : pc.dim(`not installed (pin: ${coder.pin})`);
+    const ocMarker = coder.engineVersion !== null ? pc.green('●') : pc.dim('○');
+    const ocLabel =
+      coder.engineVersion !== null
+        ? coder.engineVersion === ''
+          ? `(version unknown) (pin: ${coder.pin})`
+          : coder.engineVersion === coder.pin
+            ? `${coder.engineVersion} (matches pin)`
+            : pc.yellow(`${coder.engineVersion} (pin: ${coder.pin})`)
+        : pc.dim(`not installed (pin: ${coder.pin})`);
     lines.push(`  ${ocMarker} opencode                      ${ocLabel}`);
     for (const c of coder.configs) {
       const marker = c.exists ? pc.green('●') : pc.dim('○');

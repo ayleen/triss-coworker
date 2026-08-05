@@ -13,12 +13,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { OPENCODE_PIN, detectZaiProvider, runCoderSetup, runCoderInit } from '../src/commands/coder.js';
-import { setVar } from '../src/secrets.js';
 import {
   ZAI_CODING_PLAN_BASE_URL as CODING_PLAN_BASE,
   ZAI_PAYG_BASE_URL as PAYG_BASE,
@@ -45,11 +44,13 @@ function withTmpHome(fn) {
     const origRoot = process.env.TRISS_PROJECT_ROOT;
     const origTTY = process.stdin.isTTY;
     const origZhipu = process.env.ZHIPU_API_KEY;
+    const origOpenCode = process.env.OPENCODE_API_KEY;
     const origModel = process.env.TRISS_CODER_MODEL;
     const origSmallModel = process.env.TRISS_CODER_SMALL_MODEL;
     process.env.HOME = home;
     process.env.TRISS_PROJECT_ROOT = home; // same leak the coder-init.test.js fix guards against
     delete process.env.ZHIPU_API_KEY;
+    delete process.env.OPENCODE_API_KEY;
     delete process.env.TRISS_CODER_MODEL;
     delete process.env.TRISS_CODER_SMALL_MODEL;
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
@@ -71,6 +72,8 @@ function withTmpHome(fn) {
       else process.env.TRISS_PROJECT_ROOT = origRoot;
       if (origZhipu === undefined) delete process.env.ZHIPU_API_KEY;
       else process.env.ZHIPU_API_KEY = origZhipu;
+      if (origOpenCode === undefined) delete process.env.OPENCODE_API_KEY;
+      else process.env.OPENCODE_API_KEY = origOpenCode;
       if (origModel === undefined) delete process.env.TRISS_CODER_MODEL;
       else process.env.TRISS_CODER_MODEL = origModel;
       if (origSmallModel === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -393,42 +396,47 @@ test(
 // first-time wizard setup and silently falls back to the default prefix.
 
 test(
-  'wizard path: runCoderSetup reloads env files, so a key written to disk (not process.env) by setVar still gets detected',
+  'direct runCoderSetup regression: both ZHIPU_API_KEY and OPENCODE_API_KEY set, no provider/model intent -> rejects with provider ambiguity before any spawn/fetch/write',
   withTmpHome(async ({ home }) => {
-    // Scope 'local' keeps this regression test focused on the env-reload
-    // fix: getEnvFilePath('local') resolves join(projectRoot(), '.triss.env')
-    // fresh on every call against this test's TRISS_PROJECT_ROOT override.
-    // (getEnvFilePath('global') now also re-evaluates homedir() lazily, so
-    // it would honor the HOME override too, but 'local' stays the cleaner
-    // exercise of the file-reload path.)
-    const envPath = join(home, '.triss.env');
-    setVar(envPath, 'ZHIPU_API_KEY', 'zk-wizard-written-key');
-    assert.equal(
-      process.env.ZHIPU_API_KEY,
-      undefined,
-      'precondition: the key must be file-only, exactly like the wizard leaves it, before runCoderSetup runs',
-    );
+    process.env.ZHIPU_API_KEY = 'zk-test-key';
+    process.env.OPENCODE_API_KEY = 'opencode-test-key';
 
-    let sawAuthHeader = false;
-    await runCoderSetup(
-      { scope: 'local' },
-      {
-        spawnSync: fakeSpawnAlreadyInstalled,
-        fetch: async (url, init) => {
-          sawAuthHeader =
-            sawAuthHeader || (init?.headers?.Authorization === 'Bearer zk-wizard-written-key');
-          return { ok: url.startsWith(CODING_PLAN_BASE) };
-        },
+    const deps = {
+      spawnSync: () => {
+        assert.fail('spawnSync must not be called when provider ambiguity exists');
       },
-    );
+      fetch: async () => {
+        assert.fail('fetch must not be called when provider ambiguity exists');
+      },
+    };
 
+    try {
+      await runCoderSetup({ scope: 'global' }, deps);
+      assert.fail('runCoderSetup must reject when both ZHIPU_API_KEY and OPENCODE_API_KEY are set without explicit provider intent');
+    } catch (err) {
+      assert.match(
+        err.message,
+        /ambiguou|ambiguous/i,
+        'error must clearly indicate provider ambiguity',
+      );
+      assert.match(
+        err.message,
+        /ZHIPU_API_KEY.*OPENCODE_API_KEY/i,
+        'error must mention both conflicting environment variables',
+      );
+      assert.match(
+        err.message,
+        /zai|opencode/i,
+        'error must list explicit provider alternatives (zai, opencode)',
+      );
+    }
+
+    // Verify no opencode.json was created
+    const configPath = join(home, '.config', 'opencode', 'opencode.json');
     assert.equal(
-      sawAuthHeader,
-      true,
-      'detection must actually probe Z.AI with the key the wizard just wrote to disk, not skip it as unset',
+      existsSync(configPath),
+      false,
+      'opencode.json must not be created when provider ambiguity causes early rejection',
     );
-    const config = JSON.parse(readFileSync(join(home, 'opencode.json'), 'utf8'));
-    assert.equal(config.model, 'zai-coding-plan/glm-5.2');
-    assert.equal(config.small_model, 'zai-coding-plan/glm-5-turbo');
   }),
 );

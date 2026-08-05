@@ -327,15 +327,15 @@ or `--provider kimi-for-coding`) or `triss config wizard coder`.
   `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
   `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
   `opencode`/`crush` enum (default `opencode`, or `TRISS_CODER_ENGINE`);
-  `isolate` is unset by default in the schema — opencode resolves unset to
-  isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
-  `permissions.run` config is inert and denied bash deadlocks, so the
-  worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
-  string — a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
-  (`opencode/hy3-free`, needs `OPENCODE_API_KEY`), a Moonshot Kimi model
-  (`moonshotai/kimi-k2.7-code`, needs `MOONSHOT_API_KEY`), or a Kimi for
-  Coding model (`kimi-for-coding/k3`, needs `KIMI_API_KEY`); triss forwards
-  only the key that model's provider requires.
+   `isolate` is unset by default in the schema — opencode resolves unset to
+   isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
+   `permissions.run` config is inert and denied bash deadlocks, so the
+   worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
+   string — a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
+   (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), a Moonshot Kimi model
+   (`moonshotai/kimi-k2.7-code`, needs `MOONSHOT_API_KEY`), or a Kimi for
+   Coding model (`kimi-for-coding/k3`, needs `KIMI_API_KEY`); triss forwards
+   only the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
   state (`opencode` vs the pinned version, `crush` presence), which
   `opencode.json` / `crush.json` files exist, provider key presence

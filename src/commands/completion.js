@@ -18,8 +18,26 @@ function leafFlags(cmd) {
 
 function collectTree(program) {
   const top = [];
-  const groups = {}; // groupName -> { subs: [{name, description, flags}], flags }
+  // groupName -> { subs: [{name, description, flags, subs?}] }
+  const groups = {};
   const leaves = {}; // leafName -> { flags }
+
+  // Build a sub entry, recursively carrying nested subs when present so
+  // depth-3+ groups (e.g. `triss coder model set`) can be completed.
+  function buildSub(cmd) {
+    const sub = {
+      name: cmd.name(),
+      description: cmd.description() || '',
+      flags: leafFlags(cmd),
+    };
+    const childCmds = (cmd.commands || []).filter(
+      (c) => c.name() !== 'help' && !c._hidden,
+    );
+    if (childCmds.length) {
+      sub.subs = childCmds.map(buildSub);
+    }
+    return sub;
+  }
 
   for (const cmd of program.commands || []) {
     if (cmd.name() === 'help' || cmd._hidden) continue;
@@ -30,11 +48,7 @@ function collectTree(program) {
       groups[name] = {
         subs: cmd.commands
           .filter((s) => s.name() !== 'help' && !s._hidden)
-          .map((s) => ({
-            name: s.name(),
-            description: s.description() || '',
-            flags: leafFlags(s),
-          })),
+          .map(buildSub),
       };
     } else {
       leaves[name] = { flags: leafFlags(cmd) };
@@ -61,13 +75,35 @@ function bashScript(program) {
     .map(([name, { subs }]) => {
       const subNames = subs.map((s) => s.name).join(' ');
       const subCases = subs
-        .map(
-          (s) =>
-            `        ${s.name})
+        .map((s) => {
+          if (!s.subs) {
+            return `        ${s.name})
           COMPREPLY=( $(compgen -W "${s.flags.join(' ')}" -- "\${cur}") )
           return 0
-          ;;`,
-        )
+          ;;`;
+          }
+          // Depth-3 group: at COMP_CWORD 3 offer this sub's child names,
+          // then case COMP_WORDS[3] and render each child leaf flags.
+          const childNames = s.subs.map((c) => c.name).join(' ');
+          const childCases = s.subs
+            .map(
+              (c) =>
+                `            ${c.name})
+              COMPREPLY=( $(compgen -W "${c.flags.join(' ')}" -- "\${cur}") )
+              return 0
+              ;;`,
+            )
+            .join('\n');
+          return `        ${s.name})
+          if [ "\${COMP_CWORD}" -eq 3 ]; then
+            COMPREPLY=( $(compgen -W "${childNames}" -- "\${cur}") )
+            return 0
+          fi
+          case "\${COMP_WORDS[3]}" in
+${childCases}
+          esac
+          ;;`;
+        })
         .join('\n');
       return `    ${name})
       if [ "\${COMP_CWORD}" -eq 2 ]; then
@@ -117,13 +153,38 @@ ${flags.map((f) => `        '${f}'`).join(' \\\n')}
     .map(([name, { subs }]) => {
       const subLines = subs.map((s) => `        '${s.name}:${escapeZsh(s.description)}'`).join('\n');
       const subCases = subs
-        .map(
-          (s) =>
-            `        ${s.name})
+        .map((s) => {
+          if (!s.subs) {
+            return `        ${s.name})
           _values 'flag' \\
 ${s.flags.map((f) => `            '${f}'`).join(' \\\n')}
-          ;;`,
-        )
+          ;;`;
+          }
+          // Depth-3 group: at CURRENT==4 offer this sub's child names, then
+          // case words[4] and render each child leaf flags.
+          const childLines = s.subs
+            .map((c) => `            '${c.name}:${escapeZsh(c.description)}'`)
+            .join('\n');
+          const childCases = s.subs
+            .map(
+              (c) =>
+                `            ${c.name})
+              _values 'flag' \\
+${c.flags.map((f) => `                '${f}'`).join(' \\\n')}
+              ;;`,
+            )
+            .join('\n');
+          return `        ${s.name})
+          if (( CURRENT == 4 )); then
+            _values 'subcommand' \\
+${childLines.replace(/^/gm, '    ')}
+            return
+          fi
+          case \${words[4]} in
+${childCases}
+          esac
+          ;;`;
+        })
         .join('\n');
       return `    ${name})
       if (( CURRENT == 3 )); then

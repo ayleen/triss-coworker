@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
+  mkdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -225,5 +226,246 @@ test('silentlyInstallBoth writes MCP config and creates CLAUDE.md in a tmp HOME'
     Object.defineProperty(process.stdin, 'isTTY', { value: origTTY, configurable: true });
     process.env.HOME = origHome;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ─── ML: model-UX (Zen/Z.AI incident) — two strong contract tests ───────────
+//
+// Post-incident contract for "triss coder" model selection via the public
+// runWizard() with an injected deps bag ({fetch, spawnSync, outputs, isTTY}) so
+// no real network or install ever runs.
+//   ZHIPU_API_KEY → Z.AI/GLM credential; OPENCODE_API_KEY → Zen credential;
+//   opencode/hy3-free → the retired free Zen model that caused the incident.
+
+// Capture stdout AND stderr into one string; restore() returns both streams.
+function captureOut() {
+  const o = process.stdout.write.bind(process.stdout);
+  const e = process.stderr.write.bind(process.stderr);
+  const c = [];
+  const tap = (x) => { c.push(Buffer.isBuffer(x) ? x.toString() : String(x)); return true; };
+  process.stdout.write = tap;
+  process.stderr.write = tap;
+  return { text: () => c.join(''), restore() { process.stdout.write = o; process.stderr.write = e; } };
+}
+
+// Authenticated fake Zen fetch: returns `ids` only with the OPENCODE bearer.
+function fakeZenFetch(zenKey, ids) {
+  return async (url, opts = {}) => {
+    const h = (opts && opts.headers) || {};
+    const auth = String(h.Authorization || h.authorization || '');
+    if (!new RegExp(`Bearer\\s+${zenKey}`).test(auth)) {
+      const er = new Error('unauthenticated: OPENCODE_API_KEY required for Zen catalogue');
+      er.code = 'NO_ZEN_AUTH';
+      throw er;
+    }
+    const body = { data: ids.map((id) => ({ id })) };
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+}
+
+// Isolated HOME + project dir; correct post-incident opencode.json (string model
+// & small_model on opencode/hy3-free; deny-first permission.bash).
+async function setupCoderFixture({ zhipu, opencode, writeConfig = true } = {}) {
+  const home = makeTmpHome();
+  const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-proj-')));
+  mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+  const envPath = join(home, '.config', 'triss', '.env');
+  writeFileSync(envPath, '');
+  const { setVar } = await import('../src/secrets.js');
+  if (zhipu !== undefined) setVar(envPath, 'ZHIPU_API_KEY', zhipu);
+  if (opencode !== undefined) setVar(envPath, 'OPENCODE_API_KEY', opencode);
+  if (writeConfig) {
+    writeFileSync(join(projectDir, 'opencode.json'), JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      model: 'opencode/hy3-free',
+      small_model: 'opencode/hy3-free',
+      permission: { bash: { deny: ['*'], allow: ['node --test test/wizard-full.test.js'] } },
+    }, null, 2));
+  }
+  const saved = { HOME: process.env.HOME, cwd: process.cwd(), isTTY: process.stdin.isTTY,
+    ZHIPU: process.env.ZHIPU_API_KEY, OPENCODE: process.env.OPENCODE_API_KEY };
+  process.env.HOME = home;
+  if (opencode === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = opencode;
+  if (zhipu === undefined) delete process.env.ZHIPU_API_KEY; else process.env.ZHIPU_API_KEY = zhipu;
+  process.chdir(projectDir);
+  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+  return {
+    home, envPath, opencodeJsonPath: join(projectDir, 'opencode.json'),
+    restore() {
+      process.env.HOME = saved.HOME;
+      if (saved.OPENCODE === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = saved.OPENCODE;
+      if (saved.ZHIPU === undefined) delete process.env.ZHIPU_API_KEY; else process.env.ZHIPU_API_KEY = saved.ZHIPU;
+      try { process.chdir(saved.cwd); } catch { /* cwd gone */ }
+      Object.defineProperty(process.stdin, 'isTTY', { value: saved.isTTY, configurable: true });
+      rmSync(home, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+    },
+  };
+}
+
+const depsBag = (fakeFetch) => ({
+  fetch: fakeFetch,
+  spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+  outputs: [],
+  isTTY: false,
+});
+const reportOf = (cap, thrown) => cap.text() + (thrown ? `\n${thrown.stack || String(thrown)}` : '');
+
+// WIZ-07: the exact incident — both keys present and opencode.json main & small
+// both on retired opencode/hy3-free. Via captured output OR a thrown error the
+// wizard must name the stale model, replace BOTH roles with DeepSeek, never
+// select GLM, and give exact recovery commands.
+test('WIZ-07: incident names stale hy3-free, replaces both roles with DeepSeek, no GLM, exact recovery', async () => {
+  const zenKey = 'sk-zen-incident';
+  const fakeFetch = fakeZenFetch(zenKey, ['deepseek-v4-flash-free', 'north-mini-code-free']);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  const cap = captureOut();
+  let fx, thrown = null;
+  try {
+    fx = await setupCoderFixture({ zhipu: 'sk-zhipu-incident', opencode: zenKey });
+    const { runWizard } = await import('../src/commands/config.js');
+    // No explicit provider: Zen config must keep provider intent Zen despite both keys.
+    try { await runWizard('coder', { global: true }, depsBag(fakeFetch)); } catch (e) { thrown = e; }
+  } finally {
+    cap.restore();
+    globalThis.fetch = origFetch;
+    if (fx) fx.restore();
+  }
+  const report = reportOf(cap, thrown);
+
+  assert.match(report, /hy3-free/, 'must identify the stale opencode/hy3-free model');
+  assert.match(report, /deepseek-v4-flash-free/, 'must offer replacement deepseek-v4-flash-free');
+  assert.match(
+    report,
+    /--small ['"]?opencode\/deepseek-v4-flash-free['"]?/,
+    'must replace small_model with deepseek-v4-flash-free too',
+  );
+  assert.doesNotMatch(report, /north-mini-code-free/, 'must not substitute a different small-model default');
+  assert.doesNotMatch(report,
+    /(default(?:ed|ing)?\s+(?:to\s+)?glm|switch(?:ed|ing)?\s+to\s+glm|us(?:e|ing)\s+glm\s+(?:as|for)|select(?:ed|ing)?\s+glm\b|cho(?:se|sen)\s+glm\b)/i,
+    'must not silently select GLM in the incident state');
+  const cmdForm = /--coder-engine\s+opencode\s+--coder-provider\s+opencode-zen/.test(report);
+  const modelForm = /--engine\s+opencode\b/.test(report) && /(?:--global|--local)/.test(report);
+  assert.ok(cmdForm || modelForm,
+    'must give exact recovery commands: --coder-engine opencode --coder-provider opencode-zen, or model set with --engine opencode plus --global/--local');
+});
+
+// WIZ-08: provider-before-credential. An explicit Zen selector (coderEngine
+// opencode, coderProvider opencode-zen) with ONLY OPENCODE_API_KEY seeded must
+// never ask for / require ZHIPU, keep ZHIPU absent, and reach Zen setup/recovery
+// rather than a generic missing-ZHIPU failure.
+test('WIZ-08: explicit Zen selector never requires ZHIPU, keeps it absent, reaches Zen setup', async () => {
+  const zenKey = 'sk-zen-only';
+  const fakeFetch = fakeZenFetch(zenKey, ['deepseek-v4-flash-free', 'north-mini-code-free']);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  const cap = captureOut();
+  let fx, thrown = null;
+  try {
+    fx = await setupCoderFixture({ opencode: zenKey }); // ZHIPU deliberately absent
+    const { runWizard } = await import('../src/commands/config.js');
+    try { await runWizard('coder', { global: true, coderEngine: 'opencode', coderProvider: 'opencode-zen' }, depsBag(fakeFetch)); } catch (e) { thrown = e; }
+  } finally {
+    cap.restore();
+    globalThis.fetch = origFetch;
+  }
+  // Observe ZHIPU absence on disk + in env while the sandbox is still live.
+  const { readEnvFile } = await import('../src/secrets.js');
+  const diskVars = fx ? readEnvFile(fx.envPath).vars : {};
+  const envZhipu = process.env.ZHIPU_API_KEY;
+  if (fx) fx.restore();
+  const report = reportOf(cap, thrown);
+
+  assert.doesNotMatch(report, /(prompt|enter|provide|require|need|missing)[\s\S]{0,40}ZHIPU/i,
+    'Zen selector must not ask for or require ZHIPU_API_KEY');
+  assert.equal(diskVars.ZHIPU_API_KEY, undefined, 'ZHIPU_API_KEY must remain absent from the env file');
+  assert.equal(envZhipu, undefined, 'ZHIPU_API_KEY must remain absent from process.env');
+  assert.match(report, /(opencode|zen)/i, 'must reach Zen setup/recovery');
+  assert.doesNotMatch(report, /(missing|not set|required)[\s\S]{0,30}ZHIPU|ZHIPU[\s\S]{0,30}(missing|not set|required)/i,
+    'must not surface a generic missing-ZHIPU failure');
+});
+
+// WIZ-09: provider ambiguity must NOT fall back to Z.AI. When the opencode
+// engine is selected but nothing disambiguates the provider — no
+// --coder-provider flag, no preset, no engine config (no opencode.json), and
+// either ZERO or SEVERAL provider credentials set — the wizard must REFUSE to
+// proceed instead of silently selecting the historical `return 'zai'` default.
+// The zai fallback would write a global opencode.json, pin a Z.AI model into
+// the env file, and demand ZHIPU_API_KEY against the user's actual intent.
+// The refusal must report provider ambiguity/required, name BOTH provider
+// options via the exact recovery commands, and leak no fake key value.
+//
+// This test is intentionally RED against the current `return 'zai'` fallback:
+// today both cases resolve provider to 'zai', write the global opencode.json,
+// and pin TRISS_CODER_MODEL — so the before-restore "nothing was written"
+// guards and the after-restore "ambiguous" + exact-command matches fail until
+// resolveWizardCoderProvider stops falling back to zai on genuine ambiguity.
+test('WIZ-09: ambiguous opencode provider must not fall back to Z.AI; names both provider commands, writes nothing', async () => {
+  const cases = [
+    { zhipu: undefined, opencode: undefined, label: 'no-credentials' },
+    { zhipu: 'zk-both', opencode: 'oc-both', label: 'both-credentials' },
+  ];
+
+  for (const c of cases) {
+    const fakeFetch = fakeZenFetch('oc-both', []);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fakeFetch;
+    const cap = captureOut();
+    let fx = null;
+    let thrown = null;
+    try {
+      fx = await setupCoderFixture({ ...c, writeConfig: false });
+      const { runWizard } = await import('../src/commands/config.js');
+      // Non-interactive (deps.isTTY:false). No --coder-provider, no preset, no
+      // opencode.json — so provider intent is genuinely ambiguous in BOTH cases
+      // (zero or several credentials). Must NOT silently resolve to zai.
+      try {
+        await runWizard('coder', { global: true, coderEngine: 'opencode' }, depsBag(fakeFetch));
+      } catch (e) { thrown = e; }
+
+      // ─── BEFORE restore: an ambiguous provider must have written NOTHING ───
+      const globalOpencodeJson = join(fx.home, '.config', 'opencode', 'opencode.json');
+      assert.equal(existsSync(globalOpencodeJson), false,
+        `[${c.label}] ambiguous provider must not create a global opencode.json`);
+      assert.equal(existsSync(fx.opencodeJsonPath), false,
+        `[${c.label}] ambiguous provider must not create a project opencode.json`);
+      const { readEnvFile } = await import('../src/secrets.js');
+      const diskVars = readEnvFile(fx.envPath).vars;
+      // No provider credential / model pin newly written by the wizard.
+      assert.equal(diskVars.TRISS_CODER_MODEL, undefined,
+        `[${c.label}] ambiguous provider must not pin a provider model (TRISS_CODER_MODEL) into the env file`);
+      assert.equal(diskVars.TRISS_CODER_SMALL_MODEL, undefined,
+        `[${c.label}] ambiguous provider must not pin a provider small model (TRISS_CODER_SMALL_MODEL) into the env file`);
+      if (c.zhipu === undefined) {
+        assert.equal(diskVars.ZHIPU_API_KEY, undefined,
+          `[${c.label}] no ZHIPU_API_KEY must be written when none was seeded`);
+      }
+      if (c.opencode === undefined) {
+        assert.equal(diskVars.OPENCODE_API_KEY, undefined,
+          `[${c.label}] no OPENCODE_API_KEY must be written when none was seeded`);
+      }
+    } finally {
+      cap.restore();
+      globalThis.fetch = origFetch;
+      if (fx) fx.restore();
+    }
+
+    // ─── AFTER restore/report: ambiguity reported, exact commands, no leak ───
+    const report = reportOf(cap, thrown);
+    assert.match(report, /ambiguous|required/i,
+      `[${c.label}] must report provider ambiguity or that a provider is required`);
+    assert.match(report, /triss config wizard coder/,
+      `[${c.label}] must give the exact \`triss config wizard coder\` invocation`);
+    assert.match(report, /--coder-engine opencode/,
+      `[${c.label}] must include --coder-engine opencode in the recovery command`);
+    assert.match(report, /--coder-provider zai/,
+      `[${c.label}] must offer --coder-provider zai as one disambiguation option`);
+    assert.match(report, /--coder-provider opencode-zen/,
+      `[${c.label}] must offer --coder-provider opencode-zen as one disambiguation option`);
+    for (const v of [c.zhipu, c.opencode].filter(Boolean)) {
+      assert.ok(!report.includes(v),
+        `[${c.label}] report must not leak the fake key value "${v}"`);
+    }
   }
 });

@@ -225,7 +225,7 @@ forwards it as `ZAI_API_KEY` for older binaries. See
 Configure via `triss coder init` or `triss config wizard coder`. The opencode
 engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
 sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/hy3-free`) with `OPENCODE_API_KEY` — see `docs/opencode-zen.md` —
+`opencode/deepseek-v4-flash-free`) with `OPENCODE_API_KEY` — run `triss coder models` to see current offerings —
 and `--provider moonshot` / `--provider kimi-for-coding` set up **Moonshot
 Kimi** models: pay-as-you-go `moonshotai/*` (e.g. `moonshotai/kimi-k2.7-code`)
 with `MOONSHOT_API_KEY`, or the flat-rate subscription `kimi-for-coding/*`

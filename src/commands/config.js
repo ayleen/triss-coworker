@@ -95,7 +95,7 @@ export async function chooseMode() {
   );
 }
 
-export async function runWizard(target, opts) {
+export async function runWizard(target, opts, deps) {
   const manifests = await listManifests();
   const explicit = !!target;
   // Capture shell-exported coder model overrides BEFORE anything loads .env
@@ -123,6 +123,8 @@ export async function runWizard(target, opts) {
       force: !!opts.force,
       scope,
       inheritedModels,
+      wizardOpts: opts || {},
+      deps: deps || {},
     });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     if (scope === 'local') maybeAddGitignore();
@@ -141,6 +143,8 @@ export async function runWizard(target, opts) {
       force: !!opts.force,
       scope,
       inheritedModels,
+      wizardOpts: opts || {},
+      deps: deps || {},
     });
     process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
     await offerClaudeCodeIntegration(scope);
@@ -388,7 +392,7 @@ async function runStandardWizard(path, current) {
   );
 }
 
-async function runFullWizard(targets, path, current, { explicit, force, scope, inheritedModels }) {
+async function runFullWizard(targets, path, current, { explicit, force, scope, inheritedModels, wizardOpts, deps }) {
   // For non-targeted runs, let the user pick which integrations to walk
   // through with one multi-select instead of N sequential y/N prompts.
   let selected = null;
@@ -430,10 +434,34 @@ async function runFullWizard(targets, path, current, { explicit, force, scope, i
       continue;
     }
 
+    // A manifest may want to NARROW the env vars walked based on the wizard
+    // flags / current state before prompting (only `coder` does today: when
+    // the provider intent is, say, OpenCode Zen, it walks ONLY OPENCODE_API_KEY
+    // and never asks for ZHIPU_API_KEY). It also resolves an engine/provider
+    // pair (engine first, provider second) that postSetup needs. A throw here
+    // (e.g. a crush engine/provider conflict) is treated like a post-setup
+    // failure: recorded, re-thrown after the loop so the wizard still walks
+    // the OTHER manifests first.
+    let envVarsToWalk = m.envVars;
+    let postSetupCtx = { scope, path, inheritedModels };
+    if (typeof m.resolveWizardCtx === 'function') {
+      try {
+        const resolved = await m.resolveWizardCtx(wizardOpts || {}, current, deps || {}, { scope, path });
+        envVarsToWalk = resolved.envVars || m.envVars;
+        postSetupCtx = { scope, path, inheritedModels, ...(resolved.ctx || {}) };
+      } catch (err) {
+        process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
+        if (m.description) process.stdout.write(pc.dim(m.description + '\n'));
+        process.stdout.write(pc.yellow(`  ⚠ ${m.name} setup could not proceed: ${err.message}\n`));
+        postSetupError = postSetupError || err;
+        continue;
+      }
+    }
+
     process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
     if (m.description) process.stdout.write(pc.dim(m.description + '\n'));
 
-    for (const v of m.envVars) {
+    for (const v of envVarsToWalk) {
       const secret = v.secret || isSecretKey(v.name);
       const existing = current[v.name];
       if (existing && !force) {
@@ -470,10 +498,13 @@ async function runFullWizard(targets, path, current, { explicit, force, scope, i
     // re-thrown after the loop so the wizard exits non-zero (a blocking coder
     // conflict is a real "setup incomplete", not a cosmetic warning).
     // `inheritedModels` (shell overrides captured before any .env load) flows in
-    // so runCoderSetup's pin-shadow check works on the wizard path too.
+    // so runCoderSetup's pin-shadow check works on the wizard path too. `deps`
+    // (injected fetch/spawnSync/outputs/isTTY) threads through so a testable
+    // wizard can drive the coder catalogue probe and engine detect without
+    // touching the real network or PATH.
     if (typeof m.postSetup === 'function') {
       try {
-        await m.postSetup({ scope, path, inheritedModels });
+        await m.postSetup(postSetupCtx, deps || {});
       } catch (err) {
         process.stdout.write(pc.yellow(`  ⚠ ${m.name} post-setup failed: ${err.message}\n`));
         postSetupError = postSetupError || err;
