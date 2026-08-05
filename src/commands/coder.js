@@ -55,6 +55,10 @@ import {
   ZAI_CODING_PLAN_BASE_URL,
   ZAI_PAYG_BASE_URL,
 } from '../zai.js';
+import {
+  OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
+  isTransientOpenCodeReadError,
+} from '../opencode-catalogue.js';
 // crush is the SECOND coding engine behind `--engine crush`. The adapter is
 // pure (detect/argv/env/parse/map); this module owns the engine-agnostic
 // orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
@@ -234,17 +238,12 @@ const GO_MODEL_CHOICES = [
 const GO_MAIN_PRIORITY = ['deepseek-v4-flash'];
 const GO_SMALL_PRIORITY = ['deepseek-v4-flash'];
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
-const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-
-function isTransientOpenCodeReadError(error) {
-  return error instanceof TypeError || error?.name === 'AbortError' || error?.name === 'TimeoutError';
-}
 
 // Zen keeps its historical Set-or-null contract. Go consumes the structured
 // outcome directly so authenticated denials and an authoritative empty
 // catalogue can never be mistaken for a temporary offline condition.
 async function fetchZenModelIds(fetchImpl = globalThis.fetch) {
-  const outcome = await fetchOpenCodeCatalogue(ZEN_MODELS_URL, fetchImpl);
+  const outcome = await fetchOpenCodeCatalogue(ZEN_MODELS_URL, fetchImpl, { strictEntries: false });
   return outcome.kind === 'available' ? outcome.ids : null;
 }
 
@@ -252,7 +251,7 @@ async function fetchGoCatalogue(fetchImpl = globalThis.fetch) {
   return fetchOpenCodeCatalogue(GO_MODELS_URL, fetchImpl);
 }
 
-async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
+async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch, { strictEntries = true } = {}) {
   const key = process.env.OPENCODE_API_KEY;
   if (!key) return { kind: 'missing-key' };
   let res;
@@ -269,7 +268,7 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
   if (!res?.ok) {
     if (status === 401) return { kind: 'unauthenticated' };
     if (status === 403) return { kind: 'forbidden' };
-    if (GO_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(status)) {
+    if (OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(status)) {
       return { kind: 'transient', reason: 'http', status };
     }
     return { kind: 'invalid', reason: 'http', status: Number.isFinite(status) ? status : null };
@@ -285,6 +284,14 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch) {
   }
   if (!body || !Array.isArray(body.data)) return { kind: 'invalid', reason: 'shape' };
   if (body.data.length === 0) return { kind: 'empty' };
+
+  if (!strictEntries) {
+    // Preserve Zen init's historical leniency: valid ids remain useful even
+    // when an unrelated entry is malformed. Go stays strict because an
+    // authoritative subscription catalogue controls fail-closed setup.
+    const ids = new Set(body.data.map((entry) => entry && entry.id).filter(Boolean));
+    return ids.size ? { kind: 'available', ids } : { kind: 'empty' };
+  }
 
   const ids = new Set();
   for (const entry of body.data) {
@@ -1152,12 +1159,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
         'opencode engine. Drop --engine crush (or use --provider zai).',
     );
   }
-  const provider = engine === 'crush' ? 'zai' : await resolveInitProvider(opts, deps);
-  if (opts.allowUnverified && provider !== 'opencode-go') {
+  if (
+    opts.allowUnverified
+    && (!opts.provider || normalizeProviderFlag(opts.provider) !== 'opencode-go')
+  ) {
     throw new Error(
-      '`--allow-unverified` on `triss coder init` is supported only with `--provider opencode-go`.',
+      '`--allow-unverified` on `triss coder init` is supported only with explicit `--provider opencode-go`.',
     );
   }
+  const provider = engine === 'crush' ? 'zai' : await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const path = ensureEnvFile(scope);
