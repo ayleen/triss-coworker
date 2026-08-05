@@ -218,7 +218,7 @@ test(
     assert.ok(
       plan.diagnostics.some(
         (d) => d.code === 'worker-provider-not-configured' &&
-          d.command === 'triss coder init --provider worker --global',
+          d.command === 'triss coder init --engine opencode --provider worker --global',
       ),
       `expected worker-provider-not-configured, got ${JSON.stringify(plan.diagnostics)}`,
     );
