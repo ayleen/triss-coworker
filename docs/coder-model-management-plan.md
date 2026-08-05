@@ -217,6 +217,13 @@ or authorization failures, an authoritative empty catalogue, invalid data, and
 transient failures produce status-specific guidance only; they must never reuse
 a current role from another provider to fabricate a repair command.
 
+For a provider whose catalogue status is `not-supported`, recovery is not
+catalogue-backed: it may reuse only the provider-compatible main and small roles
+already present in the effective config/runtime state. It must not invent a
+recommendation, cross provider prefixes, or suppress an otherwise executable
+repair command merely because that provider intentionally exposes no catalogue
+API.
+
 **Help text for `coder model set`** must describe both engines and their exact configuration targets:
 - OpenCode: `opencode.json` at project `.crush/crush.json` or global `~/.local/share/crush/crush.json`
 - Show that OpenCode has two separate main model sources (runtime main from env pins vs config main from `opencode.json.model`)

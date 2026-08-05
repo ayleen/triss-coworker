@@ -711,6 +711,94 @@ test(
   }),
 );
 
+test(
+  'formatModelRecovery: providers without a catalogue retain provider-compatible recovery commands',
+  withTmpHome(async () => {
+    const svc = await loadService();
+    const cases = [
+      {
+        provider: 'zai',
+        main: 'zai-coding-plan/glm-4.6',
+        small: 'zai-coding-plan/glm-4.5-air',
+      },
+      {
+        provider: 'moonshot',
+        main: 'moonshotai/kimi-k2.7-code',
+        small: 'moonshotai/kimi-k2.6',
+      },
+      {
+        provider: 'kimi-for-coding',
+        main: 'kimi-for-coding/k3',
+        small: 'kimi-for-coding/kimi-for-coding-highspeed',
+      },
+    ];
+
+    for (const { provider, main, small } of cases) {
+      const state = {
+        engine: 'opencode',
+        provider,
+        scope: 'global',
+        catalogue_status: 'not-supported',
+        recommended: null,
+        current: {
+          main: { value: main, availability: 'not-verified' },
+          small: { value: small, availability: 'not-verified' },
+        },
+        warnings: [{ code: 'config-parse-error', severity: 'error', message: 'repair the config' }],
+      };
+
+      const rec = svc.formatModelRecovery(state);
+      assert.deepEqual(rec.diagnostics, state.warnings);
+      assert.equal(rec.commands.length, 1, `${provider} must retain one recovery command without a catalogue API`);
+      assert.match(rec.commands[0], new RegExp(`--provider ${provider}(?:\\s|$)`));
+      assert.ok(rec.commands[0].includes(main), `${provider} recovery must retain its configured main model`);
+      assert.ok(rec.commands[0].includes(`--small ${small}`), `${provider} recovery must retain its configured small model`);
+      assert.match(rec.commands[0], /--global/);
+      assert.match(rec.commands[0], /--yes$/);
+    }
+
+    const crossProvider = svc.formatModelRecovery({
+      engine: 'opencode',
+      provider: 'zai',
+      scope: 'global',
+      catalogue_status: 'not-supported',
+      current: {
+        main: { value: 'moonshotai/kimi-k2.7-code', availability: 'not-verified' },
+        small: { value: 'zai-coding-plan/glm-4.5-air', availability: 'not-verified' },
+      },
+    });
+    assert.deepEqual(crossProvider.commands, [], 'recovery must not combine cross-provider roles');
+
+    const crossProviderConfigMain = svc.formatModelRecovery({
+      engine: 'opencode',
+      provider: 'zai',
+      scope: 'global',
+      catalogue_status: 'not-supported',
+      config_main: { value: 'moonshotai/kimi-k2.7-code', availability: 'not-verified' },
+      current: {
+        main: { value: 'zai-coding-plan/glm-4.6', availability: 'not-verified' },
+        small: { value: 'zai-coding-plan/glm-4.5-air', availability: 'not-verified' },
+      },
+    });
+    assert.deepEqual(
+      crossProviderConfigMain.commands,
+      [],
+      'a cross-provider config_main must not be replaced by the compatible runtime fallback',
+    );
+
+    const absentRoles = svc.formatModelRecovery({
+      engine: 'opencode',
+      provider: 'zai',
+      scope: 'global',
+      catalogue_status: 'not-supported',
+      current: {},
+      warnings: [{ code: 'missing-model', severity: 'error', message: 'no configured roles' }],
+    });
+    assert.deepEqual(absentRoles.commands, [], 'recovery must not invent roles for a provider without a catalogue');
+    assert.equal(absentRoles.diagnostics.length, 1);
+  }),
+);
+
 // ════════════════════════════════════════════════════════════════════════════
 // Small CLI group — `coder <x> --help` always exits 0, but commander prints the
 // PARENT `coder` usage line when <x> is unknown and the subcommand's OWN usage

@@ -31,6 +31,12 @@ triss coder init --provider opencode-go --allow-unverified --global
 This flag never bypasses authentication, authorization, empty-catalogue, or
 malformed-response failures.
 
+`triss config wizard coder` intentionally has no unverified-catalogue bypass.
+It fails closed on a transient Go catalogue error and prints the explicit
+`triss coder init --provider opencode-go --allow-unverified --local|--global`
+recovery command. Run that direct command only after deciding to accept the
+temporary unverified fallback.
+
 Zen and Go share the same environment variable, but they are separate
 providers:
 
@@ -93,8 +99,10 @@ and leaves local configuration unchanged.
 - Catalogue is empty: treat it as authoritative; check subscription/workspace
   availability rather than pinning a built-in model.
 - Catalogue is temporarily unavailable: retry after checking connectivity, or
-  use `--allow-unverified` only when accepting an unverified built-in fallback
-  is intentional.
+  rerun the exact direct `triss coder init --provider opencode-go
+  --allow-unverified --local|--global` command; the configuration wizard cannot
+  opt in on your behalf. Use it only when accepting an unverified built-in
+  fallback is intentional.
 - `RegionError`: enable the required hosting region in the OpenCode workspace
   only after accepting its data-residency implications, then retry the run.
 - Zen/Go main-small mismatch: choose two models with the same prefix even

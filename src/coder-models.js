@@ -1996,8 +1996,9 @@ function detectFormat(text) {
 //
 // Renders one exact, copy-paste `coder model set` command per failure from an
 // inspection state. Every command pins --engine (no silent default) and a
-// scope (--global/--local), proposes models the live catalogue actually
-// offers, and NEVER embeds the raw credential.
+// scope (--global/--local), uses either models verified by a live catalogue or
+// provider-compatible configured roles when catalogue lookup is unsupported,
+// and NEVER embeds the raw credential.
 export function formatModelRecovery(state = {}, _deps = {}) {
   const commands = [];
   const engine = state.engine || DEFAULT_CODER_ENGINE;
@@ -2014,55 +2015,62 @@ export function formatModelRecovery(state = {}, _deps = {}) {
   // Zen main+small pair instead.
   const configMain = state.config_main;
 
-  // A persistent repair may only be proposed from a verified, non-empty live
-  // catalogue. Account, invalid-data, empty, and transient states carry
-  // diagnostics but no speculative model mutation command.
+  let mainTarget;
+  let smallTarget;
+
+  if (state.catalogue_status === 'not-supported') {
+    // Z.AI and Kimi providers intentionally expose no catalogue API. Preserve
+    // their already-resolved config/runtime pair so parse-policy warnings still
+    // have an executable repair, but never cross provider-prefix boundaries.
+    mainTarget = configMain?.value || cur.main?.value;
+    smallTarget = cur.small?.value;
+  } else if (
+    state.catalogue_status === 'ok'
+    && rec?.main
+    && rec?.small
+    && prefixFitsProvider(rawPrefix(rec.main), provider)
+    && prefixFitsProvider(rawPrefix(rec.small), provider)
+  ) {
+    if (configMain) {
+      // config_main exists: retain it only when this verified catalogue contains
+      // it; otherwise use the verified recommendation.
+      mainTarget = configMain.availability === 'available' ? configMain.value : rec.main;
+    } else {
+      // No config_main: never reuse a runtime role from a different provider.
+      mainTarget = cur.main?.availability === 'available' ? cur.main.value : rec.main;
+    }
+
+    smallTarget = cur.small?.availability === 'available' ? cur.small.value : rec.small;
+  } else {
+    // Account, invalid-data, empty, and transient catalogue states carry
+    // diagnostics but no speculative model mutation command.
+    return { commands, diagnostics: state.warnings || [] };
+  }
+
   if (
-    state.catalogue_status !== 'ok'
-    || !rec?.main
-    || !rec?.small
-    || !prefixFitsProvider(rawPrefix(rec.main), provider)
-    || !prefixFitsProvider(rawPrefix(rec.small), provider)
+    !mainTarget
+    || !smallTarget
+    || !prefixFitsProvider(rawPrefix(mainTarget), provider)
+    || !prefixFitsProvider(rawPrefix(smallTarget), provider)
   ) {
     return { commands, diagnostics: state.warnings || [] };
   }
 
-  let mainTarget;
-  let smallTarget;
-
-  if (configMain) {
-    // config_main exists: retain it only when this verified catalogue contains
-    // it; otherwise use the verified recommendation.
-    mainTarget = configMain.availability === 'available' ? configMain.value : rec.main;
-  } else {
-    // No config_main: never reuse a runtime role from a different provider.
-    mainTarget = cur.main?.availability === 'available' ? cur.main.value : rec.main;
-  }
-
-  smallTarget = cur.small?.availability === 'available' ? cur.small.value : rec.small;
-
-  if (
-    mainTarget
-    && smallTarget
-    && prefixFitsProvider(rawPrefix(mainTarget), provider)
-    && prefixFitsProvider(rawPrefix(smallTarget), provider)
-  ) {
-    const argv = ['triss', 'coder', 'model', 'set', '--engine', engine];
-    if (provider) argv.push('--provider', provider);
-    argv.push(scopeFlag);
-    // The CLI takes main as the optional positional [main-model] (see
-    // bin/triss.js `coder model set`), so emit it positionally — a recovery
-    // command must be copy-paste-runnable against the registered surface.
-    // formatShellCommand POSIX-quotes unsafe values so a model id containing
-    // spaces/apostrophes/;/$(...) survives intact.
-    if (mainTarget) argv.push(mainTarget);
-    if (smallTarget) argv.push('--small', smallTarget);
-    // A recovery command is copy-pasted from a diagnostic surface (no TTY
-    // prompt to confirm), so it must be non-interactive: pin --yes so the
-    // planned switch applies without an interactive confirmation gate.
-    argv.push('--yes');
-    commands.push(formatShellCommand(argv));
-  }
+  const argv = ['triss', 'coder', 'model', 'set', '--engine', engine];
+  if (provider) argv.push('--provider', provider);
+  argv.push(scopeFlag);
+  // The CLI takes main as the optional positional [main-model] (see
+  // bin/triss.js `coder model set`), so emit it positionally — a recovery
+  // command must be copy-paste-runnable against the registered surface.
+  // formatShellCommand POSIX-quotes unsafe values so a model id containing
+  // spaces/apostrophes/;/$(...) survives intact.
+  argv.push(mainTarget);
+  argv.push('--small', smallTarget);
+  // A recovery command is copy-pasted from a diagnostic surface (no TTY
+  // prompt to confirm), so it must be non-interactive: pin --yes so the
+  // planned switch applies without an interactive confirmation gate.
+  argv.push('--yes');
+  commands.push(formatShellCommand(argv));
 
   return { commands, diagnostics: state.warnings || [] };
 }
