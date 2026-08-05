@@ -326,6 +326,13 @@ test(
         state.warnings.some((warning) => warning.code === `catalogue-${c.status}`),
         `${c.status}: warning must preserve the authoritative catalogue status`,
       );
+      if (c.status === 'empty') {
+        assert.equal(
+          state.warnings.some((warning) => warning.code === 'configured-model-unavailable'),
+          false,
+          'empty: the root catalogue warning must not be duplicated per configured role',
+        );
+      }
       const recovery = svc.formatModelRecovery(state, {});
       assert.deepEqual(
         recovery.commands,

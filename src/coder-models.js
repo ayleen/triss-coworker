@@ -63,6 +63,10 @@ import { getEnvFilePath, parseEnvText, readEnvFile } from './secrets.js';
 // mapping stays in one place. Safe to import: coder.js has no module-eval
 // side effects, and we only call this pure helper (never its fetch paths).
 import { coderModelCredential, DEFAULT_CODER_ENGINE } from './commands/coder.js';
+import {
+  OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
+  isTransientOpenCodeReadError,
+} from './opencode-catalogue.js';
 
 // Built-in defaults (must match coder.js's defaults).
 const DEFAULT_CODER_MODEL = 'zai-coding-plan/glm-5.2';
@@ -102,11 +106,6 @@ const ZEN_MODELS_TIMEOUT_MS = 10_000;
 // OPENCODE_API_KEY with Zen but is a distinct provider with its own model
 // prefix (`opencode-go/`). Same URL/base as fetchGoModelIds in coder.js.
 const GO_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
-const GO_CATALOGUE_TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-
-function isTransientOpenCodeReadError(error) {
-  return error instanceof TypeError || error?.name === 'AbortError' || error?.name === 'TimeoutError';
-}
 
 // Preference order for recommending Zen models from a verified catalogue
 // (matches coder.js's documented ZEN_*_PRIORITY). Both roles default to the
@@ -482,7 +481,7 @@ export async function listProviderModels(input = {}, deps = {}) {
         if (res.status === 403) {
           return { engine, provider, status: 'forbidden', httpStatus: res.status, models: [] };
         }
-        if (GO_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(Number(res.status))) {
+        if (OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES.has(Number(res.status))) {
           return { engine, provider, status: 'transient', httpStatus: res.status, models: [] };
         }
         return { engine, provider, status: 'invalid', httpStatus: res.status, models: [] };
@@ -643,14 +642,14 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
   // For OpenCode, warn about config_main and configuredSmall availability, not runtimeMain.
   // runtimeMain may be a different provider (e.g. GLM shell override) and should not trigger
   // "configured-model-unavailable" against the selected provider's catalogue.
-  if (engine === 'opencode') {
+  if (cat.status === 'ok' && engine === 'opencode') {
     if (configMain.value && configMain.value !== null && availability(configMain.value) === 'unavailable') {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'config_main', value: configMain.value, message: `Configured main model ${configMain.value} is not available in the provider's catalogue` });
     }
     if (configuredSmall.value && configuredSmall.value !== null && availability(configuredSmall.value) === 'unavailable') {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'small', value: configuredSmall.value, message: `Configured small model ${configuredSmall.value} is not available in the provider's catalogue` });
     }
-  } else {
+  } else if (cat.status === 'ok') {
     // For Crush or other engines, warn about current roles.
     if (runtimeMain.value && runtimeMain.value !== null && availability(runtimeMain.value) === 'unavailable') {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'main', value: runtimeMain.value, message: `Configured main model ${runtimeMain.value} is not available in the provider's catalogue` });

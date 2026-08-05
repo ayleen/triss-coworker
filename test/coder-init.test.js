@@ -862,6 +862,34 @@ test(
 );
 
 test(
+  'runCoderInit: --allow-unverified without explicit Go provider rejects before provider resolution',
+  withTmpHome(async () => {
+    const originalTTY = process.stdin.isTTY;
+    let prompted = false;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    try {
+      await assert.rejects(
+        () =>
+          runCoderInit(
+            { global: true, allowUnverified: true },
+            {
+              spawnSync: fakeSpawnAlreadyInstalled,
+              promptChoice: async () => {
+                prompted = true;
+                return 'opencode-go';
+              },
+            },
+          ),
+        /--allow-unverified.*explicit.*--provider opencode-go/i,
+      );
+      assert.equal(prompted, false);
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: originalTTY, configurable: true });
+    }
+  }),
+);
+
+test(
   'runCoderInit --provider opencode-zen: writes an opencode config from the live catalogue and skips Z.AI detection',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
@@ -1583,6 +1611,30 @@ test(
     assert.match(captured.join(''), /could not fetch the OpenCode Zen catalogue .* availability is NOT verified/s);
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
     assert.equal(config.model, 'opencode/deepseek-v4-flash-free'); // static fallback
+  }),
+);
+
+test(
+  'runCoderInit --provider opencode-zen: preserves valid ids from a mixed malformed catalogue response',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            object: 'list',
+            data: [null, { id: 42 }, { id: 'deepseek-v4-flash-free' }],
+          }),
+        }),
+      },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
   }),
 );
 

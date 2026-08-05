@@ -482,6 +482,8 @@ legacy Zen model management, the accepted not-verified states remain timeout,
 HTTP error, or parse error. `model set` additionally requires explicit main and
 small models plus the matching credential. The flag never relaxes credential
 checks or an authoritative unavailable result.
+On `coder init`, the flag also requires explicit `--provider opencode-go` and
+is rejected before any interactive provider selection.
 `--allow-unsafe-bash` does **not** lift or rewrite the bash policy. It
 permits exactly one thing: **model-field repair** of an existing OpenCode
 config that was written *without* the canonical deny-first policy, while

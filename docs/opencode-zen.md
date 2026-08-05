@@ -109,6 +109,10 @@ catalogue can't be fetched, and always labelled **not verified**:
 | small | `deepseek-v4-flash-free` → `north-mini-code-free` → `mimo-v2.5-free` |
 
 The interactive picker only offers models the live catalogue actually lists.
+For backward compatibility, Zen init keeps usable ids from a mixed response
+even when unrelated entries are malformed; a response with no usable ids still
+falls back as not verified. OpenCode Go intentionally uses a stricter all-entry
+validation contract.
 
 If the configured model is **authoritatively `unavailable`** — a stale pin, for
 example an `opencode/hy3-free` a previous init wrote before the promo ended —
