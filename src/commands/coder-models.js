@@ -249,6 +249,10 @@ function renderModelsHuman(state) {
     for (const w of warns) {
       const where = w.role ? `${w.scope}:${w.role}` : w.scope;
       out.write(severityColor(w.severity)(`⚠ ${w.code} (${where})\n`));
+      if (w.message) out.write(pc.dim(`    ${w.message}\n`));
+      if (w.path && !String(w.message || '').includes(w.path)) {
+        out.write(pc.dim(`    source: ${w.path}\n`));
+      }
     }
   }
 
@@ -357,6 +361,13 @@ export async function runCoderModelSet(mainArg, opts = {}) {
       const error = result && result.error ? result.error : null;
       const lockPath = result && result.lockPath ? result.lockPath : null;
       const rollbackCmd = result && result.rollbackCommand ? result.rollbackCommand : null;
+      const retainedPath = result && result.path ? result.path : null;
+      const recordPath = result && result.transaction && result.transaction.dir
+        ? result.transaction.dir
+        : null;
+      const manualRecovery = result && Array.isArray(result.manualRecovery)
+        ? result.manualRecovery
+        : [];
 
       process.stderr.write(pc.red(`✗ Crush model change failed (${reason})\n`));
       if (error) {
@@ -365,6 +376,15 @@ export async function runCoderModelSet(mainArg, opts = {}) {
       if (lockPath) {
         process.stderr.write(pc.dim(`  lock path: ${lockPath}\n`));
         process.stderr.write(pc.dim(`  manual removal: rm ${lockPath}\n`));
+      }
+      if (retainedPath && reason === 'partial-state-retained') {
+        process.stderr.write(pc.dim(`  retained config: ${retainedPath}\n`));
+      }
+      if (recordPath) {
+        process.stderr.write(pc.dim(`  record: ${recordPath}\n`));
+      }
+      for (const guidance of manualRecovery) {
+        process.stderr.write(pc.dim(`  recovery: ${guidance}\n`));
       }
       if (rollbackCmd) {
         process.stderr.write(pc.dim(`  rollback: ${rollbackCmd}\n`));
