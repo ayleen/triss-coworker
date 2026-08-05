@@ -161,3 +161,25 @@ test('Blocker-10e `triss coder model set --help` must name exact config paths: O
     `--help must name Crush local path ./.crush/crush.json; got:\n${out}`,
   );
 });
+
+test('OpenCode Go docs stay aligned across .env.example and the MCP reference', () => {
+  const env = read('.env.example');
+  const mcp = read('docs/mcp.md');
+
+  assert.match(env, /OpenCode Zen or paid OpenCode Go|Zen[\s\S]{0,200}paid Go subscription/);
+  assert.match(env, /^# TRISS_CODER_MODEL=opencode-go\/deepseek-v4-flash$/m);
+  assert.match(env, /^# TRISS_CODER_SMALL_MODEL=opencode-go\/deepseek-v4-flash$/m);
+  assert.match(mcp, /--provider opencode-go/);
+  assert.match(mcp, /opencode-go\/deepseek-v4-flash/);
+  assert.match(mcp, /\[opencode-go\.md\]\(opencode-go\.md\)/);
+});
+
+test('README coder command table retains setup and runtime safety guarantees', () => {
+  const readme = read('README.md');
+
+  assert.match(readme, /missing deny-first bash policy/);
+  assert.match(readme, /stale\/cross-provider `small_model`/);
+  assert.match(readme, /opencode defaults to isolate-OFF, crush defaults to isolate-ON/);
+  assert.match(readme, /`--restrict`\/`--no-restrict`/);
+  assert.match(readme, /refuses to run on Windows/);
+});

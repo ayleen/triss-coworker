@@ -312,11 +312,12 @@ override for self-hosted instances):
   `triss_gitlab_update` `triss_gitlab_comment`
 
 Exposed **when a provider credential is set** — `ZHIPU_API_KEY` (Z.AI GLM,
-the default), `OPENCODE_API_KEY` (OpenCode Zen — see
-[opencode-zen.md](opencode-zen.md)), `MOONSHOT_API_KEY` (Moonshot Kimi
-pay-as-you-go), **or** `KIMI_API_KEY` (Kimi for Coding subscription).
-Setup: `triss coder init` (`--provider opencode-zen`, `--provider moonshot`,
-or `--provider kimi-for-coding`) or `triss config wizard coder`.
+the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
+[opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md)),
+`MOONSHOT_API_KEY` (Moonshot Kimi pay-as-you-go), **or** `KIMI_API_KEY`
+(Kimi for Coding subscription). Setup: `triss coder init`
+(`--provider opencode-zen`, `--provider opencode-go`, `--provider moonshot`, or
+`--provider kimi-for-coding`) or `triss config wizard coder`.
 
 - `triss_coder_run` — delegate an implementation task to a coding
   agent (default `opencode` engine; `engine: "crush"` selects the crush
@@ -332,10 +333,11 @@ or `--provider kimi-for-coding`) or `triss config wizard coder`.
    `permissions.run` config is inert and denied bash deadlocks, so the
    worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
    string — a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
-   (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), a Moonshot Kimi model
-   (`moonshotai/kimi-k2.7-code`, needs `MOONSHOT_API_KEY`), or a Kimi for
-   Coding model (`kimi-for-coding/k3`, needs `KIMI_API_KEY`); triss forwards
-   only the key that model's provider requires.
+   (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), an OpenCode
+   Go model (`opencode-go/deepseek-v4-flash`, needs `OPENCODE_API_KEY` and Go
+   entitlement), a Moonshot Kimi model (`moonshotai/kimi-k2.7-code`, needs
+   `MOONSHOT_API_KEY`), or a Kimi for Coding model (`kimi-for-coding/k3`, needs
+   `KIMI_API_KEY`); triss forwards only the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
   state (`opencode` vs the pinned version, `crush` presence), which
   `opencode.json` / `crush.json` files exist, provider key presence
