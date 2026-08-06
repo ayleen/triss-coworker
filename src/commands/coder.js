@@ -1100,6 +1100,18 @@ function isKnownProviderPrefix(model) {
   return KNOWN_PROVIDER_PREFIXES.has(String(model || '').split('/')[0]);
 }
 
+function isQualifiedProviderModel(model) {
+  const value = String(model || '');
+  const slash = value.indexOf('/');
+  return (
+    slash > 0 &&
+    slash < value.length - 1 &&
+    value === value.trim() &&
+    !/\s/.test(value) &&
+    providerModelId(value).length > 0
+  );
+}
+
 // The bare model id of a provider-prefixed model string (everything after the
 // first `/`): `opencode/hy3-free` -> `hy3-free`. Used to check a model against
 // the live OpenCode Zen catalogue, whose ids are bare.
@@ -1985,6 +1997,71 @@ function readWorkerConfigLayer(scope) {
     return { path, exists: true, config };
   } catch {
     return { path, exists: true, config: null };
+  }
+}
+
+function opencodeConfigAuditPaths(cwd) {
+  const paths = [
+    opencodeConfigPath('global'),
+    join(dirname(opencodeConfigPath('global')), 'opencode.jsonc'),
+  ];
+  let current = resolvePath(cwd || projectRoot());
+  while (true) {
+    paths.push(join(current, 'opencode.json'), join(current, 'opencode.jsonc'));
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return [...new Set(paths)];
+}
+
+function auditOneShotProviderConfiguration(model, { cwd, allowedProvider } = {}) {
+  const providerId = String(model).split('/')[0];
+  let sawAllowedProvider = false;
+  for (const path of opencodeConfigAuditPaths(cwd)) {
+    if (!existsSync(path)) continue;
+    if (path.endsWith('.jsonc')) {
+      throw new Error(
+        `Cannot safely audit ${path} before forwarding a provider credential. ` +
+          'Temporarily remove the JSONC config or convert it to opencode.json for this one-shot run.',
+      );
+    }
+    let config;
+    try {
+      config = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      throw new Error(
+        `Cannot parse ${path} before forwarding a provider credential. Fix the file and retry.`,
+      );
+    }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error(
+        `Cannot safely audit ${path}: the OpenCode config must be a JSON object.`,
+      );
+    }
+    if (config.provider !== undefined && (
+      !config.provider || typeof config.provider !== 'object' || Array.isArray(config.provider)
+    )) {
+      throw new Error(
+        `Cannot safely audit provider overrides in ${path}: "provider" must be an object.`,
+      );
+    }
+    if (!Object.prototype.hasOwnProperty.call(config.provider || {}, providerId)) continue;
+    const definition = config.provider[providerId];
+    if (allowedProvider && isDeepStrictEqual(definition, allowedProvider)) {
+      sawAllowedProvider = true;
+      continue;
+    }
+    throw new Error(
+      `${path} overrides provider["${providerId}"]. OpenCode deep-merges that block, so Triss ` +
+        'refuses to forward the selected credential to a potentially overridden endpoint or headers. ' +
+        'Remove the provider override and retry.',
+    );
+  }
+  if (allowedProvider && !sawAllowedProvider) {
+    throw new Error(
+      `The managed provider["${providerId}"] definition was not found in an auditable OpenCode config.`,
+    );
   }
 }
 
@@ -3849,6 +3926,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ['--model (MCP: model)', modelOverride],
       ['--small-model (MCP: small_model)', oneShotSmallModel],
     ]) {
+      if (!isQualifiedProviderModel(value)) {
+        throw new Error(
+          `${flag} must be a non-empty provider-qualified model (<provider>/<id>) without whitespace.`,
+        );
+      }
       if (!isKnownProviderPrefix(value)) {
         throw new Error(
           `${flag} "${value}" must use a known provider prefix for a one-shot provider run.`,
@@ -3929,7 +4011,22 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
   if (engine === 'opencode' && cred.provider === 'worker') {
-    validateWorkerRunConfiguration(modelUsed, workerSettings, { oneShotSmallModel });
+    const workerAudit = validateWorkerRunConfiguration(modelUsed, workerSettings, { oneShotSmallModel });
+    if (oneShotProvider) {
+      const allowedProvider = workerProviderDefinition(
+        { kind: 'worker', workerProfile: workerAudit.profile },
+        `triss-worker/${workerAudit.profile.flashModel}`,
+        `triss-worker/${workerAudit.profile.flashModel}`,
+      );
+      auditOneShotProviderConfiguration(modelUsed, {
+        cwd: isolate ? projectRoot() : opts.cwd ? resolvePath(opts.cwd) : projectRoot(),
+        allowedProvider,
+      });
+    }
+  } else if (engine === 'opencode' && oneShotProvider) {
+    auditOneShotProviderConfiguration(modelUsed, {
+      cwd: isolate ? projectRoot() : opts.cwd ? resolvePath(opts.cwd) : projectRoot(),
+    });
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
