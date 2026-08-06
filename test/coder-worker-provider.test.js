@@ -655,6 +655,60 @@ test(
 );
 
 test(
+  'one-shot provider aliases match their OpenCode model prefixes and forward only the selected key',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    process.env.OPENCODE_API_KEY = 'sk-opencode-fake';
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+
+    const cases = [
+      {
+        provider: 'opencode-zen',
+        model: 'opencode/deepseek-v4-flash-free',
+        key: 'OPENCODE_API_KEY',
+        value: 'sk-opencode-fake',
+      },
+      {
+        provider: 'moonshot',
+        model: 'moonshotai/kimi-k2.7-code',
+        key: 'MOONSHOT_API_KEY',
+        value: 'sk-moonshot-fake',
+      },
+    ];
+
+    for (const entry of cases) {
+      let childEnv;
+      await runCoderRun(
+        'mechanical task',
+        { provider: entry.provider, model: entry.model },
+        {
+          spawn: fakeSpawn((_cmd, _argv, opts) => {
+            childEnv = opts.env;
+          }),
+          spawnSync: fakeSpawnSync,
+          stdoutWrite: () => true,
+        },
+      );
+
+      assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
+        model: entry.model,
+        small_model: entry.model,
+      });
+      assert.equal(childEnv[entry.key], entry.value);
+      for (const key of [
+        'TRISS_WORKER_API_KEY',
+        'ZHIPU_API_KEY',
+        'OPENCODE_API_KEY',
+        'MOONSHOT_API_KEY',
+        'KIMI_API_KEY',
+      ]) {
+        if (key !== entry.key) assert.equal(key in childEnv, false);
+      }
+    }
+  }),
+);
+
+test(
   'one-shot provider flag validation fails before spawn',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);

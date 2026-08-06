@@ -350,7 +350,7 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `opencode.json` / `crush.json` files exist, provider key presence
   (`TRISS_WORKER_API_KEY` / `ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
   `KIMI_API_KEY` — never the value), and how many isolation
-worktrees are live.
+  worktrees are live.
 
 If an MCP client cancels or times out `triss_coder_run`, its cancellation signal
 is forwarded to the detached engine process group. Normal completion also
