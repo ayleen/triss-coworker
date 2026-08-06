@@ -1009,6 +1009,10 @@ test(
         pattern: /non-empty provider-qualified model/i,
       },
       {
+        opts: { provider: 'opencode', model: 'opencode//x' },
+        pattern: /non-empty provider-qualified model/i,
+      },
+      {
         opts: { provider: 'zai', model: 'zai-coding-plan/glm-5.2/' },
         pattern: /non-empty provider-qualified model/i,
       },
