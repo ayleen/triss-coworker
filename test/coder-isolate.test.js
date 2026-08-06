@@ -132,6 +132,15 @@ function pinnedOpencodeSpawnSync(cmd, args, options) {
   if (cmd === 'opencode' && args?.[0] === '--version') {
     return { status: 0, stdout: `${OPENCODE_PIN}\n`, stderr: '', error: null };
   }
+  if (cmd === 'opencode' && args?.[0] === 'debug' && args?.[1] === 'config') {
+    const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+    return {
+      status: 0,
+      stdout: JSON.stringify(config),
+      stderr: '',
+      error: null,
+    };
+  }
   return spawnSync(cmd, args, options);
 }
 
@@ -483,6 +492,7 @@ test('buildOpencodeArgv always pins the resolved model, including over an agent-
     assert.notEqual(modelIdx, -1);
     assert.equal(capturedArgv[modelIdx + 1], 'zai-coding-plan/glm-5.2');
     assert.equal(capturedArgv[capturedArgv.indexOf('--agent') + 1], 'coder');
+    assert.ok(capturedArgv.includes('--pure'));
   });
   try {
     await run();
@@ -1180,6 +1190,74 @@ test('OpenCode starts residual cleanup on exit instead of waiting for close', as
     await run();
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('exit before the deadline disarms timeout and external signals while close is delayed', async () => {
+  for (const engine of ['opencode', 'crush']) {
+    const repoRoot = initRepo();
+    const run = withIsolatedRun(repoRoot, async () => {
+      const child = new EventEmitter();
+      child.pid = engine === 'opencode' ? 797971 : 797972;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      let alive = true;
+      let exited = false;
+      const postExitSignals = [];
+      const killProcess = (_pid, signal) => {
+        if (exited) postExitSignals.push(signal);
+        if (signal === 'SIGTERM') {
+          alive = false;
+          return true;
+        }
+        if (signal === 0 && !alive) {
+          const error = new Error('no such process');
+          error.code = 'ESRCH';
+          throw error;
+        }
+        return true;
+      };
+      const spawnFn = () => {
+        setTimeout(() => {
+          const output = engine === 'opencode'
+            ? FIXTURE
+            : JSON.stringify({
+                session_id: 'crush-delayed-close',
+                exit_reason: 'end_turn',
+                final_text: 'done',
+                usage: { delta_tokens: 1 },
+              }) + '\n';
+          child.stdout.end(output);
+          child.stderr.end('');
+          child.emit('exit', 0, null);
+          exited = true;
+          setTimeout(() => child.emit('close', 0, null), 60);
+        }, 10);
+        return child;
+      };
+
+      let captured = '';
+      await runCoderRun(
+        'finish just before deadline',
+        { engine, isolate: false, timeout: 0.04 },
+        {
+          spawn: spawnFn,
+          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+          stdoutWrite: (value) => { captured += value; },
+          killProcess,
+          pollMs: 0,
+          processGroupPollMs: 1,
+        },
+      );
+
+      assert.equal(JSON.parse(captured.trim()).exit_reason, 'end_turn');
+      assert.deepEqual(postExitSignals, [], `${engine} must not signal after exit`);
+    });
+    try {
+      await run();
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   }
 });
 
