@@ -2006,9 +2006,13 @@ function readWorkerConfigLayer(scope) {
 }
 
 function opencodeConfigAuditPaths(cwd, { projectRoot: configRoot } = {}) {
+  const globalDir = dirname(opencodeConfigPath('global'));
   const paths = [
-    opencodeConfigPath('global'),
-    join(dirname(opencodeConfigPath('global')), 'opencode.jsonc'),
+    join(globalDir, 'config.json'),
+    join(globalDir, 'opencode.json'),
+    join(globalDir, 'opencode.jsonc'),
+    join(homedir(), '.opencode', 'opencode.json'),
+    join(homedir(), '.opencode', 'opencode.jsonc'),
   ];
   let current = resolvePath(cwd || projectRoot());
   const boundary = resolvePath(configRoot || current);
@@ -2043,7 +2047,9 @@ function opencodeProjectBoundary(cwd) {
       }
     }
     const parent = dirname(current);
-    if (parent === current) return runtimeDir;
+    // OpenCode treats the filesystem root as the project boundary when no
+    // VCS marker exists, so parent configs remain loadable in non-git trees.
+    if (parent === current) return current;
     current = parent;
   }
 }
@@ -2103,6 +2109,89 @@ function auditOneShotProviderConfiguration(model, { cwd, projectRoot: configRoot
   if (allowedProvider && !sawAllowedProvider) {
     throw new Error(
       `The managed provider["${providerId}"] definition was not found in an auditable OpenCode config.`,
+    );
+  }
+}
+
+function auditEffectiveOneShotProviderConfiguration(
+  sh,
+  model,
+  smallModel,
+  configContent,
+  { cwd, credentialEnv, allowedProvider } = {},
+) {
+  // OpenCode loads account/org, managed-directory, and macOS MDM layers after
+  // OPENCODE_CONFIG_CONTENT. Ask the pinned binary for the final merged config
+  // under the exact child cwd/env, but deliberately omit the selected provider
+  // credential. Any failure to obtain or parse that final view is fail-closed.
+  const probeCredential = `triss-config-audit-${randomBytes(16).toString('hex')}`;
+  const env = buildEngineEnv(credentialEnv, probeCredential, configContent);
+  const result = sh('opencode', ['debug', 'config', '--pure'], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    timeout: 15_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (result?.error || result?.status !== 0) {
+    throw new Error(
+      'Cannot safely resolve the final effective OpenCode configuration before forwarding the selected credential.',
+      result?.error ? { cause: result.error } : undefined,
+    );
+  }
+
+  let config;
+  try {
+    config = JSON.parse(String(result.stdout || ''));
+  } catch {
+    throw new Error(
+      'Cannot parse the final effective OpenCode configuration before forwarding the selected credential.',
+    );
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('The final effective OpenCode configuration is not a JSON object.');
+  }
+  if (config.model !== model) {
+    throw new Error(
+      `The final effective OpenCode model is ${JSON.stringify(config.model)}, not ${JSON.stringify(model)}; ` +
+        'Triss refuses to forward the selected credential.',
+    );
+  }
+  if (config.small_model !== smallModel) {
+    throw new Error(
+      `The final effective OpenCode small_model is ${JSON.stringify(config.small_model)}, not ` +
+        `${JSON.stringify(smallModel)}; Triss refuses to forward the selected credential.`,
+    );
+  }
+
+  const providerId = String(model).split('/')[0];
+  const providers = config.provider;
+  if (providers !== undefined && (
+    !providers || typeof providers !== 'object' || Array.isArray(providers)
+  )) {
+    throw new Error(
+      'Cannot safely audit provider overrides in the final effective OpenCode configuration.',
+    );
+  }
+  const hasSelectedProvider = Object.prototype.hasOwnProperty.call(providers || {}, providerId);
+  if (allowedProvider) {
+    const expectedProvider = {
+      ...allowedProvider,
+      options: {
+        ...allowedProvider.options,
+        apiKey: probeCredential,
+      },
+    };
+    if (!hasSelectedProvider || !isDeepStrictEqual(providers[providerId], expectedProvider)) {
+      throw new Error(
+        `The final effective OpenCode provider["${providerId}"] differs from the Triss-managed definition; ` +
+          'Triss refuses to forward the selected credential.',
+      );
+    }
+  } else if (hasSelectedProvider) {
+    throw new Error(
+      `The final effective OpenCode configuration overrides provider["${providerId}"]; ` +
+        'Triss refuses to forward the selected credential.',
     );
   }
 }
@@ -2919,7 +3008,7 @@ function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
   return env;
 }
 
-function buildOpencodeArgv({ prompt, agent, model, sessionRealId, cont, dir }) {
+function buildOpencodeArgv({ prompt, agent, model, sessionRealId, cont, dir, pure = false }) {
   // --auto: headless runs must auto-approve every "ask" permission (deny
   // still blocks) — there is no human to answer the prompt.
   // --model is ALWAYS passed explicitly (the resolved model — override or
@@ -2928,6 +3017,7 @@ function buildOpencodeArgv({ prompt, agent, model, sessionRealId, cont, dir }) {
   // causes an infinite retry loop with nothing on stdout; an explicit
   // model makes this deterministic regardless of worktree config state.
   const argv = ['run', prompt, '--format', 'json', '--auto', '--model', model];
+  if (pure) argv.push('--pure');
   if (agent) argv.push('--agent', agent);
   if (sessionRealId) argv.push('--session', sessionRealId);
   if (cont) argv.push('--continue');
@@ -3458,15 +3548,22 @@ function spawnEngine({
     };
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    function settle(fn, { cleanup = true } = {}) {
-      if (settled) return;
-      settled = true;
+    let executionSourcesArmed = true;
+    const disarmExecutionSources = () => {
+      if (!executionSourcesArmed) return;
+      executionSourcesArmed = false;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       if (pollTimer) clearInterval(pollTimer);
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
       abortSignal?.removeEventListener('abort', onAbort);
+    };
+
+    function settle(fn, { cleanup = true } = {}) {
+      if (settled) return;
+      settled = true;
+      disarmExecutionSources();
       if (!cleanup) {
         fn();
         return;
@@ -3480,6 +3577,11 @@ function spawnEngine({
     // Test doubles that emit only close still use settle()'s safe fallback.
     child.on('exit', () => {
       if (settled) return;
+      // The execution is over even if inherited stdio delays `close`. Disarm
+      // deadline/cancellation callbacks before cleaning residual descendants,
+      // so a successful exit cannot be relabelled as a timeout or signal a
+      // re-used numeric PGID during that gap.
+      disarmExecutionSources();
       void startResidualCleanup().catch((err) =>
         settle(() => reject(err), { cleanup: false }));
     });
@@ -3646,14 +3748,21 @@ function spawnCrush({
     };
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    function settle(fn, { cleanup = true } = {}) {
-      if (settled) return;
-      settled = true;
+    let executionSourcesArmed = true;
+    const disarmExecutionSources = () => {
+      if (!executionSourcesArmed) return;
+      executionSourcesArmed = false;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
       abortSignal?.removeEventListener('abort', onAbort);
+    };
+
+    function settle(fn, { cleanup = true } = {}) {
+      if (settled) return;
+      settled = true;
+      disarmExecutionSources();
       if (!cleanup) {
         fn();
         return;
@@ -3663,6 +3772,7 @@ function spawnCrush({
 
     child.on('exit', () => {
       if (settled) return;
+      disarmExecutionSources();
       void startResidualCleanup().catch((err) =>
         settle(() => reject(err), { cleanup: false }));
     });
@@ -4128,6 +4238,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     isolation = setupIsolation(sh, slug);
   }
 
+  // Model identifiers are the only transient config values. Credentials stay
+  // in their dedicated env var and must never be embedded in this JSON overlay.
+  const oneShotConfigContent = oneShotProvider
+    ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
+    : null;
+
   // Audit the exact directory tree OpenCode will load, not merely the Triss
   // state root. A reused isolated session can carry its own opencode.json,
   // while a non-isolated call without --cwd inherits process.cwd() even when
@@ -4151,6 +4267,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         projectRoot: runtimeProjectRoot,
         ...oneShotAuditOptions,
       });
+      auditEffectiveOneShotProviderConfiguration(
+        sh,
+        modelUsed,
+        oneShotSmallModel,
+        oneShotConfigContent,
+        { cwd: runtimeDir, credentialEnv: cred.env, ...oneShotAuditOptions },
+      );
     } catch (err) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
@@ -4185,12 +4308,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     sessionRealId: sessionRealIdArg,
     cont: !!opts.continue,
     dir,
+    pure: !!oneShotProvider,
   });
-  // Model identifiers are the only transient config values. Credentials stay
-  // in their dedicated env var and must never be embedded in this JSON overlay.
-  const oneShotConfigContent = oneShotProvider
-    ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
-    : null;
   const env = buildEngineEnv(cred.env, credentialValue, oneShotConfigContent);
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
