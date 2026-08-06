@@ -368,7 +368,10 @@ the engine and role.
 `opencode.json` `small_model` → global `opencode.json` → the built-in
 default. An explicit `--provider` run temporarily overrides this role through
 an in-memory OpenCode config (`--small-model`, or the one-shot main model when
-omitted); no file or model pin is rewritten.
+omitted); no file or model pin is rewritten. Before forwarding the selected
+provider key, Triss rejects persistent endpoint/header overrides for that
+provider in global or project config layers. One-shot provider runs also reject
+JSONC config, which cannot be audited safely without applying OpenCode's parser.
 
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project

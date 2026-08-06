@@ -53,7 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One-shot worker runs reuse the already verified Triss-managed provider and
   overlay only model fields. They deliberately do not deep-merge a transient
   provider definition, which could retain hostile lower-precedence endpoint or
-  header options. Only the selected provider credential reaches OpenCode.
+  header options. Before any selected credential reaches OpenCode, Triss now
+  rejects persistent overrides for that provider in global/project config
+  layers (and unauditable JSONC); every managed worker layer must match the
+  complete expected provider definition.
 
 ## [0.29.0] — 2026-08-06
 

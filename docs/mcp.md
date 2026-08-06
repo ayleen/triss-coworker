@@ -336,8 +336,10 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    worktree is its reliable safety layer). `provider` selects a complete
    one-shot OpenCode provider pair and requires `model`; `small_model` is
    optional and defaults to `model`. This in-memory selection never rewrites
-   persistent config. Without `provider`, `model` keeps its legacy main-only
-   semantics. `model` takes a `<provider>/<id>`
+   persistent config. Before forwarding a provider key, Triss rejects selected
+   provider overrides in global/project config layers and unauditable JSONC.
+   Without `provider`, `model` keeps its legacy main-only semantics. `model`
+   takes a `<provider>/<id>`
    string — a Triss worker model (`triss-worker/deepseek-v4-flash`, reuses
    `TRISS_WORKER_API_KEY`), a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
    (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), an OpenCode

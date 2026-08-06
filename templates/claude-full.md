@@ -187,7 +187,8 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 `--provider` uses an in-memory main/small overlay and never changes `.env` or
 `opencode.json`. Register the worker once with `triss coder init --provider
 worker`; then GLM and worker can be selected per run while both credentials
-remain configured.
+remain configured. Before forwarding a provider key, Triss rejects selected
+provider overrides in global/project config layers and unauditable JSONC.
 
 `triss coder run` prints exactly one JSON envelope to stdout:
 

@@ -51,7 +51,13 @@ config. No temporary or persistent config file is published.
 
 The overlay must not define or replace providers. OpenCode deep-merges provider
 objects, which could retain untrusted lower-precedence options such as custom
-headers. The Triss worker therefore retains its existing setup prerequisite:
+headers. Before forwarding any selected credential, Triss audits the global
+config and every applicable project/ancestor config. Built-in providers reject
+any persistent block for the selected provider id; managed worker blocks must
+match the complete expected definition in every layer. JSONC is rejected for a
+one-shot provider run because Triss cannot prove that commented config contains
+no hidden endpoint/header override. The Triss worker therefore retains its
+existing setup prerequisite:
 `triss coder init --engine opencode --provider worker --global|--local`
 registers the env-backed provider once. Every worker run then verifies the
 effective provider package, endpoint, credential binding, and complete model
@@ -70,10 +76,12 @@ All usage and safety failures happen before isolation or engine spawn:
 - missing `--model` with `--provider`;
 - `--small-model` without `--provider`;
 - unknown provider or model/provider mismatch;
+- empty or whitespace-containing provider/model id;
 - different main/small raw prefixes;
 - non-Z.AI provider flags on Crush;
 - missing selected-provider credential;
-- missing, stale, or conflicting managed worker provider.
+- missing, stale, or conflicting managed worker provider;
+- selected-provider overrides or unauditable JSONC in effective config layers.
 
 Errors name the invalid flags and include the exact worker init recovery
 command when applicable. No failure writes model pins or OpenCode config.
