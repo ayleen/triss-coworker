@@ -333,9 +333,15 @@ test(
       'moonshot',
       'kimi-for-coding',
     ]);
-    assert.equal(run.inputSchema.properties.model.pattern, '^[^\\s/]+/[^\\s]+$');
+    assert.equal(
+      run.inputSchema.properties.model.pattern,
+      '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$',
+    );
     assert.equal(run.inputSchema.properties.small_model.type, 'string');
-    assert.equal(run.inputSchema.properties.small_model.pattern, '^[^\\s/]+/[^\\s]+$');
+    assert.equal(
+      run.inputSchema.properties.small_model.pattern,
+      '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$',
+    );
 
     const seen = [];
     await coderRunHandler(

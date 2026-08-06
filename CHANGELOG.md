@@ -54,10 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overlay only model fields. They deliberately do not deep-merge a transient
   provider definition, which could retain hostile lower-precedence endpoint or
   header options. Before any selected credential reaches OpenCode, Triss now
-  rejects persistent overrides for that provider in global/project config
-  layers (and unauditable JSONC); every managed worker layer must match the
-  complete expected provider definition. The audit follows OpenCode's actual
-  runtime directory, including reused isolated worktrees and inherited cwd.
+  rejects persistent overrides for that provider in the pinned OpenCode
+  version's global, direct-project, and `.opencode/opencode.json(c)` layers;
+  every managed worker layer must match the complete expected provider
+  definition. The pre-spawn snapshot follows OpenCode's actual runtime
+  directory, including reused isolated worktrees and inherited cwd. Concurrent
+  same-user config mutation after that snapshot is outside the guard's threat
+  model, and unverified OpenCode versions fail closed.
 
 ## [0.29.0] — 2026-08-06
 

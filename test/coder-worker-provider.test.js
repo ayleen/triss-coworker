@@ -722,7 +722,7 @@ test(
 );
 
 test(
-  'one-shot built-in providers fail closed on local or global provider overrides before forwarding credentials',
+  'one-shot built-in providers fail closed on global, direct-project, or .opencode overrides',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     Object.assign(process.env, {
@@ -733,6 +733,7 @@ test(
     });
     const globalPath = join(home, '.config', 'opencode', 'opencode.json');
     const localPath = join(home, 'opencode.json');
+    const dotLocalPath = join(home, '.opencode', 'opencode.json');
     const baseline = JSON.parse(readFileSync(globalPath, 'utf8'));
     const cases = [
       ['zai', 'zai-coding-plan/glm-5.2', 'zai-coding-plan'],
@@ -742,9 +743,13 @@ test(
       ['kimi-for-coding', 'kimi-for-coding/k3', 'kimi-for-coding'],
     ];
 
-    for (const scope of ['global', 'local']) {
+    for (const scope of ['global', 'local', 'dot-local']) {
       for (const [provider, model, providerId] of cases) {
-        const path = scope === 'global' ? globalPath : localPath;
+        const path = scope === 'global'
+          ? globalPath
+          : scope === 'local'
+            ? localPath
+            : dotLocalPath;
         const config = scope === 'global' ? structuredClone(baseline) : {};
         config.provider = {
           ...(config.provider || {}),
@@ -755,6 +760,7 @@ test(
             },
           },
         };
+        mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
         let spawned = false;
         await assert.rejects(
@@ -769,8 +775,8 @@ test(
           new RegExp(`overrides provider\\["${providerId}"\\].*refuses to forward`, 'is'),
         );
         assert.equal(spawned, false);
-        if (scope === 'local') rmSync(localPath, { force: true });
-        else writeFileSync(globalPath, JSON.stringify(baseline, null, 2) + '\n');
+        if (scope === 'global') writeFileSync(globalPath, JSON.stringify(baseline, null, 2) + '\n');
+        else rmSync(path, { force: true });
       }
     }
   }),
@@ -856,11 +862,63 @@ test(
             spawned = true;
             throw new Error('must not spawn');
           },
-          spawnSync: fakeSpawnSync,
+          spawnSync: (cmd, args) => {
+            if (cmd === 'git' && args.includes('--show-toplevel')) {
+              return { status: 0, stdout: home + '\n', error: null };
+            }
+            return fakeSpawnSync(cmd, args);
+          },
           stdoutWrite: () => true,
         },
       ),
       /overrides provider\["zai-coding-plan"\].*refuses to forward/is,
+    );
+    assert.equal(spawned, false);
+  }),
+);
+
+test(
+  'one-shot worker pro model passes the exact managed-provider audit and reaches spawn',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    let spawned = false;
+    await runCoderRun(
+      'task',
+      { provider: 'worker', model: 'triss-worker/deepseek-v4-pro', cwd: home },
+      {
+        spawn: fakeSpawn(() => {
+          spawned = true;
+        }),
+        spawnSync: fakeSpawnSync,
+        stdoutWrite: () => true,
+      },
+    );
+    assert.equal(spawned, true);
+  }),
+);
+
+test(
+  'one-shot provider run rejects an unverified OpenCode version before isolation or spawn',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    process.env.ZHIPU_API_KEY = 'sk-zai-fake';
+    let spawned = false;
+    await assert.rejects(
+      () => runCoderRun(
+        'task',
+        { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home },
+        {
+          spawn: () => {
+            spawned = true;
+            throw new Error('must not spawn');
+          },
+          spawnSync: (cmd, args) => cmd === 'opencode' && args[0] === '--version'
+            ? { status: 0, stdout: '9.9.9', error: null }
+            : { status: 1, stdout: '', error: null },
+          stdoutWrite: () => true,
+        },
+      ),
+      /credential auditing is verified only for opencode 1\.18\.7; found 9\.9\.9/i,
     );
     assert.equal(spawned, false);
   }),
@@ -933,6 +991,10 @@ test(
       },
       {
         opts: { provider: 'zai', model: 'zai-coding-plan/' },
+        pattern: /non-empty provider-qualified model/i,
+      },
+      {
+        opts: { provider: 'zai', model: 'zai-coding-plan/glm-5.2/' },
         pattern: /non-empty provider-qualified model/i,
       },
       {

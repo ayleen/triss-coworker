@@ -1108,6 +1108,7 @@ function isQualifiedProviderModel(model) {
     slash < value.length - 1 &&
     value === value.trim() &&
     !/\s/.test(value) &&
+    !value.endsWith('/') &&
     providerModelId(value).length > 0
   );
 }
@@ -2000,14 +2001,21 @@ function readWorkerConfigLayer(scope) {
   }
 }
 
-function opencodeConfigAuditPaths(cwd) {
+function opencodeConfigAuditPaths(cwd, { projectRoot: configRoot } = {}) {
   const paths = [
     opencodeConfigPath('global'),
     join(dirname(opencodeConfigPath('global')), 'opencode.jsonc'),
   ];
   let current = resolvePath(cwd || projectRoot());
+  const boundary = resolvePath(configRoot || current);
   while (true) {
-    paths.push(join(current, 'opencode.json'), join(current, 'opencode.jsonc'));
+    paths.push(
+      join(current, 'opencode.json'),
+      join(current, 'opencode.jsonc'),
+      join(current, '.opencode', 'opencode.json'),
+      join(current, '.opencode', 'opencode.jsonc'),
+    );
+    if (current === boundary) break;
     const parent = dirname(current);
     if (parent === current) break;
     current = parent;
@@ -2015,10 +2023,10 @@ function opencodeConfigAuditPaths(cwd) {
   return [...new Set(paths)];
 }
 
-function auditOneShotProviderConfiguration(model, { cwd, allowedProvider } = {}) {
+function auditOneShotProviderConfiguration(model, { cwd, projectRoot: configRoot, allowedProvider } = {}) {
   const providerId = String(model).split('/')[0];
   let sawAllowedProvider = false;
-  for (const path of opencodeConfigAuditPaths(cwd)) {
+  for (const path of opencodeConfigAuditPaths(cwd, { projectRoot: configRoot })) {
     if (!existsSync(path)) continue;
     if (path.endsWith('.jsonc')) {
       throw new Error(
@@ -2026,9 +2034,18 @@ function auditOneShotProviderConfiguration(model, { cwd, allowedProvider } = {})
           'Temporarily remove the JSONC config or convert it to opencode.json for this one-shot run.',
       );
     }
+    let raw;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (err) {
+      throw new Error(
+        `Cannot read ${path} before forwarding a provider credential: ${err.message}`,
+        { cause: err },
+      );
+    }
     let config;
     try {
-      config = JSON.parse(readFileSync(path, 'utf8'));
+      config = JSON.parse(raw);
     } catch {
       throw new Error(
         `Cannot parse ${path} before forwarding a provider credential. Fix the file and retry.`,
@@ -4025,6 +4042,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     oneShotAuditOptions = {};
   }
 
+  const detectedOpencodeVersion = engine === 'opencode' ? detectOpencodeVersion(sh) : null;
+  if (oneShotProvider && detectedOpencodeVersion !== OPENCODE_PIN) {
+    const found = detectedOpencodeVersion === null
+      ? 'not installed'
+      : detectedOpencodeVersion || 'version unknown';
+    throw new Error(
+      `One-shot provider credential auditing is verified only for opencode ${OPENCODE_PIN}; ` +
+        `found ${found}. Run \`npm install -g opencode-ai@${OPENCODE_PIN}\` and retry.`,
+    );
+  }
+
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
   if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
     throw new Error(`Invalid --timeout "${opts.timeout}" — must be a positive number of seconds`);
@@ -4049,8 +4077,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         ? resolvePath(opts.cwd)
         : process.cwd();
     try {
+      const runtimeProjectRoot = gitRepoRoot(sh, runtimeDir) || runtimeDir;
       auditOneShotProviderConfiguration(modelUsed, {
         cwd: runtimeDir,
+        projectRoot: runtimeProjectRoot,
         ...oneShotAuditOptions,
       });
     } catch (err) {
@@ -4094,7 +4124,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
     : null;
   const env = buildEngineEnv(cred.env, credentialValue, oneShotConfigContent);
-  const engineVersion = detectOpencodeVersion(sh) || opencodeVersionPin();
+  const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
   process.stderr.write(
     pc.dim(
