@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Crush running after the client regains control. Timeout, host SIGINT/SIGTERM,
   caller cancellation, and normal-close cleanup preserve SIGKILL escalation
   for descendants that survive SIGTERM.
+- A successful child exit now immediately disarms its execution timeout and
+  host/AbortSignal listeners while bounded residual cleanup and stdio close
+  continue. A delayed `close` can no longer relabel a completed OpenCode or
+  Crush run as `timeout` or signal a recycled numeric process group.
 
 ### Security
 
@@ -50,17 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current user can signal, or `kill(0, SIGTERM)` to Triss's own group.
   Custom spawn seams also receive no real group-signalling authority unless
   they explicitly inject the matching process-group owner.
-- One-shot worker runs reuse the already verified Triss-managed provider and
-  overlay only model fields. They deliberately do not deep-merge a transient
-  provider definition, which could retain hostile lower-precedence endpoint or
-  header options. Before any selected credential reaches OpenCode, Triss now
-  rejects persistent overrides for that provider in the pinned OpenCode
-  version's global, direct-project, and `.opencode/opencode.json(c)` layers;
-  every managed worker layer must match the complete expected provider
-  definition. The pre-spawn snapshot follows OpenCode's actual runtime
-  directory, including reused isolated worktrees and inherited cwd. Concurrent
-  same-user config mutation after that snapshot is outside the guard's threat
-  model, and unverified OpenCode versions fail closed.
+- One-shot runs overlay only model fields and never assume that overlay has
+  final precedence. Before any real selected credential reaches OpenCode,
+  Triss audits every file-backed source loaded by pinned OpenCode 1.18.7:
+  global `config.json`/`opencode.json(c)`, `~/.opencode/opencode.json(c)`, and
+  runtime-directory ancestors through the Git root or `/` outside Git. It then
+  resolves the final merged config with `debug config --pure` under the exact
+  sanitized child environment and a random canary instead of the real key.
+  Final main/small models and the selected provider must match, catching later
+  account/org, managed-directory, and macOS MDM overrides. The actual run also
+  uses `--pure`; unreadable, JSONC, unknown, or unverified config fails closed.
+  Concurrent same-user mutation between preflight and spawn remains outside
+  the guard's threat model.
 
 ## [0.29.0] — 2026-08-06
 

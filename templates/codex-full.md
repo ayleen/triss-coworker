@@ -79,9 +79,10 @@ On OpenCode, `--provider` + provider-qualified `--model` switches the complete
 provider pair for this run without changing persistent config; `--small-model`
 is optional and defaults to the one-shot main. Worker must first be registered
 once with `triss coder init --provider worker`. On this one-shot path, Triss
-takes a pre-spawn snapshot of the pinned OpenCode version's
-global/direct-project/`.opencode` config layers and rejects selected-provider
-overrides or unauditable JSONC.
+audits the pinned OpenCode version's complete file graph, validates the final
+merged config with `debug config --pure` using a random canary instead of the
+real key, and runs OpenCode with external plugins disabled. Late overrides and
+unauditable config fail closed.
 `--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)
 so you review the diff before merging; irreversible actions stay with you.
 `triss coder clean [--all]` removes finished isolation worktrees (default:
