@@ -960,6 +960,160 @@ test('runCoderRun abort fails closed when the OpenCode process group cannot be s
   }
 });
 
+test('runCoderRun removes its AbortSignal listener after an OpenCode run settles', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    let added;
+    let removed;
+    const abortSignal = {
+      aborted: false,
+      addEventListener(type, listener) {
+        added = [type, listener];
+      },
+      removeEventListener(type, listener) {
+        removed = [type, listener];
+      },
+    };
+    const noGroup = () => {
+      const error = new Error('no such process');
+      error.code = 'ESRCH';
+      throw error;
+    };
+
+    await runCoderRun('finish normally', {}, {
+      spawn: fakeEngineWriting(null),
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: noopStdout(),
+      abortSignal,
+      killProcess: noGroup,
+      pollMs: 0,
+    });
+
+    assert.equal(added?.[0], 'abort');
+    assert.equal(removed?.[0], 'abort');
+    assert.equal(removed?.[1], added?.[1]);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun forwards AbortSignal to Crush and waits for its process group to exit', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const controller = new AbortController();
+    const child = new EventEmitter();
+    child.pid = 848484;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    let alive = true;
+    const calls = [];
+    const killProcess = (pid, signal) => {
+      calls.push([pid, signal]);
+      if (signal === 0) {
+        if (alive) return true;
+        const error = new Error('no such process');
+        error.code = 'ESRCH';
+        throw error;
+      }
+      if (signal === 'SIGTERM') {
+        alive = false;
+        child.stdout.end(JSON.stringify({
+          session_id: 'crush-cancelled',
+          exit_reason: 'killed',
+          final_text: null,
+          usage: { delta_tokens: 0 },
+        }) + '\n');
+        setImmediate(() => child.emit('close', null, 'SIGTERM'));
+        return true;
+      }
+      return true;
+    };
+
+    let captured = '';
+    const promise = runCoderRun('cancel crush', { engine: 'crush', isolate: false, timeout: 30 }, {
+      spawn: () => child,
+      spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      abortSignal: controller.signal,
+      killProcess,
+      processGroupPollMs: 1,
+    });
+    await new Promise((done) => setImmediate(done));
+    controller.abort();
+    await promise;
+
+    assert.ok(calls.some(([pid, signal]) => pid === -848484 && signal === 'SIGTERM'));
+    assert.equal(JSON.parse(captured.trim()).exit_reason, 'killed');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun cleans residual Crush descendants and never negates a degenerate pid', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    for (const pid of [858585, 1]) {
+      const child = new EventEmitter();
+      child.pid = pid;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      let alive = pid > 1;
+      const calls = [];
+      const killProcess = (groupPid, signal) => {
+        calls.push([groupPid, signal]);
+        if (groupPid <= 0 && pid <= 1) {
+          throw new Error(`unsafe group signal ${groupPid}`);
+        }
+        if (signal === 0) {
+          if (alive) return true;
+          const error = new Error('no such process');
+          error.code = 'ESRCH';
+          throw error;
+        }
+        if (signal === 'SIGTERM') alive = false;
+        return true;
+      };
+      const spawnFn = () => {
+        setImmediate(() => {
+          child.stdout.end(JSON.stringify({
+            session_id: `crush-${pid}`,
+            exit_reason: 'end_turn',
+            final_text: 'done',
+            usage: { delta_tokens: 1 },
+          }) + '\n');
+          setImmediate(() => child.emit('close', 0, null));
+        });
+        return child;
+      };
+
+      await runCoderRun('finish crush', { engine: 'crush', isolate: false, timeout: 30 }, {
+        spawn: spawnFn,
+        spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+        stdoutWrite: noopStdout(),
+        killProcess,
+        processGroupPollMs: 1,
+      });
+
+      if (pid > 1) {
+        assert.ok(calls.some(([groupPid, signal]) => groupPid === -pid && signal === 'SIGTERM'));
+      } else {
+        assert.deepEqual(calls, []);
+      }
+    }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports exit_reason "timeout" (when some output was already parsed)', async () => {
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {

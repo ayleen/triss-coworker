@@ -25,8 +25,8 @@ triss coder run "hard task" \
   --small-model zai-coding-plan/glm-5-turbo
 ```
 
-- `--provider` is one-run only and never rewrites `.triss.env`, the global
-  Triss env, or any `opencode.json`.
+- `--provider` is one-run only and never rewrites the project `.triss.env`,
+  the global Triss `.env`, or any `opencode.json`.
 - `--provider` requires a provider-qualified `--model`. This keeps Z.AI
   coding-plan versus pay-as-you-go selection explicit and avoids guessing a
   model from whichever credentials happen to be present.

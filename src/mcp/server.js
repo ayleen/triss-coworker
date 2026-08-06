@@ -8,6 +8,9 @@ import { listTools, findTool, toMcpToolList } from './tools.js';
 import { getConfig } from '../config.js';
 import { setRestricted, projectRoot, pathsRestricted } from '../safety.js';
 import { withCall } from '../call-context.js';
+import packageJson from '../../package.json' with { type: 'json' };
+
+export const MCP_SERVER_VERSION = packageJson.version;
 
 export async function handleToolRequest(request, extra = {}, deps = {}) {
   const { name: toolName, arguments: args = {} } = request.params;
@@ -34,7 +37,7 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
   }
 }
 
-export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
+export async function runServer({ name = 'triss', version = MCP_SERVER_VERSION } = {}) {
   // Loads .env files (project-local first, then global) into process.env
   // so listTools() can see integration credentials before any tool call.
   getConfig();

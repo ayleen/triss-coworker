@@ -354,7 +354,7 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
 
 If an MCP client cancels or times out `triss_coder_run`, its cancellation signal
 is forwarded to the detached engine process group. Normal completion also
-waits for residual OpenCode tool descendants to terminate before returning the
+waits for residual engine tool descendants to terminate before returning the
 envelope; no background test/DB process is intentionally left running.
 
 **Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
