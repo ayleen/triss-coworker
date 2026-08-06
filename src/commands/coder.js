@@ -4010,6 +4010,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       : '';
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
+  let oneShotAuditOptions = null;
   if (engine === 'opencode' && cred.provider === 'worker') {
     const workerAudit = validateWorkerRunConfiguration(modelUsed, workerSettings, { oneShotSmallModel });
     if (oneShotProvider) {
@@ -4018,15 +4019,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         `triss-worker/${workerAudit.profile.flashModel}`,
         `triss-worker/${workerAudit.profile.flashModel}`,
       );
-      auditOneShotProviderConfiguration(modelUsed, {
-        cwd: isolate ? projectRoot() : opts.cwd ? resolvePath(opts.cwd) : projectRoot(),
-        allowedProvider,
-      });
+      oneShotAuditOptions = { allowedProvider };
     }
   } else if (engine === 'opencode' && oneShotProvider) {
-    auditOneShotProviderConfiguration(modelUsed, {
-      cwd: isolate ? projectRoot() : opts.cwd ? resolvePath(opts.cwd) : projectRoot(),
-    });
+    oneShotAuditOptions = {};
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
@@ -4039,6 +4035,28 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   let isolation = null;
   if (isolate) {
     isolation = setupIsolation(sh, slug);
+  }
+
+  // Audit the exact directory tree OpenCode will load, not merely the Triss
+  // state root. A reused isolated session can carry its own opencode.json,
+  // while a non-isolated call without --cwd inherits process.cwd() even when
+  // TRISS_PROJECT_ROOT points elsewhere. No selected credential reaches the
+  // engine until every applicable layer from this runtime directory is safe.
+  if (oneShotAuditOptions) {
+    const runtimeDir = isolation
+      ? isolation.wtPath
+      : opts.cwd
+        ? resolvePath(opts.cwd)
+        : process.cwd();
+    try {
+      auditOneShotProviderConfiguration(modelUsed, {
+        cwd: runtimeDir,
+        ...oneShotAuditOptions,
+      });
+    } catch (err) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
   }
 
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
