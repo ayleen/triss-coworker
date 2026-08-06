@@ -1110,7 +1110,8 @@ function isQualifiedProviderModel(model) {
     value === value.trim() &&
     !/\s/.test(value) &&
     !value.endsWith('/') &&
-    providerModelId(value).length > 0
+    providerModelId(value).length > 0 &&
+    !providerModelId(value).startsWith('/')
   );
 }
 
@@ -3326,6 +3327,7 @@ function spawnEngine({
     let timedOut = false;
     let graceTimer = null;
     let pollTimer = null;
+    let residualCleanupPromise = null;
     const state = createEventFolder();
     const stderrChunks = [];
 
@@ -3343,17 +3345,30 @@ function spawnEngine({
     // The immediate OpenCode CLI can close after a tool subprocess redirected
     // its stdio and kept running in the detached process group. Do not return
     // an envelope while such descendants can still hold DB locks or write
-    // files after Triss reported completion.
+    // files after Triss reported completion. Send the first real signal
+    // directly: an existence probe followed by a signal would add a PID/PGID
+    // reuse window after the group leader was reaped, while ESRCH from the
+    // signal itself proves that no target existed at that instant.
     const terminateResidualGroup = async () => {
-      if (!killGroup(0)) return;
-      killGroup('SIGTERM');
+      if (!killGroup('SIGTERM')) return;
       if (await waitForGroupExit(residualTermGraceMs)) return;
-      killGroup('SIGKILL');
+      if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
         throw new Error(
           `OpenCode process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
+    };
+
+    const startResidualCleanup = () => {
+      if (!residualCleanupPromise) {
+        residualCleanupPromise = terminateResidualGroup();
+        // The close handler awaits this same promise. Attach a handler now so
+        // an early rejection between exit and close is never reported as an
+        // unhandled rejection.
+        void residualCleanupPromise.catch(() => {});
+      }
+      return residualCleanupPromise;
     };
     // Schedule the SIGKILL escalation AT MOST ONCE — the timeout, the
     // rate-limit poll, host/caller cancellation, and the stdout-error path can
@@ -3456,8 +3471,18 @@ function spawnEngine({
         fn();
         return;
       }
-      void terminateResidualGroup().then(fn, reject);
+      void startResidualCleanup().then(fn, reject);
     }
+
+    // A real ChildProcess emits exit before close. Start group cleanup in that
+    // earlier callback, immediately after reap, instead of waiting for stdio
+    // close and widening the chance that the numeric PID/PGID is recycled.
+    // Test doubles that emit only close still use settle()'s safe fallback.
+    child.on('exit', () => {
+      if (settled) return;
+      void startResidualCleanup().catch((err) =>
+        settle(() => reject(err), { cleanup: false }));
+    });
 
     child.on('error', (err) => {
       // A ChildProcess error means the engine did not spawn successfully; do
@@ -3546,6 +3571,7 @@ function spawnCrush({
     let settled = false;
     let timedOut = false;
     let graceTimer = null;
+    let residualCleanupPromise = null;
     const stdoutChunks = [];
     const stderrChunks = [];
 
@@ -3562,15 +3588,22 @@ function spawnCrush({
     };
 
     const terminateResidualGroup = async () => {
-      if (!killGroup(0)) return;
-      killGroup('SIGTERM');
+      if (!killGroup('SIGTERM')) return;
       if (await waitForGroupExit(residualTermGraceMs)) return;
-      killGroup('SIGKILL');
+      if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
         throw new Error(
           `Crush process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
+    };
+
+    const startResidualCleanup = () => {
+      if (!residualCleanupPromise) {
+        residualCleanupPromise = terminateResidualGroup();
+        void residualCleanupPromise.catch(() => {});
+      }
+      return residualCleanupPromise;
     };
 
     // Same SIGKILL-once guard as spawnEngine: timeout, host/caller
@@ -3625,8 +3658,14 @@ function spawnCrush({
         fn();
         return;
       }
-      void terminateResidualGroup().then(fn, reject);
+      void startResidualCleanup().then(fn, reject);
     }
+
+    child.on('exit', () => {
+      if (settled) return;
+      void startResidualCleanup().catch((err) =>
+        settle(() => reject(err), { cleanup: false }));
+    });
 
     child.on('error', (err) =>
       settle(() => reject(new Error(`Failed to spawn crush: ${err.message}`)), { cleanup: false }));
@@ -4094,6 +4133,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // while a non-isolated call without --cwd inherits process.cwd() even when
   // TRISS_PROJECT_ROOT points elsewhere. No selected credential reaches the
   // engine until every applicable layer from this runtime directory is safe.
+  // Security coupling: agent-level model defaults are deliberately outside
+  // this selected-provider audit because buildOpencodeArgv always passes the
+  // resolved model explicitly via --model, which OpenCode gives precedence.
+  // If that CLI pin is ever removed, this audit must expand to agent.*.model
+  // before any provider credential can still be forwarded safely.
   if (oneShotAuditOptions) {
     const runtimeDir = isolation
       ? isolation.wtPath
