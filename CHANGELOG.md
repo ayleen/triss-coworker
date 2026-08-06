@@ -56,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header options. Before any selected credential reaches OpenCode, Triss now
   rejects persistent overrides for that provider in global/project config
   layers (and unauditable JSONC); every managed worker layer must match the
-  complete expected provider definition.
+  complete expected provider definition. The audit follows OpenCode's actual
+  runtime directory, including reused isolated worktrees and inherited cwd.
 
 ## [0.29.0] — 2026-08-06
 

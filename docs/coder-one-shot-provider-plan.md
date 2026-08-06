@@ -56,8 +56,10 @@ config and every applicable project/ancestor config. Built-in providers reject
 any persistent block for the selected provider id; managed worker blocks must
 match the complete expected definition in every layer. JSONC is rejected for a
 one-shot provider run because Triss cannot prove that commented config contains
-no hidden endpoint/header override. The Triss worker therefore retains its
-existing setup prerequisite:
+no hidden endpoint/header override. The audit starts from OpenCode's actual
+runtime directory: explicit `--cwd`, inherited `process.cwd()`, or the created
+or reused isolation worktree. The Triss worker therefore retains its existing
+setup prerequisite:
 `triss coder init --engine opencode --provider worker --global|--local`
 registers the env-backed provider once. Every worker run then verifies the
 effective provider package, endpoint, credential binding, and complete model
@@ -71,7 +73,10 @@ flag cannot relabel a model to obtain a different credential.
 
 ## Failure contract
 
-All usage and safety failures happen before isolation or engine spawn:
+All usage failures happen before isolation. Provider-config auditing happens
+after an isolation worktree is resolved but before engine spawn or credential
+forwarding; a newly created clean worktree is removed if that audit fails, while
+a reused worktree is preserved for inspection. Failure cases are:
 
 - missing `--model` with `--provider`;
 - `--small-model` without `--provider`;
