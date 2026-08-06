@@ -489,7 +489,10 @@ endpoint. Either way it lets you pick the model interactively. See the
 Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 `worktree` tell you what to review; `--isolate` runs the agent in a
 disposable `.triss/wt/<slug>` git worktree so it never touches your
-working tree directly. `--session <slug>` continues the same opencode
+working tree directly. Before returning the envelope, Triss terminates and
+waits for any residual process in the OpenCode process group, so tests or DB
+clients cannot keep locks or write files after completion. MCP cancellation is
+forwarded to the same cleanup path. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See
 `docs/glm-clients.md` for the full picture of how Triss talks to GLM
 (both engines, key/endpoint routing, models, and every usage mode),
@@ -530,7 +533,8 @@ freely, so discover the current id and pass it rather than hard-coding one:
 
 ```bash
 triss coder init --provider worker
-triss coder run "mechanical task" --model triss-worker/deepseek-v4-flash
+triss coder run "mechanical task" \
+  --provider worker --model triss-worker/deepseek-v4-flash
 ```
 
 The worker route uses Chat Completions through `@ai-sdk/openai-compatible`.
@@ -543,6 +547,28 @@ rejects a conflicting higher-precedence project provider. Every worker run
 revalidates the effective endpoint and model allowlist before forwarding the
 key, and prints an exact scope-specific init command when the saved provider is
 missing or stale.
+
+Worker init is a one-time provider registration, not an exclusive provider
+choice: GLM and worker credentials/configuration can coexist. After the worker
+provider has been registered, switch the complete main/small pair for one task
+without changing the persistent default:
+
+```bash
+# Worker for this task; small defaults to the same model.
+triss coder run "mechanical task" \
+  --provider worker --model triss-worker/deepseek-v4-flash
+
+# GLM for this task, with an explicit fast model.
+triss coder run "hard task" \
+  --provider zai --model zai-coding-plan/glm-5.2 \
+  --small-model zai-coding-plan/glm-5-turbo
+```
+
+`--provider` is OpenCode-only, requires a provider-qualified `--model`, and
+never rewrites `.env` or `opencode.json`. `--small-model` is available only
+with `--provider`; when omitted it equals the one-shot main model. The worker
+run still validates the previously registered env-backed provider before the
+key is forwarded.
 
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json
@@ -584,8 +610,10 @@ MAIN model only (it sits in the OpenCode-main precedence chain: one-run `--model
 default), so it changes the main model for every run until unset.
 `TRISS_CODER_SMALL_MODEL` is setup intent consumed by `triss coder init` /
 `triss coder model` — it does not swap the small model mid-run (opencode reads
-`small_model` from `opencode.json`); use `--model` for a one-run main-model
-override. The deny-first `opencode.json` bash policy applies to every provider.
+`small_model` from `opencode.json`). Use `--model` alone for a one-run main-only
+override within the current provider; use `--provider` + `--model` and optional
+`--small-model` to switch the complete pair for one run. The deny-first
+`opencode.json` bash policy applies to every provider.
 Full details, the model catalogue, and every configuration path are in
 [docs/opencode-zen.md](docs/opencode-zen.md) and [docs/opencode-go.md](docs/opencode-go.md).
 
@@ -603,7 +631,9 @@ confusion is conflating them:
   `crush`. Set at `triss coder init --engine …` or per run with
   `triss coder run --engine …`.
 - **Provider** = *which* API serves the model: Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go,
-  Moonshot Kimi, Kimi for Coding. Set at `triss coder init --provider …`.
+  Moonshot Kimi, Kimi for Coding. Register/set the persistent default with
+  `triss coder init --provider …`, or select a complete one-shot pair with
+  `triss coder run --provider … --model … [--small-model …]`.
 
 Not every engine speaks every provider:
 
@@ -617,11 +647,12 @@ then it asks for only that provider's credential** and writes the matching
 model prefix (`triss-worker/<id>`, `opencode/<id>`, `opencode-go/<id>`, `zai-coding-plan/*`, `moonshotai/*`, or
 `kimi-for-coding/*`).
 
-**Choosing a model.** `--model` on `triss coder run` is a
-**single-run override of the main model only** — it does not persist
-and does not change the small/summarization model. To persist a
-choice, use `triss coder model set` — positional main plus `--small` —
-which requires you to name the engine and the scope explicitly:
+**Choosing a model.** `--model` by itself on `triss coder run` remains a
+**single-run override of the main model only**. For a non-persistent provider
+switch, pass `--provider` with a provider-qualified `--model`; add
+`--small-model` when the small role should differ, otherwise it defaults to the
+one-shot main. To persist a choice, use `triss coder model set` — positional
+main plus `--small` — which requires the engine and scope explicitly:
 
 ```bash
 # global, opencode engine: positional main + --small; --yes for noninteractive use

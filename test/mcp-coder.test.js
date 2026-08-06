@@ -321,6 +321,58 @@ test(
 );
 
 test(
+  'triss_coder_run exposes and forwards one-shot provider + small_model',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const tools = await listTools();
+    const run = tools.find((tool) => tool.name === 'triss_coder_run');
+    assert.deepEqual(run.inputSchema.properties.provider.enum, [
+      'zai',
+      'worker',
+      'opencode-zen',
+      'opencode-go',
+      'moonshot',
+      'kimi-for-coding',
+    ]);
+    assert.equal(run.inputSchema.properties.small_model.type, 'string');
+
+    const seen = [];
+    await coderRunHandler(
+      {
+        prompt: 'do something',
+        provider: 'zai',
+        model: 'zai-coding-plan/glm-5.2',
+        small_model: 'zai-coding-plan/glm-5-turbo',
+      },
+      {
+        runCoderRun: async (_prompt, opts) => seen.push(opts),
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      },
+    );
+    assert.equal(seen[0].provider, 'zai');
+    assert.equal(seen[0].smallModel, 'zai-coding-plan/glm-5-turbo');
+  }),
+);
+
+test(
+  'coderRunHandler forwards MCP cancellation to the engine lifecycle',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const controller = new AbortController();
+    let seenSignal;
+    await coderRunHandler(
+      { prompt: 'do something' },
+      {
+        signal: controller.signal,
+        runCoderRun: async (_prompt, _opts, deps) => {
+          seenSignal = deps.abortSignal;
+        },
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      },
+    );
+    assert.equal(seenSignal, controller.signal);
+  }),
+);
+
+test(
   'coderRunHandler: leaves isolate UNDEFINED when the caller omits it (the tristate reaches runCoderRun)',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const seen = [];

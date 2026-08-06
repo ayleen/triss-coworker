@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
@@ -754,6 +754,212 @@ test('runCoderRun --isolate: a concurrent `git worktree add` failure on the same
 
 // ─── timeout / kill path ──────────────────────────────────────────────────────
 
+test('runCoderRun escalates to SIGKILL and waits for residual OpenCode process-group children before returning', async () => {
+  const repoRoot = initRepo();
+  const pidFile = join(repoRoot, 'residual-child.pid');
+  let residualPid = null;
+  const run = withIsolatedRun(repoRoot, async () => {
+    const fixtureBase64 = Buffer.from(FIXTURE).toString('base64');
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const child = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setTimeout(() => {}, 30000)\"], { stdio: 'ignore' });",
+      "fs.writeFileSync(process.env.TRISS_TEST_PID_FILE, String(child.pid));",
+      "child.unref();",
+      "process.stdout.write(Buffer.from(process.env.TRISS_TEST_FIXTURE, 'base64'));",
+    ].join('');
+    const spawnFn = (_cmd, _argv, opts) => spawn(process.execPath, ['-e', parentScript], {
+      ...opts,
+      env: {
+        ...opts.env,
+        TRISS_TEST_PID_FILE: pidFile,
+        TRISS_TEST_FIXTURE: fixtureBase64,
+      },
+    });
+
+    try {
+      await runCoderRun('finish cleanly', {}, {
+        spawn: spawnFn,
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: () => true,
+        pollMs: 0,
+        logPath: join(repoRoot, 'missing.log'),
+      });
+      residualPid = Number(readFileSync(pidFile, 'utf8'));
+      assert.throws(
+        () => process.kill(residualPid, 0),
+        /ESRCH|no such process/i,
+        'coder run must not return while an OpenCode process-group descendant is still alive',
+      );
+    } finally {
+      if (residualPid) {
+        try { process.kill(residualPid, 'SIGKILL'); } catch {}
+      }
+    }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun fails closed when a residual OpenCode process group remains after SIGKILL', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 828282;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const calls = [];
+    const killProcess = (pid, signal) => {
+      calls.push([pid, signal]);
+      return true;
+    };
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(FIXTURE);
+        child.stderr.end('');
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+
+    let captured = '';
+    await assert.rejects(
+      () => runCoderRun('finish unsafely', {}, {
+        spawn: spawnFn,
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: (value) => { captured += value; },
+        killProcess,
+        pollMs: 0,
+        residualTermGraceMs: 1,
+        residualKillWaitMs: 1,
+        processGroupPollMs: 1,
+      }),
+      /remained alive after SIGKILL; refusing to report completion/,
+    );
+    assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGTERM'));
+    assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGKILL'));
+    assert.equal(captured, '', 'a failed cleanup must not emit a completion envelope');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun abort signal terminates the detached OpenCode process group', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const controller = new AbortController();
+    const calls = [];
+    let child;
+    let alive = true;
+    const fakeKill = (pid, signal) => {
+      calls.push([pid, signal]);
+      if (!alive) {
+        const error = new Error('no such process');
+        error.code = 'ESRCH';
+        throw error;
+      }
+      if (signal === 'SIGTERM') {
+        alive = false;
+        setImmediate(() => child.emit('close', null, 'SIGTERM'));
+      }
+      return true;
+    };
+    const spawnFn = () => {
+      child = new EventEmitter();
+      child.pid = 818181;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => {
+        child.stdout.write(JSON.stringify({
+          type: 'step_start',
+          sessionID: 'ses_cancelled',
+          part: {},
+        }) + '\n');
+      });
+      return child;
+    };
+
+    let captured = '';
+    const promise = runCoderRun('cancel me', {}, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      abortSignal: controller.signal,
+      killProcess: fakeKill,
+      pollMs: 0,
+    });
+    await new Promise((done) => setImmediate(done));
+    controller.abort();
+    await promise;
+
+    assert.ok(calls.some(([pid, signal]) => pid === -818181 && signal === 'SIGTERM'));
+    const envelope = JSON.parse(captured.trim());
+    assert.equal(envelope.exit_reason, 'killed');
+    assert.equal(envelope.session_id, 'ses_cancelled');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('runCoderRun abort fails closed when the OpenCode process group cannot be signalled', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const controller = new AbortController();
+    const child = new EventEmitter();
+    child.pid = 838383;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const killProcess = (_pid, signal) => {
+      if (signal === 0) return true;
+      const error = new Error('operation not permitted');
+      error.code = 'EPERM';
+      throw error;
+    };
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.write(JSON.stringify({
+          type: 'step_start',
+          sessionID: 'ses_uncancellable',
+          part: {},
+        }) + '\n');
+      });
+      return child;
+    };
+
+    let captured = '';
+    const promise = runCoderRun('cannot cancel safely', {}, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      abortSignal: controller.signal,
+      killProcess,
+      pollMs: 0,
+    });
+    await new Promise((done) => setImmediate(done));
+    controller.abort();
+
+    await assert.rejects(
+      promise,
+      /Failed to signal OpenCode process group 838383 with SIGTERM: operation not permitted/,
+    );
+    assert.equal(captured, '', 'a failed cancellation must not emit a completion envelope');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports exit_reason "timeout" (when some output was already parsed)', async () => {
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
@@ -794,6 +1000,58 @@ test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports
       assert.equal(envelope.exit_reason, 'timeout');
       assert.equal(envelope.session_id, 'ses_hangtest');
       assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
+    } finally {
+      process.kill = origKill;
+    }
+  });
+  await run();
+  rmSync(repoRoot, { recursive: true, force: true });
+});
+
+// Regression: a child whose pid is 1 (or 0) must never reach `kill(-pid)`.
+// kill(-1) is "signal every process this uid owns" and kill(0) is "signal my
+// own process group" — either one SIGTERMs the whole login session (Finder,
+// Dock, every open app) from a single `coder run` timeout. Observed for real:
+// a test fake with `child.pid = 1` closed every app on the developer's Mac.
+test('runCoderRun: never signals process group -1/0 when the child has a degenerate pid', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const killCalls = [];
+    const origKill = process.kill.bind(process);
+    process.kill = (pid, sig) => {
+      killCalls.push([pid, sig]);
+      // Never forward a non-positive pid from this regression test. If the
+      // production guard regresses, the assertion below must fail safely
+      // instead of reproducing kill(-1) against the developer's login session.
+      if (pid <= 0) return true;
+      return origKill(pid, sig);
+    };
+    try {
+      let captured = '';
+      const spawnFn = () => {
+        const child = new EventEmitter();
+        child.pid = 1; // spawn never gave us a real pid
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(() => {
+          child.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_degenerate', part: {} }) + '\n');
+        });
+        // The kill is a no-op by design, so the child has to end on its own —
+        // otherwise the run would hang to the (already elapsed) timeout.
+        setTimeout(() => child.emit('close', null, 'SIGTERM'), 100);
+        return child;
+      };
+      await runCoderRun(
+        'hang forever',
+        { timeout: 0.05 },
+        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
+      );
+      JSON.parse(captured.trim()); // the run still produces a valid envelope
+      assert.deepEqual(
+        killCalls.filter(([pid]) => pid <= 0),
+        [],
+        `killed a process group it does not own: ${JSON.stringify(killCalls)}`,
+      );
     } finally {
       process.kill = origKill;
     }
@@ -891,8 +1149,14 @@ test('runCoderRun: forwards a host SIGINT to the detached child process group (S
     const FAKE_PID = 654322;
     const killCalls = [];
     const origKill = process.kill.bind(process);
+    let groupAlive = true;
     process.kill = (pid, sig) => {
       killCalls.push([pid, sig]);
+      if (pid === -FAKE_PID && !groupAlive) {
+        const error = new Error('no such process');
+        error.code = 'ESRCH';
+        throw error;
+      }
       return true;
     };
     let child;
@@ -920,6 +1184,7 @@ test('runCoderRun: forwards a host SIGINT to the detached child process group (S
 
       child.stdout.end(FIXTURE);
       child.stderr.end('');
+      groupAlive = false;
       child.emit('close', 0, null);
       await runPromise;
     } finally {

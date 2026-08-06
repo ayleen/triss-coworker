@@ -282,12 +282,28 @@ because Triss cannot pass a small-model flag at run time; a **direct**
 winning source per role; a shell/project override that would shadow a persistent
 change is reported with the exact `unset` / `--local` alternative (no `--force`).
 
-### Per-run override (main only)
+### Per-run model or provider override
 
 `--model <provider/model>` (CLI) or `model` (MCP) changes the **main** model for
 **one** invocation only. It does not rewrite `small_model` and is not a
 persistent repair — it cannot fix a stale or cross-provider `small_model`, so
 use `triss coder model set` for that.
+
+For a complete non-persistent provider switch on OpenCode, pass `--provider`
+with a fully qualified `--model`, plus optional `--small-model` (MCP:
+`provider`, `model`, `small_model`). The small role defaults to the one-shot
+main, and both roles must use the selected provider and identical raw prefix:
+
+```bash
+triss coder run "mechanical task" \
+  --provider worker --model triss-worker/deepseek-v4-flash
+```
+
+This uses an in-memory OpenCode overlay and does not change `.env` or
+`opencode.json`. The worker provider must first be registered once with
+`triss coder init --provider worker --global|--local`; its exact endpoint,
+env-backed key binding, package, and model allowlist are revalidated before
+the credential is forwarded.
 
 ### Stale-model recovery
 

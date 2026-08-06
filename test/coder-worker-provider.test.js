@@ -582,6 +582,133 @@ test(
 );
 
 test(
+  'one-shot worker provider overrides a persisted GLM pair without mutating config',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    const configPath = join(home, '.config', 'opencode', 'opencode.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.model = 'zai-coding-plan/glm-5.2';
+    config.small_model = 'zai-coding-plan/glm-5-turbo';
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    const before = readFileSync(configPath);
+    process.env.ZHIPU_API_KEY = 'sk-zai-must-not-leak';
+
+    let childEnv;
+    await runCoderRun(
+      'mechanical task',
+      {
+        provider: 'worker',
+        model: 'triss-worker/deepseek-v4-flash',
+      },
+      {
+        spawn: fakeSpawn((_cmd, _argv, opts) => {
+          childEnv = opts.env;
+        }),
+        spawnSync: fakeSpawnSync,
+        stdoutWrite: () => true,
+      },
+    );
+
+    assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
+      model: 'triss-worker/deepseek-v4-flash',
+      small_model: 'triss-worker/deepseek-v4-flash',
+    });
+    assert.equal(childEnv.TRISS_WORKER_API_KEY, 'sk-worker-fake');
+    assert.equal('ZHIPU_API_KEY' in childEnv, false);
+    assert.deepEqual(readFileSync(configPath), before);
+  }),
+);
+
+test(
+  'one-shot GLM provider overrides a persisted worker pair and honors --small-model',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    const configPath = join(home, '.config', 'opencode', 'opencode.json');
+    const before = readFileSync(configPath);
+    process.env.ZHIPU_API_KEY = 'sk-zai-fake';
+
+    let childEnv;
+    await runCoderRun(
+      'hard task',
+      {
+        provider: 'zai',
+        model: 'zai-coding-plan/glm-5.2',
+        smallModel: 'zai-coding-plan/glm-5-turbo',
+      },
+      {
+        spawn: fakeSpawn((_cmd, _argv, opts) => {
+          childEnv = opts.env;
+        }),
+        spawnSync: fakeSpawnSync,
+        stdoutWrite: () => true,
+      },
+    );
+
+    assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
+      model: 'zai-coding-plan/glm-5.2',
+      small_model: 'zai-coding-plan/glm-5-turbo',
+    });
+    assert.equal(childEnv.ZHIPU_API_KEY, 'sk-zai-fake');
+    assert.equal('TRISS_WORKER_API_KEY' in childEnv, false);
+    assert.deepEqual(readFileSync(configPath), before);
+  }),
+);
+
+test(
+  'one-shot provider flag validation fails before spawn',
+  withWorkerEnv(async ({ home }) => {
+    writeManagedWorkerConfig(home);
+    process.env.ZHIPU_API_KEY = 'sk-zai-fake';
+    const cases = [
+      {
+        opts: { provider: 'worker' },
+        pattern: /--provider requires --model <provider\/model>/i,
+      },
+      {
+        opts: { smallModel: 'triss-worker/deepseek-v4-flash' },
+        pattern: /--small-model requires --provider/i,
+      },
+      {
+        opts: { provider: 'worker', model: 'zai-coding-plan/glm-5.2' },
+        pattern: /does not belong to provider "worker"/i,
+      },
+      {
+        opts: {
+          provider: 'zai',
+          model: 'zai-coding-plan/glm-5.2',
+          smallModel: 'zai/glm-5-turbo',
+        },
+        pattern: /same provider prefix/i,
+      },
+      {
+        opts: {
+          engine: 'crush',
+          provider: 'zai',
+          model: 'zai-coding-plan/glm-5.2',
+        },
+        pattern: /--provider.*OpenCode-only/i,
+      },
+    ];
+
+    for (const { opts, pattern } of cases) {
+      let spawned = false;
+      await assert.rejects(
+        () => runCoderRun('task', opts, {
+          spawn: () => {
+            spawned = true;
+            throw new Error('must not spawn');
+          },
+          spawnSync: fakeSpawnSync,
+          stdoutWrite: () => true,
+        }),
+        pattern,
+      );
+      assert.equal(spawned, false);
+    }
+  }),
+);
+
+test(
   'worker coder run fails before spawn when the managed provider is missing',
   withWorkerEnv(async () => {
     let spawned = false;

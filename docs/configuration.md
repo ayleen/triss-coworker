@@ -353,17 +353,21 @@ the engine and role.
 **Triss OpenCode `main`** (the model triss forwards to the engine via
 `--model`), highest first:
 
-1. `--model` flag on `triss coder run` (one-run override, this run only)
-2. `TRISS_CODER_MODEL` exported in the shell (`process.env`) — a **runtime
+1. `--provider` + `--model` on `triss coder run` (one-run complete provider
+   pair; optional `--small-model`, otherwise small equals main)
+2. `--model` without `--provider` (legacy one-run main-only override)
+3. `TRISS_CODER_MODEL` exported in the shell (`process.env`) — a **runtime
    shadow**: it wins for this process without persisting
-3. `TRISS_CODER_MODEL` in the **project** env file (`./.triss.env`)
-4. `TRISS_CODER_MODEL` in the **global** env file (`~/.config/triss/.env`)
-5. the built-in default (`zai-coding-plan/glm-5.2`, or the detected plan
+4. `TRISS_CODER_MODEL` in the **project** env file (`./.triss.env`)
+5. `TRISS_CODER_MODEL` in the **global** env file (`~/.config/triss/.env`)
+6. the built-in default (`zai-coding-plan/glm-5.2`, or the detected plan
    prefix)
 
 **OpenCode `small`** (management/init intent), highest first: project
 `opencode.json` `small_model` → global `opencode.json` → the built-in
-default.
+default. An explicit `--provider` run temporarily overrides this role through
+an in-memory OpenCode config (`--small-model`, or the one-shot main model when
+omitted); no file or model pin is rewritten.
 
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project
@@ -391,6 +395,27 @@ shell closes; crush ignores it. A **shell small pin**
 expresses management/init intent, so if it disagrees with the persisted
 `small_model` / fast role it is a **conflict** — reconcile it with
 `triss coder model set` rather than expecting it to take over the next run.
+
+### One-shot provider selection
+
+OpenCode can switch a complete provider pair without changing persistent
+defaults:
+
+```bash
+triss coder run "mechanical task" \
+  --provider worker --model triss-worker/deepseek-v4-flash
+
+triss coder run "hard task" \
+  --provider zai --model zai-coding-plan/glm-5.2 \
+  --small-model zai-coding-plan/glm-5-turbo
+```
+
+`--provider` requires a fully qualified `--model`; `--small-model` is optional
+and defaults to the same model. Both roles must use the selected provider and
+the same raw prefix. Worker still requires a one-time local or global
+`coder init --provider worker` registration, but that registration can coexist
+with GLM credentials and does not prevent one-shot GLM runs. Crush rejects
+these flags because it remains Z.AI-only.
 
 ### Coder model management commands
 

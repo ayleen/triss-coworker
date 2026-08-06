@@ -168,7 +168,9 @@ triss coder run "<task>"
                        # runs with the same slug continue that conversation)
   --continue           # continue the most recent opencode session
   --agent <name>       # default: coder (researcher = read-only)
-  --model <p/m>        # override model for this run
+  --provider <name>    # OpenCode: one-shot provider; requires --model
+  --model <p/m>        # main model (main-only unless --provider is present)
+  --small-model <p/m>  # with --provider; defaults to the one-shot main
   --isolate            # run in a disposable git worktree (opencode default OFF, crush default ON)
   --no-isolate         # disable worktree isolation
   --restrict           # crush only: opt into the CLI allowlist (--restrict-run + --allow-bash/--allow-tool)
@@ -181,6 +183,11 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
                             # branches with no diff vs the default branch;
                             # --all forces removal of everything under .triss/wt)
 ```
+
+`--provider` uses an in-memory main/small overlay and never changes `.env` or
+`opencode.json`. Register the worker once with `triss coder init --provider
+worker`; then GLM and worker can be selected per run while both credentials
+remain configured.
 
 `triss coder run` prints exactly one JSON envelope to stdout:
 

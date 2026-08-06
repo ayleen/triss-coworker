@@ -9,6 +9,31 @@ import { getConfig } from '../config.js';
 import { setRestricted, projectRoot, pathsRestricted } from '../safety.js';
 import { withCall } from '../call-context.js';
 
+export async function handleToolRequest(request, extra = {}, deps = {}) {
+  const { name: toolName, arguments: args = {} } = request.params;
+  const tool = await (deps.findTool || findTool)(toolName);
+  if (!tool) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Unknown tool: ${toolName}` }],
+    };
+  }
+  try {
+    const text = await withCall(() => tool.handler(args, { signal: extra.signal }));
+    return { content: [{ type: 'text', text: String(text) }] };
+  } catch (err) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: `triss/${toolName} failed: ${err?.message || String(err)}`,
+        },
+      ],
+    };
+  }
+}
+
 export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
   // Loads .env files (project-local first, then global) into process.env
   // so listTools() can see integration credentials before any tool call.
@@ -39,30 +64,7 @@ export async function runServer({ name = 'triss', version = '0.9.0' } = {}) {
     tools: toMcpToolList(await listTools()),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name: toolName, arguments: args = {} } = request.params;
-    const tool = await findTool(toolName);
-    if (!tool) {
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `Unknown tool: ${toolName}` }],
-      };
-    }
-    try {
-      const text = await withCall(() => tool.handler(args));
-      return { content: [{ type: 'text', text: String(text) }] };
-    } catch (err) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: `triss/${toolName} failed: ${err?.message || String(err)}`,
-          },
-        ],
-      };
-    }
-  });
+  server.setRequestHandler(CallToolRequestSchema, handleToolRequest);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

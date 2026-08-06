@@ -1988,7 +1988,7 @@ function readWorkerConfigLayer(scope) {
   }
 }
 
-function validateWorkerRunConfiguration(model, settings) {
+function validateWorkerRunConfiguration(model, settings, { oneShotSmallModel } = {}) {
   const profile = workerCoderProfile(settings);
   const allowed = new Set(profile.models.map((id) => `triss-worker/${id}`));
   const local = readWorkerConfigLayer('local');
@@ -2009,7 +2009,10 @@ function validateWorkerRunConfiguration(model, settings) {
     ? local.config.small_model
     : global.config?.small_model;
   const invalidLayer = (local.exists && !local.config) || (global.exists && !global.config);
-  const modelsValid = [model, effectiveModel, effectiveSmall]
+  const modelsToValidate = oneShotSmallModel
+    ? [model, oneShotSmallModel]
+    : [model, effectiveModel, effectiveSmall];
+  const modelsValid = modelsToValidate
     .filter(Boolean)
     .every((value) => allowed.has(value));
   if (!invalidLayer && modelsValid && isDeepStrictEqual(effectiveProvider, expected)) {
@@ -2786,13 +2789,14 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
 // only that key is forwarded, so a Zen run never carries the Z.AI key and vice
 // versa, even when both are configured. Included only when actually set — an
 // unconfigured credential never appears.
-function buildEngineEnv(credEnv, credentialValue) {
+function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (process.env[key] != null) env[key] = process.env[key];
   }
   const value = credentialValue === undefined ? process.env[credEnv] : credentialValue;
   if (credEnv && value) env[credEnv] = value;
+  if (opencodeConfigContent) env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent;
   return env;
 }
 
@@ -3122,17 +3126,66 @@ function computeWorktreeChanges(sh, repoRoot, wtPath) {
 // ─── spawn + fold ────────────────────────────────────────────────────────────────
 
 const KILL_GRACE_MS = 5000;
+const RESIDUAL_GROUP_TERM_GRACE_MS = 250;
+const RESIDUAL_GROUP_KILL_WAIT_MS = 1000;
+const PROCESS_GROUP_POLL_MS = 25;
 // How often to poll the engine log for a usage-limit line while a run is in
 // flight. On a rate-limited run opencode emits nothing on stdout and retries
 // forever, so without this the run hangs to --timeout; polling turns that
 // into a ~poll-interval-latency clear error instead.
 const RATE_LIMIT_POLL_MS = 3000;
 
-function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, logPath, pollMs }) {
+// Signal a detached child's whole process GROUP (negative pid), never anything
+// else. `kill(-1, ...)` means every process this uid may signal and `kill(0,
+// ...)` means the caller's own process group, so a degenerate child pid must
+// never reach process.kill. Return false when there is no safe/observable group.
+function killProcessGroup(
+  pid,
+  sig,
+  killProcess = process.kill.bind(process),
+  { strict = false } = {},
+) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    killProcess(-pid, sig);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ESRCH') return false;
+    // macOS sandbox profiles can deny the existence probe for a process group
+    // even when signalling that same group is permitted. EPERM for signal 0
+    // therefore means "still observable", not "already gone".
+    if (sig === 0 && err?.code === 'EPERM') return true;
+    if (!strict) return false;
+    throw new Error(
+      `Failed to signal OpenCode process group ${pid} with ${sig}: ${err?.message || String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+function spawnEngine({
+  argv,
+  env,
+  timeoutSec,
+  spawnFn,
+  sinceMs,
+  scanRateLimit,
+  logPath,
+  pollMs,
+  abortSignal,
+  killProcess = process.kill.bind(process),
+  residualTermGraceMs = RESIDUAL_GROUP_TERM_GRACE_MS,
+  residualKillWaitMs = RESIDUAL_GROUP_KILL_WAIT_MS,
+  processGroupPollMs = PROCESS_GROUP_POLL_MS,
+}) {
   // pollMs === 0 disables the watchdog entirely; null/undefined uses the
   // default cadence. Tests set a small value to exercise the poll path.
   const resolvedPollMs = pollMs == null ? RATE_LIMIT_POLL_MS : pollMs;
   return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error('OpenCode run was cancelled before the engine started.'));
+      return;
+    }
     let child;
     try {
       child = spawnFn('opencode', argv, {
@@ -3152,27 +3205,60 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
     const state = createEventFolder();
     const stderrChunks = [];
 
-    const killGroup = (sig) => {
-      try {
-        process.kill(-child.pid, sig);
-      } catch {
-        /* already gone */
+    const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true });
+
+    const waitForGroupExit = async (maxMs) => {
+      const deadline = Date.now() + Math.max(0, maxMs);
+      while (killGroup(0)) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((done) => setTimeout(done, Math.max(1, processGroupPollMs)));
+      }
+      return true;
+    };
+
+    // The immediate OpenCode CLI can close after a tool subprocess redirected
+    // its stdio and kept running in the detached process group. Do not return
+    // an envelope while such descendants can still hold DB locks or write
+    // files after Triss reported completion.
+    const terminateResidualGroup = async () => {
+      if (!killGroup(0)) return;
+      killGroup('SIGTERM');
+      if (await waitForGroupExit(residualTermGraceMs)) return;
+      killGroup('SIGKILL');
+      if (!(await waitForGroupExit(residualKillWaitMs))) {
+        throw new Error(
+          `OpenCode process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
+        );
       }
     };
     // Schedule the SIGKILL escalation AT MOST ONCE — the timeout, the
-    // rate-limit poll, and the stdout-error path can all send SIGTERM, but a
+    // rate-limit poll, host/caller cancellation, and the stdout-error path can
+    // all send SIGTERM, but a
     // second graceTimer would leak past settle() (which only clears the
     // latest reference) and fire a stray SIGKILL at an already-reaped group.
     // The `settled` guard also stops a buffered stdout line delivered after
     // 'close' from arming a fresh timer that outlives settle().
     const scheduleSigkill = () => {
       if (settled || graceTimer) return;
-      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+      graceTimer = setTimeout(() => requestGroupSignal('SIGKILL'), KILL_GRACE_MS);
+    };
+
+    const requestGroupSignal = (sig) => {
+      try {
+        return killGroup(sig);
+      } catch (err) {
+        // Timer, AbortSignal, and process-signal callbacks must not throw an
+        // uncaught exception. Settle through the normal cleanup boundary;
+        // terminateResidualGroup will preserve the signalling failure as a
+        // rejected coder run instead of reporting a false completion.
+        settle(() => reject(err));
+        return false;
+      }
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup('SIGTERM');
+      requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
 
@@ -3195,7 +3281,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
         }
         if (info) {
           state.rateLimit = info;
-          killGroup('SIGTERM');
+          requestGroupSignal('SIGTERM');
           scheduleSigkill();
         }
       }, resolvedPollMs);
@@ -3220,14 +3306,17 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
     // server handling many `coder run` calls over its lifetime doesn't
     // accumulate one pair of listeners per call.
     const onHostSignal = () => {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        /* already gone */
-      }
+      requestGroupSignal('SIGTERM');
+      scheduleSigkill();
     };
     process.on('SIGINT', onHostSignal);
     process.on('SIGTERM', onHostSignal);
+
+    const onAbort = () => {
+      requestGroupSignal('SIGTERM');
+      scheduleSigkill();
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     function settle(fn) {
       if (settled) return;
@@ -3237,7 +3326,8 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
       if (pollTimer) clearInterval(pollTimer);
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
-      fn();
+      abortSignal?.removeEventListener('abort', onAbort);
+      void terminateResidualGroup().then(fn, reject);
     }
 
     child.on('error', (err) => {
@@ -3259,7 +3349,7 @@ function spawnEngine({ argv, env, timeoutSec, spawnFn, sinceMs, scanRateLimit, l
         // log-poll path, so we don't wait out --timeout. Guard on `settled`
         // so a line buffered past 'close' can't signal a reaped/recycled pid.
         if (state.rateLimit && !hadRateLimit && !settled) {
-          killGroup('SIGTERM');
+          requestGroupSignal('SIGTERM');
           scheduleSigkill();
         }
       });
@@ -3313,13 +3403,7 @@ function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
     const stdoutChunks = [];
     const stderrChunks = [];
 
-    const killGroup = (sig) => {
-      try {
-        process.kill(-child.pid, sig);
-      } catch {
-        /* already gone */
-      }
-    };
+    const killGroup = (sig) => killProcessGroup(child.pid, sig);
     // Same SIGKILL-once guard as spawnEngine: the timeout, the stdout-error
     // path, and host-signal forwarding can all send SIGTERM, but a second
     // graceTimer would fire a stray SIGKILL at an already-reaped group.
@@ -3338,13 +3422,7 @@ function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
     // touch the host (same rationale as spawnEngine; this also runs inside the
     // long-lived MCP server). Removed on settle so a host handling many crush
     // runs doesn't accumulate one listener pair per call.
-    const onHostSignal = () => {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        /* already gone */
-      }
-    };
+    const onHostSignal = () => killGroup('SIGTERM');
     process.on('SIGINT', onHostSignal);
     process.on('SIGTERM', onHostSignal);
 
@@ -3647,6 +3725,51 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const agent = opts.agent || 'coder';
   const modelOverride = opts.model || null;
+  if (opts.smallModel && !opts.provider) {
+    throw new Error(
+      '--small-model requires --provider <name> — without an explicit provider, --model keeps its legacy main-only semantics.',
+    );
+  }
+
+  let oneShotProvider = null;
+  let oneShotSmallModel = null;
+  if (opts.provider) {
+    if (engine !== 'opencode') {
+      throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
+    }
+    if (!modelOverride) {
+      throw new Error(
+        '--provider requires --model <provider/model> so the one-shot model and Z.AI plan are explicit.',
+      );
+    }
+    oneShotProvider = normalizeProviderFlag(opts.provider);
+    oneShotSmallModel = opts.smallModel || modelOverride;
+    for (const [flag, value] of [
+      ['--model', modelOverride],
+      ['--small-model', oneShotSmallModel],
+    ]) {
+      if (!isKnownProviderPrefix(value)) {
+        throw new Error(
+          `${flag} "${value}" must use a known provider prefix for a one-shot provider run.`,
+        );
+      }
+      const actualProvider = coderModelCredential(value).provider;
+      if (actualProvider !== oneShotProvider) {
+        throw new Error(
+          `${flag} "${value}" does not belong to provider "${oneShotProvider}".`,
+        );
+      }
+    }
+    const mainPrefix = String(modelOverride).split('/')[0];
+    const smallPrefix = String(oneShotSmallModel).split('/')[0];
+    if (mainPrefix !== smallPrefix) {
+      throw new Error(
+        `--model and --small-model must use the same provider prefix for a one-shot run ` +
+          `(got "${mainPrefix}" and "${smallPrefix}").`,
+      );
+    }
+  }
+
   const modelUsed = modelOverride || coderModel();
 
   // Provider-aware credential gate. crush only speaks Z.AI (it bridges
@@ -3705,7 +3828,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
   if (engine === 'opencode' && cred.provider === 'worker') {
-    validateWorkerRunConfiguration(modelUsed, workerSettings);
+    validateWorkerRunConfiguration(modelUsed, workerSettings, { oneShotSmallModel });
   }
 
   const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
@@ -3738,12 +3861,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     cont: !!opts.continue,
     dir,
   });
-  const env = buildEngineEnv(cred.env, credentialValue);
+  const oneShotConfigContent = oneShotProvider
+    ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
+    : null;
+  const env = buildEngineEnv(cred.env, credentialValue, oneShotConfigContent);
   const engineVersion = detectOpencodeVersion(sh) || opencodeVersionPin();
 
   process.stderr.write(
     pc.dim(
       `[coder run] agent=${agent} model=${modelUsed}` +
+        (oneShotProvider ? ` provider=${oneShotProvider} small_model=${oneShotSmallModel} one-shot` : '') +
         (isolation ? ` isolate=${isolation.wtPath}` : '') +
         '\n',
     ),
@@ -3762,6 +3889,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       scanRateLimit: deps.scanRateLimit,
       logPath: deps.logPath,
       pollMs: deps.pollMs,
+      abortSignal: deps.abortSignal,
+      killProcess: deps.killProcess,
+      residualTermGraceMs: deps.residualTermGraceMs,
+      residualKillWaitMs: deps.residualKillWaitMs,
+      processGroupPollMs: deps.processGroupPollMs,
     });
 
     // GLM usage limit: opencode retries the failing provider call forever and

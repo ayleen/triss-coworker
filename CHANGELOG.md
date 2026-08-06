@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-08-06
+
+### Added
+
+- **OpenCode coder runs can switch provider and the complete main/small pair
+  for one invocation.** `triss coder run --provider <name> --model <p/m>
+  [--small-model <p/m>]` uses an in-memory OpenCode overlay and never rewrites
+  `.env` or `opencode.json`; omitted `--small-model` defaults to the one-shot
+  main. CLI help, MCP (`provider` / `model` / `small_model`), README, config
+  reference, and generated agent instructions document the same contract.
+- Added docs-first implementation and process-lifecycle contracts with focused
+  RED/GREEN coverage for GLM ↔ Triss worker switching.
+
+### Changed
+
+- `--model` without `--provider` retains its existing main-only semantics.
+  An explicit provider requires a fully qualified model, both transient roles
+  must share its exact prefix, and Crush remains Z.AI-only. Worker credentials
+  and the managed provider can coexist with GLM while either pair is selected
+  per run.
+
+### Fixed
+
+- `coder run` no longer resolves when the immediate OpenCode CLI exits but a
+  same-process-group tool descendant remains alive. Triss now terminates and
+  waits for residual processes before computing the final envelope, preventing
+  late edits and lingering database/WAL contention.
+- MCP request cancellation/timeout signals now reach `runCoderRun()` and its
+  detached OpenCode process group instead of leaving the engine running after
+  the client regains control. Timeout and normal-close cleanup also preserve
+  SIGKILL escalation for descendants that survive SIGTERM.
+
+### Security
+
+- Detached OpenCode and Crush group signalling now rejects missing,
+  non-integer, zero, and `1` child PIDs before negation. This prevents a failed
+  or test-double spawn from issuing POSIX `kill(-1, SIGTERM)` to every process
+  the current user can signal, or `kill(0, SIGTERM)` to Triss's own group.
+- One-shot worker runs reuse the already verified Triss-managed provider and
+  overlay only model fields. They deliberately do not deep-merge a transient
+  provider definition, which could retain hostile lower-precedence endpoint or
+  header options. Only the selected provider credential reaches OpenCode.
+
 ## [0.29.0] — 2026-08-06
 
 ### Added
@@ -873,7 +916,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/ayleen/triss-coworker/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/ayleen/triss-coworker/compare/v0.28.0...v0.29.0
+[0.28.0]: https://github.com/ayleen/triss-coworker/compare/v0.27.1...v0.28.0
+[0.27.1]: https://github.com/ayleen/triss-coworker/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/ayleen/triss-coworker/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/ayleen/triss-coworker/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/ayleen/triss-coworker/compare/v0.24.2...v0.25.0

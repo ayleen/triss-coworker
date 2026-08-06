@@ -28,6 +28,10 @@ models (e.g. `--model opencode-go/deepseek-v4-flash`), both with `OPENCODE_API_K
 or Moonshot Kimi models (`--model moonshotai/kimi-k2.7-code` with
 `MOONSHOT_API_KEY`, or the flat-rate `--model kimi-for-coding/k3` with
 `KIMI_API_KEY`) instead of Z.AI GLM.
+After one-time worker registration, switch the complete provider pair for one
+OpenCode run without changing persistent defaults: `triss coder run "<task>"
+--provider worker --model triss-worker/<id> [--small-model
+triss-worker/<id>]`. `--small-model` defaults to the one-shot main.
 For one-shot analysis through the standard tools, pass `provider: "glm"` or
 `provider: "kimi"` to `triss_ask` or `triss_review` (CLI: `--provider glm` /
 `--provider kimi`; Kimi presets: flash=kimi-k2.6, pro=kimi-k3). Keep
