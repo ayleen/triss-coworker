@@ -369,11 +369,13 @@ the engine and role.
 default. An explicit `--provider` run temporarily overrides this role through
 an in-memory OpenCode config (`--small-model`, or the one-shot main model when
 omitted); no file or model pin is rewritten. Before forwarding the selected
-provider key, Triss rejects persistent endpoint/header overrides for that
-provider in global or project config layers. One-shot provider runs also reject
-JSONC config, which cannot be audited safely without applying OpenCode's parser.
-The audit follows the actual runtime directory, including inherited cwd and
-created or reused isolation worktrees.
+provider key, Triss takes a pre-spawn snapshot of the pinned OpenCode version's
+global, direct-project, and `.opencode/opencode.json(c)` layers and rejects
+persistent endpoint/header overrides for that provider. JSONC is rejected
+because Triss cannot safely reproduce OpenCode's parser. The audit follows the
+actual runtime directory, including inherited cwd and created or reused
+isolation worktrees. Concurrent same-user config mutation after the snapshot is
+outside this guard's threat model; unverified OpenCode versions fail closed.
 
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project
