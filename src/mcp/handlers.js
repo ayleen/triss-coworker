@@ -888,7 +888,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // calls always fall through to the real subprocess machinery inside
 // runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, model, isolate, cwd, timeout, engine } = {},
+  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -939,12 +939,19 @@ export async function coderRunHandler(
       session,
       continue: cont,
       agent,
+      provider,
       model,
+      smallModel,
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
     },
-    { spawn: deps.spawn, spawnSync: deps.spawnSync, stdoutWrite: (s) => { envelope += s; } },
+    {
+      spawn: deps.spawn,
+      spawnSync: deps.spawnSync,
+      abortSignal: deps.signal,
+      stdoutWrite: (s) => { envelope += s; },
+    },
   );
   return envelope.trim();
 }

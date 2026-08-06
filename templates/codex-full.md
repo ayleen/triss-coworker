@@ -66,7 +66,8 @@ same key with a distinct `opencode-go/*` prefix; configure it with
 `kimi-for-coding/*`, e.g. `kimi-for-coding/k3`, `KIMI_API_KEY`).
 
 Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
-[--agent <name>] [--model <p/m>] [--isolate] [--no-isolate]
+[--agent <name>] [--provider <name> --model <p/m> [--small-model <p/m>]]
+[--isolate] [--no-isolate]
 [--restrict] [--no-restrict] [--cwd <path>]
 [--timeout <sec>] [--stdin]` — prints one JSON envelope to stdout (`engine`,
 `engine_version`, `session_id`, `exit_reason`, `final_text`, `files_changed`,
@@ -74,6 +75,10 @@ Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 `opencode` (default) or `crush`. `--session <id>` is a triss-side slug
 mapped to a real opencode session id in `.triss/sessions.json` (first run
 creates it, later runs with the same slug continue that conversation).
+On OpenCode, `--provider` + provider-qualified `--model` switches the complete
+provider pair for this run without changing persistent config; `--small-model`
+is optional and defaults to the one-shot main. Worker must first be registered
+once with `triss coder init --provider worker`.
 `--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)
 so you review the diff before merging; irreversible actions stay with you.
 `triss coder clean [--all]` removes finished isolation worktrees (default:

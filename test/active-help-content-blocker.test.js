@@ -47,6 +47,16 @@ test('Blocker-10a `triss coder init --help` option text must not advertise hy3/h
   );
 });
 
+test('coder run help makes one-shot cross-provider selection and persistence explicit', () => {
+  const out = help(['coder', 'run']);
+  assert.match(out, /--provider <name>/);
+  assert.match(out, /one run only/i);
+  assert.match(out, /requires\s+--model/i);
+  assert.match(out, /--small-model <p\/m>/);
+  assert.match(out, /defaults to the one-shot main model/i);
+  assert.match(out, /does not modify[\s\S]*opencode\.json/i);
+});
+
 test('Blocker-10a README coder/init prose must not present hy3 as a current OpenCode Zen model', () => {
   const readme = read('README.md');
   // The buggy line frames hy3 as a current model offered by the opencode-zen

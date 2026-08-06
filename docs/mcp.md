@@ -323,7 +323,8 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
 - `triss_coder_run` — delegate an implementation task to a coding
   agent (default `opencode` engine; `engine: "crush"` selects the crush
   engine). Same options as `triss coder run` on the CLI (`engine`,
-  `session`, `continue`, `agent`, `model`, `isolate`, `cwd`, `timeout`)
+  `session`, `continue`, `agent`, `provider`, `model`, `small_model`,
+  `isolate`, `cwd`, `timeout`)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
   tool argument). Returns the JSON envelope — `engine`, `engine_version`,
   `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
@@ -332,7 +333,11 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    `isolate` is unset by default in the schema — opencode resolves unset to
    isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
    `permissions.run` config is inert and denied bash deadlocks, so the
-   worktree is its reliable safety layer). `model` takes a `<provider>/<id>`
+   worktree is its reliable safety layer). `provider` selects a complete
+   one-shot OpenCode provider pair and requires `model`; `small_model` is
+   optional and defaults to `model`. This in-memory selection never rewrites
+   persistent config. Without `provider`, `model` keeps its legacy main-only
+   semantics. `model` takes a `<provider>/<id>`
    string — a Triss worker model (`triss-worker/deepseek-v4-flash`, reuses
    `TRISS_WORKER_API_KEY`), a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
    (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), an OpenCode
@@ -345,7 +350,12 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `opencode.json` / `crush.json` files exist, provider key presence
   (`TRISS_WORKER_API_KEY` / `ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
   `KIMI_API_KEY` — never the value), and how many isolation
-  worktrees are live.
+worktrees are live.
+
+If an MCP client cancels or times out `triss_coder_run`, its cancellation signal
+is forwarded to the detached engine process group. Normal completion also
+waits for residual OpenCode tool descendants to terminate before returning the
+envelope; no background test/DB process is intentionally left running.
 
 **Timeout defaults to 1500s (25 min) over MCP**, above the CLI's 900s,
 since GLM runs over MCP are expected to be long. Override per call via
