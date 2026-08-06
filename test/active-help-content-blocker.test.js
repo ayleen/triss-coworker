@@ -50,8 +50,9 @@ test('Blocker-10a `triss coder init --help` option text must not advertise hy3/h
 test('coder run help makes one-shot cross-provider selection and persistence explicit', () => {
   const out = help(['coder', 'run']);
   assert.match(out, /--provider <name>/);
-  assert.match(out, /one run only/i);
-  assert.match(out, /requires\s+--model/i);
+  const providerOption = out.match(/--provider <name>[\s\S]*?(?=\n {2}--model <p\/m>)/)?.[0] || '';
+  assert.match(providerOption, /requires\s+--model/i);
+  assert.match(out, /--model <p\/m>[\s\S]*?one run only/i);
   assert.match(out, /--small-model <p\/m>/);
   assert.match(out, /defaults to the one-shot main model/i);
   assert.match(out, /does not modify[\s\S]*opencode\.json/i);

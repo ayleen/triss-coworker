@@ -3248,10 +3248,10 @@ function spawnEngine({
         return killGroup(sig);
       } catch (err) {
         // Timer, AbortSignal, and process-signal callbacks must not throw an
-        // uncaught exception. Settle through the normal cleanup boundary;
-        // terminateResidualGroup will preserve the signalling failure as a
-        // rejected coder run instead of reporting a false completion.
-        settle(() => reject(err));
+        // uncaught exception. Reject with this exact signalling failure. A
+        // second strict group probe would only throw again and could replace
+        // the original error that explains why cleanup cannot be guaranteed.
+        settle(() => reject(err), { cleanup: false });
         return false;
       }
     };
@@ -3318,7 +3318,7 @@ function spawnEngine({
     };
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    function settle(fn) {
+    function settle(fn, { cleanup = true } = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -3327,6 +3327,10 @@ function spawnEngine({
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
       abortSignal?.removeEventListener('abort', onAbort);
+      if (!cleanup) {
+        fn();
+        return;
+      }
       void terminateResidualGroup().then(fn, reject);
     }
 
@@ -3727,7 +3731,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const modelOverride = opts.model || null;
   if (opts.smallModel && !opts.provider) {
     throw new Error(
-      '--small-model requires --provider <name> — without an explicit provider, --model keeps its legacy main-only semantics.',
+      '--small-model requires --provider <name> (MCP: small_model requires provider) — without an explicit provider, --model keeps its legacy main-only semantics.',
     );
   }
 
@@ -3739,14 +3743,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
     if (!modelOverride) {
       throw new Error(
-        '--provider requires --model <provider/model> so the one-shot model and Z.AI plan are explicit.',
+        '--provider requires --model <provider/model> (MCP: provider requires model) so the one-shot model and Z.AI plan are explicit.',
       );
     }
     oneShotProvider = normalizeProviderFlag(opts.provider);
     oneShotSmallModel = opts.smallModel || modelOverride;
     for (const [flag, value] of [
-      ['--model', modelOverride],
-      ['--small-model', oneShotSmallModel],
+      ['--model (MCP: model)', modelOverride],
+      ['--small-model (MCP: small_model)', oneShotSmallModel],
     ]) {
       if (!isKnownProviderPrefix(value)) {
         throw new Error(

@@ -1004,8 +1004,11 @@ test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports
       process.kill = origKill;
     }
   });
-  await run();
-  rmSync(repoRoot, { recursive: true, force: true });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 // Regression: a child whose pid is 1 (or 0) must never reach `kill(-pid)`.
@@ -1056,8 +1059,11 @@ test('runCoderRun: never signals process group -1/0 when the child has a degener
       process.kill = origKill;
     }
   });
-  await run();
-  rmSync(repoRoot, { recursive: true, force: true });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test('runCoderRun: a child that never emits any parseable output and is killed by timeout still throws (not an envelope)', async () => {
