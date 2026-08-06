@@ -25,6 +25,7 @@ import {
   closeSync,
   rmSync,
   statSync,
+  lstatSync,
   chmodSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
@@ -1701,7 +1702,9 @@ function persistCoderModels(scope, model, smallModel) {
 }
 
 function detectOpencodeVersion(sh) {
-  const r = sh('opencode', ['--version']);
+  // Even a version probe is a child process. Never let it inherit provider
+  // credentials or arbitrary caller env before one-shot config auditing.
+  const r = sh('opencode', ['--version'], { env: buildEngineEnv(null, null, null) });
   if (!r || r.error || r.status !== 0) return null; // binary missing or errored
   // Status 0 means opencode actually ran, so it is INSTALLED — return the
   // trimmed version string (possibly '' when the build prints nothing or a
@@ -2021,6 +2024,27 @@ function opencodeConfigAuditPaths(cwd, { projectRoot: configRoot } = {}) {
     current = parent;
   }
   return [...new Set(paths)];
+}
+
+function opencodeProjectBoundary(cwd) {
+  const runtimeDir = resolvePath(cwd);
+  let current = runtimeDir;
+  while (true) {
+    try {
+      lstatSync(join(current, '.git'));
+      return current;
+    } catch (err) {
+      if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') {
+        throw new Error(
+          `Cannot determine the OpenCode project boundary from ${runtimeDir}: ${err.message}`,
+          { cause: err },
+        );
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) return runtimeDir;
+    current = parent;
+  }
 }
 
 function auditOneShotProviderConfiguration(model, { cwd, projectRoot: configRoot, allowedProvider } = {}) {
@@ -4077,7 +4101,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         ? resolvePath(opts.cwd)
         : process.cwd();
     try {
-      const runtimeProjectRoot = gitRepoRoot(sh, runtimeDir) || runtimeDir;
+      const runtimeProjectRoot = opencodeProjectBoundary(runtimeDir);
       auditOneShotProviderConfiguration(modelUsed, {
         cwd: runtimeDir,
         projectRoot: runtimeProjectRoot,
