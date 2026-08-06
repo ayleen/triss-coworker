@@ -216,7 +216,7 @@ test(
 function fakeSpawnStayingOpen({ closeAfterMs = 60, code = null, signal = 'SIGTERM' } = {}) {
   return () => {
     const child = new EventEmitter();
-    child.pid = 555556; // fake; killGroup's process.kill ESRCHs harmlessly
+    child.pid = 555556; // fake; custom spawn has no real group-signalling owner
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     setImmediate(() => {

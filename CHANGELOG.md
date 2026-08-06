@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-integer, zero, and `1` child PIDs before negation. This prevents a failed
   or test-double spawn from issuing POSIX `kill(-1, SIGTERM)` to every process
   the current user can signal, or `kill(0, SIGTERM)` to Triss's own group.
+  Custom spawn seams also receive no real group-signalling authority unless
+  they explicitly inject the matching process-group owner.
 - One-shot worker runs reuse the already verified Triss-managed provider and
   overlay only model fields. They deliberately do not deep-merge a transient
   provider definition, which could retain hostile lower-precedence endpoint or
