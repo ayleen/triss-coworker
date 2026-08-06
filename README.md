@@ -490,7 +490,7 @@ Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 `worktree` tell you what to review; `--isolate` runs the agent in a
 disposable `.triss/wt/<slug>` git worktree so it never touches your
 working tree directly. Before returning the envelope, Triss terminates and
-waits for any residual process in the OpenCode process group, so tests or DB
+waits for any residual process in the selected engine's process group, so tests or DB
 clients cannot keep locks or write files after completion. MCP cancellation is
 forwarded to the same cleanup path. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See

@@ -3143,7 +3143,7 @@ function killProcessGroup(
   pid,
   sig,
   killProcess = process.kill.bind(process),
-  { strict = false } = {},
+  { strict = false, label = 'OpenCode' } = {},
 ) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
@@ -3157,7 +3157,7 @@ function killProcessGroup(
     if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
     throw new Error(
-      `Failed to signal OpenCode process group ${pid} with ${sig}: ${err?.message || String(err)}`,
+      `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
       { cause: err },
     );
   }
@@ -3233,14 +3233,15 @@ function spawnEngine({
     };
     // Schedule the SIGKILL escalation AT MOST ONCE — the timeout, the
     // rate-limit poll, host/caller cancellation, and the stdout-error path can
-    // all send SIGTERM, but a
-    // second graceTimer would leak past settle() (which only clears the
+    // all send SIGTERM, but a second graceTimer would leak past settle()
+    // (which only clears the
     // latest reference) and fire a stray SIGKILL at an already-reaped group.
     // The `settled` guard also stops a buffered stdout line delivered after
     // 'close' from arming a fresh timer that outlives settle().
     const scheduleSigkill = () => {
       if (settled || graceTimer) return;
       graceTimer = setTimeout(() => requestGroupSignal('SIGKILL'), KILL_GRACE_MS);
+      if (typeof graceTimer.unref === 'function') graceTimer.unref();
     };
 
     const requestGroupSignal = (sig) => {
@@ -3387,8 +3388,22 @@ function spawnEngine({
 // recon). crush writes the whole JSON envelope at end-of-run, so stdout is
 // buffered fully and parsed once on close.
 
-function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
+function spawnCrush({
+  argv,
+  env,
+  timeoutSec,
+  spawnFn,
+  abortSignal,
+  killProcess = process.kill.bind(process),
+  residualTermGraceMs = RESIDUAL_GROUP_TERM_GRACE_MS,
+  residualKillWaitMs = RESIDUAL_GROUP_KILL_WAIT_MS,
+  processGroupPollMs = PROCESS_GROUP_POLL_MS,
+}) {
   return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error('Crush run was cancelled before the engine started.'));
+      return;
+    }
     let child;
     try {
       child = spawnFn('crush', argv, {
@@ -3407,18 +3422,50 @@ function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
     const stdoutChunks = [];
     const stderrChunks = [];
 
-    const killGroup = (sig) => killProcessGroup(child.pid, sig);
-    // Same SIGKILL-once guard as spawnEngine: the timeout, the stdout-error
-    // path, and host-signal forwarding can all send SIGTERM, but a second
-    // graceTimer would fire a stray SIGKILL at an already-reaped group.
+    const killGroup = (sig) =>
+      killProcessGroup(child.pid, sig, killProcess, { strict: true, label: 'Crush' });
+
+    const waitForGroupExit = async (maxMs) => {
+      const deadline = Date.now() + Math.max(0, maxMs);
+      while (killGroup(0)) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((done) => setTimeout(done, Math.max(1, processGroupPollMs)));
+      }
+      return true;
+    };
+
+    const terminateResidualGroup = async () => {
+      if (!killGroup(0)) return;
+      killGroup('SIGTERM');
+      if (await waitForGroupExit(residualTermGraceMs)) return;
+      killGroup('SIGKILL');
+      if (!(await waitForGroupExit(residualKillWaitMs))) {
+        throw new Error(
+          `Crush process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
+        );
+      }
+    };
+
+    // Same SIGKILL-once guard as spawnEngine: timeout, host/caller
+    // cancellation, and error paths can all send SIGTERM.
     const scheduleSigkill = () => {
       if (settled || graceTimer) return;
-      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+      graceTimer = setTimeout(() => requestGroupSignal('SIGKILL'), KILL_GRACE_MS);
+      if (typeof graceTimer.unref === 'function') graceTimer.unref();
+    };
+
+    const requestGroupSignal = (sig) => {
+      try {
+        return killGroup(sig);
+      } catch (err) {
+        settle(() => reject(err), { cleanup: false });
+        return false;
+      }
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup('SIGTERM');
+      requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
 
@@ -3426,18 +3473,32 @@ function spawnCrush({ argv, env, timeoutSec, spawnFn }) {
     // touch the host (same rationale as spawnEngine; this also runs inside the
     // long-lived MCP server). Removed on settle so a host handling many crush
     // runs doesn't accumulate one listener pair per call.
-    const onHostSignal = () => killGroup('SIGTERM');
+    const onHostSignal = () => {
+      requestGroupSignal('SIGTERM');
+      scheduleSigkill();
+    };
     process.on('SIGINT', onHostSignal);
     process.on('SIGTERM', onHostSignal);
 
-    function settle(fn) {
+    const onAbort = () => {
+      requestGroupSignal('SIGTERM');
+      scheduleSigkill();
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    function settle(fn, { cleanup = true } = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       process.off('SIGINT', onHostSignal);
       process.off('SIGTERM', onHostSignal);
-      fn();
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (!cleanup) {
+        fn();
+        return;
+      }
+      void terminateResidualGroup().then(fn, reject);
     }
 
     child.on('error', (err) => settle(() => reject(new Error(`Failed to spawn crush: ${err.message}`))));
@@ -3531,7 +3592,17 @@ async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate: _isolate
 
   let result;
   try {
-    result = await spawnCrush({ argv, env, timeoutSec: outerTimeoutSec, spawnFn });
+    result = await spawnCrush({
+      argv,
+      env,
+      timeoutSec: outerTimeoutSec,
+      spawnFn,
+      abortSignal: deps.abortSignal,
+      killProcess: deps.killProcess,
+      residualTermGraceMs: deps.residualTermGraceMs,
+      residualKillWaitMs: deps.residualKillWaitMs,
+      processGroupPollMs: deps.processGroupPollMs,
+    });
   } catch (err) {
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw err;

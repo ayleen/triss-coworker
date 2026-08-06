@@ -660,6 +660,7 @@ test(
     writeManagedWorkerConfig(home);
     process.env.OPENCODE_API_KEY = 'sk-opencode-fake';
     process.env.MOONSHOT_API_KEY = 'sk-moonshot-fake';
+    process.env.KIMI_API_KEY = 'sk-kimi-fake';
 
     const cases = [
       {
@@ -673,6 +674,18 @@ test(
         model: 'moonshotai/kimi-k2.7-code',
         key: 'MOONSHOT_API_KEY',
         value: 'sk-moonshot-fake',
+      },
+      {
+        provider: 'opencode-go',
+        model: 'opencode-go/deepseek-v4-flash',
+        key: 'OPENCODE_API_KEY',
+        value: 'sk-opencode-fake',
+      },
+      {
+        provider: 'kimi-for-coding',
+        model: 'kimi-for-coding/k3',
+        key: 'KIMI_API_KEY',
+        value: 'sk-kimi-fake',
       },
     ];
 

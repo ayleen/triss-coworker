@@ -34,10 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same-process-group tool descendant remains alive. Triss now terminates and
   waits for residual processes before computing the final envelope, preventing
   late edits and lingering database/WAL contention.
-- MCP request cancellation/timeout signals now reach `runCoderRun()` and its
-  detached OpenCode process group instead of leaving the engine running after
-  the client regains control. Timeout and normal-close cleanup also preserve
-  SIGKILL escalation for descendants that survive SIGTERM.
+- MCP request cancellation/timeout signals now reach `runCoderRun()` and the
+  selected engine's detached process group instead of leaving OpenCode or
+  Crush running after the client regains control. Timeout, host SIGINT/SIGTERM,
+  caller cancellation, and normal-close cleanup preserve SIGKILL escalation
+  for descendants that survive SIGTERM.
 
 ### Security
 

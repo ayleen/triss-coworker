@@ -27,8 +27,8 @@ by OpenCode itself. The report is nevertheless valid at Triss's boundary:
 
 ## Contract
 
-- The coder completion envelope is emitted only after the detached OpenCode
-  process group can no longer execute or write files.
+- The coder completion envelope is emitted only after the selected engine's
+  detached process group can no longer execute or write files.
 - On immediate-child close, Triss probes the group, sends SIGTERM to residual
   members, waits a short grace period, escalates to SIGKILL, and waits for group
   disappearance before resolving.
@@ -36,7 +36,8 @@ by OpenCode itself. The report is nevertheless valid at Triss's boundary:
   fail the coder run closed; Triss must not emit a successful completion
   envelope for either condition.
 - MCP request cancellation is forwarded server → tool handler →
-  `runCoderRun()` → `spawnEngine()`, which terminates the same process group.
+  `runCoderRun()` → `spawnEngine()` / `spawnCrush()`, which terminates the same
+  process group.
 - Timeout, rate-limit, host-signal, normal completion, spawn error, and MCP
   cancellation use the same cleanup boundary.
 - Triss never kills processes outside the detached group it created for the
@@ -53,5 +54,7 @@ by OpenCode itself. The report is nevertheless valid at Triss's boundary:
 - An abort regression proves cancellation sends SIGTERM to the negative process
   group and produces a killed envelope when partial events exist.
 - MCP unit tests prove the SDK signal reaches the coder lifecycle.
+- Crush regressions prove cancellation, residual-child cleanup, and the
+  degenerate-pid guard use the same lifecycle boundary.
 - Live OpenCode Go smoke is repeated after the fix, followed by a process-list
   and delayed-file check.

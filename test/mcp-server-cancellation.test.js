@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleToolRequest } from '../src/mcp/server.js';
+import packageJson from '../package.json' with { type: 'json' };
+import { handleToolRequest, MCP_SERVER_VERSION } from '../src/mcp/server.js';
+
+test('MCP server advertises the package version', () => {
+  assert.equal(MCP_SERVER_VERSION, packageJson.version);
+});
 
 test('MCP server forwards request cancellation signal to tool handlers', async () => {
   const controller = new AbortController();
