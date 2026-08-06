@@ -45,6 +45,8 @@ by OpenCode itself. The report is nevertheless valid at Triss's boundary:
 - A missing, non-integer, zero, or `1` child pid is never negated or passed to
   `process.kill`; in particular, Triss can never issue POSIX `kill(-1, ...)`
   against every signalable process in the user's login session.
+- A custom/injected spawn function cannot signal an arbitrary real process
+  group unless its caller also injects the matching group-signalling owner.
 
 ## Verification
 

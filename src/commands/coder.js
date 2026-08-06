@@ -3163,6 +3163,12 @@ function killProcessGroup(
   }
 }
 
+function noInjectedProcessGroup() {
+  const error = new Error('custom spawn has no injected process-group owner');
+  error.code = 'ESRCH';
+  throw error;
+}
+
 function spawnEngine({
   argv,
   env,
@@ -3535,7 +3541,18 @@ function spawnCrush({
 // this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
 // / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
 // envelope shape as the opencode path so callers are engine-agnostic.
-async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate: _isolate, isolation, slug, timeoutSec }) {
+async function runCrushFlow({
+  opts,
+  deps,
+  sh,
+  spawnFn,
+  killProcess,
+  prompt,
+  isolate: _isolate,
+  isolation,
+  slug,
+  timeoutSec,
+}) {
   const modelOverride = opts.model || null;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
   // slug straight through (NO .triss/sessions.json map, unlike opencode).
@@ -3602,7 +3619,7 @@ async function runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate: _isolate
       timeoutSec: outerTimeoutSec,
       spawnFn,
       abortSignal: deps.abortSignal,
-      killProcess: deps.killProcess,
+      killProcess,
       residualTermGraceMs: deps.residualTermGraceMs,
       residualKillWaitMs: deps.residualKillWaitMs,
       processGroupPollMs: deps.processGroupPollMs,
@@ -3765,6 +3782,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   loadEnvFiles();
   const sh = deps.spawnSync || nodeSpawnSync;
   const spawnFn = deps.spawn || nodeSpawn;
+  // A custom spawn seam usually returns an EventEmitter test double with an
+  // arbitrary pid. Never let that pid authorize real OS signalling. Callers
+  // that deliberately create a real detached group through a custom spawn
+  // must also inject the matching killProcess seam explicitly.
+  const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
 
@@ -3926,7 +3948,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
   if (engine === 'crush') {
-    return runCrushFlow({ opts, deps, sh, spawnFn, prompt, isolate, isolation, slug, timeoutSec });
+    return runCrushFlow({
+      opts,
+      deps,
+      sh,
+      spawnFn,
+      killProcess,
+      prompt,
+      isolate,
+      isolation,
+      slug,
+      timeoutSec,
+    });
   }
 
   const sessionRealIdArg = opts.session ? readSessionsMap()[opts.session] || null : null;
@@ -3971,7 +4004,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       logPath: deps.logPath,
       pollMs: deps.pollMs,
       abortSignal: deps.abortSignal,
-      killProcess: deps.killProcess,
+      killProcess,
       residualTermGraceMs: deps.residualTermGraceMs,
       residualKillWaitMs: deps.residualKillWaitMs,
       processGroupPollMs: deps.processGroupPollMs,

@@ -759,6 +759,7 @@ test('runCoderRun escalates to SIGKILL and waits for residual OpenCode process-g
   const pidFile = join(repoRoot, 'residual-child.pid');
   let residualPid = null;
   const run = withIsolatedRun(repoRoot, async () => {
+    let ownedGroupPid = null;
     const fixtureBase64 = Buffer.from(FIXTURE).toString('base64');
     const parentScript = [
       "const { spawn } = require('node:child_process');",
@@ -768,14 +769,22 @@ test('runCoderRun escalates to SIGKILL and waits for residual OpenCode process-g
       "child.unref();",
       "process.stdout.write(Buffer.from(process.env.TRISS_TEST_FIXTURE, 'base64'));",
     ].join('');
-    const spawnFn = (_cmd, _argv, opts) => spawn(process.execPath, ['-e', parentScript], {
-      ...opts,
-      env: {
-        ...opts.env,
-        TRISS_TEST_PID_FILE: pidFile,
-        TRISS_TEST_FIXTURE: fixtureBase64,
-      },
-    });
+    const spawnFn = (_cmd, _argv, opts) => {
+      const child = spawn(process.execPath, ['-e', parentScript], {
+        ...opts,
+        env: {
+          ...opts.env,
+          TRISS_TEST_PID_FILE: pidFile,
+          TRISS_TEST_FIXTURE: fixtureBase64,
+        },
+      });
+      ownedGroupPid = child.pid;
+      return child;
+    };
+    const killOwnedGroup = (pid, signal) => {
+      assert.equal(pid, -ownedGroupPid, 'test may signal only the process group it spawned');
+      return process.kill(pid, signal);
+    };
 
     try {
       await runCoderRun('finish cleanly', {}, {
@@ -784,6 +793,7 @@ test('runCoderRun escalates to SIGKILL and waits for residual OpenCode process-g
         stdoutWrite: () => true,
         pollMs: 0,
         logPath: join(repoRoot, 'missing.log'),
+        killProcess: killOwnedGroup,
       });
       residualPid = Number(readFileSync(pidFile, 'utf8'));
       assert.throws(
@@ -1119,44 +1129,50 @@ test('runCoderRun: --timeout kills a hung child via SIGTERM->SIGKILL and reports
   const run = withIsolatedRun(repoRoot, async () => {
     const FAKE_PID = 909090;
     const killCalls = [];
-    const origKill = process.kill.bind(process);
+    let groupAlive = true;
     let child;
-    process.kill = (pid, sig) => {
+    const killProcess = (pid, sig) => {
       killCalls.push([pid, sig]);
+      assert.equal(pid, -FAKE_PID);
+      if (sig === 0) {
+        if (groupAlive) return true;
+        const error = new Error('no such process');
+        error.code = 'ESRCH';
+        throw error;
+      }
       if (pid === -FAKE_PID && sig === 'SIGTERM') {
         // Simulate the child actually dying from the signal shortly after.
-        setTimeout(() => child.emit('close', null, 'SIGTERM'), 10);
+        setTimeout(() => {
+          groupAlive = false;
+          child.emit('close', null, 'SIGTERM');
+        }, 10);
         return true;
       }
-      return origKill(pid, sig);
+      return true;
     };
 
-    try {
-      let captured = '';
-      const spawnFn = () => {
-        child = new EventEmitter();
-        child.pid = FAKE_PID;
-        child.stdout = new PassThrough();
-        child.stderr = new PassThrough();
-        // Emit one real event, then hang forever (simulates opencode's
-        // observed "retries forever with nothing further on stdout").
-        setImmediate(() => {
-          child.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_hangtest', part: {} }) + '\n');
-        });
-        return child;
-      };
-      await runCoderRun(
-        'hang forever',
-        { timeout: 0.05 },
-        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
-      );
-      const envelope = JSON.parse(captured.trim());
-      assert.equal(envelope.exit_reason, 'timeout');
-      assert.equal(envelope.session_id, 'ses_hangtest');
-      assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
-    } finally {
-      process.kill = origKill;
-    }
+    let captured = '';
+    const spawnFn = () => {
+      child = new EventEmitter();
+      child.pid = FAKE_PID;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      // Emit one real event, then hang forever (simulates opencode's
+      // observed "retries forever with nothing further on stdout").
+      setImmediate(() => {
+        child.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_hangtest', part: {} }) + '\n');
+      });
+      return child;
+    };
+    await runCoderRun(
+      'hang forever',
+      { timeout: 0.05 },
+      { spawn: spawnFn, stdoutWrite: (s) => (captured += s), killProcess },
+    );
+    const envelope = JSON.parse(captured.trim());
+    assert.equal(envelope.exit_reason, 'timeout');
+    assert.equal(envelope.session_id, 'ses_hangtest');
+    assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
   });
   try {
     await run();
@@ -1174,44 +1190,39 @@ test('runCoderRun: never signals process group -1/0 when the child has a degener
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
     const killCalls = [];
-    const origKill = process.kill.bind(process);
-    process.kill = (pid, sig) => {
+    const killProcess = (pid, sig) => {
       killCalls.push([pid, sig]);
       // Never forward a non-positive pid from this regression test. If the
       // production guard regresses, the assertion below must fail safely
       // instead of reproducing kill(-1) against the developer's login session.
       if (pid <= 0) return true;
-      return origKill(pid, sig);
+      throw new Error(`unexpected positive pid ${pid} with ${sig}`);
     };
-    try {
-      let captured = '';
-      const spawnFn = () => {
-        const child = new EventEmitter();
-        child.pid = 1; // spawn never gave us a real pid
-        child.stdout = new PassThrough();
-        child.stderr = new PassThrough();
-        setImmediate(() => {
-          child.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_degenerate', part: {} }) + '\n');
-        });
-        // The kill is a no-op by design, so the child has to end on its own —
-        // otherwise the run would hang to the (already elapsed) timeout.
-        setTimeout(() => child.emit('close', null, 'SIGTERM'), 100);
-        return child;
-      };
-      await runCoderRun(
-        'hang forever',
-        { timeout: 0.05 },
-        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
-      );
-      JSON.parse(captured.trim()); // the run still produces a valid envelope
-      assert.deepEqual(
-        killCalls.filter(([pid]) => pid <= 0),
-        [],
-        `killed a process group it does not own: ${JSON.stringify(killCalls)}`,
-      );
-    } finally {
-      process.kill = origKill;
-    }
+    let captured = '';
+    const spawnFn = () => {
+      const child = new EventEmitter();
+      child.pid = 1; // spawn never gave us a real pid
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => {
+        child.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_degenerate', part: {} }) + '\n');
+      });
+      // The kill is a no-op by design, so the child has to end on its own —
+      // otherwise the run would hang to the (already elapsed) timeout.
+      setTimeout(() => child.emit('close', null, 'SIGTERM'), 100);
+      return child;
+    };
+    await runCoderRun(
+      'hang forever',
+      { timeout: 0.05 },
+      { spawn: spawnFn, stdoutWrite: (s) => (captured += s), killProcess },
+    );
+    JSON.parse(captured.trim()); // the run still produces a valid envelope
+    assert.deepEqual(
+      killCalls.filter(([pid]) => pid <= 0),
+      [],
+      `killed a process group it does not own: ${JSON.stringify(killCalls)}`,
+    );
   });
   try {
     await run();
@@ -1224,33 +1235,43 @@ test('runCoderRun: a child that never emits any parseable output and is killed b
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
     const FAKE_PID = 909091;
-    const origKill = process.kill.bind(process);
+    let groupAlive = true;
     let child;
-    process.kill = (pid, sig) => {
+    const killProcess = (pid, sig) => {
+      assert.equal(pid, -FAKE_PID);
+      if (sig === 0) {
+        if (groupAlive) return true;
+        const error = new Error('no such process');
+        error.code = 'ESRCH';
+        throw error;
+      }
       if (pid === -FAKE_PID && sig === 'SIGTERM') {
-        setTimeout(() => child.emit('close', null, 'SIGTERM'), 10);
+        setTimeout(() => {
+          groupAlive = false;
+          child.emit('close', null, 'SIGTERM');
+        }, 10);
         return true;
       }
-      return origKill(pid, sig);
+      return true;
     };
-    try {
-      const spawnFn = () => {
-        child = new EventEmitter();
-        child.pid = FAKE_PID;
-        child.stdout = new PassThrough();
-        child.stderr = new PassThrough();
-        // Never writes anything — the true "retries forever, nothing on
-        // stdout" recon scenario. Per the envelope-vs-throw split, zero
-        // parseable events means throw, even though it was timeout-killed.
-        return child;
-      };
-      await assert.rejects(
-        () => runCoderRun('hang with no output', { timeout: 0.05 }, { spawn: spawnFn, stdoutWrite: noopStdout() }),
-        /produced no parseable output/,
-      );
-    } finally {
-      process.kill = origKill;
-    }
+    const spawnFn = () => {
+      child = new EventEmitter();
+      child.pid = FAKE_PID;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      // Never writes anything — the true "retries forever, nothing on
+      // stdout" recon scenario. Per the envelope-vs-throw split, zero
+      // parseable events means throw, even though it was timeout-killed.
+      return child;
+    };
+    await assert.rejects(
+      () => runCoderRun(
+        'hang with no output',
+        { timeout: 0.05 },
+        { spawn: spawnFn, stdoutWrite: noopStdout(), killProcess },
+      ),
+      /produced no parseable output/,
+    );
   });
   await run();
   rmSync(repoRoot, { recursive: true, force: true });
@@ -1308,10 +1329,10 @@ test('runCoderRun: forwards a host SIGINT to the detached child process group (S
   const run = withIsolatedRun(repoRoot, async () => {
     const FAKE_PID = 654322;
     const killCalls = [];
-    const origKill = process.kill.bind(process);
     let groupAlive = true;
-    process.kill = (pid, sig) => {
+    const killProcess = (pid, sig) => {
       killCalls.push([pid, sig]);
+      assert.equal(pid, -FAKE_PID);
       if (pid === -FAKE_PID && !groupAlive) {
         const error = new Error('no such process');
         error.code = 'ESRCH';
@@ -1327,29 +1348,25 @@ test('runCoderRun: forwards a host SIGINT to the detached child process group (S
       child.stderr = new PassThrough();
       return child;
     };
-    try {
-      let captured = '';
-      const runPromise = runCoderRun(
-        'do something',
-        {},
-        { spawn: spawnFn, stdoutWrite: (s) => (captured += s) },
-      );
-      await new Promise((r) => setImmediate(r));
+    let captured = '';
+    const runPromise = runCoderRun(
+      'do something',
+      {},
+      { spawn: spawnFn, stdoutWrite: (s) => (captured += s), killProcess },
+    );
+    await new Promise((r) => setImmediate(r));
 
-      process.emit('SIGINT');
-      assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
-      // Forward-only: the host process itself was never asked to exit or
-      // re-signal itself (only the negative-PID child-group kill above).
-      assert.ok(killCalls.every(([pid]) => pid !== process.pid));
+    process.emit('SIGINT');
+    assert.ok(killCalls.some(([pid, sig]) => pid === -FAKE_PID && sig === 'SIGTERM'));
+    // Forward-only: the host process itself was never asked to exit or
+    // re-signal itself (only the negative-PID child-group kill above).
+    assert.ok(killCalls.every(([pid]) => pid !== process.pid));
 
-      child.stdout.end(FIXTURE);
-      child.stderr.end('');
-      groupAlive = false;
-      child.emit('close', 0, null);
-      await runPromise;
-    } finally {
-      process.kill = origKill;
-    }
+    child.stdout.end(FIXTURE);
+    child.stderr.end('');
+    groupAlive = false;
+    child.emit('close', 0, null);
+    await runPromise;
   });
   try {
     await run();

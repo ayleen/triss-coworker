@@ -283,10 +283,8 @@ test(
   withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
     const fakeSpawnEnoent = () => {
       const child = new EventEmitter();
-      // Never 1 (or 0): killProcessGroup refuses those, but a fake pid that
-      // reached a raw kill(-pid) would mean kill(-1) — SIGTERM to every
-      // process this uid owns, i.e. the developer's whole login session.
-      // Use a high, unspawnable pid so a stray signal just ESRCHs.
+      // A custom spawn seam is denied real process-group signalling unless
+      // the test explicitly injects a matching killProcess owner.
       child.pid = 555556;
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
