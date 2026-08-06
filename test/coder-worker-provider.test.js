@@ -843,6 +843,7 @@ test(
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     process.env.ZHIPU_API_KEY = 'sk-zai-fake';
+    mkdirSync(join(home, '.git'));
     const target = join(home, 'projects', 'target', 'nested');
     mkdirSync(target, { recursive: true });
     writeFileSync(join(home, 'projects', 'target', 'opencode.json'), JSON.stringify({
@@ -862,12 +863,7 @@ test(
             spawned = true;
             throw new Error('must not spawn');
           },
-          spawnSync: (cmd, args) => {
-            if (cmd === 'git' && args.includes('--show-toplevel')) {
-              return { status: 0, stdout: home + '\n', error: null };
-            }
-            return fakeSpawnSync(cmd, args);
-          },
+          spawnSync: fakeSpawnSync,
           stdoutWrite: () => true,
         },
       ),
@@ -881,7 +877,14 @@ test(
   'one-shot worker pro model passes the exact managed-provider audit and reaches spawn',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
+    Object.assign(process.env, {
+      ZHIPU_API_KEY: 'sk-zai-must-not-reach-probe',
+      OPENCODE_API_KEY: 'sk-opencode-must-not-reach-probe',
+      MOONSHOT_API_KEY: 'sk-moonshot-must-not-reach-probe',
+      KIMI_API_KEY: 'sk-kimi-must-not-reach-probe',
+    });
     let spawned = false;
+    let versionProbeEnv;
     await runCoderRun(
       'task',
       { provider: 'worker', model: 'triss-worker/deepseek-v4-pro', cwd: home },
@@ -889,11 +892,23 @@ test(
         spawn: fakeSpawn(() => {
           spawned = true;
         }),
-        spawnSync: fakeSpawnSync,
+        spawnSync: (cmd, args, opts) => {
+          if (cmd === 'opencode' && args[0] === '--version') versionProbeEnv = opts.env;
+          return fakeSpawnSync(cmd, args);
+        },
         stdoutWrite: () => true,
       },
     );
     assert.equal(spawned, true);
+    for (const key of [
+      'TRISS_WORKER_API_KEY',
+      'ZHIPU_API_KEY',
+      'OPENCODE_API_KEY',
+      'MOONSHOT_API_KEY',
+      'KIMI_API_KEY',
+    ]) {
+      assert.equal(key in versionProbeEnv, false, `${key} must not reach opencode --version`);
+    }
   }),
 );
 

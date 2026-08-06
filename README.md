@@ -544,9 +544,10 @@ After changing the worker base URL or flash/pro model ids, rerun
 fails closed until the matching env-backed provider block is present. Global
 init reads only global worker settings (except genuine shell exports) and
 rejects a conflicting higher-precedence project provider. Every worker run
-revalidates the effective endpoint and model allowlist before forwarding the
-key, and prints an exact scope-specific init command when the saved provider is
-missing or stale.
+revalidates the registered global/project endpoint and model allowlist before
+forwarding the key, and prints an exact scope-specific init command when the
+saved provider is missing or stale. The broader runtime-tree snapshot described
+below applies to explicit one-shot `--provider worker` runs.
 
 Worker init is a one-time provider registration, not an exclusive provider
 choice: GLM and worker credentials/configuration can coexist. After the worker
