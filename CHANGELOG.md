@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-08-06
+
+### Added
+
+- **Existing OpenAI-compatible worker profiles are now available in coder
+  mode.** `triss coder init --provider worker` registers an env-backed
+  `triss-worker` provider through `@ai-sdk/openai-compatible`, reusing
+  `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, and the configured
+  flash/pro model ids instead of introducing another credential. Init, run,
+  model inspection/switching, status, MCP, wizard/help output, and generated
+  agent instructions all understand `triss-worker/<model-id>`. V1 supports one
+  custom profile and the Chat Completions protocol; Crush remains Z.AI-only.
+
+### Changed
+
+- Worker setup resolves credentials, endpoint, and model ids from the selected
+  local/global scope while preserving genuine parent-shell overrides. Worker
+  readiness now has one shared definition across `triss status` and MCP, and
+  the MCP coder-status description names `TRISS_WORKER_API_KEY` explicitly.
+- OpenCode init, persistent model changes, and rollback now coordinate through
+  the same PID/token `(engine, scope)` filesystem lock with dead-PID recovery.
+
+### Security
+
+- Worker init and run fail closed before forwarding credentials when the
+  effective project/global `provider["triss-worker"]`, endpoint, env-backed key
+  binding, package, or complete flash/pro model allowlist is missing, stale, or
+  conflicting. A global init cannot persist project-local endpoint settings or
+  report success over a higher-precedence unsafe project provider.
+- Jira issue output and its model-summarization corpus no longer include the
+  presence or absence of the worker credential.
+
 ## [0.28.0] — 2026-08-06
 
 ### Added
