@@ -1,5 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { createRequire } from 'node:module';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -8,11 +9,17 @@ import { listTools, findTool, toMcpToolList } from './tools.js';
 import { getConfig } from '../config.js';
 import { setRestricted, projectRoot, pathsRestricted } from '../safety.js';
 import { withCall } from '../call-context.js';
-import packageJson from '../../package.json' with { type: 'json' };
 
-export const MCP_SERVER_VERSION = packageJson.version;
+const require = createRequire(import.meta.url);
+export const MCP_SERVER_VERSION = require('../../package.json').version;
 
 export async function handleToolRequest(request, extra = {}, deps = {}) {
+  if (!request?.params || typeof request.params.name !== 'string') {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: 'Malformed MCP tool request: missing params.name' }],
+    };
+  }
   const { name: toolName, arguments: args = {} } = request.params;
   const tool = await (deps.findTool || findTool)(toolName);
   if (!tool) {

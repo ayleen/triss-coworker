@@ -3336,7 +3336,10 @@ function spawnEngine({
     }
 
     child.on('error', (err) => {
-      settle(() => reject(new Error(`Failed to spawn opencode: ${err.message}`)));
+      // A ChildProcess error means the engine did not spawn successfully; do
+      // not replace that exact diagnostic with a speculative group-cleanup
+      // failure for a pid that may never have become a process leader.
+      settle(() => reject(new Error(`Failed to spawn opencode: ${err.message}`)), { cleanup: false });
     });
 
     if (child.stdout) {
@@ -3501,7 +3504,8 @@ function spawnCrush({
       void terminateResidualGroup().then(fn, reject);
     }
 
-    child.on('error', (err) => settle(() => reject(new Error(`Failed to spawn crush: ${err.message}`))));
+    child.on('error', (err) =>
+      settle(() => reject(new Error(`Failed to spawn crush: ${err.message}`)), { cleanup: false }));
 
     // crush emits the whole envelope at end-of-run, so buffer stdout fully
     // (parseEnvelope takes the last non-empty line on close).
@@ -3936,6 +3940,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     cont: !!opts.continue,
     dir,
   });
+  // Model identifiers are the only transient config values. Credentials stay
+  // in their dedicated env var and must never be embedded in this JSON overlay.
   const oneShotConfigContent = oneShotProvider
     ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
     : null;
