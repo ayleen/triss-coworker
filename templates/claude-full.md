@@ -187,9 +187,11 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 `--provider` uses an in-memory main/small overlay and never changes `.env` or
 `opencode.json`. Register the worker once with `triss coder init --provider
 worker`; then GLM and worker can be selected per run while both credentials
-remain configured. On this one-shot path, Triss takes a pre-spawn snapshot of
-the pinned OpenCode version's global/direct-project/`.opencode` config layers
-and rejects selected-provider overrides or unauditable JSONC.
+remain configured. On this one-shot path, Triss audits the pinned OpenCode
+version's complete file graph, validates the final merged config with `debug
+config --pure` using a random canary instead of the real key, and runs OpenCode
+with external plugins disabled. Late overrides and unauditable config fail
+closed.
 
 `triss coder run` prints exactly one JSON envelope to stdout:
 

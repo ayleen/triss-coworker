@@ -569,11 +569,16 @@ triss coder run "hard task" \
 never rewrites `.env` or `opencode.json`. `--small-model` is available only
 with `--provider`; when omitted it equals the one-shot main model. The worker
 run still validates the previously registered env-backed provider before the
-key is forwarded. During a one-shot provider run, Triss takes a pre-spawn
-snapshot of the pinned OpenCode version's global and project config layers,
-including `.opencode/opencode.json(c)`, and rejects selected-provider overrides
-or JSONC that it cannot audit safely. Concurrent same-user config mutation after
-that snapshot is outside this guard's threat model.
+key is forwarded. During a one-shot provider run, Triss first audits every
+file-backed source loaded by the pinned OpenCode version: global `config.json`
+and `opencode.json(c)`, `~/.opencode/opencode.json(c)`, and runtime-directory
+ancestors up to the Git root (or `/` outside Git). It then asks OpenCode for the
+final merged config under the exact sanitized child environment, with a random
+canary instead of the real credential, and verifies the final main/small models
+and selected provider. Both the preflight and actual run use `--pure` to disable
+external plugins. Unreadable/JSONC/unknown layers fail closed. Concurrent
+same-user config mutation between preflight and spawn remains outside this
+guard's threat model.
 
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json

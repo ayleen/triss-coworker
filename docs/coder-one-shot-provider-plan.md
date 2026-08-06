@@ -46,22 +46,32 @@ The MCP `triss_coder_run` tool exposes the same operation through `provider`,
 
 For an explicit provider run, Triss supplies an in-memory
 `OPENCODE_CONFIG_CONTENT` overlay containing only the selected `model` and
-`small_model`. OpenCode 1.18.7 resolves those fields above project/global
-config. No temporary or persistent config file is published.
+`small_model`. No temporary or persistent config file is published. The
+overlay is not assumed to have final precedence: OpenCode 1.18.7 can merge
+account/organization, managed-directory, and macOS MDM configuration after it.
 
 The overlay must not define or replace providers. OpenCode deep-merges provider
 objects, which could retain untrusted lower-precedence options such as custom
 headers. Before forwarding any selected credential, Triss audits the pinned
-OpenCode version's global config plus direct `opencode.json(c)` and
-`.opencode/opencode.json(c)` layers from the actual runtime directory to its Git
-root. Built-in providers reject any persistent block for the selected provider
-id; managed worker blocks must match the complete expected definition in every
+OpenCode version's global `config.json` and `opencode.json(c)`, the legacy
+`~/.opencode/opencode.json(c)` source, and direct config ancestors from the
+actual runtime directory to its Git root (or filesystem root outside Git).
+Built-in providers reject any persistent block for the selected provider id;
+managed worker blocks must match the complete expected definition in every
 layer. JSONC is rejected because Triss cannot prove that commented config
-contains no hidden endpoint/header override. The audit is a pre-spawn snapshot;
-concurrent same-user mutation after it is outside the guard's threat model.
-Unverified OpenCode versions fail closed so changed discovery rules cannot
-silently bypass the audit. The runtime directory is explicit `--cwd`, inherited
-`process.cwd()`, or the created/reused isolation worktree. The Triss worker
+contains no hidden endpoint/header override.
+
+After this file audit, Triss runs `opencode debug config --pure` under the exact
+sanitized child environment. The real selected credential is absent; a random
+canary is supplied instead so the managed worker's env binding can still be
+verified. The final merged main model, small model, and selected-provider block
+must match. The actual one-shot `opencode run` also receives `--pure`, disabling
+external plugins in both phases. Any probe failure or unknown final shape is
+fail-closed. This remains a pre-spawn check; concurrent same-user mutation
+between preflight and spawn is outside the guard's threat model. Unverified
+OpenCode versions fail closed so changed discovery rules cannot silently bypass
+the audit. The runtime directory is explicit `--cwd`, inherited `process.cwd()`,
+or the created/reused isolation worktree. The Triss worker
 therefore retains its existing setup prerequisite:
 `triss coder init --engine opencode --provider worker --global|--local`
 registers the env-backed provider once. Every worker run then verifies the

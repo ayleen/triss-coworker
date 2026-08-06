@@ -369,13 +369,18 @@ the engine and role.
 default. An explicit `--provider` run temporarily overrides this role through
 an in-memory OpenCode config (`--small-model`, or the one-shot main model when
 omitted); no file or model pin is rewritten. Before forwarding the selected
-provider key, Triss takes a pre-spawn snapshot of the pinned OpenCode version's
-global, direct-project, and `.opencode/opencode.json(c)` layers and rejects
-persistent endpoint/header overrides for that provider. JSONC is rejected
-because Triss cannot safely reproduce OpenCode's parser. The audit follows the
-actual runtime directory, including inherited cwd and created or reused
-isolation worktrees. Concurrent same-user config mutation after the snapshot is
-outside this guard's threat model; unverified OpenCode versions fail closed.
+provider key, Triss audits the pinned version's full file graph: global
+`config.json` and `opencode.json(c)`, `~/.opencode/opencode.json(c)`, and direct
+configs from the actual runtime directory to the Git root (or `/` for non-Git
+directories). JSONC and unreadable layers fail closed. Because account/org,
+managed-directory, and macOS MDM settings load after the in-memory overlay,
+Triss also runs `opencode debug config --pure` under the exact sanitized child
+environment with a random canary instead of the real credential. The final
+main/small pair and selected provider must still match before the real key is
+injected; the actual one-shot run also uses `--pure`. This includes inherited
+cwd and created or reused isolation worktrees. Concurrent same-user mutation
+between preflight and spawn remains outside the guard's threat model;
+unverified OpenCode versions fail closed.
 
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project
@@ -423,7 +428,8 @@ and defaults to the same model. Both roles must use the selected provider and
 the same raw prefix. Worker still requires a one-time local or global
 `coder init --provider worker` registration, but that registration can coexist
 with GLM credentials and does not prevent one-shot GLM runs. Crush rejects
-these flags because it remains Z.AI-only.
+these flags because it remains Z.AI-only. One-shot OpenCode runs are preflighted
+against the final effective config and run with external plugins disabled.
 
 ### Coder model management commands
 

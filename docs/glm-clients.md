@@ -303,7 +303,11 @@ This uses an in-memory OpenCode overlay and does not change `.env` or
 `opencode.json`. The worker provider must first be registered once with
 `triss coder init --provider worker --global|--local`; its exact endpoint,
 env-backed key binding, package, and model allowlist are revalidated before
-the credential is forwarded.
+the credential is forwarded. Triss also resolves OpenCode's final effective
+configuration through a credential-free `debug config --pure` preflight,
+substituting a random canary for the selected key binding. Late account/org,
+managed-directory, or macOS MDM overrides therefore fail closed before the real
+credential is injected. The actual one-shot run also uses `--pure`.
 
 ### Stale-model recovery
 
