@@ -354,7 +354,8 @@ the engine and role.
 `--model`), highest first:
 
 1. `--provider` + `--model` on `triss coder run` (one-run complete provider
-   pair; optional `--small-model`, otherwise small equals main)
+   pair; optional `--small-model`, otherwise small equals main). This explicit
+   pair wins even when `TRISS_CODER_MODEL` is exported in the shell.
 2. `--model` without `--provider` (legacy one-run main-only override)
 3. `TRISS_CODER_MODEL` exported in the shell (`process.env`) — a **runtime
    shadow**: it wins for this process without persisting

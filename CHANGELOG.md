@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The MCP server now advertises the package version instead of a stale
+  hard-coded protocol version.
 - `--model` without `--provider` retains its existing main-only semantics.
   An explicit provider requires a fully qualified model, both transient roles
   must share its exact prefix, and Crush remains Z.AI-only. Worker credentials
