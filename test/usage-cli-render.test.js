@@ -149,3 +149,41 @@ test('grouped rendering lists each group key', () => {
   assert.match(out, /alpha/);
   assert.match(out, /beta/);
 });
+
+test('grouped rows render canonical token aggregates, never the deprecated aliases as zero', () => {
+  // A Crush-only group reports combined and no splittable fields. Its row must
+  // NOT fabricate "0 in / 0 out" from the deprecated aliases — it shows the
+  // combined total.
+  const out = render(
+    [v2({ model: 'glm-4.7', tokens: { combined: 42, total: 42 } })],
+    { groupBy: 'model' },
+  );
+  assert.match(out, /combined/);
+  assert.match(out, /\b42\b[^\n]*\bcombined\b|\bcombined\b[^\n]*\b42\b/);
+  // Deprecated aliases on the grouped record are null/undefined, so the row must
+  // not show a literal "0 in" from them.
+  assert.doesNotMatch(out, /0 in \/ 0 out/);
+});
+
+test('grouped rows for a reported api group still show its input/output counts', () => {
+  const records = [
+    { ...allKnownRecord(), model: 'reported-alpha' },
+    { ...allKnownRecord(), model: 'reported-alpha' },
+  ];
+  const out = render(records, { groupBy: 'model' });
+  // Two all-known records sum 606 uncached / 38 visible; the row must carry them.
+  assert.match(out, /\b606\b/);
+  assert.match(out, /\b38\b/);
+});
+
+test('grouped rows render a partially-reported field with coverage instead of a bare zero', () => {
+  // Two calls in one group: one reports visible output, the other reports none.
+  const records = [
+    v2({ model: 'partial-m' }),
+    v2({ model: 'partial-m', tokens: { input_uncached: 10, cache_read: 5, output_visible: 3 } }),
+  ];
+  const out = render(records, { groupBy: 'model' });
+  // The input/output group row reflects the covered call, not "0".
+  assert.doesNotMatch(out, /partial-m[^\n]*\b0 in\b/);
+  assert.match(out, /\b10\b/);
+});

@@ -260,6 +260,74 @@ test(
   ),
 );
 
+// ── Opencode: normalization warnings reach the envelope ──────────────────────
+
+// A step whose reported `tokens.total` disagrees with the derived component sum
+// makes finalizeOpencodeUsage push a mismatch warning. That warning must reach
+// the envelope's `warnings`, not be dropped when the assembly destructures the
+// normalization result.
+function fakeOpencodeSpawnWith(lines) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 555557;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(lines.join('\n') + '\n');
+      child.stderr.end('');
+      setImmediate(() => child.emit('close', 0, null));
+    });
+    return child;
+  };
+}
+
+const MISMATCH_EVENTS = [
+  {
+    type: 'step_start',
+    timestamp: 1783087384887,
+    sessionID: 'ses_mismatch',
+    part: { id: 'prt_1', messageID: 'msg_1', sessionID: 'ses_mismatch', type: 'step-start' },
+  },
+  {
+    type: 'step_finish',
+    timestamp: 1783087384975,
+    sessionID: 'ses_mismatch',
+    part: {
+      id: 'prt_2',
+      reason: 'stop',
+      messageID: 'msg_1',
+      sessionID: 'ses_mismatch',
+      type: 'step-finish',
+      // Reported total disagrees with 297 input + 54 output.
+      tokens: { total: 400, input: 200, output: 50, reasoning: 4, cache: { write: 0, read: 97 } },
+      cost: 0,
+    },
+  },
+];
+const MISMATCH_STREAM = MISMATCH_EVENTS.map((e) => JSON.stringify(e));
+
+test(
+  'opencode envelope: a normalization mismatch warning is surfaced in warnings, not dropped',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello via a shell echo',
+        {},
+        {
+          spawn: fakeOpencodeSpawnWith(MISMATCH_STREAM),
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: capture.stdoutWrite,
+        },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      const joined = (envelope.warnings || []).join('\n');
+      assert.match(joined, /mismatch/i);
+    },
+  ),
+);
+
 // ── Crush: usage.tokens + deprecated aliases (test 6 + 8) ────────────────────
 
 test(
@@ -336,5 +404,40 @@ test(
     assert.equal(envelope.usage.cost.total_usd, 0);
     assert.equal(envelope.usage.cost.source, 'engine_reported');
     assert.equal(envelope.usage.cost.complete, true);
+  }),
+);
+
+// ── Crush: an explicit model becomes billing_model, not the sentinel ─────────
+
+test(
+  'crush envelope usage: an explicit model overrides the "crush" billing_model sentinel',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_model',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 42, delta_cost_usd: 0.0001 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    const loggedArgs = [];
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30, model: 'zai/glm-5.2' },
+      {
+        ...crushRunDeps(envelopeLine),
+        stdoutWrite: capture.stdoutWrite,
+        logUsage: (args) => {
+          loggedArgs.push(args);
+          return { ...args, schema_version: 2 };
+        },
+      },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    assert.equal(envelope.engine, 'crush');
+    assert.equal(loggedArgs.length, 1, 'the crush run should log exactly one usage record');
+    // The explicit model must become the pricing key, not the hardcoded sentinel.
+    assert.equal(loggedArgs[0].billing_model, 'zai/glm-5.2');
+    assert.equal(loggedArgs[0].model, 'zai/glm-5.2');
   }),
 );
