@@ -304,9 +304,21 @@ export function parsePeriod(input) {
 // aggregate the same way.
 const TOKEN_VALUE_FIELDS = Object.keys(emptyTokens()).filter((k) => !k.endsWith('_source'));
 
+// The three TOTAL fields carry provenance counters (reported_calls /
+// derived_calls) alongside the shared sum/known_calls/unknown_calls, per
+// docs/usage-accounting.md "Aggregation". The five atomic fields and combined
+// keep exactly their three keys.
+const TOTAL_SOURCE_FIELDS = ['input_total', 'output_total', 'total'];
+
 function newTokenAgg() {
   const agg = {};
-  for (const key of TOKEN_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
+  for (const key of TOKEN_VALUE_FIELDS) {
+    agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
+    if (TOTAL_SOURCE_FIELDS.includes(key)) {
+      agg[key].reported_calls = 0;
+      agg[key].derived_calls = 0;
+    }
+  }
   return agg;
 }
 
@@ -346,6 +358,14 @@ function foldTokenAgg(agg, normalized) {
       entry.unknown_calls++;
     }
   }
+  // Totals also carry provenance counters from their *_source sibling: a
+  // 'reported' source marks a reported total, 'derived' a derived one; anything
+  // else (absent, null, unknown) increments neither.
+  for (const key of TOTAL_SOURCE_FIELDS) {
+    const source = normalized.tokens[key + '_source'];
+    if (source === 'reported') agg[key].reported_calls++;
+    else if (source === 'derived') agg[key].derived_calls++;
+  }
 }
 
 function foldCostAgg(agg, normalized) {
@@ -377,18 +397,17 @@ export function summarize(records, { groupBy } = {}) {
   };
   const groups = new Map();
   // A cost is known from the canonical aggregate (docs/usage-accounting.md
-  // "Compatibility fields"): for a v2 record we read cost.total_usd/completeness
-  // and NEVER the deprecated cost_usd flat aliases; normalizeUsageRecord turns a
-  // v1 record into the same shape using only the flat fields it can prove, so
-  // legacy behavior is preserved exactly (an explicit 0 is known, null/algo
-  // unknown). When a v2 record carries no canonical cost object at all (e.g.
-  // hand-rolled test fixtures), fall back to the flat aliases so an explicit
-  // known flag still counts.
+  // "Compatibility fields"): if a record carries a canonical cost object at
+  // all, that object decides entirely — known only when its total_usd is a
+  // finite number, and the deprecated cost_usd flat aliases are NEVER
+  // consulted. Only a record with no canonical cost object (normalizeUsageRecord
+  // always produces one for a v1 record, so this is only hand-rolled v2
+  // fixtures) falls back to the flat aliases so an explicit known flag still
+  // counts, exactly as today.
   const knownCostUsd = (r, normalized) => {
     const c = normalized.cost;
-    if (c && typeof c === 'object' && typeof c.total_usd !== 'undefined') {
-      if (c.complete === true && Number.isFinite(c.total_usd)) return c.total_usd;
-      return null; // the canonical object decides entirely
+    if (c && typeof c === 'object') {
+      return Number.isFinite(c.total_usd) ? c.total_usd : null;
     }
     if (r.cost_usd_known !== false && Number.isFinite(r.cost_usd)) return r.cost_usd;
     return null;
@@ -587,6 +606,17 @@ export function estimateCanonicalCost({
   return cost;
 }
 
+// A usage_status is inferred from the normalized tokens when the record did not
+// state one: 'reported' when any token value is a finite number (a 0 is a
+// reported counter), 'missing' when none is. An explicit usage_status on the
+// record always wins.
+function inferUsageStatus(tokens) {
+  for (const value of Object.values(tokens)) {
+    if (Number.isFinite(value)) return 'reported';
+  }
+  return 'missing';
+}
+
 // Promotes a persisted record to the in-memory canonical shape for
 // aggregation. Purify — never mutates the argument. A v2 record passes
 // through; a v1 record (no schema_version) is upgraded to the canonical shape
@@ -605,7 +635,7 @@ export function normalizeUsageRecord(record) {
       billing_model: r.billing_model ?? r.model ?? null,
       tokens,
       cost: r.cost && typeof r.cost === 'object' ? r.cost : null,
-      usage_status: r.usage_status ?? 'missing',
+      usage_status: r.usage_status ?? inferUsageStatus(tokens),
       legacy: false,
     };
   }
@@ -637,7 +667,7 @@ export function normalizeUsageRecord(record) {
     billing_model: r.billing_model ?? r.model ?? null,
     tokens,
     cost,
-    usage_status: r.usage_status ?? 'missing',
+    usage_status: r.usage_status ?? inferUsageStatus(tokens),
     legacy: true,
   };
 }
