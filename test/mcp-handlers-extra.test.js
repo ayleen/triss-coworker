@@ -21,6 +21,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+// writeHandler persists usage, and src/usage.js binds its log path from
+// homedir() at module load. Redirect HOME before the first import that reaches
+// it so the suite writes to a throwaway log instead of the developer's own.
+const USAGE_HOME = mkdtempSync(join(tmpdir(), 'triss-mhe-home-'));
+process.env.HOME = USAGE_HOME;
+test.after(() => rmSync(USAGE_HOME, { recursive: true, force: true }));
+
 // The OpenAI SDK that backs deepseekChat() uses its own fetch internally,
 // so a globalThis.fetch monkey-patch isn't enough — point its baseURL at
 // a tiny local HTTP server instead.
