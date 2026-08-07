@@ -577,8 +577,8 @@ are unaffected.
 | `TRISS_PROJECT_ROOT`           | `process.cwd()` | Pin the project root used by the sandbox and `.triss.env` lookup. `triss mcp install --local` writes this into the project-local `.mcp.json` automatically; **global** installs (`~/.claude.json`, `~/.codex/config.toml`) intentionally leave it unset and let the sandbox follow the per-session cwd — see [docs/mcp.md](mcp.md#scope-and-the-path-sandbox). |
 | `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
 | `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
-| `TRISS_USAGE_LOG_MAX_BYTES`    | `10485760`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (10 MB default) |
-| `TRISS_PRICE_<MODEL_ID>`       | list prices | `miss,hit,out` USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price, including `opencode/*` Zen models, report `unknown`, not `$0` |
+| `TRISS_USAGE_LOG_MAX_BYTES`    | `41943040`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (40 MiB default; reports read only the active file) |
+| `TRISS_PRICE_<MODEL_ID>`       | list prices | `uncached,cache_read,out` (or `uncached,cache_read,cache_write,out`) USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price, including `opencode/*` Zen models, report `unknown`, not `$0` |
 | `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
 | `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
 | `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
@@ -606,9 +606,13 @@ integration's delegation rules will appear in the file.
 entirely, set `TRISS_USAGE_LOG=0` before any call. To override the
 baked-in DeepSeek list prices (e.g. you point Triss at a different
 provider, or want the discounted rate), set
-`TRISS_PRICE_<MODEL>=<input_cache_miss>,<input_cache_hit>,<output>` in
+`TRISS_PRICE_<MODEL>=<input_uncached>,<cache_read>,<output>` in
 USD per token. Example: `TRISS_PRICE_DEEPSEEK_V4_PRO=4.35e-7,3.625e-9,8.7e-7`
-applies the 75% promotional pricing to the pro preset. PAYG GLM calls use the
+applies the 75% promotional pricing to the pro preset. A four-value form,
+`<input_uncached>,<cache_read>,<cache_write>,<output>`, also prices cache
+writes; the three-value form leaves the cache-write rate **unknown** rather
+than reusing the ordinary input rate, so a non-zero cache-write count makes
+the estimate incomplete instead of silently wrong. PAYG GLM calls use the
 canonical `zai/<model>` id and ship with Z.AI's published list prices for the
 models both endpoints advertise (`glm-4.5`, `glm-4.5-air`, `glm-4.6`,
 `glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1`, `glm-5.2`), so a PAYG cost is
@@ -623,9 +627,11 @@ Subscription calls — `zai-coding-plan/*` and `kimi-for-coding/*` — stay
 `$0` because the plan meters by quota rather than tokens. Any model outside
 those catalogues — a newly released GLM/Kimi id, `opencode/*` OpenCode Zen
 models — is explicitly unknown until you set its matching `TRISS_PRICE_<MODEL_ID>`
-override. Usage JSONL keeps `cost_usd` numeric for
+override. Usage JSONL keeps a deprecated flat `cost_usd` numeric for
 compatibility and marks these records with `cost_usd_known: false`; existing
-historical records are not relabelled.
+historical records are not relabelled. The canonical per-token-class schema,
+cost precedence, and completeness rules live in
+[docs/usage-accounting.md](usage-accounting.md).
 
 **Claude Code integration step in the wizard** — split by mode:
 

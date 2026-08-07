@@ -60,7 +60,7 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen or Go (§
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
 | Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
 | Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **ON** (the disposable worktree is crush's reliable safety layer — the config allowlist is inert and a denied bash deadlocks to timeout) |
-| Per-call cost | reported `0` on the coding plan | real `delta_cost_usd` reported |
+| Per-call cost | engine-**calculated** from its own model catalogue, so a `0` is equally consistent with "coding plan" and "no rate in the catalogue"; Triss keeps it as `reported_total_usd` and only trusts a zero for a proven subscription/free call | real `delta_cost_usd` reported — a per-call charge Triss trusts, including an explicit `0` |
 | Sub-agents | opencode agent templates | `--agents single` (Triss forces this) |
 
 **Rule of thumb:** prefer **opencode** for the persistent bash-policy safety
@@ -74,7 +74,7 @@ and keep crush paired with its default worktree isolation (or opt into
 | Axis | Winner | Notes |
 |---|---|---|
 | Output parsing | **crush** | one JSON envelope vs opencode's ndjson fold |
-| Per-call cost | **crush** | real `delta_cost_usd`; opencode reports `0` on the coding plan |
+| Per-call cost | **crush** | real `delta_cost_usd`; opencode's cost is its own catalogue-based estimate, and a `0` does not prove a free call ([usage-accounting.md](usage-accounting.md)) |
 | Sessions | **crush** | native get-or-create ids; opencode needs a slug→`ses_` map file |
 | Roles / health-check | **crush** | `--role smart\|fast`, `ping` / `ping-fast`; opencode has none |
 | Allowlist patterns | **crush** | `exact:`/`glob:`/`regex:` + chaining-guard vs opencode glob keys |
@@ -430,10 +430,17 @@ Every run prints exactly one JSON object on stdout:
   "files_changed": ["path/a.js", "…"],
   "diff_stat": "N files changed, +X -Y",
   "worktree": ".triss/wt/<slug> | null",
-  "usage": { "…tokens / cost…" },
+  "usage": { "…canonical v2 tokens / cost…" },
   "warnings": ["…"]
 }
 ```
+
+`usage` carries the canonical `schema_version: 2` token classes
+(`input_uncached`, `cache_read`, `cache_write`, `output_visible`, `reasoning`,
+plus totals) and a `cost` object with completeness, alongside deprecated
+`prompt_tokens`/`completion_tokens` aliases. For crush, every split field is
+`null` and the count lands in `tokens.combined`. Full shape:
+[usage-accounting.md](usage-accounting.md#coder-envelope).
 
 **`exit_reason` resolution** (same for both engines): the outer
 timeout/signal wins first — `timedOut → timeout`, killed by signal →

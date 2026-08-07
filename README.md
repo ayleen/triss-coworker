@@ -347,24 +347,51 @@ triss usage --reset                  # clear the log
 ```
 
 Every model call (CLI **and** MCP) appends one record to
-`~/.cache/triss/usage.jsonl` with model, tokens, cached tokens, computed
-USD cost, working directory, a label like `triss/ask`, and a per-invocation
-`call_id` (UUIDv4). An optional `parent_call_id` lets a host group several
-Triss calls under a single outer session — set `TRISS_PARENT_CALL_ID` in
-the environment that launches Triss (e.g. in your MCP server's `env`
-block) and every record from that process carries it. External dashboards
-(e.g. tokentelemetry) can group by either field. List-price defaults for
-DeepSeek are baked in. GLM records retain `zai-coding-plan/` or `zai/` so
-subscription usage stays known `$0` while unpriced PAYG usage is shown as
-`unknown`, never as free. Any other unpriced model, including `opencode/*`
-OpenCode Zen, is also `unknown` unless configured with a matching
-`TRISS_PRICE_<MODEL_ID>` override. The JSONL keeps `cost_usd` numeric for
-dashboard compatibility and marks unpriced records with `cost_usd_known: false`.
-Existing records are not migrated, so older bare GLM model ids remain as
-originally logged. Override per-model with
-`TRISS_PRICE_<MODEL_ID>=miss,hit,out` (USD per token), for example
-`TRISS_PRICE_ZAI_GLM_5_2=...`. Disable tracking entirely with
+`~/.cache/triss/usage.jsonl`. Records keep each token class the source
+reported separately, instead of collapsing them into one prompt/completion
+pair:
+
+```text
+Triss usage · 1 call · last 24h
+
+  total:         14,609
+
+  input:
+    uncached:       303
+    cache read:  14,272
+    cache write:      0
+
+  output:
+    visible:         19
+    reasoning:       15
+
+  cost:          $0.0000 · free
+```
+
+The rule throughout is that **unknown is not zero**. A field the provider did
+not report is `null` and is rendered as `unavailable` or as coverage
+(`reasoning: 930 · reported by 12/25 calls`), never as `0`. Crush, which
+reports one combined count, is shown as `combined`, not as output.
+
+Each record also carries the working directory, a label like `triss/ask`, and
+a per-invocation `call_id` (UUIDv4). An optional `parent_call_id` lets a host
+group several Triss calls under a single outer session — set
+`TRISS_PARENT_CALL_ID` in the environment that launches Triss (e.g. in your
+MCP server's `env` block) and every record from that process carries it.
+External dashboards (e.g. tokentelemetry) can group by either field.
+
+List prices for DeepSeek, PAYG GLM, and Kimi are baked in. GLM records retain
+`zai-coding-plan/` or `zai/` so subscription usage stays known `$0` while
+unpriced PAYG usage is shown as `unknown`, never as free. Override per model
+with `TRISS_PRICE_<MODEL_ID>=uncached,cache_read,output` or the four-value
+`uncached,cache_read,cache_write,output` form (USD per token). Reports read
+only the active log — the rotated `usage.jsonl.old` archive is excluded, and
+the rotation default is 40 MiB. Disable tracking entirely with
 `TRISS_USAGE_LOG=0`.
+
+**[docs/usage-accounting.md](docs/usage-accounting.md)** is the full schema:
+every provider's field mapping, cost precedence and completeness, legacy
+records, and the deprecated compatibility fields.
 
 ### Streaming output
 

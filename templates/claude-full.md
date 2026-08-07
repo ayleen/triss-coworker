@@ -205,10 +205,27 @@ closed.
   "files_changed": ["src/a.js"],
   "diff_stat": " 2 files changed, 40 insertions(+)",
   "worktree": "/path/.triss/wt/<slug> | null",
-  "usage": { "prompt_tokens": 0, "completion_tokens": 0 },
+  "usage": {
+    "schema_version": 2,
+    "usage_status": "reported",
+    "tokens": {
+      "input_uncached": 303, "cache_read": 14272, "cache_write": 0,
+      "output_visible": 19, "reasoning": 15,
+      "input_total": 14575, "output_total": 34, "total": 14609,
+      "combined": null
+    },
+    "cost": { "total_usd": 0, "source": "free", "complete": true },
+    "prompt_tokens": 303, "completion_tokens": 19
+  },
   "warnings": []
 }
 ```
+
+In `usage`, a token class the engine did not report is `null`, never `0`.
+`prompt_tokens`/`completion_tokens` are deprecated aliases — read
+`usage.tokens` and `usage.cost`. `cost.complete: false` means `total_usd` is
+not the whole bill. For crush, every split field is `null` and the count is in
+`tokens.combined`.
 
 With `--isolate`, the agent runs in `.triss/wt/<slug>` on its own branch —
 review the diff before merging; irreversible actions (deploy, push, DB
