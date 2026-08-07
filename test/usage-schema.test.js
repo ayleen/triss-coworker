@@ -189,3 +189,57 @@ test('output_visible never goes negative when reasoning exceeds completion_token
   const { tokens } = normalizeApiUsage(resp, { provider: 'deepseek' });
   assert.equal(tokens.output_visible, null);
 });
+
+test('worker response with only a hit count keeps it as cache_read, not null', () => {
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_cache_hit_tokens: 200,
+      completion_tokens: 100,
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.deepEqual(warnings, []);
+  assert.equal(tokens.cache_read, 200);
+  // The miss half was never reported, so the uncached half stays unknown.
+  assert.equal(tokens.input_uncached, null);
+  assert.equal(tokens.input_total, 1000);
+  assert.equal(tokens.output_total, 100);
+});
+
+test('worker response with only a miss count half keeps it as input_uncached, not null', () => {
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_cache_miss_tokens: 800,
+      completion_tokens: 100,
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.deepEqual(warnings, []);
+  assert.equal(tokens.input_uncached, 800);
+  // The hit half was never reported, so the cached half stays unknown.
+  assert.equal(tokens.cache_read, null);
+});
+
+test('a lone hit that disagrees with a nested cached_tokens still raises the conflict warning', () => {
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_cache_hit_tokens: 200,
+      prompt_tokens_details: { cached_tokens: 500 },
+      completion_tokens: 100,
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.ok(
+    warnings.some((w) => /conflict/i.test(w)),
+    `expected a conflict warning, got ${JSON.stringify(warnings)}`,
+  );
+  // The reported hit half wins over the disagreeing nested count.
+  assert.equal(tokens.cache_read, 200);
+  assert.equal(tokens.input_uncached, null);
+});

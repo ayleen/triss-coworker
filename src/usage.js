@@ -174,8 +174,12 @@ export function logUsage(input = {}) {
   }
 
   // Canonical v2 form. A missing-usage call still gets written — absence is
-  // never represented as an all-zero record, so there is no admission guard.
+  // never represented as an all-zero record — but a v2 record is written only
+  // when `model` and `billing_model` are known, so a caller with neither gets
+  // nothing written instead of a record whose identity vanished from the log.
   const billing_model = input.billing_model || model;
+  const resolvedModel = model || input.billing_model;
+  if (!billing_model || !resolvedModel) return; // no known model identity
   const billing_mode = input.billing_mode || resolveBillingMode({ billing_model, engine });
   const cTokens = emptyTokens();
   for (const key of Object.keys(cTokens)) {
@@ -188,10 +192,10 @@ export function logUsage(input = {}) {
   const record = {
     schema_version: 2,
     ts: new Date().toISOString(),
-    model,
+    model: resolvedModel,
     billing_model,
     billing_mode,
-    provider: input.provider || resolveProvider(model),
+    provider: input.provider || resolveProvider(resolvedModel),
     usage_source: usage_source || null,
     usage_status: input.usage_status || 'reported',
     engine: engine || null,
@@ -421,18 +425,15 @@ export function estimateCanonicalCost({
   };
 
   // Engine-reported totals win when trusted: a positive cost always is; a
-  // Crush delta (including 0) always is; a plan/free zero is a proven zero.
+  // Crush delta (including 0) always is. A plan/free zero is decided by the
+  // proven mode below, before any engine zero could label it engine_reported.
   if (reported_total_source === 'engine' && reported_total_usd != null) {
-    if (
-      reported_total_usd > 0 ||
-      isCrush ||
-      billing_mode === 'subscription' ||
-      billing_mode === 'free'
-    ) {
+    if (reported_total_usd > 0 || isCrush) {
       return { ...cost, total_usd: reported_total_usd, source: 'engine_reported', complete: true };
     }
   }
-  // Without a trusted engine total, a plan or proven-free zero is the truth.
+  // Without a trusted engine total, a plan or proven-free zero is the truth —
+  // it wins even when the engine also reported a zero.
   if (billing_mode === 'subscription') {
     return {
       ...cost,
