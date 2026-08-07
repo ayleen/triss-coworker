@@ -827,7 +827,12 @@ const CODER_TOOLS = [
       'OpenCode Zen or OpenCode Go models (opencode engine, set up via `triss coder init`). ' +
       'Returns a JSON envelope: ' +
       '{engine, engine_version, session_id, exit_reason, final_text, ' +
-      'files_changed, diff_stat, worktree, usage, warnings}. This tool\'s ' +
+      'files_changed, diff_stat, worktree, usage, warnings}. The envelope\'s ' +
+      '`usage` carries the canonical schema_version: 2 shape: `usage.tokens` ' +
+      '(input_uncached, cache_read, cache_write, output_visible, reasoning, plus ' +
+      'totals) and `usage.cost` (total_usd, source, complete), where an ' +
+      'unreported class is `null` rather than `0`; `prompt_tokens`/' +
+      '`completion_tokens` remain as deprecated aliases. This tool\'s ' +
       'timeout defaults to 1500s (25 min) since coding runs over MCP are ' +
       'expected to be long; override per call via the `timeout` arg. For ' +
       'runs that may exceed that, use `triss coder run` on the CLI ' +
