@@ -12,10 +12,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { emptyTokens } from './usage-schema.js';
 
 export const USAGE_FILE = join(homedir(), '.cache', 'triss', 'usage.jsonl');
 
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+// The v2 records (with compatibility fields) run ~3.7x larger than v1, so the
+// default rotation cap is raised to 40 MiB to keep a comparable call horizon.
+export const DEFAULT_MAX_BYTES = 40 * 1024 * 1024; // 40 MB
 
 function rotateBytes() {
   const raw = process.env.TRISS_USAGE_LOG_MAX_BYTES;
@@ -132,43 +135,96 @@ export function estimateCost(record) {
   );
 }
 
-export function logUsage({
-  model,
-  prompt_tokens,
-  cached_tokens,
-  completion_tokens,
-  label,
-  call_id,
-  parent_call_id,
-}) {
-  if (!model || prompt_tokens == null) return;
+export function logUsage(input = {}) {
+  const {
+    model,
+    label,
+    call_id,
+    parent_call_id,
+    usage_source,
+    engine,
+  } = input;
   if (process.env.TRISS_USAGE_LOG === '0') return; // opt-out
+
+  // Legacy v1 call form: flat fields, no `tokens` key. Its null-prompt guard
+  // and output shape are part of the historical contract and stay untouched.
+  if (!input.tokens) {
+    const { prompt_tokens, cached_tokens, completion_tokens } = input;
+    if (!model || prompt_tokens == null) return;
+    const record = {
+      ts: new Date().toISOString(),
+      model,
+      prompt_tokens,
+      cached_tokens: cached_tokens || 0,
+      completion_tokens: completion_tokens || 0,
+      label: label || 'triss',
+      call_id: call_id || null,
+      parent_call_id: parent_call_id || null,
+    };
+    // Per-project breakdown is opt-in via cwd; some users sync this log
+    // across machines and prefer to omit absolute paths.
+    if (process.env.TRISS_USAGE_LOG_CWD !== '0') record.cwd = process.cwd();
+    const estimatedCost = estimateCost(record);
+    // Keep cost_usd numeric for existing JSONL consumers. New readers should
+    // inspect cost_usd_known before treating a zero as a known-free call.
+    record.cost_usd = estimatedCost ?? 0;
+    record.cost_usd_known = estimatedCost !== null;
+    appendRecord(record);
+    return record;
+  }
+
+  // Canonical v2 form. A missing-usage call still gets written — absence is
+  // never represented as an all-zero record, so there is no admission guard.
+  const billing_model = input.billing_model || model;
+  const billing_mode = input.billing_mode || resolveBillingMode({ billing_model, engine });
+  const cTokens = emptyTokens();
+  for (const key of Object.keys(cTokens)) {
+    cTokens[key] = input.tokens && input.tokens[key] !== undefined ? input.tokens[key] : null;
+  }
+  const cCost =
+    input.cost ||
+    estimateCanonicalCost({ billing_model, billing_mode, tokens: cTokens });
+
   const record = {
+    schema_version: 2,
     ts: new Date().toISOString(),
     model,
-    prompt_tokens,
-    cached_tokens: cached_tokens || 0,
-    completion_tokens: completion_tokens || 0,
-    label: label || 'triss',
+    billing_model,
+    billing_mode,
+    provider: input.provider || resolveProvider(model),
+    usage_source: usage_source || null,
+    usage_status: input.usage_status || 'reported',
+    engine: engine || null,
+    label: label || null,
     call_id: call_id || null,
     parent_call_id: parent_call_id || null,
   };
-  // Per-project breakdown is opt-in via cwd; some users sync this log
-  // across machines and prefer to omit absolute paths.
   if (process.env.TRISS_USAGE_LOG_CWD !== '0') record.cwd = process.cwd();
-  const estimatedCost = estimateCost(record);
-  // Keep cost_usd numeric for existing JSONL consumers. New readers should
-  // inspect cost_usd_known before treating a zero as a known-free call.
-  record.cost_usd = estimatedCost ?? 0;
-  record.cost_usd_known = estimatedCost !== null;
+  record.tokens = cTokens;
+  record.cost = cCost;
+  // Deprecated compatibility fields are derived FROM the canonical values and
+  // never overwrite anything canonical.
+  record.prompt_tokens = cTokens.input_total;
+  record.cached_tokens = cTokens.cache_read;
+  record.completion_tokens = cTokens.output_total;
+  const knownCost = cCost && Number.isFinite(cCost.total_usd) ? cCost.total_usd : null;
+  record.cost_usd = knownCost === null ? 0 : knownCost;
+  record.cost_usd_known = knownCost !== null;
+
+  appendRecord(record);
+  return record;
+}
+
+// Appends a record to the real log. Tracking is best-effort; a write failure
+// must never fail a real call because of it.
+function appendRecord(record) {
   try {
     mkdirSync(dirname(USAGE_FILE), { recursive: true });
     maybeRotate(USAGE_FILE);
     appendFileSync(USAGE_FILE, JSON.stringify(record) + '\n');
   } catch {
-    // Tracking is best-effort; never fail a real call because of it.
+    /* swallow */
   }
-  return record;
 }
 
 export function readLog(file = USAGE_FILE) {
@@ -204,6 +260,32 @@ export function parsePeriod(input) {
   return n * unit;
 }
 
+// The canonical token value fields — the nine counts, not their *_source
+// provenance siblings — derived from the canonical shape so v1 and v2 records
+// aggregate the same way.
+const TOKEN_VALUE_FIELDS = Object.keys(emptyTokens()).filter((k) => !k.endsWith('_source'));
+
+function newTokenAgg() {
+  const agg = {};
+  for (const key of TOKEN_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
+  return agg;
+}
+
+// An explicit 0 is a known call; null and non-numbers are unknown and never
+// contribute to the sum. Unknown is never coerced to zero before coverage.
+function foldTokenAgg(agg, normalized) {
+  for (const key of TOKEN_VALUE_FIELDS) {
+    const value = normalized.tokens[key];
+    const entry = agg[key];
+    if (Number.isFinite(value)) {
+      entry.sum += value;
+      entry.known_calls++;
+    } else {
+      entry.unknown_calls++;
+    }
+  }
+}
+
 export function summarize(records, { groupBy } = {}) {
   const total = {
     calls: records.length,
@@ -214,11 +296,13 @@ export function summarize(records, { groupBy } = {}) {
     known_cost_usd: 0,
     known_cost_calls: 0,
     unknown_cost_calls: 0,
+    tokens: newTokenAgg(),
   };
   const groups = new Map();
   const hasKnownCost = (record) =>
     record.cost_usd_known !== false && Number.isFinite(record.cost_usd);
-  for (const r of records) {
+  for (const raw of records) {
+    const r = raw;
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
@@ -229,6 +313,7 @@ export function summarize(records, { groupBy } = {}) {
     } else {
       total.unknown_cost_calls++;
     }
+    foldTokenAgg(total.tokens, normalizeUsageRecord(raw));
     if (groupBy) {
       const key = String(r[groupBy] ?? '(unknown)');
       const g = groups.get(key) || {
@@ -240,6 +325,7 @@ export function summarize(records, { groupBy } = {}) {
         known_cost_usd: 0,
         known_cost_calls: 0,
         unknown_cost_calls: 0,
+        tokens: newTokenAgg(),
       };
       g.calls++;
       g.prompt_tokens += r.prompt_tokens || 0;
@@ -252,11 +338,13 @@ export function summarize(records, { groupBy } = {}) {
       } else {
         g.unknown_cost_calls++;
       }
+      foldTokenAgg(g.tokens, normalizeUsageRecord(raw));
       groups.set(key, g);
     }
   }
   // cost_usd remains a numeric subtotal for backward compatibility.
-  // unknown_cost_calls tells newer renderers that it is not a complete total.
+  // unknown_cost_calls and the canonical aggregate tell newer renderers that
+  // it is not a complete total.
   return { total, groups };
 }
 
@@ -404,4 +492,59 @@ export function estimateCanonicalCost({
   if (!outputCovered) cost.unknown_components.push('output_total');
   for (const c of missingRates) cost.unknown_components.push(c);
   return cost;
+}
+
+// Promotes a persisted record to the in-memory canonical shape for
+// aggregation. Purify — never mutates the argument. A v2 record passes
+// through; a v1 record (no schema_version) is upgraded to the canonical shape
+// using only the flat fields it can prove.
+export function normalizeUsageRecord(record) {
+  const r = record || {};
+
+  if (r.schema_version === 2) {
+    const tokens = emptyTokens();
+    for (const key of Object.keys(tokens)) {
+      tokens[key] = r.tokens && r.tokens[key] !== undefined ? r.tokens[key] : null;
+    }
+    return {
+      schema_version: 2,
+      model: r.model ?? null,
+      billing_model: r.billing_model ?? r.model ?? null,
+      tokens,
+      cost: r.cost && typeof r.cost === 'object' ? r.cost : null,
+      usage_status: r.usage_status ?? 'missing',
+      legacy: false,
+    };
+  }
+
+  // v1 could never split the input or the output, so only the totals and the
+  // cached count survive; the atomic split fields stay unknowable.
+  const prompt = finite(r.prompt_tokens);
+  const cached = finite(r.cached_tokens);
+  const completion = finite(r.completion_tokens);
+  const tokens = emptyTokens();
+  tokens.input_total = prompt;
+  tokens.input_total_source = prompt != null ? 'reported' : null;
+  tokens.cache_read = cached;
+  tokens.output_total = completion;
+  tokens.output_total_source = completion != null ? 'reported' : null;
+  if (prompt != null && completion != null) {
+    tokens.total = prompt + completion;
+    tokens.total_source = 'derived';
+  }
+  const known = r.cost_usd_known !== false && Number.isFinite(r.cost_usd);
+  const cost = {
+    total_usd: known ? r.cost_usd : null,
+    source: known ? 'estimated' : 'unknown',
+    complete: known,
+  };
+  return {
+    schema_version: 1,
+    model: r.model ?? null,
+    billing_model: r.billing_model ?? r.model ?? null,
+    tokens,
+    cost,
+    usage_status: r.usage_status ?? 'missing',
+    legacy: true,
+  };
 }
