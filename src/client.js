@@ -61,8 +61,7 @@ function recordUsage(resp, label, request = {}) {
   if (!resp) return;
   const ctx = currentCall();
   const model = billingModelFor({ ...request, model: resp.model || request.model });
-  // Map the internal request provider onto the normalizer's vocabulary.
-  const provider = request.provider === 'glm' ? 'zai' : request.provider === 'kimi' ? 'kimi' : 'worker';
+  const provider = providerForUsage(request.provider);
   const { tokens, usage_status } = normalizeApiUsage(resp, { provider });
   logUsage({
     model,
@@ -74,6 +73,16 @@ function recordUsage(resp, label, request = {}) {
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
   });
+}
+
+// The printed usage line and the persisted record must agree on the provider,
+// so both funnel the caller's vocabulary through one mapping onto the
+// normalizer's ('glm' -> 'zai' for Z.AI; kimi/deepseek name themselves;
+// everything else, including the bare worker, is the generic worker shape).
+function providerForUsage(provider) {
+  if (provider === 'glm') return 'zai';
+  if (provider === 'zai' || provider === 'kimi' || provider === 'deepseek') return provider;
+  return 'worker';
 }
 
 // Statuses Z.AI returns when the key does not match the endpoint the request
@@ -213,7 +222,7 @@ export async function chat({
 export function reportUsage(resp, label = 'worker', { provider } = {}) {
   // Reuse the same normalizer persistence uses so the human line and the log
   // can never disagree; a provider field is never read directly here.
-  const { tokens, usage_status } = normalizeApiUsage(resp, { provider });
+  const { tokens, usage_status } = normalizeApiUsage(resp, { provider: providerForUsage(provider) });
   // A call that reported no counters renders nothing rather than a zero line.
   if (usage_status === 'missing') return '';
 

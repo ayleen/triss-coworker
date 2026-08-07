@@ -138,7 +138,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   }
   if (!useStream) process.stdout.write(out + '\n');
   else process.stdout.write('\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review') + '\n'));
+  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review', { provider: request.provider }) + '\n'));
   return out;
 }
 
