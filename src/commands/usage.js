@@ -123,14 +123,17 @@ export function formatCost(summary) {
   if (!summary.unknown_cost_calls) {
     cost = known;
   } else {
-    const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no price configured)`;
+    const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no complete cost)`;
     cost = summary.known_cost_calls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
   }
   // An engine-reported monetary total (e.g. OpenCode part.cost) survives even
   // when the canonical total is unavailable; surface it in its own note per
   // docs/usage-accounting.md "CLI output" (`cost: unknown · engine reported $0.0000`).
+  // The note only belongs when NOTHING is priced: once an engine cost became
+  // the known canonical total, appending it again would duplicate the figure
+  // already shown (`$0.2500 · engine reported $0.2500`).
   const engine = summary.cost && summary.cost.reported_total_usd;
-  if (engine && engine.known_calls > 0) {
+  if (engine && engine.known_calls > 0 && !summary.known_cost_calls) {
     cost += ` · engine reported $${engine.sum.toFixed(4)}`;
   }
   return cost;

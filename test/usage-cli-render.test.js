@@ -250,3 +250,62 @@ test('cost renders a summed known engine total in the appended note', () => {
   // "unknown", not a green $0.5000.
   assert.match(out, /cost:[^\n]*unknown/);
 });
+
+// DEFECT 3 — the engine-reported note may not duplicate a cost that is already
+// the known canonical total. It only belongs when NOTHING is priced
+// (known_cost_calls is 0).
+
+// A v2 record whose engine-reported cost became the known canonical total: the
+// cost object carries a complete engine_reported total AND the compatibility
+// cost_usd/cost_usd_known mark it known.
+function withKnownEngineCost(record, reportedTotalUsd) {
+  return {
+    ...record,
+    cost_usd: reportedTotalUsd,
+    cost_usd_known: true,
+    cost: {
+      reported_total_usd: reportedTotalUsd,
+      reported_total_source: 'engine',
+      total_usd: reportedTotalUsd,
+      source: 'engine_reported',
+      complete: true,
+    },
+  };
+}
+
+test('DEFECT 3: the engine-reported note is omitted when the engine cost is already the known total', () => {
+  // For Crush / an OpenCode call whose positive engine cost became the known
+  // canonical total, the known cost IS that number — appending the note would
+  // read `$0.2500 · engine reported $0.2500`.
+  const records = [
+    withKnownEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0.25),
+    withKnownEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0.25),
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.5000/);
+  assert.doesNotMatch(out, /engine reported/, 'the engine note must not duplicate the known total');
+});
+
+test('DEFECT 3: the engine-reported note IS shown when nothing is priced', () => {
+  // Nothing is priced (known_cost_calls is 0) yet an engine total exists — the
+  // documented `cost: unknown · engine reported $0.0000` shape.
+  const records = [
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0),
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0),
+  ];
+  const out = render(records);
+  assert.match(out, /engine reported \$0\.0000/);
+  assert.match(out, /cost:[^\n]*unknown/);
+});
+
+// DEFECT 4 — an unpriced call may have a known price row but insufficient token
+// detail, so the wording must say "(no complete cost)", never "(no price
+// configured)".
+test('DEFECT 4: the unknown-cost note reads "(no complete cost)"', () => {
+  const records = [
+    withCost(v2({ tokens: { cache_read: 0 } }), 0, false),
+  ];
+  const out = render(records);
+  assert.match(out, /\(no complete cost\)/);
+  assert.doesNotMatch(out, /no price configured/);
+});

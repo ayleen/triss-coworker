@@ -72,6 +72,12 @@ export function recordUsage(resp, label, request = {}) {
   return logUsage({
     model,
     billing_model: model,
+    // A direct Kimi call is the single Moonshot PAYG endpoint, but its bare id
+    // (e.g. `kimi-k3`) has no prefix for resolveBillingMode to classify — so
+    // the known pay-as-you-go mode is forwarded explicitly. GLM calls leave it
+    // to resolveBillingMode (billingModelFor already carries a zai prefix), and
+    // the worker endpoint is user-configurable so it correctly stays 'unknown'.
+    billing_mode: request.provider === 'kimi' ? 'payg' : undefined,
     usage_source: 'api',
     usage_status,
     tokens,

@@ -154,3 +154,38 @@ test('crush with no usage object reports missing and all null', () => {
     assert.equal(value, null, `${key} should be null`);
   }
 });
+
+// DEFECT 1 — a partial reported total must not be presented as the run total.
+// Only when EVERY folded step reported `tokens.total` is the summed reported
+// number authoritative; otherwise the total falls back to the derived sum, and
+// if that cannot be derived either it stays null rather than surfacing the
+// partial reported figure.
+
+test('partial reported total — one of two steps omits total: total is the DERIVED component sum, not the partial reported number', () => {
+  const acc = emptyOpencodeUsage();
+  // First step reports a total (200) with full components; second step reports
+  // the same components but OMITS `total`. The reported sum (200) is only a
+  // partial figure and must not become the run total.
+  foldOpencodeStep(acc, { tokens: { total: 200, input: 50, cache: { read: 10, write: 5 }, output: 20, reasoning: 10 }, cost: null });
+  foldOpencodeStep(acc, { tokens: { input: 50, cache: { read: 10, write: 5 }, output: 20, reasoning: 10 } });
+  const { tokens } = finalizeOpencodeUsage(acc);
+  // Derived: 100 uncached + 20 read + 10 write -> 130 input; 40 visible + 20
+  // reasoning -> 60 output; total 190. Not the partial reported 200.
+  assert.equal(tokens.input_total, 130);
+  assert.equal(tokens.output_total, 60);
+  assert.equal(tokens.total, 190);
+  assert.equal(tokens.total_source, 'derived');
+});
+
+test('partial reported total with incomplete components — total stays null, never the partial reported number', () => {
+  const acc = emptyOpencodeUsage();
+  // No step reports cache.read, so the input total cannot be derived; the
+  // reported 200 is only on the first step and must not stand as the run total.
+  foldOpencodeStep(acc, { tokens: { total: 200, input: 50, output: 20, reasoning: 10 } });
+  foldOpencodeStep(acc, { tokens: { input: 30, output: 10, reasoning: 5 } });
+  const { tokens } = finalizeOpencodeUsage(acc);
+  assert.equal(tokens.input_total, null);
+  assert.equal(tokens.output_total, 45);
+  assert.equal(tokens.total, null);
+  assert.equal(tokens.total_source, null);
+});

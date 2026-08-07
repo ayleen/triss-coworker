@@ -133,7 +133,14 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     }
   } else if (tokens.cache_read === null) {
     // No deepseek hit half at all: fall back to the nested cached_tokens alias,
-    // then the top-level one, for the cached half.
+    // then the top-level one, for the cached half. Nested wins, but when BOTH
+    // aliases are present and disagree the conflict is recorded — never
+    // resolved silently (the same contract as the hit-half branch above).
+    if (nestedCached !== null && topCached !== null && nestedCached !== topCached) {
+      warnings.push(
+        `conflicting cached-token aliases: nested ${nestedCached} vs top-level cached_tokens ${topCached}`,
+      );
+    }
     tokens.cache_read = nestedCached !== null ? nestedCached : topCached;
   }
 
@@ -164,6 +171,11 @@ export function emptyOpencodeUsage() {
       total: false,
       reported_total_usd: false,
     },
+    // Steps folded and how many of them reported `tokens.total`. A reported
+    // total is only authoritative when EVERY folded step supplied it — a
+    // partial reported sum must never be presented as the run total.
+    steps: 0,
+    stepsWithTotal: 0,
   };
 }
 
@@ -180,6 +192,7 @@ export function foldOpencodeStep(acc, part) {
   // A malformed event must never take the whole fold down; unknown fields are
   // simply not reported and therefore stay null.
   if (!part) return;
+  acc.steps++;
   const tokens = part.tokens;
   if (tokens) {
     const cache = tokens.cache;
@@ -188,6 +201,7 @@ export function foldOpencodeStep(acc, part) {
     foldField(acc, 'cache_write', cache && cache.write);
     foldField(acc, 'output_visible', tokens.output);
     foldField(acc, 'reasoning', tokens.reasoning);
+    if (num(tokens.total) !== null) acc.stepsWithTotal++;
     foldField(acc, 'total', tokens.total);
   }
   foldField(acc, 'reported_total_usd', part.cost);
@@ -216,8 +230,11 @@ export function finalizeOpencodeUsage(acc) {
     tokens.output_total_source = 'derived';
   }
 
-  if (seen.total) {
-    // A reported total is authoritative even when the components disagree.
+  // A reported total is authoritative only when EVERY folded step supplied
+  // `tokens.total`; a run where only some steps reported it has only a partial
+  // reported sum, which must never be presented as the run total.
+  const everyStepReportedTotal = acc.steps > 0 && acc.stepsWithTotal === acc.steps;
+  if (everyStepReportedTotal) {
     tokens.total = acc.total;
     tokens.total_source = 'reported';
   } else if (derivedInput !== null && derivedOutput !== null) {
@@ -226,7 +243,7 @@ export function finalizeOpencodeUsage(acc) {
   }
 
   if (
-    seen.total &&
+    everyStepReportedTotal &&
     derivedInput !== null &&
     derivedOutput !== null &&
     acc.total !== derivedInput + derivedOutput

@@ -441,3 +441,38 @@ test(
     assert.equal(loggedArgs[0].model, 'zai/glm-5.2');
   }),
 );
+
+// ── Crush: provider identity (DEFECT 5) ─────────────────────────────────────
+
+test(
+  'DEFECT 5: a crush run persists provider "zai" even with no explicit model (the "crush" sentinel resolves to no provider prefix)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_provider',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 42, delta_cost_usd: 0.0001 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    const loggedArgs = [];
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30 },
+      {
+        ...crushRunDeps(envelopeLine),
+        stdoutWrite: capture.stdoutWrite,
+        logUsage: (args) => {
+          loggedArgs.push(args);
+          return { ...args, schema_version: 2 };
+        },
+      },
+    );
+    assert.equal(loggedArgs.length, 1, 'the crush run should log exactly one usage record');
+    // The schema documents Crush as a Z.AI call; with no model the `crush`
+    // sentinel has no provider prefix, so the provider must be forwarded.
+    assert.equal(loggedArgs[0].billing_model, 'crush');
+    assert.equal(loggedArgs[0].model, 'crush');
+    assert.equal(loggedArgs[0].provider, 'zai');
+  }),
+);
