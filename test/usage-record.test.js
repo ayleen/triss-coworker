@@ -355,3 +355,67 @@ test('grouped summarize produces the same canonical aggregate per group', () => 
     );
   }
 });
+
+// DEFECT 3 — the canonical cost aggregate covered only reported_total_usd, so a
+// v2 record's component costs and total_usd never reached summarize()'s
+// canonical aggregate. Every canonical cost field must be tracked with the same
+// rules as the token aggregate: explicit 0 is known; null is unknown and never
+// summed.
+test('DEFECT 3: the canonical cost aggregate tracks every cost field', () => {
+  const records = [
+    {
+      schema_version: 2,
+      cost: {
+        input_uncached_usd: 1,
+        cache_read_usd: 2,
+        cache_write_usd: 0,
+        output_visible_usd: null,
+        reasoning_usd: null,
+        output_total_usd: 3,
+        reported_total_usd: 4,
+        total_usd: 4,
+      },
+    },
+    {
+      schema_version: 2,
+      cost: {
+        input_uncached_usd: 2,
+        cache_read_usd: null,
+        cache_write_usd: 0,
+        output_visible_usd: null,
+        reasoning_usd: null,
+        output_total_usd: 5,
+        reported_total_usd: null,
+        total_usd: 7,
+      },
+    },
+  ];
+  const { total } = summarize(records);
+  const COST_FIELDS = [
+    'input_uncached_usd',
+    'cache_read_usd',
+    'cache_write_usd',
+    'output_visible_usd',
+    'reasoning_usd',
+    'output_total_usd',
+    'reported_total_usd',
+    'total_usd',
+  ];
+  for (const field of COST_FIELDS) {
+    assert.ok(
+      total.cost[field] && typeof total.cost[field] === 'object',
+      `cost aggregate should key every canonical field, missing ${field}`,
+    );
+  }
+  // Component fields with all values reported sum; null is unknown, never 0.
+  assert.deepEqual(total.cost.input_uncached_usd, { sum: 3, known_calls: 2, unknown_calls: 0 });
+  assert.deepEqual(total.cost.cache_read_usd, { sum: 2, known_calls: 1, unknown_calls: 1 });
+  // An explicit 0 cache_write is known, twice.
+  assert.deepEqual(total.cost.cache_write_usd, { sum: 0, known_calls: 2, unknown_calls: 0 });
+  // A field nobody reported is unknown for every call, never summed.
+  assert.deepEqual(total.cost.output_visible_usd, { sum: 0, known_calls: 0, unknown_calls: 2 });
+  assert.deepEqual(total.cost.reasoning_usd, { sum: 0, known_calls: 0, unknown_calls: 2 });
+  assert.deepEqual(total.cost.output_total_usd, { sum: 8, known_calls: 2, unknown_calls: 0 });
+  assert.deepEqual(total.cost.reported_total_usd, { sum: 4, known_calls: 1, unknown_calls: 1 });
+  assert.deepEqual(total.cost.total_usd, { sum: 11, known_calls: 2, unknown_calls: 0 });
+});

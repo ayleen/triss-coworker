@@ -46,6 +46,48 @@ function hasNumeric(usage) {
   return false;
 }
 
+// The DeepSeek-compatible contract, applied whenever the response itself
+// proves the shape — a provider canonicalized to 'worker' must not miss rules
+// a 'deepseek'-labeled call gets. Shared by both branches so they cannot
+// drift. Never guesses the provider from the endpoint.
+function applyDeepseekContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning }) {
+  // DeepSeek documents reasoning as a subset of the completion count, so the
+  // visible remainder is only meaningful when that subtraction is valid; a
+  // negative remainder is a broken report, not a number to persist.
+  if (outputTotal !== null && reasoning !== null) {
+    const visible = outputTotal - reasoning;
+    tokens.output_visible = visible >= 0 ? visible : null;
+  }
+  // hit+miss must account for the whole prompt; when they disagree the
+  // provider's own numbers are kept and the disagreement surfaces as a
+  // warning instead of a silent repair.
+  if (
+    hit !== null &&
+    miss !== null &&
+    inputTotal !== null &&
+    hit + miss !== inputTotal
+  ) {
+    warnings.push(
+      `deepseek cache hit+miss mismatch: ${hit} + ${miss} != prompt_tokens ${inputTotal}`,
+    );
+  }
+}
+
+// A self-contradictory reported total is a broken report, never repaired: the
+// reported numbers are kept and the disagreement surfaces as a warning.
+function checkReportedTotal(tokens, inputTotal, outputTotal, warnings) {
+  if (
+    tokens.total !== null &&
+    inputTotal !== null &&
+    outputTotal !== null &&
+    tokens.total !== inputTotal + outputTotal
+  ) {
+    warnings.push(
+      `reported total mismatch: ${tokens.total} != input_total ${inputTotal} + output_total ${outputTotal}`,
+    );
+  }
+}
+
 export function normalizeApiUsage(resp, { provider } = {}) {
   const warnings = [];
   const tokens = emptyTokens();
@@ -68,30 +110,16 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     tokens.input_uncached = num(usage.prompt_cache_miss_tokens);
     tokens.cache_read = num(usage.prompt_cache_hit_tokens);
     tokens.reasoning = reasoning;
-    // DeepSeek documents reasoning as a subset of the completion count, so the
-    // visible remainder is only meaningful when that subtraction is valid; a
-    // negative remainder is a broken report, not a number to persist.
-    if (outputTotal !== null && reasoning !== null) {
-      const visible = outputTotal - reasoning;
-      tokens.output_visible = visible >= 0 ? visible : null;
-    }
-    // hit+miss must account for the whole prompt; when they disagree the
-    // provider's own numbers are kept and the disagreement surfaces as a
-    // warning instead of a silent repair.
-    if (
-      tokens.cache_read !== null &&
-      tokens.input_uncached !== null &&
-      inputTotal !== null &&
-      tokens.cache_read + tokens.input_uncached !== inputTotal
-    ) {
-      warnings.push(
-        `deepseek cache hit+miss mismatch: ${tokens.cache_read} + ${tokens.input_uncached} != prompt_tokens ${inputTotal}`,
-      );
-    }
-    return { tokens, usage_status: 'reported', warnings };
-  }
-
-  if (provider === 'zai' || provider === 'kimi') {
+    applyDeepseekContract({
+      tokens,
+      warnings,
+      hit: tokens.cache_read,
+      miss: tokens.input_uncached,
+      inputTotal,
+      outputTotal,
+      reasoning,
+    });
+  } else if (provider === 'zai' || provider === 'kimi') {
     // Z.AI nests the cached count in prompt_tokens_details; Kimi reports it
     // top-level. Both derive the uncached remainder the same way.
     const cached =
@@ -103,48 +131,54 @@ export function normalizeApiUsage(resp, { provider } = {}) {
       const uncached = inputTotal - cached;
       tokens.input_uncached = uncached >= 0 ? uncached : null;
     }
-    return { tokens, usage_status: 'reported', warnings };
+  } else {
+    // Generic worker: recognise the documented aliases without assuming the
+    // endpoint agrees with any single provider's shape.
+    const hit = num(usage.prompt_cache_hit_tokens);
+    const miss = num(usage.prompt_cache_miss_tokens);
+    const nestedCached = num(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens);
+    const topCached = num(usage.cached_tokens);
+
+    // The deepseek pair is the only alias that splits the input into both
+    // halves. Each half is recognised on its own: a response reporting only one
+    // still keeps that half rather than discarding it as unknown.
+    if (hit !== null) tokens.cache_read = hit;
+    if (miss !== null) tokens.input_uncached = miss;
+
+    if (hit !== null) {
+      // The reported hit half wins whenever another cached count disagrees with
+      // it — the disagreement is recorded, never silently combined — including
+      // when only the hit half (not the miss half) is present.
+      if (
+        (nestedCached !== null && nestedCached !== hit) ||
+        (topCached !== null && topCached !== hit)
+      ) {
+        warnings.push(
+          `conflicting cached-token aliases: deepseek hit ${hit} vs cached_tokens ${nestedCached ?? topCached}`,
+        );
+      }
+    } else if (tokens.cache_read === null) {
+      // No deepseek hit half at all: fall back to the nested cached_tokens alias,
+      // then the top-level one, for the cached half. Nested wins, but when BOTH
+      // aliases are present and disagree the conflict is recorded — never
+      // resolved silently (the same contract as the hit-half branch above).
+      if (nestedCached !== null && topCached !== null && nestedCached !== topCached) {
+        warnings.push(
+          `conflicting cached-token aliases: nested ${nestedCached} vs top-level cached_tokens ${topCached}`,
+        );
+      }
+      tokens.cache_read = nestedCached !== null ? nestedCached : topCached;
+    }
+
+    tokens.reasoning = reasoning;
+    // A worker response that proves the DeepSeek-compatible shape gets the
+    // same two rules as the dedicated branch — derived from the response, not
+    // from any assumed endpoint.
+    applyDeepseekContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning });
   }
 
-  // Generic worker: recognise the documented aliases without assuming the
-  // endpoint agrees with any single provider's shape.
-  const hit = num(usage.prompt_cache_hit_tokens);
-  const miss = num(usage.prompt_cache_miss_tokens);
-  const nestedCached = num(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens);
-  const topCached = num(usage.cached_tokens);
-
-  // The deepseek pair is the only alias that splits the input into both
-  // halves. Each half is recognised on its own: a response reporting only one
-  // still keeps that half rather than discarding it as unknown.
-  if (hit !== null) tokens.cache_read = hit;
-  if (miss !== null) tokens.input_uncached = miss;
-
-  if (hit !== null) {
-    // The reported hit half wins whenever another cached count disagrees with
-    // it — the disagreement is recorded, never silently combined — including
-    // when only the hit half (not the miss half) is present.
-    if (
-      (nestedCached !== null && nestedCached !== hit) ||
-      (topCached !== null && topCached !== hit)
-    ) {
-      warnings.push(
-        `conflicting cached-token aliases: deepseek hit ${hit} vs cached_tokens ${nestedCached ?? topCached}`,
-      );
-    }
-  } else if (tokens.cache_read === null) {
-    // No deepseek hit half at all: fall back to the nested cached_tokens alias,
-    // then the top-level one, for the cached half. Nested wins, but when BOTH
-    // aliases are present and disagree the conflict is recorded — never
-    // resolved silently (the same contract as the hit-half branch above).
-    if (nestedCached !== null && topCached !== null && nestedCached !== topCached) {
-      warnings.push(
-        `conflicting cached-token aliases: nested ${nestedCached} vs top-level cached_tokens ${topCached}`,
-      );
-    }
-    tokens.cache_read = nestedCached !== null ? nestedCached : topCached;
-  }
-
-  tokens.reasoning = reasoning;
+  // Runs once for every provider path.
+  checkReportedTotal(tokens, inputTotal, outputTotal, warnings);
   return { tokens, usage_status: 'reported', warnings };
 }
 

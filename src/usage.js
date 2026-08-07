@@ -310,13 +310,27 @@ function newTokenAgg() {
   return agg;
 }
 
-// The canonical cost aggregate tracks at minimum the reported (engine/provider)
-// monetary total with its own coverage, mirroring the token aggregates: an
-// explicit 0 counts as known, null/absent as unknown.
+// The canonical cost value fields — the monetary counts without their
+// provenance/metadata siblings — derived from the canonical cost object so v1
+// and v2 records aggregate the same way (docs/usage-accounting.md).
+const COST_VALUE_FIELDS = [
+  'input_uncached_usd',
+  'cache_read_usd',
+  'cache_write_usd',
+  'output_visible_usd',
+  'reasoning_usd',
+  'output_total_usd',
+  'reported_total_usd',
+  'total_usd',
+];
+
+// The canonical cost aggregate tracks every monetary field with its own
+// coverage, mirroring the token aggregates: an explicit 0 counts as known,
+// null/absent as unknown.
 function newCostAgg() {
-  return {
-    reported_total_usd: { sum: 0, known_calls: 0, unknown_calls: 0 },
-  };
+  const agg = {};
+  for (const key of COST_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
+  return agg;
 }
 
 // An explicit 0 is a known call; null and non-numbers are unknown and never
@@ -335,13 +349,16 @@ function foldTokenAgg(agg, normalized) {
 }
 
 function foldCostAgg(agg, normalized) {
-  const reported = normalized.cost && normalized.cost.reported_total_usd;
-  const entry = agg.reported_total_usd;
-  if (Number.isFinite(reported)) {
-    entry.sum += reported;
-    entry.known_calls++;
-  } else {
-    entry.unknown_calls++;
+  const cost = normalized.cost && typeof normalized.cost === 'object' ? normalized.cost : null;
+  for (const key of COST_VALUE_FIELDS) {
+    const value = cost ? cost[key] : undefined;
+    const entry = agg[key];
+    if (Number.isFinite(value)) {
+      entry.sum += value;
+      entry.known_calls++;
+    } else {
+      entry.unknown_calls++;
+    }
   }
 }
 

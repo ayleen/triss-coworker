@@ -271,3 +271,82 @@ test('worker response with no deepseek half but conflicting nested and top-level
   assert.equal(tokens.input_uncached, null);
   assert.equal(tokens.input_total, 1000);
 });
+
+// DEFECT 1 — the DeepSeek normalization branch is unreachable in production:
+// resolveModelRequest() canonicalizes the DeepSeek provider to 'worker', so a
+// response that proves the DeepSeek-compatible contract must get the same
+// treatment on the GENERIC branch, derived from the response itself.
+test('worker response with the full deepseek field set derives output_visible', () => {
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_cache_hit_tokens: 200,
+      prompt_cache_miss_tokens: 800,
+      completion_tokens: 100,
+      completion_tokens_details: { reasoning_tokens: 40 },
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.deepEqual(warnings, []);
+  assert.equal(tokens.output_visible, 60);
+  assert.equal(tokens.reasoning, 40);
+  assert.equal(tokens.cache_read, 200);
+  assert.equal(tokens.input_uncached, 800);
+  assert.equal(tokens.input_total, 1000);
+  assert.equal(tokens.output_total, 100);
+});
+
+test('worker response whose hit+miss disagrees with prompt_tokens warns', () => {
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_cache_hit_tokens: 300,
+      prompt_cache_miss_tokens: 800,
+      completion_tokens: 100,
+      completion_tokens_details: { reasoning_tokens: 40 },
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.ok(
+    warnings.some((w) => /mismatch/i.test(w)),
+    `expected a mismatch warning, got ${JSON.stringify(warnings)}`,
+  );
+  // The reported numbers are preserved, never repaired.
+  assert.equal(tokens.cache_read, 300);
+  assert.equal(tokens.input_uncached, 800);
+  assert.equal(tokens.input_total, 1000);
+});
+
+// DEFECT 2 — a self-contradictory reported total (total != input + output)
+// must warn while preserving every reported value, on every provider path.
+test('a self-contradictory reported total warns and preserves every value, on every provider', () => {
+  const resp = {
+    usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 140 },
+  };
+  for (const provider of ['deepseek', 'zai', 'kimi', 'worker']) {
+    const { tokens, warnings } = normalizeApiUsage(resp, { provider });
+    assert.ok(
+      warnings.some((w) => /mismatch/i.test(w)),
+      `provider ${provider} should warn on the total mismatch, got ${JSON.stringify(warnings)}`,
+    );
+    // The contract preserves every reported value.
+    assert.equal(tokens.input_total, 100, `provider ${provider} keeps input_total`);
+    assert.equal(tokens.output_total, 50, `provider ${provider} keeps output_total`);
+    assert.equal(tokens.total, 140, `provider ${provider} keeps total`);
+  }
+});
+
+test('an internally consistent total stays silent on every provider', () => {
+  const resp = {
+    usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+  };
+  for (const provider of ['deepseek', 'zai', 'kimi', 'worker']) {
+    const { tokens, warnings } = normalizeApiUsage(resp, { provider });
+    assert.deepEqual(warnings, [], `provider ${provider} must not warn on a consistent total`);
+    assert.equal(tokens.input_total, 100);
+    assert.equal(tokens.output_total, 50);
+    assert.equal(tokens.total, 150);
+  }
+});
