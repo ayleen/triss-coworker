@@ -228,7 +228,9 @@ the provider contract guarantees reasoning is a subset of the completion count
 and the result is non-negative; otherwise it stays `null`.
 
 If cache hit + cache miss disagrees with `prompt_tokens`, every reported field
-is preserved and a normalization warning is emitted.
+is preserved and a normalization warning is emitted. Such warnings are written
+once to stderr (dimmed, prefixed `[triss] usage warning: `) — they never alter
+the persisted record or the printed usage line.
 
 ### Z.AI API responses (`usage_source: "api"`)
 
@@ -415,6 +417,11 @@ the ordinary input rate into it. The model key is the uppercased
 `moonshotai/`/`moonshotai-cn/` prefix is stripped (so `TRISS_PRICE_KIMI_K3`
 covers both the bare and the prefixed route).
 
+An override also beats a subscription-plan's built-in zero: pricing a
+`zai-coding-plan/<model>` (or `kimi-for-coding/<model>`) model explicitly makes
+that call a component estimate with `source: "estimated"` instead of the plan
+zero, so a user can account for a plan model whose contract differs.
+
 ### Built-in price table
 
 Built-in rows migrate from the v1 keys as follows:
@@ -570,6 +577,12 @@ Grouped views by model, project, and label use the same canonical aggregation.
 and `zai-coding-plan/glm-5.2` stay distinct groups; `billing_model` is only
 ever a price key. Sorting by cost uses the complete known total and never
 presents a partial estimate as a complete one.
+
+The canonical `cost` object is aggregated too: its `reported_total_usd` carries
+its own `sum`/`known_calls`/`unknown_calls` (an explicit 0 is known, `null`/absent
+is unknown). When the canonical total is unavailable but an engine-reported
+total exists, the CLI renders it separately — `cost: unknown · engine reported
+$0.0000` — rather than discarding it.
 
 For one transition release, `summarize()` keeps its existing `prompt_tokens`,
 `cached_tokens`, `completion_tokens`, `cost_usd`, `known_cost_usd`,

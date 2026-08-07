@@ -232,6 +232,51 @@ test('a subscription call with an engine-reported zero is a plan cost, not engin
   assert.equal(c.output_total_usd, null);
 });
 
+test('a TRISS_PRICE_<> override on a subscription model prices the components, source estimated, not the plan zero', () => {
+  const envKey = 'TRISS_PRICE_ZAI_CODING_PLAN_GLM_5_2';
+  const prev = process.env[envKey];
+  process.env[envKey] = '1e-6,2e-6,3e-6,4e-6'; // input_uncached, cache_read, cache_write, output
+  try {
+    const c = estimateCanonicalCost({
+      billing_model: 'zai-coding-plan/glm-5.2',
+      billing_mode: 'subscription',
+      tokens: { input_uncached: 500, cache_read: 200, cache_write: 50, input_total: 750, output_total: 100 },
+    });
+    // Override wins over the plan zero: components are priced and source is
+    // 'estimated', not 'plan'.
+    assert.equal(c.source, 'estimated');
+    assert.equal(c.complete, true);
+    close(c.input_uncached_usd, 500 * 1e-6);
+    close(c.cache_read_usd, 200 * 2e-6);
+    close(c.cache_write_usd, 50 * 3e-6);
+    close(c.output_total_usd, 100 * 4e-6);
+    close(c.total_usd, 500 * 1e-6 + 200 * 2e-6 + 50 * 3e-6 + 100 * 4e-6);
+  } finally {
+    if (prev === undefined) delete process.env[envKey];
+    else process.env[envKey] = prev;
+  }
+});
+
+test('a TRISS_PRICE_<> override on a subscription model is overridden by a trusted engine total', () => {
+  const envKey = 'TRISS_PRICE_ZAI_CODING_PLAN_GLM_5_2';
+  const prev = process.env[envKey];
+  process.env[envKey] = '1e-6,2e-6,3e-6,4e-6';
+  try {
+    const c = estimateCanonicalCost({
+      billing_model: 'zai-coding-plan/glm-5.2',
+      billing_mode: 'subscription',
+      reported_total_usd: 0.05,
+      reported_total_source: 'engine',
+      tokens: { input_uncached: 500, cache_read: 200, cache_write: 50, input_total: 700, output_total: 100 },
+    });
+    assert.equal(c.source, 'engine_reported');
+    assert.equal(c.total_usd, 0.05);
+  } finally {
+    if (prev === undefined) delete process.env[envKey];
+    else process.env[envKey] = prev;
+  }
+});
+
 test('a proven free call with an engine-reported zero is free, not engine_reported', () => {
   const c = estimateCanonicalCost({
     billing_model: 'opencode/deepseek-v4-flash-free',

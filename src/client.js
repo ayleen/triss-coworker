@@ -54,7 +54,7 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
   return new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
 }
 
-function recordUsage(resp, label, request = {}) {
+export function recordUsage(resp, label, request = {}) {
   // A successful call with no usage object is still a real call worth
   // recording — as a `missing` record, not a dropped one. Only an absent
   // response entirely is skipped.
@@ -62,13 +62,23 @@ function recordUsage(resp, label, request = {}) {
   const ctx = currentCall();
   const model = billingModelFor({ ...request, model: resp.model || request.model });
   const provider = providerForUsage(request.provider);
-  const { tokens, usage_status } = normalizeApiUsage(resp, { provider });
-  logUsage({
+  const { tokens, usage_status, warnings } = normalizeApiUsage(resp, { provider });
+  // Normalization disagreements (e.g. a DeepSeek hit+miss mismatch) are
+  // surfaced once on stderr, dimmed, so a human sees the caveat without the
+  // persisted record or reportUsage()'s format changing.
+  for (const warning of warnings || []) {
+    process.stderr.write(pc.dim(`[triss] usage warning: ${warning}\n`));
+  }
+  return logUsage({
     model,
     billing_model: model,
     usage_source: 'api',
     usage_status,
     tokens,
+    // The resolved provider must be forwarded explicitly: logUsage only
+    // derives it from the model prefix, so a bare id like `kimi-k3` would
+    // otherwise persist with `provider: null` and lose which provider it was.
+    provider,
     label,
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,

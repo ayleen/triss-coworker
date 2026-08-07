@@ -120,6 +120,20 @@ export function priceFor(billingModel) {
   return row ? { ...row, cache_write: null } : null;
 }
 
+// Whether an explicit TRISS_PRICE_<MODEL_ID> override answers for this billing
+// model. Mirrors priceFor()'s override rule exactly so estimateCanonicalCost
+// can tell an env-supplied price (which may beat the plan zero) apart from the
+// built-in plan row by source, never by comparing numbers.
+export function priceIsOverride(billingModel) {
+  const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
+  const envKey = 'TRISS_PRICE_' + bare.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  const raw = process.env[envKey];
+  if (!raw) return false;
+  const parts = raw.split(',');
+  if (!(parts.length === 3 || parts.length === 4)) return false;
+  return parts.map(Number).every((r) => Number.isFinite(r));
+}
+
 export function estimateCost(record) {
   const p = priceFor(record.model);
   // A missing price is not a free call. Keep it distinct from the known
@@ -288,6 +302,15 @@ function newTokenAgg() {
   return agg;
 }
 
+// The canonical cost aggregate tracks at minimum the reported (engine/provider)
+// monetary total with its own coverage, mirroring the token aggregates: an
+// explicit 0 counts as known, null/absent as unknown.
+function newCostAgg() {
+  return {
+    reported_total_usd: { sum: 0, known_calls: 0, unknown_calls: 0 },
+  };
+}
+
 // An explicit 0 is a known call; null and non-numbers are unknown and never
 // contribute to the sum. Unknown is never coerced to zero before coverage.
 function foldTokenAgg(agg, normalized) {
@@ -303,6 +326,17 @@ function foldTokenAgg(agg, normalized) {
   }
 }
 
+function foldCostAgg(agg, normalized) {
+  const reported = normalized.cost && normalized.cost.reported_total_usd;
+  const entry = agg.reported_total_usd;
+  if (Number.isFinite(reported)) {
+    entry.sum += reported;
+    entry.known_calls++;
+  } else {
+    entry.unknown_calls++;
+  }
+}
+
 export function summarize(records, { groupBy } = {}) {
   const total = {
     calls: records.length,
@@ -314,11 +348,13 @@ export function summarize(records, { groupBy } = {}) {
     known_cost_calls: 0,
     unknown_cost_calls: 0,
     tokens: newTokenAgg(),
+    cost: newCostAgg(),
   };
   const groups = new Map();
   const hasKnownCost = (record) =>
     record.cost_usd_known !== false && Number.isFinite(record.cost_usd);
   for (const r of records) {
+    const normalized = normalizeUsageRecord(r);
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
@@ -329,7 +365,8 @@ export function summarize(records, { groupBy } = {}) {
     } else {
       total.unknown_cost_calls++;
     }
-    foldTokenAgg(total.tokens, normalizeUsageRecord(r));
+    foldTokenAgg(total.tokens, normalized);
+    foldCostAgg(total.cost, normalized);
     if (groupBy) {
       const key = String(r[groupBy] ?? '(unknown)');
       const g = groups.get(key) || {
@@ -342,6 +379,7 @@ export function summarize(records, { groupBy } = {}) {
         known_cost_calls: 0,
         unknown_cost_calls: 0,
         tokens: newTokenAgg(),
+        cost: newCostAgg(),
       };
       g.calls++;
       g.prompt_tokens += r.prompt_tokens || 0;
@@ -354,7 +392,8 @@ export function summarize(records, { groupBy } = {}) {
       } else {
         g.unknown_cost_calls++;
       }
-      foldTokenAgg(g.tokens, normalizeUsageRecord(r));
+      foldTokenAgg(g.tokens, normalized);
+      foldCostAgg(g.cost, normalized);
       groups.set(key, g);
     }
   }
@@ -445,8 +484,11 @@ export function estimateCanonicalCost({
     }
   }
   // Without a trusted engine total, a plan or proven-free zero is the truth —
-  // it wins even when the engine also reported a zero.
-  if (billing_mode === 'subscription') {
+  // it wins even when the engine also reported a zero. An explicit
+  // TRISS_PRICE_<> override, though, lets a user price a plan model itself;
+  // that env-supplied rate beats the plan zero, so fall through to the
+  // component estimate (source: 'estimated') instead of the built-in zero.
+  if (billing_mode === 'subscription' && !priceIsOverride(billing_model)) {
     return {
       ...cost,
       input_uncached_usd: null,

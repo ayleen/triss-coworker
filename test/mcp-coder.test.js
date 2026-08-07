@@ -196,7 +196,19 @@ test(
 
 test(
   'coderRunHandler: happy path returns the envelope as a JSON string (fake spawn, no isolate)',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv(
+    {
+      ZHIPU_API_KEY: 'zk-fake-test-key',
+      OPENCODE_API_KEY: 'sk-zen-fake',
+      TRISS_USAGE_LOG: '0',
+      // Pin the unpriced routing deterministically so these envelope assertions
+      // (engine-reported zero is NOT known $0) hold on any machine, regardless
+      // of this repo's or the global .triss.env. The pinned opencode/* route
+      // needs an OPENCODE key to pass credential gating, so a fake one is set
+      // alongside it.
+      TRISS_CODER_MODEL: 'opencode/deepseek-v4-flash-free',
+    },
+    async () => {
     const result = await coderRunHandler(
       { prompt: 'print hello via a shell echo' },
       { spawn: fakeSpawnReplayingFixture() },
@@ -210,8 +222,8 @@ test(
     assert.equal(envelope.usage.prompt_tokens, 303);
     assert.equal(envelope.usage.completion_tokens, 19);
     // ...alongside the canonical tokens/cost/schema_version members. The model
-    // in play (from this repo's .triss.env) is an unpriced opencode/* route, so
-    // the engine-reported zero is NOT a known $0: total_usd stays null.
+    // in play is pinned by withIsolatedEnv's TRISS_CODER_MODEL to an unpriced
+    // opencode/* route, so the engine-reported zero is NOT a known $0.
     assert.equal(envelope.usage.schema_version, 2);
     assert.equal(envelope.usage.usage_status, 'reported');
     assert.equal(envelope.usage.tokens.input_uncached, 303);

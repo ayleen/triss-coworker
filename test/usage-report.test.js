@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reportUsage } from '../src/client.js';
+import { reportUsage, recordUsage } from '../src/client.js';
 
 test('a deepseek response renders the full split line exactly', () => {
   const resp = {
@@ -75,4 +75,67 @@ test('a reported zero completion_tokens still renders the output segment', () =>
     line.includes('0 output (split unavailable)'),
     `an explicit zero is data and must be rendered: ${line}`,
   );
+});
+
+test('recordUsage emits each normalization warning once on stderr for a DeepSeek mismatch', () => {
+  // hit + miss (14272 + 303 = 14575) disagrees with prompt_tokens 20000: the
+  // documented hit+miss disagreement surfaces as a warning
+  // (src/usage-schema.js), and recordUsage must surface it on stderr instead
+  // of silently discarding it.
+  const resp = {
+    model: 'deepseek-v4-flash',
+    usage: {
+      prompt_tokens: 20000,
+      prompt_cache_miss_tokens: 303,
+      prompt_cache_hit_tokens: 14272,
+      completion_tokens: 34,
+      total_tokens: 20034,
+    },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const stderrWrite = process.stderr.write;
+  const chunks = [];
+  process.stderr.write = (s) => {
+    chunks.push(String(s));
+    return true;
+  };
+  try {
+    recordUsage(resp, 'triss/ask', { provider: 'deepseek', model: 'deepseek-v4-flash' });
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+  const stderr = chunks.join('');
+  assert.ok(
+    stderr.includes('deepseek cache hit+miss mismatch: 14272 + 303 != prompt_tokens 20000'),
+    `expected the mismatch warning on stderr, got: ${stderr}`,
+  );
+  assert.ok(
+    stderr.includes('[triss] usage warning: '),
+    `warning must carry the [triss] usage warning: prefix, got: ${stderr}`,
+  );
+  assert.equal(
+    (stderr.match(/deepseek cache hit\+miss mismatch/g) || []).length,
+    1,
+    'the warning must be written exactly once',
+  );
+});
+
+test('recordUsage persists a bare Kimi model id with its provider identity', () => {
+  // A bare `kimi-k3` id has no prefix for resolveProvider() to read, so the
+  // provider must be forwarded explicitly; otherwise the persisted record
+  // loses that it was a Kimi call.
+  const resp = {
+    model: 'kimi-k3',
+    usage: { prompt_tokens: 100, cached_tokens: 20, completion_tokens: 50, total_tokens: 150 },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const stderrWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  let record;
+  try {
+    record = recordUsage(resp, 'triss/ask', { provider: 'kimi', model: 'kimi-k3' });
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+  assert.equal(record.provider, 'kimi');
 });

@@ -119,9 +119,21 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
 export function formatCost(summary) {
   const knownCost = summary.known_cost_usd ?? summary.cost_usd ?? 0;
   const known = pc.green('$' + knownCost.toFixed(4));
-  if (!summary.unknown_cost_calls) return known;
-  const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no price configured)`;
-  return summary.known_cost_calls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
+  let cost;
+  if (!summary.unknown_cost_calls) {
+    cost = known;
+  } else {
+    const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no price configured)`;
+    cost = summary.known_cost_calls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
+  }
+  // An engine-reported monetary total (e.g. OpenCode part.cost) survives even
+  // when the canonical total is unavailable; surface it in its own note per
+  // docs/usage-accounting.md "CLI output" (`cost: unknown · engine reported $0.0000`).
+  const engine = summary.cost && summary.cost.reported_total_usd;
+  if (engine && engine.known_calls > 0) {
+    cost += ` · engine reported $${engine.sum.toFixed(4)}`;
+  }
+  return cost;
 }
 
 function humanPeriod(sinceMs) {
