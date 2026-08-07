@@ -241,25 +241,43 @@ without discarding values from other events. A field remains `null` for the
 whole call only when no event reports it; an explicitly reported zero counts as
 known.
 
-The current fixture proves the following relationship only when
-`cache_write === 0`:
+Phase 1 resolved the cache-write question against the pinned runtime
+(opencode 1.18.7), which normalizes a provider `usage` object as:
 
 ```text
-input_total  = input_uncached + cache_read
+input       = max(0, usage.inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
+output      = max(0, usage.outputTokens - usage.reasoningTokens)
+reasoning   = usage.reasoningTokens
+cache.read  = usage.cacheReadInputTokens
+cache.write = usage.cacheWriteInputTokens (or the provider-metadata equivalent)
+total       = usage.totalTokens, passed through as-is (absent when the provider omits it)
+```
+
+Both cache classes are therefore subtracted out of `input`, and reasoning out
+of `output`, so these relationships hold **including a non-zero cache write**:
+
+```text
+input_total  = input_uncached + cache_read + cache_write
 output_total = output_visible + reasoning
 total        = input_total + output_total  (only if no reported total exists)
 ```
 
-The fixture does not prove whether a non-zero cache-write count is included in
-OpenCode's input or total counters. Phase 1 must verify this against the pinned
-OpenCode source or capture a real pinned-version event with non-zero
-`cache.write` before the public contract is locked. Until that evidence exists:
+The fixture (`cache_write === 0`) is consistent with this and remains the
+regression case; the derivation rule itself rests on the pinned-runtime
+evidence recorded in `docs/usage-accounting.md`. A reported `tokens.total` is
+still preferred when present, and a total that remains underdetermined for any
+other reason stays `null` rather than being guessed at.
 
-- always preserve `cache_write` as its own atomic value;
-- do not derive `input_total` from a non-zero `cache_write` event;
-- use a reported `tokens.total` when available;
-- leave an otherwise underdetermined input/overall total `null` rather than
-  guessing.
+The same pinned runtime computes its cost as
+
+```text
+cost = input*price.input + output*price.output + cache.read*price.cache_read
+     + cache.write*price.cache_write + reasoning*price.output   (all /1e6)
+```
+
+with every missing rate defaulting to `0`. This confirms both that an OpenCode
+`cost: 0` cannot prove a free call and that the engine bills reasoning at the
+output rate.
 
 The optional runtime `tokens.total` is accepted but not required. The fold
 must continue to tolerate unknown event types and truncated NDJSON lines.
@@ -792,10 +810,10 @@ total = 14,609
 
 They also prove that fields sum across every `step_finish`, optional totals are
 accepted, explicit zeros remain known, and reported/component mismatches warn.
-The existing zero-cache-write fixture does not authorize a non-zero
-cache-write total formula. Add a pinned-source-backed fixture before asserting
-that relationship; otherwise test that totals remain `null` when the reported
-total is absent and cache-write semantics are unresolved.
+Because Phase 1 verified the pinned-runtime normalization, a synthetic
+non-zero cache-write case must also assert
+`input_total = input_uncached + cache_read + cache_write` and the derived
+`total`.
 
 OpenCode cost tests require:
 

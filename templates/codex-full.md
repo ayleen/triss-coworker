@@ -71,7 +71,12 @@ Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 [--restrict] [--no-restrict] [--cwd <path>]
 [--timeout <sec>] [--stdin]` — prints one JSON envelope to stdout (`engine`,
 `engine_version`, `session_id`, `exit_reason`, `final_text`, `files_changed`,
-`diff_stat`, `worktree`, `usage`, `warnings`). `--engine <name>` selects
+`diff_stat`, `worktree`, `usage`, `warnings`). `usage` is the canonical
+`schema_version: 2` shape — `usage.tokens` splits `input_uncached`,
+`cache_read`, `cache_write`, `output_visible`, and `reasoning`, `usage.cost`
+carries `total_usd` plus `complete`, and an unreported class is `null`, never
+`0`; `prompt_tokens`/`completion_tokens` remain as deprecated aliases.
+`--engine <name>` selects
 `opencode` (default) or `crush`. `--session <id>` is a triss-side slug
 mapped to a real opencode session id in `.triss/sessions.json` (first run
 creates it, later runs with the same slug continue that conversation).

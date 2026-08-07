@@ -477,9 +477,31 @@ If you remove the MCP entry, the CLI keeps working. If you remove
 ## Usage tracking
 
 Every MCP tool call gets its own `call_id` (UUIDv4) written to
-`~/.cache/triss/usage.jsonl` alongside the existing model/tokens/cost
-fields. Dashboards (e.g. tokentelemetry) can group records per
+`~/.cache/triss/usage.jsonl` alongside the model, per-token-class counts, and
+cost fields. Dashboards (e.g. tokentelemetry) can group records per
 invocation.
+
+Records use `schema_version: 2`, which keeps each token class the source
+reported separately — `input_uncached`, `cache_read`, `cache_write`,
+`output_visible`, `reasoning`, plus totals that carry `reported`/`derived`
+provenance. A class the provider did not report is `null`, never `0`. The
+`cost` object states whether the total is `complete` and where it came from
+(`provider_reported`, `engine_reported`, `plan`, `free`, `estimated`,
+`unknown`). The flat `prompt_tokens`, `cached_tokens`, `completion_tokens`,
+`cost_usd`, and `cost_usd_known` fields remain on each record as **deprecated**
+compatibility aliases for one transition release; canonical readers use
+`tokens` and `cost`. `triss usage --json` stays the raw, unfiltered surface —
+it prints persisted records from the active log, before period or grouping
+filters, and never includes the rotated `usage.jsonl.old` archive. The full
+schema is in [usage-accounting.md](usage-accounting.md).
+
+`triss_coder_run` returns the same canonical shape in its envelope's `usage`
+member (`usage.tokens`, `usage.cost`, plus the deprecated
+`prompt_tokens`/`completion_tokens` aliases), identical to the CLI.
+
+`triss_write` returns the generated content and the per-call usage report as
+separate values: the usage report goes into the tool's status response and is
+never written into the target file.
 
 GLM records keep the endpoint the call actually used (`zai-coding-plan/` or
 `zai/`) — including after an endpoint auto-correction, so a retried call is
