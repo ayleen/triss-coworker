@@ -39,13 +39,35 @@ worker. The CLI lives at `bin/triss.js`; the library code is in `src/`.
   reading; new write paths must call it with `kind: 'write'`.
 - Never log full secrets — `secrets.maskValue()` handles the common case.
 
+## How to build a change: docs first, then TDD
+Mandatory order for any behaviour change:
+1. **Docs first.** Write the public contract (see the next section) *before*
+   touching `src/`. Production code must not change while the docs phase is
+   open — the docs are what the tests then assert.
+2. **RED.** Add focused failing tests for the documented contract. They must
+   fail on missing production behaviour, not on fixture/import/env errors.
+3. **GREEN.** Implement the smallest vertical slice that turns them green.
+4. **Refactor** with the focused suite green, then run the full suite.
+
+- Never weaken a test to accommodate current behaviour; the documented
+  contract wins and the implementation moves.
+- A non-trivial change gets `docs/<feature>-plan.md` first (for example
+  `docs/usage-accounting-plan.md`). An internal plan is a working document —
+  it never substitutes for the public docs in step 1.
+- Verify claims against the code, pinned fixtures, or provider docs before
+  locking a contract. `null` (unknown) and `0` (reported zero) are different
+  values everywhere in this codebase.
+
 ## When you change something user-visible
-Update *all three* in lockstep:
+Update *all of these* in lockstep:
 1. `README.md` (env-var tables, command catalogue)
 2. `.env.example` (every recognised env var with a one-line use-case)
 3. `docs/mcp.md` (MCP tool catalogue, gating env vars)
 4. If you added a new integration: `docs/extending.md`.
-5. If the change affects the CLAUDE Code-facing behaviour: `templates/claude.md`.
+5. If the change affects the agent-facing behaviour, audit the installed
+   guidance templates — `templates/claude.md`, `templates/claude-full.md`,
+   `templates/codex.md`, `templates/codex-full.md` — and update the ones that
+   describe it (`claude-full.md` documents the coder envelope verbatim).
 
 ## Testing
 - `node --test test/*.test.js` runs all suites (currently 150+ tests).
