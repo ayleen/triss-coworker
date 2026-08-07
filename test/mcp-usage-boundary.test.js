@@ -11,6 +11,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+// These handlers persist usage, and src/usage.js binds its log path from
+// homedir() at module load. Redirect HOME before the first import that reaches
+// it so the suite writes to a throwaway log instead of the developer's own.
+const HOME_DIR = mkdtempSync(join(tmpdir(), 'triss-mub-home-'));
+process.env.HOME = HOME_DIR;
+test.after(() => rmSync(HOME_DIR, { recursive: true, force: true }));
+
 // The OpenAI SDK uses its own fetch internally, so point its baseURL at a
 // tiny local HTTP server instead of monkey-patching globalThis.fetch.
 function startMockOpenAI(content) {
