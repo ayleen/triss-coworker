@@ -305,8 +305,7 @@ export function summarize(records, { groupBy } = {}) {
   const groups = new Map();
   const hasKnownCost = (record) =>
     record.cost_usd_known !== false && Number.isFinite(record.cost_usd);
-  for (const raw of records) {
-    const r = raw;
+  for (const r of records) {
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
@@ -317,7 +316,7 @@ export function summarize(records, { groupBy } = {}) {
     } else {
       total.unknown_cost_calls++;
     }
-    foldTokenAgg(total.tokens, normalizeUsageRecord(raw));
+    foldTokenAgg(total.tokens, normalizeUsageRecord(r));
     if (groupBy) {
       const key = String(r[groupBy] ?? '(unknown)');
       const g = groups.get(key) || {
@@ -342,7 +341,7 @@ export function summarize(records, { groupBy } = {}) {
       } else {
         g.unknown_cost_calls++;
       }
-      foldTokenAgg(g.tokens, normalizeUsageRecord(raw));
+      foldTokenAgg(g.tokens, normalizeUsageRecord(r));
       groups.set(key, g);
     }
   }
