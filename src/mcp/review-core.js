@@ -79,7 +79,7 @@ export async function runReviewCore({
     `<diff>\n${diff}\n</diff>`,
   ].filter(Boolean);
 
-  return callModel({
+  const result = await callModel({
     provider,
     model,
     maxTokens,
@@ -89,6 +89,10 @@ export async function runReviewCore({
       { role: 'user', content: question || 'Review this change. List concrete issues; do not summarise the diff.' },
     ],
   });
+  // callModel now returns { content, usageReport }; injected stand-ins that
+  // still return plain text are passed through unchanged.
+  if (typeof result === 'string') return result;
+  return result.usageReport ? `${result.content}\n\n${result.usageReport}` : result.content;
 }
 
 async function fetchLinkedIssue(key) {

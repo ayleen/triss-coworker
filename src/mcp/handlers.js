@@ -32,7 +32,20 @@ async function callModel({ provider, model, messages, maxTokens = 4096 }, deps =
   });
   const text = responseText(resp);
   if (!text) throw new Error('Worker returned empty response — increase max_tokens');
-  return text + '\n\n' + reportUsage(resp, 'triss');
+  // Content and the usage report are separate values; handlers compose them
+  // at the response boundary, so writeHandler can drop the report entirely.
+  // The provider is passed through so the line matches the persisted record.
+  return {
+    content: text,
+    usageReport: reportUsage(resp, 'triss', { provider: request.provider }),
+  };
+}
+
+// Compose a text-returning handler's output from the two callModel fields.
+// The report joins only when present, so an empty report never leaves a
+// dangling blank line.
+function withUsage({ content, usageReport }) {
+  return usageReport ? `${content}\n\n${usageReport}` : content;
 }
 
 // ─── core handlers ──────────────────────────────────────────────────────────
@@ -42,7 +55,7 @@ export async function chatHandler({ prompt, system, model, max_tokens }) {
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  return callModel({ model, messages, maxTokens: max_tokens });
+  return withUsage(await callModel({ model, messages, maxTokens: max_tokens }));
 }
 
 export async function askHandler(
@@ -66,7 +79,7 @@ export async function askHandler(
         `<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`;
     }
   }
-  return callModel(
+  return withUsage(await callModel(
     {
       provider,
       model,
@@ -78,7 +91,7 @@ export async function askHandler(
       ],
     },
     deps,
-  );
+  ));
 }
 
 export async function fetchHandler({ urls, question, model, max_tokens }) {
@@ -90,7 +103,7 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
   }
   const corpus = parts.join('\n\n');
   if (!question) return corpus;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -98,7 +111,7 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
       { role: 'user', content: `<data>\n${corpus}\n</data>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function reviewHandler({
@@ -153,7 +166,7 @@ export async function writeHandler({ spec, target, context, model, max_tokens })
   }
   if (target) assertSafePath(target, { kind: 'write' });
 
-  const text = await callModel({
+  const { content, usageReport } = await callModel({
     model,
     maxTokens: max_tokens || 16384,
     messages: [
@@ -161,16 +174,16 @@ export async function writeHandler({ spec, target, context, model, max_tokens })
       { role: 'user', content: `${ctx}Write: ${spec}` },
     ],
   });
-  // callModel appends a usage report — strip it so the file body stays clean.
-  const usageStart = text.indexOf('\n\n[triss/');
-  const body = stripFences(usageStart === -1 ? text : text.slice(0, usageStart));
-  const usage = usageStart === -1 ? '' : text.slice(usageStart);
+  // callModel keeps content and the usage line apart; only content belongs in
+  // the file, and the report surfaces once in the status response.
+  const body = stripFences(content);
 
-  if (!target) return body + usage;
+  if (!target) return withUsage({ content: body, usageReport });
 
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, body);
-  return `✓ Wrote ${target} (${body.length} chars)${usage}`;
+  const status = `✓ Wrote ${target} (${body.length} chars)`;
+  return usageReport ? `${status}\n\n${usageReport}` : status;
 }
 
 // ─── jira handlers ──────────────────────────────────────────────────────────
@@ -190,7 +203,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, model, max_
     })
     .join('\n');
   if (!question) return corpus || '(no issues)';
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -198,7 +211,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, model, max_
       { role: 'user', content: `<jira-issues jql="${jql}">\n${corpus}\n</jira-issues>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function jiraIssueHandler({ key, with_comments, question, model, max_tokens }, deps = {}) {
@@ -226,7 +239,7 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
   }
   const text = lines.join('\n');
   if (!question) return text;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -234,7 +247,7 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
       { role: 'user', content: `<jira-issue>\n${text}\n</jira-issue>` },
       { role: 'user', content: question },
     ],
-  }, deps);
+  }, deps));
 }
 
 export async function jiraCreateHandler({
@@ -360,7 +373,7 @@ export async function linearSearchHandler({ term, question, limit = 50, model, m
     .map((i) => `${i.identifier}\t[${i.state?.name}]\t${i.title}\t(${i.assignee?.name ?? 'unassigned'})`)
     .join('\n');
   if (!question) return corpus || '(no issues)';
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -368,7 +381,7 @@ export async function linearSearchHandler({ term, question, limit = 50, model, m
       { role: 'user', content: `<linear-issues term="${term}">\n${corpus}\n</linear-issues>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function linearIssueHandler({ id, with_comments, question, model, max_tokens }) {
@@ -393,7 +406,7 @@ export async function linearIssueHandler({ id, with_comments, question, model, m
   }
   const text = lines.join('\n');
   if (!question) return text;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -401,7 +414,7 @@ export async function linearIssueHandler({ id, with_comments, question, model, m
       { role: 'user', content: `<linear-issue>\n${text}\n</linear-issue>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function linearCreateHandler({
@@ -628,7 +641,7 @@ export async function githubSearchHandler({ query, limit = 30, question, model, 
     })
     .join('\n');
   if (!question) return corpus || '(no issues)';
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -636,7 +649,7 @@ export async function githubSearchHandler({ query, limit = 30, question, model, 
       { role: 'user', content: `<github-issues query="${query}">\n${corpus}\n</github-issues>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function githubIssueHandler({ repo, number, with_comments, question, model, max_tokens }) {
@@ -661,7 +674,7 @@ export async function githubIssueHandler({ repo, number, with_comments, question
   }
   const text = lines.join('\n');
   if (!question) return text;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -669,7 +682,7 @@ export async function githubIssueHandler({ repo, number, with_comments, question
       { role: 'user', content: `<github-issue>\n${text}\n</github-issue>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function githubCreateHandler({ repo, title, body, labels, assignees }) {
@@ -713,7 +726,7 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, model
     })
     .join('\n');
   if (!question) return corpus || '(no results)';
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -721,7 +734,7 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, model
       { role: 'user', content: `<confluence-results cql="${cql}">\n${corpus}\n</confluence-results>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function confluencePageHandler({ id, question, model, max_tokens }) {
@@ -748,7 +761,7 @@ export async function confluencePageHandler({ id, question, model, max_tokens })
     body,
   ].join('\n');
   if (!question) return text;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -756,7 +769,7 @@ export async function confluencePageHandler({ id, question, model, max_tokens })
       { role: 'user', content: `<confluence-page>\n${text}\n</confluence-page>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function confluenceCreateHandler({ space, title, body, parent }) {
@@ -799,7 +812,7 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
     )
     .join('\n');
   if (!question) return corpus || '(no issues)';
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -807,7 +820,7 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
       { role: 'user', content: `<gitlab-issues search="${search}">\n${corpus}\n</gitlab-issues>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function gitlabIssueHandler({ project, iid, with_comments, question, model, max_tokens }) {
@@ -832,7 +845,7 @@ export async function gitlabIssueHandler({ project, iid, with_comments, question
   }
   const text = lines.join('\n');
   if (!question) return text;
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 4096,
     messages: [
@@ -840,7 +853,7 @@ export async function gitlabIssueHandler({ project, iid, with_comments, question
       { role: 'user', content: `<gitlab-issue>\n${text}\n</gitlab-issue>` },
       { role: 'user', content: question },
     ],
-  });
+  }));
 }
 
 export async function gitlabCreateHandler({ project, title, body, labels }) {
@@ -1009,14 +1022,14 @@ export async function commitMsgHandler({ type, scope, conventional = true, model
   ]
     .filter(Boolean)
     .join('\n');
-  return callModel({
+  return withUsage(await callModel({
     model,
     maxTokens: max_tokens || 2048,
     messages: [
       { role: 'system', content: SYSTEM },
       { role: 'user', content: userPrompt },
     ],
-  });
+  }));
 }
 
 // ─── status ─────────────────────────────────────────────────────────────────

@@ -116,6 +116,6 @@ export async function runAskWithDeps(opts, deps = {}) {
   }
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask') + '\n'));
+  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask', { provider: request.provider }) + '\n'));
   return answer;
 }
