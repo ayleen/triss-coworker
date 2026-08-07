@@ -85,34 +85,47 @@ const DEFAULT_PRICES = {
   'kimi-k2.6': { input_uncached: 0.95e-6, cache_read: 0.16e-6, output: 4.0e-6 },
 };
 
-export function priceFor(billingModel) {
-  // Coder runs log Moonshot models with opencode's provider prefix
-  // (moonshotai/kimi-k3, moonshotai-cn/…); ask/review logs the same ids bare.
-  // Strip the prefix FIRST so one DEFAULT_PRICES row — and one
-  // TRISS_PRICE_<MODEL_ID> override — covers both routes.
+// Shared TRISS_PRICE_<MODEL_ID> override parser. Coder runs log Moonshot models
+// with opencode's provider prefix (moonshotai/kimi-k3, moonshotai-cn/…);
+// ask/review logs the same ids bare. Strip the prefix FIRST so one
+// DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers both
+// routes. The model key is the uppercased id with non-alphanumerics → '_'.
+//
+// Returns the parsed rates array (length 3 or 4) or null when the override is
+// absent or malformed. Any arity other than 3 or 4 — a blank/whitespace-only
+// component, or a non-numeric token — is rejected so the whole override is
+// ignored rather than half-applied.
+function priceOverride(billingModel) {
   const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
-  // Allow env overrides like TRISS_PRICE_<MODELID>=<miss>,<hit>,<out> or the
-  // four-value form that also sets a cache-write rate. The model key is the
-  // uppercased id with non-alphanumerics → '_'.
   const envKey = 'TRISS_PRICE_' + bare.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  if (process.env[envKey]) {
-    const parts = process.env[envKey].split(',');
-    // Any arity other than 3 or 4 — or a non-numeric token — is malformed and
-    // the override is ignored rather than half-applied.
-    if (parts.length === 3 || parts.length === 4) {
-      const rates = parts.map(Number);
-      if (rates.every((r) => Number.isFinite(r))) {
-        if (rates.length === 3) {
-          // Three values never invent a cache-write rate.
-          return { input_uncached: rates[0], cache_read: rates[1], cache_write: null, output: rates[2] };
-        }
-        return { input_uncached: rates[0], cache_read: rates[1], cache_write: rates[2], output: rates[3] };
-      }
+  const raw = process.env[envKey];
+  if (!raw) return null;
+  const parts = raw.split(',');
+  if (parts.length !== 3 && parts.length !== 4) return null;
+  // DEFECT: an empty cache-read field ('1,,2') must reject BEFORE numeric
+  // conversion — Number('') is 0, which would silently turn a blank override
+  // field into a zero rate instead of falling back to the built-in row.
+  if (parts.some((p) => p.trim() === '')) return null;
+  const rates = parts.map(Number);
+  if (!rates.every((r) => Number.isFinite(r))) return null;
+  return rates;
+}
+
+export function priceFor(billingModel) {
+  // Allow env overrides like TRISS_PRICE_<MODELID>=<miss>,<hit>,<out> or the
+  // four-value form that also sets a cache-write rate.
+  const rates = priceOverride(billingModel);
+  if (rates) {
+    if (rates.length === 3) {
+      // Three values never invent a cache-write rate.
+      return { input_uncached: rates[0], cache_read: rates[1], cache_write: null, output: rates[2] };
     }
+    return { input_uncached: rates[0], cache_read: rates[1], cache_write: rates[2], output: rates[3] };
   }
+  const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
   // Subscription use is metered by the plan, regardless of the particular
   // model id. Keep this after the override so a user can explicitly
-  // account for a plan model if their contract changes.
+  // account for a plan model if their contract changes elsewhere.
   if (bare.startsWith('zai-coding-plan/')) return { ...CODING_PLAN_PRICE };
   if (bare.startsWith('kimi-for-coding/')) return { ...CODING_PLAN_PRICE };
   const row = DEFAULT_PRICES[bare];
@@ -121,17 +134,12 @@ export function priceFor(billingModel) {
 }
 
 // Whether an explicit TRISS_PRICE_<MODEL_ID> override answers for this billing
-// model. Mirrors priceFor()'s override rule exactly so estimateCanonicalCost
-// can tell an env-supplied price (which may beat the plan zero) apart from the
-// built-in plan row by source, never by comparing numbers.
+// model. Built on the same parser so it can never drift from priceFor() — an
+// estimateCanonicalCost call decides an env-supplied price (which may beat the
+// plan zero) apart from the built-in plan row by source, never by comparing
+// numbers.
 export function priceIsOverride(billingModel) {
-  const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
-  const envKey = 'TRISS_PRICE_' + bare.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  const raw = process.env[envKey];
-  if (!raw) return false;
-  const parts = raw.split(',');
-  if (!(parts.length === 3 || parts.length === 4)) return false;
-  return parts.map(Number).every((r) => Number.isFinite(r));
+  return priceOverride(billingModel) !== null;
 }
 
 export function estimateCost(record) {
@@ -351,20 +359,39 @@ export function summarize(records, { groupBy } = {}) {
     cost: newCostAgg(),
   };
   const groups = new Map();
-  const hasKnownCost = (record) =>
-    record.cost_usd_known !== false && Number.isFinite(record.cost_usd);
+  // A cost is known from the canonical aggregate (docs/usage-accounting.md
+  // "Compatibility fields"): for a v2 record we read cost.total_usd/completeness
+  // and NEVER the deprecated cost_usd flat aliases; normalizeUsageRecord turns a
+  // v1 record into the same shape using only the flat fields it can prove, so
+  // legacy behavior is preserved exactly (an explicit 0 is known, null/algo
+  // unknown). When a v2 record carries no canonical cost object at all (e.g.
+  // hand-rolled test fixtures), fall back to the flat aliases so an explicit
+  // known flag still counts.
+  const knownCostUsd = (r, normalized) => {
+    const c = normalized.cost;
+    if (c && typeof c === 'object' && typeof c.total_usd !== 'undefined') {
+      if (c.complete === true && Number.isFinite(c.total_usd)) return c.total_usd;
+      return null; // the canonical object decides entirely
+    }
+    if (r.cost_usd_known !== false && Number.isFinite(r.cost_usd)) return r.cost_usd;
+    return null;
+  };
+  const foldCost = (agg, r, normalized) => {
+    const known = knownCostUsd(r, normalized);
+    if (known !== null) {
+      agg.cost_usd += known;
+      agg.known_cost_usd += known;
+      agg.known_cost_calls++;
+    } else {
+      agg.unknown_cost_calls++;
+    }
+  };
   for (const r of records) {
     const normalized = normalizeUsageRecord(r);
     total.prompt_tokens += r.prompt_tokens || 0;
     total.cached_tokens += r.cached_tokens || 0;
     total.completion_tokens += r.completion_tokens || 0;
-    if (hasKnownCost(r)) {
-      total.cost_usd += r.cost_usd;
-      total.known_cost_usd += r.cost_usd;
-      total.known_cost_calls++;
-    } else {
-      total.unknown_cost_calls++;
-    }
+    foldCost(total, r, normalized);
     foldTokenAgg(total.tokens, normalized);
     foldCostAgg(total.cost, normalized);
     if (groupBy) {
@@ -385,13 +412,7 @@ export function summarize(records, { groupBy } = {}) {
       g.prompt_tokens += r.prompt_tokens || 0;
       g.cached_tokens += r.cached_tokens || 0;
       g.completion_tokens += r.completion_tokens || 0;
-      if (hasKnownCost(r)) {
-        g.cost_usd += r.cost_usd;
-        g.known_cost_usd += r.cost_usd;
-        g.known_cost_calls++;
-      } else {
-        g.unknown_cost_calls++;
-      }
+      foldCost(g, r, normalized);
       foldTokenAgg(g.tokens, normalized);
       foldCostAgg(g.cost, normalized);
       groups.set(key, g);
