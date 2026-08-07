@@ -3,6 +3,7 @@ import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey, requireKimiApiKey } from './config.js';
 import { normalizeKimiBaseUrl } from './moonshot.js';
 import { logUsage } from './usage.js';
+import { normalizeApiUsage } from './usage-schema.js';
 import { currentCall } from './call-context.js';
 import {
   ZAI_CODING_PLAN_BASE_URL,
@@ -54,13 +55,21 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
 }
 
 function recordUsage(resp, label, request = {}) {
-  if (!resp?.usage) return;
+  // A successful call with no usage object is still a real call worth
+  // recording — as a `missing` record, not a dropped one. Only an absent
+  // response entirely is skipped.
+  if (!resp) return;
   const ctx = currentCall();
+  const model = billingModelFor({ ...request, model: resp.model || request.model });
+  // Map the internal request provider onto the normalizer's vocabulary.
+  const provider = request.provider === 'glm' ? 'zai' : request.provider === 'kimi' ? 'kimi' : 'worker';
+  const { tokens, usage_status } = normalizeApiUsage(resp, { provider });
   logUsage({
-    model: billingModelFor({ ...request, model: resp.model || request.model }),
-    prompt_tokens: resp.usage.prompt_tokens,
-    cached_tokens: resp.usage.prompt_tokens_details?.cached_tokens,
-    completion_tokens: resp.usage.completion_tokens,
+    model,
+    billing_model: model,
+    usage_source: 'api',
+    usage_status,
+    tokens,
     label,
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
@@ -201,11 +210,51 @@ export async function chat({
   return resp;
 }
 
-export function reportUsage(resp, label = 'worker') {
-  const u = resp?.usage;
-  if (!u) return '';
-  const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
-  return `[${label}: ${u.prompt_tokens} in (${cached} cached) / ${u.completion_tokens} out | finish: ${resp.choices?.[0]?.finish_reason ?? 'n/a'}]`;
+export function reportUsage(resp, label = 'worker', { provider } = {}) {
+  // Reuse the same normalizer persistence uses so the human line and the log
+  // can never disagree; a provider field is never read directly here.
+  const { tokens, usage_status } = normalizeApiUsage(resp, { provider });
+  // A call that reported no counters renders nothing rather than a zero line.
+  if (usage_status === 'missing') return '';
+
+  const fmt = (n) => n.toLocaleString('en-US');
+
+  // Input side: show the split only when both halves are known, otherwise the
+  // reported total with a "split unavailable" marker.
+  let input = '';
+  if (tokens.input_uncached != null && tokens.cache_read != null) {
+    input = `${fmt(tokens.input_uncached)} uncached input + ${fmt(tokens.cache_read)} cache-read`;
+    if (tokens.cache_write != null && tokens.cache_write !== 0) {
+      input += ` + ${fmt(tokens.cache_write)} cache-write`;
+    }
+  } else if (tokens.input_total != null) {
+    input = `${fmt(tokens.input_total)} input (split unavailable)`;
+  }
+
+  let output = '';
+  if (tokens.output_visible != null && tokens.reasoning != null) {
+    output = `${fmt(tokens.output_visible)} visible + ${fmt(tokens.reasoning)} reasoning`;
+  } else if (tokens.output_total != null) {
+    output = `${fmt(tokens.output_total)} output (split unavailable)`;
+  }
+
+  let line = `[${label}: `;
+  if (input) line += input;
+  if (output) line += (input ? ' / ' : '') + output;
+  if (tokens.total != null) line += ` | total ${fmt(tokens.total)}`;
+
+  // An unknown atomic category is flagged, never printed as zero.
+  if (
+    tokens.input_uncached == null ||
+    tokens.cache_read == null ||
+    tokens.output_visible == null ||
+    tokens.reasoning == null
+  ) {
+    line += ' | incomplete usage detail';
+  }
+
+  line += ` | finish: ${resp?.choices?.[0]?.finish_reason ?? 'n/a'}]`;
+  return line;
 }
 
 // Successful one-shot providers are not perfectly uniform. OpenAI-compatible
