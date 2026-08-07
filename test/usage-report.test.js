@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reportUsage, recordUsage } from '../src/client.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// USAGE_FILE is derived from homedir() (HOME) at module load, and client.js
+// transitively imports src/usage.js. Point HOME at a throwaway dir BEFORE the
+// first import so recordUsage() writes to that temp log instead of polluting —
+// or rotating — the developer's real ~/.cache/triss/usage.jsonl.
+const HOME_DIR = mkdtempSync(join(tmpdir(), 'triss-usage-home-'));
+process.env.HOME = HOME_DIR;
+const { reportUsage, recordUsage } = await import('../src/client.js');
+
+test.after(() => {
+  rmSync(HOME_DIR, { recursive: true, force: true });
+});
 
 test('a deepseek response renders the full split line exactly', () => {
   const resp = {

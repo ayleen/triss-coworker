@@ -188,6 +188,31 @@ test('grouped rows render a partially-reported field with coverage instead of a 
   assert.match(out, /\b10\b/);
 });
 
+test('DEFECT 3: a mixed Crush+API group renders BOTH the split figures and the combined total', () => {
+  // A group holding one Crush call (combined only) and one API call
+  // (splittable input/output) must not hide the split figures behind the
+  // combined total nor the combined total behind the split — both belong.
+  const records = [
+    { ...v2({ model: 'mixed-m', tokens: { combined: 42, total: 42 } }) },
+    { ...v2({ model: 'mixed-m', tokens: { input_total: 100, cache_read: 20, output_total: 10 } }) },
+  ];
+  const out = render(records, { groupBy: 'model' });
+  // Split figures from the API call are present in the group row…
+  assert.match(out, /mixed-m[^\n]*\b100\b/, 'split input figure 100 must render');
+  assert.match(out, /mixed-m[^\n]*\b10\b/, 'split output figure 10 must render');
+  // …and the Crush combined total is present too, on the same group row.
+  assert.match(out, /mixed-m[^\n]*\bcombined\s*42\b/, 'combined total must render alongside the split figures');
+});
+
+test('DEFECT 3: a combined-only group still renders just combined (no fabricated split)', () => {
+  const out = render(
+    [v2({ model: 'crush-only-m', tokens: { combined: 7, total: 7 } })],
+    { groupBy: 'model' },
+  );
+  assert.match(out, /crush-only-m[^\n]*\bcombined:\s*7\b/);
+  assert.doesNotMatch(out, /crush-only-m[^\n]*\bin\b/, 'no split figures were reported, so none may be fabricated');
+});
+
 // A v2 record carrying a canonical cost object with a reported engine total
 // (e.g. an OpenCode part.cost that did not prove a known component estimate).
 function withEngineCost(record, reportedTotalUsd) {

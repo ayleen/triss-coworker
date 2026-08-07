@@ -3,13 +3,24 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
+
+// USAGE_FILE is derived from homedir() (HOME) at module load. Point HOME at a
+// throwaway dir BEFORE the first import so logUsage()/clearLog() write to that
+// temp log instead of polluting — or rotating — the developer's real
+// ~/.cache/triss/usage.jsonl.
+const HOME_DIR = mkdtempSync(join(tmpdir(), 'triss-usage-home-'));
+process.env.HOME = HOME_DIR;
+const {
   logUsage,
   readLog,
   summarize,
   normalizeUsageRecord,
   DEFAULT_MAX_BYTES,
-} from '../src/usage.js';
+} = await import('../src/usage.js');
+
+test.after(() => {
+  rmSync(HOME_DIR, { recursive: true, force: true });
+});
 
 const NINE_TOKEN_FIELDS = [
   'input_uncached',
@@ -295,6 +306,35 @@ test('summarize never coerces a field nobody reported into zero', () => {
   ];
   const { total } = summarize(records);
   assert.deepEqual(total.tokens.reasoning, { sum: 0, known_calls: 0, unknown_calls: 3 });
+});
+
+test('DEFECT 2: v2 cost aggregation reads the canonical cost, never the deprecated flat aliases', () => {
+  // First record: a v2 record whose canonical cost object says $0.005 but whose
+  // deprecated cost_usd compat alias still carries a stale 999 — aggregation
+  // must trust the canonical total_usd, not 999. The second carries no canonical
+  // total (complete:false) so its flat alias must NOT count it as known either.
+  const records = [
+    {
+      schema_version: 2,
+      cost_usd: 999,
+      cost_usd_known: true,
+      cost: { total_usd: 0.005, source: 'estimated', complete: true },
+    },
+    {
+      schema_version: 2,
+      cost_usd: 0,
+      cost_usd_known: true,
+      cost: { total_usd: null, source: 'unknown', complete: false },
+    },
+  ];
+  const { total } = summarize(records);
+  assert.equal(total.known_cost_calls, 1, 'only the record with a completed canonical total counts as known');
+  assert.equal(total.unknown_cost_calls, 1);
+  assert.ok(
+    Math.abs(total.cost_usd - 0.005) < 1e-12,
+    `v2 must use the canonical total_usd 0.005, not the stale flat 999 (got ${total.cost_usd})`,
+  );
+  assert.ok(Math.abs(total.known_cost_usd - 0.005) < 1e-12);
 });
 
 test('grouped summarize produces the same canonical aggregate per group', () => {

@@ -95,11 +95,20 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
       const shortKey = groupBy === 'cwd' ? shortenCwd(key) : key;
       const gTokens = g.tokens ?? {};
       const gCombined = gTokens.combined;
+      // A mixed group (e.g. one Crush call + one API call) reports combined AND
+      // split figures; hide neither. Show both on the one line. Combined-only
+      // when no split field was reported at all.
+      const splitKnown =
+        (gTokens.input_total && gTokens.input_total.known_calls > 0) ||
+        (gTokens.output_total && gTokens.output_total.known_calls > 0);
+      const splitOut = `${groupField('input_total', gTokens.input_total)} in / ${groupField('output_total', gTokens.output_total)} out`;
       let inOut;
-      if (gCombined && gCombined.known_calls > 0) {
+      if (gCombined && gCombined.known_calls > 0 && splitKnown) {
+        inOut = `${splitOut} · combined ${fmt(gCombined.sum)}`;
+      } else if (gCombined && gCombined.known_calls > 0) {
         inOut = `combined: ${fmt(gCombined.sum)}`;
       } else {
-        inOut = `${groupField('input_total', gTokens.input_total)} in / ${groupField('output_total', gTokens.output_total)} out`;
+        inOut = splitOut;
       }
       body.push(
         `  ${shortKey.padEnd(40)} ${String(g.calls).padStart(5)} calls   ${inOut.padEnd(28)} ` +

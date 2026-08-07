@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
+
+// USAGE_FILE is derived from homedir() (HOME) at module load. Point HOME at a
+// throwaway dir BEFORE the first import so logUsage()/clearLog() write to that
+// temp log instead of polluting — or rotating — the developer's real
+// ~/.cache/triss/usage.jsonl.
+const HOME_DIR = mkdtempSync(join(tmpdir(), 'triss-usage-home-'));
+process.env.HOME = HOME_DIR;
+const {
   estimateCost,
   summarize,
   parsePeriod,
@@ -11,7 +18,11 @@ import {
   readLog,
   clearLog,
   maybeRotate,
-} from '../src/usage.js';
+} = await import('../src/usage.js');
+
+test.after(() => {
+  rmSync(HOME_DIR, { recursive: true, force: true });
+});
 
 test('estimateCost applies the right per-token rates', () => {
   const cost = estimateCost({

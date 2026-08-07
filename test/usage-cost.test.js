@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   priceFor,
+  priceIsOverride,
   resolveProvider,
   resolveBillingMode,
   estimateCanonicalCost,
@@ -97,6 +98,43 @@ test('a malformed TRISS_PRICE override is ignored and the built-in row is used',
     close(p.cache_read, 0.0028e-6);
     close(p.output, 0.28e-6);
     assert.equal(p.cache_write, null);
+  } finally {
+    if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
+    else process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = before;
+  }
+});
+
+test('DEFECT 4: a blank field in a TRISS_PRICE override is rejected and the built-in row is used', () => {
+  // '1,,2' is a 3-arity override with an EMPTY cache-read field. Number('') is
+  // 0, so without a pre-conversion emptiness check this would silently become
+  // a zero cache-read rate. It must be rejected wholesale instead.
+  const before = process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
+  process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = '1,,2';
+  try {
+    const p = priceFor('deepseek-v4-flash');
+    assert.equal(
+      priceIsOverride('deepseek-v4-flash'),
+      false,
+      'an override with a blank field must not answer for the model',
+    );
+    // Falls back to the built-in deepseek-v4-flash row, cache_read intact.
+    close(p.input_uncached, 0.14e-6);
+    close(p.cache_read, 0.0028e-6);
+    close(p.output, 0.28e-6);
+    assert.equal(p.cache_write, null);
+  } finally {
+    if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
+    else process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = before;
+  }
+});
+
+test('DEFECT 4: whitespace-only override fields are rejected the same way', () => {
+  const before = process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
+  process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = '1, ,2';
+  try {
+    const p = priceFor('deepseek-v4-flash');
+    assert.equal(priceIsOverride('deepseek-v4-flash'), false);
+    close(p.cache_read, 0.0028e-6);
   } finally {
     if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
     else process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = before;
