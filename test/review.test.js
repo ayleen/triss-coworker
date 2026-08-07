@@ -301,7 +301,7 @@ test('REV-06: MCP review core forwards the selected inference provider and model
       reviewSystem: 'Review.',
       callModel: async (request) => {
         captured = request;
-        return 'reviewed';
+        return { content: 'reviewed', usageReport: '' };
       },
     });
 

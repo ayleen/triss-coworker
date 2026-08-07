@@ -113,8 +113,8 @@ export function priceFor(billingModel) {
   // Subscription use is metered by the plan, regardless of the particular
   // model id. Keep this after the override so a user can explicitly
   // account for a plan model if their contract changes.
-  if (bare.startsWith('zai-coding-plan/')) return CODING_PLAN_PRICE;
-  if (bare.startsWith('kimi-for-coding/')) return CODING_PLAN_PRICE;
+  if (bare.startsWith('zai-coding-plan/')) return { ...CODING_PLAN_PRICE };
+  if (bare.startsWith('kimi-for-coding/')) return { ...CODING_PLAN_PRICE };
   const row = DEFAULT_PRICES[bare];
   // No built-in row carries a cache-write rate — that would silently expire.
   return row ? { ...row, cache_write: null } : null;
