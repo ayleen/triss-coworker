@@ -214,7 +214,7 @@ closed.
       "input_total": 14575, "output_total": 34, "total": 14609,
       "combined": null
     },
-    "cost": { "total_usd": 0, "source": "free", "complete": true },
+    "cost": { "total_usd": null, "source": "unknown", "complete": false },
     "prompt_tokens": 303, "completion_tokens": 19
   },
   "warnings": []

@@ -135,6 +135,61 @@ test('logUsage defaults model from billing_model when only billing_model is give
   assert.equal(rec.billing_model, 'zai/glm-5.2');
 });
 
+test('logUsage opencode source: compatibility prompt_tokens/completion_tokens keep per-source meaning (uncached input / visible output)', () => {
+  const rec = logUsage({
+    model: 'opencode/deepseek-v4-flash-free',
+    usage_source: 'opencode',
+    tokens: {
+      input_uncached: 303,
+      cache_read: 14272,
+      cache_write: 0,
+      output_visible: 19,
+      reasoning: 15,
+      input_total: 14575,
+      output_total: 34,
+      total: 14609,
+    },
+    label: 'opencode-source',
+  });
+  // Deprecated aliases keep opencode's existing meaning: the summed uncached
+  // input and the visible output (docs/usage-accounting.md "Compatibility
+  // fields").
+  assert.equal(rec.prompt_tokens, 303);
+  assert.equal(rec.completion_tokens, 19);
+  assert.equal(rec.cached_tokens, 14272);
+  // Canonical fields are untouched.
+  assert.equal(rec.tokens.input_total, 14575);
+  assert.equal(rec.tokens.output_total, 34);
+});
+
+test('logUsage crush source: compatibility prompt_tokens is 0 and completion_tokens carries the combined delta', () => {
+  const rec = logUsage({
+    model: 'glm-4.7',
+    usage_source: 'crush',
+    tokens: { combined: 42, total: 42 },
+    label: 'crush-source',
+  });
+  assert.equal(rec.prompt_tokens, 0);
+  assert.equal(rec.completion_tokens, 42);
+  // cached_tokens keeps its meaning: cache_read, which is null for crush.
+  assert.equal(rec.cached_tokens, null);
+  // Canonical combined-only shape is preserved.
+  assert.equal(rec.tokens.combined, 42);
+  assert.equal(rec.tokens.input_total, null);
+});
+
+test('logUsage api/absent source: compatibility fields mirror input_total/output_total', () => {
+  const rec = logUsage({
+    model: 'deepseek-v4-flash',
+    usage_source: 'api',
+    tokens: { input_total: 1000, cache_read: 200, output_total: 100 },
+    label: 'api-source',
+  });
+  assert.equal(rec.prompt_tokens, 1000);
+  assert.equal(rec.completion_tokens, 100);
+  assert.equal(rec.cached_tokens, 200);
+});
+
 test('normalizeUsageRecord passes a v2 record through marked non-legacy', () => {
   const rec = normalizeUsageRecord({
     schema_version: 2,

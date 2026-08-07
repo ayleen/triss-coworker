@@ -365,7 +365,7 @@ Triss usage · 1 call · last 24h
     visible:         19
     reasoning:       15
 
-  cost:          $0.0000 · free
+  cost:          unknown · engine reported $0.0000
 ```
 
 The rule throughout is that **unknown is not zero**. A field the provider did

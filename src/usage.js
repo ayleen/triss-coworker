@@ -207,10 +207,23 @@ export function logUsage(input = {}) {
   record.tokens = cTokens;
   record.cost = cCost;
   // Deprecated compatibility fields are derived FROM the canonical values and
-  // never overwrite anything canonical.
-  record.prompt_tokens = cTokens.input_total;
+  // never overwrite anything canonical. Their meaning is per-source (see
+  // docs/usage-accounting.md "Compatibility fields"):
+  //   - opencode: the summed uncached input and the visible output;
+  //   - crush: prompt 0 and the combined delta carried as completion_tokens;
+  //   - anything else (api/absent): the input_total / output_total pair.
+  // cached_tokens keeps cache_read meaning on every path.
+  if (usage_source === 'opencode') {
+    record.prompt_tokens = cTokens.input_uncached;
+    record.completion_tokens = cTokens.output_visible;
+  } else if (usage_source === 'crush') {
+    record.prompt_tokens = 0;
+    record.completion_tokens = cTokens.combined;
+  } else {
+    record.prompt_tokens = cTokens.input_total;
+    record.completion_tokens = cTokens.output_total;
+  }
   record.cached_tokens = cTokens.cache_read;
-  record.completion_tokens = cTokens.output_total;
   const knownCost = cCost && Number.isFinite(cCost.total_usd) ? cCost.total_usd : null;
   record.cost_usd = knownCost === null ? 0 : knownCost;
   record.cost_usd_known = knownCost !== null;

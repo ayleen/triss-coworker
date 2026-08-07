@@ -30,7 +30,7 @@ costs are finite numbers or `null`.
   "ts": "2026-08-07T00:00:00.000Z",
   "model": "opencode/deepseek-v4-flash-free",
   "billing_model": "opencode/deepseek-v4-flash-free",
-  "billing_mode": "free",
+  "billing_mode": "unknown",
   "provider": "opencode-zen",
   "usage_source": "opencode",
   "usage_status": "reported",
@@ -62,13 +62,18 @@ costs are finite numbers or `null`.
     "output_total_usd": null,
     "reported_total_usd": 0,
     "reported_total_source": "engine",
-    "total_usd": 0,
-    "source": "free",
-    "complete": true,
-    "unknown_components": []
+    "total_usd": null,
+    "source": "unknown",
+    "complete": false,
+    "unknown_components": ["input_total"]
   }
 }
 ```
+
+Note the cost in that example. The engine reported `0`, and Triss keeps that
+signal in `reported_total_usd` — but an OpenCode Zen route is not *proven*
+free, so the zero does not become the call's cost. See
+[Proving a free call](#proving-a-free-call).
 
 ### Atomic token fields
 
@@ -140,12 +145,28 @@ event does not prove which, the mode is `unknown`, not `subscription`:
 | `zai-coding-plan/*` | `subscription` |
 | `moonshotai/*`, `moonshotai-cn/*` | `payg` |
 | `kimi-for-coding/*` | `subscription` |
-| OpenCode Zen model verified free in the live catalogue | `free` |
-| OpenCode Zen model without verified free status | `unknown` |
+| OpenCode Zen model proven free by a caller-supplied set | `free` |
+| OpenCode Zen model without that proof | `unknown` |
 | OpenCode Go with a proven per-call subscription route | `subscription` |
 | OpenCode Go that may fall back to Zen balance | `unknown` |
 | `triss-worker/*` (configurable endpoint) | `unknown` — a configured price can still produce an estimate |
 | Crush | token pricing may stay `unknown`; cost trust follows `delta_cost_usd` |
+
+### Proving a free call
+
+`billing_mode: "free"` requires the caller to pass a set of model ids it has
+*proven* free. A `-free` suffix is not proof, and neither is a zero cost from
+the engine — OpenCode computes that zero from its own catalogue and returns it
+just as readily for a model the catalogue prices incompletely.
+
+Triss's own coder path does not have that proof today: the authenticated Zen
+catalogue it queries returns model **ids only**, with no rates, so a Zen run is
+classified `unknown` and its engine-reported zero stays in
+`reported_total_usd` without becoming the call's cost. A Zen call therefore
+reports its cost as unknown rather than as `$0`. Set a matching
+`TRISS_PRICE_<MODEL_ID>` override (all zeros for a free model) if you want it
+priced. Should the catalogue start publishing rates, this classification can
+tighten without changing the record schema.
 
 `usage_status: "missing"` means the call completed but reported no counters at
 all. Such a call is still logged, with `null` token fields — absence is never
@@ -574,7 +595,7 @@ Triss usage · 1 call · last 24h
     visible:         19
     reasoning:       15
 
-  cost:          $0.0000 · free
+  cost:          unknown · engine reported $0.0000
 ```
 
 With partial detail, coverage is reported instead of implying zero:

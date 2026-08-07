@@ -79,11 +79,30 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
     const sorted = [...groups.entries()].sort(
       (a, b) => (b[1].known_cost_usd ?? b[1].cost_usd ?? 0) - (a[1].known_cost_usd ?? a[1].cost_usd ?? 0),
     );
+    // The same rendering rules as the totals block apply per group row: render
+    // from the canonical g.tokens aggregate so a field nobody reported reads
+    // `unavailable` (never a fabricated 0 from the deprecated aliases), an
+    // explicit 0 reads 0, and a partially-reported field shows coverage. Crush's
+    // combined total is labelled `combined` rather than split into in/out.
+    const groupField = (key, entry) => {
+      if (!entry) return 'unavailable';
+      const totalCalls = entry.known_calls + entry.unknown_calls;
+      if (entry.known_calls > 0 && entry.unknown_calls === 0) return fmt(entry.sum);
+      if (entry.known_calls === 0) return 'unavailable';
+      return `${fmt(entry.sum)} · ${entry.known_calls}/${totalCalls} calls`;
+    };
     for (const [key, g] of sorted) {
       const shortKey = groupBy === 'cwd' ? shortenCwd(key) : key;
+      const gTokens = g.tokens ?? {};
+      const gCombined = gTokens.combined;
+      let inOut;
+      if (gCombined && gCombined.known_calls > 0) {
+        inOut = `combined: ${fmt(gCombined.sum)}`;
+      } else {
+        inOut = `${groupField('input_total', gTokens.input_total)} in / ${groupField('output_total', gTokens.output_total)} out`;
+      }
       body.push(
-        `  ${shortKey.padEnd(40)} ${String(g.calls).padStart(5)} calls   ` +
-          `${fmt(g.prompt_tokens).padStart(10)} in / ${fmt(g.completion_tokens).padStart(8)} out ` +
+        `  ${shortKey.padEnd(40)} ${String(g.calls).padStart(5)} calls   ${inOut.padEnd(28)} ` +
           formatCost(g),
       );
     }

@@ -3985,9 +3985,14 @@ async function runCrushFlow({
     usage_source: 'crush',
   });
   const ctx = currentCall();
-  logUsage({
+  // An explicit model replaces the stable 'crush' sentinel for pricing. The
+  // sentinel is kept only when no model identity is known, and it is never
+  // eligible for a component price estimate (see estimateCanonicalCost).
+  const crushBillingModel = modelOverride || 'crush';
+  const logUsageFn = deps.logUsage || logUsage;
+  logUsageFn({
     model: modelOverride || 'crush',
-    billing_model: 'crush',
+    billing_model: crushBillingModel,
     billing_mode: 'unknown',
     usage_source: 'crush',
     engine: 'crush',
@@ -4461,9 +4466,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     result.warnings.push('no usage data (no step_finish events) in the event stream');
   }
 
-  const { tokens, reported_total_usd, reported_total_source, usage_status } = finalizeOpencodeUsage(
-    result.usage,
-  );
+  const { tokens, reported_total_usd, reported_total_source, usage_status, warnings: normalizeWarnings } =
+    finalizeOpencodeUsage(result.usage);
+  if (normalizeWarnings.length) result.warnings.push(...normalizeWarnings);
   const billing_model = modelUsed;
   const billing_mode = resolveBillingMode({ billing_model, engine: 'opencode' });
   // Estimate the canonical cost. An unknown provider zero stays unknown ("unknown
