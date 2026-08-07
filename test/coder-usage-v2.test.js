@@ -1,0 +1,340 @@
+/**
+ * coder-usage-v2.test.js — RED phase for the "Coder envelope" v2 usage member
+ * contract defined in docs/usage-accounting.md ("## Coder envelope"):
+ *
+ *   usage: {
+ *     schema_version: 2,
+ *     usage_status: "reported",
+ *     tokens: { input_uncached, cache_read, cache_write, output_visible,
+ *               reasoning, input_total, output_total, total, combined },
+ *     cost:   { reported_total_usd, reported_total_source,
+ *               total_usd, source, complete },
+ *     prompt_tokens,  // deprecated alias, existing per-engine meaning
+ *     completion_tokens,  // deprecated alias
+ *   }
+ *
+ * Two engines, via the REAL exported API in src/commands/coder.js:
+ *   - Opencode: replay test/fixtures/opencode-run-events.ndjson through
+ *     `createEventFolder`/`foldEventLine` (pure fold) and through `runCoderRun`
+ *     with a fake spawn (envelope).
+ *   - Crush: build the parsed crush envelope the way coder-crush.test.js does
+ *     `parseCrushEnvelope`, then drive `runCoderRun` with engine "crush" +
+ *     a fake spawn that emits that single-JSON line.
+ *
+ * No live network, no real engine processes. This slice must NOT touch src/.
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
+
+import { createEventFolder, foldEventLine, runCoderRun } from '../src/commands/coder.js';
+
+const FIXTURE_PATH = join(
+  new URL('.', import.meta.url).pathname,
+  'fixtures',
+  'opencode-run-events.ndjson',
+);
+const FIXTURE = readFileSync(FIXTURE_PATH, 'utf8');
+const FIXTURE_LINES = FIXTURE.split('\n').filter(Boolean);
+
+function replayFixture(state) {
+  for (const line of FIXTURE_LINES) foldEventLine(state, line);
+  return state;
+}
+
+// ─── env isolation ─────────────────────────────────────────────────────────
+//
+// Point HOME/TRISS_PROJECT_ROOT at an empty tmp dir so loadEnvFiles() cannot
+// re-inject the repo's live credentials from ./.triss.env, clear any ambient
+// provider keys the author's shell might carry, and set exactly the keys a
+// given test needs. Restores everything afterwards.
+
+const AMBIENT_ENV = [
+  'ZHIPU_API_KEY',
+  'OPENCODE_API_KEY',
+  'MOONSHOT_API_KEY',
+  'KIMI_API_KEY',
+  'TRISS_CODER_MODEL',
+  'TRISS_CODER_ENGINE',
+  'TRISS_USAGE_LOG',
+];
+
+function withIsolatedEnv(vars, fn) {
+  return async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-coder-v2-')));
+    const saved = {};
+    for (const k of AMBIENT_ENV) saved[k] = process.env[k];
+    const savedHome = process.env.HOME;
+    const savedRoot = process.env.TRISS_PROJECT_ROOT;
+    for (const k of AMBIENT_ENV) delete process.env[k];
+    process.env.HOME = home;
+    process.env.TRISS_PROJECT_ROOT = home;
+    Object.assign(process.env, vars);
+    try {
+      await fn();
+    } finally {
+      for (const k of AMBIENT_ENV) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+      else process.env.TRISS_PROJECT_ROOT = savedRoot;
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+}
+
+// ─── fake engine spawns ──────────────────────────────────────────────────────
+
+function fakeOpencodeSpawn() {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 555555;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(FIXTURE);
+      child.stderr.end('');
+      setImmediate(() => child.emit('close', 0, null));
+    });
+    return child;
+  };
+}
+
+// Crush reports its whole envelope as a single JSON line (parseCrushEnvelope
+// takes the LAST non-empty line). Replay that line then close cleanly.
+function fakeCrushSpawn(envelopeLine) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 654320;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(envelopeLine);
+      child.stderr.end('');
+      setImmediate(() => child.emit('close', 0, null));
+    });
+    return child;
+  };
+}
+
+// `deps.stdoutWrite` is injected instead of monkey-patching the real
+// process.stdout.write — the fake spawn yields the event loop (setImmediate),
+// and `node --test`'s own reporter writes control messages to the real stdout
+// between turns, which would otherwise corrupt a naive capture.
+function stdoutCapture() {
+  const chunks = [];
+  return {
+    stdoutWrite: (s) => {
+      chunks.push(s);
+      return true;
+    },
+    text: () => chunks.join(''),
+  };
+}
+
+// A process-group "gone" seam for the crush flow's group-cleanup polling: any
+// signal-0 probe throws ESRCH, so spawnCrush treats the group as vanished.
+function goneProcessGroup() {
+  return () => {
+    const e = new Error('no such process');
+    e.code = 'ESRCH';
+    throw e;
+  };
+}
+
+function crushRunDeps(envelopeLine) {
+  return {
+    spawn: fakeCrushSpawn(envelopeLine),
+    spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+    stdoutWrite: () => true,
+    killProcess: goneProcessGroup(),
+    processGroupPollMs: 1,
+  };
+}
+
+// ─── OpenCode: pure fold carries canonical tokens (test 1) ───────────────────
+
+test('opencode fold: the accumulator exposes canonical token fields summed across both step_finish events', () => {
+  const state = replayFixture(createEventFolder());
+  // Fixture: step_finish #1 {input:294, output:14, reasoning:15, cache:{read:6976, write:0}},
+  //           step_finish #2 {input:9,  output:5,  reasoning:0,  cache:{read:7296, write:0}}
+  // -> input_uncached 303, cache_read 14272, cache_write 0, output_visible 19,
+  //    reasoning 15, input_total 14575, output_total 34, total(=7299+7310) 14609.
+  assert.equal(state.usage.input_uncached, 303);
+  assert.equal(state.usage.cache_read, 14272);
+  assert.equal(state.usage.cache_write, 0);
+  assert.equal(state.usage.output_visible, 19);
+  assert.equal(state.usage.reasoning, 15);
+  assert.equal(state.usage.input_total, 14575);
+  assert.equal(state.usage.output_total, 34);
+  assert.equal(state.usage.total, 14609);
+});
+
+// ── OpenCode: envelope.usage ─────────────────────────────────────────────────
+
+// The default GLM model is the plan-metered zai-coding-plan family. To pin the
+// cost to the "not proven free / engine reports zero" case the contract
+// describes (docs: the fixture's model is not free, the engine cost is zero),
+// override the model with an explicit unpriced pay-per-token GLM id so no
+// subscription promise can make the run look free.
+
+const UNPRICED_PAYG_MODEL = 'zai/glm-unreleased';
+
+test(
+  'opencode envelope usage: deprecated aliases keep their existing meaning (prompt 303 / completion 19)',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello via a shell echo',
+        {},
+        { spawn: fakeOpencodeSpawn(), spawnSync: () => ({ status: 1, stdout: '', error: null }), stdoutWrite: capture.stdoutWrite },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.usage.prompt_tokens, 303);
+      assert.equal(envelope.usage.completion_tokens, 19);
+    },
+  ),
+);
+
+test(
+  'opencode envelope usage: reports the engine-reported cost verbatim (reported_total_usd 0 / reported_total_source "engine")',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello via a shell echo',
+        {},
+        { spawn: fakeOpencodeSpawn(), spawnSync: () => ({ status: 1, stdout: '', error: null }), stdoutWrite: capture.stdoutWrite },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.usage.cost.reported_total_usd, 0);
+      assert.equal(envelope.usage.cost.reported_total_source, 'engine');
+    },
+  ),
+);
+
+test(
+  'opencode envelope usage: a zero engine cost on an unproven model is NOT a known free call (complete false / source "unknown")',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello via a shell echo',
+        {},
+        { spawn: fakeOpencodeSpawn(), spawnSync: () => ({ status: 1, stdout: '', error: null }), stdoutWrite: capture.stdoutWrite },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.usage.cost.complete, false);
+      assert.equal(envelope.usage.cost.source, 'unknown');
+    },
+  ),
+);
+
+test(
+  'opencode envelope usage: carries schema_version 2 and usage_status "reported"',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello via a shell echo',
+        {},
+        { spawn: fakeOpencodeSpawn(), spawnSync: () => ({ status: 1, stdout: '', error: null }), stdoutWrite: capture.stdoutWrite },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.usage.schema_version, 2);
+      assert.equal(envelope.usage.usage_status, 'reported');
+    },
+  ),
+);
+
+// ── Crush: usage.tokens + deprecated aliases (test 6 + 8) ────────────────────
+
+test(
+  'crush envelope usage: tokens.combined and tokens.total carry delta_tokens; every split field is null; aliases map to 0 / delta_tokens',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_abc',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 42, delta_cost_usd: 0.0001 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30 },
+      { ...crushRunDeps(envelopeLine), stdoutWrite: capture.stdoutWrite },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    assert.equal(envelope.engine, 'crush');
+    assert.equal(envelope.usage.tokens.combined, 42);
+    assert.equal(envelope.usage.tokens.total, 42);
+    for (const key of ['input_uncached', 'cache_read', 'cache_write', 'output_visible', 'reasoning', 'input_total', 'output_total']) {
+      assert.equal(envelope.usage.tokens[key], null, `crush split field ${key} must be null`);
+    }
+    // Deprecated aliases keep crush's existing meaning: prompt 0, completion = delta_tokens.
+    assert.equal(envelope.usage.prompt_tokens, 0);
+    assert.equal(envelope.usage.completion_tokens, 42);
+  }),
+);
+
+// ── Crush: usage.cost (testcase 7) — including a real delta_cost_usd of 0 ──
+
+test(
+  'crush envelope usage: cost.total_usd mirrors delta_cost_usd with source "engine" and complete true (nonzero delta)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_abc',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 42, delta_cost_usd: 0.0001 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30 },
+      { ...crushRunDeps(envelopeLine), stdoutWrite: capture.stdoutWrite },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    assert.equal(envelope.usage.cost.total_usd, 0.0001);
+    assert.equal(envelope.usage.cost.source, 'engine_reported');
+    assert.equal(envelope.usage.cost.complete, true);
+  }),
+);
+
+test(
+  'crush envelope usage: a real delta_cost_usd of exactly 0 is reported as a complete engine-priced call',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_zero',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 5, delta_cost_usd: 0 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30 },
+      { ...crushRunDeps(envelopeLine), stdoutWrite: capture.stdoutWrite },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    assert.equal(envelope.usage.cost.total_usd, 0);
+    assert.equal(envelope.usage.cost.source, 'engine_reported');
+    assert.equal(envelope.usage.cost.complete, true);
+  }),
+);

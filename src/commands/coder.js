@@ -59,7 +59,13 @@ import {
   readEnvFile,
 } from '../secrets.js';
 import { projectRoot } from '../safety.js';
-import { logUsage } from '../usage.js';
+import { logUsage, estimateCanonicalCost, resolveBillingMode } from '../usage.js';
+import {
+  emptyOpencodeUsage,
+  foldOpencodeStep,
+  finalizeOpencodeUsage,
+  normalizeCrushUsage,
+} from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
 import {
@@ -2925,7 +2931,7 @@ export function createEventFolder() {
     parsedAnyEvent: false,
     sessionRealId: null,
     finalText: null,
-    usage: { input: 0, output: 0 },
+    usage: emptyOpencodeUsage(),
     sawStepFinish: false,
     warnings: [],
     rateLimit: null,
@@ -2959,14 +2965,17 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       if (onToolUse) onToolUse(evt);
       break;
     case 'step_finish': {
-      // Per-step tokens, NOT cumulative — recon confirmed every
-      // step_finish event carries its own step-level counts, so the
-      // envelope's usage is the SUM across all step_finish events, not
-      // just the last one.
+      // Per-step tokens, NOT cumulative — recon confirmed every step_finish event
+      // carries its own step-level counts, so the envelope's usage is the SUM
+      // across all step_finish events, not just the last one.
       state.sawStepFinish = true;
-      const tokens = evt.part?.tokens || {};
-      state.usage.input += tokens.input || 0;
-      state.usage.output += tokens.output || 0;
+      foldOpencodeStep(state.usage, evt.part);
+      // The accumulator keeps the raw per-step sums; the two derived totals are
+      // refreshed here so the canonical fold surface already carries them
+      // (finalizeOpencodeUsage stays the single source of the derivation).
+      const { tokens: folded } = finalizeOpencodeUsage(state.usage);
+      state.usage.input_total = folded.input_total;
+      state.usage.output_total = folded.output_total;
       break;
     }
     case 'text':
@@ -3914,11 +3923,12 @@ async function runCrushFlow({
   if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
 
   // crush reports a COMBINED delta_tokens, never split prompt/completion (unlike
-  // opencode's per-step input/output). Stuff it into completion_tokens so the
-  // run is still accounted (prompt_tokens:0 is fine — logUsage only
-  // short-circuits on null), and flag the split as unavailable.
-  const deltaTokens = parsed.usage?.delta_tokens ?? 0;
-  const deltaCostUsd = parsed.usage?.delta_cost_usd;
+  // opencode's per-step input/output). The canonical tokens shape keeps every
+  // split null and puts delta_tokens in combined/total; flag the split as
+  // unavailable so the run is still accounted without pretending to a split.
+  const normalizedUsage = normalizeCrushUsage(parsed.usage);
+  const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizedUsage;
+  const deltaTokens = tokens.combined ?? 0;
   warnings.push(
     'crush reports combined token count only (delta_tokens); prompt/completion split unavailable',
   );
@@ -3962,13 +3972,28 @@ async function runCrushFlow({
     }
   }
 
-  // Usage accounting. prompt_tokens:0 (crush has no split) + the real combined
-  // count as completion_tokens, so runs never vanish from the usage log.
+  // Usage accounting — canonical v2 form. crush reports a REAL, complete
+  // per-call cost straight from the engine (unlike opencode's catalogue-derived
+  // cost, whose zero proves nothing), so the canonical estimate trusts it in
+  // full, including an explicit 0.
+  const crushCost = estimateCanonicalCost({
+    billing_model: 'crush',
+    billing_mode: 'unknown',
+    tokens,
+    reported_total_usd,
+    reported_total_source,
+    usage_source: 'crush',
+  });
   const ctx = currentCall();
   logUsage({
     model: modelOverride || 'crush',
-    prompt_tokens: 0,
-    completion_tokens: deltaTokens,
+    billing_model: 'crush',
+    billing_mode: 'unknown',
+    usage_source: 'crush',
+    engine: 'crush',
+    usage_status,
+    tokens,
+    cost: crushCost,
     label: 'coder',
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
@@ -3984,11 +4009,17 @@ async function runCrushFlow({
     diff_stat: diffStat,
     worktree: worktreeOut,
     usage: {
+      schema_version: 2,
+      usage_status,
+      tokens,
+      cost: crushCost,
+      // Deprecated aliases keep crush's existing meaning: prompt 0, and the
+      // combined delta_tokens carried as completion_tokens.
       prompt_tokens: 0,
       completion_tokens: deltaTokens,
       // crush reports REAL per-call cost (unlike opencode's coding-plan
-      // cost:0). Preserved verbatim as an extra usage field.
-      cost_usd: deltaCostUsd ?? null,
+      // cost:0). Preserved verbatim for current consumers.
+      cost_usd: crushCost.total_usd ?? null,
     },
     warnings,
   };
@@ -4430,13 +4461,35 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     result.warnings.push('no usage data (no step_finish events) in the event stream');
   }
 
-  const promptTokens = result.usage.input;
-  const completionTokens = result.usage.output;
+  const { tokens, reported_total_usd, reported_total_source, usage_status } = finalizeOpencodeUsage(
+    result.usage,
+  );
+  const billing_model = modelUsed;
+  const billing_mode = resolveBillingMode({ billing_model, engine: 'opencode' });
+  // Estimate the canonical cost. An unknown provider zero stays unknown ("unknown
+  // is not zero") — exactly how an engine zero on an unpriced pay-per-token route
+  // reports source:'unknown', complete:false instead of a claimed $0.
+  const cost = estimateCanonicalCost({
+    billing_model,
+    billing_mode,
+    tokens,
+    reported_total_usd,
+    reported_total_source,
+  });
+  // Deprecated aliases keep their pre-existing meaning and values: the summed
+  // uncached input and the visible output.
+  const promptTokens = tokens.input_uncached;
+  const completionTokens = tokens.output_visible;
   const ctx = currentCall();
   logUsage({
     model: modelUsed,
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
+    billing_model,
+    billing_mode,
+    usage_source: 'opencode',
+    engine: 'opencode',
+    usage_status,
+    tokens,
+    cost,
     label: 'coder',
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
@@ -4451,7 +4504,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     files_changed: filesChanged,
     diff_stat: diffStat,
     worktree: worktreeOut,
-    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens },
+    usage: {
+      schema_version: 2,
+      usage_status,
+      tokens,
+      cost,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+    },
     warnings: result.warnings,
   };
 

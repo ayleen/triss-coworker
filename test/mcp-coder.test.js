@@ -205,7 +205,25 @@ test(
     assert.equal(envelope.engine, 'opencode');
     assert.equal(envelope.exit_reason, 'end_turn');
     assert.equal(envelope.final_text, '`hello`');
-    assert.deepEqual(envelope.usage, { prompt_tokens: 303, completion_tokens: 19 });
+    // v2 usage contract (docs/usage-accounting.md, "Coder envelope"). Deprecated
+    // aliases keep their pre-existing meaning and values (303 / 19)...
+    assert.equal(envelope.usage.prompt_tokens, 303);
+    assert.equal(envelope.usage.completion_tokens, 19);
+    // ...alongside the canonical tokens/cost/schema_version members. The model
+    // in play (from this repo's .triss.env) is an unpriced opencode/* route, so
+    // the engine-reported zero is NOT a known $0: total_usd stays null.
+    assert.equal(envelope.usage.schema_version, 2);
+    assert.equal(envelope.usage.usage_status, 'reported');
+    assert.equal(envelope.usage.tokens.input_uncached, 303);
+    assert.equal(envelope.usage.tokens.cache_read, 14272);
+    assert.equal(envelope.usage.tokens.input_total, 14575);
+    assert.equal(envelope.usage.tokens.output_visible, 19);
+    assert.equal(envelope.usage.tokens.output_total, 34);
+    assert.equal(envelope.usage.cost.reported_total_usd, 0);
+    assert.equal(envelope.usage.cost.reported_total_source, 'engine');
+    assert.equal(envelope.usage.cost.total_usd, null);
+    assert.equal(envelope.usage.cost.source, 'unknown');
+    assert.equal(envelope.usage.cost.complete, false);
   }),
 );
 
