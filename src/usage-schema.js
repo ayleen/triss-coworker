@@ -1,7 +1,7 @@
-// Normalizes an OpenAI-compatible chat-completions usage object into the
-// canonical tokens shape from docs/usage-accounting.md. The whole contract is
-// "unknown is not zero": a field a provider did not report stays null, a
-// reported 0 survives, and a derived value never goes negative.
+// Normalizes provider and engine usage payloads into the canonical tokens
+// shape from docs/usage-accounting.md. The whole contract is "unknown is not
+// zero": a field a source did not report stays null, a reported 0 survives,
+// and a derived value never goes negative.
 
 // A value counts as reported only when it is a finite number. undefined,
 // null, NaN, and non-numbers all mean "not reported".
@@ -134,4 +134,133 @@ export function normalizeApiUsage(resp, { provider } = {}) {
 
   tokens.reasoning = reasoning;
   return { tokens, usage_status: 'reported', warnings };
+}
+
+// --- OpenCode step folding -------------------------------------------------
+
+export function emptyOpencodeUsage() {
+  // OpenCode events are step-level, never cumulative, so each field keeps its
+  // own running sum plus a seen flag: a field no event reported must stay null
+  // for the whole call, while a field every event reported as 0 must survive.
+  return {
+    input_uncached: 0,
+    cache_read: 0,
+    cache_write: 0,
+    output_visible: 0,
+    reasoning: 0,
+    total: 0,
+    reported_total_usd: 0,
+    seen: {
+      input_uncached: false,
+      cache_read: false,
+      cache_write: false,
+      output_visible: false,
+      reasoning: false,
+      total: false,
+      reported_total_usd: false,
+    },
+  };
+}
+
+// Folds one step's worth of a field into the accumulator, marking it seen only
+// when the step actually reported a finite number.
+function foldField(acc, key, value) {
+  const n = num(value);
+  if (n === null) return;
+  acc[key] += n;
+  acc.seen[key] = true;
+}
+
+export function foldOpencodeStep(acc, part) {
+  // A malformed event must never take the whole fold down; unknown fields are
+  // simply not reported and therefore stay null.
+  if (!part) return;
+  const tokens = part.tokens;
+  if (tokens) {
+    const cache = tokens.cache;
+    foldField(acc, 'input_uncached', tokens.input);
+    foldField(acc, 'cache_read', cache && cache.read);
+    foldField(acc, 'cache_write', cache && cache.write);
+    foldField(acc, 'output_visible', tokens.output);
+    foldField(acc, 'reasoning', tokens.reasoning);
+    foldField(acc, 'total', tokens.total);
+  }
+  foldField(acc, 'reported_total_usd', part.cost);
+}
+
+export function finalizeOpencodeUsage(acc) {
+  const tokens = emptyTokens();
+  const warnings = [];
+  const { seen } = acc;
+
+  for (const key of ['input_uncached', 'cache_read', 'cache_write', 'output_visible', 'reasoning']) {
+    if (seen[key]) tokens[key] = acc[key];
+  }
+
+  // Totals are derived only when every contributing component was reported.
+  let derivedInput = null;
+  if (seen.input_uncached && seen.cache_read && seen.cache_write) {
+    derivedInput = acc.input_uncached + acc.cache_read + acc.cache_write;
+    tokens.input_total = derivedInput;
+    tokens.input_total_source = 'derived';
+  }
+  let derivedOutput = null;
+  if (seen.output_visible && seen.reasoning) {
+    derivedOutput = acc.output_visible + acc.reasoning;
+    tokens.output_total = derivedOutput;
+    tokens.output_total_source = 'derived';
+  }
+
+  if (seen.total) {
+    // A reported total is authoritative even when the components disagree.
+    tokens.total = acc.total;
+    tokens.total_source = 'reported';
+  } else if (derivedInput !== null && derivedOutput !== null) {
+    tokens.total = derivedInput + derivedOutput;
+    tokens.total_source = 'derived';
+  }
+
+  if (
+    seen.total &&
+    derivedInput !== null &&
+    derivedOutput !== null &&
+    acc.total !== derivedInput + derivedOutput
+  ) {
+    // Surface the disagreement instead of silently repairing either side.
+    warnings.push(
+      `opencode reported total mismatch: ${acc.total} != ${derivedInput} + ${derivedOutput}`,
+    );
+  }
+
+  const reported_total_usd = seen.reported_total_usd ? acc.reported_total_usd : null;
+  const reported_total_source = seen.reported_total_usd ? 'engine' : null;
+  const usage_status = seen.reported_total_usd || seen.total || seen.reasoning
+    || seen.output_visible || seen.cache_write || seen.cache_read || seen.input_uncached
+    ? 'reported'
+    : 'missing';
+
+  return { tokens, reported_total_usd, reported_total_source, usage_status, warnings };
+}
+
+// --- Crush ------------------------------------------------------------------
+
+export function normalizeCrushUsage(usage) {
+  const tokens = emptyTokens();
+  // Crush only reports a combined count; every split field stays null and is
+  // never stored as if it were completion tokens.
+  const delta = usage != null ? num(usage.delta_tokens) : null;
+  if (delta === null) {
+    return { tokens, reported_total_usd: null, reported_total_source: null, usage_status: 'missing', warnings: [] };
+  }
+  tokens.combined = delta;
+  tokens.total = delta;
+  tokens.total_source = 'reported';
+
+  // delta_cost_usd is the real per-call cost by contract, including an
+  // explicit 0.
+  const cost = num(usage.delta_cost_usd);
+  const reported_total_usd = cost;
+  const reported_total_source = cost === null ? null : 'engine';
+
+  return { tokens, reported_total_usd, reported_total_source, usage_status: 'reported', warnings: [] };
 }
