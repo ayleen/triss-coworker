@@ -274,10 +274,32 @@ record.
 ### Price components
 
 A price definition supports independent rates for `input_uncached`,
-`cache_read`, `cache_write`, `output_visible`, and `reasoning`. When only an
-unsplit output total is known and the provider documents one common output
-rate, the cost object carries `output_total_usd` instead of the two output
-components.
+`cache_read`, and `cache_write`, plus one output rate.
+
+Input is priced per component: `input_uncached_usd`, `cache_read_usd`, and
+`cache_write_usd`. Output is priced once, as `output_total_usd`, because every
+provider Triss supports today documents a single output rate — see
+[How reasoning is priced](#how-reasoning-is-priced). `output_visible_usd` and
+`reasoning_usd` exist in the schema for a future provider that bills them
+apart, and stay `null` in this release.
+
+### What makes an estimate complete
+
+An estimate is complete when the priced components account for the **whole**
+call, not merely when some component happened to be priced:
+
+- the **input side** is covered when the known input components sum exactly to
+  a known `input_total`, or when all three input components are known and no
+  `input_total` was reported;
+- the **output side** is covered when `output_total` is known (reported, or
+  derived from a fully known `output_visible` + `reasoning`);
+- every covered component that is non-zero also has a known rate.
+
+This is what lets a DeepSeek or Z.AI call be complete without a cache-write
+rate: those providers report `input_uncached + cache_read == prompt_tokens`, so
+the input side is already fully accounted for and no cache-write class exists
+in the response. Conversely, a non-zero `cache_write` with no configured rate
+leaves the estimate incomplete and names `cache_write` in `unknown_components`.
 
 ### Precedence
 
@@ -333,15 +355,16 @@ Two different provider shapes exist, and Triss must not conflate them:
 
 - **DeepSeek, Z.AI, Kimi** report `completion_tokens` as a count that already
   *includes* reasoning. Triss prices the reported `output_total` **once** at
-  the output rate. `output_visible_usd` and `reasoning_usd` stay `null` — not
-  because reasoning is free, but because it is already inside the priced
-  total. No assumption about a separate reasoning rate is required.
+  the output rate. Reasoning is not free here — it is already inside the priced
+  total — so no assumption about a separate reasoning rate is required.
 - **OpenCode** reports `output` with reasoning already subtracted. The pinned
-  engine prices `reasoning` at the model's **output** rate, so Triss prices
-  `output_visible + reasoning` at the output rate for OpenCode routes.
+  engine prices `reasoning` at the model's **output** rate, so `output_total`
+  (`output_visible + reasoning`) priced once at the output rate is exactly what
+  the engine itself would charge.
 
-Where neither rule applies, the reasoning component and the complete estimated
-total stay unknown rather than being guessed at.
+Both cases therefore reduce to one `output_total_usd` at the output rate.
+Where neither rule applies, the output cost and the complete estimated total
+stay unknown rather than being guessed at.
 
 ### Price overrides
 
