@@ -3994,6 +3994,10 @@ async function runCrushFlow({
     model: modelOverride || 'crush',
     billing_model: crushBillingModel,
     billing_mode: 'unknown',
+    // The schema documents Crush runs as Z.AI (provider `zai`, engine
+    // `crush`). The `crush` sentinel model has no provider prefix for
+    // resolveProvider to read, so the provider must be forwarded explicitly.
+    provider: 'zai',
     usage_source: 'crush',
     engine: 'crush',
     usage_status,

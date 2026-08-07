@@ -139,3 +139,25 @@ test('recordUsage persists a bare Kimi model id with its provider identity', () 
   }
   assert.equal(record.provider, 'kimi');
 });
+
+test('DEFECT 6: a direct Kimi call persists billing_mode "payg" for a bare id', () => {
+  // A bare `kimi-k3` id would otherwise leave billing_mode "unknown"
+  // (resolveBillingMode only recognises prefixed ids); a direct Kimi call is
+  // the single Moonshot PAYG endpoint, so the billing mode must be recorded as
+  // pay-as-you-go. The bare id stays the documented price key (no rewrite).
+  const resp = {
+    model: 'kimi-k3',
+    usage: { prompt_tokens: 100, cached_tokens: 20, completion_tokens: 50, total_tokens: 150 },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const stderrWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  let record;
+  try {
+    record = recordUsage(resp, 'triss/ask', { provider: 'kimi', model: 'kimi-k3' });
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+  assert.equal(record.billing_mode, 'payg');
+  assert.equal(record.billing_model, 'kimi-k3', 'the bare id is the price key and must not be rewritten');
+});

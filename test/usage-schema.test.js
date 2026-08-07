@@ -243,3 +243,31 @@ test('a lone hit that disagrees with a nested cached_tokens still raises the con
   assert.equal(tokens.cache_read, 200);
   assert.equal(tokens.input_uncached, null);
 });
+
+test('worker response with no deepseek half but conflicting nested and top-level cached_tokens warns and keeps nested', () => {
+  // No deepseek hit half at all: the generic worker falls back to the nested
+  // cached_tokens alias. When BOTH the nested and the top-level alias are
+  // present AND differ, the nested one wins — but the conflicting aliases must
+  // never be resolved silently (contract: "Conflicting aliases are not silently
+  // combined").
+  const resp = {
+    usage: {
+      prompt_tokens: 1000,
+      prompt_tokens_details: { cached_tokens: 500 },
+      cached_tokens: 300,
+      completion_tokens: 100,
+      total_tokens: 1100,
+    },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.ok(
+    warnings.some((w) => /conflict/i.test(w)),
+    `expected a conflict warning, got ${JSON.stringify(warnings)}`,
+  );
+  // Nested-wins precedence is kept.
+  assert.equal(tokens.cache_read, 500);
+  // The uncached half is only derivable from an explicit miss half, not from a
+  // cached alias fallback, so it stays unknown here.
+  assert.equal(tokens.input_uncached, null);
+  assert.equal(tokens.input_total, 1000);
+});
