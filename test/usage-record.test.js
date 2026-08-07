@@ -419,3 +419,175 @@ test('DEFECT 3: the canonical cost aggregate tracks every cost field', () => {
   assert.deepEqual(total.cost.reported_total_usd, { sum: 4, known_calls: 1, unknown_calls: 1 });
   assert.deepEqual(total.cost.total_usd, { sum: 11, known_calls: 2, unknown_calls: 0 });
 });
+
+// DEFECT 1 — the deprecated flat cost is consulted even when a canonical cost
+// object exists. The canonical object decides entirely: a null total_usd is a
+// genuinely unknown cost, and a stale flat alias must never resurrect it.
+test('DEFECT 1: a canonical cost object with null total_usd never falls back to a stale flat alias', () => {
+  const records = [
+    {
+      schema_version: 2,
+      cost_usd: 5,
+      cost_usd_known: true,
+      cost: { total_usd: null, source: 'unknown', complete: false },
+    },
+  ];
+  const { total } = summarize(records);
+  assert.equal(total.known_cost_calls, 0, 'a null canonical total is unknown despite a known flat alias');
+  assert.equal(total.unknown_cost_calls, 1);
+  assert.equal(total.cost_usd, 0);
+  assert.equal(total.known_cost_usd, 0);
+});
+
+test('DEFECT 1: a canonical cost object without a total_usd key decides the call is unknown', () => {
+  // The object is present but carries no total_usd key at all — the presence of
+  // the canonical object must be enough to keep the flat aliases out of play.
+  const records = [
+    {
+      schema_version: 2,
+      cost_usd: 5,
+      cost_usd_known: true,
+      cost: { source: 'unknown', complete: false },
+    },
+  ];
+  const { total } = summarize(records);
+  assert.equal(total.known_cost_calls, 0, 'a canonical cost object without total_usd must not use the flat alias');
+  assert.equal(total.unknown_cost_calls, 1);
+  assert.equal(total.cost_usd, 0);
+  assert.equal(total.known_cost_usd, 0);
+});
+
+test('DEFECT 1: a v1 record with no canonical cost object still uses the flat aliases', () => {
+  // Only a record WITHOUT a canonical cost object may consult the flat aliases —
+  // exactly the legacy v1 behavior.
+  const records = [{ model: 'm', prompt_tokens: 10, completion_tokens: 5, cost_usd: 5 }];
+  const { total } = summarize(records);
+  assert.equal(total.known_cost_calls, 1);
+  assert.equal(total.unknown_cost_calls, 0);
+  assert.equal(total.cost_usd, 5);
+});
+
+// DEFECT 2 — docs/usage-accounting.md ("Aggregation") promises reported_calls /
+// derived_calls alongside sum/known_calls/unknown_calls for the three TOTAL
+// fields. The five atomic fields and combined keep exactly their three keys.
+test('DEFECT 2: total aggregates carry reported_calls and derived_calls provenance counters', () => {
+  const records = [
+    { schema_version: 2, tokens: { total: 100, total_source: 'reported' } },
+    { schema_version: 2, tokens: { total: 150, total_source: 'derived' } },
+    { schema_version: 2, tokens: {} },
+  ];
+  const { total } = summarize(records);
+  assert.equal(total.tokens.total.reported_calls, 1);
+  assert.equal(total.tokens.total.derived_calls, 1);
+  assert.equal(total.tokens.total.unknown_calls, 1);
+  assert.equal(total.tokens.total.known_calls, 2);
+  assert.equal(total.tokens.total.sum, 250);
+});
+
+test('DEFECT 2: input_total and output_total carry the same provenance counters', () => {
+  const records = [
+    {
+      schema_version: 2,
+      tokens: {
+        input_total: 10,
+        input_total_source: 'reported',
+        output_total: 5,
+        output_total_source: 'derived',
+      },
+    },
+    { schema_version: 2, tokens: { input_total: 20, output_total: 6 } },
+  ];
+  const { total } = summarize(records);
+  assert.deepEqual(total.tokens.input_total, {
+    sum: 30,
+    known_calls: 2,
+    unknown_calls: 0,
+    reported_calls: 1,
+    derived_calls: 0,
+  });
+  assert.deepEqual(total.tokens.output_total, {
+    sum: 11,
+    known_calls: 2,
+    unknown_calls: 0,
+    reported_calls: 0,
+    derived_calls: 1,
+  });
+});
+
+test('DEFECT 2: atomic fields and combined keep exactly their three aggregate keys', () => {
+  const records = [
+    {
+      schema_version: 2,
+      tokens: {
+        input_uncached: 1,
+        cache_read: 2,
+        cache_write: 0,
+        output_visible: 3,
+        reasoning: 4,
+        combined: 9,
+      },
+    },
+  ];
+  const { total } = summarize(records);
+  for (const field of ['input_uncached', 'cache_read', 'cache_write', 'output_visible', 'reasoning', 'combined']) {
+    const entry = total.tokens[field];
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ['sum', 'known_calls', 'unknown_calls'].sort(),
+      `${field} must keep exactly three aggregate keys`,
+    );
+  }
+});
+
+// DEFECT 3 — a v1 record with real counters but no usage_status field used to
+// normalize to 'missing', discarding valid history. Infer it from the tokens.
+test('DEFECT 3: a v1 record with counters and no usage_status normalizes to reported', () => {
+  const rec = normalizeUsageRecord({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 100,
+    cached_tokens: 20,
+    completion_tokens: 50,
+    cost_usd: 0.0001,
+  });
+  assert.equal(rec.usage_status, 'reported');
+});
+
+test('DEFECT 3: a v1-shaped record with no counters normalizes to missing', () => {
+  const rec = normalizeUsageRecord({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: null,
+    completion_tokens: null,
+  });
+  assert.equal(rec.usage_status, 'missing');
+});
+
+test('DEFECT 3: an explicit usage_status always wins over inference', () => {
+  const reported = normalizeUsageRecord({
+    model: 'm',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    usage_status: 'missing',
+  });
+  assert.equal(reported.usage_status, 'missing', 'explicit missing wins over counters');
+
+  const missing = normalizeUsageRecord({
+    schema_version: 2,
+    tokens: {},
+    usage_status: 'reported',
+  });
+  assert.equal(missing.usage_status, 'reported', 'explicit reported wins over empty tokens');
+});
+
+test('DEFECT 3: a v2 record without usage_status infers from its tokens too', () => {
+  const reported = normalizeUsageRecord({
+    schema_version: 2,
+    tokens: { input_total: 100, output_total: 50 },
+  });
+  assert.equal(reported.usage_status, 'reported');
+
+  const missing = normalizeUsageRecord({
+    schema_version: 2,
+    tokens: { input_total: null, output_total: null },
+  });
+  assert.equal(missing.usage_status, 'missing');
+});
