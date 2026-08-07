@@ -187,3 +187,66 @@ test('grouped rows render a partially-reported field with coverage instead of a 
   assert.doesNotMatch(out, /partial-m[^\n]*\b0 in\b/);
   assert.match(out, /\b10\b/);
 });
+
+// A v2 record carrying a canonical cost object with a reported engine total
+// (e.g. an OpenCode part.cost that did not prove a known component estimate).
+function withEngineCost(record, reportedTotalUsd) {
+  return {
+    ...record,
+    cost: {
+      reported_total_usd: reportedTotalUsd,
+      reported_total_source: 'engine',
+      total_usd: null,
+      source: 'unknown',
+      complete: false,
+    },
+  };
+}
+
+test('summarize aggregates the canonical reported engine total with its own coverage', () => {
+  const records = [
+    withEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0),
+    withEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0.5),
+    withEngineCost(v2({ tokens: { combined: 42, total: 42 } }), null),
+  ];
+  const { total } = summarize(records);
+  assert.deepEqual(total.cost.reported_total_usd, { sum: 0.5, known_calls: 2, unknown_calls: 1 });
+});
+
+test('grouped summarize carries the engine reported total aggregate per group', () => {
+  const records = [
+    withEngineCost(v2({ model: 'm-a', tokens: { combined: 42, total: 42 } }), 0.25),
+    withEngineCost(v2({ model: 'm-a', tokens: { combined: 42, total: 42 } }), 0.25),
+    withEngineCost(v2({ model: 'm-b', tokens: { combined: 42, total: 42 } }), 0.75),
+  ];
+  const { total, groups } = summarize(records, { groupBy: 'model' });
+  assert.deepEqual(total.cost.reported_total_usd, { sum: 1.25, known_calls: 3, unknown_calls: 0 });
+  assert.deepEqual(groups.get('m-a').cost.reported_total_usd, { sum: 0.5, known_calls: 2, unknown_calls: 0 });
+  assert.deepEqual(groups.get('m-b').cost.reported_total_usd, { sum: 0.75, known_calls: 1, unknown_calls: 0 });
+});
+
+test('cost renders "engine reported $X" when the canonical total is unavailable but an engine total exists', () => {
+  // docs/usage-accounting.md "CLI output": `cost: unknown · engine reported $0.0000`
+  const records = [
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0),
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0),
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.0000/);
+  assert.match(out, /engine reported/);
+});
+
+test('cost renders a summed known engine total in the appended note', () => {
+  // Two calls each reported an engine cost of $0.25 but no canonical total —
+  // the summed engine figure must surface in its own "engine reported" note,
+  // never as a green known-`$0.5` canonical line.
+  const records = [
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0.25),
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0.25),
+  ];
+  const out = render(records);
+  assert.match(out, /engine reported \$0\.5000/);
+  // The canonical total is still unavailable, so the base cost label is
+  // "unknown", not a green $0.5000.
+  assert.match(out, /cost:[^\n]*unknown/);
+});
