@@ -250,9 +250,12 @@ documented aliases without assuming any endpoint implements them:
 6. everything else stays `null`.
 
 Conflicting aliases are never silently combined. When the resolved provider is
-known, its documented shape wins; otherwise Triss keeps the common totals and
-warns about the conflicting detail. Streaming and non-streaming responses go
-through the same normalizer and produce identical records.
+known, its documented shape wins. When it is not, and a response carries both
+the DeepSeek hit/miss pair and a nested or top-level cached count that
+disagrees with it, the hit/miss pair is used — it is the only alias that
+reports the uncached and cached halves independently — and the disagreement is
+recorded as a warning. Streaming and non-streaming responses go through the
+same normalizer and produce identical records.
 
 ### Crush (`usage_source: "crush"`)
 
