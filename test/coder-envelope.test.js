@@ -46,12 +46,15 @@ test('foldEventLine: replays the Phase 0 fixture into the expected folded state'
   assert.deepEqual(state.warnings, []);
 });
 
-test('foldEventLine: usage is the SUM of tokens.input/output across ALL step_finish events, not just the last', () => {
+test('foldEventLine: usage is the SUM of tokens across ALL step_finish events, not just the last', () => {
   const state = replayFixture(createEventFolder());
   // Fixture: step_finish #1 tokens {input:294, output:14}, step_finish #2
-  // tokens {input:9, output:5} -> summed 303 / 19.
-  assert.equal(state.usage.input, 303);
-  assert.equal(state.usage.output, 19);
+  // tokens {input:9, output:5} -> summed input_uncached 303 / cache_read 14272 /
+  // output_visible 19, plus the derived input_total 14575 / output_total 34.
+  assert.equal(state.usage.input_uncached, 303);
+  assert.equal(state.usage.output_visible, 19);
+  assert.equal(state.usage.input_total, 14575);
+  assert.equal(state.usage.output_total, 34);
 });
 
 test('foldEventLine: keeps overwriting finalText — the LAST text event wins, not concatenation', () => {
@@ -176,7 +179,25 @@ test(
     assert.deepEqual(envelope.files_changed, []);
     assert.equal(envelope.diff_stat, null);
     assert.equal(envelope.worktree, null);
-    assert.deepEqual(envelope.usage, { prompt_tokens: 303, completion_tokens: 19 });
+    // v2 usage contract (docs/usage-accounting.md, "Coder envelope"). Deprecated
+    // aliases keep their pre-existing meaning and values (303 / 19)...
+    assert.equal(envelope.usage.prompt_tokens, 303);
+    assert.equal(envelope.usage.completion_tokens, 19);
+    // ...alongside the canonical tokens/cost/schema_version members. The model
+    // in play (from this repo's .triss.env) is an unpriced opencode/* route, so
+    // the engine-reported zero is NOT a known $0: total_usd stays null.
+    assert.equal(envelope.usage.schema_version, 2);
+    assert.equal(envelope.usage.usage_status, 'reported');
+    assert.equal(envelope.usage.tokens.input_uncached, 303);
+    assert.equal(envelope.usage.tokens.cache_read, 14272);
+    assert.equal(envelope.usage.tokens.input_total, 14575);
+    assert.equal(envelope.usage.tokens.output_visible, 19);
+    assert.equal(envelope.usage.tokens.output_total, 34);
+    assert.equal(envelope.usage.cost.reported_total_usd, 0);
+    assert.equal(envelope.usage.cost.reported_total_source, 'engine');
+    assert.equal(envelope.usage.cost.total_usd, null);
+    assert.equal(envelope.usage.cost.source, 'unknown');
+    assert.equal(envelope.usage.cost.complete, false);
     assert.deepEqual(envelope.warnings, []);
   }),
 );
