@@ -215,6 +215,37 @@ test('a proven free call reports a known-zero free total', () => {
   assert.equal(c.complete, true);
 });
 
+test('a subscription call with an engine-reported zero is a plan cost, not engine_reported', () => {
+  const c = estimateCanonicalCost({
+    billing_model: 'zai-coding-plan/glm-5.2',
+    billing_mode: 'subscription',
+    reported_total_usd: 0,
+    reported_total_source: 'engine',
+    tokens: { input_uncached: 500, input_total: 500, output_total: 100 },
+  });
+  assert.equal(c.total_usd, 0);
+  assert.equal(c.source, 'plan');
+  assert.equal(c.complete, true);
+  assert.equal(c.input_uncached_usd, null);
+  assert.equal(c.cache_read_usd, null);
+  assert.equal(c.cache_write_usd, null);
+  assert.equal(c.output_total_usd, null);
+});
+
+test('a proven free call with an engine-reported zero is free, not engine_reported', () => {
+  const c = estimateCanonicalCost({
+    billing_model: 'opencode/deepseek-v4-flash-free',
+    billing_mode: 'free',
+    reported_total_usd: 0,
+    reported_total_source: 'engine',
+    tokens: { output_total: 10 },
+  });
+  assert.equal(c.total_usd, 0);
+  assert.equal(c.source, 'free');
+  assert.equal(c.complete, true);
+  assert.equal(c.output_total_usd, null);
+});
+
 test('a Crush engine-reported cost becomes the total even with an unknown billing mode', () => {
   const c = estimateCanonicalCost({
     billing_model: 'crush',

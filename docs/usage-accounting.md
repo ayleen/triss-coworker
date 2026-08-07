@@ -116,7 +116,7 @@ Rules:
 | `usage_source` | which payload contract Triss parsed: `api`, `opencode`, or `crush`. |
 | `engine` | `opencode`, `crush`, or `null` for direct API calls. |
 | `billing_mode` | `payg`, `subscription`, `free`, or `unknown`. |
-| `usage_status` | `reported`, `partial`, or `missing`. |
+| `usage_status` | `reported` or `missing`. |
 
 `provider` is derived from the resolved model prefix:
 
@@ -149,7 +149,9 @@ event does not prove which, the mode is `unknown`, not `subscription`:
 
 `usage_status: "missing"` means the call completed but reported no counters at
 all. Such a call is still logged, with `null` token fields — absence is never
-represented as an all-zero record.
+represented as an all-zero record. Anything else is `reported`; how much of the
+detail a source supplied is expressed by which token fields are `null`, not by
+a third status value.
 
 ## Source mappings
 
@@ -244,7 +246,9 @@ documented aliases without assuming any endpoint implements them:
 
 1. `prompt_tokens`, `completion_tokens`, `total_tokens` when present;
 2. nested `prompt_tokens_details.cached_tokens`;
-3. DeepSeek top-level `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`;
+3. DeepSeek top-level `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`,
+   each recognised on its own — a response reporting only one half still keeps
+   that half rather than discarding it as unknown;
 4. Kimi top-level `cached_tokens`;
 5. `completion_tokens_details.reasoning_tokens`;
 6. everything else stays `null`.
@@ -308,7 +312,10 @@ leaves the estimate incomplete and names `cache_write` in `unknown_components`.
 2. an **engine-reported** total whose engine contract defines it as the real
    monetary cost (Crush `delta_cost_usd`), or a **positive** OpenCode engine
    estimate with known model identity;
-3. a proven **subscription-plan** or **free-tier** total;
+3. a proven **subscription-plan** or **free-tier** total. A plan or free call
+   takes this branch even when the engine also reported a zero: the zero is
+   known because the plan proves it, so the call is labelled `plan`/`free`
+   rather than `engine_reported`, and its component costs stay `null`;
 4. a **complete** Triss component estimate;
 5. **unknown**.
 

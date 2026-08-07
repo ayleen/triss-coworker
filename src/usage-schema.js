@@ -113,12 +113,16 @@ export function normalizeApiUsage(resp, { provider } = {}) {
   const nestedCached = num(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens);
   const topCached = num(usage.cached_tokens);
 
-  if (hit !== null && miss !== null) {
-    // The deepseek pair is the only alias that splits the input into both
-    // halves, so it wins whenever another cached count disagrees with it —
-    // the disagreement is recorded, never silently combined.
-    tokens.cache_read = hit;
-    tokens.input_uncached = miss;
+  // The deepseek pair is the only alias that splits the input into both
+  // halves. Each half is recognised on its own: a response reporting only one
+  // still keeps that half rather than discarding it as unknown.
+  if (hit !== null) tokens.cache_read = hit;
+  if (miss !== null) tokens.input_uncached = miss;
+
+  if (hit !== null) {
+    // The reported hit half wins whenever another cached count disagrees with
+    // it — the disagreement is recorded, never silently combined — including
+    // when only the hit half (not the miss half) is present.
     if (
       (nestedCached !== null && nestedCached !== hit) ||
       (topCached !== null && topCached !== hit)
@@ -127,8 +131,9 @@ export function normalizeApiUsage(resp, { provider } = {}) {
         `conflicting cached-token aliases: deepseek hit ${hit} vs cached_tokens ${nestedCached ?? topCached}`,
       );
     }
-  } else {
-    // Nested cached_tokens is the most specific alias, then the top-level one.
+  } else if (tokens.cache_read === null) {
+    // No deepseek hit half at all: fall back to the nested cached_tokens alias,
+    // then the top-level one, for the cached half.
     tokens.cache_read = nestedCached !== null ? nestedCached : topCached;
   }
 

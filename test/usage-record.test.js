@@ -110,6 +110,31 @@ test('logUsage fills in billing_model, provider, and billing_mode when omitted',
   assert.equal(rec.billing_mode, 'payg');
 });
 
+test('logUsage returns undefined and writes nothing when neither model nor billing_model is known', () => {
+  const before = process.env.TRISS_USAGE_LOG;
+  try {
+    process.env.TRISS_USAGE_LOG = '1';
+    assert.equal(
+      logUsage({ tokens: { input_total: 100, output_total: 10 } }),
+      undefined,
+      'a canonical call with no model / billing_model must write nothing',
+    );
+  } finally {
+    if (before === undefined) delete process.env.TRISS_USAGE_LOG;
+    else process.env.TRISS_USAGE_LOG = before;
+  }
+});
+
+test('logUsage defaults model from billing_model when only billing_model is given', () => {
+  const rec = logUsage({
+    billing_model: 'zai/glm-5.2',
+    tokens: { input_total: 10, output_total: 2 },
+    label: 'billing-model-derived',
+  });
+  assert.equal(rec.model, 'zai/glm-5.2');
+  assert.equal(rec.billing_model, 'zai/glm-5.2');
+});
+
 test('normalizeUsageRecord passes a v2 record through marked non-legacy', () => {
   const rec = normalizeUsageRecord({
     schema_version: 2,
