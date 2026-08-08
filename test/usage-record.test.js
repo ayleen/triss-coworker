@@ -295,6 +295,52 @@ test('normalizeUsageRecord treats cost unknown on a legacy record as unknown cos
   assert.equal(rec.cost.complete, false);
 });
 
+test('a legacy subscription cost is labelled plan, not estimated', () => {
+  // Pre-v2 zai-coding-plan records are subscription-metered; their known flat
+  // cost is a plan zero and must not render as an estimate.
+  const rec = normalizeUsageRecord({
+    model: 'zai-coding-plan/glm-5.2',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0,
+  });
+  assert.equal(rec.cost.total_usd, 0);
+  assert.equal(rec.cost.source, 'plan');
+  assert.equal(rec.cost.complete, true);
+});
+
+test('a legacy kimi-for-coding cost is labelled plan too', () => {
+  const rec = normalizeUsageRecord({
+    model: 'kimi-for-coding/k3',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0,
+  });
+  assert.equal(rec.cost.source, 'plan');
+});
+
+test('a legacy record with a plan billing_model is labelled plan', () => {
+  const rec = normalizeUsageRecord({
+    model: 'glm-5.2',
+    billing_model: 'zai-coding-plan/glm-5.2',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0,
+  });
+  assert.equal(rec.cost.source, 'plan');
+});
+
+test('a legacy payg cost stays estimated', () => {
+  const rec = normalizeUsageRecord({
+    model: 'zai/glm-5.2',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0.0001,
+  });
+  assert.equal(rec.cost.source, 'estimated');
+  assert.equal(rec.cost.complete, true);
+});
+
 // a legacy coder record is NOT a plain API record. The old OpenCode
 // fold persisted only the summed uncached input and visible output (cache
 // reads/writes and reasoning were excluded), so mapping prompt/completion onto
@@ -345,24 +391,41 @@ test('a legacy crush-shaped coder record maps combined only', () => {
   }
 });
 
-test('a legacy coder record with a prompt of 0 and cached input stays on the OpenCode mapping', () => {
-  // Only the explicit `crush` model identifier marks a legacy Crush record. A
-  // non-crush coder record keeps the OpenCode mapping, which preserves every
-  // value it actually has.
+test('an ambiguous legacy coder record is combined, not visible output', () => {
+  // A pre-v2 Crush run started with an explicit model override logs prompt 0,
+  // cached 0 and a non-zero completion. With no way to attribute such a record
+  // to a category it must not claim to be visible output — it is combined.
   const rec = normalizeUsageRecord({
-    model: 'zai/glm-4.7',
+    model: 'zai/glm-5.2',
     label: 'coder',
     prompt_tokens: 0,
     cached_tokens: 0,
     completion_tokens: 42,
   });
-  assert.equal(rec.tokens.combined, null);
-  assert.equal(rec.tokens.input_uncached, 0);
-  assert.equal(rec.tokens.cache_read, 0);
-  assert.equal(rec.tokens.output_visible, 42);
-  assert.equal(rec.tokens.total, null);
+  assert.equal(rec.tokens.combined, 42);
+  assert.equal(rec.tokens.output_visible, null);
+  assert.equal(rec.tokens.input_uncached, null);
+  assert.equal(rec.tokens.cache_read, null);
   assert.equal(rec.tokens.input_total, null);
   assert.equal(rec.tokens.output_total, null);
+  assert.equal(rec.tokens.total, null);
+});
+
+test('a legacy coder record with a positive prompt keeps the OpenCode mapping', () => {
+  // A positive prompt means the run certainly reported uncached input, so the
+  // flat halves map onto the atomic fields and combined stays null.
+  const rec = normalizeUsageRecord({
+    model: 'zai/glm-5.2',
+    label: 'coder',
+    prompt_tokens: 100,
+    cached_tokens: 0,
+    completion_tokens: 20,
+  });
+  assert.equal(rec.tokens.combined, null);
+  assert.equal(rec.tokens.input_uncached, 100);
+  assert.equal(rec.tokens.cache_read, 0);
+  assert.equal(rec.tokens.output_visible, 20);
+  assert.equal(rec.tokens.total, null);
 });
 
 test('a legacy coder record served entirely from cache keeps its cached and visible counts', () => {
