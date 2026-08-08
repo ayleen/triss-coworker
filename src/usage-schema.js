@@ -210,6 +210,9 @@ export function emptyOpencodeUsage() {
     // partial reported sum must never be presented as the run total.
     steps: 0,
     stepsWithTotal: 0,
+    // The same rule applies to per-step cost: an engine-reported total is only
+    // authoritative when EVERY folded step reported a finite cost.
+    stepsWithCost: 0,
   };
 }
 
@@ -239,6 +242,7 @@ export function foldOpencodeStep(acc, part) {
     foldField(acc, 'total', tokens.total);
   }
   foldField(acc, 'reported_total_usd', part.cost);
+  if (num(part.cost) !== null) acc.stepsWithCost++;
 }
 
 export function finalizeOpencodeUsage(acc) {
@@ -288,8 +292,13 @@ export function finalizeOpencodeUsage(acc) {
     );
   }
 
-  const reported_total_usd = seen.reported_total_usd ? acc.reported_total_usd : null;
-  const reported_total_source = seen.reported_total_usd ? 'engine' : null;
+  // An engine-reported monetary total is authoritative only when EVERY folded
+  // step reported a finite cost (the same coverage rule as the reported token
+  // total): a run where only some steps carried a cost has a partial sum, which
+  // must never be presented as the complete cost.
+  const everyStepReportedCost = acc.steps > 0 && acc.stepsWithCost === acc.steps;
+  const reported_total_usd = everyStepReportedCost ? acc.reported_total_usd : null;
+  const reported_total_source = everyStepReportedCost ? 'engine' : null;
   const usage_status = seen.reported_total_usd || seen.total || seen.reasoning
     || seen.output_visible || seen.cache_write || seen.cache_read || seen.input_uncached
     ? 'reported'

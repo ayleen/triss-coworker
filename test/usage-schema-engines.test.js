@@ -116,6 +116,40 @@ test('costs accumulate across steps', () => {
   assert.ok(Math.abs(reported_total_usd - 0.03) < 1e-9, `expected ~0.03, got ${reported_total_usd}`);
 });
 
+// DEFECT 2 — a partial per-step cost sum was treated as authoritative: as soon
+// as ONE step reported `part.cost`, the (possibly partial) sum became an
+// engine-reported total and estimateCanonicalCost trusted it as the complete
+// cost. The engine total is only exposed when EVERY folded step reported a
+// finite cost, mirroring the existing stepsWithTotal rule.
+
+test('DEFECT 2: a partial per-step cost is never presented as the engine total', () => {
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 10, cache: { read: 0, write: 0 }, output: 5, reasoning: 1 }, cost: 0.01 });
+  foldOpencodeStep(acc, { tokens: { input: 10, cache: { read: 0, write: 0 }, output: 5, reasoning: 1 } });
+  const { reported_total_usd, reported_total_source } = finalizeOpencodeUsage(acc);
+  assert.equal(reported_total_usd, null, 'a partial cost sum must not become the engine total');
+  assert.equal(reported_total_source, null);
+});
+
+test('DEFECT 2: a single missing cost in a longer run still hides the engine total', () => {
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.01 });
+  foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.02 });
+  foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 } });
+  const { reported_total_usd, reported_total_source } = finalizeOpencodeUsage(acc);
+  assert.equal(reported_total_usd, null);
+  assert.equal(reported_total_source, null);
+});
+
+test('DEFECT 2: when every step reports a cost, the summed engine total is exposed', () => {
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.01 });
+  foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.02 });
+  const { reported_total_usd, reported_total_source } = finalizeOpencodeUsage(acc);
+  assert.ok(Math.abs(reported_total_usd - 0.03) < 1e-9, `expected ~0.03, got ${reported_total_usd}`);
+  assert.equal(reported_total_source, 'engine');
+});
+
 test('crush folds delta_tokens into combined and total with an engine-reported cost', () => {
   const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
     delta_tokens: 42,

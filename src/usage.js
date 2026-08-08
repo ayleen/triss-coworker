@@ -652,14 +652,32 @@ export function normalizeUsageRecord(record) {
   const cached = finite(r.cached_tokens);
   const completion = finite(r.completion_tokens);
   const tokens = emptyTokens();
-  tokens.input_total = prompt;
-  tokens.input_total_source = prompt != null ? 'reported' : null;
-  tokens.cache_read = cached;
-  tokens.output_total = completion;
-  tokens.output_total_source = completion != null ? 'reported' : null;
-  if (prompt != null && completion != null) {
-    tokens.total = prompt + completion;
-    tokens.total_source = 'derived';
+
+  if (r.label === 'coder') {
+    // The old OpenCode fold persisted only the summed uncached input and the
+    // visible output — cache reads/writes and reasoning were excluded — so the
+    // call total is unknowable and deriving one would present a partial figure
+    // as the complete call (docs/usage-accounting.md "Reading older records"
+    // never claims the old OpenCode input/output pair represented the complete
+    // call). The flat halves map onto the atomic fields instead.
+    if (r.model === 'crush' || (prompt === 0 && completion !== null && completion !== 0)) {
+      // Crush-shaped: a combined count only, every other field null.
+      tokens.combined = completion;
+    } else {
+      tokens.input_uncached = prompt;
+      tokens.cache_read = cached;
+      tokens.output_visible = completion;
+    }
+  } else {
+    tokens.input_total = prompt;
+    tokens.input_total_source = prompt != null ? 'reported' : null;
+    tokens.cache_read = cached;
+    tokens.output_total = completion;
+    tokens.output_total_source = completion != null ? 'reported' : null;
+    if (prompt != null && completion != null) {
+      tokens.total = prompt + completion;
+      tokens.total_source = 'derived';
+    }
   }
   const known = r.cost_usd_known !== false && Number.isFinite(r.cost_usd);
   const cost = {
