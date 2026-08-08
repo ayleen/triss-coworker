@@ -263,6 +263,92 @@ test('normalizeUsageRecord treats cost unknown on a legacy record as unknown cos
   assert.equal(rec.cost.complete, false);
 });
 
+// DEFECT 1 — a legacy coder record is NOT a plain API record. The old OpenCode
+// fold persisted only the summed uncached input and visible output (cache
+// reads/writes and reasoning were excluded), so mapping prompt/completion onto
+// the totals would present a partial figure as the complete call. The flat
+// halves map onto the ATOMIC fields and the totals must stay null.
+test('DEFECT 1: a legacy coder record maps the flat halves onto the atomic fields, totals null', () => {
+  const rec = normalizeUsageRecord({
+    model: 'opencode/deepseek-v4-flash-free',
+    label: 'coder',
+    prompt_tokens: 303,
+    cached_tokens: 0,
+    completion_tokens: 19,
+  });
+  assert.equal(rec.legacy, true);
+  assert.equal(rec.tokens.input_uncached, 303);
+  assert.equal(rec.tokens.cache_read, 0);
+  assert.equal(rec.tokens.output_visible, 19);
+  // The call total is unknowable from the old coder fields — never present
+  // 303 + 19 = 322 as the run total when the real total was 14,609.
+  assert.equal(rec.tokens.input_total, null);
+  assert.equal(rec.tokens.output_total, null);
+  assert.equal(rec.tokens.total, null);
+  assert.equal(rec.tokens.input_total_source, null);
+  assert.equal(rec.tokens.output_total_source, null);
+  assert.equal(rec.tokens.total_source, null);
+});
+
+test('DEFECT 1: a legacy crush-shaped coder record maps combined only', () => {
+  const rec = normalizeUsageRecord({
+    model: 'crush',
+    label: 'coder',
+    prompt_tokens: 0,
+    cached_tokens: 0,
+    completion_tokens: 42,
+  });
+  assert.equal(rec.tokens.combined, 42);
+  for (const key of [
+    'input_uncached',
+    'cache_read',
+    'cache_write',
+    'output_visible',
+    'reasoning',
+    'input_total',
+    'output_total',
+    'total',
+  ]) {
+    assert.equal(rec.tokens[key], null, `${key} should be null`);
+  }
+});
+
+test('DEFECT 1: a legacy coder record with prompt 0 and non-zero completion is crush-shaped', () => {
+  // The `model === 'crush'` marker is the primary signal; a record whose model
+  // is anything else is still crush-shaped when prompt is 0 with a non-zero
+  // completion count.
+  const rec = normalizeUsageRecord({
+    model: 'zai/glm-4.7',
+    label: 'coder',
+    prompt_tokens: 0,
+    cached_tokens: 0,
+    completion_tokens: 42,
+  });
+  assert.equal(rec.tokens.combined, 42);
+  assert.equal(rec.tokens.total, null);
+  assert.equal(rec.tokens.input_total, null);
+  assert.equal(rec.tokens.output_total, null);
+});
+
+test('DEFECT 1: a legacy non-coder record keeps the today mapping unchanged', () => {
+  const rec = normalizeUsageRecord({
+    model: 'deepseek-v4-flash',
+    label: 'triss',
+    prompt_tokens: 100,
+    cached_tokens: 20,
+    completion_tokens: 50,
+  });
+  assert.equal(rec.tokens.input_total, 100);
+  assert.equal(rec.tokens.input_total_source, 'reported');
+  assert.equal(rec.tokens.cache_read, 20);
+  assert.equal(rec.tokens.output_total, 50);
+  assert.equal(rec.tokens.output_total_source, 'reported');
+  assert.equal(rec.tokens.total, 150);
+  assert.equal(rec.tokens.total_source, 'derived');
+  assert.equal(rec.tokens.input_uncached, null);
+  assert.equal(rec.tokens.output_visible, null);
+});
+
 test('summarize keeps the deprecated keys with the same v1 numbers', () => {
   const dir = mkdtempSync(join(tmpdir(), 'triss-record-'));
   const file = join(dir, 'usage.jsonl');

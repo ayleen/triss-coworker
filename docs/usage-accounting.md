@@ -684,9 +684,9 @@ The CLI and MCP coder paths return the same `usage` member:
     "cost": {
       "reported_total_usd": 0,
       "reported_total_source": "engine",
-      "total_usd": 0,
-      "source": "free",
-      "complete": true
+      "total_usd": null,
+      "source": "unknown",
+      "complete": false
     },
     "prompt_tokens": 303,
     "completion_tokens": 19
