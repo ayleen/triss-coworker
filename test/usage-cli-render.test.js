@@ -188,7 +188,7 @@ test('grouped rows render a partially-reported field with coverage instead of a 
   assert.match(out, /\b10\b/);
 });
 
-test('DEFECT 3: a mixed Crush+API group renders BOTH the split figures and the combined total', () => {
+test('a mixed Crush+API group renders BOTH the split figures and the combined total', () => {
   // A group holding one Crush call (combined only) and one API call
   // (splittable input/output) must not hide the split figures behind the
   // combined total nor the combined total behind the split — both belong.
@@ -204,7 +204,7 @@ test('DEFECT 3: a mixed Crush+API group renders BOTH the split figures and the c
   assert.match(out, /mixed-m[^\n]*\bcombined\s*42\b/, 'combined total must render alongside the split figures');
 });
 
-test('DEFECT 3: a combined-only group still renders just combined (no fabricated split)', () => {
+test('a combined-only group still renders just combined (no fabricated split)', () => {
   const out = render(
     [v2({ model: 'crush-only-m', tokens: { combined: 7, total: 7 } })],
     { groupBy: 'model' },
@@ -276,7 +276,7 @@ test('cost renders a summed known engine total in the appended note', () => {
   assert.match(out, /cost:[^\n]*unknown/);
 });
 
-// DEFECT 3 — the engine-reported note may not duplicate a cost that is already
+// the engine-reported note may not duplicate a cost that is already
 // the known canonical total. It only belongs when NOTHING is priced
 // (known_cost_calls is 0).
 
@@ -298,7 +298,7 @@ function withKnownEngineCost(record, reportedTotalUsd) {
   };
 }
 
-test('DEFECT 3: the engine-reported note is omitted when the engine cost is already the known total', () => {
+test('the engine-reported note is omitted when the engine cost is already the known total', () => {
   // For Crush / an OpenCode call whose positive engine cost became the known
   // canonical total, the known cost IS that number — appending the note would
   // read `$0.2500 · engine reported $0.2500`.
@@ -311,7 +311,7 @@ test('DEFECT 3: the engine-reported note is omitted when the engine cost is alre
   assert.doesNotMatch(out, /engine reported/, 'the engine note must not duplicate the known total');
 });
 
-test('DEFECT 3: the engine-reported note IS shown when nothing is priced', () => {
+test('the engine-reported note IS shown when nothing is priced', () => {
   // Nothing is priced (known_cost_calls is 0) yet an engine total exists — the
   // documented `cost: unknown · engine reported $0.0000` shape.
   const records = [
@@ -323,10 +323,10 @@ test('DEFECT 3: the engine-reported note IS shown when nothing is priced', () =>
   assert.match(out, /cost:[^\n]*unknown/);
 });
 
-// DEFECT 4 — an unpriced call may have a known price row but insufficient token
+// an unpriced call may have a known price row but insufficient token
 // detail, so the wording must say "(no complete cost)", never "(no price
 // configured)".
-test('DEFECT 4: the unknown-cost note reads "(no complete cost)"', () => {
+test('the unknown-cost note reads "(no complete cost)"', () => {
   const records = [
     withCost(v2({ tokens: { cache_read: 0 } }), 0, false),
   ];
@@ -335,11 +335,11 @@ test('DEFECT 4: the unknown-cost note reads "(no complete cost)"', () => {
   assert.doesNotMatch(out, /no price configured/);
 });
 
-// DEFECT 1 — a Z.AI / Kimi / generic worker response reports only the block
+// a Z.AI / Kimi / generic worker response reports only the block
 // totals (input_total / output_total), so every atomic line reads
 // "unavailable" and the known numbers were never shown. The block must render
 // its known total marked as an unsplit figure instead of hiding it.
-test('DEFECT 1: totals-only records render both numbers with split unavailable', () => {
+test('totals-only records render both numbers with split unavailable', () => {
   const out = render([
     v2({ tokens: { input_total: 1000, output_total: 500, total: 1500 } }),
     v2({ tokens: { input_total: 2000, output_total: 600, total: 2600 } }),
@@ -350,24 +350,24 @@ test('DEFECT 1: totals-only records render both numbers with split unavailable',
   assert.match(out, /total:\s*1,100 · split unavailable/);
 });
 
-test('DEFECT 1: a fully split record renders no redundant total lines', () => {
+test('a fully split record renders no redundant total lines', () => {
   // Every atomic field is reported, so the split is available and the block
   // must NOT add a redundant "total · split unavailable" line.
   const out = render([allKnownRecord()]);
   assert.doesNotMatch(out, /total:[^\n]*split unavailable/);
 });
 
-test('DEFECT 1: a partial split with a known total still renders the unsplit total', () => {
+test('a partial split with a known total still renders the unsplit total', () => {
   // Only the cache_read half of the input split is reported; the input_total
   // is known, so it must surface as an unsplit figure rather than vanish.
   const out = render([v2({ tokens: { cache_read: 200, input_total: 1000, output_total: 100, total: 1100 } })]);
   assert.match(out, /total:\s*1,000 · split unavailable/);
 });
 
-// DEFECT 2 — the cost line drops the documented source classification, so a
+// the cost line drops the documented source classification, so a
 // proven-free call, a subscription plan call, and an estimated zero are
 // indistinguishable (docs/usage-accounting.md shows `cost: $0.0000 · free`).
-test('DEFECT 2: all-free known costs render "· free"', () => {
+test('all-free known costs render "· free"', () => {
   const records = [
     { schema_version: 2, cost: { total_usd: 0, source: 'free', complete: true } },
     { schema_version: 2, cost: { total_usd: 0, source: 'free', complete: true } },
@@ -376,7 +376,7 @@ test('DEFECT 2: all-free known costs render "· free"', () => {
   assert.match(out, /\$0\.0000 · free/);
 });
 
-test('DEFECT 2: a mix of plan and estimated known costs renders "· mixed"', () => {
+test('a mix of plan and estimated known costs renders "· mixed"', () => {
   const records = [
     { schema_version: 2, cost: { total_usd: 0, source: 'plan', complete: true } },
     { schema_version: 2, cost: { total_usd: 0.5, source: 'estimated', complete: true } },
@@ -385,7 +385,7 @@ test('DEFECT 2: a mix of plan and estimated known costs renders "· mixed"', () 
   assert.match(out, /\$0\.5000 · mixed/);
 });
 
-test('DEFECT 2: no source suffix when no record carries a canonical cost', () => {
+test('no source suffix when no record carries a canonical cost', () => {
   // Flat-alias-only fixtures have no canonical cost object, so no
   // classification may be appended.
   const out = render([
@@ -396,10 +396,10 @@ test('DEFECT 2: no source suffix when no record carries a canonical cost', () =>
   assert.doesNotMatch(out, / · (free|plan|estimated|mixed|unknown)\b/);
 });
 
-// DEFECT 4 — the combined line printed the bare sum, hiding its coverage: a
+// the combined line printed the bare sum, hiding its coverage: a
 // partial combined figure looked universal. It must use the same coverage
 // helper as every other field.
-test('DEFECT 4: a partial combined figure shows coverage, not a universal sum', () => {
+test('a partial combined figure shows coverage, not a universal sum', () => {
   const records = [
     v2({ tokens: { combined: 42, total: 42 } }),
     v2({ tokens: {} }),
@@ -409,7 +409,7 @@ test('DEFECT 4: a partial combined figure shows coverage, not a universal sum', 
   assert.match(out, /combined\s*:\s*42[^\n]*reported by\s*1\/3\s*calls/);
 });
 
-test('DEFECT 4: a partial grouped combined figure shows coverage in the row', () => {
+test('a partial grouped combined figure shows coverage in the row', () => {
   const records = [
     v2({ model: 'g-m', tokens: { combined: 7, total: 7 } }),
     v2({ model: 'g-m', tokens: {} }),
@@ -418,12 +418,12 @@ test('DEFECT 4: a partial grouped combined figure shows coverage in the row', ()
   assert.match(out, /g-m[^\n]*\bcombined\s*:\s*7\b[^\n]*\b1\/2\s*calls\b/);
 });
 
-// DEFECT 1 — grouped rows printed "unavailable in / unavailable out" for legacy
+// grouped rows printed "unavailable in / unavailable out" for legacy
 // coder records because their totals are null by design (the old counts were
 // NOT totals) while their atomic halves are preserved. The row must fall back
 // to the atomic figure, labelled so it is never mistaken for a total.
 
-test('DEFECT 1: a legacy-shaped group falls back to the atomic figures', () => {
+test('a legacy-shaped group falls back to the atomic figures', () => {
   // Totals null, atomic halves known — the shape a legacy coder record
   // normalizes to. Two records whose atomic sums land on the asserted figures.
   const records = [
@@ -436,7 +436,7 @@ test('DEFECT 1: a legacy-shaped group falls back to the atomic figures', () => {
   assert.doesNotMatch(out, /legacy-m[^\n]*unavailable in/, 'the known atomic figure must replace unavailable');
 });
 
-test('DEFECT 1: real legacy coder records render their atomic figures in the row', () => {
+test('real legacy coder records render their atomic figures in the row', () => {
   const records = [
     { model: 'opencode/hy3-free', label: 'coder', prompt_tokens: 137116849, cached_tokens: 0, completion_tokens: 10823455 },
   ];
@@ -445,7 +445,7 @@ test('DEFECT 1: real legacy coder records render their atomic figures in the row
   assert.match(out, /opencode\/hy3-free[^\n]*\b10,823,455 visible out\b/);
 });
 
-test('DEFECT 1: a group with known totals renders the totals exactly as today', () => {
+test('a group with known totals renders the totals exactly as today', () => {
   const records = [
     v2({ model: 'api-m', tokens: { input_total: 1000, output_total: 500, total: 1500 } }),
     v2({ model: 'api-m', tokens: { input_total: 2000, output_total: 600, total: 2600 } }),
@@ -458,13 +458,13 @@ test('DEFECT 1: a group with known totals renders the totals exactly as today', 
   assert.doesNotMatch(out, /api-m[^\n]*\bvisible out\b/);
 });
 
-// DEFECT 2 — the engine-cost note vanished in a mixed report: it was gated on
+// the engine-cost note vanished in a mixed report: it was gated on
 // known_cost_calls being 0, so a single priced call hid the engine-reported
 // evidence for the unpriced ones. The aggregate must track the engine-reported
 // total of calls whose canonical cost is UNKNOWN, and formatCost must surface
 // it regardless of how many other calls were priced.
 
-test('DEFECT 2: a mixed report shows the engine-reported cost of the unpriced call', () => {
+test('a mixed report shows the engine-reported cost of the unpriced call', () => {
   // One priced call (flat alias) + one unpriced call whose engine-reported
   // total was preserved. The engine figure must survive the priced call.
   const records = [
@@ -477,7 +477,7 @@ test('DEFECT 2: a mixed report shows the engine-reported cost of the unpriced ca
   assert.match(out, /engine reported \$0\.0000/, 'the engine evidence for the unpriced call must survive');
 });
 
-test('DEFECT 2: a known engine cost is never duplicated as an unresolved note', () => {
+test('a known engine cost is never duplicated as an unresolved note', () => {
   // The engine cost became the known canonical total — re-appending it would
   // read `$0.5000 · engine reported $0.5000`.
   const records = [

@@ -9,15 +9,17 @@ function num(v) {
   return Number.isFinite(v) ? v : null;
 }
 
-// A negative TOKEN count is a broken report, not data: treat it as unknown
-// (null) and surface an /invalid/i warning naming the field, so it can never
-// leak into derived totals, cost estimates, or aggregation. Money is
-// different — a delta_cost_usd or part.cost may legitimately be signed — so
-// costs keep the plain finite guard above.
+// A TOKEN count must be a non-negative safe integer or null; anything else — a
+// fractional, negative, or non-finite value — is a broken report, not data.
+// Reject it as unknown (null) and surface an /invalid/i warning naming the
+// field, so it can never leak into derived totals, cost estimates, or
+// aggregation. Money is different — a delta_cost_usd or part.cost may
+// legitimately be signed or fractional — so costs keep the plain finite guard
+// above.
 function tokenNum(v, name, warnings) {
   const n = num(v);
-  if (n !== null && n < 0) {
-    warnings.push(`invalid ${name}: negative count ${n}`);
+  if (n !== null && (n < 0 || !Number.isSafeInteger(n))) {
+    warnings.push(`invalid ${name}: token count ${n}`);
     return null;
   }
   return n;

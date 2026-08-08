@@ -245,7 +245,11 @@ export function logUsage(input = {}) {
     record.completion_tokens = cTokens.output_visible ?? 0;
   } else if (usage_source === 'crush') {
     record.prompt_tokens = 0;
-    record.completion_tokens = cTokens.combined;
+    // The canonical combined count may be null when the Crush envelope reported
+    // only a cost or no usage at all; the deprecated aliases are the pre-v2
+    // shape and must fall back to the 0 the envelope uses, so the JSONL and the
+    // envelope agree. The canonical field stays null.
+    record.completion_tokens = cTokens.combined ?? 0;
   } else {
     record.prompt_tokens = cTokens.input_total;
     record.completion_tokens = cTokens.output_total;
@@ -681,9 +685,12 @@ export function normalizeUsageRecord(record) {
     // call total is unknowable and deriving one would present a partial figure
     // as the complete call (docs/usage-accounting.md "Reading older records"
     // never claims the old OpenCode input/output pair represented the complete
-    // call). The flat halves map onto the atomic fields instead.
-    if (r.model === 'crush' || (prompt === 0 && completion !== null && completion !== 0)) {
-      // Crush-shaped: a combined count only, every other field null.
+    // call). The flat halves map onto the atomic fields instead. A record is
+    // Crush-shaped only when the model identifier is literally `crush`; a
+    // legacy OpenCode call whose input was served entirely from cache also has
+    // a prompt_tokens of 0, so no zero-prompt heuristic may reclassify it.
+    if (r.model === 'crush') {
+      // Crush reports a combined count only, every other field null.
       tokens.combined = completion;
     } else {
       tokens.input_uncached = prompt;
