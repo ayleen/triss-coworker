@@ -343,7 +343,13 @@ const COST_VALUE_FIELDS = [
 // (free / plan / estimated / engine_reported / mixed). A record with no
 // canonical cost object contributes nothing to the map.
 function newCostAgg() {
-  const agg = { sources: {} };
+  const agg = {
+    sources: {},
+    // The engine-reported monetary total of the calls whose canonical cost is
+    // UNKNOWN, kept separately from the overall engine sum so a mixed report
+    // keeps the evidence for its unpriced calls (see formatCost).
+    unresolved_reported_total_usd: { sum: 0, known_calls: 0, unknown_calls: 0 },
+  };
   for (const key of COST_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
   return agg;
 }
@@ -385,6 +391,17 @@ function foldCostAgg(agg, normalized) {
     } else {
       entry.unknown_calls++;
     }
+  }
+  // A call whose canonical total is unknown may still carry an engine-reported
+  // monetary signal; keep that evidence separately from the overall engine sum
+  // so a mixed report never loses it behind the priced calls. An explicit 0
+  // counts as known.
+  const unresolved = agg.unresolved_reported_total_usd;
+  if (cost && !Number.isFinite(cost.total_usd) && Number.isFinite(cost.reported_total_usd)) {
+    unresolved.sum += cost.reported_total_usd;
+    unresolved.known_calls++;
+  } else {
+    unresolved.unknown_calls++;
   }
 }
 

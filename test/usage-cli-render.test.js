@@ -417,3 +417,74 @@ test('DEFECT 4: a partial grouped combined figure shows coverage in the row', ()
   const out = render(records, { groupBy: 'model' });
   assert.match(out, /g-m[^\n]*\bcombined\s*:\s*7\b[^\n]*\b1\/2\s*calls\b/);
 });
+
+// DEFECT 1 — grouped rows printed "unavailable in / unavailable out" for legacy
+// coder records because their totals are null by design (the old counts were
+// NOT totals) while their atomic halves are preserved. The row must fall back
+// to the atomic figure, labelled so it is never mistaken for a total.
+
+test('DEFECT 1: a legacy-shaped group falls back to the atomic figures', () => {
+  // Totals null, atomic halves known — the shape a legacy coder record
+  // normalizes to. Two records whose atomic sums land on the asserted figures.
+  const records = [
+    v2({ model: 'legacy-m', tokens: { input_uncached: 100000000, output_visible: 10000000 } }),
+    v2({ model: 'legacy-m', tokens: { input_uncached: 37116849, output_visible: 823455 } }),
+  ];
+  const out = render(records, { groupBy: 'model' });
+  assert.match(out, /legacy-m[^\n]*\b137,116,849 uncached in\b/);
+  assert.match(out, /legacy-m[^\n]*\b10,823,455 visible out\b/);
+  assert.doesNotMatch(out, /legacy-m[^\n]*unavailable in/, 'the known atomic figure must replace unavailable');
+});
+
+test('DEFECT 1: real legacy coder records render their atomic figures in the row', () => {
+  const records = [
+    { model: 'opencode/hy3-free', label: 'coder', prompt_tokens: 137116849, cached_tokens: 0, completion_tokens: 10823455 },
+  ];
+  const out = render(records, { groupBy: 'model' });
+  assert.match(out, /opencode\/hy3-free[^\n]*\b137,116,849 uncached in\b/);
+  assert.match(out, /opencode\/hy3-free[^\n]*\b10,823,455 visible out\b/);
+});
+
+test('DEFECT 1: a group with known totals renders the totals exactly as today', () => {
+  const records = [
+    v2({ model: 'api-m', tokens: { input_total: 1000, output_total: 500, total: 1500 } }),
+    v2({ model: 'api-m', tokens: { input_total: 2000, output_total: 600, total: 2600 } }),
+  ];
+  const out = render(records, { groupBy: 'model' });
+  assert.match(out, /api-m[^\n]*\b3,000 in\b/);
+  assert.match(out, /api-m[^\n]*\b1,100 out\b/);
+  // Known totals must NOT be relabelled with the atomic fallback labels.
+  assert.doesNotMatch(out, /api-m[^\n]*\buncached in\b/);
+  assert.doesNotMatch(out, /api-m[^\n]*\bvisible out\b/);
+});
+
+// DEFECT 2 — the engine-cost note vanished in a mixed report: it was gated on
+// known_cost_calls being 0, so a single priced call hid the engine-reported
+// evidence for the unpriced ones. The aggregate must track the engine-reported
+// total of calls whose canonical cost is UNKNOWN, and formatCost must surface
+// it regardless of how many other calls were priced.
+
+test('DEFECT 2: a mixed report shows the engine-reported cost of the unpriced call', () => {
+  // One priced call (flat alias) + one unpriced call whose engine-reported
+  // total was preserved. The engine figure must survive the priced call.
+  const records = [
+    withCost(v2({ tokens: { cache_read: 0 } }), 0.001),
+    withEngineCost(v2({ tokens: { cache_read: 0 } }), 0),
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.0010/, 'the priced subtotal must render');
+  assert.match(out, /unknown for 1 call/, 'the unpriced call must still be flagged');
+  assert.match(out, /engine reported \$0\.0000/, 'the engine evidence for the unpriced call must survive');
+});
+
+test('DEFECT 2: a known engine cost is never duplicated as an unresolved note', () => {
+  // The engine cost became the known canonical total — re-appending it would
+  // read `$0.5000 · engine reported $0.5000`.
+  const records = [
+    withKnownEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0.25),
+    withKnownEngineCost(v2({ tokens: { combined: 42, total: 42 } }), 0.25),
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.5000/);
+  assert.doesNotMatch(out, /engine reported \$/, 'a known engine total must not be re-surfaced');
+});
