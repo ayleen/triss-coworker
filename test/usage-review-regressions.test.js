@@ -95,6 +95,19 @@ test('legacy coder PAYG cost is not promoted to a complete canonical total', () 
   assert.equal(record.cost.legacy_estimate_usd, 0.0001);
 });
 
+test('a non-zero legacy plan override stays evidence instead of becoming a known plan total', () => {
+  const record = normalizeUsageRecord({
+    model: 'zai-coding-plan/glm-5.2',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0.0001,
+  });
+  assert.equal(record.cost.total_usd, null);
+  assert.equal(record.cost.source, 'unknown');
+  assert.equal(record.cost.complete, false);
+  assert.equal(record.cost.legacy_estimate_usd, 0.0001);
+});
+
 test('per-call output keeps the authoritative total when the atomic split disagrees', () => {
   const line = reportUsage({
     usage: {
