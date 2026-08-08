@@ -29,11 +29,21 @@ jobs:
 
           path = Path('src/usage.js')
           text = path.read_text()
-          old = "  const planKnown = known && isPlan;"
-          new = "  const planKnown = known && isPlan && r.cost_usd === 0;"
-          if text.count(old) != 1:
-              raise RuntimeError(f'expected one planKnown assignment, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          replacements = [
+            (
+              "  const planKnown = known && isPlan;",
+              "  const planKnown = known && isPlan && r.cost_usd === 0;",
+            ),
+            (
+              "    legacy_estimate_usd: known && !isPlan ? r.cost_usd : null,",
+              "    legacy_estimate_usd: known && !planKnown ? r.cost_usd : null,",
+            ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise RuntimeError(f'expected one match, found {text.count(old)}: {old}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
 
           path = Path('test/usage-record.test.js')
           text = path.read_text()
