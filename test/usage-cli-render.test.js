@@ -334,3 +334,86 @@ test('DEFECT 4: the unknown-cost note reads "(no complete cost)"', () => {
   assert.match(out, /\(no complete cost\)/);
   assert.doesNotMatch(out, /no price configured/);
 });
+
+// DEFECT 1 — a Z.AI / Kimi / generic worker response reports only the block
+// totals (input_total / output_total), so every atomic line reads
+// "unavailable" and the known numbers were never shown. The block must render
+// its known total marked as an unsplit figure instead of hiding it.
+test('DEFECT 1: totals-only records render both numbers with split unavailable', () => {
+  const out = render([
+    v2({ tokens: { input_total: 1000, output_total: 500, total: 1500 } }),
+    v2({ tokens: { input_total: 2000, output_total: 600, total: 2600 } }),
+  ]);
+  // The input block shows the summed input_total (3,000) as an unsplit figure…
+  assert.match(out, /total:\s*3,000 · split unavailable/);
+  // …and the output block shows the summed output_total (1,100) the same way.
+  assert.match(out, /total:\s*1,100 · split unavailable/);
+});
+
+test('DEFECT 1: a fully split record renders no redundant total lines', () => {
+  // Every atomic field is reported, so the split is available and the block
+  // must NOT add a redundant "total · split unavailable" line.
+  const out = render([allKnownRecord()]);
+  assert.doesNotMatch(out, /total:[^\n]*split unavailable/);
+});
+
+test('DEFECT 1: a partial split with a known total still renders the unsplit total', () => {
+  // Only the cache_read half of the input split is reported; the input_total
+  // is known, so it must surface as an unsplit figure rather than vanish.
+  const out = render([v2({ tokens: { cache_read: 200, input_total: 1000, output_total: 100, total: 1100 } })]);
+  assert.match(out, /total:\s*1,000 · split unavailable/);
+});
+
+// DEFECT 2 — the cost line drops the documented source classification, so a
+// proven-free call, a subscription plan call, and an estimated zero are
+// indistinguishable (docs/usage-accounting.md shows `cost: $0.0000 · free`).
+test('DEFECT 2: all-free known costs render "· free"', () => {
+  const records = [
+    { schema_version: 2, cost: { total_usd: 0, source: 'free', complete: true } },
+    { schema_version: 2, cost: { total_usd: 0, source: 'free', complete: true } },
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.0000 · free/);
+});
+
+test('DEFECT 2: a mix of plan and estimated known costs renders "· mixed"', () => {
+  const records = [
+    { schema_version: 2, cost: { total_usd: 0, source: 'plan', complete: true } },
+    { schema_version: 2, cost: { total_usd: 0.5, source: 'estimated', complete: true } },
+  ];
+  const out = render(records);
+  assert.match(out, /\$0\.5000 · mixed/);
+});
+
+test('DEFECT 2: no source suffix when no record carries a canonical cost', () => {
+  // Flat-alias-only fixtures have no canonical cost object, so no
+  // classification may be appended.
+  const out = render([
+    withCost(v2({ tokens: { cache_read: 0 } }), 0.0003),
+    withCost(v2({ tokens: { cache_read: 0 } }), 0.0007),
+  ]);
+  assert.match(out, /\$0\.0010/);
+  assert.doesNotMatch(out, / · (free|plan|estimated|mixed|unknown)\b/);
+});
+
+// DEFECT 4 — the combined line printed the bare sum, hiding its coverage: a
+// partial combined figure looked universal. It must use the same coverage
+// helper as every other field.
+test('DEFECT 4: a partial combined figure shows coverage, not a universal sum', () => {
+  const records = [
+    v2({ tokens: { combined: 42, total: 42 } }),
+    v2({ tokens: {} }),
+    v2({ tokens: {} }),
+  ];
+  const out = render(records);
+  assert.match(out, /combined\s*:\s*42[^\n]*reported by\s*1\/3\s*calls/);
+});
+
+test('DEFECT 4: a partial grouped combined figure shows coverage in the row', () => {
+  const records = [
+    v2({ model: 'g-m', tokens: { combined: 7, total: 7 } }),
+    v2({ model: 'g-m', tokens: {} }),
+  ];
+  const out = render(records, { groupBy: 'model' });
+  assert.match(out, /g-m[^\n]*\bcombined\s*:\s*7\b[^\n]*\b1\/2\s*calls\b/);
+});

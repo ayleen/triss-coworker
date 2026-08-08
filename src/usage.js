@@ -338,9 +338,12 @@ const COST_VALUE_FIELDS = [
 
 // The canonical cost aggregate tracks every monetary field with its own
 // coverage, mirroring the token aggregates: an explicit 0 counts as known,
-// null/absent as unknown.
+// null/absent as unknown. It also carries a `sources` map — the count of calls
+// per canonical cost.source — so the renderer can classify a report's cost
+// (free / plan / estimated / engine_reported / mixed). A record with no
+// canonical cost object contributes nothing to the map.
 function newCostAgg() {
-  const agg = {};
+  const agg = { sources: {} };
   for (const key of COST_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
   return agg;
 }
@@ -370,6 +373,9 @@ function foldTokenAgg(agg, normalized) {
 
 function foldCostAgg(agg, normalized) {
   const cost = normalized.cost && typeof normalized.cost === 'object' ? normalized.cost : null;
+  if (cost && typeof cost.source === 'string') {
+    agg.sources[cost.source] = (agg.sources[cost.source] || 0) + 1;
+  }
   for (const key of COST_VALUE_FIELDS) {
     const value = cost ? cost[key] : undefined;
     const entry = agg[key];

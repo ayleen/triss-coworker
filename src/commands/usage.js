@@ -51,6 +51,30 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
     return `${fmt(entry.sum)} · reported by ${entry.known_calls}/${totalCalls} calls`;
   };
 
+  // A block's atomic split is available when both defining halves were reported
+  // by every call (mirroring the one-liner rule in client.js); cache_write is
+  // not required because most providers have no cache-write class.
+  const splitAvailable = (aKey, bKey) => {
+    const a = tokens[aKey];
+    const b = tokens[bKey];
+    return Boolean(
+      a && b &&
+      a.known_calls > 0 && a.unknown_calls === 0 &&
+      b.known_calls > 0 && b.unknown_calls === 0,
+    );
+  };
+  // When the atomic split is unavailable but the block's total is known, the
+  // total is rendered as an unsplit figure instead of being hidden — a Z.AI /
+  // Kimi / generic worker response reports only the totals, so every atomic
+  // line would otherwise read `unavailable` and the real usage would vanish.
+  const unsplitTotal = (aKey, bKey, totalKey) => {
+    const total = tokens[totalKey];
+    if (!splitAvailable(aKey, bKey) && total && total.known_calls > 0) {
+      return `    total:        ${field(totalKey)} · split unavailable`;
+    }
+    return null;
+  };
+
   body.push(pc.bold(`Triss usage`) + ` · ${count} calls · ${periodLabel ?? 'recent'}`);
   body.push('');
   body.push(`  total:        ${field('total')}`);
@@ -59,15 +83,21 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
   body.push(`    uncached:     ${field('input_uncached')}`);
   body.push(`    cache read:   ${field('cache_read')}`);
   body.push(`    cache write:  ${field('cache_write')}`);
+  const inputUnsplit = unsplitTotal('input_uncached', 'cache_read', 'input_total');
+  if (inputUnsplit) body.push(inputUnsplit);
   body.push('');
   body.push('  output:');
   body.push(`    visible:      ${field('output_visible')}`);
   body.push(`    reasoning:    ${field('reasoning')}`);
+  const outputUnsplit = unsplitTotal('output_visible', 'reasoning', 'output_total');
+  if (outputUnsplit) body.push(outputUnsplit);
 
   const combined = tokens.combined;
   if (combined && combined.known_calls > 0) {
     body.push('');
-    body.push(`  combined: ${fmt(combined.sum)} · input/output split unavailable`);
+    // Same coverage rules as every other field: a partial combined figure must
+    // show its coverage instead of looking like a universal sum.
+    body.push(`  combined: ${field('combined')} · input/output split unavailable`);
   }
 
   body.push('');
@@ -104,9 +134,9 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
       const splitOut = `${groupField('input_total', gTokens.input_total)} in / ${groupField('output_total', gTokens.output_total)} out`;
       let inOut;
       if (gCombined && gCombined.known_calls > 0 && splitKnown) {
-        inOut = `${splitOut} · combined ${fmt(gCombined.sum)}`;
+        inOut = `${splitOut} · combined ${groupField('combined', gCombined)}`;
       } else if (gCombined && gCombined.known_calls > 0) {
-        inOut = `combined: ${fmt(gCombined.sum)}`;
+        inOut = `combined: ${groupField('combined', gCombined)}`;
       } else {
         inOut = splitOut;
       }
@@ -144,6 +174,17 @@ export function formatCost(summary) {
   const engine = summary.cost && summary.cost.reported_total_usd;
   if (engine && engine.known_calls > 0 && !summary.known_cost_calls) {
     cost += ` · engine reported $${engine.sum.toFixed(4)}`;
+  }
+  // The canonical cost-source classification distinguishes a proven-free call,
+  // a subscription plan call, an estimated zero, and an engine-reported total
+  // (docs/usage-accounting.md: `cost: $0.0000 · free`). 'unknown' is the
+  // absence of a classification, never a label; when the cost-bearing calls
+  // disagree on their source, the report renders "mixed" instead.
+  const sources = summary.cost && summary.cost.sources;
+  if (sources) {
+    const distinct = Object.keys(sources).filter((s) => s !== 'unknown');
+    if (distinct.length === 1) cost += ` · ${distinct[0]}`;
+    else if (distinct.length > 1) cost += ` · mixed`;
   }
   return cost;
 }
