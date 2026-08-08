@@ -24,6 +24,13 @@ jobs:
       - run: npm ci
       - name: Apply fixes
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/fix-pr32-05.py')
+          text = path.read_text()
+          text = text.replace("+ '\\nDisable tracking: TRISS_USAGE_LOG=0'", "+ '\\\\nDisable tracking: TRISS_USAGE_LOG=0'")
+          path.write_text(text)
+          PY
           cat .github/fix-pr32-0*.py > /tmp/fix-pr32-review.py
           python /tmp/fix-pr32-review.py
       - run: npm run lint
