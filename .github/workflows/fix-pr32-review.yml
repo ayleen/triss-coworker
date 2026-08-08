@@ -34,30 +34,36 @@ jobs:
 
           path = Path('.github/fix-pr32-06.py')
           text = path.read_text()
-          text = text.replace(
-              '''    """Records without `schema_version` are read as-is; the log is never rewritten
-          in place. A pure normalizer produces the in-memory canonical shape for
-          aggregation, and for a v1 record it:
-          """,''',
-              '''    """Records without `schema_version` are read as-is; the log is never rewritten
-          in place.""",''',
-          )
-          text = text.replace(
-              '''    """Records without `schema_version` are read as-is; the log is never rewritten
-          in place. Only an absent version denotes v1. A record with an unknown explicit
-          version is excluded from deprecated-alias interpretation and reported as an
-          unsupported record instead of being silently downgraded. A pure normalizer
-          produces the in-memory canonical shape for aggregation, and for a v1 record it:
-          """,''',
-              '''    """Records without `schema_version` are read as-is; the log is never rewritten
-          in place. Only an absent version denotes v1. A record with an unknown explicit
-          version is excluded from deprecated-alias interpretation and reported as an
-          unsupported record instead of being silently downgraded.""",''',
-          )
+          start_marker = "replace_once(\n    'docs/usage-accounting.md',\n    \"\"\"Records without `schema_version`"
+          next_marker = "replace_once(\n    'docs/usage-accounting.md',\n    \"\"\"At least one numeric field"
+          start = text.index(start_marker)
+          end = text.index(next_marker, start)
+          text = text[:start] + text[end:]
           path.write_text(text)
           PY
           cat .github/fix-pr32-0*.py > /tmp/fix-pr32-review.py
           python /tmp/fix-pr32-review.py
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('docs/usage-accounting.md')
+          text = path.read_text()
+          pattern = (
+              r'Records without `schema_version` are read as-is; the log is never rewritten\s+'
+              r'in\s+place\.'
+          )
+          replacement = (
+              'Records without `schema_version` are read as-is; the log is never rewritten in\n'
+              'place. Only an absent version denotes v1. A record with an unknown explicit\n'
+              'version is excluded from deprecated-alias interpretation and reported as an\n'
+              'unsupported record instead of being silently downgraded.'
+          )
+          text, count = re.subn(pattern, replacement, text, count=1)
+          if count != 1:
+              raise RuntimeError(f'expected one legacy-schema documentation match, found {count}')
+          path.write_text(text)
+          PY
       - run: npm run lint
       - run: npm test
       - name: Commit fixes to the PR branch
