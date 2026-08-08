@@ -26,9 +26,34 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           path = Path('.github/fix-pr32-05.py')
           text = path.read_text()
           text = text.replace("+ '\\nDisable tracking: TRISS_USAGE_LOG=0'", "+ '\\\\nDisable tracking: TRISS_USAGE_LOG=0'")
+          path.write_text(text)
+
+          path = Path('.github/fix-pr32-06.py')
+          text = path.read_text()
+          text = text.replace(
+              '''    """Records without `schema_version` are read as-is; the log is never rewritten
+          in place. A pure normalizer produces the in-memory canonical shape for
+          aggregation, and for a v1 record it:
+          """,''',
+              '''    """Records without `schema_version` are read as-is; the log is never rewritten
+          in place.""",''',
+          )
+          text = text.replace(
+              '''    """Records without `schema_version` are read as-is; the log is never rewritten
+          in place. Only an absent version denotes v1. A record with an unknown explicit
+          version is excluded from deprecated-alias interpretation and reported as an
+          unsupported record instead of being silently downgraded. A pure normalizer
+          produces the in-memory canonical shape for aggregation, and for a v1 record it:
+          """,''',
+              '''    """Records without `schema_version` are read as-is; the log is never rewritten
+          in place. Only an absent version denotes v1. A record with an unknown explicit
+          version is excluded from deprecated-alias interpretation and reported as an
+          unsupported record instead of being silently downgraded.""",''',
+          )
           path.write_text(text)
           PY
           cat .github/fix-pr32-0*.py > /tmp/fix-pr32-review.py
