@@ -111,7 +111,7 @@ test('a lone cache-read counter renders on the usage line', () => {
   };
   const line = reportUsage(resp, 'triss/ask', { provider: 'worker' });
   assert.match(line, /500 cache-read/);
-  assert.doesNotMatch(line, /\[triss\/ask:  \|/, 'a lone counter must not leave the segment empty');
+  assert.doesNotMatch(line, /\[triss\/ask: {2}\|/, 'a lone counter must not leave the segment empty');
 });
 
 test('a lone reasoning counter renders on the usage line', () => {
