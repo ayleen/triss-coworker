@@ -102,9 +102,9 @@ function priceOverride(billingModel) {
   if (!raw) return null;
   const parts = raw.split(',');
   if (parts.length !== 3 && parts.length !== 4) return null;
-  // DEFECT: an empty cache-read field ('1,,2') must reject BEFORE numeric
-  // conversion — Number('') is 0, which would silently turn a blank override
-  // field into a zero rate instead of falling back to the built-in row.
+  // A blank field ('1,,2') must be rejected BEFORE numeric conversion, because
+  // Number('') is 0 — which would silently price that class at zero instead of
+  // falling back to the built-in row.
   if (parts.some((p) => p.trim() === '')) return null;
   const rates = parts.map(Number);
   if (!rates.every((r) => Number.isFinite(r))) return null;
@@ -236,8 +236,13 @@ export function logUsage(input = {}) {
   //   - anything else (api/absent): the input_total / output_total pair.
   // cached_tokens keeps cache_read meaning on every path.
   if (usage_source === 'opencode') {
-    record.prompt_tokens = cTokens.input_uncached;
-    record.completion_tokens = cTokens.output_visible;
+    // The deprecated aliases are the pre-v2 shape and must stay numeric for
+    // null-averse consumers: when the canonical value is unknown (e.g. a run
+    // with no step_finish) they fall back to the 0 the zero-initialized
+    // accumulator used to hold, so the envelope and the JSONL agree. The
+    // canonical tokens fields still distinguish unknown from zero.
+    record.prompt_tokens = cTokens.input_uncached ?? 0;
+    record.completion_tokens = cTokens.output_visible ?? 0;
   } else if (usage_source === 'crush') {
     record.prompt_tokens = 0;
     record.completion_tokens = cTokens.combined;

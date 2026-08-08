@@ -260,6 +260,41 @@ test(
   ),
 );
 
+// DEFECT 2 — the deprecated envelope aliases are the pre-v2 shape and
+// null-averse consumers depend on them staying numeric. When a run ends before
+// any step_finish the canonical fields are null, but the aliases must fall back
+// to the 0 the zero-initialized accumulator used to produce.
+test(
+  'opencode envelope usage: a no-step run keeps canonical nulls but numeric 0 aliases',
+  withIsolatedEnv(
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    async () => {
+      // A stream with NO step_finish: only a step_start and a text event.
+      const noFinishEvents = [
+        { type: 'step_start', timestamp: 1, sessionID: 'ses_nofinish', part: { type: 'step-start', id: 'prt_1' } },
+        { type: 'text', timestamp: 2, sessionID: 'ses_nofinish', part: { type: 'text', text: 'hello' } },
+      ].map((e) => JSON.stringify(e));
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'print hello',
+        {},
+        {
+          spawn: fakeOpencodeSpawnWith(noFinishEvents),
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: capture.stdoutWrite,
+        },
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.usage.usage_status, 'missing');
+      assert.equal(envelope.usage.tokens.input_uncached, null);
+      assert.equal(envelope.usage.tokens.output_visible, null);
+      // The deprecated aliases stay numeric for null-averse consumers.
+      assert.equal(envelope.usage.prompt_tokens, 0);
+      assert.equal(envelope.usage.completion_tokens, 0);
+    },
+  ),
+);
+
 // ── Opencode: normalization warnings reach the envelope ──────────────────────
 
 // A step whose reported `tokens.total` disagrees with the derived component sum

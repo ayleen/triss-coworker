@@ -350,3 +350,27 @@ test('an internally consistent total stays silent on every provider', () => {
     assert.equal(tokens.total, 150);
   }
 });
+
+// DEFECT 1 — a negative TOKEN count is a broken report, not data: treat it as
+// unknown (null) and surface an /invalid/i warning naming the field, so it can
+// never leak into derived totals or aggregation.
+test('DEFECT 1: a negative prompt_tokens is invalid, not reported', () => {
+  const resp = {
+    usage: { prompt_tokens: -5, completion_tokens: 50, total_tokens: 45 },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.equal(tokens.input_total, null);
+  assert.ok(
+    warnings.some((w) => /invalid/i.test(w)),
+    `expected an invalid warning, got ${JSON.stringify(warnings)}`,
+  );
+});
+
+test('DEFECT 1: a negative completion_tokens is invalid, not reported', () => {
+  const resp = {
+    usage: { prompt_tokens: 100, completion_tokens: -20, total_tokens: 80 },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.equal(tokens.output_total, null);
+  assert.ok(warnings.some((w) => /invalid/i.test(w)), `got ${JSON.stringify(warnings)}`);
+});

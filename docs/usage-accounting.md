@@ -528,6 +528,12 @@ For one transition release, every v2 record also carries the flat v1 fields
 In particular, a canonical Crush record stays combined-only even though its
 legacy `completion_tokens` field keeps `delta_tokens` for this release.
 
+For a coder run the deprecated `prompt_tokens` / `completion_tokens` aliases
+fall back to `0` when the canonical value is unknown, precisely because they
+are the pre-v2 shape and null-averse consumers depend on them staying numeric —
+the canonical `tokens` fields remain the ones that distinguish unknown from
+zero.
+
 ### Reading older records
 
 Records without `schema_version` are read as-is; the log is never rewritten in

@@ -173,6 +173,22 @@ test('logUsage opencode source: compatibility prompt_tokens/completion_tokens ke
   assert.equal(rec.tokens.output_total, 34);
 });
 
+test('logUsage opencode compatibility aliases stay numeric 0 when the canonical value is unknown', () => {
+  // A run with no step_finish leaves the canonical atomics null; the deprecated
+  // aliases are the pre-v2 shape and must fall back to the 0 they used to hold.
+  const rec = logUsage({
+    model: 'opencode/deepseek-v4-flash-free',
+    usage_source: 'opencode',
+    tokens: { input_uncached: null, output_visible: null },
+    label: 'opencode-nostep',
+  });
+  assert.equal(rec.usage_status, 'reported');
+  assert.equal(rec.tokens.input_uncached, null, 'the canonical field stays null');
+  assert.equal(rec.tokens.output_visible, null, 'the canonical field stays null');
+  assert.equal(rec.prompt_tokens, 0);
+  assert.equal(rec.completion_tokens, 0);
+});
+
 test('logUsage crush source: compatibility prompt_tokens is 0 and completion_tokens carries the combined delta', () => {
   const rec = logUsage({
     model: 'glm-4.7',
