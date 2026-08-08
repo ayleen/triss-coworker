@@ -30,6 +30,8 @@ jobs:
           path = Path('.github/fix-pr32-05.py')
           text = path.read_text()
           text = text.replace("+ '\\nDisable tracking: TRISS_USAGE_LOG=0'", "+ '\\\\nDisable tracking: TRISS_USAGE_LOG=0'")
+          text = text.replace("  let input = '';", "  let input;")
+          text = text.replace("  let output = '';", "  let output;")
           path.write_text(text)
 
           path = Path('.github/fix-pr32-06.py')
