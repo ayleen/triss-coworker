@@ -388,3 +388,18 @@ test('a fractional prompt_tokens is invalid, not reported', () => {
     `expected an invalid warning, got ${JSON.stringify(warnings)}`,
   );
 });
+
+test('an unrelated numeric usage field does not mark a response reported', () => {
+  // A provider extension like `requests` is not a token counter: the status
+  // comes from the normalized tokens, so a response whose canonical fields all
+  // stayed null is missing, never reported.
+  const resp = {
+    usage: { requests: 1 },
+  };
+  const { tokens, usage_status, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.equal(usage_status, 'missing');
+  assert.deepEqual(warnings, []);
+  for (const key of Object.keys(tokens)) {
+    assert.equal(tokens[key], null, `${key} should be null`);
+  }
+});

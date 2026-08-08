@@ -70,6 +70,16 @@ test('a response with no usage returns the empty string', () => {
   assert.equal(reportUsage({}, 'triss/ask'), '');
 });
 
+test('a response with only an unrelated usage field returns the empty string', () => {
+  // `requests` is a provider extension, not a token counter; the response must
+  // not render a degenerate line like `[label:  | incomplete usage detail | ...]`.
+  const resp = {
+    usage: { requests: 1 },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  assert.equal(reportUsage(resp, 'triss/ask'), '');
+});
+
 test('a missing finish_reason renders finish n/a', () => {
   const resp = {
     usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },

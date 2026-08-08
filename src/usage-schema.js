@@ -52,12 +52,13 @@ function setTotal(tokens, key, value, warnings) {
   return n;
 }
 
-// 'missing' means the call reported no counters at all, so an empty usage
-// object counts as missing just like an absent one.
-function hasNumeric(usage) {
-  for (const v of Object.values(usage)) {
-    if (Number.isFinite(v)) return true;
-    if (v && typeof v === 'object' && hasNumeric(v)) return true;
+// 'missing' means no canonical token ended up a number; 'reported' means at
+// least one did. The status is decided from the NORMALIZED shape so an
+// unrelated extension field in the raw usage object (e.g. usage: { requests: 1 })
+// cannot mark a response reported while every canonical field stays null.
+function hasTokenValue(tokens) {
+  for (const value of Object.values(tokens)) {
+    if (Number.isFinite(value)) return true;
   }
   return false;
 }
@@ -109,7 +110,7 @@ export function normalizeApiUsage(resp, { provider } = {}) {
   const tokens = emptyTokens();
   const usage = resp && resp.usage != null ? resp.usage : null;
 
-  if (usage == null || !hasNumeric(usage)) {
+  if (usage == null) {
     // Absence is never represented as an all-zero record.
     return { tokens, usage_status: 'missing', warnings };
   }
@@ -199,7 +200,11 @@ export function normalizeApiUsage(resp, { provider } = {}) {
 
   // Runs once for every provider path.
   checkReportedTotal(tokens, inputTotal, outputTotal, warnings);
-  return { tokens, usage_status: 'reported', warnings };
+  // The status follows the normalized tokens: 'reported' only when at least one
+  // canonical field is a number, so an unrelated extension field in the raw
+  // usage object cannot mark a response reported.
+  const usage_status = hasTokenValue(tokens) ? 'reported' : 'missing';
+  return { tokens, usage_status, warnings };
 }
 
 // --- OpenCode step folding -------------------------------------------------
@@ -225,6 +230,16 @@ export function emptyOpencodeUsage() {
       total: false,
       reported_total_usd: false,
     },
+    // How many folded steps reported each atomic field. A derived total is
+    // only built when EVERY step contributed the whole side, so a step that
+    // reported just one field must not let a partial sum pass as a total.
+    reported: {
+      input_uncached: 0,
+      cache_read: 0,
+      cache_write: 0,
+      output_visible: 0,
+      reasoning: 0,
+    },
     // Steps folded and how many of them reported `tokens.total`. A reported
     // total is only authoritative when EVERY folded step supplied it — a
     // partial reported sum must never be presented as the run total.
@@ -245,6 +260,7 @@ function foldTokenField(acc, key, value) {
   if (n === null) return;
   acc[key] += n;
   acc.seen[key] = true;
+  acc.reported[key]++;
 }
 
 // Folds one step's worth of a COST field. Money may legitimately be signed, so
@@ -289,15 +305,18 @@ export function finalizeOpencodeUsage(acc) {
     if (seen[key]) tokens[key] = acc[key];
   }
 
-  // Totals are derived only when every contributing component was reported.
+  // Totals are derived only when EVERY folded step reported the whole side; a
+  // step that reported just one field must not let a partial sum pass as a
+  // derived total. The atomic sums themselves stay honest.
+  const everyStep = (key) => acc.steps > 0 && acc.reported[key] === acc.steps;
   let derivedInput = null;
-  if (seen.input_uncached && seen.cache_read && seen.cache_write) {
+  if (everyStep('input_uncached') && everyStep('cache_read') && everyStep('cache_write')) {
     derivedInput = acc.input_uncached + acc.cache_read + acc.cache_write;
     tokens.input_total = derivedInput;
     tokens.input_total_source = 'derived';
   }
   let derivedOutput = null;
-  if (seen.output_visible && seen.reasoning) {
+  if (everyStep('output_visible') && everyStep('reasoning')) {
     derivedOutput = acc.output_visible + acc.reasoning;
     tokens.output_total = derivedOutput;
     tokens.output_total_source = 'derived';

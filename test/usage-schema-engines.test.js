@@ -99,6 +99,37 @@ test('a reported total that disagrees with the components warns and preserves bo
   assert.equal(tokens.output_total, 15);
 });
 
+test('a partially covered step never yields a derived total', () => {
+  // Step 2 reports only `output`, so the atomic sums are honest sums of what
+  // was reported, but no derived total may be built from a run whose input side
+  // (and reasoning) are missing for one of its steps.
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 100, output: 10, reasoning: 5, cache: { read: 50, write: 25 } } });
+  foldOpencodeStep(acc, { tokens: { output: 20 } });
+  const { tokens } = finalizeOpencodeUsage(acc);
+  // The atomic sums stay: each field is the sum of the steps that reported it.
+  assert.equal(tokens.input_uncached, 100);
+  assert.equal(tokens.output_visible, 30);
+  // Derived totals require EVERY folded step to have reported the contributing
+  // fields; step 2 reported only output, so none of them may be derived.
+  assert.equal(tokens.input_total, null);
+  assert.equal(tokens.output_total, null);
+  // Without a reported total either, the run total stays null.
+  assert.equal(tokens.total, null);
+});
+
+test('a fully reported run still derives its totals', () => {
+  // Regression guard for the coverage rule: two steps that both report the
+  // full input and output halves keep deriving the totals as before.
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 30, output: 5, reasoning: 1, cache: { read: 10, write: 5 } } });
+  foldOpencodeStep(acc, { tokens: { input: 20, output: 3, reasoning: 2, cache: { read: 5, write: 0 } } });
+  const { tokens } = finalizeOpencodeUsage(acc);
+  assert.equal(tokens.input_total, 70);
+  assert.equal(tokens.output_total, 11);
+  assert.equal(tokens.total, 81);
+});
+
 test('steps with no cost leave reported_total_usd and its source null', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: 10, cache: { read: 0, write: 0 }, output: 5, reasoning: 1 } });
