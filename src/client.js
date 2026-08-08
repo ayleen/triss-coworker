@@ -245,7 +245,9 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
   const fmt = (n) => n.toLocaleString('en-US');
 
   // Input side: show the split only when both halves are known, otherwise the
-  // reported total with a "split unavailable" marker.
+  // reported total with a "split unavailable" marker. When neither exists but
+  // some atomic counter is known, render each known counter with its own
+  // category so a lone reported figure is never hidden.
   let input = '';
   if (tokens.input_uncached != null && tokens.cache_read != null) {
     input = `${fmt(tokens.input_uncached)} uncached input + ${fmt(tokens.cache_read)} cache-read`;
@@ -254,6 +256,14 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
     }
   } else if (tokens.input_total != null) {
     input = `${fmt(tokens.input_total)} input (split unavailable)`;
+  } else {
+    const parts = [];
+    if (tokens.input_uncached != null) parts.push(`${fmt(tokens.input_uncached)} uncached input`);
+    if (tokens.cache_read != null) parts.push(`${fmt(tokens.cache_read)} cache-read`);
+    if (tokens.cache_write != null && tokens.cache_write !== 0) {
+      parts.push(`${fmt(tokens.cache_write)} cache-write`);
+    }
+    input = parts.join(' + ');
   }
 
   let output = '';
@@ -261,6 +271,11 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
     output = `${fmt(tokens.output_visible)} visible + ${fmt(tokens.reasoning)} reasoning`;
   } else if (tokens.output_total != null) {
     output = `${fmt(tokens.output_total)} output (split unavailable)`;
+  } else {
+    const parts = [];
+    if (tokens.output_visible != null) parts.push(`${fmt(tokens.output_visible)} visible`);
+    if (tokens.reasoning != null) parts.push(`${fmt(tokens.reasoning)} reasoning`);
+    output = parts.join(' + ');
   }
 
   let line = `[${label}: `;
