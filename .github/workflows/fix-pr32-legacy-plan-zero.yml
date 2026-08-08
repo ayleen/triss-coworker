@@ -1,0 +1,74 @@
+name: Finalize PR 32 legacy plan handling
+
+on:
+  push:
+    branches:
+      - 'docs/usage-accounting-v2-plan'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: docs/usage-accounting-v2-plan
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Apply legacy plan zero fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/usage.js')
+          text = path.read_text()
+          old = "  const planKnown = known && isPlan;"
+          new = "  const planKnown = known && isPlan && r.cost_usd === 0;"
+          if text.count(old) != 1:
+              raise RuntimeError(f'expected one planKnown assignment, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('test/usage-record.test.js')
+          text = path.read_text()
+          marker = "test('a legacy kimi-for-coding cost is labelled plan too', () => {"
+          if text.count(marker) != 1:
+              raise RuntimeError(f'expected one insertion marker, found {text.count(marker)}')
+          test = """test('a legacy non-zero plan-prefixed estimate remains canonically incomplete', () => {
+            // A v1 plan-prefixed record can be non-zero when an explicit price
+            // override was active. That value was still computed from v1's
+            // incomplete token classes, so only a proven plan zero is complete.
+            const rec = normalizeUsageRecord({
+              model: 'zai-coding-plan/glm-5.2',
+              prompt_tokens: 100,
+              completion_tokens: 50,
+              cost_usd: 0.0001,
+            });
+            assert.equal(rec.cost.total_usd, null);
+            assert.equal(rec.cost.source, 'unknown');
+            assert.equal(rec.cost.complete, false);
+            assert.equal(rec.cost.legacy_estimate_usd, 0.0001);
+          });
+
+          """
+          path.write_text(text.replace(marker, test + marker, 1))
+          PY
+      - run: npm run lint
+      - run: npm test
+      - name: Commit final fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-pr32-legacy-plan-zero.yml
+          rm -rf .local
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(usage): trust only legacy plan zeros'
+          git push origin HEAD:docs/usage-accounting-v2-plan
