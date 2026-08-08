@@ -685,12 +685,21 @@ export function normalizeUsageRecord(record) {
     // call total is unknowable and deriving one would present a partial figure
     // as the complete call (docs/usage-accounting.md "Reading older records"
     // never claims the old OpenCode input/output pair represented the complete
-    // call). The flat halves map onto the atomic fields instead. A record is
-    // Crush-shaped only when the model identifier is literally `crush`; a
-    // legacy OpenCode call whose input was served entirely from cache also has
-    // a prompt_tokens of 0, so no zero-prompt heuristic may reclassify it.
+    // call). The flat halves map onto the atomic fields instead.
+    //
+    // A pre-v2 Crush run logged prompt 0 / cached 0 and its combined count as
+    // completion, and never passed cached_tokens; a legacy OpenCode run whose
+    // uncached input happened to be 0 looks exactly the same. So the record is
+    // combined only when it is explicitly a Crush model, or when prompt 0 and
+    // cached 0 with a non-zero completion make it impossible to attribute —
+    // such a record must not claim to be visible output. Anything with a real
+    // prompt or a cached count is certainly OpenCode.
     if (r.model === 'crush') {
       // Crush reports a combined count only, every other field null.
+      tokens.combined = completion;
+    } else if (prompt === 0 && (cached || 0) === 0 && completion !== null && completion > 0) {
+      // Ambiguous between Crush (with an explicit model override) and an
+      // OpenCode run whose uncached input was 0: keep it combined.
       tokens.combined = completion;
     } else {
       tokens.input_uncached = prompt;
@@ -709,9 +718,14 @@ export function normalizeUsageRecord(record) {
     }
   }
   const known = r.cost_usd_known !== false && Number.isFinite(r.cost_usd);
+  // Pre-v2 subscription records (zai-coding-plan / kimi-for-coding) were
+  // metered by the plan, so a known flat cost is a plan zero, not an estimate.
+  const legacyModel = r.billing_model || r.model || '';
+  const isPlan =
+    legacyModel.startsWith('zai-coding-plan/') || legacyModel.startsWith('kimi-for-coding/');
   const cost = {
     total_usd: known ? r.cost_usd : null,
-    source: known ? 'estimated' : 'unknown',
+    source: known ? (isPlan ? 'plan' : 'estimated') : 'unknown',
     complete: known,
   };
   return {
