@@ -1,0 +1,40 @@
+name: Apply PR 32 cross-review fixes
+
+on:
+  push:
+    branches:
+      - 'docs/usage-accounting-v2-plan'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: docs/usage-accounting-v2-plan
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Apply fixes
+        run: |
+          cat .github/fix-pr32-0*.py > /tmp/fix-pr32-review.py
+          python /tmp/fix-pr32-review.py
+      - run: npm run lint
+      - run: npm test
+      - name: Commit fixes to the PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/fix-pr32-0*.py .github/workflows/fix-pr32-review.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(usage): address cross-review accounting gaps'
+          git push origin HEAD:docs/usage-accounting-v2-plan
