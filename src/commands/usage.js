@@ -125,13 +125,30 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
       const shortKey = groupBy === 'cwd' ? shortenCwd(key) : key;
       const gTokens = g.tokens ?? {};
       const gCombined = gTokens.combined;
-      // A mixed group (e.g. one Crush call + one API call) reports combined AND
-      // split figures; hide neither. Show both on the one line. Combined-only
-      // when no split field was reported at all.
+      // A side renders from its total aggregate when the total is known. Legacy
+      // coder records keep their totals null by design (their old counts were
+      // NOT totals) while preserving the atomic halves, so the row falls back
+      // to the atomic figure, labelled so it is never mistaken for a total.
+      // Only when neither the total nor the atomic figure is known does the
+      // side print `unavailable`.
+      const side = (totalKey, atomicKey, atomicLabel, unit) => {
+        const totalEntry = gTokens[totalKey];
+        const atomicEntry = gTokens[atomicKey];
+        if (totalEntry && totalEntry.known_calls > 0) return `${groupField(totalKey, totalEntry)} ${unit}`;
+        if (atomicEntry && atomicEntry.known_calls > 0) {
+          return `${groupField(atomicKey, atomicEntry)} ${atomicLabel} ${unit}`;
+        }
+        return `unavailable ${unit}`;
+      };
+      // A mixed group (e.g. one Crush call + one API/legacy call) reports
+      // combined AND split figures; hide neither. Show both on the one line.
+      // Combined-only when no split field was reported at all.
       const splitKnown =
         (gTokens.input_total && gTokens.input_total.known_calls > 0) ||
-        (gTokens.output_total && gTokens.output_total.known_calls > 0);
-      const splitOut = `${groupField('input_total', gTokens.input_total)} in / ${groupField('output_total', gTokens.output_total)} out`;
+        (gTokens.output_total && gTokens.output_total.known_calls > 0) ||
+        (gTokens.input_uncached && gTokens.input_uncached.known_calls > 0) ||
+        (gTokens.output_visible && gTokens.output_visible.known_calls > 0);
+      const splitOut = `${side('input_total', 'input_uncached', 'uncached', 'in')} / ${side('output_total', 'output_visible', 'visible', 'out')}`;
       let inOut;
       if (gCombined && gCombined.known_calls > 0 && splitKnown) {
         inOut = `${splitOut} · combined ${groupField('combined', gCombined)}`;
@@ -168,12 +185,13 @@ export function formatCost(summary) {
   // An engine-reported monetary total (e.g. OpenCode part.cost) survives even
   // when the canonical total is unavailable; surface it in its own note per
   // docs/usage-accounting.md "CLI output" (`cost: unknown · engine reported $0.0000`).
-  // The note only belongs when NOTHING is priced: once an engine cost became
-  // the known canonical total, appending it again would duplicate the figure
-  // already shown (`$0.2500 · engine reported $0.2500`).
-  const engine = summary.cost && summary.cost.reported_total_usd;
-  if (engine && engine.known_calls > 0 && !summary.known_cost_calls) {
-    cost += ` · engine reported $${engine.sum.toFixed(4)}`;
+  // The note follows the calls whose canonical cost is UNKNOWN, so a mixed
+  // report keeps the evidence for its unpriced calls. An engine cost that
+  // became a known canonical total is never re-appended — that would duplicate
+  // the figure already shown (`$0.2500 · engine reported $0.2500`).
+  const unresolvedEngine = summary.cost && summary.cost.unresolved_reported_total_usd;
+  if (unresolvedEngine && unresolvedEngine.known_calls > 0) {
+    cost += ` · engine reported $${unresolvedEngine.sum.toFixed(4)}`;
   }
   // The canonical cost-source classification distinguishes a proven-free call,
   // a subscription plan call, an estimated zero, and an engine-reported total
