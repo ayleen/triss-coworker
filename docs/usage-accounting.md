@@ -65,7 +65,7 @@ costs are finite numbers or `null`.
     "total_usd": null,
     "source": "unknown",
     "complete": false,
-    "unknown_components": ["input_total"]
+    "unknown_components": ["cost"]
   }
 }
 ```
@@ -587,8 +587,8 @@ presents a partial estimate as a complete one.
 The canonical `cost` object is aggregated too: its `reported_total_usd` carries
 its own `sum`/`known_calls`/`unknown_calls` (an explicit 0 is known, `null`/absent
 is unknown). When the canonical total is unavailable but an engine-reported
-total exists, the CLI renders it separately — `cost: unknown · engine reported
-$0.0000` — rather than discarding it.
+total exists, the CLI renders it separately — `cost: unknown for 1 call (no
+complete cost) · engine reported $0.0000` — rather than discarding it.
 
 For one transition release, `summarize()` keeps its existing `prompt_tokens`,
 `cached_tokens`, `completion_tokens`, `cost_usd`, `known_cost_usd`,
@@ -614,7 +614,7 @@ Triss usage · 1 call · last 24h
     visible:         19
     reasoning:       15
 
-  cost:          unknown · engine reported $0.0000
+  cost:          unknown for 1 call (no complete cost) · engine reported $0.0000
 ```
 
 With partial detail, coverage is reported instead of implying zero:

@@ -101,6 +101,42 @@ test('a reported zero completion_tokens still renders the output segment', () =>
   );
 });
 
+test('a lone cache-read counter renders on the usage line', () => {
+  // A generic worker that reports only the hit half of the input split (no
+  // prompt total) must not render a degenerate line: the one counter it did
+  // report is shown, labelled with its own category.
+  const resp = {
+    usage: { prompt_cache_hit_tokens: 500 },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const line = reportUsage(resp, 'triss/ask', { provider: 'worker' });
+  assert.match(line, /500 cache-read/);
+  assert.doesNotMatch(line, /\[triss\/ask:  \|/, 'a lone counter must not leave the segment empty');
+});
+
+test('a lone reasoning counter renders on the usage line', () => {
+  // Only reasoning_tokens is reported (completion_tokens absent): the visible
+  // half stays unknown but the reasoning figure must still surface.
+  const resp = {
+    usage: { completion_tokens_details: { reasoning_tokens: 40 } },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const line = reportUsage(resp, 'triss/ask');
+  assert.match(line, /40 reasoning/);
+});
+
+test('a partial input split joins with the output total', () => {
+  // Only the hit half of the input is reported and the output has only a
+  // total; the lone input counter still renders, joined to the output by the
+  // usual separator.
+  const resp = {
+    usage: { prompt_cache_hit_tokens: 500, completion_tokens: 10, total_tokens: 10 },
+    choices: [{ finish_reason: 'stop' }],
+  };
+  const line = reportUsage(resp, 'triss/ask', { provider: 'worker' });
+  assert.match(line, /500 cache-read \/ 10 output \(split unavailable\)/);
+});
+
 test('recordUsage emits each normalization warning once on stderr for a DeepSeek mismatch', () => {
   // hit + miss (14272 + 303 = 14575) disagrees with prompt_tokens 20000: the
   // documented hit+miss disagreement surfaces as a warning
