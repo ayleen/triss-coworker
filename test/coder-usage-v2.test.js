@@ -260,7 +260,7 @@ test(
   ),
 );
 
-// DEFECT 2 — the deprecated envelope aliases are the pre-v2 shape and
+// the deprecated envelope aliases are the pre-v2 shape and
 // null-averse consumers depend on them staying numeric. When a run ends before
 // any step_finish the canonical fields are null, but the aliases must fall back
 // to the 0 the zero-initialized accumulator used to produce.
@@ -477,10 +477,10 @@ test(
   }),
 );
 
-// ── Crush: provider identity (DEFECT 5) ─────────────────────────────────────
+// ── Crush: provider identity ─────────────────────────────────────
 
 test(
-  'DEFECT 5: a crush run persists provider "zai" even with no explicit model (the "crush" sentinel resolves to no provider prefix)',
+  'a crush run persists provider "zai" even with no explicit model (the "crush" sentinel resolves to no provider prefix)',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({

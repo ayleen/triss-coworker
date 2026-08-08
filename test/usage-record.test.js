@@ -205,6 +205,22 @@ test('logUsage crush source: compatibility prompt_tokens is 0 and completion_tok
   assert.equal(rec.tokens.input_total, null);
 });
 
+test('logUsage crush compatibility aliases stay numeric 0 when the combined value is unknown', () => {
+  // A Crush envelope that reported only a cost (or no usage at all) has a null
+  // canonical combined count; the deprecated aliases are the pre-v2 shape and
+  // must fall back to the 0 the envelope uses, so the JSONL and the envelope
+  // agree. The canonical field stays null.
+  const rec = logUsage({
+    model: 'crush',
+    usage_source: 'crush',
+    tokens: { combined: null },
+    label: 'crush-no-combined',
+  });
+  assert.equal(rec.tokens.combined, null, 'the canonical field stays null');
+  assert.equal(rec.prompt_tokens, 0);
+  assert.equal(rec.completion_tokens, 0);
+});
+
 test('logUsage api/absent source: compatibility fields mirror input_total/output_total', () => {
   const rec = logUsage({
     model: 'deepseek-v4-flash',
@@ -279,12 +295,12 @@ test('normalizeUsageRecord treats cost unknown on a legacy record as unknown cos
   assert.equal(rec.cost.complete, false);
 });
 
-// DEFECT 1 — a legacy coder record is NOT a plain API record. The old OpenCode
+// a legacy coder record is NOT a plain API record. The old OpenCode
 // fold persisted only the summed uncached input and visible output (cache
 // reads/writes and reasoning were excluded), so mapping prompt/completion onto
 // the totals would present a partial figure as the complete call. The flat
 // halves map onto the ATOMIC fields and the totals must stay null.
-test('DEFECT 1: a legacy coder record maps the flat halves onto the atomic fields, totals null', () => {
+test('a legacy coder record maps the flat halves onto the atomic fields, totals null', () => {
   const rec = normalizeUsageRecord({
     model: 'opencode/deepseek-v4-flash-free',
     label: 'coder',
@@ -306,7 +322,7 @@ test('DEFECT 1: a legacy coder record maps the flat halves onto the atomic field
   assert.equal(rec.tokens.total_source, null);
 });
 
-test('DEFECT 1: a legacy crush-shaped coder record maps combined only', () => {
+test('a legacy crush-shaped coder record maps combined only', () => {
   const rec = normalizeUsageRecord({
     model: 'crush',
     label: 'coder',
@@ -329,10 +345,10 @@ test('DEFECT 1: a legacy crush-shaped coder record maps combined only', () => {
   }
 });
 
-test('DEFECT 1: a legacy coder record with prompt 0 and non-zero completion is crush-shaped', () => {
-  // The `model === 'crush'` marker is the primary signal; a record whose model
-  // is anything else is still crush-shaped when prompt is 0 with a non-zero
-  // completion count.
+test('a legacy coder record with a prompt of 0 and cached input stays on the OpenCode mapping', () => {
+  // Only the explicit `crush` model identifier marks a legacy Crush record. A
+  // non-crush coder record keeps the OpenCode mapping, which preserves every
+  // value it actually has.
   const rec = normalizeUsageRecord({
     model: 'zai/glm-4.7',
     label: 'coder',
@@ -340,13 +356,35 @@ test('DEFECT 1: a legacy coder record with prompt 0 and non-zero completion is c
     cached_tokens: 0,
     completion_tokens: 42,
   });
-  assert.equal(rec.tokens.combined, 42);
+  assert.equal(rec.tokens.combined, null);
+  assert.equal(rec.tokens.input_uncached, 0);
+  assert.equal(rec.tokens.cache_read, 0);
+  assert.equal(rec.tokens.output_visible, 42);
   assert.equal(rec.tokens.total, null);
   assert.equal(rec.tokens.input_total, null);
   assert.equal(rec.tokens.output_total, null);
 });
 
-test('DEFECT 1: a legacy non-coder record keeps the today mapping unchanged', () => {
+test('a legacy coder record served entirely from cache keeps its cached and visible counts', () => {
+  // A legacy OpenCode call whose input was served entirely from cache has a
+  // real prompt_tokens of 0 with non-zero cached_tokens and completion_tokens;
+  // it must not be misread as a Crush record. The cached count stays cache_read
+  // and the visible output stays output_visible, with combined null.
+  const rec = normalizeUsageRecord({
+    model: 'opencode/deepseek-v4-flash-free',
+    label: 'coder',
+    prompt_tokens: 0,
+    cached_tokens: 5000,
+    completion_tokens: 40,
+  });
+  assert.equal(rec.tokens.combined, null);
+  assert.equal(rec.tokens.cache_read, 5000);
+  assert.equal(rec.tokens.output_visible, 40);
+  assert.equal(rec.tokens.input_uncached, 0);
+  assert.equal(rec.tokens.total, null);
+});
+
+test('a legacy non-coder record keeps the today mapping unchanged', () => {
   const rec = normalizeUsageRecord({
     model: 'deepseek-v4-flash',
     label: 'triss',
@@ -410,7 +448,7 @@ test('summarize never coerces a field nobody reported into zero', () => {
   assert.deepEqual(total.tokens.reasoning, { sum: 0, known_calls: 0, unknown_calls: 3 });
 });
 
-test('DEFECT 2: v2 cost aggregation reads the canonical cost, never the deprecated flat aliases', () => {
+test('v2 cost aggregation reads the canonical cost, never the deprecated flat aliases', () => {
   // First record: a v2 record whose canonical cost object says $0.005 but whose
   // deprecated cost_usd compat alias still carries a stale 999 — aggregation
   // must trust the canonical total_usd, not 999. The second carries no canonical
@@ -458,12 +496,12 @@ test('grouped summarize produces the same canonical aggregate per group', () => 
   }
 });
 
-// DEFECT 3 — the canonical cost aggregate covered only reported_total_usd, so a
+// the canonical cost aggregate covered only reported_total_usd, so a
 // v2 record's component costs and total_usd never reached summarize()'s
 // canonical aggregate. Every canonical cost field must be tracked with the same
 // rules as the token aggregate: explicit 0 is known; null is unknown and never
 // summed.
-test('DEFECT 3: the canonical cost aggregate tracks every cost field', () => {
+test('the canonical cost aggregate tracks every cost field', () => {
   const records = [
     {
       schema_version: 2,
@@ -522,10 +560,10 @@ test('DEFECT 3: the canonical cost aggregate tracks every cost field', () => {
   assert.deepEqual(total.cost.total_usd, { sum: 11, known_calls: 2, unknown_calls: 0 });
 });
 
-// DEFECT 1 — the deprecated flat cost is consulted even when a canonical cost
+// the deprecated flat cost is consulted even when a canonical cost
 // object exists. The canonical object decides entirely: a null total_usd is a
 // genuinely unknown cost, and a stale flat alias must never resurrect it.
-test('DEFECT 1: a canonical cost object with null total_usd never falls back to a stale flat alias', () => {
+test('a canonical cost object with null total_usd never falls back to a stale flat alias', () => {
   const records = [
     {
       schema_version: 2,
@@ -541,7 +579,7 @@ test('DEFECT 1: a canonical cost object with null total_usd never falls back to 
   assert.equal(total.known_cost_usd, 0);
 });
 
-test('DEFECT 1: a canonical cost object without a total_usd key decides the call is unknown', () => {
+test('a canonical cost object without a total_usd key decides the call is unknown', () => {
   // The object is present but carries no total_usd key at all — the presence of
   // the canonical object must be enough to keep the flat aliases out of play.
   const records = [
@@ -559,7 +597,7 @@ test('DEFECT 1: a canonical cost object without a total_usd key decides the call
   assert.equal(total.known_cost_usd, 0);
 });
 
-test('DEFECT 1: a v1 record with no canonical cost object still uses the flat aliases', () => {
+test('a v1 record with no canonical cost object still uses the flat aliases', () => {
   // Only a record WITHOUT a canonical cost object may consult the flat aliases —
   // exactly the legacy v1 behavior.
   const records = [{ model: 'm', prompt_tokens: 10, completion_tokens: 5, cost_usd: 5 }];
@@ -569,10 +607,10 @@ test('DEFECT 1: a v1 record with no canonical cost object still uses the flat al
   assert.equal(total.cost_usd, 5);
 });
 
-// DEFECT 2 — docs/usage-accounting.md ("Aggregation") promises reported_calls /
+// docs/usage-accounting.md ("Aggregation") promises reported_calls /
 // derived_calls alongside sum/known_calls/unknown_calls for the three TOTAL
 // fields. The five atomic fields and combined keep exactly their three keys.
-test('DEFECT 2: total aggregates carry reported_calls and derived_calls provenance counters', () => {
+test('total aggregates carry reported_calls and derived_calls provenance counters', () => {
   const records = [
     { schema_version: 2, tokens: { total: 100, total_source: 'reported' } },
     { schema_version: 2, tokens: { total: 150, total_source: 'derived' } },
@@ -586,7 +624,7 @@ test('DEFECT 2: total aggregates carry reported_calls and derived_calls provenan
   assert.equal(total.tokens.total.sum, 250);
 });
 
-test('DEFECT 2: input_total and output_total carry the same provenance counters', () => {
+test('input_total and output_total carry the same provenance counters', () => {
   const records = [
     {
       schema_version: 2,
@@ -616,7 +654,7 @@ test('DEFECT 2: input_total and output_total carry the same provenance counters'
   });
 });
 
-test('DEFECT 2: atomic fields and combined keep exactly their three aggregate keys', () => {
+test('atomic fields and combined keep exactly their three aggregate keys', () => {
   const records = [
     {
       schema_version: 2,
@@ -641,9 +679,9 @@ test('DEFECT 2: atomic fields and combined keep exactly their three aggregate ke
   }
 });
 
-// DEFECT 3 — a v1 record with real counters but no usage_status field used to
+// a v1 record with real counters but no usage_status field used to
 // normalize to 'missing', discarding valid history. Infer it from the tokens.
-test('DEFECT 3: a v1 record with counters and no usage_status normalizes to reported', () => {
+test('a v1 record with counters and no usage_status normalizes to reported', () => {
   const rec = normalizeUsageRecord({
     model: 'deepseek-v4-flash',
     prompt_tokens: 100,
@@ -654,7 +692,7 @@ test('DEFECT 3: a v1 record with counters and no usage_status normalizes to repo
   assert.equal(rec.usage_status, 'reported');
 });
 
-test('DEFECT 3: a v1-shaped record with no counters normalizes to missing', () => {
+test('a v1-shaped record with no counters normalizes to missing', () => {
   const rec = normalizeUsageRecord({
     model: 'deepseek-v4-flash',
     prompt_tokens: null,
@@ -663,7 +701,7 @@ test('DEFECT 3: a v1-shaped record with no counters normalizes to missing', () =
   assert.equal(rec.usage_status, 'missing');
 });
 
-test('DEFECT 3: an explicit usage_status always wins over inference', () => {
+test('an explicit usage_status always wins over inference', () => {
   const reported = normalizeUsageRecord({
     model: 'm',
     prompt_tokens: 100,
@@ -680,7 +718,7 @@ test('DEFECT 3: an explicit usage_status always wins over inference', () => {
   assert.equal(missing.usage_status, 'reported', 'explicit reported wins over empty tokens');
 });
 
-test('DEFECT 3: a v2 record without usage_status infers from its tokens too', () => {
+test('a v2 record without usage_status infers from its tokens too', () => {
   const reported = normalizeUsageRecord({
     schema_version: 2,
     tokens: { input_total: 100, output_total: 50 },

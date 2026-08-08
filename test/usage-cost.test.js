@@ -104,7 +104,7 @@ test('a malformed TRISS_PRICE override is ignored and the built-in row is used',
   }
 });
 
-test('DEFECT 4: a blank field in a TRISS_PRICE override is rejected and the built-in row is used', () => {
+test('a blank field in a TRISS_PRICE override is rejected and the built-in row is used', () => {
   // '1,,2' is a 3-arity override with an EMPTY cache-read field. Number('') is
   // 0, so without a pre-conversion emptiness check this would silently become
   // a zero cache-read rate. It must be rejected wholesale instead.
@@ -128,7 +128,7 @@ test('DEFECT 4: a blank field in a TRISS_PRICE override is rejected and the buil
   }
 });
 
-test('DEFECT 4: whitespace-only override fields are rejected the same way', () => {
+test('whitespace-only override fields are rejected the same way', () => {
   const before = process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
   process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = '1, ,2';
   try {

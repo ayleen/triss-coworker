@@ -116,13 +116,13 @@ test('costs accumulate across steps', () => {
   assert.ok(Math.abs(reported_total_usd - 0.03) < 1e-9, `expected ~0.03, got ${reported_total_usd}`);
 });
 
-// DEFECT 2 — a partial per-step cost sum was treated as authoritative: as soon
+// a partial per-step cost sum was treated as authoritative: as soon
 // as ONE step reported `part.cost`, the (possibly partial) sum became an
 // engine-reported total and estimateCanonicalCost trusted it as the complete
 // cost. The engine total is only exposed when EVERY folded step reported a
 // finite cost, mirroring the existing stepsWithTotal rule.
 
-test('DEFECT 2: a partial per-step cost is never presented as the engine total', () => {
+test('a partial per-step cost is never presented as the engine total', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: 10, cache: { read: 0, write: 0 }, output: 5, reasoning: 1 }, cost: 0.01 });
   foldOpencodeStep(acc, { tokens: { input: 10, cache: { read: 0, write: 0 }, output: 5, reasoning: 1 } });
@@ -131,7 +131,7 @@ test('DEFECT 2: a partial per-step cost is never presented as the engine total',
   assert.equal(reported_total_source, null);
 });
 
-test('DEFECT 2: a single missing cost in a longer run still hides the engine total', () => {
+test('a single missing cost in a longer run still hides the engine total', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.01 });
   foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.02 });
@@ -141,7 +141,7 @@ test('DEFECT 2: a single missing cost in a longer run still hides the engine tot
   assert.equal(reported_total_source, null);
 });
 
-test('DEFECT 2: when every step reports a cost, the summed engine total is exposed', () => {
+test('when every step reports a cost, the summed engine total is exposed', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.01 });
   foldOpencodeStep(acc, { tokens: { input: 1, cache: { read: 0, write: 0 }, output: 1, reasoning: 0 }, cost: 0.02 });
@@ -150,11 +150,11 @@ test('DEFECT 2: when every step reports a cost, the summed engine total is expos
   assert.equal(reported_total_source, 'engine');
 });
 
-// DEFECT 1 — negative TOKEN counts are broken reports, not data: rejected as
+// negative TOKEN counts are broken reports, not data: rejected as
 // unknown (null) with an /invalid/i warning. Money is different: a part.cost
 // may legitimately be signed and must still be recorded.
 
-test('DEFECT 1: a negative tokens.input leaves input_uncached null and warns', () => {
+test('a negative tokens.input leaves input_uncached null and warns', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: -10, output: 5, reasoning: 1, cache: { read: 0, write: 0 } } });
   const { tokens, warnings } = finalizeOpencodeUsage(acc);
@@ -165,7 +165,7 @@ test('DEFECT 1: a negative tokens.input leaves input_uncached null and warns', (
   );
 });
 
-test('DEFECT 1: a negative part.cost is still recorded', () => {
+test('a negative part.cost is still recorded', () => {
   const acc = emptyOpencodeUsage();
   foldOpencodeStep(acc, { tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 0, write: 0 } }, cost: -0.25 });
   const { reported_total_usd, reported_total_source } = finalizeOpencodeUsage(acc);
@@ -173,7 +173,7 @@ test('DEFECT 1: a negative part.cost is still recorded', () => {
   assert.equal(reported_total_source, 'engine');
 });
 
-test('DEFECT 1: a negative crush delta_tokens is invalid, not reported', () => {
+test('a negative crush delta_tokens is invalid, not reported', () => {
   const { tokens, warnings } = normalizeCrushUsage({ delta_tokens: -5, delta_cost_usd: 0.5 });
   assert.equal(tokens.combined, null);
   assert.equal(tokens.total, null);
@@ -222,12 +222,12 @@ test('crush with no usage object reports missing and all null', () => {
   }
 });
 
-// DEFECT 3 — a Crush cost was discarded when the token count was missing: the
+// a Crush cost was discarded when the token count was missing: the
 // old early return for an absent delta_tokens threw away a reported
 // delta_cost_usd. The call is 'reported' when EITHER the token count or the
 // cost is a finite number, and 'missing' only when neither is.
 
-test('DEFECT 3: a cost-only crush envelope keeps the engine-reported cost', () => {
+test('a cost-only crush envelope keeps the engine-reported cost', () => {
   const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
     delta_cost_usd: 0.5,
   });
@@ -240,7 +240,7 @@ test('DEFECT 3: a cost-only crush envelope keeps the engine-reported cost', () =
   }
 });
 
-test('DEFECT 3: a cost-only explicit zero is still a reported engine cost', () => {
+test('a cost-only explicit zero is still a reported engine cost', () => {
   const { reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
     delta_cost_usd: 0,
   });
@@ -249,7 +249,7 @@ test('DEFECT 3: a cost-only explicit zero is still a reported engine cost', () =
   assert.equal(reported_total_source, 'engine');
 });
 
-test('DEFECT 3: a token-only crush envelope stays reported with a null cost', () => {
+test('a token-only crush envelope stays reported with a null cost', () => {
   const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
     delta_tokens: 42,
   });
@@ -259,7 +259,7 @@ test('DEFECT 3: a token-only crush envelope stays reported with a null cost', ()
   assert.equal(tokens.combined, 42);
 });
 
-// DEFECT 1 — a partial reported total must not be presented as the run total.
+// a partial reported total must not be presented as the run total.
 // Only when EVERY folded step reported `tokens.total` is the summed reported
 // number authoritative; otherwise the total falls back to the derived sum, and
 // if that cannot be derived either it stays null rather than surfacing the

@@ -272,7 +272,7 @@ test('worker response with no deepseek half but conflicting nested and top-level
   assert.equal(tokens.input_total, 1000);
 });
 
-// DEFECT 1 — the DeepSeek normalization branch is unreachable in production:
+// the DeepSeek normalization branch is unreachable in production:
 // resolveModelRequest() canonicalizes the DeepSeek provider to 'worker', so a
 // response that proves the DeepSeek-compatible contract must get the same
 // treatment on the GENERIC branch, derived from the response itself.
@@ -319,7 +319,7 @@ test('worker response whose hit+miss disagrees with prompt_tokens warns', () => 
   assert.equal(tokens.input_total, 1000);
 });
 
-// DEFECT 2 — a self-contradictory reported total (total != input + output)
+// a self-contradictory reported total (total != input + output)
 // must warn while preserving every reported value, on every provider path.
 test('a self-contradictory reported total warns and preserves every value, on every provider', () => {
   const resp = {
@@ -351,10 +351,10 @@ test('an internally consistent total stays silent on every provider', () => {
   }
 });
 
-// DEFECT 1 — a negative TOKEN count is a broken report, not data: treat it as
+// a negative TOKEN count is a broken report, not data: treat it as
 // unknown (null) and surface an /invalid/i warning naming the field, so it can
 // never leak into derived totals or aggregation.
-test('DEFECT 1: a negative prompt_tokens is invalid, not reported', () => {
+test('a negative prompt_tokens is invalid, not reported', () => {
   const resp = {
     usage: { prompt_tokens: -5, completion_tokens: 50, total_tokens: 45 },
   };
@@ -366,11 +366,25 @@ test('DEFECT 1: a negative prompt_tokens is invalid, not reported', () => {
   );
 });
 
-test('DEFECT 1: a negative completion_tokens is invalid, not reported', () => {
+test('a negative completion_tokens is invalid, not reported', () => {
   const resp = {
     usage: { prompt_tokens: 100, completion_tokens: -20, total_tokens: 80 },
   };
   const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
   assert.equal(tokens.output_total, null);
   assert.ok(warnings.some((w) => /invalid/i.test(w)), `got ${JSON.stringify(warnings)}`);
+});
+
+test('a fractional prompt_tokens is invalid, not reported', () => {
+  // Token counts are integers or null; a fractional count is a broken report
+  // and must not reach derived totals, aggregation, or cost estimates.
+  const resp = {
+    usage: { prompt_tokens: 1.5, completion_tokens: 50, total_tokens: 51 },
+  };
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'worker' });
+  assert.equal(tokens.input_total, null);
+  assert.ok(
+    warnings.some((w) => /invalid/i.test(w)),
+    `expected an invalid warning, got ${JSON.stringify(warnings)}`,
+  );
 });

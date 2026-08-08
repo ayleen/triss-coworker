@@ -154,7 +154,7 @@ test('recordUsage persists a bare Kimi model id with its provider identity', () 
   assert.equal(record.provider, 'kimi');
 });
 
-test('DEFECT 6: a direct Kimi call persists billing_mode "payg" for a bare id', () => {
+test('a direct Kimi call persists billing_mode "payg" for a bare id', () => {
   // A bare `kimi-k3` id would otherwise leave billing_mode "unknown"
   // (resolveBillingMode only recognises prefixed ids); a direct Kimi call is
   // the single Moonshot PAYG endpoint, so the billing mode must be recorded as
