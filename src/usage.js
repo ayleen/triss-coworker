@@ -770,14 +770,14 @@ export function normalizeUsageRecord(record) {
   const isPlan =
     legacyModel.startsWith('zai-coding-plan/') ||
     legacyModel.startsWith('kimi-for-coding/');
-  const planKnown = known && isPlan;
+  const planKnown = known && isPlan && r.cost_usd === 0;
   const cost = {
     total_usd: planKnown ? r.cost_usd : null,
     source: planKnown ? 'plan' : 'unknown',
     complete: planKnown,
     // Compatibility/subtotal evidence only. It is intentionally not the
     // canonical total because v1 discarded billable token classes.
-    legacy_estimate_usd: known && !isPlan ? r.cost_usd : null,
+    legacy_estimate_usd: known && !planKnown ? r.cost_usd : null,
   };
   return {
     schema_version: 1,

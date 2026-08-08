@@ -309,6 +309,22 @@ test('a legacy subscription cost is labelled plan, not estimated', () => {
   assert.equal(rec.cost.complete, true);
 });
 
+test('a legacy non-zero plan-prefixed estimate remains canonically incomplete', () => {
+  // A v1 plan-prefixed record can be non-zero when an explicit price
+  // override was active. That value was still computed from v1's
+  // incomplete token classes, so only a proven plan zero is complete.
+  const rec = normalizeUsageRecord({
+    model: 'zai-coding-plan/glm-5.2',
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    cost_usd: 0.0001,
+  });
+  assert.equal(rec.cost.total_usd, null);
+  assert.equal(rec.cost.source, 'unknown');
+  assert.equal(rec.cost.complete, false);
+  assert.equal(rec.cost.legacy_estimate_usd, 0.0001);
+});
+
 test('a legacy kimi-for-coding cost is labelled plan too', () => {
   const rec = normalizeUsageRecord({
     model: 'kimi-for-coding/k3',
