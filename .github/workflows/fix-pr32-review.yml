@@ -65,6 +65,14 @@ jobs:
           if count != 1:
               raise RuntimeError(f'expected one legacy-schema documentation match, found {count}')
           path.write_text(text)
+
+          path = Path('test/usage-cli-render.test.js')
+          text = path.read_text()
+          old = r'  assert.match(out, /total:\s*1,000 · split unavailable/);'
+          new = r'  assert.match(out, /total:\s*1,000 · split partial for 1\/1 calls/);'
+          if text.count(old) != 1:
+              raise RuntimeError(f'expected one stale partial-split assertion, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
           PY
       - run: npm run lint
       - run: npm test
