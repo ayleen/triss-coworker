@@ -1,7 +1,4 @@
-# --------------------------------------
-# Cross-layer regression suite.
-# --------------------------------------
-regression = r"""import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -192,5 +189,3 @@ test('cached alias warning names the alias that actually conflicts', () => {
   assert.match(warning, /top-level cached_tokens 7/);
   assert.doesNotMatch(warning, /hit 5 vs nested cached_tokens 5$/);
 });
-"""
-write('test/usage-review-regressions.test.js', regression)

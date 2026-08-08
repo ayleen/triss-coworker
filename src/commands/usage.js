@@ -51,28 +51,33 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
     return `${fmt(entry.sum)} · reported by ${entry.known_calls}/${totalCalls} calls`;
   };
 
-  // A block's atomic split is available when both defining halves were reported
-  // by every call (mirroring the one-liner rule in client.js); cache_write is
-  // not required because most providers have no cache-write class.
-  const splitAvailable = (aKey, bKey) => {
-    const a = tokens[aKey];
-    const b = tokens[bKey];
-    return Boolean(
-      a && b &&
-      a.known_calls > 0 && a.unknown_calls === 0 &&
-      b.known_calls > 0 && b.unknown_calls === 0,
-    );
+  const sideCoverage = total.token_sides ?? {};
+  const sideCalls = (state) => state
+    ? state.reconciled_calls + state.inconsistent_calls +
+      state.partial_calls + state.unavailable_calls
+    : 0;
+  const splitAvailable = (side) => {
+    const state = sideCoverage[side];
+    const calls = sideCalls(state);
+    return calls > 0 && state.reconciled_calls === calls;
   };
-  // When the atomic split is unavailable but the block's total is known, the
-  // total is rendered as an unsplit figure instead of being hidden — a Z.AI /
-  // Kimi / generic worker response reports only the totals, so every atomic
-  // line would otherwise read `unavailable` and the real usage would vanish.
-  const unsplitTotal = (aKey, bKey, totalKey) => {
-    const total = tokens[totalKey];
-    if (!splitAvailable(aKey, bKey) && total && total.known_calls > 0) {
-      return `    total:        ${field(totalKey)} · split unavailable`;
+  // A known total remains authoritative whenever the split is unavailable,
+  // partial, or arithmetically inconsistent. Atomic evidence stays visible on
+  // its own lines above; the total line names why it was not replaced.
+  const unsplitTotal = (side, totalKey) => {
+    const entry = tokens[totalKey];
+    if (splitAvailable(side) || !entry || entry.known_calls === 0) return null;
+    const state = sideCoverage[side];
+    const calls = sideCalls(state);
+    let detail = 'split unavailable';
+    if (state?.inconsistent_calls) {
+      detail = `split inconsistent for ${state.inconsistent_calls}/${calls} calls`;
+    } else if (state?.partial_calls) {
+      detail = `split partial for ${state.partial_calls}/${calls} calls`;
+    } else if (state?.unavailable_calls && calls > 1) {
+      detail = `split unavailable for ${state.unavailable_calls}/${calls} calls`;
     }
-    return null;
+    return `    total:        ${field(totalKey)} · ${detail}`;
   };
 
   body.push(pc.bold(`Triss usage`) + ` · ${count} calls · ${periodLabel ?? 'recent'}`);
@@ -83,13 +88,13 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
   body.push(`    uncached:     ${field('input_uncached')}`);
   body.push(`    cache read:   ${field('cache_read')}`);
   body.push(`    cache write:  ${field('cache_write')}`);
-  const inputUnsplit = unsplitTotal('input_uncached', 'cache_read', 'input_total');
+  const inputUnsplit = unsplitTotal('input', 'input_total');
   if (inputUnsplit) body.push(inputUnsplit);
   body.push('');
   body.push('  output:');
   body.push(`    visible:      ${field('output_visible')}`);
   body.push(`    reasoning:    ${field('reasoning')}`);
-  const outputUnsplit = unsplitTotal('output_visible', 'reasoning', 'output_total');
+  const outputUnsplit = unsplitTotal('output', 'output_total');
   if (outputUnsplit) body.push(outputUnsplit);
 
   const combined = tokens.combined;
@@ -106,8 +111,10 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
   if (groupBy && groups.size) {
     body.push('');
     body.push(pc.bold(`By ${groupBy}:`));
+    const completeCost = (summary) =>
+      summary.cost?.total_usd?.sum ?? summary.known_cost_usd ?? summary.cost_usd ?? 0;
     const sorted = [...groups.entries()].sort(
-      (a, b) => (b[1].known_cost_usd ?? b[1].cost_usd ?? 0) - (a[1].known_cost_usd ?? a[1].cost_usd ?? 0),
+      (a, b) => completeCost(b[1]) - completeCost(a[1]),
     );
     // The same rendering rules as the totals block apply per group row: render
     // from the canonical g.tokens aggregate so a field nobody reported reads
@@ -131,12 +138,22 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
       // to the atomic figure, labelled so it is never mistaken for a total.
       // Only when neither the total nor the atomic figure is known does the
       // side print `unavailable`.
-      const side = (totalKey, atomicKey, atomicLabel, unit) => {
+      const side = (sideName, totalKey, atomicKey, atomicLabel, unit) => {
         const totalEntry = gTokens[totalKey];
         const atomicEntry = gTokens[atomicKey];
-        if (totalEntry && totalEntry.known_calls > 0) return `${groupField(totalKey, totalEntry)} ${unit}`;
+        const state = g.token_sides?.[sideName];
+        const calls = sideCalls(state);
+        let caveat = '';
+        if (state?.inconsistent_calls) {
+          caveat = ` (split inconsistent ${state.inconsistent_calls}/${calls})`;
+        } else if (state?.partial_calls) {
+          caveat = ` (split partial ${state.partial_calls}/${calls})`;
+        }
+        if (totalEntry && totalEntry.known_calls > 0) {
+          return `${groupField(totalKey, totalEntry)} ${unit}${caveat}`;
+        }
         if (atomicEntry && atomicEntry.known_calls > 0) {
-          return `${groupField(atomicKey, atomicEntry)} ${atomicLabel} ${unit}`;
+          return `${groupField(atomicKey, atomicEntry)} ${atomicLabel} ${unit}${caveat}`;
         }
         return `unavailable ${unit}`;
       };
@@ -148,7 +165,7 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
         (gTokens.output_total && gTokens.output_total.known_calls > 0) ||
         (gTokens.input_uncached && gTokens.input_uncached.known_calls > 0) ||
         (gTokens.output_visible && gTokens.output_visible.known_calls > 0);
-      const splitOut = `${side('input_total', 'input_uncached', 'uncached', 'in')} / ${side('output_total', 'output_visible', 'visible', 'out')}`;
+      const splitOut = `${side('input', 'input_total', 'input_uncached', 'uncached', 'in')} / ${side('output', 'output_total', 'output_visible', 'visible', 'out')}`;
       let inOut;
       if (gCombined && gCombined.known_calls > 0 && splitKnown) {
         inOut = `${splitOut} · combined ${groupField('combined', gCombined)}`;
@@ -164,6 +181,16 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
     }
   }
 
+  if (total.unsupported_schema_records > 0) {
+    body.push('');
+    body.push(
+      pc.yellow(
+        `Warning: ${total.unsupported_schema_records} record` +
+          `${total.unsupported_schema_records === 1 ? '' : 's'} use an unsupported explicit schema version; ` +
+          'their deprecated aliases were excluded from canonical totals.',
+      ),
+    );
+  }
   body.push('');
   body.push(
     pc.dim(`Log: ${USAGE_FILE}` + '\nDisable tracking: TRISS_USAGE_LOG=0'),
@@ -173,36 +200,32 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
 }
 
 export function formatCost(summary) {
-  const knownCost = summary.known_cost_usd ?? summary.cost_usd ?? 0;
+  const canonical = summary.cost?.total_usd;
+  const knownCost = canonical?.sum ?? summary.known_cost_usd ?? summary.cost_usd ?? 0;
+  const knownCalls = canonical?.known_calls ?? summary.known_cost_calls ?? 0;
+  const unknownCalls = canonical?.unknown_calls ?? summary.unknown_cost_calls ?? 0;
   const known = pc.green('$' + knownCost.toFixed(4));
   let cost;
-  if (!summary.unknown_cost_calls) {
+  if (!unknownCalls) {
     cost = known;
   } else {
-    const unknown = `unknown for ${summary.unknown_cost_calls} call${summary.unknown_cost_calls === 1 ? '' : 's'} (no complete cost)`;
-    cost = summary.known_cost_calls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
+    const unknown = `unknown for ${unknownCalls} call${unknownCalls === 1 ? '' : 's'} (no complete cost)`;
+    cost = knownCalls ? `${known} + ${pc.yellow(unknown)}` : pc.yellow(unknown);
   }
-  // An engine-reported monetary total (e.g. OpenCode part.cost) survives even
-  // when the canonical total is unavailable; surface it in its own note per
-  // docs/usage-accounting.md "CLI output" (`cost: unknown · engine reported $0.0000`).
-  // The note follows the calls whose canonical cost is UNKNOWN, so a mixed
-  // report keeps the evidence for its unpriced calls. An engine cost that
-  // became a known canonical total is never re-appended — that would duplicate
-  // the figure already shown (`$0.2500 · engine reported $0.2500`).
   const unresolvedEngine = summary.cost && summary.cost.unresolved_reported_total_usd;
   if (unresolvedEngine && unresolvedEngine.known_calls > 0) {
     cost += ` · engine reported $${unresolvedEngine.sum.toFixed(4)}`;
   }
-  // The canonical cost-source classification distinguishes a proven-free call,
-  // a subscription plan call, an estimated zero, and an engine-reported total
-  // (docs/usage-accounting.md: `cost: $0.0000 · free`). 'unknown' is the
-  // absence of a classification, never a label; when the cost-bearing calls
-  // disagree on their source, the report renders "mixed" instead.
+  if (summary.legacy_estimated_cost_calls > 0) {
+    const calls = summary.legacy_estimated_cost_calls;
+    cost += ` · legacy estimate $${summary.legacy_estimated_cost_usd.toFixed(4)} for ` +
+      `${calls} call${calls === 1 ? '' : 's'} (not complete)`;
+  }
   const sources = summary.cost && summary.cost.sources;
   if (sources) {
-    const distinct = Object.keys(sources).filter((s) => s !== 'unknown');
+    const distinct = Object.keys(sources).filter((source) => source !== 'unknown');
     if (distinct.length === 1) cost += ` · ${distinct[0]}`;
-    else if (distinct.length > 1) cost += ` · mixed`;
+    else if (distinct.length > 1) cost += ' · mixed';
   }
   return cost;
 }

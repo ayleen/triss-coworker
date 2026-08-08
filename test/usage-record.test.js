@@ -182,7 +182,7 @@ test('logUsage opencode compatibility aliases stay numeric 0 when the canonical 
     tokens: { input_uncached: null, output_visible: null },
     label: 'opencode-nostep',
   });
-  assert.equal(rec.usage_status, 'reported');
+  assert.equal(rec.usage_status, 'missing');
   assert.equal(rec.tokens.input_uncached, null, 'the canonical field stays null');
   assert.equal(rec.tokens.output_visible, null, 'the canonical field stays null');
   assert.equal(rec.prompt_tokens, 0);
@@ -330,15 +330,17 @@ test('a legacy record with a plan billing_model is labelled plan', () => {
   assert.equal(rec.cost.source, 'plan');
 });
 
-test('a legacy payg cost stays estimated', () => {
+test('a legacy payg estimate remains compatibility evidence, not a complete canonical cost', () => {
   const rec = normalizeUsageRecord({
     model: 'zai/glm-5.2',
     prompt_tokens: 100,
     completion_tokens: 50,
     cost_usd: 0.0001,
   });
-  assert.equal(rec.cost.source, 'estimated');
-  assert.equal(rec.cost.complete, true);
+  assert.equal(rec.cost.total_usd, null);
+  assert.equal(rec.cost.source, 'unknown');
+  assert.equal(rec.cost.complete, false);
+  assert.equal(rec.cost.legacy_estimate_usd, 0.0001);
 });
 
 // a legacy coder record is NOT a plain API record. The old OpenCode
