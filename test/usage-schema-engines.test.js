@@ -155,6 +155,43 @@ test('crush with no usage object reports missing and all null', () => {
   }
 });
 
+// DEFECT 3 — a Crush cost was discarded when the token count was missing: the
+// old early return for an absent delta_tokens threw away a reported
+// delta_cost_usd. The call is 'reported' when EITHER the token count or the
+// cost is a finite number, and 'missing' only when neither is.
+
+test('DEFECT 3: a cost-only crush envelope keeps the engine-reported cost', () => {
+  const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
+    delta_cost_usd: 0.5,
+  });
+  assert.equal(usage_status, 'reported', 'a reported cost must mark the call reported');
+  assert.equal(reported_total_usd, 0.5);
+  assert.equal(reported_total_source, 'engine');
+  // A cost-only envelope leaves every token field null.
+  for (const [key, value] of Object.entries(tokens)) {
+    assert.equal(value, null, `${key} should be null`);
+  }
+});
+
+test('DEFECT 3: a cost-only explicit zero is still a reported engine cost', () => {
+  const { reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
+    delta_cost_usd: 0,
+  });
+  assert.equal(usage_status, 'reported', 'an explicit 0 cost is data, not missing');
+  assert.equal(reported_total_usd, 0);
+  assert.equal(reported_total_source, 'engine');
+});
+
+test('DEFECT 3: a token-only crush envelope stays reported with a null cost', () => {
+  const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
+    delta_tokens: 42,
+  });
+  assert.equal(usage_status, 'reported');
+  assert.equal(reported_total_usd, null);
+  assert.equal(reported_total_source, null);
+  assert.equal(tokens.combined, 42);
+});
+
 // DEFECT 1 — a partial reported total must not be presented as the run total.
 // Only when EVERY folded step reported `tokens.total` is the summed reported
 // number authoritative; otherwise the total falls back to the derived sum, and

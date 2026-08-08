@@ -305,18 +305,23 @@ export function normalizeCrushUsage(usage) {
   // Crush only reports a combined count; every split field stays null and is
   // never stored as if it were completion tokens.
   const delta = usage != null ? num(usage.delta_tokens) : null;
-  if (delta === null) {
-    return { tokens, reported_total_usd: null, reported_total_source: null, usage_status: 'missing', warnings: [] };
-  }
-  tokens.combined = delta;
-  tokens.total = delta;
-  tokens.total_source = 'reported';
-
   // delta_cost_usd is the real per-call cost by contract, including an
   // explicit 0.
-  const cost = num(usage.delta_cost_usd);
+  const cost = usage != null ? num(usage.delta_cost_usd) : null;
+
+  if (delta !== null) {
+    tokens.combined = delta;
+    tokens.total = delta;
+    tokens.total_source = 'reported';
+  }
+
   const reported_total_usd = cost;
   const reported_total_source = cost === null ? null : 'engine';
 
-  return { tokens, reported_total_usd, reported_total_source, usage_status: 'reported', warnings: [] };
+  // The call is 'reported' when EITHER the token count or the cost is a finite
+  // number: a reported delta_cost_usd must not be thrown away just because
+  // delta_tokens is absent, and 'missing' means neither was reported.
+  const usage_status = delta !== null || cost !== null ? 'reported' : 'missing';
+
+  return { tokens, reported_total_usd, reported_total_source, usage_status, warnings: [] };
 }
