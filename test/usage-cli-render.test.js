@@ -361,7 +361,7 @@ test('a partial split with a known total still renders the unsplit total', () =>
   // Only the cache_read half of the input split is reported; the input_total
   // is known, so it must surface as an unsplit figure rather than vanish.
   const out = render([v2({ tokens: { cache_read: 200, input_total: 1000, output_total: 100, total: 1100 } })]);
-  assert.match(out, /total:\s*1,000 · split unavailable/);
+  assert.match(out, /total:\s*1,000 · split partial for 1\/1 calls/);
 });
 
 // the cost line drops the documented source classification, so a

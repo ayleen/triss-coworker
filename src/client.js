@@ -3,7 +3,7 @@ import pc from 'picocolors';
 import { getConfig, requireApiKey, requireGlmApiKey, requireKimiApiKey } from './config.js';
 import { normalizeKimiBaseUrl } from './moonshot.js';
 import { logUsage } from './usage.js';
-import { normalizeApiUsage } from './usage-schema.js';
+import { normalizeApiUsage, reconcileTokenSide } from './usage-schema.js';
 import { currentCall } from './call-context.js';
 import {
   ZAI_CODING_PLAN_BASE_URL,
@@ -236,63 +236,64 @@ export async function chat({
 }
 
 export function reportUsage(resp, label = 'worker', { provider } = {}) {
-  // Reuse the same normalizer persistence uses so the human line and the log
-  // can never disagree; a provider field is never read directly here.
-  const { tokens, usage_status } = normalizeApiUsage(resp, { provider: providerForUsage(provider) });
-  // A call that reported no counters renders nothing rather than a zero line.
+  const { tokens, usage_status } = normalizeApiUsage(resp, {
+    provider: providerForUsage(provider),
+  });
   if (usage_status === 'missing') return '';
 
   const fmt = (n) => n.toLocaleString('en-US');
+  const inputState = reconcileTokenSide(tokens, 'input');
+  const outputState = reconcileTokenSide(tokens, 'output');
 
-  // Input side: show the split only when both halves are known, otherwise the
-  // reported total with a "split unavailable" marker. When neither exists but
-  // some atomic counter is known, render each known counter with its own
-  // category so a lone reported figure is never hidden.
-  let input;
-  if (tokens.input_uncached != null && tokens.cache_read != null) {
-    input = `${fmt(tokens.input_uncached)} uncached input + ${fmt(tokens.cache_read)} cache-read`;
-    if (tokens.cache_write != null && tokens.cache_write !== 0) {
-      input += ` + ${fmt(tokens.cache_write)} cache-write`;
-    }
-  } else if (tokens.input_total != null) {
-    input = `${fmt(tokens.input_total)} input (split unavailable)`;
-  } else {
+  const inputEvidence = () => {
     const parts = [];
     if (tokens.input_uncached != null) parts.push(`${fmt(tokens.input_uncached)} uncached input`);
     if (tokens.cache_read != null) parts.push(`${fmt(tokens.cache_read)} cache-read`);
     if (tokens.cache_write != null && tokens.cache_write !== 0) {
       parts.push(`${fmt(tokens.cache_write)} cache-write`);
     }
-    input = parts.join(' + ');
-  }
-
-  let output;
-  if (tokens.output_visible != null && tokens.reasoning != null) {
-    output = `${fmt(tokens.output_visible)} visible + ${fmt(tokens.reasoning)} reasoning`;
-  } else if (tokens.output_total != null) {
-    output = `${fmt(tokens.output_total)} output (split unavailable)`;
-  } else {
+    return parts.join(' + ');
+  };
+  const outputEvidence = () => {
     const parts = [];
     if (tokens.output_visible != null) parts.push(`${fmt(tokens.output_visible)} visible`);
     if (tokens.reasoning != null) parts.push(`${fmt(tokens.reasoning)} reasoning`);
-    output = parts.join(' + ');
+    return parts.join(' + ');
+  };
+
+  let input;
+  const inputParts = inputEvidence();
+  if (inputState.reconciled) {
+    input = inputParts;
+  } else if (tokens.input_total != null) {
+    const detail = inputState.inconsistent
+      ? `split inconsistent${inputParts ? `: ${inputParts}` : ''}`
+      : `split unavailable${inputParts ? `; partial: ${inputParts}` : ''}`;
+    input = `${fmt(tokens.input_total)} input (${detail})`;
+  } else {
+    input = inputParts;
+  }
+
+  let output;
+  const outputParts = outputEvidence();
+  if (outputState.reconciled) {
+    output = outputParts;
+  } else if (tokens.output_total != null) {
+    const detail = outputState.inconsistent
+      ? `split inconsistent${outputParts ? `: ${outputParts}` : ''}`
+      : `split unavailable${outputParts ? `; partial: ${outputParts}` : ''}`;
+    output = `${fmt(tokens.output_total)} output (${detail})`;
+  } else {
+    output = outputParts;
   }
 
   let line = `[${label}: `;
   if (input) line += input;
   if (output) line += (input ? ' / ' : '') + output;
   if (tokens.total != null) line += ` | total ${fmt(tokens.total)}`;
-
-  // An unknown atomic category is flagged, never printed as zero.
-  if (
-    tokens.input_uncached == null ||
-    tokens.cache_read == null ||
-    tokens.output_visible == null ||
-    tokens.reasoning == null
-  ) {
+  if (!inputState.reconciled || !outputState.reconciled) {
     line += ' | incomplete usage detail';
   }
-
   line += ` | finish: ${resp?.choices?.[0]?.finish_reason ?? 'n/a'}]`;
   return line;
 }

@@ -295,7 +295,7 @@ test('a TRISS_PRICE_<> override on a subscription model prices the components, s
   }
 });
 
-test('a TRISS_PRICE_<> override on a subscription model is overridden by a trusted engine total', () => {
+test('a positive engine estimate does not override an incomplete subscription-model component estimate', () => {
   const envKey = 'TRISS_PRICE_ZAI_CODING_PLAN_GLM_5_2';
   const prev = process.env[envKey];
   process.env[envKey] = '1e-6,2e-6,3e-6,4e-6';
@@ -307,8 +307,10 @@ test('a TRISS_PRICE_<> override on a subscription model is overridden by a trust
       reported_total_source: 'engine',
       tokens: { input_uncached: 500, cache_read: 200, cache_write: 50, input_total: 700, output_total: 100 },
     });
-    assert.equal(c.source, 'engine_reported');
-    assert.equal(c.total_usd, 0.05);
+    assert.equal(c.reported_total_usd, 0.05);
+    assert.equal(c.source, 'unknown');
+    assert.equal(c.total_usd, null);
+    assert.equal(c.complete, false);
   } finally {
     if (prev === undefined) delete process.env[envKey];
     else process.env[envKey] = prev;
@@ -369,7 +371,7 @@ test('an OpenCode engine zero must NOT prove a free call when there is no price'
   assert.equal(c.total_usd, null);
 });
 
-test('a positive OpenCode engine cost with a known billing model is trusted', () => {
+test('a positive OpenCode engine cost is preserved but not trusted without complete component evidence', () => {
   const c = estimateCanonicalCost({
     billing_model: 'deepseek-v4-flash',
     billing_mode: 'payg',
@@ -377,10 +379,11 @@ test('a positive OpenCode engine cost with a known billing model is trusted', ()
     reported_total_source: 'engine',
     tokens: { input_total: 1000, output_total: 100 },
   });
-  assert.equal(c.total_usd, 0.25);
-  assert.equal(c.source, 'engine_reported');
-  assert.equal(c.complete, true);
+  assert.equal(c.reported_total_usd, 0.25);
   assert.equal(c.reported_total_source, 'engine');
+  assert.equal(c.total_usd, null);
+  assert.equal(c.source, 'unknown');
+  assert.equal(c.complete, false);
 });
 
 test('an unknown model with tokens present stays unknown and incomplete', () => {

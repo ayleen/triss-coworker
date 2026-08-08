@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { emptyTokens } from './usage-schema.js';
+import { emptyTokens, reconcileTokenSide } from './usage-schema.js';
 
 export const USAGE_FILE = join(homedir(), '.cache', 'triss', 'usage.jsonl');
 
@@ -209,7 +209,12 @@ export function logUsage(input = {}) {
   }
   const cCost =
     input.cost ||
-    estimateCanonicalCost({ billing_model, billing_mode, tokens: cTokens });
+    estimateCanonicalCost({
+      billing_model,
+      billing_mode,
+      tokens: cTokens,
+      usage_source,
+    });
 
   const record = {
     schema_version: 2,
@@ -219,7 +224,7 @@ export function logUsage(input = {}) {
     billing_mode,
     provider: input.provider || resolveProvider(resolvedModel),
     usage_source: usage_source || null,
-    usage_status: input.usage_status || 'reported',
+    usage_status: input.usage_status ?? inferUsageStatus(cTokens, cCost),
     engine: engine || null,
     label: label || null,
     call_id: call_id || null,
@@ -331,36 +336,17 @@ function newTokenAgg() {
   return agg;
 }
 
-// The canonical cost value fields — the monetary counts without their
-// provenance/metadata siblings — derived from the canonical cost object so v1
-// and v2 records aggregate the same way (docs/usage-accounting.md).
-const COST_VALUE_FIELDS = [
-  'input_uncached_usd',
-  'cache_read_usd',
-  'cache_write_usd',
-  'output_visible_usd',
-  'reasoning_usd',
-  'output_total_usd',
-  'reported_total_usd',
-  'total_usd',
-];
-
-// The canonical cost aggregate tracks every monetary field with its own
-// coverage, mirroring the token aggregates: an explicit 0 counts as known,
-// null/absent as unknown. It also carries a `sources` map — the count of calls
-// per canonical cost.source — so the renderer can classify a report's cost
-// (free / plan / estimated / engine_reported / mixed). A record with no
-// canonical cost object contributes nothing to the map.
-function newCostAgg() {
-  const agg = {
-    sources: {},
-    // The engine-reported monetary total of the calls whose canonical cost is
-    // UNKNOWN, kept separately from the overall engine sum so a mixed report
-    // keeps the evidence for its unpriced calls (see formatCost).
-    unresolved_reported_total_usd: { sum: 0, known_calls: 0, unknown_calls: 0 },
+function newSideState() {
+  return {
+    reconciled_calls: 0,
+    inconsistent_calls: 0,
+    partial_calls: 0,
+    unavailable_calls: 0,
   };
-  for (const key of COST_VALUE_FIELDS) agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
-  return agg;
+}
+
+function newSideAgg() {
+  return { input: newSideState(), output: newSideState() };
 }
 
 // An explicit 0 is a known call; null and non-numbers are unknown and never
@@ -386,8 +372,66 @@ function foldTokenAgg(agg, normalized) {
   }
 }
 
-function foldCostAgg(agg, normalized) {
-  const cost = normalized.cost && typeof normalized.cost === 'object' ? normalized.cost : null;
+function foldSideAgg(agg, normalized) {
+  for (const side of ['input', 'output']) {
+    const state = reconcileTokenSide(normalized.tokens, side);
+    const entry = agg[side];
+    if (state.reconciled) entry.reconciled_calls++;
+    else if (state.inconsistent) entry.inconsistent_calls++;
+    else if (state.any_known) entry.partial_calls++;
+    else entry.unavailable_calls++;
+  }
+}
+
+// The canonical cost value fields — the monetary counts without their
+// provenance/metadata siblings — derived from the canonical cost object so v1
+// and v2 records aggregate the same way (docs/usage-accounting.md).
+const COST_VALUE_FIELDS = [
+  'input_uncached_usd',
+  'cache_read_usd',
+  'cache_write_usd',
+  'output_visible_usd',
+  'reasoning_usd',
+  'output_total_usd',
+  'reported_total_usd',
+  'total_usd',
+];
+
+// The canonical cost aggregate tracks every monetary field with its own
+// coverage, mirroring the token aggregates: an explicit 0 counts as known,
+// null/absent as unknown. It also carries a `sources` map — the count of calls
+// per canonical cost.source — so the renderer can classify a report's cost.
+function newCostAgg() {
+  const agg = {
+    sources: {},
+    // The engine-reported monetary total of calls whose canonical cost is
+    // unknown, kept separately so the CLI can retain that evidence.
+    unresolved_reported_total_usd: { sum: 0, known_calls: 0, unknown_calls: 0 },
+  };
+  for (const key of COST_VALUE_FIELDS) {
+    agg[key] = { sum: 0, known_calls: 0, unknown_calls: 0 };
+  }
+  return agg;
+}
+
+function flatKnownCost(record) {
+  return record.cost_usd_known !== false && Number.isFinite(record.cost_usd)
+    ? record.cost_usd
+    : null;
+}
+
+function foldCostAgg(agg, normalized, raw) {
+  let cost = normalized.cost && typeof normalized.cost === 'object'
+    ? normalized.cost
+    : null;
+  // Preserve the existing fallback for hand-rolled v2 consumers that have
+  // only flat aliases. Never apply it to unsupported explicit schema versions
+  // or to v1 records whose canonical normalizer deliberately marked the old
+  // estimate incomplete.
+  if (!cost && !normalized.unsupported) {
+    const flat = flatKnownCost(raw);
+    if (flat !== null) cost = { total_usd: flat };
+  }
   if (cost && typeof cost.source === 'string') {
     agg.sources[cost.source] = (agg.sources[cost.source] || 0) + 1;
   }
@@ -401,10 +445,6 @@ function foldCostAgg(agg, normalized) {
       entry.unknown_calls++;
     }
   }
-  // A call whose canonical total is unknown may still carry an engine-reported
-  // monetary signal; keep that evidence separately from the overall engine sum
-  // so a mixed report never loses it behind the priced calls. An explicit 0
-  // counts as known.
   const unresolved = agg.unresolved_reported_total_usd;
   if (cost && !Number.isFinite(cost.total_usd) && Number.isFinite(cost.reported_total_usd)) {
     unresolved.sum += cost.reported_total_usd;
@@ -415,8 +455,8 @@ function foldCostAgg(agg, normalized) {
 }
 
 export function summarize(records, { groupBy } = {}) {
-  const total = {
-    calls: records.length,
+  const makeSummary = (calls = 0) => ({
+    calls,
     prompt_tokens: 0,
     cached_tokens: 0,
     completion_tokens: 0,
@@ -424,28 +464,31 @@ export function summarize(records, { groupBy } = {}) {
     known_cost_usd: 0,
     known_cost_calls: 0,
     unknown_cost_calls: 0,
+    legacy_estimated_cost_usd: 0,
+    legacy_estimated_cost_calls: 0,
+    unsupported_schema_records: 0,
     tokens: newTokenAgg(),
+    token_sides: newSideAgg(),
     cost: newCostAgg(),
-  };
+  });
+  const total = makeSummary(records.length);
   const groups = new Map();
-  // A cost is known from the canonical aggregate (docs/usage-accounting.md
-  // "Compatibility fields"): if a record carries a canonical cost object at
-  // all, that object decides entirely — known only when its total_usd is a
-  // finite number, and the deprecated cost_usd flat aliases are NEVER
-  // consulted. Only a record with no canonical cost object (normalizeUsageRecord
-  // always produces one for a v1 record, so this is only hand-rolled v2
-  // fixtures) falls back to the flat aliases so an explicit known flag still
-  // counts, exactly as today.
-  const knownCostUsd = (r, normalized) => {
-    const c = normalized.cost;
-    if (c && typeof c === 'object') {
-      return Number.isFinite(c.total_usd) ? c.total_usd : null;
+
+  // Deprecated summary keys preserve their old flat-record subtotal. The
+  // canonical cost aggregate above independently decides whether that value
+  // is a complete monetary total.
+  const knownCostUsd = (record, normalized) => {
+    if (normalized.unsupported) return null;
+    if (normalized.legacy) return flatKnownCost(record);
+    const cost = normalized.cost;
+    if (cost && typeof cost === 'object') {
+      return Number.isFinite(cost.total_usd) ? cost.total_usd : null;
     }
-    if (r.cost_usd_known !== false && Number.isFinite(r.cost_usd)) return r.cost_usd;
-    return null;
+    return flatKnownCost(record);
   };
-  const foldCost = (agg, r, normalized) => {
-    const known = knownCostUsd(r, normalized);
+
+  const foldCompatibilityCost = (agg, record, normalized) => {
+    const known = knownCostUsd(record, normalized);
     if (known !== null) {
       agg.cost_usd += known;
       agg.known_cost_usd += known;
@@ -453,42 +496,40 @@ export function summarize(records, { groupBy } = {}) {
     } else {
       agg.unknown_cost_calls++;
     }
+    if (
+      normalized.legacy &&
+      normalized.cost?.source === 'unknown' &&
+      flatKnownCost(record) !== null
+    ) {
+      agg.legacy_estimated_cost_usd += record.cost_usd;
+      agg.legacy_estimated_cost_calls++;
+    }
   };
-  for (const r of records) {
-    const normalized = normalizeUsageRecord(r);
-    total.prompt_tokens += r.prompt_tokens || 0;
-    total.cached_tokens += r.cached_tokens || 0;
-    total.completion_tokens += r.completion_tokens || 0;
-    foldCost(total, r, normalized);
-    foldTokenAgg(total.tokens, normalized);
-    foldCostAgg(total.cost, normalized);
+
+  const fold = (agg, record, normalized) => {
+    if (normalized.unsupported) agg.unsupported_schema_records++;
+    else {
+      agg.prompt_tokens += record.prompt_tokens || 0;
+      agg.cached_tokens += record.cached_tokens || 0;
+      agg.completion_tokens += record.completion_tokens || 0;
+    }
+    foldCompatibilityCost(agg, record, normalized);
+    foldTokenAgg(agg.tokens, normalized);
+    foldSideAgg(agg.token_sides, normalized);
+    foldCostAgg(agg.cost, normalized, record);
+  };
+
+  for (const record of records) {
+    const normalized = normalizeUsageRecord(record);
+    fold(total, record, normalized);
     if (groupBy) {
-      const key = String(r[groupBy] ?? '(unknown)');
-      const g = groups.get(key) || {
-        calls: 0,
-        prompt_tokens: 0,
-        cached_tokens: 0,
-        completion_tokens: 0,
-        cost_usd: 0,
-        known_cost_usd: 0,
-        known_cost_calls: 0,
-        unknown_cost_calls: 0,
-        tokens: newTokenAgg(),
-        cost: newCostAgg(),
-      };
-      g.calls++;
-      g.prompt_tokens += r.prompt_tokens || 0;
-      g.cached_tokens += r.cached_tokens || 0;
-      g.completion_tokens += r.completion_tokens || 0;
-      foldCost(g, r, normalized);
-      foldTokenAgg(g.tokens, normalized);
-      foldCostAgg(g.cost, normalized);
-      groups.set(key, g);
+      const key = String(record[groupBy] ?? '(unknown)');
+      const group = groups.get(key) || makeSummary(0);
+      group.calls++;
+      fold(group, record, normalized);
+      groups.set(key, group);
     }
   }
-  // cost_usd remains a numeric subtotal for backward compatibility.
-  // unknown_cost_calls and the canonical aggregate tell newer renderers that
-  // it is not a complete total.
   return { total, groups };
 }
 
@@ -537,6 +578,8 @@ export function estimateCanonicalCost({
 } = {}) {
   const p = priceFor(billing_model);
   const isCrush = billing_model === 'crush' || usage_source === 'crush';
+  const usageMeta = tokens && tokens.__usage_meta;
+  const isOpenCode = usage_source === 'opencode' || usageMeta?.source === 'opencode';
 
   const iu = finite(tokens.input_uncached);
   const cr = finite(tokens.cache_read);
@@ -544,10 +587,6 @@ export function estimateCanonicalCost({
   const it = finite(tokens.input_total);
   const ot = finite(tokens.output_total);
 
-  // A component is priced only when both its count and its rate are known; a
-  // missing count or price is never treated as zero. output_visible_usd and
-  // reasoning_usd stay null this release — every supported provider bills the
-  // whole output once, at the output rate.
   const priced = (count, rate) => (count != null && rate != null ? count * rate : null);
   const cost = {
     input_uncached_usd: priced(iu, p && p.input_uncached),
@@ -564,19 +603,24 @@ export function estimateCanonicalCost({
     unknown_components: [],
   };
 
-  // Engine-reported totals win when trusted: a positive cost always is; a
-  // Crush delta (including 0) always is. A plan/free zero is decided by the
-  // proven mode below, before any engine zero could label it engine_reported.
-  if (reported_total_source === 'engine' && reported_total_usd != null) {
-    if (reported_total_usd > 0 || isCrush) {
-      return { ...cost, total_usd: reported_total_usd, source: 'engine_reported', complete: true };
-    }
+  // Only Crush's engine contract defines its reported value as the actual
+  // per-call monetary charge. OpenCode part.cost is catalogue arithmetic in
+  // which absent rates become zero; even a positive result can therefore be
+  // partial. Keep every non-Crush engine value as evidence and continue to
+  // the plan/component completeness checks below.
+  if (
+    reported_total_source === 'engine' &&
+    reported_total_usd != null &&
+    isCrush
+  ) {
+    return {
+      ...cost,
+      total_usd: reported_total_usd,
+      source: 'engine_reported',
+      complete: true,
+    };
   }
-  // Without a trusted engine total, a plan or proven-free zero is the truth —
-  // it wins even when the engine also reported a zero. An explicit
-  // TRISS_PRICE_<> override, though, lets a user price a plan model itself;
-  // that env-supplied rate beats the plan zero, so fall through to the
-  // component estimate (source: 'estimated') instead of the built-in zero.
+
   if (billing_mode === 'subscription' && !priceIsOverride(billing_model)) {
     return {
       ...cost,
@@ -597,24 +641,32 @@ export function estimateCanonicalCost({
       complete: true,
     };
   }
-  // No price row at all → nothing to estimate; whatever we lack is unknown.
   if (!p) {
-    cost.unknown_components = [];
     if (it == null) cost.unknown_components.push('input_total');
     if (ot == null) cost.unknown_components.push('output_total');
     if (cost.unknown_components.length === 0) cost.unknown_components.push('cost');
     return cost;
   }
 
-  // Input side is covered when the known input components account for a
-  // reported input_total (the DeepSeek/Z.AI case, where no cache-write class
-  // exists), or when all three are known and no input_total was reported.
   const knownInputSum = (iu ?? 0) + (cr ?? 0) + (cw ?? 0);
-  const inputCovered = it != null ? knownInputSum === it : iu != null && cr != null && cw != null;
-  const outputCovered = ot != null;
+  const ordinaryInputCovered = it != null
+    ? knownInputSum === it
+    : iu != null && cr != null && cw != null;
+  // OpenCode atomics are per-step sums. When the fold supplied internal
+  // coverage metadata, require that proof. For a reloaded/persisted
+  // OpenCode record (metadata intentionally is not serialized), require a
+  // reconciled side total; partial atomics alone can never prove coverage.
+  const inputCovered = isOpenCode
+    ? usageMeta
+      ? usageMeta.input_complete === true && it != null && knownInputSum === it
+      : it != null && knownInputSum === it
+    : ordinaryInputCovered;
+  const outputCovered = isOpenCode
+    ? usageMeta
+      ? usageMeta.output_complete === true && ot != null
+      : ot != null
+    : ot != null;
 
-  // A non-zero covered component with no rate makes the estimate incomplete
-  // and is named so it can be surfaced rather than silently dropped.
   const missingRates = [];
   if (iu != null && iu !== 0 && p.input_uncached == null) missingRates.push('input_uncached');
   if (cr != null && cr !== 0 && p.cache_read == null) missingRates.push('cache_read');
@@ -622,7 +674,6 @@ export function estimateCanonicalCost({
 
   const complete = inputCovered && outputCovered && missingRates.length === 0;
   if (complete) {
-    // The priced components account for the whole call.
     const totalUsd =
       (cost.input_uncached_usd ?? 0) +
       (cost.cache_read_usd ?? 0) +
@@ -631,28 +682,27 @@ export function estimateCanonicalCost({
     return { ...cost, total_usd: totalUsd, source: 'estimated', complete: true };
   }
 
-  cost.unknown_components = [];
   if (!inputCovered) cost.unknown_components.push('input_total');
   if (!outputCovered) cost.unknown_components.push('output_total');
-  for (const c of missingRates) cost.unknown_components.push(c);
+  for (const component of missingRates) cost.unknown_components.push(component);
   return cost;
 }
 
-// A usage_status is inferred from the normalized tokens when the record did not
-// state one: 'reported' when any token value is a finite number (a 0 is a
-// reported counter), 'missing' when none is. An explicit usage_status on the
-// record always wins.
-function inferUsageStatus(tokens) {
-  for (const value of Object.values(tokens)) {
+// A usage_status is inferred from canonical values when the record did not
+// state one. A finite source-reported monetary signal counts as reported;
+// a derived plan/estimate alone does not invent usage that the source omitted.
+function inferUsageStatus(tokens, cost) {
+  for (const value of Object.values(tokens || {})) {
     if (Number.isFinite(value)) return 'reported';
   }
+  if (cost && Number.isFinite(cost.reported_total_usd)) return 'reported';
   return 'missing';
 }
 
 // Promotes a persisted record to the in-memory canonical shape for
-// aggregation. Purify — never mutates the argument. A v2 record passes
-// through; a v1 record (no schema_version) is upgraded to the canonical shape
-// using only the flat fields it can prove.
+// aggregation. Pure — never mutates the argument. Only an ABSENT schema
+// version is legacy v1; unknown explicit versions fail closed instead of
+// being silently reinterpreted through deprecated aliases.
 export function normalizeUsageRecord(record) {
   const r = record || {};
 
@@ -661,45 +711,42 @@ export function normalizeUsageRecord(record) {
     for (const key of Object.keys(tokens)) {
       tokens[key] = r.tokens && r.tokens[key] !== undefined ? r.tokens[key] : null;
     }
+    const cost = r.cost && typeof r.cost === 'object' ? r.cost : null;
     return {
       schema_version: 2,
       model: r.model ?? null,
       billing_model: r.billing_model ?? r.model ?? null,
       tokens,
-      cost: r.cost && typeof r.cost === 'object' ? r.cost : null,
-      usage_status: r.usage_status ?? inferUsageStatus(tokens),
+      cost,
+      usage_status: r.usage_status ?? inferUsageStatus(tokens, cost),
       legacy: false,
+      unsupported: false,
     };
   }
 
-  // v1 could never split the input or the output, so only the totals and the
-  // cached count survive; the atomic split fields stay unknowable.
+  if (r.schema_version != null) {
+    const tokens = emptyTokens();
+    return {
+      schema_version: r.schema_version,
+      model: r.model ?? null,
+      billing_model: r.billing_model ?? r.model ?? null,
+      tokens,
+      cost: null,
+      usage_status: 'missing',
+      legacy: false,
+      unsupported: true,
+    };
+  }
+
   const prompt = finite(r.prompt_tokens);
   const cached = finite(r.cached_tokens);
   const completion = finite(r.completion_tokens);
   const tokens = emptyTokens();
 
   if (r.label === 'coder') {
-    // The old OpenCode fold persisted only the summed uncached input and the
-    // visible output — cache reads/writes and reasoning were excluded — so the
-    // call total is unknowable and deriving one would present a partial figure
-    // as the complete call (docs/usage-accounting.md "Reading older records"
-    // never claims the old OpenCode input/output pair represented the complete
-    // call). The flat halves map onto the atomic fields instead.
-    //
-    // A pre-v2 Crush run logged prompt 0 / cached 0 and its combined count as
-    // completion, and never passed cached_tokens; a legacy OpenCode run whose
-    // uncached input happened to be 0 looks exactly the same. So the record is
-    // combined only when it is explicitly a Crush model, or when prompt 0 and
-    // cached 0 with a non-zero completion make it impossible to attribute —
-    // such a record must not claim to be visible output. Anything with a real
-    // prompt or a cached count is certainly OpenCode.
     if (r.model === 'crush') {
-      // Crush reports a combined count only, every other field null.
       tokens.combined = completion;
     } else if (prompt === 0 && (cached || 0) === 0 && completion !== null && completion > 0) {
-      // Ambiguous between Crush (with an explicit model override) and an
-      // OpenCode run whose uncached input was 0: keep it combined.
       tokens.combined = completion;
     } else {
       tokens.input_uncached = prompt;
@@ -717,16 +764,20 @@ export function normalizeUsageRecord(record) {
       tokens.total_source = 'derived';
     }
   }
+
   const known = r.cost_usd_known !== false && Number.isFinite(r.cost_usd);
-  // Pre-v2 subscription records (zai-coding-plan / kimi-for-coding) were
-  // metered by the plan, so a known flat cost is a plan zero, not an estimate.
   const legacyModel = r.billing_model || r.model || '';
   const isPlan =
-    legacyModel.startsWith('zai-coding-plan/') || legacyModel.startsWith('kimi-for-coding/');
+    legacyModel.startsWith('zai-coding-plan/') ||
+    legacyModel.startsWith('kimi-for-coding/');
+  const planKnown = known && isPlan;
   const cost = {
-    total_usd: known ? r.cost_usd : null,
-    source: known ? (isPlan ? 'plan' : 'estimated') : 'unknown',
-    complete: known,
+    total_usd: planKnown ? r.cost_usd : null,
+    source: planKnown ? 'plan' : 'unknown',
+    complete: planKnown,
+    // Compatibility/subtotal evidence only. It is intentionally not the
+    // canonical total because v1 discarded billable token classes.
+    legacy_estimate_usd: known && !isPlan ? r.cost_usd : null,
   };
   return {
     schema_version: 1,
@@ -734,7 +785,8 @@ export function normalizeUsageRecord(record) {
     billing_model: r.billing_model ?? r.model ?? null,
     tokens,
     cost,
-    usage_status: r.usage_status ?? inferUsageStatus(tokens),
+    usage_status: r.usage_status ?? inferUsageStatus(tokens, null),
     legacy: true,
+    unsupported: false,
   };
 }

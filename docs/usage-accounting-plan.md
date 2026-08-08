@@ -218,9 +218,9 @@ This table is a contract-lock input, not a permanent hardcoded catalogue. The
 implementation must use the authenticated/pinned route facts available for
 the call and fail to `unknown` when it cannot prove a stronger classification.
 
-`usage_status` is `reported`, `partial`, or `missing`. A call with no token or
-cost counters remains observable as `missing`; absence of counters is not
-represented by an all-zero record.
+`usage_status` is `reported` or `missing`. A call with no token or
+source-reported cost counters remains observable as `missing`; partial detail is
+represented by nullable fields, not by an all-zero record or a third status.
 
 ## Source normalization contracts
 
@@ -410,9 +410,10 @@ Rules:
 - OpenCode `part.cost` is an engine-calculated signal, not a raw provider bill.
   Preserve it separately as `reported_total_usd` with
   `reported_total_source: "engine"`.
-- A positive OpenCode cost can be used as the complete total when the pinned
-  engine contract and billing model are known. An OpenCode zero is known-zero
-  only when the per-call billing mode is proven `subscription` or `free`.
+- OpenCode cost is retained as engine-reported evidence but is never alone
+  sufficient for a complete total: missing catalogue rates become zero, so even
+  a positive value can be partial. A proven plan/free mode or a separately
+  complete component estimate decides the canonical total.
 - For a `payg` or `unknown` OpenCode call, engine-reported zero is not
   authoritative. Fall through to a complete component estimate; if no complete
   estimate is possible, the total cost is unknown.
@@ -587,7 +588,8 @@ renamed raw reader with a compatibility wrapper) returns persisted objects,
 while a pure `normalizeUsageRecord()` produces the in-memory canonical shape
 for aggregation. The compatibility normalizer:
 
-- preserves the old prompt, cached, completion, and cost values;
+- preserves the old prompt, cached, completion, and flat cost values as
+  compatibility evidence, while non-plan v1 estimates remain canonically incomplete;
 - derives only a legacy `total = prompt_tokens + completion_tokens`;
 - treats old cached tokens as reported cache-read detail but does not infer all
   other atomic fields;

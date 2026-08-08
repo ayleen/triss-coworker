@@ -333,8 +333,7 @@ leaves the estimate incomplete and names `cache_write` in `unknown_components`.
 1. a **provider-reported** monetary total whose API contract defines it as the
    charge for this call;
 2. an **engine-reported** total whose engine contract defines it as the real
-   monetary cost (Crush `delta_cost_usd`), or a **positive** OpenCode engine
-   estimate with known model identity;
+   monetary cost (currently Crush `delta_cost_usd` only);
 3. a proven **subscription-plan** or **free-tier** total. A plan or free call
    takes this branch even when the engine also reported a zero: the zero is
    known because the plan proves it, so the call is labelled `plan`/`free`
@@ -353,14 +352,12 @@ leaves the estimate incomplete and names `cache_write` in `unknown_components`.
 - OpenCode's `part.cost` is an **engine-calculated** signal, not a provider
   bill. It is always preserved in `reported_total_usd` with
   `reported_total_source: "engine"`, separately from `total_usd`.
-- A **positive** OpenCode cost may become the complete total when the pinned
-  engine contract and the billing model are both known.
-- An OpenCode **zero** is known-zero only when `billing_mode` is proven
-  `subscription` or `free`. For a `payg` or `unknown` mode it is not
-  authoritative: Triss falls through to a complete component estimate, and if
-  no complete estimate is possible the total cost is unknown. See
-  [Verified engine facts](#verified-engine-facts) — the engine computes a zero
-  whenever the catalogue has no rate for a component.
+- OpenCode `part.cost`, whether positive or zero, is evidence rather than an
+  authoritative bill. The engine substitutes zero for missing catalogue rates,
+  so a positive value can still omit a non-zero component. Triss always keeps
+  that signal in `reported_total_usd`, then uses a proven plan/free mode or a
+  complete component estimate for canonical `total_usd`; otherwise cost remains
+  unknown.
 - A model prefix alone never proves a zero-cost mode when the provider can fall
   back from subscription quota to a balance-funded route.
 - Crush's `delta_cost_usd` is accepted, **including an explicit zero**, because
@@ -509,7 +506,10 @@ rather than baking in a zero that would expire.
 
 A v2 record is written when `model` and `billing_model` are known **and** a
 provider response, a parsed coder envelope, or a terminal engine event reached
-the recording boundary. At least one numeric field is *not* required.
+the recording boundary. At least one numeric field is *not* required. When the caller omits
+`usage_status`, the persistence boundary infers `reported` only from a finite
+canonical token counter or a source-reported monetary signal; an all-null call
+is persisted as `missing`.
 
 Failures that never reach a provider or engine call — preflight, credential,
 configuration, and spawn errors — are not logged as usage. `TRISS_USAGE_LOG=0`
@@ -537,10 +537,15 @@ zero.
 ### Reading older records
 
 Records without `schema_version` are read as-is; the log is never rewritten in
-place. A pure normalizer produces the in-memory canonical shape for
+place. Only an absent version denotes v1. A record with an unknown explicit
+version is excluded from deprecated-alias interpretation and reported as an
+unsupported record instead of being silently downgraded. A pure normalizer produces the in-memory canonical shape for
 aggregation, and for a v1 record it:
 
-- preserves the old prompt, cached, completion, and cost values;
+- preserves the old prompt, cached, completion, and flat cost values as
+  deprecated compatibility evidence;
+- never promotes a non-plan v1 estimate to a complete canonical cost because
+  v1 discarded billable cache/reasoning classes; proven plan zeros remain known;
 - derives only `total = prompt_tokens + completion_tokens`;
 - treats the old cached count as reported cache-read detail;
 - leaves reasoning and cache-write `null`;
