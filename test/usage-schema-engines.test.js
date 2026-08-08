@@ -150,6 +150,39 @@ test('DEFECT 2: when every step reports a cost, the summed engine total is expos
   assert.equal(reported_total_source, 'engine');
 });
 
+// DEFECT 1 — negative TOKEN counts are broken reports, not data: rejected as
+// unknown (null) with an /invalid/i warning. Money is different: a part.cost
+// may legitimately be signed and must still be recorded.
+
+test('DEFECT 1: a negative tokens.input leaves input_uncached null and warns', () => {
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: -10, output: 5, reasoning: 1, cache: { read: 0, write: 0 } } });
+  const { tokens, warnings } = finalizeOpencodeUsage(acc);
+  assert.equal(tokens.input_uncached, null);
+  assert.ok(
+    warnings.some((w) => /invalid/i.test(w)),
+    `expected an invalid warning, got ${JSON.stringify(warnings)}`,
+  );
+});
+
+test('DEFECT 1: a negative part.cost is still recorded', () => {
+  const acc = emptyOpencodeUsage();
+  foldOpencodeStep(acc, { tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 0, write: 0 } }, cost: -0.25 });
+  const { reported_total_usd, reported_total_source } = finalizeOpencodeUsage(acc);
+  assert.equal(reported_total_usd, -0.25);
+  assert.equal(reported_total_source, 'engine');
+});
+
+test('DEFECT 1: a negative crush delta_tokens is invalid, not reported', () => {
+  const { tokens, warnings } = normalizeCrushUsage({ delta_tokens: -5, delta_cost_usd: 0.5 });
+  assert.equal(tokens.combined, null);
+  assert.equal(tokens.total, null);
+  assert.ok(
+    warnings.some((w) => /invalid/i.test(w)),
+    `expected an invalid warning, got ${JSON.stringify(warnings)}`,
+  );
+});
+
 test('crush folds delta_tokens into combined and total with an engine-reported cost', () => {
   const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizeCrushUsage({
     delta_tokens: 42,

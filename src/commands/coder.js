@@ -4486,9 +4486,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     reported_total_source,
   });
   // Deprecated aliases keep their pre-existing meaning and values: the summed
-  // uncached input and the visible output.
-  const promptTokens = tokens.input_uncached;
-  const completionTokens = tokens.output_visible;
+  // uncached input and the visible output. They are the pre-v2 shape and must
+  // stay numeric for null-averse consumers — before the canonical split existed
+  // the zero-initialized accumulator made a no-step run report 0/0, so when the
+  // canonical value is unknown the alias falls back to 0. The canonical fields
+  // remain the ones that distinguish unknown from zero.
+  const promptTokens = tokens.input_uncached ?? 0;
+  const completionTokens = tokens.output_visible ?? 0;
   const ctx = currentCall();
   logUsage({
     model: modelUsed,

@@ -9,6 +9,20 @@ function num(v) {
   return Number.isFinite(v) ? v : null;
 }
 
+// A negative TOKEN count is a broken report, not data: treat it as unknown
+// (null) and surface an /invalid/i warning naming the field, so it can never
+// leak into derived totals, cost estimates, or aggregation. Money is
+// different — a delta_cost_usd or part.cost may legitimately be signed — so
+// costs keep the plain finite guard above.
+function tokenNum(v, name, warnings) {
+  const n = num(v);
+  if (n !== null && n < 0) {
+    warnings.push(`invalid ${name}: negative count ${n}`);
+    return null;
+  }
+  return n;
+}
+
 export function emptyTokens() {
   // Fresh object per call so no caller can mutate a shared shape.
   return {
@@ -28,8 +42,8 @@ export function emptyTokens() {
 }
 
 // Writes a reported total together with its provenance sibling.
-function setTotal(tokens, key, value) {
-  const n = num(value);
+function setTotal(tokens, key, value, warnings) {
+  const n = tokenNum(value, key, warnings);
   if (n === null) return null;
   tokens[key] = n;
   tokens[key + '_source'] = 'reported';
@@ -99,16 +113,16 @@ export function normalizeApiUsage(resp, { provider } = {}) {
   }
 
   // The common OpenAI-compatible totals are reported verbatim on every path.
-  const inputTotal = setTotal(tokens, 'input_total', usage.prompt_tokens);
-  const outputTotal = setTotal(tokens, 'output_total', usage.completion_tokens);
-  setTotal(tokens, 'total', usage.total_tokens);
+  const inputTotal = setTotal(tokens, 'input_total', usage.prompt_tokens, warnings);
+  const outputTotal = setTotal(tokens, 'output_total', usage.completion_tokens, warnings);
+  setTotal(tokens, 'total', usage.total_tokens, warnings);
 
   const details = usage.completion_tokens_details;
-  const reasoning = num(details && details.reasoning_tokens);
+  const reasoning = tokenNum(details && details.reasoning_tokens, 'reasoning_tokens', warnings);
 
   if (provider === 'deepseek') {
-    tokens.input_uncached = num(usage.prompt_cache_miss_tokens);
-    tokens.cache_read = num(usage.prompt_cache_hit_tokens);
+    tokens.input_uncached = tokenNum(usage.prompt_cache_miss_tokens, 'prompt_cache_miss_tokens', warnings);
+    tokens.cache_read = tokenNum(usage.prompt_cache_hit_tokens, 'prompt_cache_hit_tokens', warnings);
     tokens.reasoning = reasoning;
     applyDeepseekContract({
       tokens,
@@ -124,8 +138,8 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     // top-level. Both derive the uncached remainder the same way.
     const cached =
       provider === 'zai'
-        ? num(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)
-        : num(usage.cached_tokens);
+        ? tokenNum(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens, 'cached_tokens', warnings)
+        : tokenNum(usage.cached_tokens, 'cached_tokens', warnings);
     tokens.cache_read = cached;
     if (inputTotal !== null && cached !== null) {
       const uncached = inputTotal - cached;
@@ -134,10 +148,14 @@ export function normalizeApiUsage(resp, { provider } = {}) {
   } else {
     // Generic worker: recognise the documented aliases without assuming the
     // endpoint agrees with any single provider's shape.
-    const hit = num(usage.prompt_cache_hit_tokens);
-    const miss = num(usage.prompt_cache_miss_tokens);
-    const nestedCached = num(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens);
-    const topCached = num(usage.cached_tokens);
+    const hit = tokenNum(usage.prompt_cache_hit_tokens, 'prompt_cache_hit_tokens', warnings);
+    const miss = tokenNum(usage.prompt_cache_miss_tokens, 'prompt_cache_miss_tokens', warnings);
+    const nestedCached = tokenNum(
+      usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens,
+      'cached_tokens',
+      warnings,
+    );
+    const topCached = tokenNum(usage.cached_tokens, 'cached_tokens', warnings);
 
     // The deepseek pair is the only alias that splits the input into both
     // halves. Each half is recognised on its own: a response reporting only one
@@ -213,11 +231,22 @@ export function emptyOpencodeUsage() {
     // The same rule applies to per-step cost: an engine-reported total is only
     // authoritative when EVERY folded step reported a finite cost.
     stepsWithCost: 0,
+    // Negative token counts are broken reports: rejected with a warning.
+    warnings: [],
   };
 }
 
-// Folds one step's worth of a field into the accumulator, marking it seen only
-// when the step actually reported a finite number.
+// Folds one step's worth of a TOKEN field, rejecting negative counts as unknown
+// (null) with an /invalid/i warning.
+function foldTokenField(acc, key, value) {
+  const n = tokenNum(value, key, acc.warnings);
+  if (n === null) return;
+  acc[key] += n;
+  acc.seen[key] = true;
+}
+
+// Folds one step's worth of a COST field. Money may legitimately be signed, so
+// costs keep the plain finite guard.
 function foldField(acc, key, value) {
   const n = num(value);
   if (n === null) return;
@@ -233,13 +262,17 @@ export function foldOpencodeStep(acc, part) {
   const tokens = part.tokens;
   if (tokens) {
     const cache = tokens.cache;
-    foldField(acc, 'input_uncached', tokens.input);
-    foldField(acc, 'cache_read', cache && cache.read);
-    foldField(acc, 'cache_write', cache && cache.write);
-    foldField(acc, 'output_visible', tokens.output);
-    foldField(acc, 'reasoning', tokens.reasoning);
-    if (num(tokens.total) !== null) acc.stepsWithTotal++;
-    foldField(acc, 'total', tokens.total);
+    foldTokenField(acc, 'input_uncached', tokens.input);
+    foldTokenField(acc, 'cache_read', cache && cache.read);
+    foldTokenField(acc, 'cache_write', cache && cache.write);
+    foldTokenField(acc, 'output_visible', tokens.output);
+    foldTokenField(acc, 'reasoning', tokens.reasoning);
+    const totalN = tokenNum(tokens.total, 'total', acc.warnings);
+    if (totalN !== null) {
+      acc.stepsWithTotal++;
+      acc.total += totalN;
+      acc.seen.total = true;
+    }
   }
   foldField(acc, 'reported_total_usd', part.cost);
   if (num(part.cost) !== null) acc.stepsWithCost++;
@@ -247,7 +280,7 @@ export function foldOpencodeStep(acc, part) {
 
 export function finalizeOpencodeUsage(acc) {
   const tokens = emptyTokens();
-  const warnings = [];
+  const warnings = [...acc.warnings];
   const { seen } = acc;
 
   for (const key of ['input_uncached', 'cache_read', 'cache_write', 'output_visible', 'reasoning']) {
@@ -311,11 +344,12 @@ export function finalizeOpencodeUsage(acc) {
 
 export function normalizeCrushUsage(usage) {
   const tokens = emptyTokens();
+  const warnings = [];
   // Crush only reports a combined count; every split field stays null and is
   // never stored as if it were completion tokens.
-  const delta = usage != null ? num(usage.delta_tokens) : null;
+  const delta = usage != null ? tokenNum(usage.delta_tokens, 'delta_tokens', warnings) : null;
   // delta_cost_usd is the real per-call cost by contract, including an
-  // explicit 0.
+  // explicit 0. Money may legitimately be signed, so it keeps the plain guard.
   const cost = usage != null ? num(usage.delta_cost_usd) : null;
 
   if (delta !== null) {
@@ -332,5 +366,5 @@ export function normalizeCrushUsage(usage) {
   // delta_tokens is absent, and 'missing' means neither was reported.
   const usage_status = delta !== null || cost !== null ? 'reported' : 'missing';
 
-  return { tokens, reported_total_usd, reported_total_source, usage_status, warnings: [] };
+  return { tokens, reported_total_usd, reported_total_source, usage_status, warnings };
 }
