@@ -248,7 +248,7 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
   // reported total with a "split unavailable" marker. When neither exists but
   // some atomic counter is known, render each known counter with its own
   // category so a lone reported figure is never hidden.
-  let input = '';
+  let input;
   if (tokens.input_uncached != null && tokens.cache_read != null) {
     input = `${fmt(tokens.input_uncached)} uncached input + ${fmt(tokens.cache_read)} cache-read`;
     if (tokens.cache_write != null && tokens.cache_write !== 0) {
@@ -266,7 +266,7 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
     input = parts.join(' + ');
   }
 
-  let output = '';
+  let output;
   if (tokens.output_visible != null && tokens.reasoning != null) {
     output = `${fmt(tokens.output_visible)} visible + ${fmt(tokens.reasoning)} reasoning`;
   } else if (tokens.output_total != null) {
