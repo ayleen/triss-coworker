@@ -420,6 +420,30 @@ test(
 );
 
 test(
+  'crush envelope: an invalid delta_tokens surfaces an /invalid/i warning',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    // A negative delta_tokens is rejected by normalization; that warning must
+    // reach the envelope's warnings instead of being dropped.
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_neg',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: -5, delta_cost_usd: 0.5 },
+      }) + '\n';
+    const capture = stdoutCapture();
+    await runCoderRun(
+      'do something',
+      { engine: 'crush', isolate: false, timeout: 30 },
+      { ...crushRunDeps(envelopeLine), stdoutWrite: capture.stdoutWrite },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    const joined = (envelope.warnings || []).join('\n');
+    assert.match(joined, /invalid/i, `expected an invalid warning, got ${JSON.stringify(envelope.warnings)}`);
+  }),
+);
+
+test(
   'crush envelope usage: a real delta_cost_usd of exactly 0 is reported as a complete engine-priced call',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =

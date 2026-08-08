@@ -3927,7 +3927,14 @@ async function runCrushFlow({
   // split null and puts delta_tokens in combined/total; flag the split as
   // unavailable so the run is still accounted without pretending to a split.
   const normalizedUsage = normalizeCrushUsage(parsed.usage);
-  const { tokens, reported_total_usd, reported_total_source, usage_status } = normalizedUsage;
+  const {
+    tokens,
+    reported_total_usd,
+    reported_total_source,
+    usage_status,
+    warnings: normalizeWarnings,
+  } = normalizedUsage;
+  if (normalizeWarnings.length) warnings.push(...normalizeWarnings);
   const deltaTokens = tokens.combined ?? 0;
   warnings.push(
     'crush reports combined token count only (delta_tokens); prompt/completion split unavailable',
