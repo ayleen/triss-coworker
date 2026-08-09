@@ -91,6 +91,21 @@ These five never contain each other. Adding all five gives the call total.
 that cannot be split at all (Crush). When `combined` is set, every atomic field
 is `null`.
 
+### Counter validation
+
+Every canonical token counter is either a non-negative JavaScript safe integer
+or `null`. Negative, fractional, non-finite, non-numeric, and unsafe-integer
+values are invalid: Triss normalizes them to `null` and records a warning. A
+`*_source` value is only `"reported"`, `"derived"`, or `null`; invalid
+provenance is likewise cleared and reported as a warning.
+
+If any canonical token counter or provenance field is invalid, token-derived,
+plan, or free cost completion fails closed: `total_usd` is `null`, `source` is
+`"unknown"`, and `complete` is `false`. A finite source-reported monetary
+signal is independent evidence and remains in `reported_total_usd` with its
+`reported_total_source`; it is not promoted to a complete total for the damaged
+record.
+
 ### Total fields and provenance
 
 `input_total`, `output_total`, and `total` are *totals*, not categories. Each
@@ -524,6 +539,10 @@ For one transition release, every v2 record also carries the flat v1 fields
 
 - v2 aggregation and rendering never read them when canonical fields exist;
 - they never overwrite a canonical value.
+
+The exported deprecated `estimateCost()` wrapper likewise preserves its v1
+JavaScript arithmetic and coercion behavior for malformed flat counters.
+Canonical v2 production paths never use that compatibility behavior.
 
 In particular, a canonical Crush record stays combined-only even though its
 legacy `completion_tokens` field keeps `delta_tokens` for this release.

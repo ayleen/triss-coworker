@@ -143,25 +143,41 @@ export function priceIsOverride(billingModel) {
   return priceOverride(billingModel) !== null;
 }
 
+function isCanonicalTokenCount(value) {
+  return typeof value === 'number' && value >= 0 && Number.isSafeInteger(value);
+}
+
+function estimateLegacyFlatCost(record, price) {
+  const cached = record.cached_tokens ?? 0;
+  const fresh = Math.max(0, record.prompt_tokens - cached);
+  return (
+    fresh * price.input_uncached +
+    cached * price.cache_read +
+    record.completion_tokens * price.output
+  );
+}
+
 export function estimateCost(record) {
-  // Deprecated flat API kept for one transition release. Normalize first, then
-  // express its historical prompt/cache arithmetic as canonical components so
-  // all price selection and completeness decisions stay in one estimator.
-  const normalized = normalizeUsageRecord(record);
+  // Deprecated flat API kept for one transition release. Canonical counters
+  // use the v2 estimator; malformed historical inputs retain the exact old
+  // JavaScript arithmetic, including NaN and coercion behavior.
+  const price = priceFor(record.model);
+  if (!price) return null;
   const prompt = record.prompt_tokens;
   const cached = record.cached_tokens ?? 0;
   const completion = record.completion_tokens;
+  if (!isCanonicalTokenCount(prompt) || !isCanonicalTokenCount(cached) || !isCanonicalTokenCount(completion)) {
+    return estimateLegacyFlatCost(record, price);
+  }
   const fresh = Math.max(0, prompt - cached);
-  const totalInput = fresh + cached;
   const cost = estimateCanonicalCost({
-    billing_model: normalized.billing_model,
-    billing_mode: resolveBillingMode({ billing_model: normalized.billing_model }),
+    billing_model: record.model,
+    billing_mode: resolveBillingMode({ billing_model: record.model }),
     tokens: {
-      ...normalized.tokens,
       input_uncached: fresh,
       cache_read: cached,
       cache_write: 0,
-      input_total: totalInput,
+      input_total: fresh + cached,
       output_total: completion,
     },
   });
@@ -216,6 +232,14 @@ export function logUsage(input = {}) {
   const billing_mode = input.billing_mode || resolveBillingMode({ billing_model, engine });
   const tokenWarnings = [];
   const cTokens = normalizeCanonicalTokens(input.tokens, tokenWarnings);
+  const reportedCost = input.cost && typeof input.cost === 'object'
+    ? {
+      reported_total_usd: Number.isFinite(input.cost.reported_total_usd)
+        ? input.cost.reported_total_usd
+        : null,
+      reported_total_source: input.cost.reported_total_source ?? null,
+    }
+    : {};
   const cCost =
     (tokenWarnings.length ? null : input.cost) ||
     estimateCanonicalCost({
@@ -225,6 +249,7 @@ export function logUsage(input = {}) {
       // fails closed if a caller bypasses this write-boundary sanitizer.
       tokens: input.tokens,
       usage_source,
+      ...reportedCost,
     });
 
   const record = {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyTokens, normalizeApiUsage } from '../src/usage-schema.js';
+import { emptyTokens, normalizeApiUsage, normalizeCanonicalTokens } from '../src/usage-schema.js';
 
 const TOKEN_KEYS = [
   'input_uncached',
@@ -23,6 +23,22 @@ test('emptyTokens returns all-null with the exact key set', () => {
   for (const key of TOKEN_KEYS) {
     assert.equal(tokens[key], null, `${key} should be null`);
   }
+});
+
+test('normalizeCanonicalTokens permits only reported/derived provenance', () => {
+  const warnings = [];
+  const tokens = normalizeCanonicalTokens({
+    input_total: 10,
+    input_total_source: 'reported',
+    output_total: 5,
+    output_total_source: 'derived',
+    total: 15,
+    total_source: 'untrusted',
+  }, warnings);
+  assert.equal(tokens.input_total_source, 'reported');
+  assert.equal(tokens.output_total_source, 'derived');
+  assert.equal(tokens.total_source, null);
+  assert.deepEqual(warnings, ['invalid total_source: token provenance untrusted']);
 });
 
 test('deepseek response maps hit/miss/reasoning and derives output_visible', () => {

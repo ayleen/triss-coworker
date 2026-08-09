@@ -15,6 +15,7 @@ const {
   readLog,
   summarize,
   normalizeUsageRecord,
+  estimateCanonicalCost,
   DEFAULT_MAX_BYTES,
 } = await import('../src/usage.js');
 
@@ -286,6 +287,32 @@ test('logUsage removes invalid canonical counters before persistence and cannot 
   assert.equal(rec.tokens.input_total, null);
   assert.equal(rec.cost.total_usd, null);
   assert.equal(rec.cost.complete, false);
+});
+
+test('logUsage keeps valid Crush-reported monetary evidence when tokens are invalid', () => {
+  const tokens = { combined: -1, total: -1, total_source: 'reported' };
+  const cost = estimateCanonicalCost({
+    billing_model: 'crush',
+    billing_mode: 'unknown',
+    usage_source: 'crush',
+    tokens,
+    reported_total_usd: 0.5,
+    reported_total_source: 'engine',
+  });
+  const rec = logUsage({
+    model: 'crush',
+    billing_model: 'crush',
+    billing_mode: 'unknown',
+    usage_source: 'crush',
+    tokens,
+    cost,
+  });
+  assert.equal(rec.cost.reported_total_usd, 0.5);
+  assert.equal(rec.cost.reported_total_source, 'engine');
+  assert.equal(rec.cost.total_usd, null);
+  assert.equal(rec.cost.source, 'unknown');
+  assert.equal(rec.cost.complete, false);
+  assert.deepEqual(rec.cost.unknown_components, ['invalid_tokens']);
 });
 
 test('normalizeUsageRecord maps a v1 record and marks it legacy', () => {
