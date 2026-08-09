@@ -6,6 +6,28 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { requestTimeoutMs } from '../src/config.js';
 
+function clientTimeoutsFor(timeout) {
+  const script = [
+    "import OpenAI from 'openai';",
+    "import { getClient } from './src/client.js';",
+    "console.log(JSON.stringify({ defaultTimeout: OpenAI.DEFAULT_TIMEOUT, timeouts: ['worker', 'glm', 'kimi'].map((provider) => getClient({ provider }).timeout) }));",
+  ].join('\n');
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      TRISS_REQUEST_TIMEOUT_MS: timeout,
+      TRISS_WORKER_API_KEY: 'test-worker-key',
+      ZHIPU_API_KEY: 'test-glm-key',
+      MOONSHOT_API_KEY: 'test-kimi-key',
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
 test('REQUEST-TIMEOUT-01: only supported positive integer milliseconds are accepted', () => {
   assert.equal(
     requestTimeoutMs({ parentEnv: { TRISS_REQUEST_TIMEOUT_MS: '120000' }, files: [] }),
@@ -56,22 +78,13 @@ test('REQUEST-TIMEOUT-02: reloadable config-file values honor shell precedence w
 });
 
 test('REQUEST-TIMEOUT-03: all OpenAI-compatible clients receive the configured timeout', () => {
-  const script = [
-    "import { getClient } from './src/client.js';",
-    "console.log(JSON.stringify(['worker', 'glm', 'kimi'].map((provider) => getClient({ provider }).timeout)));",
-  ].join('\n');
-  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      TRISS_REQUEST_TIMEOUT_MS: '1800000',
-      TRISS_WORKER_API_KEY: 'test-worker-key',
-      ZHIPU_API_KEY: 'test-glm-key',
-      MOONSHOT_API_KEY: 'test-kimi-key',
-    },
-  });
+  const { timeouts } = clientTimeoutsFor('1800000');
+  assert.deepEqual(timeouts, [1800000, 1800000, 1800000]);
+});
 
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), [1800000, 1800000, 1800000]);
+test('REQUEST-TIMEOUT-04: malformed shell config omits timeout for every provider client', () => {
+  // This explicit shell value must override any project/global env file. The
+  // OpenAI constructor materializes its SDK default when timeout is omitted.
+  const { defaultTimeout, timeouts } = clientTimeoutsFor('not-a-number');
+  assert.deepEqual(timeouts, [defaultTimeout, defaultTimeout, defaultTimeout]);
 });

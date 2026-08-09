@@ -400,7 +400,7 @@ stdout is a TTY, so you see progress instead of 1-3 minutes of silence.
 `--stream` on `ask`, `chat`, or `review` forces streaming when stdout is
 piped or redirected; without either flag, the TTY default remains in effect.
 `--no-stream` disables streaming; if both forms are supplied, the last flag
-wins. Streaming is automatically off for MCP tool calls and any `--json` flag.
+wins. Streaming is automatically off for MCP tool calls.
 
 For a buffered request that cannot stream, set `TRISS_REQUEST_TIMEOUT_MS` to
 a positive integer timeout in milliseconds no greater than `2147483647`.

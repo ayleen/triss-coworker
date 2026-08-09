@@ -118,7 +118,7 @@ program
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget (default 4096)')
   .option('--stream', 'force streaming even when stdout is not a TTY')
-  .option('--no-stream', 'disable streaming output')
+  .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
   .action((prompt, opts) => wrap(runChat)(prompt, opts));
 
 program
@@ -142,7 +142,7 @@ program
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
   .option('--stream', 'force streaming even when stdout is not a TTY')
-  .option('--no-stream', 'disable streaming output')
+  .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
   .action((pr, opts) => wrap(runReview)(pr, opts));
 
 program
