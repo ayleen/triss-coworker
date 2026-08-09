@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { emptyTokens, reconcileTokenSide } from './usage-schema.js';
+import { emptyTokens, normalizeCanonicalTokens, reconcileTokenSide } from './usage-schema.js';
 
 export const USAGE_FILE = join(homedir(), '.cache', 'triss', 'usage.jsonl');
 
@@ -75,10 +75,11 @@ const DEFAULT_PRICES = {
   'zai/glm-5-turbo': { input_uncached: 1.2e-6, cache_read: 0.24e-6, output: 4.0e-6 },
   'zai/glm-5.1': { input_uncached: 1.4e-6, cache_read: 0.26e-6, output: 4.4e-6 },
   'zai/glm-5.2': { input_uncached: 1.4e-6, cache_read: 0.26e-6, output: 4.4e-6 },
-  // Kimi (Moonshot) list prices as of 2026-07-27 (platform.kimi.ai/docs/pricing),
-  // USD per token. Keyed bare — the single Moonshot endpoint returns bare model
-  // ids, and a worker pointed at api.moonshot.ai logs the same ids, so one row
-  // prices both routes.
+  // Kimi (Moonshot) list prices re-verified 2026-08-09 against the official
+  // global pricing pages (platform.kimi.ai/docs/pricing/chat-*), USD per token.
+  // Keyed bare — the single Moonshot endpoint returns bare model ids, and a
+  // worker pointed at api.moonshot.ai logs the same ids, so one row prices both
+  // routes.
   'kimi-k3': { input_uncached: 3.0e-6, cache_read: 0.3e-6, output: 15.0e-6 },
   'kimi-k2.7-code': { input_uncached: 0.95e-6, cache_read: 0.19e-6, output: 4.0e-6 },
   'kimi-k2.7-code-highspeed': { input_uncached: 1.9e-6, cache_read: 0.38e-6, output: 8.0e-6 },
@@ -143,18 +144,28 @@ export function priceIsOverride(billingModel) {
 }
 
 export function estimateCost(record) {
-  const p = priceFor(record.model);
-  // A missing price is not a free call. Keep it distinct from the known
-  // $0 coding-plan prices; logUsage preserves the numeric cost_usd schema
-  // and records this distinction separately as cost_usd_known.
-  if (!p) return null;
+  // Deprecated flat API kept for one transition release. Normalize first, then
+  // express its historical prompt/cache arithmetic as canonical components so
+  // all price selection and completeness decisions stay in one estimator.
+  const normalized = normalizeUsageRecord(record);
+  const prompt = record.prompt_tokens;
   const cached = record.cached_tokens ?? 0;
-  const fresh = Math.max(0, record.prompt_tokens - cached);
-  return (
-    fresh * p.input_uncached +
-    cached * p.cache_read +
-    record.completion_tokens * p.output
-  );
+  const completion = record.completion_tokens;
+  const fresh = Math.max(0, prompt - cached);
+  const totalInput = fresh + cached;
+  const cost = estimateCanonicalCost({
+    billing_model: normalized.billing_model,
+    billing_mode: resolveBillingMode({ billing_model: normalized.billing_model }),
+    tokens: {
+      ...normalized.tokens,
+      input_uncached: fresh,
+      cache_read: cached,
+      cache_write: 0,
+      input_total: totalInput,
+      output_total: completion,
+    },
+  });
+  return cost.complete ? cost.total_usd : null;
 }
 
 export function logUsage(input = {}) {
@@ -203,16 +214,16 @@ export function logUsage(input = {}) {
   const resolvedModel = model || input.billing_model;
   if (!billing_model || !resolvedModel) return; // no known model identity
   const billing_mode = input.billing_mode || resolveBillingMode({ billing_model, engine });
-  const cTokens = emptyTokens();
-  for (const key of Object.keys(cTokens)) {
-    cTokens[key] = input.tokens && input.tokens[key] !== undefined ? input.tokens[key] : null;
-  }
+  const tokenWarnings = [];
+  const cTokens = normalizeCanonicalTokens(input.tokens, tokenWarnings);
   const cCost =
-    input.cost ||
+    (tokenWarnings.length ? null : input.cost) ||
     estimateCanonicalCost({
       billing_model,
       billing_mode,
-      tokens: cTokens,
+      // The estimator sees the unnormalized input too, so it independently
+      // fails closed if a caller bypasses this write-boundary sanitizer.
+      tokens: input.tokens,
       usage_source,
     });
 
@@ -509,9 +520,36 @@ export function summarize(records, { groupBy } = {}) {
   const fold = (agg, record, normalized) => {
     if (normalized.unsupported) agg.unsupported_schema_records++;
     else {
-      agg.prompt_tokens += record.prompt_tokens || 0;
-      agg.cached_tokens += record.cached_tokens || 0;
-      agg.completion_tokens += record.completion_tokens || 0;
+      // v1 aliases retain their historical raw subtotal. v2 aliases are only
+      // compatibility projections, so derive them from the sanitized canonical
+      // fields rather than allowing a corrupt persisted flat alias back in.
+      const tokens = normalized.tokens;
+      const aliases = normalized.legacy
+        ? {
+          prompt: record.prompt_tokens || 0,
+          cached: record.cached_tokens || 0,
+          completion: record.completion_tokens || 0,
+        }
+        : record.usage_source === 'opencode'
+          ? {
+            prompt: tokens.input_uncached ?? 0,
+            cached: tokens.cache_read ?? 0,
+            completion: tokens.output_visible ?? 0,
+          }
+          : record.usage_source === 'crush'
+            ? {
+              prompt: 0,
+              cached: tokens.cache_read ?? 0,
+              completion: tokens.combined ?? 0,
+            }
+            : {
+              prompt: tokens.input_total ?? 0,
+              cached: tokens.cache_read ?? 0,
+              completion: tokens.output_total ?? 0,
+            };
+      agg.prompt_tokens += aliases.prompt;
+      agg.cached_tokens += aliases.cached;
+      agg.completion_tokens += aliases.completion;
     }
     foldCompatibilityCost(agg, record, normalized);
     foldTokenAgg(agg.tokens, normalized);
@@ -580,12 +618,14 @@ export function estimateCanonicalCost({
   const isCrush = billing_model === 'crush' || usage_source === 'crush';
   const usageMeta = tokens && tokens.__usage_meta;
   const isOpenCode = usage_source === 'opencode' || usageMeta?.source === 'opencode';
+  const tokenWarnings = [];
+  const canonicalTokens = normalizeCanonicalTokens(tokens, tokenWarnings);
 
-  const iu = finite(tokens.input_uncached);
-  const cr = finite(tokens.cache_read);
-  const cw = finite(tokens.cache_write);
-  const it = finite(tokens.input_total);
-  const ot = finite(tokens.output_total);
+  const iu = canonicalTokens.input_uncached;
+  const cr = canonicalTokens.cache_read;
+  const cw = canonicalTokens.cache_write;
+  const it = canonicalTokens.input_total;
+  const ot = canonicalTokens.output_total;
 
   const priced = (count, rate) => (count != null && rate != null ? count * rate : null);
   const cost = {
@@ -602,6 +642,12 @@ export function estimateCanonicalCost({
     complete: false,
     unknown_components: [],
   };
+
+  // Do not let a corrupt canonical counter turn a plan/free/engine result into
+  // a false complete cost. Preserve a reported monetary value only as evidence.
+  if (tokenWarnings.length) {
+    return { ...cost, unknown_components: ['invalid_tokens'] };
+  }
 
   // Only Crush's engine contract defines its reported value as the actual
   // per-call monetary charge. OpenCode part.cost is catalogue arithmetic in
@@ -707,11 +753,21 @@ export function normalizeUsageRecord(record) {
   const r = record || {};
 
   if (r.schema_version === 2) {
-    const tokens = emptyTokens();
-    for (const key of Object.keys(tokens)) {
-      tokens[key] = r.tokens && r.tokens[key] !== undefined ? r.tokens[key] : null;
-    }
-    const cost = r.cost && typeof r.cost === 'object' ? r.cost : null;
+    const warnings = [];
+    const tokens = normalizeCanonicalTokens(r.tokens, warnings);
+    const persistedCost = r.cost && typeof r.cost === 'object' ? r.cost : null;
+    const cost = warnings.length
+      ? {
+        ...(persistedCost || {}),
+        total_usd: null,
+        source: 'unknown',
+        complete: false,
+        unknown_components: [
+          ...(Array.isArray(persistedCost?.unknown_components) ? persistedCost.unknown_components : []),
+          'invalid_tokens',
+        ],
+      }
+      : persistedCost;
     return {
       schema_version: 2,
       model: r.model ?? null,
@@ -721,6 +777,7 @@ export function normalizeUsageRecord(record) {
       usage_status: r.usage_status ?? inferUsageStatus(tokens, cost),
       legacy: false,
       unsupported: false,
+      warnings,
     };
   }
 

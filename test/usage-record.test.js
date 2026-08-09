@@ -246,6 +246,48 @@ test('normalizeUsageRecord passes a v2 record through marked non-legacy', () => 
   assert.equal(rec.tokens.total, 14609);
 });
 
+test('a persisted v2 record with invalid canonical counters fails closed', () => {
+  const bad = {
+    schema_version: 2,
+    model: 'deepseek-v4-flash',
+    billing_model: 'deepseek-v4-flash',
+    prompt_tokens: -5,
+    cached_tokens: 0,
+    completion_tokens: 1,
+    tokens: {
+      input_uncached: -5,
+      cache_read: 0,
+      cache_write: 0,
+      input_total: -5,
+      output_total: 1,
+      total: -4,
+    },
+    cost: { total_usd: -4.2e-7, source: 'estimated', complete: true },
+  };
+  const rec = normalizeUsageRecord(bad);
+  assert.equal(rec.tokens.input_total, null);
+  assert.ok(rec.warnings.every((warning) => /invalid/i.test(warning)), JSON.stringify(rec.warnings));
+  assert.equal(rec.cost.total_usd, null);
+  assert.equal(rec.cost.complete, false);
+  assert.equal(rec.cost.source, 'unknown');
+
+  const { total } = summarize([bad]);
+  assert.equal(total.prompt_tokens, 0, 'invalid v2 prompt alias must not re-enter the deprecated subtotal');
+  assert.equal(total.cached_tokens, 0);
+  assert.equal(total.completion_tokens, 1, 'the valid sanitized v2 output alias remains countable');
+});
+
+test('logUsage removes invalid canonical counters before persistence and cannot complete their cost', () => {
+  const rec = logUsage({
+    model: 'zai-coding-plan/glm-5.2',
+    tokens: { input_total: -1, output_total: 10 },
+    cost: { total_usd: 0, source: 'plan', complete: true },
+  });
+  assert.equal(rec.tokens.input_total, null);
+  assert.equal(rec.cost.total_usd, null);
+  assert.equal(rec.cost.complete, false);
+});
+
 test('normalizeUsageRecord maps a v1 record and marks it legacy', () => {
   const rec = normalizeUsageRecord({
     model: 'deepseek-v4-flash',

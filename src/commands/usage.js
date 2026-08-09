@@ -80,7 +80,7 @@ export function renderUsage({ total, groups, groupBy, calls, periodLabel }) {
     return `    total:        ${field(totalKey)} · ${detail}`;
   };
 
-  body.push(pc.bold(`Triss usage`) + ` · ${count} calls · ${periodLabel ?? 'recent'}`);
+  body.push(pc.bold(`Triss usage`) + ` · ${count} call${count === 1 ? '' : 's'} · ${periodLabel ?? 'recent'}`);
   body.push('');
   body.push(`  total:        ${field('total')}`);
   body.push('');

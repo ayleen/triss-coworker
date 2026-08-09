@@ -59,6 +59,22 @@ test('priceFor resolves a moonshotai-prefixed id to the same bare Kimi row', () 
   assert.notEqual(prefixed, null);
 });
 
+test('priceFor keeps every re-verified Kimi PAYG row at the published USD rates', () => {
+  const rows = {
+    'kimi-k3': [3.0e-6, 0.3e-6, 15.0e-6],
+    'kimi-k2.7-code': [0.95e-6, 0.19e-6, 4.0e-6],
+    'kimi-k2.7-code-highspeed': [1.9e-6, 0.38e-6, 8.0e-6],
+    'kimi-k2.6': [0.95e-6, 0.16e-6, 4.0e-6],
+  };
+  for (const [model, [input, cacheRead, output]] of Object.entries(rows)) {
+    const p = priceFor(model);
+    close(p.input_uncached, input);
+    close(p.cache_read, cacheRead);
+    close(p.output, output);
+    assert.equal(p.cache_write, null);
+  }
+});
+
 test('a three-value TRISS_PRICE override applies and leaves cache_write null', () => {
   const before = process.env.TRISS_PRICE_OVERRIDE3;
   process.env.TRISS_PRICE_OVERRIDE3 = '0.000001,0.0000001,0.000005';
@@ -212,6 +228,17 @@ test('a complete DeepSeek PAYG component estimate sums the priced components', (
   assert.equal(c.reasoning_usd, null);
   assert.equal(c.reported_total_usd, null);
   assert.equal(c.reported_total_source, null);
+});
+
+test('an invalid canonical counter makes an estimate unknown even for a plan', () => {
+  const c = estimateCanonicalCost({
+    billing_model: 'zai-coding-plan/glm-5.2',
+    billing_mode: 'subscription',
+    tokens: { input_total: -1, output_total: 10 },
+  });
+  assert.equal(c.total_usd, null);
+  assert.equal(c.complete, false);
+  assert.deepEqual(c.unknown_components, ['invalid_tokens']);
 });
 
 test('a non-zero cache_write with no rate makes the estimate incomplete', () => {
