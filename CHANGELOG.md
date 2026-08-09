@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-08-09
+
+### Added
+
+- **Usage accounting v2 preserves every token class a source reports.** New
+  canonical records separate uncached input, cache reads, cache writes, visible
+  output, reasoning, combined engine totals, and reported/derived totals with
+  explicit provenance. DeepSeek, Z.AI, Kimi, generic OpenAI-compatible APIs,
+  OpenCode events, and Crush envelopes each retain their native detail instead
+  of collapsing it into the legacy prompt/cached/completion trio.
+- Added canonical per-field aggregation and CLI coverage reporting. Unknown
+  data remains `null`/`unavailable`, a reported zero remains zero, partial
+  coverage is labelled, and Crush combined usage is never presented as visible
+  output.
+- Added the public schema, provider mapping, pricing, persistence, compatibility,
+  and reporting contract in `docs/usage-accounting.md`.
+
+### Changed
+
+- Cost accounting now distinguishes provider/engine evidence from complete
+  canonical totals. Component estimates are complete only when known token
+  classes and published rates cover the whole call; OpenCode `part.cost`
+  remains evidence, while Crush `delta_cost_usd` is trusted as its contract's
+  real per-call charge.
+- Canonical token counters must be non-negative JavaScript safe integers or
+  `null`, and total provenance is restricted to `reported`, `derived`, or
+  `null`. Invalid values fail closed across write, read, estimation, and
+  aggregation boundaries without discarding valid separately reported monetary
+  evidence.
+- Kimi PAYG pricing was re-verified and updated for K3, K2.7 Code, K2.7 Code
+  HighSpeed, and K2.6, including their cache-hit rates.
+- The default active usage-log rotation threshold increases from 10 MiB to
+  40 MiB to preserve a comparable reporting horizon for larger v2 records.
+- V1 JSONL records, exported `estimateCost()`, flat record aliases,
+  `summarize()` compatibility keys, and raw `triss usage --json` output remain
+  available for one transition release.
+
+### Fixed
+
+- `triss_write` no longer copies the usage report into generated files or
+  truncates model output that resembles the old display marker. Model content
+  and usage metadata now travel as separate structured values and are composed
+  only at response boundaries.
+- Streaming and non-streaming calls, coder envelopes, MCP responses, JSONL
+  persistence, per-call rendering, and aggregate rendering now use the same
+  normalization and cost-completeness rules.
+- Invalid persisted v2 counters and provenance can no longer re-enter totals
+  through deprecated aliases or produce a false plan/free/estimated cost.
+
 ## [0.30.0] — 2026-08-06
 
 ### Added
@@ -933,7 +982,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/ayleen/triss-coworker/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/ayleen/triss-coworker/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/ayleen/triss-coworker/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/ayleen/triss-coworker/compare/v0.27.1...v0.28.0
