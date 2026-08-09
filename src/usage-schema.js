@@ -26,6 +26,13 @@ function tokenNum(v, name, warnings) {
   return n;
 }
 
+function tokenSource(v, name, warnings) {
+  if (v == null) return null;
+  if (v === 'reported' || v === 'derived') return v;
+  warnings.push(`invalid ${name}: token provenance ${String(v)}`);
+  return null;
+}
+
 export function emptyTokens() {
   // Fresh object per call so no caller can mutate a shared shape.
   return {
@@ -57,7 +64,8 @@ export function normalizeCanonicalTokens(raw = {}, warnings = []) {
   for (const key of Object.keys(tokens)) {
     if (!key.endsWith('_source')) continue;
     const valueKey = key.slice(0, -'_source'.length);
-    tokens[key] = tokens[valueKey] === null ? null : raw && raw[key] !== undefined ? raw[key] : null;
+    const source = tokenSource(raw && raw[key], key, warnings);
+    tokens[key] = tokens[valueKey] === null ? null : source;
   }
   return tokens;
 }

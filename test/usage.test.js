@@ -59,6 +59,31 @@ test('estimateCost delegates the legacy flat shape through the canonical estimat
   assert.equal(estimateCost({ ...flat, model: 'unknown-model' }), null);
 });
 
+test('estimateCost preserves legacy JavaScript arithmetic for malformed flat counters', () => {
+  const model = 'deepseek-v4-flash';
+  assert.ok(Number.isNaN(estimateCost({ model, cached_tokens: 0, completion_tokens: 1 })));
+  const cases = [
+    {
+      name: 'negative cache',
+      record: { model, prompt_tokens: 10, cached_tokens: -5, completion_tokens: 10 },
+      expected: 0.000004886,
+    },
+    {
+      name: 'fractional counters',
+      record: { model, prompt_tokens: 10.5, cached_tokens: 0, completion_tokens: 2.5 },
+      expected: 0.0000021700000000000004,
+    },
+    {
+      name: 'numeric strings',
+      record: { model, prompt_tokens: '10', cached_tokens: '2', completion_tokens: '3' },
+      expected: 0.0000019656000000000003,
+    },
+  ];
+  for (const { name, record, expected } of cases) {
+    assert.equal(estimateCost(record), expected, name);
+  }
+});
+
 test('estimateCost returns null for unknown models instead of treating them as free', () => {
   assert.equal(
     estimateCost({ model: 'mystery-model', prompt_tokens: 100, cached_tokens: 0, completion_tokens: 50 }),
