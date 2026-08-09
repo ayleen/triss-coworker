@@ -395,10 +395,17 @@ records, and the deprecated compatibility fields.
 
 ### Streaming output
 
-Long `--model pro` calls (review, ask) now stream tokens as they arrive
-when stdout is a TTY, so you see progress instead of 1-3 minutes of
-silence. Disable per-call with `--no-stream`. Streaming is automatically
-off for piped output, MCP tool calls, and any `--json` flag.
+Long `--model pro` calls (review, ask) stream tokens as they arrive when
+stdout is a TTY, so you see progress instead of 1-3 minutes of silence.
+`--stream` on `ask`, `chat`, or `review` forces streaming when stdout is
+piped or redirected; without either flag, the TTY default remains in effect.
+`--no-stream` disables streaming; if both forms are supplied, the last flag
+wins. Streaming is automatically off for MCP tool calls and any `--json` flag.
+
+For a buffered request that cannot stream, set `TRISS_REQUEST_TIMEOUT_MS` to
+a positive integer timeout in milliseconds no greater than `2147483647`.
+Unset, invalid, zero, negative, and larger values retain the OpenAI SDK
+default (600000 ms).
 
 ### `triss chat`
 
