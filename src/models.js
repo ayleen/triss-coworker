@@ -21,9 +21,9 @@ const GLM_PRESETS = {
 
 const DEFAULT_GLM_PREFIX = 'zai-coding-plan';
 
-// Kimi (Moonshot) list prices per 1M tokens, fetched 2026-07-27 from
-// platform.kimi.ai/docs/pricing: kimi-k3 $3.00/$15.00 (cache hit $0.30) is the
-// flagship — "the smartest open-weights model" is the whole reason this
+// Kimi (Moonshot) list prices per 1M tokens, re-verified 2026-08-09 against
+// platform.kimi.ai/docs/pricing/chat-*: kimi-k3 $3.00/$15.00 (cache hit $0.30)
+// is the flagship — "the smartest open-weights model" is the whole reason this
 // provider exists, so `pro` names it despite the price. `flash` is Triss's
 // cheap bulk-read tier: kimi-k2.6 at $0.95/$4.00 (cache hit $0.16) is the
 // cheapest current-generation model on the platform (kimi-k2.7-code matches

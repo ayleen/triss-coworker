@@ -492,7 +492,7 @@ Re-verified 2026-08-07 unless noted:
 | --- | --- | --- | --- |
 | DeepSeek | separate published cache-hit rate | none published | inside `completion_tokens` |
 | Z.AI | separate published "Cached Input" rate | "Cached Input Storage" line, currently *limited-time free*; no cache-write token count in the API response | inside `completion_tokens` |
-| Kimi (Moonshot) | published; **prices not re-verifiable from the public docs page on 2026-08-07** (rendered client-side), so the built-in rows keep their 2026-07-27 snapshot | none published | inside `completion_tokens` |
+| Kimi (Moonshot) | separate published cache-hit rate; re-verified 2026-08-09 from the official global pricing pages: K3 `$0.30/$3.00/$15.00`, K2.7 Code `$0.19/$0.95/$4.00`, K2.7 Code HighSpeed `$0.38/$1.90/$8.00`, K2.6 `$0.16/$0.95/$4.00` per 1M cache-hit/input/output tokens | none published | inside `completion_tokens` |
 | OpenCode | per-model `cache_read` in the live catalogue | per-model `cache_write` where the catalogue supplies one; absent for several models | billed at the output rate |
 | Crush | not itemised | not itemised | not itemised; only `delta_cost_usd` |
 

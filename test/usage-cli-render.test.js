@@ -81,6 +81,12 @@ test('all-known record renders every canonical category with its summed value', 
   assert.match(out, /\b14,609\b/);
 });
 
+test('the usage header uses singular call for one record', () => {
+  const out = render([allKnownRecord()]);
+  assert.match(out, /Triss usage.*\b1 call\b/);
+  assert.doesNotMatch(out, /Triss usage.*\b1 calls\b/);
+});
+
 test('a field no record reported renders "unavailable", never 0', () => {
   // Three records, none of which report reasoning.
   const out = render([
@@ -94,14 +100,14 @@ test('a field no record reported renders "unavailable", never 0', () => {
 });
 
 test('a field only some records report renders coverage "N/M calls"', () => {
-  // 25 records, 12 of which report reasoning totalling 930.
+  // 25 records, 12 of which report reasoning totalling 900.
   const records = [];
   for (let i = 0; i < 25; i++) {
-    const reasoning = i < 12 ? 930 / 12 : null;
+    const reasoning = i < 12 ? 75 : null;
     records.push(v2({ tokens: { input_uncached: 1, output_visible: 1, reasoning } }));
   }
   const out = render(records);
-  assert.match(out, /\b930\b/);
+  assert.match(out, /\b900\b/);
   assert.match(out, /reported by\s*12\/25\s*calls/);
 });
 

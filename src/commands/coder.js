@@ -200,7 +200,8 @@ const GLM_MODEL_CHOICES = [
 ];
 
 // Moonshot pay-as-you-go models (models.dev `moonshotai` provider, cross-checked
-// against platform.kimi.ai docs 2026-07-27). kimi-k2.7-code is the recommended
+// against the official platform.kimi.ai pricing pages 2026-08-09).
+// kimi-k2.7-code is the recommended
 // main: it is the purpose-built coding model at $0.95/$4.00 per 1M tokens —
 // the flagship kimi-k3 ($3.00/$15.00) is offered for when raw smarts beat cost.
 // kimi-k2.6 is the cheap general model, the natural small/fast pick.

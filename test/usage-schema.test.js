@@ -186,9 +186,29 @@ test('output_visible never goes negative when reasoning exceeds completion_token
       total_tokens: 1100,
     },
   };
-  const { tokens } = normalizeApiUsage(resp, { provider: 'deepseek' });
+  const { tokens, warnings } = normalizeApiUsage(resp, { provider: 'deepseek' });
   assert.equal(tokens.output_visible, null);
+  assert.ok(
+    warnings.includes('deepseek reasoning_tokens exceeds completion_tokens: 40 > 30'),
+    `expected deterministic contradiction warning, got ${JSON.stringify(warnings)}`,
+  );
 });
+
+for (const [provider, cachedShape] of [
+  ['zai', { prompt_tokens_details: { cached_tokens: 501 } }],
+  ['kimi', { cached_tokens: 501 }],
+]) {
+  test(`${provider} warns when cached_tokens exceeds prompt_tokens`, () => {
+    const { tokens, warnings } = normalizeApiUsage({
+      usage: { prompt_tokens: 500, completion_tokens: 100, total_tokens: 600, ...cachedShape },
+    }, { provider });
+    assert.equal(tokens.input_uncached, null);
+    assert.ok(
+      warnings.includes('cached_tokens exceeds prompt_tokens: 501 > 500'),
+      `expected deterministic contradiction warning, got ${JSON.stringify(warnings)}`,
+    );
+  });
+}
 
 test('worker response with only a hit count keeps it as cache_read, not null', () => {
   const resp = {

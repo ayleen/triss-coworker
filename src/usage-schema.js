@@ -17,9 +17,10 @@ function num(v) {
 // legitimately be signed or fractional — so costs keep the plain finite guard
 // above.
 function tokenNum(v, name, warnings) {
+  if (v == null) return null;
   const n = num(v);
-  if (n !== null && (n < 0 || !Number.isSafeInteger(n))) {
-    warnings.push(`invalid ${name}: token count ${n}`);
+  if (n === null || n < 0 || !Number.isSafeInteger(n)) {
+    warnings.push(`invalid ${name}: token count ${String(v)}`);
     return null;
   }
   return n;
@@ -41,6 +42,24 @@ export function emptyTokens() {
     total_source: null,
     combined: null,
   };
+}
+
+// The persistence, read, and estimation boundaries all consume the same
+// canonical token shape. Keep their admission rule in one place: counters are
+// non-negative safe integers or null, never merely finite numbers. Provenance
+// belongs only to a surviving total so a rejected value cannot look reported.
+export function normalizeCanonicalTokens(raw = {}, warnings = []) {
+  const tokens = emptyTokens();
+  for (const key of Object.keys(tokens)) {
+    if (key.endsWith('_source')) continue;
+    tokens[key] = tokenNum(raw && raw[key], key, warnings);
+  }
+  for (const key of Object.keys(tokens)) {
+    if (!key.endsWith('_source')) continue;
+    const valueKey = key.slice(0, -'_source'.length);
+    tokens[key] = tokens[valueKey] === null ? null : raw && raw[key] !== undefined ? raw[key] : null;
+  }
+  return tokens;
 }
 
 // Reconciles an atomic input/output split with the authoritative side
@@ -117,6 +136,11 @@ function applyDeepseekContract({ tokens, warnings, hit, miss, inputTotal, output
   if (outputTotal !== null && reasoning !== null) {
     const visible = outputTotal - reasoning;
     tokens.output_visible = visible >= 0 ? visible : null;
+    if (visible < 0) {
+      warnings.push(
+        `deepseek reasoning_tokens exceeds completion_tokens: ${reasoning} > ${outputTotal}`,
+      );
+    }
   }
   // hit+miss must account for the whole prompt; when they disagree the
   // provider's own numbers are kept and the disagreement surfaces as a
@@ -190,6 +214,9 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     if (inputTotal !== null && cached !== null) {
       const uncached = inputTotal - cached;
       tokens.input_uncached = uncached >= 0 ? uncached : null;
+      if (uncached < 0) {
+        warnings.push(`cached_tokens exceeds prompt_tokens: ${cached} > ${inputTotal}`);
+      }
     }
   } else {
     // Generic worker: recognise the documented aliases without assuming the

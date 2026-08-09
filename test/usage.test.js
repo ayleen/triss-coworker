@@ -12,6 +12,7 @@ const HOME_DIR = mkdtempSync(join(tmpdir(), 'triss-usage-home-'));
 process.env.HOME = HOME_DIR;
 const {
   estimateCost,
+  estimateCanonicalCost,
   summarize,
   parsePeriod,
   logUsage,
@@ -34,6 +35,28 @@ test('estimateCost applies the right per-token rates', () => {
   // fresh = 800 * 0.14e-6 + cached = 200 * 0.0028e-6 + out = 100 * 0.28e-6
   // = 0.000112 + 0.00000056 + 0.000028 = 0.00014056
   assert.ok(Math.abs(cost - 0.00014056) < 1e-9, `unexpected cost ${cost}`);
+});
+
+test('estimateCost delegates the legacy flat shape through the canonical estimator', () => {
+  const flat = {
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 1000,
+    cached_tokens: 200,
+    completion_tokens: 100,
+  };
+  const canonical = estimateCanonicalCost({
+    billing_model: flat.model,
+    billing_mode: 'unknown',
+    tokens: {
+      input_uncached: 800,
+      cache_read: 200,
+      cache_write: 0,
+      input_total: 1000,
+      output_total: 100,
+    },
+  });
+  assert.equal(estimateCost(flat), canonical.total_usd);
+  assert.equal(estimateCost({ ...flat, model: 'unknown-model' }), null);
 });
 
 test('estimateCost returns null for unknown models instead of treating them as free', () => {
