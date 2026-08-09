@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ask`, `chat`, and `review` accept `--stream` to force streaming when stdout
   is not a TTY; `--no-stream` remains an explicit opt-out.
 - `TRISS_REQUEST_TIMEOUT_MS` configures the request timeout for all
-  OpenAI-compatible model clients. Values outside `1` through `2147483647`
-  fail safe to the SDK default.
+  OpenAI-compatible model clients. Malformed or out-of-range values fail safe
+  to the SDK default.
 
 ## [0.31.0] — 2026-08-09
 
