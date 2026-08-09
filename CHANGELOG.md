@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-08-09
+
 ### Added
 
 - `ask`, `chat`, and `review` accept `--stream` to force streaming when stdout
