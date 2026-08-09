@@ -1,6 +1,12 @@
 import OpenAI from 'openai';
 import pc from 'picocolors';
-import { getConfig, requireApiKey, requireGlmApiKey, requireKimiApiKey } from './config.js';
+import {
+  getConfig,
+  requestTimeoutMs,
+  requireApiKey,
+  requireGlmApiKey,
+  requireKimiApiKey,
+} from './config.js';
 import { normalizeKimiBaseUrl } from './moonshot.js';
 import { logUsage } from './usage.js';
 import { normalizeApiUsage, reconcileTokenSide } from './usage-schema.js';
@@ -36,14 +42,19 @@ export function glmRouteHint(baseUrl) {
 // up `triss config set TRISS_WORKER_API_KEY` changes mid-session. Constructing
 // the client is microseconds — no observable overhead next to a model RTT.
 export function getClient({ provider = 'worker', baseUrl } = {}) {
+  // Keep the caller's options immutable. Omitting timeout rather than passing
+  // undefined preserves the OpenAI SDK's own default and retry behavior.
+  const timeout = requestTimeoutMs();
+  const buildClient = (options) =>
+    new OpenAI(timeout === undefined ? options : { ...options, timeout });
   if (provider === 'glm') {
-    return new OpenAI({
+    return buildClient({
       apiKey: requireGlmApiKey(),
       baseURL: baseUrl || ZAI_CODING_PLAN_BASE_URL,
     });
   }
   if (provider === 'kimi') {
-    return new OpenAI({
+    return buildClient({
       apiKey: requireKimiApiKey(),
       // resolveModelRequest already normalizes, but normalize here too so a
       // direct caller with a trailing-slash/blank baseUrl gets the same URL.
@@ -51,7 +62,7 @@ export function getClient({ provider = 'worker', baseUrl } = {}) {
     });
   }
   const cfg = requireApiKey(getConfig());
-  return new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
+  return buildClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
 }
 
 export function recordUsage(resp, label, request = {}) {

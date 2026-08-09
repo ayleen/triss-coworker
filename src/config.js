@@ -6,6 +6,7 @@ import { activeEnvFiles } from './secrets.js';
 // pair plus the Kimi (Moonshot) key and base-URL override.
 const PROVIDER_ENV_KEYS = [
   'TRISS_CODER_MODEL',
+  'TRISS_REQUEST_TIMEOUT_MS',
   'ZHIPU_API_KEY',
   'MOONSHOT_API_KEY',
   'TRISS_KIMI_BASE_URL',
@@ -100,6 +101,19 @@ export function readWorkerConfigSnapshot({ scope = 'effective', ...seams } = {})
     flashModel: pick('TRISS_WORKER_FLASH_MODEL'),
     proModel: pick('TRISS_WORKER_PRO_MODEL'),
   };
+}
+
+// Node timers clamp values above 2^31 - 1 ms, so reject those alongside
+// malformed and non-positive values. Returning undefined deliberately leaves
+// the OpenAI SDK default intact instead of turning a typo into a near-zero
+// timeout. This uses the reloadable, non-mutating provider snapshot so an MCP
+// process sees an edited env file on the next client construction.
+export function requestTimeoutMs(seams = {}) {
+  const { pick } = readProviderEnvSnapshot(seams);
+  const raw = pick('TRISS_REQUEST_TIMEOUT_MS');
+  if (!/^[1-9]\d*$/.test(raw)) return undefined;
+  const timeout = Number(raw);
+  return Number.isSafeInteger(timeout) && timeout <= 2_147_483_647 ? timeout : undefined;
 }
 
 export function getConfig() {

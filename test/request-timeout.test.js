@@ -6,14 +6,25 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { requestTimeoutMs } from '../src/config.js';
 
-test('REQUEST-TIMEOUT-01: only positive safe integer milliseconds are accepted', () => {
+test('REQUEST-TIMEOUT-01: only supported positive integer milliseconds are accepted', () => {
   assert.equal(
     requestTimeoutMs({ parentEnv: { TRISS_REQUEST_TIMEOUT_MS: '120000' }, files: [] }),
     120000,
   );
   assert.equal(requestTimeoutMs({ parentEnv: { TRISS_REQUEST_TIMEOUT_MS: '1' }, files: [] }), 1);
 
-  for (const invalid of ['', '0', '-1', '1.5', ' 120000', '120000 ', '12e3', 'Infinity', '9007199254740992']) {
+  for (const invalid of [
+    '',
+    '0',
+    '-1',
+    '1.5',
+    ' 120000',
+    '120000 ',
+    '12e3',
+    'Infinity',
+    '2147483648',
+    '9007199254740992',
+  ]) {
     assert.equal(
       requestTimeoutMs({ parentEnv: { TRISS_REQUEST_TIMEOUT_MS: invalid }, files: [] }),
       undefined,
@@ -22,12 +33,21 @@ test('REQUEST-TIMEOUT-01: only positive safe integer milliseconds are accepted',
   }
 });
 
-test('REQUEST-TIMEOUT-02: parsing injected config is side-effect free', () => {
+test('REQUEST-TIMEOUT-02: reloadable config-file values honor shell precedence without mutating process.env', () => {
   const before = process.env.TRISS_REQUEST_TIMEOUT_MS;
-  const parentEnv = Object.freeze({ TRISS_REQUEST_TIMEOUT_MS: '1800000' });
+  const files = [{ scope: 'local', path: '/virtual/.triss.env', exists: true }];
+  const readFile = () => 'TRISS_REQUEST_TIMEOUT_MS=1800000\n';
   try {
     delete process.env.TRISS_REQUEST_TIMEOUT_MS;
-    assert.equal(requestTimeoutMs({ parentEnv, files: [] }), 1800000);
+    assert.equal(requestTimeoutMs({ parentEnv: {}, files, readFile }), 1800000);
+    assert.equal(
+      requestTimeoutMs({
+        parentEnv: { TRISS_REQUEST_TIMEOUT_MS: '120000' },
+        files,
+        readFile,
+      }),
+      120000,
+    );
     assert.equal(process.env.TRISS_REQUEST_TIMEOUT_MS, undefined);
   } finally {
     if (before === undefined) delete process.env.TRISS_REQUEST_TIMEOUT_MS;
