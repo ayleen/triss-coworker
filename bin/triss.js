@@ -76,6 +76,7 @@ program
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
   .option('--system <text>', 'override the system prompt')
+  .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', "disable streaming output (default streams when stdout is a TTY)")
   // Commander also supplies its Command instance to action handlers. Adapt
   // at the CLI boundary so runAsk receives only its documented options.
@@ -116,6 +117,7 @@ program
   .option('-s, --system <text>', 'system prompt (e.g. role / persona)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget (default 4096)')
+  .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output')
   .action((prompt, opts) => wrap(runChat)(prompt, opts));
 
@@ -139,6 +141,7 @@ program
   .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
+  .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output')
   .action((pr, opts) => wrap(runReview)(pr, opts));
 

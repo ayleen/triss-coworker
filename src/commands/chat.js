@@ -55,5 +55,6 @@ export async function runChat(prompt, opts) {
 export function shouldStream(opts) {
   if (opts?.noStream) return false;
   if (opts?.stream === false) return false;
+  if (opts?.stream === true) return true;
   return Boolean(process.stdout.isTTY);
 }
