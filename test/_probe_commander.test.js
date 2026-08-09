@@ -58,3 +58,29 @@ test('dual flags together: --no-restrict wins over --restrict when both appear (
   assert.equal(runOptsFor(['--restrict', '--no-restrict']).restrict, false);
   assert.equal(runOptsFor(['--no-restrict', '--restrict']).restrict, true);
 });
+
+// Mirrors the ask/chat/review declarations in bin/triss.js. Both options must
+// target Commander\'s single `stream` property: omitted preserves the TTY
+// default, while either explicit flag and left-to-right precedence are visible
+// to shouldStream().
+function streamOptsFor(extra) {
+  const program = new Command();
+  program
+    .command('ask')
+    .option('--stream', 'force streaming even when stdout is not a TTY')
+    .option('--no-stream', 'disable streaming output');
+  program.exitOverride();
+  program.parse(['node', 'triss', 'ask', ...extra]);
+  return program.commands[0].opts();
+}
+
+test('--stream/--no-stream: omitted is undefined, each explicit flag sets the shared property', () => {
+  assert.equal(streamOptsFor([]).stream, undefined);
+  assert.equal(streamOptsFor(['--stream']).stream, true);
+  assert.equal(streamOptsFor(['--no-stream']).stream, false);
+});
+
+test('--stream/--no-stream: Commander applies the last occurrence', () => {
+  assert.equal(streamOptsFor(['--stream', '--no-stream']).stream, false);
+  assert.equal(streamOptsFor(['--no-stream', '--stream']).stream, true);
+});

@@ -40,3 +40,13 @@ test('STR-03: shouldStream is false when stdout is not a TTY', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: orig, configurable: true });
   }
 });
+
+test('STR-04: explicit --stream overrides a non-TTY stdout', () => {
+  const orig = process.stdout.isTTY;
+  Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+  try {
+    assert.equal(shouldStream({ stream: true }), true);
+  } finally {
+    Object.defineProperty(process.stdout, 'isTTY', { value: orig, configurable: true });
+  }
+});
