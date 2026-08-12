@@ -167,14 +167,51 @@ export function maskValue(v) {
   return v.slice(0, 4) + '…' + v.slice(-4);
 }
 
-export function readStdin({ trim = true } = {}) {
+export function readStdin({ trim = true, fatalUtf8 = false } = {}) {
   return new Promise((resolve, reject) => {
     const stdin = process.stdin;
-    let buf = '';
-    stdin.setEncoding('utf8');
-    stdin.on('data', (d) => (buf += d));
-    stdin.on('end', () => resolve(trim ? buf.trim() : buf));
-    stdin.on('error', reject);
+    if (fatalUtf8 && stdin.readableEncoding) {
+      const error = new Error(
+        'stdin raw bytes are unavailable because a text encoding is already configured',
+      );
+      error.code = 'TRISS_INVALID_UTF8';
+      reject(error);
+      return;
+    }
+    const chunks = [];
+    let text = '';
+    if (!fatalUtf8) stdin.setEncoding('utf8');
+    const onData = (chunk) => {
+      if (fatalUtf8) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      else text += chunk;
+    };
+    const cleanup = () => {
+      stdin.removeListener('data', onData);
+      stdin.removeListener('end', onEnd);
+      stdin.removeListener('error', onError);
+    };
+    const onEnd = () => {
+      try {
+        if (fatalUtf8) {
+          text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+            .decode(Buffer.concat(chunks));
+        }
+        cleanup();
+        resolve(trim ? text.trim() : text);
+      } catch (cause) {
+        cleanup();
+        const error = new Error('stdin input must be valid UTF-8 text', { cause });
+        error.code = 'TRISS_INVALID_UTF8';
+        reject(error);
+      }
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    stdin.on('data', onData);
+    stdin.on('end', onEnd);
+    stdin.on('error', onError);
     stdin.resume();
   });
 }

@@ -13,6 +13,11 @@ import {
   parseTicketKey,
 } from '../git.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
+import {
+  bindReviewPromptToBoundary,
+  createReviewBoundaryId,
+  wrapReviewSection,
+} from '../review-prompt.js';
 
 export async function runReviewCore({
   pr,
@@ -24,6 +29,7 @@ export async function runReviewCore({
   maxTokens,
   reviewSystem,
   callModel,
+  reviewBoundaryId,
 }) {
   let title;
   let description = '';
@@ -68,15 +74,19 @@ export async function runReviewCore({
     }
   }
 
-  const sections = [
+  const boundaryId = reviewBoundaryId || createReviewBoundaryId();
+  const changeCorpus = [
     `<change base="${baseRef}" head="${headRef}">`,
     `Title: ${title}`,
     urlNote ? `URL: ${urlNote}` : null,
     description ? `\nDescription:\n${description}` : null,
     changedFiles.length ? `\nChanged files:\n${changedFiles.join('\n')}` : null,
     `</change>`,
-    ticketCorpus || null,
-    `<diff>\n${diff}\n</diff>`,
+  ].filter(Boolean).join('\n');
+  const sections = [
+    wrapReviewSection(boundaryId, 'change', changeCorpus),
+    ticketCorpus ? wrapReviewSection(boundaryId, 'ticket', ticketCorpus) : null,
+    wrapReviewSection(boundaryId, 'diff', `<diff>\n${diff}\n</diff>`),
   ].filter(Boolean);
 
   const result = await callModel({
@@ -84,7 +94,10 @@ export async function runReviewCore({
     model,
     maxTokens,
     messages: [
-      { role: 'system', content: reviewSystem },
+      {
+        role: 'system',
+        content: bindReviewPromptToBoundary(reviewSystem, boundaryId),
+      },
       { role: 'user', content: sections.join('\n\n') },
       { role: 'user', content: question || 'Review this change. List concrete issues; do not summarise the diff.' },
     ],

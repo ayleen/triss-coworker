@@ -456,9 +456,12 @@ The three diff sources are mutually exclusive: local Git (`triss review` or
 `--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text piped to
 `triss review --stdin`. `--stdin` cannot be combined with a PR number or
 `--base`; `--skip-issue` remains accepted for compatibility but has no effect
-in stdin mode because no ticket lookup occurs. Stdin mode rejects a TTY and empty or
-whitespace-only input before provider or model resolution. It preserves the
-accepted UTF-8 text exactly, without trimming or line-ending normalization.
+in stdin mode because no ticket lookup occurs. Stdin mode rejects a TTY,
+empty or whitespace-only input, and malformed UTF-8 before provider or model
+resolution. It preserves accepted UTF-8 text exactly, without trimming or
+line-ending normalization. Unpredictable per-request boundary markers keep
+marker-like diff text inside the untrusted diff section rather than letting it
+impersonate metadata or a linked ticket.
 
 Defaults to the `pro` preset because review needs reasoning. Output is
 a list of concrete issues with file:line citations — not a diff

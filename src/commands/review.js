@@ -1,7 +1,12 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
-import { REVIEW_SYSTEM_PROMPT } from '../review-prompt.js';
+import {
+  REVIEW_SYSTEM_PROMPT,
+  bindReviewPromptToBoundary,
+  createReviewBoundaryId,
+  wrapReviewSection,
+} from '../review-prompt.js';
 import { readStdin } from '../secrets.js';
 import { shouldStream } from './chat.js';
 import {
@@ -47,7 +52,17 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         '--stdin requires piped input. Try: git diff | triss review --stdin',
       );
     }
-    stdinDiff = await readInput({ trim: false });
+    try {
+      stdinDiff = await readInput({ trim: false, fatalUtf8: true });
+    } catch (error) {
+      if (error?.code === 'TRISS_INVALID_UTF8') {
+        throw new Error(
+          `${error.message}. Try: git diff | triss review --stdin`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     if (typeof stdinDiff !== 'string') {
       throw new Error(
         'stdin input must be UTF-8 text. Try: git diff | triss review --stdin',
@@ -119,11 +134,9 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     }
   }
 
-  const sections = stdinMode
-    ? [
-        '<change source="stdin">\nTitle: stdin\n</change>',
-        `<diff>\n${diff}\n</diff>`,
-      ]
+  const boundaryId = deps.reviewBoundaryId || createReviewBoundaryId();
+  const changeCorpus = stdinMode
+    ? '<change source="stdin">\nTitle: stdin\n</change>'
     : [
         `<change base="${baseRef}" head="${headRef}">`,
         `Title: ${title}`,
@@ -131,20 +144,27 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         description ? `\nDescription:\n${description}` : null,
         changedFiles.length ? `\nChanged files:\n${changedFiles.join('\n')}` : null,
         `</change>`,
-        ticketCorpus || null,
-        `<diff>\n${diff}\n</diff>`,
-      ].filter(Boolean);
+      ].filter(Boolean).join('\n');
+  const sections = [
+    wrapReviewSection(boundaryId, 'change', changeCorpus),
+    ticketCorpus ? wrapReviewSection(boundaryId, 'ticket', ticketCorpus) : null,
+    wrapReviewSection(boundaryId, 'diff', `<diff>\n${diff}\n</diff>`),
+  ].filter(Boolean);
   const corpus = sections.join('\n\n');
 
   const diagnostic = stdinMode
     ? `[triss/review] provider=${provider} model=${model} source=stdin ` +
-      `bytes=${Buffer.byteLength(stdinDiff, 'utf8')}\n`
-    : `[triss/review] provider=${provider} model=${model} bytes=${corpus.length} ` +
+      `bytes=${Buffer.byteLength(diff, 'utf8')}\n`
+    : `[triss/review] provider=${provider} model=${model} ` +
+      `bytes=${Buffer.byteLength(diff, 'utf8')} ` +
       `base=${baseRef} head=${headRef}\n`;
   process.stderr.write(pc.dim(diagnostic));
 
   const messages = [
-    { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+    {
+      role: 'system',
+      content: bindReviewPromptToBoundary(REVIEW_SYSTEM_PROMPT, boundaryId),
+    },
     { role: 'user', content: corpus },
     { role: 'user', content: opts.question || DEFAULT_QUESTION },
   ];

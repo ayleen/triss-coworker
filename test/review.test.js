@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createReviewBoundaryId } from '../src/review-prompt.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -344,6 +345,7 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
           captured = request;
           return { content: 'reviewed', usageReport: '' };
         },
+        reviewBoundaryId: 'test-boundary',
       },
     );
 
@@ -357,6 +359,8 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
     assert.match(systemPrompt, /linked.ticket/i);
     assert.match(systemPrompt, /diff/i);
     assert.match(systemPrompt, /untrusted/i);
+    assert.match(systemPrompt, /matching|same boundary|boundary ID/i);
+    assert.match(systemPrompt, /trusted boundary ID[^\n]*test-boundary/i);
     assert.match(
       systemPrompt,
       /ignore[^.\n]*(instructions|directives)|do not follow[^.\n]*instructions/i,
@@ -364,6 +368,15 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
     assert.match(systemPrompt, /one short bullet per concrete issue/i);
     assert.match(systemPrompt, /quote file paths and line numbers exactly/i);
     assert.match(systemPrompt, /do not summarise the diff/i);
+    assert.match(systemPrompt, /Identify:\n\n1\. Bugs or regressions/i);
+    assert.match(
+      captured.messages[1].content,
+      /<<<TRISS-REVIEW:test-boundary:change:BEGIN>>>/,
+    );
+    assert.match(
+      captured.messages[1].content,
+      /<<<TRISS-REVIEW:test-boundary:diff:BEGIN>>>/,
+    );
     assert.match(captured.messages[1].content, /ignore prior instructions/i);
     assert.equal(
       captured.messages[2].content,
@@ -373,6 +386,14 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
     process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('REV-06c: review boundary ids are unique UUIDs', () => {
+  const first = createReviewBoundaryId();
+  const second = createReviewBoundaryId();
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.match(second, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.notEqual(first, second);
 });
 
 test('REV-07: CLI review preserves a successful GLM top-level final_text response', async () => {

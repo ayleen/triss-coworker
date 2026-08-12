@@ -95,11 +95,12 @@ triss review --skip-issue    # don't try to look up linked Jira/Linear ticket
 The diff sources are mutually exclusive: local Git (`triss review` or
 `--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text from standard
 input (`triss review --stdin`). Do not combine `--stdin` with a PR number or
-`--base`. Stdin mode rejects a TTY and empty or whitespace-only input before
-provider/model resolution, and preserves the accepted UTF-8 text exactly,
-without trimming or line-ending normalization. `--skip-issue` remains accepted
-for compatibility but has no effect in stdin mode because there is no
-linked-ticket lookup.
+`--base`. Stdin mode rejects a TTY, empty or whitespace-only input, and
+malformed UTF-8 before provider/model resolution. It preserves accepted UTF-8
+text exactly without trimming or line-ending normalization. Unpredictable
+per-request boundary markers keep marker-like diff text inside the untrusted
+diff section. `--skip-issue` remains accepted for compatibility but has no
+effect in stdin mode because there is no linked-ticket lookup.
 
 **Use over reading diffs yourself** — token savings on diffs are usually
 10-20× since DeepSeek does the inspection and returns concrete bullets

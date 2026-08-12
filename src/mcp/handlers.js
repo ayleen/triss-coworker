@@ -135,6 +135,7 @@ export async function reviewHandler(
     maxTokens: max_tokens || 8192,
     reviewSystem: REVIEW_SYSTEM_PROMPT,
     callModel: deps.callModel || callModel,
+    reviewBoundaryId: deps.reviewBoundaryId,
   });
 }
 
