@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `triss review --stdin` accepts an explicitly piped diff without consulting
+  Git, GitHub, or linked-ticket integrations. It rejects malformed UTF-8,
+  interactive TTY input, empty or whitespace-only input, and conflicting PR or
+  `--base` sources before provider or model resolution.
+
+### Security
+
+- CLI and MCP reviews now share an untrusted-data system prompt and wrap
+  metadata, linked-ticket text, and diffs in per-request boundary markers so
+  marker-like text inside third-party content cannot impersonate another
+  review section.
+
 ## [0.31.1] — 2026-08-09
 
 ### Added

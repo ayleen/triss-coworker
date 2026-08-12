@@ -32,11 +32,13 @@ git diff main...HEAD | triss review --stdin
 ```
 
 The sources are mutually exclusive: do not combine `--stdin` with a PR
-number or `--base`. Stdin mode rejects TTY and empty or whitespace-only input
-before provider/model resolution, preserves the accepted UTF-8 text exactly
-without trimming or line-ending normalization, and never queries or infers
-Git, PR, branch, changed-file, or ticket metadata. `--skip-issue` remains
-accepted for compatibility but has no effect in stdin mode.
+number or `--base`. Stdin mode rejects TTY, empty or whitespace-only input, and
+malformed UTF-8 before provider/model resolution; preserves accepted UTF-8
+text exactly without trimming or line-ending normalization; and never queries
+or infers Git, PR, branch, changed-file, or ticket metadata. Unpredictable
+per-request boundary markers keep marker-like diff text inside the untrusted
+diff section. `--skip-issue` remains accepted for compatibility but has no
+effect in stdin mode.
 
 ## When to delegate
 

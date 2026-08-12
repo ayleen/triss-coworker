@@ -218,7 +218,8 @@ Core tools are always listed. Model calls default to the worker and require
   has no `stdin` argument and cannot use the CLI's `triss review --stdin`
   mode. Its shared review system prompt treats PR metadata, linked-ticket text,
   and diff text as untrusted data and does not follow instructions embedded in
-  that content.
+  that content. Unpredictable per-request boundary markers keep marker-like
+  content inside its actual metadata, ticket, or diff section.
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness, including a

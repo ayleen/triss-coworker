@@ -56,11 +56,11 @@ Reusable behavior already exists:
   response-shape behavior.
 
 One current helper behavior cannot be reused unchanged: `readStdin()` trims the
-complete payload. Review stdin must preserve valid supplied UTF-8 text exactly,
-without trimming or line-ending normalization, while using a non-mutating
-whitespace check only to decide whether the input is empty. Malformed byte-
-sequence detection or rejection is outside this feature scope and must not be
-described as byte-preserving behavior.
+complete payload. Review stdin must strictly decode and preserve valid supplied
+UTF-8 text exactly, without trimming or line-ending normalization, while using
+a non-mutating whitespace check only to decide whether the input is empty.
+Malformed byte sequences must fail before provider resolution rather than being
+replaced with U+FFFD and sent to a model.
 
 ## Contract lock
 
@@ -102,9 +102,12 @@ rejected, when `--stdin` is present:
 
 1. If `process.stdin.isTTY` is true, fail with guidance such as
    `git diff | triss review --stdin` rather than waiting for input.
-2. Read until EOF as UTF-8. Exact preservation is guaranteed only for valid
-   UTF-8 text; malformed byte-sequence detection or rejection is outside this
-   feature scope.
+2. Read bytes until EOF and decode them with fatal UTF-8 validation. Preserve
+   valid UTF-8 text exactly, including a leading BOM; reject malformed byte
+   sequences before provider resolution or any external/model side effect. If
+   an upstream caller already configured stdin to emit decoded strings, fail
+   closed rather than re-encoding potentially replaced text as if it were the
+   original byte stream.
 3. Require the injected or real stdin reader to return a string. Any other
    result fails clearly (for example, `stdin reader must return UTF-8 text`)
    before provider resolution or any Git, GitHub, tracker, or model call.
@@ -115,9 +118,13 @@ rejected, when `--stdin` is present:
    Git/PR diff. The original text remains unmutated; wrapping it in the review
    corpus markers does not change the accepted text itself.
 
-Extend the shared stdin helper with a backward-compatible untrimmed-input mode,
-for example `readStdin({ trim: false })`. Existing callers keep their current
-trimmed behavior by default; review opts into untrimmed mode.
+Extend the shared stdin helper with backward-compatible untrimmed and strict
+UTF-8 modes, for example `readStdin({ trim: false, fatalUtf8: true })`.
+Existing callers keep their current trimmed, replacement-decoding behavior by
+default; review opts into both untrimmed and fatal UTF-8 handling. Every helper
+completion path must remove the `data`, `end`, and `error` listeners it added so
+repeated calls in a long-lived process do not retain buffers or swallow later
+stream errors.
 
 ### Review corpus and model call
 
@@ -127,45 +134,59 @@ reporting, and `triss/review` label. The system prompt must explicitly mark all
 supplied metadata, linked-ticket text, and diff text as untrusted review data
 and instruct the model to ignore instructions or requests contained inside
 those values. The same boundary must apply to branch and PR reviews through
-both the CLI and `triss_review` MCP tool. This is a prompt-safety clarification
+both the CLI and `triss_review` MCP tool. The prompt must introduce its review
+checklist grammatically: the untrusted-data rules cannot interrupt the
+`Identify:` lead-in and its numbered list. This is a prompt-safety clarification
 only: the existing review checklist, question semantics, and verdict format
 remain unchanged.
 
-The stdin text is placed once inside the existing diff envelope, whose
-`<change>` and `<diff>` elements are plain-text markers, not parseable XML:
+Each review call generates an unpredictable boundary ID and places change
+metadata, linked-ticket text (when present), and the diff in separately named
+sections authenticated by that ID. Legacy `<change>`, `<linked-issue>`, and
+`<diff>` text may remain inside those sections for compatibility, but only the
+matching per-request boundary markers define structure. The trusted system
+message names the exact boundary ID for that request; IDs appearing only inside
+untrusted corpus text have no structural authority. For example:
 
 ```text
-<change source="stdin">
-Title: stdin
-</change>
+<<<TRISS-REVIEW:<random-id>:change:BEGIN>>>
+<change source="stdin"> ... </change>
+<<<TRISS-REVIEW:<random-id>:change:END>>>
 
+<<<TRISS-REVIEW:<random-id>:diff:BEGIN>>>
 <diff>
 <UTF-8 stdin text>
 </diff>
+<<<TRISS-REVIEW:<random-id>:diff:END>>>
 ```
 
-The wrapper is review metadata and is not part of the diff value. The
+The wrappers are review metadata and are not part of the diff value. Literal
+marker-like text inside a diff, including `</diff>` or a fake `<linked-issue>`,
+remains inside the authenticated diff section and cannot impersonate a real
+ticket section without the unpredictable matching boundary ID. The
 `Title: stdin` line is the canonical stable source title for stdin mode and
 must not be replaced with branch, PR, or ticket metadata. The
 implementation must preserve the accepted valid UTF-8 text exactly, without trimming
 or line-ending normalization, and must not invent base/head refs, changed-file
 lists, PR metadata, or linked issues for stdin mode. Logging must identify
-`source=stdin` and report an accurate UTF-8 byte count for the accepted stdin
-text, computed as `Buffer.byteLength(stdinText, 'utf8')`; it must not label
-`String.length` as bytes or use the wrapper corpus length. It must not print
-misleading `base` or `head` values.
+`source=stdin` and report an accurate UTF-8 byte count for the accepted source
+diff, computed as `Buffer.byteLength(diff, 'utf8')`; branch and PR diagnostics
+must use the same definition instead of `String.length` or wrapper-corpus
+length. Stdin diagnostics must not print misleading `base` or `head` values.
 
 ### Compatibility boundaries
 
-- Existing branch, `--base`, and PR modes keep their current behavior and
-  corpus structure.
+- Existing branch, `--base`, and PR modes keep their source behavior and legacy
+  inner change/ticket/diff envelopes; all review sources gain the same outer
+  per-request boundary markers.
 - `--provider`, `--model`, `--max-tokens`, `--question`, `--stream`, and
   `--no-stream` behave identically for every source mode.
 - No provider route, model preset, timeout, usage schema, or pricing behavior
   changes.
 - The `triss_review` MCP tool remains Git/PR-based. MCP arguments are structured
   input and have no process stdin, so no `stdin` property is added to its schema.
-  Its system prompt shares the same untrusted-data boundary as CLI review.
+  Its system prompt and corpus sections share the same untrusted-data boundary
+  as CLI review.
 - No automatic stdin detection and no new diff parser are introduced.
 
 ## Scope
@@ -177,6 +198,8 @@ This work covers:
 - stdin source selection and validation in the CLI review implementation;
 - a shared CLI/MCP review prompt boundary for untrusted metadata, ticket text,
   and diff content;
+- strict malformed-UTF-8 rejection and authenticated per-request section
+  boundaries;
 - deterministic unit and subprocess coverage;
 - README, the tracked `AGENTS.md` dogfood command table, and generated-agent-
   template examples that describe CLI review.
@@ -186,7 +209,7 @@ This work does not:
 - add stdin to the MCP review tool;
 - mix stdin with a generated branch or PR diff;
 - infer branch, file, ticket, or PR metadata from diff text;
-- add diff-size limits, secret scanning, parsing, or rewriting;
+- add diff-size limits, secret scanning, or diff rewriting;
 - change `triss ask --stdin`, `triss chat --stdin`, or `triss coder run --stdin`
   semantics;
 - change the existing review rules, default question, or verdict format; the
@@ -231,9 +254,10 @@ regressions in `test/review.test.js` unchanged.
 The RED suite must prove:
 
 1. `triss review --help` exposes `--stdin` with a piped-diff description.
-2. A valid stdin diff reaches the model exactly once inside the plain-text
-   `<diff>` marker and preserves the exact valid UTF-8 text, including
-   leading/trailing whitespace and line endings.
+2. A valid stdin diff reaches the model exactly once inside the authenticated
+   diff section and preserves the exact valid UTF-8 text, including
+   leading/trailing whitespace, a leading BOM, and line endings. Malformed
+   bytes fail through a real CLI subprocess before provider resolution.
 3. Stdin mode works outside a Git repository, proving that it does not invoke
    branch, base, changed-file, `gh`, or tracker discovery.
 4. Stdin mode forwards the existing provider, model, max-token, question, and
@@ -256,15 +280,18 @@ The RED suite must prove:
     chat/coder subprocesses where no deterministic no-network seam exists.
 11. MCP tool-list tests continue to prove that `triss_review` has no stdin
     schema property, and an MCP handler test captures its real model request to
-    prove the shared untrusted-data system prompt is used.
-12. Stdin diagnostics report `source=stdin` and the exact
-    `Buffer.byteLength(stdinText, 'utf8')` count for the accepted stdin text,
-    not a JavaScript string or wrapper-corpus length.
+    prove the shared untrusted-data system prompt and authenticated section
+    boundaries are used.
+12. All source modes report the exact `Buffer.byteLength(diff, 'utf8')` count
+    for the accepted source diff, not a JavaScript string or wrapper-corpus
+    length; stdin additionally reports `source=stdin`.
 13. An injected stdin reader returning a non-string fails clearly before
     provider resolution or any external/model side effect.
 14. Existing CLI branch/PR and MCP branch captured system prompts retain the
     review checklist and default question after adding the untrusted-data
     instruction.
+15. Successful and malformed strict stdin reads leave the stream's listener
+    counts unchanged after settlement.
 
 Use injected `readStdin`, stdin-TTY state, model resolution, and chat functions
 through `runReviewWithDeps()` so focused tests make no network calls. A small
@@ -279,30 +306,33 @@ environment, fixture, or import error.
 Implement only the tested vertical slice:
 
 1. Register `--stdin` on the `review` command in `bin/triss.js`.
-2. Extend `readStdin()` with an opt-in untrimmed mode while retaining trimmed output
-   as the default for every existing caller.
+2. Extend `readStdin()` with opt-in untrimmed and fatal UTF-8 modes while
+   retaining trimmed replacement-decoding as the default for existing callers,
+   and clean up every listener installed by the helper on success or failure.
 3. Extend the `runReviewWithDeps()` dependency seam with injected stdin reading
    and TTY state for deterministic tests.
 4. Validate incompatible options and TTY state before resolving the provider or
    accessing Git/GitHub.
 5. In stdin mode, require the reader result to be a string, fail clearly for a
-   non-string result before provider resolution, read untrimmed UTF-8 text,
-   reject whitespace-only input, and build the minimal stdin review corpus
-   without Git, GitHub, or tracker calls.
+   non-string result before provider resolution, strictly decode untrimmed UTF-8
+   text, reject malformed or whitespace-only input, and build the minimal stdin
+   review corpus without Git, GitHub, or tracker calls.
 6. Preserve the existing branch/PR path as a separate source branch rather than
    interleaving stdin checks throughout it.
 7. Rejoin the shared model-call path so prompt, question, streaming, response,
    usage, and error behavior remain common.
-8. Move the review system prompt to a narrow shared module used by the CLI and
+8. Move the review system prompt and authenticated-section helper to a narrow
+   shared module used by the CLI and
    MCP handler, while preserving the existing CLI review rules and adding the
    explicit untrusted-data instruction. Make the diagnostic line source-aware:
    stdin mode reports `source=stdin` and
-   `bytes=Buffer.byteLength(stdinText, 'utf8')`; Git/PR modes retain their
-   current base/head diagnostics.
+   every mode reports `bytes=Buffer.byteLength(diff, 'utf8')`; Git/PR modes
+   retain their current base/head fields.
 
 Do not extract a broad review-source framework or add stdin to the separate MCP
-review core. Sharing only the system prompt keeps the MCP source contract
-Git/PR-based while applying the same prompt-safety boundary.
+review core. Sharing the system prompt and boundary helpers, then integrating
+them into the existing MCP core, keeps the MCP source contract Git/PR-based
+while applying the same prompt-safety boundary.
 
 ### Phase 4 — refactor with GREEN held
 
@@ -368,6 +398,7 @@ the branch/PR review paths and MCP schema did not change unintentionally.
 - `src/commands/review.js`
 - `src/review-prompt.js`
 - `src/mcp/handlers.js`
+- `src/mcp/review-core.js`
 - `src/secrets.js`
 - `test/review-stdin.test.js`
 - `test/review.test.js` only if an existing shared assertion belongs there
@@ -380,6 +411,7 @@ the branch/PR review paths and MCP schema did not change unintentionally.
 - `templates/claude-full.md`
 - `templates/codex-full.md`
 - `docs/mcp.md`
+- `CHANGELOG.md`
 
 Avoid touching generated or unrelated files. If implementation reveals that a
 listed file does not need a change, leave it untouched and preserve the tested
@@ -396,22 +428,28 @@ The work is complete only when all of the following are true:
    without an unknown-option or Git/GitHub/base-discovery error; the injected
    `runReviewWithDeps()` path proves a successful model call.
 4. The accepted valid UTF-8 stdin diff is sent once through the existing review
-   prompt and `triss/review` model-call path without content transformation.
+   prompt and `triss/review` model-call path without content transformation;
+   malformed byte sequences fail before provider resolution.
 5. Stdin mode performs no Git, GitHub, changed-file, or linked-ticket lookup.
 6. TTY, empty input, whitespace-only input, non-string reader output, PR
    conflict, and base conflict fail before provider or external side effects
    with actionable errors.
 7. Existing branch, explicit-base, PR, provider, streaming, usage, and response
    behavior remains green.
-8. Existing trimmed stdin consumers retain their behavior.
+8. Existing trimmed stdin consumers retain their behavior, and completed stdin
+   reads do not leak stream listeners.
 9. The MCP review schema and source behavior remain branch/PR-only, while its
-   captured system prompt applies the same untrusted-data boundary as CLI
-   review.
+   captured system prompt and per-request section markers apply the same
+   untrusted-data boundary as CLI review.
 10. README, tracked `AGENTS.md` dogfood row, full agent templates, CLI help, and
     MCP documentation describe the same source boundaries.
 11. Focused tests, lint, the full test suite, and `git diff --check` pass with
     real non-zero test counts.
-12. The final diff contains only the planned review-stdin work.
+12. CLI and MCP distinguish authentic change/ticket/diff sections from
+    marker-like text embedded in untrusted content using an unpredictable
+    per-request boundary ID.
+13. The final diff contains only the planned review-stdin work and records the
+    user-visible feature and security boundary under `CHANGELOG.md` Unreleased.
 
 ## Rollout notes
 

@@ -13,7 +13,7 @@ function tmpFile() {
 }
 
 test('readStdin keeps trimmed compatibility by default and preserves raw input opt-in', () => {
-  const input = '  leading\r\nbody\r\ntrailing  \n';
+  const input = '\ufeff  leading\r\nbody\r\ntrailing  \n';
   const script = (options) =>
     `import { readStdin } from './src/secrets.js';\n` +
     `console.log(JSON.stringify(await readStdin(${options})));\n`;
@@ -30,6 +30,66 @@ test('readStdin keeps trimmed compatibility by default and preserves raw input o
   const raw = run('{ trim: false }');
   assert.equal(raw.status, 0, raw.stderr);
   assert.equal(JSON.parse(raw.stdout), input);
+
+  const strict = run('{ trim: false, fatalUtf8: true }');
+  assert.equal(strict.status, 0, strict.stderr);
+  assert.equal(JSON.parse(strict.stdout), input);
+
+  const invalid = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', script('{ trim: false, fatalUtf8: true }')],
+    {
+      cwd: process.cwd(),
+      input: Buffer.from([0x61, 0xff, 0x62]),
+      encoding: 'utf8',
+    },
+  );
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /valid UTF-8|malformed UTF-8/i);
+
+  const predecodedScript =
+    `process.stdin.setEncoding('utf8');\n` +
+    script('{ trim: false, fatalUtf8: true }');
+  const predecoded = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', predecodedScript],
+    {
+      cwd: process.cwd(),
+      input: Buffer.from([0x61, 0xff, 0x62]),
+      encoding: 'utf8',
+    },
+  );
+  assert.notEqual(predecoded.status, 0);
+  assert.match(predecoded.stderr, /raw bytes|encoding|valid UTF-8/i);
+
+  const listenerScript = (expectInvalid) => `
+    import { readStdin } from './src/secrets.js';
+    const names = ['data', 'end', 'error'];
+    const before = Object.fromEntries(names.map((name) => [name, process.stdin.listenerCount(name)]));
+    try {
+      await readStdin({ trim: false, fatalUtf8: true });
+      if (${expectInvalid}) throw new Error('expected malformed UTF-8 rejection');
+    } catch (error) {
+      if (!${expectInvalid} || error.code !== 'TRISS_INVALID_UTF8') throw error;
+    }
+    const after = Object.fromEntries(names.map((name) => [name, process.stdin.listenerCount(name)]));
+    console.log(JSON.stringify({ before, after }));
+  `;
+  const assertNoListenerGrowth = (result) => {
+    assert.equal(result.status, 0, result.stderr);
+    const { before, after } = JSON.parse(result.stdout);
+    assert.deepEqual(after, before);
+  };
+  assertNoListenerGrowth(spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', listenerScript(false)],
+    { cwd: process.cwd(), input: Buffer.from('valid'), encoding: 'utf8' },
+  ));
+  assertNoListenerGrowth(spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', listenerScript(true)],
+    { cwd: process.cwd(), input: Buffer.from([0x61, 0xff, 0x62]), encoding: 'utf8' },
+  ));
 });
 
 test('readEnvFile parses keys and strips quotes', () => {
