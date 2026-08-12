@@ -4,6 +4,7 @@
 import { chat as workerChat, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
+import { REVIEW_SYSTEM_PROMPT } from '../review-prompt.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
 
@@ -16,10 +17,6 @@ const SUMMARY_SYSTEM =
   'You are summarizing data fetched from an external system for a coding ' +
   'agent. Be concise and faithful. Use bullets, preserve IDs/keys/URLs ' +
   'verbatim, and omit fluff.';
-
-const REVIEW_SYSTEM = `You are a senior code reviewer. Identify bugs,
-regressions, security issues, missing tests, and edge cases. Quote
-file:line citations. One bullet per issue, no diff summary.`;
 
 async function callModel({ provider, model, messages, maxTokens = 4096 }, deps = {}) {
   const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
@@ -114,15 +111,18 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
   }));
 }
 
-export async function reviewHandler({
-  pr,
-  base,
-  skip_issue,
-  question,
-  provider,
-  model,
-  max_tokens,
-}) {
+export async function reviewHandler(
+  {
+    pr,
+    base,
+    skip_issue,
+    question,
+    provider,
+    model,
+    max_tokens,
+  },
+  deps = {},
+) {
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
   return runReviewCore({
@@ -133,8 +133,8 @@ export async function reviewHandler({
     provider,
     model: model || 'pro',
     maxTokens: max_tokens || 8192,
-    reviewSystem: REVIEW_SYSTEM,
-    callModel,
+    reviewSystem: REVIEW_SYSTEM_PROMPT,
+    callModel: deps.callModel || callModel,
   });
 }
 

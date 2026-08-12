@@ -446,7 +446,7 @@ Git, PR, branch, changed-file, or ticket metadata.
 triss review                 # current branch vs auto-detected base
 triss review 123             # GitHub PR #123 (requires `gh` CLI)
 triss review --base develop  # explicit base
-git diff main..HEAD | triss review --stdin  # review exactly this piped diff
+git diff main...HEAD | triss review --stdin  # review this branch's merge-base diff
 triss review --skip-issue    # don't try ticket lookup
 triss review --provider glm  # same review flow, one-shot GLM inference
 triss review --provider kimi # …or Kimi (pro preset = kimi-k3)

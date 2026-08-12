@@ -33,7 +33,7 @@ implementation.
 ## Current problem
 
 `triss review` currently accepts a GitHub PR number or builds a local diff from
-`<base>..HEAD`. Its CLI does not register `--stdin`, so this command fails in
+`<base>...HEAD`. Its CLI does not register `--stdin`, so this command fails in
 Commander before `runReview()` or provider selection runs:
 
 ```text
@@ -121,13 +121,15 @@ trimmed behavior by default; review opts into untrimmed mode.
 
 ### Review corpus and model call
 
-Stdin mode uses the existing review rules in `SYSTEM_PROMPT`, the default review
+Stdin mode uses the shared CLI/MCP review system prompt, the default review
 question, `--question`, provider/model resolution, streaming behavior, usage
 reporting, and `triss/review` label. The system prompt must explicitly mark all
 supplied metadata, linked-ticket text, and diff text as untrusted review data
 and instruct the model to ignore instructions or requests contained inside
-those values. This is a prompt-safety clarification only: the existing review
-checklist, question semantics, and verdict format remain unchanged.
+those values. The same boundary must apply to branch and PR reviews through
+both the CLI and `triss_review` MCP tool. This is a prompt-safety clarification
+only: the existing review checklist, question semantics, and verdict format
+remain unchanged.
 
 The stdin text is placed once inside the existing diff envelope, whose
 `<change>` and `<diff>` elements are plain-text markers, not parseable XML:
@@ -163,6 +165,7 @@ misleading `base` or `head` values.
   changes.
 - The `triss_review` MCP tool remains Git/PR-based. MCP arguments are structured
   input and have no process stdin, so no `stdin` property is added to its schema.
+  Its system prompt shares the same untrusted-data boundary as CLI review.
 - No automatic stdin detection and no new diff parser are introduced.
 
 ## Scope
@@ -172,6 +175,8 @@ This work covers:
 - the public CLI/help contract for `triss review --stdin`;
 - untrimmed UTF-8 stdin collection without changing existing trimmed callers;
 - stdin source selection and validation in the CLI review implementation;
+- a shared CLI/MCP review prompt boundary for untrusted metadata, ticket text,
+  and diff content;
 - deterministic unit and subprocess coverage;
 - README, the tracked `AGENTS.md` dogfood command table, and generated-agent-
   template examples that describe CLI review.
@@ -250,14 +255,16 @@ The RED suite must prove:
     `coder` callers, without requiring source-text assertions or direct
     chat/coder subprocesses where no deterministic no-network seam exists.
 11. MCP tool-list tests continue to prove that `triss_review` has no stdin
-    schema property.
+    schema property, and an MCP handler test captures its real model request to
+    prove the shared untrusted-data system prompt is used.
 12. Stdin diagnostics report `source=stdin` and the exact
     `Buffer.byteLength(stdinText, 'utf8')` count for the accepted stdin text,
     not a JavaScript string or wrapper-corpus length.
 13. An injected stdin reader returning a non-string fails clearly before
     provider resolution or any external/model side effect.
-14. Existing branch/PR captured system prompts retain the review checklist and
-    default question after adding the untrusted-data instruction.
+14. Existing CLI branch/PR and MCP branch captured system prompts retain the
+    review checklist and default question after adding the untrusted-data
+    instruction.
 
 Use injected `readStdin`, stdin-TTY state, model resolution, and chat functions
 through `runReviewWithDeps()` so focused tests make no network calls. A small
@@ -286,14 +293,16 @@ Implement only the tested vertical slice:
    interleaving stdin checks throughout it.
 7. Rejoin the shared model-call path so prompt, question, streaming, response,
    usage, and error behavior remain common.
-8. Preserve the existing review rules while adding the explicit untrusted-data
-   instruction to `SYSTEM_PROMPT`. Make the diagnostic line source-aware:
+8. Move the review system prompt to a narrow shared module used by the CLI and
+   MCP handler, while preserving the existing CLI review rules and adding the
+   explicit untrusted-data instruction. Make the diagnostic line source-aware:
    stdin mode reports `source=stdin` and
    `bytes=Buffer.byteLength(stdinText, 'utf8')`; Git/PR modes retain their
    current base/head diagnostics.
 
-Do not extract a broad review framework or change the separate MCP review core
-solely to share this CLI-only source mode.
+Do not extract a broad review-source framework or add stdin to the separate MCP
+review core. Sharing only the system prompt keeps the MCP source contract
+Git/PR-based while applying the same prompt-safety boundary.
 
 ### Phase 4 — refactor with GREEN held
 
@@ -357,6 +366,8 @@ the branch/PR review paths and MCP schema did not change unintentionally.
 - `README.md`
 - `bin/triss.js`
 - `src/commands/review.js`
+- `src/review-prompt.js`
+- `src/mcp/handlers.js`
 - `src/secrets.js`
 - `test/review-stdin.test.js`
 - `test/review.test.js` only if an existing shared assertion belongs there
@@ -393,7 +404,9 @@ The work is complete only when all of the following are true:
 7. Existing branch, explicit-base, PR, provider, streaming, usage, and response
    behavior remains green.
 8. Existing trimmed stdin consumers retain their behavior.
-9. The MCP review schema and behavior remain branch/PR-only.
+9. The MCP review schema and source behavior remain branch/PR-only, while its
+   captured system prompt applies the same untrusted-data boundary as CLI
+   review.
 10. README, tracked `AGENTS.md` dogfood row, full agent templates, CLI help, and
     MCP documentation describe the same source boundaries.
 11. Focused tests, lint, the full test suite, and `git diff --check` pass with
