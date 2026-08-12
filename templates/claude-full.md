@@ -88,7 +88,7 @@ Defaults to the `pro` preset because review needs reasoning.
 triss review                 # current branch vs auto-detected base
 triss review 123             # PR #123 in the current GitHub repo
 triss review --base develop  # HEAD vs develop
-git diff main..HEAD | triss review --stdin  # review exactly this piped diff
+git diff main...HEAD | triss review --stdin  # review this branch's merge-base diff
 triss review --skip-issue    # don't try to look up linked Jira/Linear ticket
 ```
 

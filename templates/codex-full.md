@@ -28,7 +28,7 @@ Review a branch, GitHub PR, or explicitly piped UTF-8 diff text:
 triss review                 # current branch vs auto-detected base
 triss review 123             # GitHub PR #123
 triss review --base develop  # explicit base
-git diff main..HEAD | triss review --stdin
+git diff main...HEAD | triss review --stdin
 ```
 
 The sources are mutually exclusive: do not combine `--stdin` with a PR
