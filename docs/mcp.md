@@ -212,8 +212,11 @@ Core tools are always listed. Model calls default to the worker and require
   `provider` field: `worker` (default), `deepseek` (an alias for `worker`),
   `glm`, or `kimi` (`moonshot` is an alias)
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
-- `triss_review` — code review on current branch or a GitHub PR; accepts the
-  same optional `provider` field as `triss_ask`
+- `triss_review` — code review on the current branch or a GitHub PR; accepts
+  the same optional `provider` field as `triss_ask`. It remains Git/PR-based:
+  MCP calls have structured arguments rather than process stdin, so this tool
+  has no `stdin` argument and cannot use the CLI's `triss review --stdin`
+  mode.
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness, including a

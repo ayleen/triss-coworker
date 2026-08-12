@@ -24,7 +24,7 @@ reasoning and edits.
 | `triss write --spec "<spec>" --context <ref> --target <out>` | boilerplate generation against a style reference |
 | `triss extract <session.jsonl> -o <out>` | extract human-readable transcript from Claude Code logs |
 | `triss fetch <url> [--question "<q>"]` | fetch URL → markdown (with `--question`, summary) |
-| `triss review [<pr>]` | code review on current branch or a GitHub PR (auto-detects linked Jira/Linear ticket) |
+| `triss review [<pr>]` | code review on a branch, GitHub PR, or explicitly piped diff (`--stdin`; linked ticket only for branch/PR) |
 | `triss commit-msg [--apply]` | Conventional Commits message from staged diff |
 | `triss usage [--since 7d \| --month] [--by-project]` | cumulative cost / token report |
 | `triss status` | model + integration readiness |

@@ -15,10 +15,28 @@ reasoning and edits.
 | `triss write --spec "<spec>" --context <ref> --target <out>` | boilerplate generation against a style reference |
 | `triss extract <session.jsonl> -o <out>` | extract human-readable transcript from Claude Code logs |
 | `triss fetch <url> [--question "<q>"]` | fetch URL → markdown (with `--question`, summary) |
-| `triss review [<pr>]` | code review on current branch or a GitHub PR (auto-detects linked Jira/Linear ticket) |
+| `triss review [<pr>]` | code review on a branch, GitHub PR, or explicitly piped diff (`--stdin`; linked ticket only for branch/PR) |
 | `triss commit-msg [--apply]` | Conventional Commits message from staged diff |
 | `triss usage [--since 7d \| --month] [--by-project]` | cumulative cost / token report |
 | `triss status` | model + integration readiness |
+
+### `triss review [PR]` — code review
+
+Review a branch, GitHub PR, or explicitly piped UTF-8 diff text:
+
+```bash
+triss review                 # current branch vs auto-detected base
+triss review 123             # GitHub PR #123
+triss review --base develop  # explicit base
+git diff main..HEAD | triss review --stdin
+```
+
+The sources are mutually exclusive: do not combine `--stdin` with a PR
+number or `--base`. Stdin mode rejects TTY and empty or whitespace-only input
+before provider/model resolution, preserves the accepted UTF-8 text exactly
+without trimming or line-ending normalization, and never queries or infers
+Git, PR, branch, changed-file, or ticket metadata. `--skip-issue` remains
+accepted for compatibility but has no effect in stdin mode.
 
 ## When to delegate
 

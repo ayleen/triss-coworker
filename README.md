@@ -269,7 +269,7 @@ and writing**.
 | `triss write`      | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
 | `triss extract`    | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
 | `triss fetch`      | Fetches URL(s) and returns readable markdown          | The agent's WebFetch tool           |
-| `triss review`     | Code review on current branch or a PR (diff + linked ticket) | The agent reading the whole diff |
+| `triss review`     | Code review on a branch, PR, or explicitly piped diff (linked ticket only for branch/PR) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
 | `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
@@ -435,18 +435,30 @@ errors out if `--stdin` is used in a TTY — it always wants piped input.
 
 ### `triss review [PR]`
 
-Code review composed from `git diff` (or `gh pr diff`), PR metadata, and
-a linked Jira / Linear ticket auto-detected from the branch name or PR
-title (e.g. `feature/ENG-42-foo` → fetches `ENG-42`).
+Branch reviews use `git diff` against the selected base and may include a
+linked Jira / Linear ticket auto-detected from the branch name. PR reviews use
+`gh pr diff` plus PR metadata and may include a linked ticket from the PR title
+(e.g. `feature/ENG-42-foo` → fetches `ENG-42`). Stdin mode is separate: it
+reviews only the explicitly piped UTF-8 diff text and does not query or infer
+Git, PR, branch, changed-file, or ticket metadata.
 
 ```bash
 triss review                 # current branch vs auto-detected base
 triss review 123             # GitHub PR #123 (requires `gh` CLI)
 triss review --base develop  # explicit base
+git diff main..HEAD | triss review --stdin  # review exactly this piped diff
 triss review --skip-issue    # don't try ticket lookup
 triss review --provider glm  # same review flow, one-shot GLM inference
 triss review --provider kimi # …or Kimi (pro preset = kimi-k3)
 ```
+
+The three diff sources are mutually exclusive: local Git (`triss review` or
+`--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text piped to
+`triss review --stdin`. `--stdin` cannot be combined with a PR number or
+`--base`; `--skip-issue` remains accepted for compatibility but has no effect
+in stdin mode because no ticket lookup occurs. Stdin mode rejects a TTY and empty or
+whitespace-only input before provider or model resolution. It preserves the
+accepted UTF-8 text exactly, without trimming or line-ending normalization.
 
 Defaults to the `pro` preset because review needs reasoning. Output is
 a list of concrete issues with file:line citations — not a diff

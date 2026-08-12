@@ -167,13 +167,13 @@ export function maskValue(v) {
   return v.slice(0, 4) + '…' + v.slice(-4);
 }
 
-export function readStdin() {
+export function readStdin({ trim = true } = {}) {
   return new Promise((resolve, reject) => {
     const stdin = process.stdin;
     let buf = '';
     stdin.setEncoding('utf8');
     stdin.on('data', (d) => (buf += d));
-    stdin.on('end', () => resolve(buf.trim()));
+    stdin.on('end', () => resolve(trim ? buf.trim() : buf));
     stdin.on('error', reject);
     stdin.resume();
   });

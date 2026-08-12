@@ -137,6 +137,7 @@ program
   .description('Code review via the configured worker, GLM, or Kimi. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
   .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
   .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
+  .option('--stdin', 'read an explicitly piped UTF-8 diff instead of Git or PR sources')
   .option('-q, --question <text>', 'override the default review question')
   .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')

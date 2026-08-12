@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { runAsk, runAskWithDeps } from '../src/commands/ask.js';
 import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
@@ -115,4 +116,36 @@ test('ASK-04: CLI ask preserves a successful GLM top-level final_text response',
   }
 
   assert.match(captured.join(''), /The final answer\./);
+});
+
+test('ASK-05: the real ask stdin caller keeps the helper default trim behavior', () => {
+  const script = `
+    import { runAskWithDeps } from './src/commands/ask.js';
+    let captured;
+    const originalWrite = process.stdout.write;
+    process.stdout.write = () => true;
+    await runAskWithDeps(
+      { stdin: true, question: 'q', stream: false },
+      {
+        resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
+        chat: async (input) => {
+          captured = input;
+          return { final_text: 'ok', usage: {} };
+        },
+      },
+    );
+    process.stdout.write = originalWrite;
+    console.log(JSON.stringify(captured.messages[1].content));
+  `;
+  const raw = '  leading\r\nbody\r\ntrailing  \n';
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: process.cwd(),
+    input: raw,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    JSON.parse(result.stdout),
+    '<corpus>\n<source kind="stdin">\nleading\r\nbody\r\ntrailing\n</source>\n</corpus>',
+  );
 });

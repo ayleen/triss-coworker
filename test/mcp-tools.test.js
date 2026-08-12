@@ -168,6 +168,14 @@ test('ask and review MCP tools expose worker/deepseek/glm/kimi provider routing'
   }
 });
 
+test('triss_review MCP schema remains branch/PR-only and has no stdin property', async () => {
+  const tools = await listTools();
+  const review = tools.find((entry) => entry.name === 'triss_review');
+  assert.ok(review, 'missing triss_review');
+  assert.equal(review.inputSchema.properties.stdin, undefined);
+  assert.match(review.description, /current branch|GitHub PR/i);
+});
+
 test('listTools loads project-local .triss.env so per-project credentials work', async () => {
   // Regression test: previously listTools read process.env without first
   // loading .env files, so a .triss.env with ATLASSIAN_* in the cwd was

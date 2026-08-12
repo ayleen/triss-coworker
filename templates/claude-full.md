@@ -77,17 +77,29 @@ docker logs container 2>&1 | triss ask --stdin --question "errors and their caus
 Prefer this over reading the same output yourself when it's >2K tokens.
 
 ### `triss review [PR]` — code review via DeepSeek
-For reviewing a branch or PR. Stitches together: the diff (git or `gh pr
-diff`), PR metadata (title + body if PR# given), and a linked Jira/Linear
-issue (auto-detected from `PROJ-NNN` keys in branch name or PR title).
+For reviewing a branch, PR, or an explicitly piped diff. Branch reviews use
+the git diff and may include a linked Jira/Linear issue from the branch name;
+PR reviews use `gh pr diff`, PR metadata, and may include a linked issue from
+the PR title (`PROJ-NNN`). Stdin reviews use only the explicitly piped UTF-8
+diff text and never infer Git, PR, branch, changed-file, or ticket metadata.
 Defaults to the `pro` preset because review needs reasoning.
 
 ```bash
 triss review                 # current branch vs auto-detected base
 triss review 123             # PR #123 in the current GitHub repo
 triss review --base develop  # HEAD vs develop
+git diff main..HEAD | triss review --stdin  # review exactly this piped diff
 triss review --skip-issue    # don't try to look up linked Jira/Linear ticket
 ```
+
+The diff sources are mutually exclusive: local Git (`triss review` or
+`--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text from standard
+input (`triss review --stdin`). Do not combine `--stdin` with a PR number or
+`--base`. Stdin mode rejects a TTY and empty or whitespace-only input before
+provider/model resolution, and preserves the accepted UTF-8 text exactly,
+without trimming or line-ending normalization. `--skip-issue` remains accepted
+for compatibility but has no effect in stdin mode because there is no
+linked-ticket lookup.
 
 **Use over reading diffs yourself** — token savings on diffs are usually
 10-20× since DeepSeek does the inspection and returns concrete bullets

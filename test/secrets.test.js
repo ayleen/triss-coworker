@@ -12,6 +12,26 @@ function tmpFile() {
   return join(dir, '.env');
 }
 
+test('readStdin keeps trimmed compatibility by default and preserves raw input opt-in', () => {
+  const input = '  leading\r\nbody\r\ntrailing  \n';
+  const script = (options) =>
+    `import { readStdin } from './src/secrets.js';\n` +
+    `console.log(JSON.stringify(await readStdin(${options})));\n`;
+  const run = (options) => spawnSync(process.execPath, ['--input-type=module', '--eval', script(options)], {
+    cwd: process.cwd(),
+    input,
+    encoding: 'utf8',
+  });
+
+  const trimmed = run('{}');
+  assert.equal(trimmed.status, 0, trimmed.stderr);
+  assert.equal(JSON.parse(trimmed.stdout), 'leading\r\nbody\r\ntrailing');
+
+  const raw = run('{ trim: false }');
+  assert.equal(raw.status, 0, raw.stderr);
+  assert.equal(JSON.parse(raw.stdout), input);
+});
+
 test('readEnvFile parses keys and strips quotes', () => {
   const path = tmpFile();
   writeFileSync(
