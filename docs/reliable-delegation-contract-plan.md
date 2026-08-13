@@ -169,12 +169,18 @@ write, rename, or deletion leaves the validated project root.
    `activity`, or MCP results.
 3. The existing explicit environment allowlist for coder subprocesses remains
    deny-by-default. Do not replace it with `{ ...process.env }`.
-4. Complete sandbox-owned process-tree cleanup remains a release blocker after
-   a child is created. A result may be built only after the sandbox/container
-   ownership primitive proves that no descendant remains, including a child
-   that called `setsid()` or double-forked, or after spawn failed before any
-   child existed and cleanup is therefore `not_applicable`. A detached process
-   group alone is not sufficient ownership evidence.
+4. Complete sandbox-owned process-tree cleanup remains a release blocker for an
+   enforced process guarantee. Enforced managed-root identity is additionally a
+   release blocker for any result that claims verified changes or reusable
+   persistent state. Such a result may be built only after the
+   sandbox/container ownership primitive proves that no descendant remains,
+   including a child that called `setsid()` or double-forked, or after spawn
+   failed before any child existed and cleanup is therefore `not_applicable`.
+   A host without that primitive may emit only the explicitly advisory
+   `best_effort` result defined in Sections 6.1-6.3; it never gets a post-run
+   change snapshot, a success for `expect: changes|analysis`, or persistent
+   session publication. A detached process group alone is not sufficient
+   ownership evidence.
 5. `files_changed: []` means the isolated fingerprint comparison ran
    successfully and found no deliverable changes. It must never mean "not
    checked".
@@ -216,21 +222,33 @@ write, rename, or deletion leaves the validated project root.
     engine receives only a bounded run-scoped loopback token that may be visible
     to tools but cannot reveal the real credential and expires at cleanup.
     Post-hoc public-output redaction is defense in depth, not the boundary.
-18. Every engine run, isolated or non-isolated, runs inside an OS-enforced
-    filesystem sandbox that
+    Before any best-effort run, the host must also prove an independent
+    credential-isolation boundary: the engine and its tools cannot read the
+    parent's process memory/environment/IPC or any configured credential store
+    such as global or project `.triss.env`. A sanitized child environment and
+    loopback token alone are insufficient for a same-UID unrestricted child.
+    This boundary may be a separate-identity launcher, OS credential isolation,
+    or another reviewed mechanism; if it is unavailable, coder fails preflight
+    rather than risk secret disclosure.
+18. An OS-enforced filesystem sandbox is used when the host supplies one. It
     permits writes only within its authorized target (isolated: managed
     `.triss/wt-v2/<slug>` child; non-isolated: validated caller project
     worktree) and explicitly denies `.triss/coder-state-v2`, leases,
-    review-fetch state, and the source Git common
-    directory. CLI allowlists are additional policy, not this ownership
-    boundary. If no supported sandbox is available, every coder run fails
-    preflight; none silently falls back to unrestricted mode.
-19. One exclusive repository/session lease covers isolation creation/reuse,
-    state load/write, all snapshots, engine execution, envelope construction,
-    and cleanup. A same-slug run or coder clean cannot overlap it. Every
-    non-isolated run additionally holds one exclusive validated-worktree target
-    lease, so different slugs cannot concurrently write or share quota
-    attribution in the same caller worktree.
+    review-fetch state, and the source Git common directory. If the host does
+    not supply that boundary, coder still runs in explicit `best_effort` mode
+    only after invariant 17's credential-isolation preflight succeeds:
+    it retains engine CLI restrictions and all host-side validation that are
+    available, but neither the CLI nor envelope may claim OS write confinement.
+    CLI restrictions are not represented as an OS ownership boundary.
+19. Where a kernel lease adapter is enforced, one exclusive repository/session
+    lease covers isolation creation/reuse, state load/write, all snapshots,
+    engine execution, envelope construction, and cleanup. A same-slug run or
+    coder clean cannot overlap it. Every non-isolated run additionally holds one
+    enforced validated-worktree target lease, so different slugs cannot
+    concurrently write or share quota attribution in the same caller worktree.
+    Without that adapter, Triss uses only a best-effort in-process lease and
+    reports `execution_capabilities.locking: best_effort|unavailable`; it must
+    not claim cross-process exclusion or per-run quota attribution.
 20. Public envelope components share one aggregate serialization budget. A
     component that cannot fit its reserved budget fails with a stable typed
     result; Triss never emits truncated or partial JSON.
@@ -239,8 +257,16 @@ write, rename, or deletion leaves the validated project root.
 
 Add a top-level `envelope_version: 2`. Retain all existing top-level fields and
 usage schema fields. `session_id` remains the engine-issued/native identifier;
-new `session_slug` is always the Triss ownership/continuation key exposed to CLI
-and MCP callers. Add the fields below.
+new `session_slug` is always the Triss ownership/correlation key exposed to CLI
+and MCP callers; it is a continuation key only when
+`session_persistence=persistent`. Add `session_persistence` with enum
+`ephemeral|persistent|ephemeral_downgraded`; the last value means the caller
+requested `--session` or `--keep-session`, but this host lacks one of the
+enforced persistent-state capabilities and Triss deliberately started a new
+non-continuing ephemeral native session. Add the fields below.
+Add `effective_isolation` with enum `isolated_enforced|non_isolated_requested|
+best_effort_caller_worktree`; the last value is an explicit downgrade, never an
+implicit implementation of `--isolate`.
 
 Example successful implementation result:
 
@@ -251,6 +277,8 @@ Example successful implementation result:
   "engine_version": "1.18.7",
   "session_id": "ses_123",
   "session_slug": "task",
+  "session_persistence": "persistent",
+  "effective_isolation": "isolated_enforced",
   "run_id": "run_7e15c7e2000000000000000000000000",
   "started_at": "2026-08-13T10:00:00.000Z",
   "finished_at": "2026-08-13T10:03:00.000Z",
@@ -260,6 +288,15 @@ Example successful implementation result:
   "termination_cause": "none",
   "engine_status": "completed",
   "cleanup_status": "verified",
+  "execution_capabilities": {
+    "sandbox": "enforced",
+    "process_supervision": "enforced",
+    "locking": "enforced",
+    "writable_quota": "enforced",
+    "credential_isolation": "enforced",
+    "managed_root": "enforced",
+    "persistent_store_quota": "enforced"
+  },
   "provider_status": "usable",
   "expectation": "changes",
   "artifact_status": "changes_present",
@@ -349,8 +386,62 @@ after an otherwise zero exit is `unknown`, not `completed`.
   no descendant can execute or write after result construction;
 - `failed`: cleanup could not be proved; normally the command throws and emits
   no envelope;
+- `best_effort`: Triss performed the strongest available child/process-group
+  cleanup, but the host could not prove that a complete descendant set is gone;
+  delayed descendants or writes remain possible and result construction does
+  not upgrade this value to `verified`;
 - `not_applicable`: no child process was created, including spawn failure, or a
   future engine does not create an owned sandbox process tree.
+
+`execution_capabilities` is a required envelope object with exactly seven
+keys, each one of `enforced|best_effort|unavailable`:
+
+- `sandbox`: OS write/network confinement for the engine and its tools;
+- `process_supervision`: complete-tree ownership, parent-death cleanup, and
+  empty-set proof;
+- `locking`: kernel-backed cross-process session/target exclusion;
+- `writable_quota`: OS-enforced writable-block quota and first-rejection
+  notification.
+- `credential_isolation`: an independent boundary preventing the engine/tools
+  from reading raw provider credentials, configured credential stores, or the
+  parent process memory/environment/IPC.
+- `managed_root`: no-follow, component-wise validated durable-state operations;
+- `persistent_store_quota`: OS-enforced aggregate bound for durable session
+  stores and their transactional metadata.
+
+`enforced` means the named OS guarantee was active for this run. `best_effort`
+means Triss used a weaker host/engine mechanism but cannot make that guarantee.
+`unavailable` means no mechanism was active. The CLI prints a concise warning
+for every non-enforced capability; JSON/MCP expose only this object and stable
+warning codes, never raw platform diagnostics. `cleanup_status: verified`
+requires `process_supervision: enforced`; `best_effort` or `unavailable`
+process supervision can never yield verified cleanup.
+`credential_isolation` is the sole exception: it must be `enforced` before any
+engine spawn, including a best-effort run; otherwise preflight fails with
+`TRISS_CODER_CREDENTIAL_ISOLATION_REQUIRED`.
+Persistent-state eligibility is also closed and objective: it is true only when
+all seven capabilities are `enforced`; no `best_effort` value may be
+silently promoted into durable-session authority.
+
+The complete stable non-enforced capability-warning enum is
+`TRISS_CODER_CAP_SANDBOX_BEST_EFFORT`,
+`TRISS_CODER_CAP_PROCESS_SUPERVISION_BEST_EFFORT`,
+`TRISS_CODER_CAP_LOCKING_BEST_EFFORT`, and
+`TRISS_CODER_CAP_WRITABLE_QUOTA_BEST_EFFORT`,
+`TRISS_CODER_CAP_MANAGED_ROOT_BEST_EFFORT`, and
+`TRISS_CODER_CAP_PERSISTENT_STORE_QUOTA_BEST_EFFORT`, and
+`TRISS_CODER_PERSISTENCE_UNAVAILABLE`; one code appears once for each
+capability whose value is not `enforced`, in that field order. `unavailable`
+uses the same code because the machine-readable capability value distinguishes
+it from a weaker active mechanism. `TRISS_CODER_PERSISTENCE_UNAVAILABLE` appears
+only when the caller requested persistence and the eligibility predicate is
+false. A missing `credential_isolation` is never a
+warning/fallback: it is the preflight code above. Package 1 exports this closed
+enum and tests duplicate suppression and order. Atomic 23 owns CLI projection
+tests; Atomic 24 owns MCP/JSON projection tests. The separate stable target
+downgrade code is `TRISS_CODER_ISOLATION_DOWNGRADED`; it appears exactly once
+before spawn and in the envelope when `effective_isolation` is
+`best_effort_caller_worktree`.
 
 `provider_status`:
 
@@ -412,10 +503,13 @@ This table covers pre-spawn abort, zero exit with no output, and non-zero exit w
 malformed-only output, provider success followed by engine failure, and a
 provider error followed by exit zero. Explicit engine/provider error evidence
 wins within its own column. `cleanup_status` is `not_applicable` whenever no
-child was created, including spawn failure and pre-spawn abort; every path that
-created a process must prove `verified` cleanup before an envelope is emitted.
+child was created, including spawn failure and pre-spawn abort. A path with
+enforced supervision that created a process must prove `verified` cleanup before
+an envelope is emitted. A host selected for best-effort supervision instead
+emits the bounded advisory envelope defined below after bounded group cleanup;
+it cannot expose post-run change evidence or a satisfied explicit expectation.
 A no-child envelope may be emitted with the applicable row and a bounded error;
-cleanup failure after spawn remains fail-closed and emits no envelope.
+cleanup `failed` after spawn remains fail-closed and emits no envelope.
 
 `expectation`:
 
@@ -463,12 +557,20 @@ Derive `artifact_status` independently from expectation and failure state:
 4. an unavailable comparison with no text is `not_checked`;
 5. everything else is `no_artifact`.
 
+`cleanup_status: best_effort` has explicit precedence over this derivation only
+for change evidence: it cannot produce `changes_present` or `no_changes`.
+It returns `text_only` when usable trimmed final text exists, otherwise
+`not_checked`. This preserves the objectively observed text without treating it
+as verified implementation evidence.
+
 Then apply the first matching requirement row after process cleanup and both
 change comparisons:
 
 | Gate/evidence | Expectation | Requirement |
 | --- | --- | --- |
 | cleanup `failed` after child creation | any | no envelope; fail closed |
+| cleanup `best_effort` after child creation | changes/analysis | `not_evaluated`; envelope has `files_changed=null`, `run_files_changed=null`, and `change_detection.status=not_checked`; `artifact_status` follows the explicit best-effort precedence above |
+| cleanup `best_effort` after child creation | either | `not_evaluated`; same advisory-only envelope; no success/satisfaction claim |
 | cleanup `not_applicable` + process `not_started` | changes/analysis | `unsatisfied` |
 | process not completed | changes/analysis | `unsatisfied` |
 | engine not completed | changes/analysis | `unsatisfied` |
@@ -493,6 +595,14 @@ For v1, capture three bounded visible-worktree fingerprint snapshots:
 - `pre_run_snapshot`: the visible isolated worktree immediately before spawn;
 - `post_run_snapshot`: the visible isolated worktree after complete
   sandbox-owned process-tree cleanup.
+
+Capture `post_run_snapshot` only when cleanup is `verified`. When cleanup is
+`best_effort`, descendants may still write after the parent observes exit, so
+both change lists are `null`, `change_detection.status=not_checked`, and the
+engine's output is advisory only. Do not retain/reuse a worktree, publish a
+persistent session, or run a destructive cleanup transition from this state;
+retain only the bounded ephemeral-recovery record described below. This rule
+prevents a transient diff from being reported as a verified deliverable.
 
 Build each snapshot from NUL-delimited
 `git ls-files --cached --others -z` with inherited/global/repository/info
@@ -735,7 +845,7 @@ same slug concurrently, and prove distinct root-fingerprinted branch refs,
 independent four-slot/512 MiB caps, no cross-root reuse/clean, and no shared-ref
 collision.
 
-Independently of logical reservations, `.triss/engine-sessions-v2` is itself an
+When `persistent_store_quota=enforced`, `.triss/engine-sessions-v2` is itself an
 OS-enforced 512 MiB allocation-block quota domain covering every directory,
 regular file, temp, marker, copy-on-write block, and filesystem metadata block,
 with at most one allocation-block overshoot. Package 0 proves the same
@@ -744,7 +854,10 @@ fails the session publication/cleanup transaction closed without corrupting the
 last validated generation. Logical 508+4 MiB budgeting is admission planning,
 not the hard physical boundary. Tests fill path/empty-directory/10,000-entry
 metadata pressure and concurrent maximum generation updates and assert the
-physical quota/overshoot and recoverable prior generation.
+physical quota/overshoot and recoverable prior generation. Without this
+capability no v2 persistent store is opened or created; requests downgrade to
+the stateless ephemeral behavior rather than treating logical budgeting as a
+physical limit.
 
 Inventory writes use only `.inventory.tmp.<run-id>.<32-hex-nonce>`, created
 exclusively mode `0600`, regular/no-follow, same UID, capped at 64 KiB. Under
@@ -767,8 +880,15 @@ byte-exact empty fixture is
 
 Only an explicit `--session <slug>` or omitted slug combined with
 `--keep-session` creates a persistent inventory entry. Persistent sessions are
-isolated-only in v1; persistence with effective non-isolated mode fails before
-allocation. Before any credentials/spawn, such a session atomically reserves
+available only when all seven capabilities are `enforced`, and are isolated-only
+in v1.
+Persistence with effective non-isolated mode or without those enforced
+capabilities is downgraded before allocation to a fresh stateless ephemeral run:
+it never reads, continues, mutates, cleans, or reserves the requested persistent
+slug/store, emits `TRISS_CODER_PERSISTENCE_UNAVAILABLE` plus
+`session_persistence: "ephemeral_downgraded"`, and preserves any pre-existing
+session untouched. This keeps coder usable without inventing a racy/stranded
+store. Before any credentials/spawn, an eligible persistent session atomically reserves
 its `(engine,slug)` under the shared maintenance lock plus inventory mutex. At
 four entries or 512 MiB reserved capacity it fails preflight with
 `TRISS_CODER_SESSION_CAP`; an existing idle session may continue. Successful
@@ -856,8 +976,10 @@ Each run overlays fresh ephemeral sanitized config/
 token, then persists only filtered bounded session data. The sandbox denies the
 engine every `.triss/engine-sessions-v2` host-store path; the parent alone copies
 the validated allowlist into/out of task HOME. The same assigned slot lease covers mapping/storage load, engine run,
-persistence, and cleanup for both isolation modes, so different slugs never
-write one file and the same slug cannot overlap across modes.
+persistence, and cleanup for the isolated-only persistent mode, so different
+slugs never write one file and the same slug cannot overlap. A non-isolated
+`--session`/`--keep-session` request is rejected from persistent storage before
+any store touch and follows the documented fresh ephemeral downgrade instead.
 
 The canonical `session.json` key order is exactly the order shown above.
 `schema_version` is
@@ -976,7 +1098,7 @@ inventory entry, `session.json`, or `home.current` is published, so ordinary
 runs never consume the four persistent slots and do not retain conversation
 state. On verified completion, envelope serialization, and process-tree
 cleanup, remove the ephemeral task HOME, worktree, branch, and coder state.
-After failure or parent crash retain only
+After failure or parent crash on a host with enforced supervision retain only
 `.triss/ephemeral-recovery-v1/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
 capped canonical JSON-plus-LF record with exact ordered keys
 `{schema_version,project_root_fingerprint,session_slug,run_id,sandbox_id,
@@ -992,7 +1114,21 @@ records and 16 MiB exist per project; cap admission performs recovery then
 fails before spawn. `--keep-session` is explicit consent to persistent
 generated state and returns the slug for later `--session`. Tests cover more
 than 100 successful unnamed runs without inventory growth, failure/crash TTL
-recovery, cap-plus-one, and absence of conversation bytes.
+recovery, cap-plus-one, and absence of conversation bytes. A run without both an
+enforced sandbox and enforced process supervision, or without an enforced
+managed root, never publishes this
+project-managed recovery record or any persistent Triss
+artifact: it uses the caller's validated Git worktree as its best-effort target
+and a fresh restrictive external task HOME whose random name is not reusable,
+revokes the proxy, and attempts bounded group cleanup. If the group is not
+demonstrably empty, it leaves only that external temporary HOME for the OS
+temporary-directory retention policy; it does not delete, quarantine, or
+re-admit it through the project state machine. The caller's worktree may still
+be modified by the engine or a delayed descendant, which is why the envelope
+claims no verified diff. Repeated such runs cannot fill a 16-record
+project cap. Tests cover more than 100 such runs with no project
+worktree/branch/state/recovery artifacts beyond ordinary caller-worktree edits
+and no admission failure.
 
 A read-only first persistent run, subsequent source/main movement, manual
 worktree deletion, branch replacement, or snapshot mismatch can never silently
@@ -1007,9 +1143,11 @@ engines share the same slot, and different live slugs never share one. Acquire
 a kernel-released exclusive advisory lock on the fixed regular no-follow
 mode-`0600` file
 `.triss/locks-v2/<repository-fingerprint>/session-slot-<0..3>.lock`
-before isolation lookup or state access. Package 0 selects and proves the native
-macOS/Linux lock adapter; unsupported hosts fail preflight. After the kernel
-lock is held, atomically replace a sidecar diagnostic owner record containing
+before isolation lookup or state access. Package 0 records the native platform
+lock adapter where available. A host without it uses only a clearly
+labelled best-effort in-process lock: the run is not rejected and may not claim
+cross-process exclusion. After an enforced kernel lock is held, atomically
+replace a sidecar diagnostic owner record containing
 schema version, run ID, PID, process-start identity, host boot/session identity,
 and creation time; it contains no paths or secrets. The exact sidecar is
 `<lock-path>.owner.json`, mode `0600`, at most 4 KiB, no-follow regular file,
@@ -1064,8 +1202,11 @@ crashes, and prove inode/temp counts and lock identity remain fixed.
 - failed isolated snapshot or comparison: `status = failed`, both file lists
   are `null`, and result construction must not perform the empty-worktree
   cleanup path;
-- `expectation: changes` with effective isolation off fails before spawn with an
-  actionable error: use `--isolate` or choose `--expect either`.
+- `expectation: changes` with effective isolation off fails before spawn only
+  when the caller explicitly selected ordinary non-isolated mode on a host that
+  can otherwise verify an isolated run. When capability resolution selected
+  `best_effort_caller_worktree`, it instead runs advisory with exit `3` and the
+  required downgrade warning below.
 
 Do not add non-isolated attribution in this release. Correctly detecting edits
 to already-dirty tracked files and untracked files requires a bounded pre/post
@@ -1142,22 +1283,28 @@ The proxy never returns credentials, logs bodies, or permits a CONNECT/general
 forward-proxy route. Provider TLS remains between proxy and the canonical
 configured provider endpoint.
 
-Wrap every engine run, isolated or compatibility non-isolated, in a platform
-adapter with a task-scoped HOME/XDG/config tree containing only sanitized engine
-configuration. The positive read allowlist is exactly: the authorized target
+When `execution_capabilities.sandbox=enforced`, wrap the engine run, isolated or
+compatibility non-isolated, in a platform adapter with a task-scoped HOME/XDG/
+config tree containing only sanitized engine configuration. The positive read
+allowlist is exactly: the authorized target
 worktree; task temp/config; the resolved engine executable and its resolved
 read-only runtime/library roots; explicitly selected read-only dependency roots
 inside the target project; and required OS device/time/certificate files. The
 real HOME, source checkout outside the authorized target, sibling checkouts,
 SSH/cloud/keychain/socket directories, `/proc`/process FDs, parent-process
-memory/environment, and IPC to unrelated processes are absent or denied.
+memory/environment, and IPC to unrelated processes are absent or denied. This
+full filesystem/network/process denial is an enforced-sandbox claim only. In
+best-effort mode, the engine may access other same-user filesystem locations or
+network routes that the host cannot confine; the sole mandatory protection is
+the separately enforced credential-isolation launcher, which must deny raw
+provider stores and parent-process access before spawn.
 
-Compile that allowlist only from a host-owned toolchain manifest discovered and
+Compile an enforced-sandbox allowlist only from a host-owned toolchain manifest discovered and
 approved by Package 0, never by scanning `PATH` inside the sandbox. The
 mode-`0600`, 64 KiB-capped canonical JSON-plus-LF manifest has exact ordered
 keys `{schema_version,platform,architecture,commands,executables,runtime_roots,
 readonly_project_roots,environment,limits,created_at}` and no extras. Version is
-integer `1`; platform is `darwin|linux`; architecture is the Package 0-approved
+integer `1`; platform is `darwin|linux|win32`; architecture is the Package 0-approved
 value. `commands` is a sorted unique array of at most 32 exact argv-prefix
 arrays (256 arguments and 8 KiB encoded bytes per command); v1 includes only
 the package-specific `node --test ...`, `npm run lint`, `git status --short`,
@@ -1174,7 +1321,8 @@ files, CPU, and writable blocks. Package 0 records byte-exact manifests for
 each supported engine/OS tuple and hashes every executable/runtime-root
 inventory; drift fails preflight and requires a new feasibility approval.
 
-The sandbox launches commands only through a parent mediator that validates the
+When `execution_capabilities.sandbox=enforced`, the sandbox launches commands
+only through a parent mediator that validates the
 manifest prefix, supplies the fixed environment, and applies the same owned
 process-set and output collectors as the engine. Real OpenCode and Crush
 fixtures must successfully execute one focused `node --test` command and
@@ -1182,17 +1330,24 @@ fixtures must successfully execute one focused `node --test` command and
 common object store, sibling checkout, and Triss managed state remain
 unreadable. The tests also prove that an unlisted compiler/interpreter, shell
 flag, runtime root, or environment override is denied. A platform for which the
-exact manifest cannot run the required RED/GREEN commands is unsupported; do
-not broaden a system directory to make the test pass.
+exact manifest cannot run the required RED/GREEN commands records sandbox
+capability `unavailable` or `best_effort`; coder still runs with its documented
+engine restrictions and without an OS-sandbox claim, provided the separate
+`credential_isolation` capability remains enforced. Do not broaden a system
+directory to make the strict test pass.
 
 The authorized target is the managed `.triss/wt-v2/<slug>` child for isolated runs
 and the validated caller project worktree for non-isolated runs. Writes are
-limited to that target and task temp. Before any non-isolated sandbox/quota
-setup, acquire the regular/no-follow mode-`0600` kernel lease
+limited to that target and task temp when sandbox enforcement is active. Before
+any non-isolated enforced sandbox/quota setup, acquire the regular/no-follow
+mode-`0600` kernel lease
 `.triss/locks-v2/<repository-fingerprint>/non-isolated-target.lock` and hold it
 through process-tree emptiness, quota accounting, envelope construction, and
 session finalization. It is acquired after shared maintenance but before the
-assigned slot lease; a busy target fails preflight rather than waiting unboundedly.
+assigned slot lease; a busy enforced lock fails preflight rather than waiting
+unboundedly. Without the kernel adapter, use a best-effort in-process target
+lock and expose `locking: best_effort|unavailable`; no global exclusion or
+per-run quota attribution is claimed.
 Export exactly `CODER_NON_ISOLATED_TARGET_LOCK_BASENAME` and
 `acquireCoderTargetLease()` from Package 4A; every engine imports them. Its
 diagnostic sidecar is `<lock>.owner.json`, mode `0600`, regular/no-follow, 4 KiB
@@ -1240,21 +1395,27 @@ SHA-1 uses normal format; SHA-256 sets only
 `core.repositoryFormatVersion=1` and `extensions.objectFormat=sha256`. Copy no
 other source config key. Set `GIT_OPTIONAL_LOCKS=0`,
 `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and an empty hooks path.
-OpenCode
-permissions and Crush `--restrict` remain enabled but are not the OS boundary.
-Package 0 must prove a supported macOS/Linux mechanism and that both engines can
-use the proxy endpoint; inability is a stop gate, not permission to expose a
-key or run unrestricted.
+OpenCode permissions and Crush `--restrict` remain enabled but are not the OS
+boundary. Package 0 records which hosts have an enforced mechanism. Its absence
+selects best-effort execution, never permission to expose a key. Both engines
+must still use the parent-owned proxy endpoint without receiving the provider
+key. Package 0 must separately prove that a best-effort child cannot read the
+parent or configured credential stores; inability to preserve either credential
+boundary remains a stop gate.
 
-The sandbox ownership primitive must track the complete descendant set even
-after `setsid()`, re-parenting, or a double fork. Cleanup revokes proxy access,
-terminates that complete set, and waits until it is empty before persistence,
-post-run fingerprinting, target reuse, or envelope construction. A PID/PGID
-check alone cannot produce `cleanup_status: verified`. Package 0 must prove a
-cgroup/pid-namespace/job-like primitive with a race-free empty-set observation
-on every supported host; otherwise every coder run fails preflight.
+Where enforced process supervision exists, the sandbox ownership primitive must
+track the complete descendant set even after `setsid()`, re-parenting, or a
+double fork. Cleanup revokes proxy access, terminates that complete set, and
+waits until it is empty before persistence, post-run fingerprinting, target
+reuse, or envelope construction. A PID/PGID check alone cannot produce
+`cleanup_status: verified`. On a host without that primitive, Triss still
+revokes proxy access and attempts bounded process-group cleanup, then emits the
+Section 6.2 advisory envelope with `cleanup_status: best_effort` and
+`execution_capabilities.process_supervision: best_effort|unavailable`. Such a
+run is stateless and ephemeral: it may not create/continue/clean a persistent
+session, take a post-run snapshot, or claim `expect: changes|analysis` success.
 
-The OS primitive also binds descendant lifetime to the parent supervisor's
+When the enforced primitive is present, it also binds descendant lifetime to the parent supervisor's
 kernel-owned control handle: unexpected parent exit, including `SIGKILL`,
 atomically closes that handle and triggers kill-on-close for the entire owned
 set without JavaScript `finally`. Proxy and quota channels fail closed on the
@@ -1265,9 +1426,11 @@ cannot couple lock release to descendant disappearance, recovery must retain a
 stable non-PID-reusable sandbox identity outside agent-writable paths and, under
 the still-held admission lock, kill/wait that exact set before making the slug
 lease reusable. A PID file, PGID, or best-effort parent-death signal is
-insufficient. Tests `SIGKILL` the Triss parent while a double-fork/`setsid`
-descendant schedules delayed writes; another run/clean cannot acquire the slug
-until the exact sandbox is empty, and no delayed write occurs.
+insufficient for an `enforced` capability claim. Tests `SIGKILL` the Triss
+parent while a double-fork/`setsid` descendant schedules delayed writes;
+supported hosts prove another run/clean cannot acquire the slug until the exact
+sandbox is empty and no delayed write occurs. Unsupported hosts prove the same
+scenario is reported as best-effort rather than rejected or reported verified.
 
 The parent-owned process-set journal lives at managed root
 `.triss/process-sets-v2/` and is denied to every engine. The regular/no-follow
@@ -1413,11 +1576,11 @@ row/store/journal mismatch fails closed. Tests cover explicit/generated cap or
 collision cancellation and new-host crashes after unpublished/deleting owner
 removal but before journal acknowledgement.
 
-The platform also enforces a 512 MiB aggregate additional-block quota across
-all engine-writable target, task HOME/config, and temp mounts for one run, with
-at most one filesystem allocation block of overshoot. Existing target bytes do
-not consume the quota, but every new allocation or copy-on-write block does.
-The quota filesystem/adapter synchronously emits one authenticated
+When `execution_capabilities.writable_quota=enforced`, the platform enforces a
+512 MiB aggregate additional-block quota across all engine-writable target, task
+HOME/config, and temp mounts for one run, with at most one filesystem allocation
+block of overshoot. Existing target bytes do not consume the quota, but every
+new allocation or copy-on-write block does. The quota filesystem/adapter synchronously emits one authenticated
 `quota_exhausted` control event to the parent supervisor on the first rejected
 allocation, before acknowledging that failure to the engine writer. The parent
 atomically records first cause `filesystem_quota`, acknowledges the event,
@@ -1427,9 +1590,12 @@ post-exit usage inspection is not an observable lifecycle contract and fails
 preflight. Duplicate events cannot replace an earlier cause. Non-isolated targets
 require a filesystem project quota or equivalent direct-write enforcement;
 monitoring usage after writes, per-file limits, or an uncapped bind mount is not
-sufficient. If the target filesystem cannot provide that boundary, the run
-fails preflight rather than using an overlay that would silently change
-persistence semantics.
+sufficient for an `enforced` claim. If the target filesystem cannot provide that
+boundary, the coder run remains available with `writable_quota` non-enforced
+and the stable capability warning. Quota loss alone does not alter an enforced
+sandbox/supervisor target, cleanup status, or verified snapshot evidence; it
+only disables the quota guarantee and makes persistent-state eligibility false.
+It must not use an overlay that silently changes persistence semantics.
 
 Packages 2B-2G fixtures run the three allowed mediated Git operations in both SHA-1
 and SHA-256 repositories, while malicious source config/hooks/helpers remain
@@ -1477,20 +1643,34 @@ Rules:
 
 - default is `either` for compatibility;
 - invalid values fail before credentials, Git mutation, or spawn;
-- `--expect changes` requires effective isolation;
-- `--expect changes --no-isolate` fails before spawn;
+- `--expect changes` requires effective isolation for a verified-success claim;
+  on a host selected for best-effort it still runs as advisory and exits `3`,
+  never claiming changes;
+- `--expect changes --no-isolate` fails before spawn only when enforced
+  verification is otherwise available; best-effort execution remains advisory;
+- when requested isolation cannot be enforced, print
+  `TRISS_CODER_ISOLATION_DOWNGRADED` before the engine starts, set
+  `effective_isolation: "best_effort_caller_worktree"`, and state that edits
+  (including delayed descendants) may reach the caller's current Git worktree;
+  the caller may abort before spawn. JSON/MCP expose the field/code but never
+  silently substitute the target;
 - Crush's isolation-on default satisfies `--expect changes`; isolated runs
-  reject `--no-restrict` and still apply the OS sandbox;
+  reject `--no-restrict`; an OS sandbox is applied when the host provides it
+  and otherwise the run reports best-effort capabilities;
 - OpenCode requires explicit `--isolate` in v1;
 - help text states that `either` does not verify task completion.
 
 Every run has a slug. An explicit `--session` must match the Section 6.3
-grammar and selects persistent isolated continuation. Without it, the host
+grammar and requests persistent isolated continuation only when the Section 6.3
+persistent-capability predicate is true; otherwise it selects the fresh
+`ephemeral_downgraded` run defined there, never the existing session. Without it, the host
 generates `anon-<32 lowercase hex>` from 16 CSPRNG bytes, exclusively creates
 run-scoped ephemeral workspace/recovery names, and returns that exact value as
 top-level `session_slug`; it does not reserve persistent inventory or publish
-engine HOME. `--keep-session` explicitly promotes the generated slug into the
-persistent isolated admission/store path before spawn. A generated-slug
+engine HOME. `--keep-session` explicitly requests promotion of the generated
+slug into the persistent isolated admission/store path before spawn; when the
+predicate is false it instead runs `ephemeral_downgraded` with the same warning.
+A generated-slug
 collision never means reuse: discard it and retry with fresh randomness at most
 eight times, then fail preflight. A reusable slot lock artifact is not a slug
 collision. Tests inject collisions and prove no pre-existing worktree, branch,
@@ -1498,10 +1678,25 @@ reservation/state, mapping, HOME, or recovery record can be reused by an
 anonymous run; more than 100 successful default runs leave persistent inventory
 empty.
 
-Every isolated run requires the Section 6.5 sandbox. Non-isolated compatibility
-runs do not create or trust fingerprint state, but require the same sandbox and
-credential proxy and never receive raw provider credentials. Any coder run
-fails preflight when either boundary is unavailable.
+Every isolated run attempts the Section 6.5 sandbox. Non-isolated compatibility
+runs do not create or trust fingerprint state and never receive raw provider
+credentials. Every coder run requires the credential proxy and invariant 17
+credential isolation; either missing boundary fails preflight because raw
+credential disclosure is forbidden. Capability resolution is field-specific,
+not one global fallback mode. The explicit sandbox × supervision matrix selects
+`isolated_enforced` only when both are `enforced` **and**
+`managed_root=enforced`; every other pair/managed-root loss selects the warned
+`best_effort_caller_worktree`, because an unconstrained child could escape the
+isolated target or an unverified descendant could make its managed worktree
+unsafe to remove/reuse, and a path-based managed root cannot prove the target
+was not substituted. `process_supervision` still solely determines whether
+cleanup is `verified`; verified fingerprint change evidence requires all three
+fields enforced. Non-enforced `locking` removes only cross-process
+exclusion/quota attribution; non-enforced `writable_quota` removes only the hard
+write bound; and persistent state requires the all-seven predicate. Every
+non-enforced field is exposed through its stable warning code and CLI text before
+the engine starts. No other capability loss silently changes the selected target
+or turns a verified snapshot into advisory output.
 
 Release A requires a Git worktree for every coder run, including non-isolated
 compatibility mode, because repository fingerprinting, lease ownership, the Git
@@ -1534,10 +1729,15 @@ For an explicitly requested `changes` or `analysis` expectation, CLI exit codes
 are deterministic: `0` only for `requirement_status: satisfied`, `2` for usage
 or preflight rejection, `3` for a normally completed but unmet/unverifiable
 expectation, and `1` for process, engine, provider, or cleanup failure. The JSON
-envelope is still written for codes `1` and `3` when cleanup is `verified`, or
-when no child was created and cleanup is `not_applicable`; cleanup `failed`
-after child creation emits no envelope. MCP returns the same envelope in
-structured content and marks the tool result as an error for codes `1` and `3`.
+envelope is still written for codes `1` and `3` when cleanup is `verified`,
+`best_effort`, or when no child was created and cleanup is `not_applicable`.
+The `best_effort` envelope is Section 6.2 advisory-only. It exits `3` for an
+explicit expectation only when `process_status=completed`,
+`engine_status=completed`, and `provider_status=usable`; a process, engine, or
+provider failure still exits `1` even though change evidence remains
+`not_evaluated`. Cleanup `failed` after child creation emits no envelope. MCP
+returns the same envelope in structured content and marks the tool result as an
+error for codes `1` and `3`.
 Compatibility-default `either` retains existing exit behavior and never claims
 satisfaction.
 
@@ -1840,6 +2040,15 @@ fixture (the final LF is part of it):
 ```json
 {"schema_version":1,"entry_id":"run_00000000000000000000000000000000.11111111111111111111111111111111","run_id":"run_00000000000000000000000000000000","sandbox_id":"sbx_22222222222222222222222222222222","pid":123,"process_start_id":"123:456","boot_id":"boot-1","project_root_fingerprint":"sha256:0000000000000000000000000000000000000000000000000000000000000000","created_at":"2026-08-13T10:00:00.000Z"}
 ```
+
+PR acquisition is strict in v1: unlike coder best-effort execution, it requires
+an enforced managed-root primitive, kernel registry lock, complete-tree
+supervision, and the stated aggregate/per-run quotas. If any is unavailable,
+`triss review <PR>` fails before GitHub metadata, directory creation, or network
+with `TRISS_REVIEW_STRICT_CAPABILITY_REQUIRED`; it emits no review verdict or
+partial report. Local and stdin review remain available through their own bounded
+contracts. A future best-effort PR mode requires a separately approved public
+capability/result contract and is not implied by coder fallback.
 
 Acquire a kernel advisory lock on the mode-`0600`, regular/no-follow,
 same-UID file `.triss/review-fetch/.registry.lock`; create it exclusively when
@@ -2309,13 +2518,14 @@ Release-gate packages additionally run the commands stated below.
 
 Perform Reference surface 0 as a separate feasibility/architecture-spike PR
 based on pinned `v0.34.0`, not in the implementation branch. It owns only
-reviewed spike fixtures, backend selection/build metadata, toolchain manifests,
+reviewed spike fixtures, capability-matrix/build metadata, toolchain manifests,
 standalone packaging proof, and captured reproducible results. Record the exact
 approved plan commit/blob, immutable base/start SHAs, concrete v0.34.0 merge
 matrix, and baseline results. After that PR is reviewed and merged, update this
-plan with the selected backend/ABI/support matrix and obtain another
+plan with the measured capability/ABI/support matrix and obtain another
 architecture approval. Package 1 and every implementation release are hard
-blocked until then; a weak model may not treat spike success as implementation
+blocked until that capability matrix and its public best-effort semantics are
+approved; a weak model may not treat spike success as implementation
 authorization.
 
 #### Atomic 01 / Package 1 — pure result and lifecycle contract
@@ -2350,16 +2560,24 @@ provider/model/endpoint pinning, request/body/deadline caps, no body logging,
 revocation, and exact-secret non-disclosure. Non-goals: engine integration or a
 general forward proxy.
 
-#### Atomic 04 / Package 2B — filesystem and network sandbox
+#### Atomic 04 / Package 2B — filesystem and network capability adapter
 
 Prerequisite: Package 2A and Package 0 platform proof. Named reference: Section
 6.5. Add `src/coder-sandbox.js` and `test/coder-sandbox.test.js`; export
-`resolveCoderSandbox()` and `buildCoderSandboxMounts()`. RED/GREEN:
+`resolveCoderSandbox()`, `buildCoderSandboxMounts()`, and
+`resolveCoderCredentialIsolation()`. The last returns either an opaque
+credential-isolation launch plan or the stable preflight rejection; it has
+explicit inputs for the resolved credential-store paths, parent PID/control
+identity, engine command, and platform capability tuple, and never returns a
+plan that merely sanitizes environment variables. RED/GREEN:
 `node --test test/coder-sandbox.test.js`. Cover both engines, child/subprocess
 inheritance, worktree-only writes, state/lease/common-dir denial, symlink/path
 escape, SSH/cloud/HOME/parent-process read denial, non-isolated parity,
-loopback-proxy-only network, and fail-closed unsupported sandbox hosts.
-Non-goal: relying on OpenCode/Crush CLI permission flags as the boundary.
+loopback-proxy-only network, and exact `enforced|best_effort|unavailable`
+capability reporting on `darwin|linux|win32`, including malicious absolute
+credential-store/parent-process read canaries. Credential-isolation/proxy
+failure remains fail-closed; unavailable sandbox does not. Non-goal: relying on OpenCode/Crush
+CLI permission flags as an OS boundary.
 
 #### Atomic 05 / Package 2C — bounded Git mediator
 
@@ -2375,23 +2593,27 @@ Reject `log` and all `%B`/`%N`/`%ae`/`--all`/`--decorate`/format/revision/path
 attempts; canary messages, notes, author email, refs, and historical objects
 must not enter mediator/model output.
 
-#### Atomic 06 / Package 2F — managed-root dir-FD primitive
+#### Atomic 06 / Package 2F — managed-root capability primitive
 
-Prerequisites: Package 2C and Package 0's recorded native-backend proof. Named
+Prerequisites: Package 2C and Package 0's recorded capability matrix. Named
 reference: Section 5 managed-root invariant. Add `src/managed-root.js` and
 `test/managed-root.test.js`, plus only the exact dependency/native helper and
 build files authorized by the Package 0 handoff; export
 `openManagedTrissRoot()`, `openManagedChildDir()`, and dir-FD-relative
-`managedCreate()`, `managedRename()`, `managedUnlink()`, and `managedFsync()`.
+`managedCreate()`, `managedRename()`, `managedUnlink()`, and `managedFsync()`,
+plus its enforcement capability.
 RED/GREEN: `node --test test/managed-root.test.js`. Cover every v2 root including
 process-set journal, same-UID/mode/device/inode/containment checks, missing-root
 creation, intermediate/final symlink and mount substitution, concurrent swap,
-foreign ownership, destructive recheck, and outside canaries. Non-goals:
-implementing any caller schema, lock, session, or PR state machine.
+foreign ownership, destructive recheck, and outside canaries. Where the Package
+0 backend is absent, implement a documented path-based best-effort variant that
+never advertises dir-FD enforcement and skips destructive state transitions it
+cannot revalidate safely; it must not block a coder run. Non-goals: implementing
+any caller schema, lock, session, or PR state machine.
 
-#### Atomic 07 / Package 2G — fixed kernel advisory-lock primitive
+#### Atomic 07 / Package 2G — fixed lock capability primitive
 
-Prerequisites: Package 2F and Package 0 platform proof. Named reference:
+Prerequisites: Package 2F and Package 0 capability matrix. Named reference:
 Sections 5, 6.3, and 6.5 fixed-lock rules. Add `src/fixed-kernel-lock.js` and
 `test/fixed-kernel-lock.test.js`; reuse only the exact Package 0 backend and its
 already authorized package/native files; export
@@ -2410,8 +2632,10 @@ dir-FD parent, never follows, replaces, or unlinks the inode, and does not
 return until kernel acquisition or abort is resolved. Cover shared/exclusive
 compatibility, mutex use, abort/deadline, cross-process release, inode
 substitution, parent `SIGKILL`, waiter ordering, and fixed-inode reuse.
-RED/GREEN: `node --test test/fixed-kernel-lock.test.js`. Non-goals: coder lock
-paths, diagnostic sidecars, or any inventory/registry schema.
+RED/GREEN: `node --test test/fixed-kernel-lock.test.js`. On a host without
+kernel support, export a best-effort non-kernel scope with the same lifetime API
+and capability result; it must never claim cross-process locking. Non-goals:
+coder lock paths, diagnostic sidecars, or any inventory/registry schema.
 
 #### Atomic 08 / Package 2D — complete descendant supervisor primitive
 
@@ -2427,7 +2651,8 @@ RED/GREEN:
 `node --test test/coder-process-supervisor.test.js`. Cover normal exit,
 deadline/abort/signal causes, `setsid()`, double fork, re-parenting, proxy
 revocation ordering, kill/wait-until-empty, kernel kill-on-parent/control-handle
-close, lease-release ordering, parent `SIGKILL`, and unsupported-host preflight.
+close, lease-release ordering, parent `SIGKILL`, and unsupported-host
+best-effort capability reporting.
 Export one `OWNED_PROCESS_RECOVERY_GRACE_MS = 300000` constant. Age uses the
 host monotonic clock recorded by the OS ownership adapter; wall-clock RFC3339
 is diagnostic only. A future wall timestamp, unavailable monotonic epoch, or
@@ -2511,8 +2736,8 @@ Section 6.5 writable-quota contract. Add `src/coder-write-quota.js` and
 `subscribeCoderQuotaEvents()`. RED/GREEN:
 `node --test test/coder-write-quota.test.js`. Cover 512 MiB additional-block
 accounting, isolated/non-isolated targets, one-block overshoot, many-small-file
-pressure, `filesystem_quota` cause, cleanup, and fail-closed unsupported
-filesystems. Prove authenticated synchronous first-rejection notification,
+pressure, `filesystem_quota` cause, cleanup, and unavailable-filesystem
+capability reporting. Prove authenticated synchronous first-rejection notification,
 first-cause-before-ack ordering, duplicate-event immunity, and termination when
 the child catches the write error. Non-goals: post-write monitoring or engine
 integration.
@@ -2671,7 +2896,8 @@ reference: Section 6.3 per-session generation contract. Add
 `loadCoderSession()`, `stageCoderSessionHome()`, `publishCoderSessionHome()`,
 `cleanCoderSession()`, and `createCoderSessionStoreAdapter()`. RED/GREEN:
 `node --test test/coder-session-store.test.js`. Reuse Package 4B1 transitions;
-cover exact mapping schema, isolated/non-isolated ownership, generation marker/tree-hash vectors,
+cover exact isolated-only mapping schema, rejection/no-store-touch for a
+non-isolated persistence request, generation marker/tree-hash vectors,
 allowlisted files, path/file/total bounds, no-follow/special-file rejection,
 credential/token scan, every first/subsequent-publish fsync/rename crash state,
 idempotent store-level round-trip recovery, same/different-slug concurrency,
@@ -2682,7 +2908,9 @@ checks plus dir-FD-relative canonical rename and deleting-directory removal, is
 injected into its owner adapter, and integration tests crash after canonical
 rename, deleting delete, inventory-entry removal, and every journal
 release/ack/prune point after first/subsequent publication.
-Non-goals: admission/list CLI or real
+It also resolves and returns `persistent_store_quota`; an unavailable value
+prevents every load/stage/publish/clean call and is consumed by the shared
+persistent-state eligibility predicate. Non-goals: admission/list CLI or real
 engine continuation/envelope integration.
 
 #### Atomic 19 / Package 4D — rollback backup orchestrator
@@ -2737,12 +2965,24 @@ integration subset. Edit only the isolation/result neighborhoods in
 boundary. RED/GREEN:
 `node --test test/coder-result.test.js test/coder-envelope.test.js test/coder-isolate.test.js`.
 Implement bounded envelope fields and one OpenCode orchestration path across
-proxy, sandbox, toolchain mediator, Git mediator, process set, quota, locks, and
-state machine. A real fake-provider explicit-session two-run fixture proves
+proxy, sandbox capability adapter, toolchain mediator, Git mediator, process
+set, quota, locks, and state machine. A real fake-provider explicit-session
+two-run fixture proves
 workspace-bound generation resume; default unnamed fixtures prove auto-clean
-and zero persistent inventory. Include `session_slug` in every safe envelope
-after allocation. Non-goals: Crush, CLI option parsing, session list/clean CLI,
-or MCP integration. Package 11 only repeats this as acceptance.
+and zero persistent inventory. Include `session_slug` and
+`execution_capabilities` in every safe envelope after allocation. Fixtures cover
+enforced and unsupported-host best-effort advisory results, no post-run diff or
+persistent-session transition unless the shared all-seven-capability predicate
+is true,
+and removal of the production win32-only coder rejection after Package 0's
+credential-isolation proof. Unsupported-host fixtures require the before-spawn
+target-downgrade warning, `best_effort_caller_worktree`, and a caller abort path.
+They also cover managed-root loss with otherwise enforced sandbox/supervision:
+no project ephemeral recovery artifact or cap is published, while the separate
+process cleanup fact remains truthful.
+Non-goals: Crush, CLI option
+parsing, session list/clean CLI, or MCP integration. Package 11 only repeats
+this as acceptance.
 
 #### Atomic 22 / Package 6 — Crush parity
 
@@ -2751,12 +2991,13 @@ result/spawn integration in `src/commands/coder.js`, optionally the pure
 normalizer in `src/coder-engines/crush.js`, plus `test/coder-crush.test.js` and
 shared isolation assertions. RED/GREEN:
 `node --test test/coder-result.test.js test/coder-crush.test.js test/coder-isolate.test.js`.
-Wire and reuse every Package 2A-2G proxy/sandbox/Git-mediator/supervisor/quota/
+Wire and reuse every Package 2A-2G proxy/sandbox-capability/Git-mediator/supervisor/quota/
 managed-root
 component plus Packages 4A-4C lease/inventory/session-store components; no Crush path may
 bypass a shared boundary. Tests run raw-object/config canaries, synchronous
-quota-notification/tree-kill, proxy revocation, lease ownership, and persistent
-session restore through Crush. Add the corresponding real
+quota-notification/tree-kill, proxy revocation, lease ownership, persistent
+session restore through Crush, and enforced/best-effort capability parity. Add
+the corresponding real
 fake-provider two-run Crush continuation fixture with fresh task HOME.
 Non-goal: OpenCode-only refactor.
 
@@ -2775,6 +3016,9 @@ help together with the v2 session CLI contract: `--session <slug>` uses only the
 per-engine v2 store, `--keep-session` explicitly persists an otherwise
 generated session, omitted session defaults to ephemeral auto-clean, bare
 `--continue` is rejected with migration guidance, and
+an explicit `--session`/`--keep-session` that lacks persistent-state eligibility
+starts only a fresh `ephemeral_downgraded` session with the stable warning,
+never reads or mutates the existing persistent slug/store; and
 `triss coder session list` calls only `runCoderSessionList()`, whose subprocess
 contract serializes the bounded Package 4B1 inventory projection to stdout,
 writes typed diagnostics to stderr, exits `0` only for a complete canonical
@@ -2792,6 +3036,7 @@ session, and cover help/completion text, missing/corrupt mappings, mode
 mismatch, bounded/redacted list output, persistent cap errors, 100 ephemeral
 default runs without inventory growth, `--keep-session`, workspace mismatch,
 relocation/adopt/reset, packed-artifact backup/validation, and explicit cleanup.
+They also cover this persistence downgrade and its help/warning projection.
 Non-goal: MCP.
 
 #### Atomic 24 / Package 8 — MCP expectation adapter
@@ -2866,7 +3111,18 @@ admission acceptance creates sessions 1-4, proves the fifth fails before spawn
 with `TRISS_CODER_SESSION_CAP`, lists four bounded rows, cleans one exact
 engine/slug/workspace, and proves capacity is reclaimed. It uses a local fake
 provider and requires no credentials. Non-goal: review acquisition
-or sharding cases.
+or sharding cases. Atomic 28 owns a `windows-latest` job that installs the
+packed npm tarball in an owned temporary prefix and runs the fake-provider coder
+smoke, asserting no OS-sandbox-only rejection, correct capabilities/warnings,
+and Package 0's credential-isolation proof. It does not claim a Windows
+standalone artifact.
+
+After the Release A candidate is explicitly authorized for push, the host must
+record an exact-candidate-SHA successful `windows-latest` run of that job before
+any Windows npm support or public release claim. The local checkpoint gate does
+not substitute for hosted Windows evidence; a failed, absent, or mismatched-SHA
+job leaves the Windows support wording unpublished and blocks Release A
+publication until corrected.
 
 Release A cannot advance until this passes:
 
@@ -2897,7 +3153,9 @@ pushed or published by this plan.
 Perform Reference surface 14 only after Package 11 passes. Document local
 metadata schema v1 and rollback behavior as well as the envelope. Record exact
 candidate SHA through the host-only checkpoint procedure and rerun the Release
-A synthetic command on that SHA.
+A synthetic command on that SHA. Atomic 29 owns README/configuration/help and
+CHANGELOG wording for capability-dependent Windows npm support, mandatory raw-
+credential isolation, and the still POSIX-only standalone artifact.
 
 #### Atomic 30 / Package 13 — review limit configuration
 
@@ -2977,15 +3235,16 @@ Add `src/review-pr-registry.js` and `test/review-pr-registry.test.js`; export
 and `cleanPrRunDirectory()`. RED/GREEN:
 `node --test test/review-pr-registry.test.js`. Implement exact lock, marker,
 registry, basename, discriminated-state, temp, byte-vector, scan-bound, and
-ownership rules plus every fsync/rename/delete crash point and idempotent
-recovery. Export
+ownership rules plus every fsync/rename/delete crash point, strict-capability
+preflight before metadata/network, and idempotent recovery. Export
 `createPrProcessOwnerAdapter({heldOwnerLockContext = null})` with the exact
 Package 2D2 interface; a borrowed context is the active `.registry.lock` scope
 and a null context acquires it for fresh recovery. Import Package 2G's
 `withFixedKernelLock()` for `.registry.lock`;
 never create, replace, unlink, or independently open a lock inode. Package 17A
 also owns the registry-locked three-entry admission,
-`TRISS_REVIEW_FETCH_CAP`, 512 MiB whole-root quota/headroom check and release/
+`TRISS_REVIEW_FETCH_CAP`, `TRISS_REVIEW_STRICT_CAPABILITY_REQUIRED`, 512 MiB
+whole-root quota/headroom check and release/
 crash reclamation. It uses Packages 2D/2D1/2D2 to allocate the durable `reserving`
 process set before marker/registry publication, promote it before child spawn,
 and attach/recover/begin-release/acknowledge the exact set during every normal
@@ -3222,8 +3481,16 @@ Actions:
    `src/response-format.js`, `src/review-prompt.js`, CLI/MCP handlers and
    `test/response-format.test.js` own `text|evidence`; `.github/workflows/test.yml`,
    `.github/workflows/publish.yml`, `scripts/build-standalone.js`, and
-   `test/release-gates.test.js` own one canonical standalone artifact built on
-   Ubuntu and smoke-tested from identical downloaded bytes on Ubuntu/macOS.
+   `test/release-gates.test.js` own one canonical POSIX standalone artifact
+   built on Ubuntu and smoke-tested from identical downloaded bytes on
+   Ubuntu/macOS. The npm package is the intended portable distribution for
+   `darwin|linux|win32`. Package 0 only records whether Windows has a viable
+   enforced credential-isolation backend; without it, Windows support is an
+   architecture blocker and may not be advertised. Atomic 21/23 own removal of
+   any production win32-only rejection, while Atomic 28/29 own the
+   `windows-latest` npm-installed fake-provider smoke and public support claim.
+   A Windows standalone artifact is not promised until that smoke and packaging
+   format are explicitly added.
 4. Before creating the implementation worktree, the host supplies two reviewed
    immutable values: `APPROVED_PLAN_COMMIT` and `APPROVED_PLAN_BLOB`. The former
    is the final follow-up-approved revision of this document, never an
@@ -3266,12 +3533,16 @@ Actions:
    first-cause-before-ack ordering when a child handles `EDQUOT`. Also
    prove the kernel advisory-lock adapter and quota-backed 128 MiB disposable
    acquisition directory on this platform. Record exact engine/platform/
-   filesystem versions and maximum quota overshoot. Stop the design if an
-   engine/platform/filesystem cannot satisfy these boundaries; do not fall back
-   to credential-bearing, unrestricted, unlocked, monitor-only, PGID-only, or
-   post-write quota-check runs.
+   filesystem versions and maximum quota overshoot. Record every boundary as
+   `enforced`, `best_effort`, or `unavailable` for each engine/platform/
+   filesystem tuple. Prove `credential_isolation` independently with absolute
+   configured-secret and parent-process access canaries; it must be enforced
+   for every tuple that may spawn coder. A missing other OS boundary selects best-effort coder with a
+   visible capability warning; it does not stop coder. Never fall back to raw
+   credential inheritance or claim an unavailable sandbox, lock, tree-cleanup,
+   or quota guarantee.
    Node's path-based `fs` API is not evidence for the managed-root or lock
-   boundary. Select and record one exact macOS/Linux backend that exposes
+   boundary. Select and record one exact platform backend where available that exposes
    dir-FD-relative `openat`/`mkdirat`/`renameat`/`unlinkat`/`fsync` plus
    shared/exclusive advisory locking to Node 22, including its module/helper
    name, version, source/checksum, build command, exported ABI, and supported
@@ -3279,8 +3550,9 @@ Actions:
    against that backend. The implementation handoff names whether it is a
    pinned native dependency or repository-built helper and the exact permitted
    `package.json`/lockfile/native-source/build files. If no reviewed backend
-   satisfies the tests, stop before Package 2F; a weak model may not invent one
-   or substitute path-based `fs` calls.
+   satisfies the strict tests on a host, implement only the documented
+   best-effort path for that host; a weak model may not invent an enforced
+   backend or represent path-based `fs` calls as dir-FD protection.
    Package 0 is an architecture spike because this repository is currently a
    pure Node package. Its PR records backend name/version/checksum, source and
    license, native ABI, Node 22 loading contract, build toolchain, privileges,
@@ -3290,7 +3562,14 @@ Actions:
    execute the identical artifact bytes on Ubuntu and macOS. A repository-built
    helper must contain all per-target binaries or a reviewed runtime selection
    scheme inside the signed artifact; a host-built/downloaded-at-runtime helper
-   is forbidden. Failure on either smoke target stops the design. Merge the
+   is forbidden. Failure on either smoke target marks strict-native capability
+   unavailable on that target but does not prevent portable best-effort coder.
+   The spike also resolves `win32`: record the capability tuple and prove a
+   viable enforced credential-isolation backend, including the absolute-secret
+   and parent-process canaries. Failure is an architecture blocker for an
+   advertised Windows coder, not a successful best-effort result. It does not
+   remove production platform rejection or add CI jobs.
+   Merge the
    spike PR, pin its resulting commit, revise this document with those measured
    decisions, and obtain follow-up architecture approval before Package 1.
    Also produce the exact Section 6.5 toolchain manifest for each supported
@@ -3301,7 +3580,9 @@ Actions:
    `.triss/review-fetch` quota and registry admission with two/three active
    fetches, fourth-attempt pre-mkdir rejection, shared metadata headroom,
    parent-crash reclamation, and one-block maximum overshoot. Failure to enforce
-   either aggregate domain is a Package 0 stop gate.
+   the coder session-store domain records an unavailable coder quota capability;
+   failure to enforce the review-fetch domain is a strict PR-acquisition stop
+   gate. The latter must not silently select coder's best-effort mode.
 8. Run the current focused baseline tests before editing.
 
 Commands:
@@ -3496,8 +3777,9 @@ Implementation notes:
   `run_<32 lowercase hex>` without a dependency;
 - set `started_at` after validation but before isolation setup or any other run
   mutation, and set `finished_at` only after process and worktree cleanup;
-- successful emitted envelopes use `cleanup_status: verified` because spawn
-  lifecycle already fails closed;
+- verified change evidence and persistent-state envelopes use
+  `cleanup_status: verified`; unsupported-host advisory envelopes use
+  `best_effort`, null change lists, and no success claim;
 - preserve partial changes on timeout/error;
 - use Package 1 pure helpers for derived fields.
 
@@ -4021,8 +4303,15 @@ bounded diagnostics, and stable public provider error
 codes. State that process completion is not task satisfaction, show
 `--expect changes --isolate`, require local `git status`/`git diff` inspection,
 distinguish environment blockers, document local metadata schema v1 and its
-lease/cleanup/rollback behavior, explain credential-proxy and OS-sandbox
-requirements, retain lifecycle fail-closed language, and avoid volatile
+  lease/cleanup/rollback behavior, explain credential-proxy requirements and the
+  seven `execution_capabilities` values and `effective_isolation`, distinguish enforced from best-effort
+  execution, state that unavailable OS sandbox/cleanup/lock/quota does not block
+  coder but cannot provide those guarantees, and state that unavailable
+  credential isolation always blocks before spawn to protect the real provider
+  key. Document that a best-effort envelope is advisory-only (`null` change
+  lists, no explicit-expectation success, no persistent session), including the
+  pre-spawn `TRISS_CODER_ISOLATION_DOWNGRADED` warning and possible direct
+  caller-worktree edits, and avoid volatile
 context-window claims. Document the v2 per-engine/per-slug session namespace,
 the required slug grammar, rejection of bare `--continue`, absence of automatic
 legacy-map migration, different isolation-mode ownership, and explicit
@@ -4035,7 +4324,10 @@ bounded crash TTL recovery, stable project identity, rename versus
 cross-filesystem adopt/quarantine/reset, and missing-versus-malformed mapping.
 Document the four-session/512 MiB cap as persistent-session-only,
 `TRISS_CODER_SESSION_CAP`, bounded `session list`, and list/continue/clean slot
-reclamation. Document installed `triss coder state backup|validate|adopt|reset`
+  reclamation. Document Windows npm-package support as capability-dependent
+  best-effort execution, its visible warnings, and its stricter credential
+  preflight; describe the standalone artifact as POSIX-only until separately
+  shipped and tested. Document installed `triss coder state backup|validate|adopt|reset`
 and packed-artifact availability. State
 that legacy and v2 stores coexist without discovery across the boundary and
 that rollback retains v2 session data for later re-upgrade. Empty/whitespace
@@ -4244,11 +4536,13 @@ implement it locally; do not restart indefinitely.
 | activity has no raw payload | `test/coder-envelope.test.js` |
 | engine output/warnings remain bounded | malformed-event and stderr flood fixtures |
 | OpenCode/Crush parity | `test/coder-crush.test.js`, `test/coder-isolate.test.js` |
-| cleanup before envelope | existing real-process lifecycle regressions |
+| verified cleanup before any verified envelope/change snapshot | existing real-process lifecycle regressions |
+| best-effort lifecycle is advisory and stateless | unsupported-host fixture: null change lists, exit 3 for explicit expectation, no persistent publication or destructive cleanup |
 | metadata is bounded, owned, versioned, and safely cleaned | `test/worktree-fingerprint.test.js`, `test/coder-state.test.js`, `test/coder-clean.test.js` |
 | credential absent from engine tools/output | `test/coder-credential-proxy.test.js`, adversarial engine fixtures |
-| sandboxed process tree cannot forge state or escape cleanup | `test/coder-sandbox.test.js`, `test/coder-process-supervisor.test.js`, tamper/setsid/double-fork fixtures |
-| writable quota selects an observable stable cause | `test/coder-write-quota.test.js`, synchronous-notification fixture |
+| enforced sandbox process tree cannot forge state or escape cleanup | `test/coder-sandbox.test.js`, `test/coder-process-supervisor.test.js`, tamper/setsid/double-fork fixtures; unsupported-host best-effort envelope fixture |
+| credential isolation remains hard on every platform | absolute configured-secret and parent-process read canaries; missing boundary preflight fixture on darwin/linux/win32 |
+| writable quota selects an observable stable cause when enforced | `test/coder-write-quota.test.js`, synchronous-notification fixture; unavailable-quota capability fixture |
 | Git mediator cannot expose other refs/history | `test/coder-git-mediator.test.js`, object/config canary fixtures |
 | same-session run/clean is exclusive | `test/coder-lease.test.js`, `test/coder-clean.test.js` |
 | every legal envelope component fits aggregate cap | near-limit `test/coder-envelope.test.js` fixture |
@@ -4278,6 +4572,7 @@ implement it locally; do not restart indefinitely.
 | persistent conversation matches Git workspace | base/ref/coder-state/snapshot mismatch fixtures for both engines |
 | project rename/adopt cannot strand state | same-device rename and cross-device quarantine crash fixtures |
 | sandbox toolchain is exact and usable | real OpenCode/Crush node-test/lint plus denied-HOME/common-dir canaries |
+| Windows coder remains usable when strict OS boundaries are absent | `windows-latest` npm-installed fake-provider coder smoke, capability/warning fixture, and no win32-only preflight rejection |
 | rollback commands ship in public artifacts | npm-pack installed-prefix backup/validate and canonical standalone smokes |
 | each atomic handoff is immutable | local checkpoint SHA/scope/test-evidence verifier |
 
@@ -4308,12 +4603,15 @@ changelog and tool description. Consumers that require an array must branch on
 is the only changes-expectation evidence; `files_changed` remains the complete
 isolated deliverable list.
 
-Release A also intentionally rejects every coder run, including compatibility
-non-isolated OpenCode, when the credential proxy or OS sandbox is unavailable,
-rejects isolated Crush `--no-restrict`, and rejects every non-Git project root
-with `TRISS_CODER_GIT_REQUIRED`. Announce these security compatibility changes
-from legacy non-isolated behavior; never downgrade to path-only ownership, raw
-credential inheritance, or unrestricted execution.
+Release A intentionally rejects every coder run, including compatibility
+non-isolated OpenCode, when the credential proxy is unavailable, rejects
+isolated Crush `--no-restrict`, and rejects every non-Git project root with
+`TRISS_CODER_GIT_REQUIRED`. OS sandbox, complete-tree supervision, kernel lock,
+and writable quota are capability-selected: an unavailable mechanism runs in
+best-effort mode with visible CLI/MCP/envelope warnings rather than blocking the
+user. Announce that `best_effort` is not OS isolation, no verified descendant
+cleanup, no cross-process lock guarantee, and no hard disk quota; never expose
+raw credentials or represent a missing capability as enforced.
 
 Release A also replaces ambiguous continuation with the v2 slug-owned session
 contract. Callers must use `--session <slug>`; bare `--continue`, direct real
@@ -4442,14 +4740,17 @@ Stop implementation and return to design review if any of these occur:
 - either engine cannot use a parent-owned credential proxy without receiving
   the real key, or the bounded proxy token can reach anything except its one
   local run;
-- the host platform cannot enforce the Section 6.5 process-tree sandbox for any
-  coder run;
-- the writable-quota adapter cannot synchronously notify the parent on first
-  rejected allocation before acknowledging the child write;
+- a host claims an `enforced` Section 6.5 process-tree sandbox but cannot prove
+  that guarantee for its advertised engine/platform tuple;
+- a host claims an `enforced` writable quota but cannot synchronously notify
+  the parent on first rejected allocation before acknowledging the child write;
 - `origin/main` moves from the pinned Package 0 SHA, or the v0.34.0 exec,
   evidence-format, or standalone contract changes before a release gate;
 - exact PR base/head objects, stable metadata, or a unique merge base cannot be
   acquired inside the bounded disposable repository;
+- PR acquisition lacks any required strict managed-root, kernel-lock,
+  complete-tree-supervision, or aggregate/per-run quota capability; it must
+  fail closed rather than inherit coder's best-effort behavior;
 - bounded fingerprint snapshots cannot represent the managed isolated worktree
   without reading outside it or storing file contents;
 - a proposed diagnostic requires storing raw commands, raw model payloads, or
@@ -4486,8 +4787,11 @@ Decisions fixed by this plan:
     size, cleanup, and rollback rules in Section 6.3.
 12. Provider credentials stay in the parent proxy; engine tools may observe
     only the bounded ephemeral proxy token, never the real credential. Every
-    run requires the OS sandbox; every named session and all isolated lifecycle
-    state require the exclusive inventory-assigned slot lease.
+    run requires that proxy. OS sandbox, complete-tree supervision, lock, and
+    quota are reported as enforced or best-effort capabilities; only an
+    enforced lock may support an exclusive-session claim.
+    `credential_isolation` is mandatory and enforced on every platform; if that
+    boundary cannot be proved, coder does not run even in best-effort mode.
 13. PR acquisition rejects `--base`, never fetches into the source common Git
     directory, and uses only the bounded controlled disposable bare repository.
 14. The exhaustive transport matrix in Section 9.6 owns CLI/MCP success and
