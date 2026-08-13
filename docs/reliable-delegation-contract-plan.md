@@ -417,10 +417,12 @@ keys, each one of `enforced|best_effort|unavailable`:
   parent process memory/environment/IPC.
 - `managed_root`: no-follow, component-wise validated durable-state operations;
 - `persistent_store_quota`: OS-enforced aggregate bound for durable session
-  stores and their transactional metadata.
+  stores, engine-scoped persistent worktrees/coder-state records, their linked
+  Git-worktree administration/ref metadata, and every transaction temp.
 - `result_store_quota`: OS-enforced aggregate allocation-block bound for
-  `.triss/coder-results-v1/` retained worktrees, result metadata, and their
-  transaction temps.
+  every retained-result artifact: `.triss/coder-results-v1` metadata,
+  result-owned worktrees/coder-state records, linked Git-worktree
+  administration/ref metadata, and their transaction temps.
 
 `enforced` means the named OS guarantee was active for this run. `best_effort`
 means Triss used a weaker host/engine mechanism but cannot make that guarantee.
@@ -870,18 +872,23 @@ same slug concurrently, and prove distinct root-fingerprinted branch refs,
 independent four-slot/512 MiB caps, no cross-root reuse/clean, and no shared-ref
 collision.
 
-When `persistent_store_quota=enforced`, `.triss/engine-sessions-v2` is itself an
-OS-enforced 512 MiB allocation-block quota domain covering every directory,
-regular file, temp, marker, copy-on-write block, and filesystem metadata block,
-with at most one allocation-block overshoot. Package 0 proves the same
-synchronous parent notification semantics as Section 6.5; quota exhaustion
-fails the session publication/cleanup transaction closed without corrupting the
-last validated generation. Logical 508+4 MiB budgeting is admission planning,
-not the hard physical boundary. Tests fill path/empty-directory/10,000-entry
-metadata pressure and concurrent maximum generation updates and assert the
-physical quota/overshoot and recoverable prior generation. Without this
-capability no v2 persistent store is opened or created; requests downgrade to
-the stateless ephemeral behavior rather than treating logical budgeting as a
+When `persistent_store_quota=enforced`, each persistent session has one
+platform-owned multi-root quota ID over its `.triss/engine-sessions-v2` store,
+engine-scoped `.triss/wt-v2` worktree and coder-state record, linked-worktree
+administration under the Git common dir, branch-ref metadata, and every
+directory/regular file/temp/marker/copy-on-write/filesystem-metadata block they
+allocate. The aggregate project domain is 512 MiB with at most one allocation
+block overshoot; a path-local quota over only `engine-sessions-v2` is not an
+`enforced` capability. Package 0 proves the same synchronous parent
+notification semantics as Section 6.5 across every member root; quota
+exhaustion fails session publication/continuation/cleanup closed without
+corrupting the last validated generation. Logical 508+4 MiB budgeting is
+admission planning, not the hard physical boundary. Tests fill persistent
+worktree, coder-state, Git administration, path/empty-directory/10,000-entry
+metadata pressure, and repeated continuation growth, then assert the physical
+quota/overshoot and recoverable prior generation. Without this capability no v2
+persistent session store or workspace is opened or created; requests downgrade
+to stateless ephemeral behavior rather than treating logical budgeting as a
 physical limit.
 
 Inventory writes use only `.inventory.tmp.<run-id>.<32-hex-nonce>`, created
@@ -1136,20 +1143,42 @@ worktree path. This is deliberately separate from conversation persistence.
 
 Result artifacts use a durable registry under `.triss/coder-results-v1/`, not a
 post-hoc file-existence check. `result_store_quota` is a separate execution
-capability: when enforced, the entire result root (worktrees, coder state,
-metadata, tombstones, temps, directories, and allocation blocks) is an
-OS-enforced 4 GiB quota domain with at most one allocation-block overshoot. If
-it is unavailable or best-effort, every unnamed isolated run fails before
+capability: when enforced, one platform-owned multi-root quota ID covers
+`.triss/coder-results-v1` metadata/tombstones/temps, result-owned worktrees and
+coder-state leaves, plus their linked Git-worktree administration and branch-ref
+metadata in the common Git directory. A path-local quota over only the result
+registry directory is not sufficient. Its aggregate physical domain is 4 GiB
+with at most one allocation-block overshoot; only 3 GiB are allocatable to run
+reservations and the remaining 1 GiB is permanently unavailable to payloads as
+transaction, index, deleting, quarantine-move, and filesystem-metadata
+headroom. If it is unavailable or best-effort, every unnamed isolated run fails before
 credentials/spawn with `TRISS_CODER_RESULT_QUOTA_REQUIRED`; it must not run and
 later discard a verified implementation. If it is enforced but less than 1 GiB
-plus one block remains, admission fails before spawn with
+of the 3 GiB payload budget remains, admission fails before spawn with
 `TRISS_CODER_RESULT_CAP`. Only enforced capability plus a durable 1 GiB
 reservation permits spawn; read-only completion releases that reservation.
-Package 0 proves all three paths, concurrent four-1GiB admission, metadata
-pressure, and first-rejection notification. This capability does not alter
+Package 0 proves all three paths, concurrent three-1GiB admission, permanently
+available cleanup headroom under full payload use, multi-root charging,
+metadata pressure, and first-rejection notification. This capability does not alter
 snapshot evidence itself: verified post-run fingerprints require exactly
 enforced sandbox, process supervision, and managed root; result publication
 additionally requires the result-store predicate.
+
+On publication, the host moves the completed ephemeral linked worktree with the
+sanitized host-owned `git worktree move` transaction into
+`.triss/coder-results-v1/runs/<run-id>/worktree`, moves its coder-state record
+to `.triss/coder-results-v1/runs/<run-id>/coder-state`, and renames the checked
+out branch with a host-owned `git branch -m` transaction to
+`refs/heads/coder-result-v1/<project-root-fingerprint-64-hex>/<engine>/<run-id>`;
+the ref component is the 64-hex digest after `sha256:`, never a prefixed
+fingerprint string.
+The host then verifies both `git worktree list --porcelain` and the exact common
+dir worktree-admin entry point to the new path before publishing `retained`.
+The result registry's `worktree_basename`, `coder_state_basename`, and
+`branch_ref` are derived values for these canonical paths, never arbitrary user
+paths. The multi-root quota ID charges the result root and these Git-managed
+members together, so a retained result cannot evade accounting through the
+legacy `.triss/wt-v2`/`.triss/coder-state-v2` namespace.
 
 Its regular/no-follow mode-`0600` `.registry.lock` is a fixed kernel lock inode;
 while holding shared coder maintenance then this exclusive registry lock,
@@ -1198,8 +1227,8 @@ Before each unnamed isolated spawn, Atomic 20C first holds that lock to reconcil
 crash state and verify count/quota admission, then invokes Package 2D2's
 high-level durable allocator with `owner_kind=result_registry` and
 `owner_reference=<run-id>`. Inside that allocator's result-owner adapter lock,
-`publishReference` reserves exactly `1073741824` bytes in an OS-enforced 4 GiB
-aggregate result-worktree allocation-block quota and publishes one matching
+`publishReference` reserves exactly `1073741824` bytes from the OS-enforced
+3 GiB allocatable payload budget of the 4 GiB multi-root result quota and publishes one matching
 `reserved` row before credentials/spawn; allocator rollback cancels that exact
 row/reservation on every pre-spawn failure. The per-run sandbox is also bounded
 to that 1 GiB reservation. A verified
@@ -1210,7 +1239,8 @@ record read-only, verifies the post snapshot, atomically creates
 `.triss/coder-results-v1/<run-id>.json`, then changes `reserved -> retained`,
 sets `retained_bytes` to the actual frozen allocation, and releases the unused
 reservation before envelope construction. Thus up to 16 small retained results
-may coexist without ever exceeding 4 GiB, while concurrent runs cannot
+may coexist without exceeding the 3 GiB payload budget plus protected 1 GiB
+transaction headroom, while concurrent runs cannot
 over-admit. The retained index is
 mode-`0600`, no-follow canonical JSON-plus-LF with exact ordered keys
 `{schema_version,run_id,engine,session_slug,project_root_fingerprint,worktree_basename,branch_ref,coder_state_basename,base_snapshot_id,post_snapshot_id,retained_bytes,created_at}`.
@@ -1220,7 +1250,7 @@ workspace measurement. `coder result list` verifies each read-only artifact and
 reports `integrity: intact|tampered|missing`; a user who bypasses permissions or
 moves its branch/worktree creates `tampered|missing`, which recovery and
 rollback retain/block rather than silently rewriting size/snapshot. The physical
-4 GiB result quota remains enforced even against same-UID tampering.
+4 GiB multi-root result quota remains enforced even against same-UID tampering.
 
 Recovery always holds the same locks and first attaches/terminates/waits for a
 non-empty `reserved` or `deleting` owner sandbox. It removes only
@@ -1232,22 +1262,72 @@ or `missing`; neither recovery nor rollback silently modifies it.
 `triss coder result clean <run-id>` (and matching MCP action) is the sole
 explicit removal. Under managed-root, registry lock, engine-scoped ownership,
 and quiescence checks it first publishes `retained -> deleting` with
-`delete_phase=prepare` and deterministic unique tombstone names. It moves the
-worktree, branch, coder-state leaf, and index one at a time, publishing after
-each rename `worktree_tombstoned`, `branch_tombstoned`, `state_tombstoned`, and
-`index_tombstoned`; it then deletes those tombstones in the same order and
-publishes `worktree_removed`, `branch_removed`, `state_removed`, and
-`index_removed` before removing the row and releasing capacity. For every phase,
-recovery accepts exactly one of the original or deterministic tombstone for the
-current artifact, completes that phase, and reserves the engine/slug/run
-namespace until row removal. Both/neither, foreign leaves, or another
-generation block. Thus a crash after worktree removal, before branch/state/index
-deletion, continues safely instead of being misclassified as mismatch. Tests
-inject every reservation/index/registry/deleting rename/deletion/row-removal
-crash, concurrent admission, read-only auto-clean, tamper/missing detection,
-and native-session-data absence. `coder result list` exposes only retained run
-ID, engine, slug, publish timestamp, retained bytes, immutable provenance
-snapshot, integrity state, and existing worktree path.
+`delete_phase=prepare` and these exact tombstone formulas for generation `g`:
+worktree/state/index parent `.triss/coder-results-v1/.deleting-<run-id>-<g>/`
+with children `worktree`, `coder-state`, and `index.json`; branch ref
+`refs/heads/coder-result-v1/deleting/<project-root-fingerprint-64-hex>/<engine>/<run-id>-<g>`.
+`g` is the entry's 16-lowercase-hex `transaction_generation`, and every stored
+deleting field must byte-equal its formula. The closed `delete_phase` enum is
+`prepare|worktree_tombstoned|branch_tombstoned|state_tombstoned|index_tombstoned|
+worktree_removed|branch_removed|state_removed|index_removed`.
+The byte-exact phase fixture fixes
+`run_id=run_00000000000000000000000000000000`, `g=0000000000000001`,
+`engine=opencode`, and project fingerprint
+`sha256:0000000000000000000000000000000000000000000000000000000000000000`;
+its deleting fields are exactly
+`{"delete_phase":"prepare","deleting_worktree_basename":".deleting-run_00000000000000000000000000000000-0000000000000001/worktree","deleting_coder_state_basename":".deleting-run_00000000000000000000000000000000-0000000000000001/coder-state","deleting_index_basename":".deleting-run_00000000000000000000000000000000-0000000000000001/index.json","deleting_branch_ref":"refs/heads/coder-result-v1/deleting/0000000000000000000000000000000000000000000000000000000000000000/opencode/run_00000000000000000000000000000000-0000000000000001"}`;
+the full ordered entry fixture replaces only `delete_phase` for every enum
+value and ends in one LF.
+
+For `prepare`, all four canonical artifacts exist. `worktree_tombstoned` means
+only the worktree is at its tombstone; it is created with host-owned
+`git worktree move`, then `git worktree list --porcelain` and the common-dir
+worktree-admin record must point to that tombstone before the phase is written.
+`branch_tombstoned` means only the checked-out branch was renamed by host-owned
+`git branch -m` to the exact deleting ref and the linked worktree HEAD matches
+it. `state_tombstoned` and `index_tombstoned` move only their indicated
+canonical leaf with managed dir-FD rename. The removal phases require every
+earlier artifact at its tombstone and every later artifact at its canonical
+name: `worktree_removed` is created only by `git worktree remove` and requires
+the common-dir administration entry to be absent; `branch_removed` only by
+sanitized `git update-ref` transaction; state/index removal use managed unlink.
+Each phase permits exactly one location for every artifact as just specified.
+Recovery re-runs only the next idempotent host transaction; both/neither,
+foreign leaves, a mismatched Git admin record/ref, or another generation block.
+The registry row reserves the exact result branch/run and the original
+`engine/slug` until row removal. Every new persistent or anonymous admission
+calls one shared `assertCoderNamespaceAvailable()` under maintenance plus the
+result registry lock; it rejects canonical or deleting result ownership before
+testing ordinary worktree/branch/state paths. Thus canonical names cannot be
+reused after a tombstone move. Tests inject every Git worktree move/remove,
+branch rename/ref delete, state/index rename/delete, registry publication, and
+row-removal crash, including a restart with common-dir admin residue.
+
+`coder result list` exposes only retained run ID, engine, slug, publish
+timestamp, retained bytes, immutable provenance snapshot, integrity state, and
+existing worktree path.
+
+An integrity failure is recoverable only by an explicit administrative
+acknowledgement, never ordinary `clean`: `triss coder result quarantine
+--project-id <32-lowercase-hex> --run-id <run-id> --generation <16-lowercase-hex>`
+(with the identical MCP action) requires exact equality to the stable project
+ID, current row run ID, and current transaction generation. Under exclusive
+maintenance, result-registry lock, all relevant Git/worktree locks, and
+quiescence, it records a mode-`0600` canonical quarantine manifest under
+`.triss/quarantine-v1/results/<run-id>-<generation>.json` with integrity reason,
+actual measured multi-root quota blocks, and every remaining owned artifact.
+It moves every still-matching artifact by the deletion-safe host transaction to
+the quarantine namespace, never guesses a missing worktree/ref/state, and marks
+the user-acknowledged loss. It then rereads the platform quota usage, releases
+only the exact result reservation/registry row after no result-root member is
+charged to it, and leaves quarantine storage outside the result quota under a
+separate bounded operator-managed quarantine cap. A malformed/foreign/mismatched
+artifact or quota disagreement retains and blocks. Rollback preflight accepts a
+completed, user-acknowledged quarantine manifest as a known loss (and reports it
+in validation output), but never calls it an intact backed-up deliverable.
+Tests cover tampered branch, user-deleted worktree, missing state, wrong
+project/run/generation refusal, crash after manifest/move/row release, quota
+reconciliation, bounded quarantine capacity, and subsequent anonymous admission.
 After failure or parent crash on a host with enforced supervision retain only
 `.triss/ephemeral-recovery-v1/<engine>/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
 capped canonical JSON-plus-LF record with exact ordered keys
@@ -1694,7 +1774,12 @@ inspection or transition. A session adapter is constructed with a
 discriminated context: exactly one opaque active prefix
 `heldOwnerLockContext`, one `sessionAbsenceContext`, or null; a PR adapter uses
 its registry context or null; a retained-result adapter uses its result-registry
-context or null. With a valid prefix context, `withOwnerLock` borrows that prefix,
+context or null. The result context is produced only by Atomic 20B's awaited
+`withCoderResultRegistryLock(callback)` while shared maintenance and that exact
+fixed registry lock are held; the normal run passes it to
+`createCoderResultProcessOwnerAdapter({context})` and allocation inside the
+callback. With null, fresh-host recovery acquires the same two locks itself.
+With a valid prefix context, `withOwnerLock` borrows that prefix,
 must not reacquire or release it, and acquires only the remaining final owner
 mutex when required. A session context contains maintenance, conditional
 target, and assigned slot, so the adapter briefly adds inventory; a PR context
@@ -1713,7 +1798,7 @@ module. Allocation itself uses the same lock/revalidation sequence, requires
 control handle; no public promotion API or higher layer writes journal state
 directly. `mismatch`, a
 thrown callback, or a changed journal row retains and fails closed. Package 4B
-supplies the session adapter, Package 5 supplies the retained-result adapter,
+supplies the session adapter, Atomic 20B supplies the retained-result adapter,
 and Package 17A supplies the PR adapter; crash tests cover promotion and every
 `release_pending + released` variant from a new host.
 Normal promotion/finalization tests use borrowed contexts while fresh-host
@@ -2948,15 +3033,16 @@ Section 6.5 writable-quota contract. Add `src/coder-write-quota.js` and
 `subscribeQuotaEvents()`, and the coder-facing wrappers
 `prepareCoderWriteQuota()` / `subscribeCoderQuotaEvents()`, plus
 `prepareCoderResultStoreQuota()` which returns the distinct
-`result_store_quota` capability and a root-wide reservation handle. RED/GREEN:
+`result_store_quota` capability and a multi-root reservation handle. RED/GREEN:
 `node --test test/coder-write-quota.test.js`. Cover 512 MiB additional-block
 accounting, isolated/non-isolated targets, a bounded local-review projection,
 one-block overshoot, many-small-file
 pressure, `filesystem_quota` cause, cleanup, and unavailable-filesystem
 capability reporting. Prove authenticated synchronous first-rejection notification,
 first-cause-before-ack ordering, duplicate-event immunity, and termination when
-the child catches the write error. Also cover the 4 GiB result-root quota,
-four concurrent 1 GiB reservations, capacity release, metadata/tombstone
+the child catches the write error. Also cover the 4 GiB multi-root result quota,
+three concurrent 1 GiB reservations plus protected 1 GiB cleanup headroom,
+capacity release, metadata/tombstone
 pressure, and unavailable-vs-full capability/error distinction. Non-goals:
 post-write monitoring or engine integration.
 
@@ -3126,10 +3212,12 @@ checks plus dir-FD-relative canonical rename and deleting-directory removal, is
 injected into its owner adapter, and integration tests crash after canonical
 rename, deleting delete, inventory-entry removal, and every journal
 release/ack/prune point after first/subsequent publication.
-It also resolves and returns `persistent_store_quota`; an unavailable value
-prevents every load/stage/publish/clean call and is consumed by the shared
-persistent-state eligibility predicate. Non-goals: admission/list CLI or real
-engine continuation/envelope integration.
+It also resolves and returns the multi-root `persistent_store_quota`; an
+unavailable value prevents every load/stage/publish/continuation/clean call and
+is consumed by the shared persistent-state eligibility predicate. Its fixtures
+charge store, worktree, coder-state, and linked-worktree Git administration to
+the same platform quota ID. Non-goals: admission/list CLI or real engine
+continuation/envelope integration.
 
 #### Atomic 19 / Package 4D — rollback backup orchestrator
 
@@ -3173,9 +3261,11 @@ result-registry schema. Add `src/coder-result-registry-codec.js` and
 for the bounded registry and index metadata. It owns no quota, state transition,
 process adapter, command routing, or worktree mutation. RED/GREEN:
 `node --test test/coder-result-registry-codec.test.js`. Cover exact byte fixtures,
-64/8 KiB cap-plus-one reads, aggregate string bounds, fixed lock reuse,
-temp-name/mode/owner limits, partial/duplicate/stale temp recovery, and every
-file/parent fsync/rename failure.
+64/8 KiB cap-plus-one reads, aggregate string bounds, fixed lock reuse, and
+temp-name/mode/owner limits plus malformed-temp classification only. It never
+decides stale/partial temp deletion, completes a next-generation publication,
+consults a process journal, or owns recovery transitions; those belong solely
+to Atomic 20A. Cover every codec file/parent fsync/rename failure.
 
 #### Atomic 20A / Package 5A — retained-result transitions and deletion
 
@@ -3184,22 +3274,34 @@ Prerequisites: Atomic 20 plus Packages 2D2 and 2E. Named reference: Section
 `src/coder-result-transitions.js` and `test/coder-result-transitions.test.js`;
 export `reserveCoderResultCapacity()`, `publishCoderRetainedResult()`,
 `releaseCoderResultReservation()`, `beginCoderResultDeletion()`,
-`recoverCoderResultRegistry()`, and `listCoderRetainedResults()`. It alone owns
-the 1 GiB/4 GiB admission, reservation conversion, immutable freeze/verify,
+`recoverCoderResultRegistry()`, `listCoderRetainedResults()`, and
+`assertCoderNamespaceAvailable()`. It alone owns
+the 1 GiB reservation/3 GiB payload-budget plus 1 GiB headroom admission,
+multi-root quota conversion, immutable freeze/verify,
 phase-aware tombstone rename/delete, and recovery table, using Atomic 20 codec.
 RED/GREEN: `node --test test/coder-result-transitions.test.js`. Cover all three
 result-quota outcomes, concurrent admission, tampered/missing provenance,
-and every reservation/index/phase/row crash; no process-owner adapter or CLI.
+every reservation/index/phase/row crash, and every stale/partial/duplicate temp
+reconciliation that may delete a temp or complete exactly-next publication after
+journal proof. It also owns `assertCoderNamespaceAvailable()` and the exact
+project-ID/run-ID/generation quarantine transaction with measured quota release;
+no process-owner adapter or CLI.
 
 #### Atomic 20B / Package 5B — retained-result process-owner adapter
 
 Prerequisites: Atomic 20A and Package 2D2. Named reference: Section 6.5
 `owner_kind=result_registry`. Add `src/coder-result-owner-adapter.js` and
 `test/coder-result-owner-adapter.test.js`; export only
-`createCoderResultProcessOwnerAdapter()`. It composes shared maintenance,
-registry lock, and Atomic 20A transitions into the exact injected
+`withCoderResultRegistryLock(callback)` and
+`createCoderResultProcessOwnerAdapter({context = null})`. The former acquires
+shared maintenance plus result-registry lock and supplies one opaque active
+context only to its callback; the latter accepts that exact borrowed context or
+null for fresh-host discovery, never both. It composes this context, registry
+lock, and Atomic 20A transitions into the exact injected
 `withOwnerLock/publishReference/rollbackPublishedReference/inspectReference/
-transitionRelease` interface. RED/GREEN:
+transitionRelease` interface. With borrowed context, `withOwnerLock` must not
+reacquire/release maintenance or registry lock; with null it acquires/releases
+both in the documented order, then revalidates the journal snapshot. RED/GREEN:
 `node --test test/coder-result-owner-adapter.test.js`. Use fakes for worktree
 mutation; cover reserving publication/rollback, live release, and new-host
 release-pending recovery. Non-goals: codec, quota implementation, CLI, engine.
@@ -3215,6 +3317,10 @@ state-orchestration subset and Section 15 result preflight. Add
 Compose the exported result subsystem with project identity, ephemeral-default
 versus explicit/kept persistent admission, engine-scoped workspace/session
 binding, snapshots, legacy/v2 clean separation, and recoverable finalization.
+For normal result-capable admission it executes the full preflight and
+`allocateOwnedProcessSet()` inside Atomic 20B's
+`withCoderResultRegistryLock(context => ...)`, constructs the adapter with that
+same context, and never opens a lock gap or recursively reacquires it.
 Replace Package 4D's conservative non-empty-root rollback guard with exact
 registry preflight; Package 4D remains sole owner of backup layout/manifest/copy.
 Mixed-version, relocation, read-only cleanup, retained retrieval/clean, rollback
@@ -3306,7 +3412,10 @@ backup|validate|adopt|reset` exact option routing; adopt/reset require explicit
 project IDs/actions and never delete quarantine data.
 It also owns `triss coder result list` and `triss coder result clean <run-id>`;
 the latter removes only a validated retained result artifact, never a persistent
-session selected by a slug.
+session selected by a slug. It additionally owns the administrative
+`triss coder result quarantine --project-id <id> --run-id <run-id> --generation <g>`
+route: all three exact values are mandatory, it is unavailable as an implicit
+clean fallback, and it reports acknowledged loss without exposing a manifest.
 Subprocess tests create the same slug for both engines and prove only the
 selected engine is removed. Tests also prove the
 legacy shared map and direct real engine IDs cannot select or clean a v2
@@ -3314,7 +3423,9 @@ session, and cover help/completion text, missing/corrupt mappings, mode
 mismatch, bounded/redacted list output, persistent cap errors, 100 ephemeral
 default runs without inventory growth, `--keep-session`, workspace mismatch,
 relocation/adopt/reset, packed-artifact backup/validation, and explicit cleanup.
-They also cover this persistence downgrade, result retention/list/clean, and
+They also cover this persistence downgrade, result retention/list/clean/quarantine,
+wrong project/run/generation rejection, bounded quarantine and post-quarantine
+admission, and
 isolation-opt-in help/warning projection.
 Non-goal: MCP.
 
@@ -3325,7 +3436,7 @@ Prerequisite: Package 7. Named reference: Reference surface 6. Edit
 reuse `resolveExpectation()` and result serializers. RED/GREEN:
 `node --test test/mcp-coder.test.js test/mcp-tools.test.js test/mcp-server-cancellation.test.js`.
 Implement schema, handler mapping, safe output, and cancellation, including the
-default-false `allowBestEffortCallerWorktree` opt-in and result list/clean
+default-false `allowBestEffortCallerWorktree` opt-in and result list/clean/quarantine
 actions. Non-goal: CLI
 parsing. MCP tests require top-level `session_slug` for explicit, ephemeral, and
 kept-generated runs; only explicit/kept slugs are continuation/cleanup keys,
@@ -3875,10 +3986,12 @@ Actions:
    the coder session-store domain records an unavailable coder quota capability;
    failure to enforce the review-fetch domain is a strict PR-acquisition stop
    gate. The latter must not silently select coder's best-effort mode.
-   Also prove the independent aggregate 4 GiB allocation-block result-store
-   domain over the complete `.triss/coder-results-v1` root: four concurrent
-   1 GiB reservations succeed, a fifth and every <1GiB-headroom attempt reject
-   before credentials/spawn, reservation release makes capacity reusable, and
+   Also prove the independent aggregate 4 GiB multi-root allocation-block
+   result-store domain over result metadata, worktrees, coder state, and linked
+   Git administration/ref metadata: three concurrent 1 GiB reservations
+   succeed; the fourth and every <1GiB-payload-headroom attempt reject before
+   credentials/spawn; 1 GiB remains reserved for metadata/cleanup even at full
+   payload use; reservation release makes capacity reusable; and
    metadata/empty-directory/tombstone pressure remains inside the one-block
    overshoot. Record the exact `result_store_quota` capability result for every
    supported engine/OS tuple. An unavailable or best-effort result quota is a
@@ -4633,7 +4746,7 @@ legacy-map migration, different isolation-mode ownership, and explicit
 sessions. Document generated 128-bit slugs and top-level `session_slug`, but
 make omitted-session conversations ephemeral: read-only runs auto-clean, but
 verified changed runs retain a bounded result artifact until explicit result
-clean, with no conversation retention. Document `coder result list|clean`,
+clean, with no conversation retention. Document `coder result list|clean|quarantine`,
 explicit `--session` persistence,
 `--keep-session`, workspace/OID/snapshot binding and mismatch rejection,
 bounded crash TTL recovery, stable project identity, rename versus
@@ -4886,7 +4999,7 @@ implement it locally; do not restart indefinitely.
 | no secret/raw tool data in diagnostics | coder-result and provider-error fixtures |
 | CLI/MCP contract parity | MCP schema/handler and CLI help tests |
 | default unnamed coder runs do not persist | 100-run ephemeral inventory/HOME fixture |
-| changed unnamed coder result remains retrievable | retained worktree/result-index fixture, envelope path existence, explicit result-clean and crash recovery |
+| changed unnamed coder result remains retrievable | retained worktree/result-index fixture, envelope path existence, explicit result-clean/quarantine and crash recovery |
 | explicit isolation cannot silently write caller worktree | CLI/MCP no-opt-in preflight and explicit-opt-in downgrade fixtures |
 | persistent conversation matches Git workspace | base/ref/coder-state/snapshot mismatch fixtures for both engines |
 | same slug is isolated across engines | clean one engine then continue the other engine-scoped worktree/branch/state fixture |
@@ -5056,10 +5169,15 @@ the retained worktree or exports/accepts its code outside the managed result
 root, then invokes `coder result clean <run-id>` and retries rollback. This
 release deliberately does not define a multi-GiB rollback archive: the existing
 512 MiB state-backup cap remains truthful because it backs up zero retained
-results. Tests cover retained-result preflight rejection, a crash/deleting row,
-foreign result-root retention, explicit clean followed by successful empty
-result-registry backup, and old-binary simulation proving no ignored result
-worktree is called rollback-safe.
+results. A completed exact `coder result quarantine` manifest is the sole
+exception: it represents an operator-acknowledged lost/tampered result, so
+backup/validate may continue but must print the bounded run ID/generation and
+`TRISS_CODER_RESULT_QUARANTINED` warning; it never calls that result backed up
+or intact. Incomplete, foreign, or mismatched quarantine manifests still block.
+Tests cover retained-result preflight rejection, a crash/deleting row, foreign
+result-root retention, explicit clean followed by successful empty
+result-registry backup, completed quarantine warning/continuation, and
+old-binary simulation proving no ignored result worktree is called rollback-safe.
 
 Coder-state cleanup may remove an orphan only through Section 6.3 owner/schema
 and missing-leaf-parent checks; otherwise retain it and warn. Rollback tests
