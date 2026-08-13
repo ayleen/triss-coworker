@@ -7,6 +7,7 @@ import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { REVIEW_SYSTEM_PROMPT } from '../review-prompt.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
+import { PACKAGE_VERSION, compareStableVersions } from '../version.js';
 
 const ASK_SYSTEM =
   'You are a precise code/document analyst. Read the supplied sources and ' +
@@ -1057,38 +1058,88 @@ export function describeKimiRoutingLines(kimi) {
   ];
 }
 
-export async function statusHandler() {
-  const { getConfig } = await import('../config.js');
-  const { listPresets, describeGlmRouting, describeKimiRouting } = await import('../models.js');
-  const { loadIntegrations, envReadiness, getCoreManifest } = await import('../integrations/_registry.js');
-  const { projectRoot, pathsRestricted } = await import('../safety.js');
-  const { activeEnvFiles } = await import('../secrets.js');
-  const cfg = getConfig();
-  const presets = listPresets();
-  const integrations = await loadIntegrations();
-  const all = [getCoreManifest(), ...integrations];
-  const root = projectRoot();
+export async function statusHandler(_args = {}, deps = {}) {
+  const configModule = deps.getConfig
+    ? { getConfig: deps.getConfig }
+    : await import('../config.js');
+  const modelsModule = deps.listPresets
+    ? {
+      listPresets: deps.listPresets,
+      describeGlmRouting: deps.describeGlmRouting,
+      describeKimiRouting: deps.describeKimiRouting,
+    }
+    : await import('../models.js');
+  const registryModule = deps.loadIntegrations
+    ? {
+      loadIntegrations: deps.loadIntegrations,
+      envReadiness: deps.envReadiness,
+      getCoreManifest: deps.getCoreManifest,
+    }
+    : await import('../integrations/_registry.js');
+  const safetyModule = deps.projectRoot
+    ? { projectRoot: deps.projectRoot, pathsRestricted: deps.pathsRestricted }
+    : await import('../safety.js');
+  const secretsModule = deps.activeEnvFiles
+    ? { activeEnvFiles: deps.activeEnvFiles }
+    : await import('../secrets.js');
+  const cfg = configModule.getConfig();
+  const presets = modelsModule.listPresets();
+  const integrations = await registryModule.loadIntegrations();
+  const all = [registryModule.getCoreManifest(), ...integrations];
+  const root = safetyModule.projectRoot();
   const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
     `Worker API base: ${cfg.baseUrl}`,
     `Worker API key:  ${cfg.apiKey ? cfg.apiKey.slice(0, 4) + '…' + cfg.apiKey.slice(-4) : '(missing)'}`,
     `Default preset: ${cfg.defaultPreset}`,
     `Project root: ${root} (from ${rootSource})`,
-    `Path sandbox: ${pathsRestricted() ? 'on' : 'off'}`,
+    `Path sandbox: ${safetyModule.pathsRestricted() ? 'on' : 'off'}`,
     `Env files:`,
-    ...activeEnvFiles().map((f) => `  ${f.scope}: ${f.path} (${f.exists ? 'loaded' : 'absent'})`),
+    ...secretsModule.activeEnvFiles().map((f) => `  ${f.scope}: ${f.path} (${f.exists ? 'loaded' : 'absent'})`),
     `Worker presets: ${presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
     // A GLM-only setup has no worker key at all, so the worker lines above say
     // "(missing)" while provider:"glm" calls work fine. Spell out that route
     // separately instead of letting the reader infer it from a worker field.
     // Same for Kimi (provider "kimi").
-    ...describeGlmRoutingLines(describeGlmRouting()),
-    ...describeKimiRoutingLines(describeKimiRouting()),
+    ...describeGlmRoutingLines(modelsModule.describeGlmRouting()),
+    ...describeKimiRoutingLines(modelsModule.describeKimiRouting()),
     `Integrations:`,
     ...all.map((m) => {
-      const r = envReadiness(m);
+      const r = registryModule.envReadiness(m);
       return `  ${m.name}: ${r.ready ? 'ready' : 'missing ' + r.missing.join(',')}`;
     }),
   ];
+  let updateState = null;
+  try {
+    if (deps.readUpdateState) {
+      updateState = await deps.readUpdateState();
+    } else {
+      const update = await import('../update/cache.js');
+      const read = update.readUpdateState || update.readCache || update.getUpdateState;
+      if (typeof read === 'function') updateState = await read();
+    }
+  } catch {
+    // A broken or unavailable passive cache must not make triss_status fail.
+  }
+  if (updateState) {
+    lines.push('Update:');
+    const updateManifest = updateState.manifest || updateState;
+    const latestVersion = updateState.latestVersion || updateManifest.version;
+    const currentVersion = updateState.currentVersion || PACKAGE_VERSION;
+    let available = Boolean(updateState.updateAvailable);
+    if (updateState.updateAvailable === undefined && latestVersion) {
+      try { available = compareStableVersions(latestVersion, currentVersion) > 0; }
+      catch { available = false; }
+    }
+    if (available && latestVersion) {
+      const compatibility = updateState.nodeCompatible === false || updateState.kind === 'incompatible' ||
+        updateManifest.nodeCompatible === false
+        ? ` (requires ${updateState.requiresNode || updateState.node || updateManifest.node || 'a newer Node.js version'})`
+        : '';
+      lines.push(`  Available: ${latestVersion}${compatibility}`);
+    } else {
+      lines.push('  No newer stable release known (cached)');
+    }
+  }
   return lines.join('\n');
 }

@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-// Bypass the SSRF DNS lookup for unit tests that mock globalThis.fetch —
-// the resolver is exercised separately in net.test.js.
-process.env.TRISS_ALLOW_PRIVATE_NETWORKS = '1';
-
 import { htmlToMarkdown, fetchUrl, fetchAsMarkdown } from '../src/web.js';
+import { requestSequence } from './helpers/http-request.js';
+
+const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
 
 test('htmlToMarkdown turns headings, paragraphs, lists into markdown', () => {
   const html = `
@@ -59,41 +58,40 @@ test('fetchUrl rejects non-http(s) URLs', async () => {
 });
 
 test('fetchUrl raises with status on non-2xx', async () => {
-  globalThis.fetch = async () => ({
-    ok: false,
+  const requestImpl = requestSequence([{
     status: 404,
     statusText: 'Not Found',
-    url: 'https://example.com/missing',
-    headers: new Map([['content-type', 'text/html']]),
-    text: async () => '<html>not here</html>',
-  });
-  await assert.rejects(() => fetchUrl('https://example.com/missing'), /HTTP 404/);
+    headers: { 'content-type': 'text/html' },
+    body: '<html>not here</html>',
+  }]);
+  await assert.rejects(
+    () => fetchUrl('https://example.com/missing', { requestImpl, lookupImpl: publicLookup }),
+    /HTTP 404/,
+  );
 });
 
 test('fetchAsMarkdown returns text verbatim for non-html content', async () => {
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    url: 'https://example.com/data.json',
-    headers: { get: () => 'application/json' },
-    text: async () => '{"a":1}',
+  const requestImpl = requestSequence([{
+    headers: { 'content-type': 'application/json' },
+    body: '{"a":1}',
+  }]);
+  const out = await fetchAsMarkdown('https://example.com/data.json', {
+    requestImpl,
+    lookupImpl: publicLookup,
   });
-  const out = await fetchAsMarkdown('https://example.com/data.json');
   assert.equal(out.markdown, '{"a":1}');
   assert.match(out.contentType, /json/);
 });
 
 test('fetchAsMarkdown converts html content', async () => {
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    url: 'https://example.com/x',
-    headers: { get: () => 'text/html; charset=utf-8' },
-    text: async () => '<html><body><h1>X</h1><p>p</p></body></html>',
+  const requestImpl = requestSequence([{
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+    body: '<html><body><h1>X</h1><p>p</p></body></html>',
+  }]);
+  const out = await fetchAsMarkdown('https://example.com/x', {
+    requestImpl,
+    lookupImpl: publicLookup,
   });
-  const out = await fetchAsMarkdown('https://example.com/x');
   assert.match(out.markdown, /^# X/m);
   assert.match(out.markdown, /\np$/);
 });

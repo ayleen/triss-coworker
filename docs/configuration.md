@@ -569,6 +569,7 @@ are unaffected.
 
 | Variable                       | Default     | Effect                                                    |
 | ------------------------------ | ----------- | --------------------------------------------------------- |
+| `TRISS_UPDATE_CHECK`           | (on)        | `0` disables passive CLI/MCP update checks and notices; explicit `triss update` still performs its requested check |
 | `TRISS_HTTP_TIMEOUT_MS`        | `30000`     | Per-request timeout for integration HTTP calls (Jira/GitHub/GitLab/Linear/Confluence) |
 | `TRISS_REQUEST_TIMEOUT_MS`     | `600000`    | Timeout in ms for OpenAI-compatible model clients (worker, GLM, Kimi). Set an integer from `1` through `2147483647` for long buffered `ask`/`chat`/`review` calls; other values retain the SDK default. |
 | `TRISS_HTTP_MAX_BYTES`         | `26214400`  | Max response body size for integration calls (25 MB default) |
@@ -583,6 +584,12 @@ are unaffected.
 | `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
 | `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
 | `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
+
+The bash installer additionally accepts `TRISS_STANDALONE_HOME` (default
+`~/.local/share/triss`) and `TRISS_BIN_DIR` (default `~/.local/bin`). These are
+installer inputs, not project `.triss.env` settings. `TRISS_HOME` is legacy-only
+and never grants standalone write authority. The receipt records normalized
+paths so later environment changes cannot redirect update writes.
 
 ## Troubleshooting
 

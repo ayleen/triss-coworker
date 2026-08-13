@@ -29,6 +29,7 @@ import { runInit } from '../src/commands/init.js';
 import { runAgentHelp } from '../src/commands/agent-help.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
+import { runUpdate } from '../src/commands/update.js';
 import {
   runWizard,
   runSet,
@@ -42,6 +43,11 @@ import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.
 import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
+import { loadEnvFiles } from '../src/config.js';
+import {
+  runDefaultPassiveCliCheck,
+  shouldSuppressPassiveCheck,
+} from '../src/update/passive.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -55,6 +61,19 @@ program
       'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
   )
   .version(packageJson.version);
+
+program.hook('postAction', async () => {
+  loadEnvFiles();
+  const argv = process.argv.slice(2);
+  if (shouldSuppressPassiveCheck({
+    argv,
+    stderrIsTTY: Boolean(process.stderr.isTTY),
+    ci: /^(1|true|yes)$/i.test(process.env.CI || ''),
+    optOut: process.env.TRISS_UPDATE_CHECK === '0',
+    commandFailed: Boolean(process.exitCode),
+  })) return;
+  await runDefaultPassiveCliCheck({ currentVersion: packageJson.version });
+});
 
 program
   .command('init')
@@ -168,6 +187,19 @@ program
   .command('status')
   .description('Show current configuration: API key, models, .env sources')
   .action(wrap(runStatus));
+
+program
+  .command('update')
+  .description('Check for a newer stable release; explicitly update standalone installs')
+  .option('--json', 'emit one machine-readable status object')
+  .option('--apply', 'apply the newer release to a validated standalone install')
+  .option('--rollback', 'switch to the previous verified standalone version')
+  .option('--yes', 'skip apply/rollback confirmation in non-interactive use')
+  .option('--break-lock', 'separately authorize breaking a proven-stale update lock')
+  // Commander passes its Command instance as a second action argument.  The
+  // update runner has a second parameter reserved for injected dependencies
+  // in tests, so keep the CLI boundary options-only.
+  .action((opts) => wrap(runUpdate)(opts));
 
 program
   .command('completion <shell>')

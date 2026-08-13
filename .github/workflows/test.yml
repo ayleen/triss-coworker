@@ -7,6 +7,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NPM_VERSION: '11.6.2'
 
 permissions:
   contents: read
@@ -25,6 +26,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
       - run: npm ci
       - run: npm run lint
       - run: npm test
@@ -38,6 +43,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
       - run: npm ci
       - name: Pack tarball
         run: |
@@ -53,3 +62,73 @@ jobs:
           TARBALL=$(ls /tmp/triss-pack/triss-coworker-*.tgz)
           pnpm add "$TARBALL"
           ./node_modules/.bin/triss --version
+
+  standalone-build:
+    needs: test
+    runs-on: ubuntu-latest
+    name: build canonical standalone artifact
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - name: Build twice from independent production installs
+        run: |
+          node scripts/release-gates.js build-twice \
+            --source "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/triss-standalone" \
+            --output "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --version "$(node -p "require('./package.json').version")"
+      - name: Record canonical artifact checksum
+        run: |
+          node scripts/release-gates.js write-checksum \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --output "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - name: Verify canonical artifact input
+        run: |
+          node scripts/release-gates.js verify-artifact \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --metadata "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz.metadata.json" \
+            --checksum "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-canonical
+          path: |
+            ${{ runner.temp }}/triss-standalone/standalone.ndjson.gz
+            ${{ runner.temp }}/triss-standalone/standalone.ndjson.gz.metadata.json
+            ${{ runner.temp }}/triss-standalone/standalone.sha256
+          if-no-files-found: error
+
+  standalone-smoke:
+    needs: standalone-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['22', '24']
+      fail-fast: false
+    name: standalone smoke (${{ matrix.os }}, Node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-canonical
+          path: ${{ runner.temp }}/triss-standalone
+      - name: Verify downloaded artifact digest
+        run: |
+          node scripts/release-gates.js verify-artifact \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --metadata "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz.metadata.json" \
+            --checksum "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - name: Smoke downloaded artifact without package or repository tools
+        run: |
+          node scripts/release-gates.js smoke \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz"

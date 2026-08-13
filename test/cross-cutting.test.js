@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { requestSequence } from './helpers/http-request.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -139,31 +140,17 @@ test('fetchUrl default 10 MB cap is used when TRISS_FETCH_MAX_BYTES is unset', a
   const oversize = new Uint8Array(LIMIT + 1);
   oversize.fill(65); // 'A'
 
-  let chunkIdx = 0;
-  const reader = {
-    async read() {
-      if (chunkIdx === 0) { chunkIdx++; return { value: oversize, done: false }; }
-      return { value: undefined, done: true };
-    },
-    async cancel() {},
-  };
-
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    url: 'https://example.com/big',
-    headers: { get: () => 'text/html' },
-    body: { getReader: () => reader },
-    text: async () => '',
-  });
+  const requestImpl = requestSequence([{ chunks: [oversize] }]);
 
   try {
     // Use a cache-busting query so Node's module cache doesn't return the
     // previously imported instance that had TRISS_FETCH_MAX_BYTES set.
     const { fetchUrl } = await import(`../src/web.js?default-cap-${Date.now()}`);
     await assert.rejects(
-      () => fetchUrl('https://example.com/big'),
+      () => fetchUrl('https://example.com/big', {
+        requestImpl,
+        lookupImpl: async () => [{ address: '93.184.216.34', family: 4 }],
+      }),
       /exceeds 10485760 bytes|exceeds.*bytes|too large/i,
     );
   } finally {

@@ -7,6 +7,11 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NPM_VERSION: '11.6.2'
+
+concurrency:
+  group: triss-release-publish
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -14,18 +19,97 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22', '24']
+      fail-fast: false
+    name: test (Node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
       - run: npm ci
       - run: npm run lint
       - run: npm test
 
-  publish:
+  standalone-build:
     needs: test
+    runs-on: ubuntu-latest
+    name: build canonical standalone artifact
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - name: Build canonical artifact from independent production installs
+        run: |
+          node scripts/release-gates.js build-twice \
+            --source "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/triss-standalone" \
+            --output "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --version "${GITHUB_REF_NAME#v}"
+      - name: Record canonical artifact checksum
+        run: |
+          node scripts/release-gates.js write-checksum \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --output "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - name: Verify canonical artifact input
+        run: |
+          node scripts/release-gates.js verify-artifact \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --metadata "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz.metadata.json" \
+            --checksum "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-canonical
+          path: |
+            ${{ runner.temp }}/triss-standalone/standalone.ndjson.gz
+            ${{ runner.temp }}/triss-standalone/standalone.ndjson.gz.metadata.json
+            ${{ runner.temp }}/triss-standalone/standalone.sha256
+          if-no-files-found: error
+
+  standalone-smoke:
+    needs: standalone-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['22', '24']
+      fail-fast: false
+    name: standalone smoke (${{ matrix.os }}, Node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-canonical
+          path: ${{ runner.temp }}/triss-standalone
+      - name: Verify downloaded artifact digest
+        run: |
+          node scripts/release-gates.js verify-artifact \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
+            --metadata "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz.metadata.json" \
+            --checksum "$RUNNER_TEMP/triss-standalone/standalone.sha256"
+      - name: Smoke downloaded artifact without package or repository tools
+        run: |
+          node scripts/release-gates.js smoke \
+            --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz"
+
+  npm-publish:
+    needs: [standalone-smoke, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,6 +121,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
       - name: Show npm version
         run: npm --version
       - name: Verify tag matches package version
@@ -47,5 +135,197 @@ jobs:
             echo "Tag $TAG_VERSION does not match package.json version $PKG_VERSION"
             exit 1
           fi
+      - name: Verify tag is the exact origin/main release
+        run: |
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          TAG_SHA=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          MAIN_SHA=$(git rev-parse 'refs/remotes/origin/main^{commit}')
+          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
+            echo "Tag $GITHUB_REF_NAME points to $TAG_SHA, but origin/main is $MAIN_SHA"
+            exit 1
+          fi
+          git show "${GITHUB_REF_NAME}:install.sh" > "$RUNNER_TEMP/tag-install.sh"
+          git show 'refs/remotes/origin/main:install.sh' > "$RUNNER_TEMP/main-install.sh"
+          cmp -s "$RUNNER_TEMP/tag-install.sh" "$RUNNER_TEMP/main-install.sh" || {
+            echo "Tagged install.sh does not match origin/main"
+            exit 1
+          }
       - run: npm ci
       - run: npm publish --access public --provenance
+
+  release:
+    needs: [standalone-smoke, npm-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-canonical
+          path: dist/canonical
+      - name: Prepare checksum and release manifest
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          RELEASE_VERSION="${TAG_VERSION#v}"
+          PUBLISHED_AT=$(git show -s --format=%cI "$GITHUB_SHA")
+          PUBLISHED_AT=$(node -e 'const value=process.argv[1]; const parsed=Date.parse(value); if (!Number.isFinite(parsed)) process.exit(1); process.stdout.write(new Date(parsed).toISOString())' "$PUBLISHED_AT")
+          node scripts/release-gates.js verify-artifact \
+            --artifact dist/canonical/standalone.ndjson.gz \
+            --metadata dist/canonical/standalone.ndjson.gz.metadata.json \
+            --checksum dist/canonical/standalone.sha256
+          mv dist/canonical/standalone.ndjson.gz "dist/triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz"
+          mv dist/canonical/standalone.ndjson.gz.metadata.json "dist/triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz.metadata.json"
+          node scripts/release-gates.js write-checksum \
+            --artifact "dist/triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz" \
+            --output "dist/triss-coworker-${RELEASE_VERSION}-standalone.sha256"
+          node scripts/release-gates.js write-manifest \
+            --artifact "dist/triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz" \
+            --output dist/update-manifest.json \
+            --artifact-name "triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz" \
+            --tag "$TAG_VERSION" \
+            --version "$RELEASE_VERSION" \
+            --published-at "$PUBLISHED_AT"
+          rm -f "dist/triss-coworker-${RELEASE_VERSION}-standalone.ndjson.gz.metadata.json"
+      - name: Get or create draft GitHub Release and reconcile immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          node scripts/release-gates.js ensure-release \
+            --tag "$TAG_VERSION" \
+            --target "$GITHUB_SHA" \
+            --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
+            --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
+            --manifest dist/update-manifest.json
+      - name: Verify draft assets byte-for-byte
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          node scripts/release-gates.js verify-draft \
+            --resume \
+            --tag "$TAG_VERSION" \
+            --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
+            --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
+            --manifest dist/update-manifest.json
+      - name: Publish complete release without changing latest alias
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: node scripts/release-gates.js release-action --action publish-nonlatest --tag "$TAG_VERSION" --target "$GITHUB_SHA"
+      - name: Verify anonymous tag-specific assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          node scripts/release-gates.js verify-tag \
+            --tag "$TAG_VERSION" \
+            --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
+            --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
+            --manifest dist/update-manifest.json || {
+              node scripts/release-gates.js release-action --action return-to-draft --tag "$TAG_VERSION" --target "$GITHUB_SHA"
+              exit 1
+            }
+      - name: Promote, reconcile, verify latest, and recover on failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node scripts/release-gates.js release-status \
+            --tag "$TAG_VERSION" \
+            > "$RUNNER_TEMP/release-status.json"
+          promotion_phase=$(node -e 'const s=require(process.argv[1]); process.stdout.write(s.promotion_phase || "null")' \
+            "$RUNNER_TEMP/release-status.json")
+          if [ "$promotion_phase" = "incident_pending" ]; then
+            recovery_status=0
+            node scripts/release-gates.js recover-promotion \
+              --tag "$TAG_VERSION" \
+              --state "$RUNNER_TEMP/previous-latest.json" \
+              --load || recovery_status=$?
+            if [ "$recovery_status" -eq 0 ]; then
+              recovery_status=1
+            fi
+            exit "$recovery_status"
+          fi
+          if node -e 'const s=require(process.argv[1]); process.exit(s.is_latest ? 0 : 1)' \
+            "$RUNNER_TEMP/release-status.json"; then
+            verify_status=0
+            node scripts/release-gates.js verify-latest \
+              --tag "$TAG_VERSION" \
+              --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
+              --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
+              --manifest dist/update-manifest.json || verify_status=$?
+            if [ "$verify_status" -eq 0 ]; then
+              node scripts/release-gates.js clear-promotion-state --tag "$TAG_VERSION"
+              exit 0
+            fi
+            recovery_status=0
+            node scripts/release-gates.js recover-promotion \
+              --tag "$TAG_VERSION" \
+              --state "$RUNNER_TEMP/previous-latest.json" \
+              --load || recovery_status=$?
+            if [ "$recovery_status" -ne 0 ]; then
+              exit "$recovery_status"
+            fi
+            exit "$verify_status"
+          fi
+          node scripts/release-gates.js snapshot-latest \
+            --tag "$TAG_VERSION" \
+            --output dist/previous-latest.json \
+            --persist
+          promote_status=0
+          node scripts/release-gates.js release-action \
+            --action promote \
+            --tag "$TAG_VERSION" \
+            --target "$GITHUB_SHA" \
+            --snapshot dist/previous-latest.json || promote_status=$?
+          # A failed PATCH may have reached GitHub. Re-read authenticated state
+          # first; recovery is authorized only when this candidate is observed
+          # as latest. A CAS mismatch must remain a zero-mutation abort.
+          node scripts/release-gates.js release-status \
+            --tag "$TAG_VERSION" \
+            > "$RUNNER_TEMP/release-status-after-promote.json"
+          promotion_outcome=$(node scripts/release-gates.js promotion-outcome \
+            --status-file "$RUNNER_TEMP/release-status-after-promote.json" \
+            --promote-status "$promote_status" \
+            --tag "$TAG_VERSION")
+          if [ "$promotion_outcome" != "verify-latest" ]; then
+            if [ "$promote_status" -ne 0 ]; then
+              exit "$promote_status"
+            fi
+            echo "promotion completed without candidate becoming latest"
+            exit 1
+          fi
+          # The candidate was observed latest, so anonymous verification may
+          # reconcile a real post-PATCH failure and invoke bounded recovery.
+          verify_status=0
+          node scripts/release-gates.js verify-latest \
+            --tag "$TAG_VERSION" \
+            --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
+            --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
+            --manifest dist/update-manifest.json || verify_status=$?
+          if [ "$verify_status" -eq 0 ]; then
+            node scripts/release-gates.js clear-promotion-state --tag "$TAG_VERSION"
+            exit 0
+          fi
+          recovery_status=0
+          node scripts/release-gates.js recover-promotion \
+            --tag "$TAG_VERSION" \
+            --state dist/previous-latest.json \
+            --load || recovery_status=$?
+          if [ "$recovery_status" -ne 0 ]; then
+            exit "$recovery_status"
+          fi
+          # Keep the workflow failed after a recovered incident so the
+          # publication is not reported as a clean latest promotion.
+          if [ "$promote_status" -ne 0 ]; then
+            exit "$promote_status"
+          fi
+          exit "$verify_status"
