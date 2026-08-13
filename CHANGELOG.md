@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-08-13
+
+### Added
+
+- `triss exec` deterministically routes a task to `ask`, `review`, `coder run`,
+  or `chat`. Its JSON `--explain` mode validates the selected route without
+  model, Git, integration, update-check, stdin, network, or filesystem work.
+- `ask` and `review` support a shared `evidence` response contract across CLI
+  and MCP, with explicit Outcome, Evidence, Uncertainty, and Decision sections.
+- Help, completion, README, MCP documentation, and generated agent instructions
+  cover the new routing and evidence interfaces.
+
+### Changed
+
+- Core CLI and MCP token budgets, plus coder timeouts, use strict shared
+  positive-number validation. Malformed and partially numeric values now fail
+  before corpus, Git, model, or subprocess work.
+- Lexical `exec` routing is conservative: ambiguous or read-only status wording
+  remains chat, while only explicit review or implementation intent selects an
+  agentic route.
+
+### Fixed
+
+- Managed `AGENTS.md` and `CLAUDE.md` initialization now plans all destinations
+  before mutation, rejects aliases and malformed marker layouts, preserves
+  unrelated bytes and file modes, installs complete files atomically, and uses
+  identity-aware rollback without clobbering intervening user changes.
+- Clean text reviews retain their legacy message even when terminal colors are
+  enabled, and `exec --explain` remains side-effect free in interactive shells.
+
 ## [0.33.0] — 2026-08-13
 
 ### Added
@@ -1026,7 +1056,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/ayleen/triss-coworker/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/ayleen/triss-coworker/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/ayleen/triss-coworker/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/ayleen/triss-coworker/compare/v0.31.0...v0.31.1

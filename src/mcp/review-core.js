@@ -14,10 +14,12 @@ import {
 } from '../git.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import {
-  bindReviewPromptToBoundary,
   createReviewBoundaryId,
+  reviewSystemPromptForFormat,
   wrapReviewSection,
 } from '../review-prompt.js';
+import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
+import { positiveIntegerOption } from '../option-validation.js';
 
 export async function runReviewCore({
   pr,
@@ -27,10 +29,13 @@ export async function runReviewCore({
   provider,
   model,
   maxTokens,
-  reviewSystem,
+  responseFormat: responseFormatInput = 'text',
   callModel,
   reviewBoundaryId,
+  gitDiffFn = gitDiff,
 }) {
+  const responseFormat = validateResponseFormat(responseFormatInput);
+  const validatedMaxTokens = positiveIntegerOption(maxTokens, 'max_tokens', 8192);
   let title;
   let description = '';
   let diff;
@@ -54,10 +59,10 @@ export async function runReviewCore({
     headRef = currentBranch();
     baseRef = baseRef || defaultBranch();
     title = headRef;
-    diff = gitDiff(baseRef, 'HEAD');
+    diff = gitDiffFn(baseRef, 'HEAD');
   }
 
-  if (!diff.trim()) return '(no changes between branches — nothing to review)';
+  if (!diff.trim()) return emptyReviewResponse(responseFormat);
 
   let ticketCorpus = '';
   if (!skipIssue) {
@@ -92,17 +97,25 @@ export async function runReviewCore({
   const result = await callModel({
     provider,
     model,
-    maxTokens,
+    maxTokens: validatedMaxTokens,
     messages: [
       {
         role: 'system',
-        content: bindReviewPromptToBoundary(reviewSystem, boundaryId),
+        // Same format-aware helper as the CLI review command so their prompt
+        // contract cannot drift: text keeps the one-line clean rule, evidence
+        // requires the shared Markdown contract without it.
+        content: reviewSystemPromptForFormat(responseFormat, { boundaryId }),
       },
       { role: 'user', content: sections.join('\n\n') },
       { role: 'user', content: question || 'Review this change. List concrete issues; do not summarise the diff.' },
     ],
   });
-  // callModel returns { content, usageReport }.
+  // callModel returns { content, usageReport }. Evidence mode returns the
+  // model-authored contract verbatim — it ends at "Decision required: none",
+  // and appending the usage line after that would break the contract. Usage
+  // observability stays in the persisted usage log (`triss usage`), not in
+  // the tool result. Text mode (the default) keeps the appended report.
+  if (responseFormat === 'evidence') return result.content;
   return result.usageReport ? `${result.content}\n\n${result.usageReport}` : result.content;
 }
 

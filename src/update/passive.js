@@ -1,3 +1,5 @@
+import { isExecExplainInvocation } from '../cli-argv.js';
+
 function parseVersion(value) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value || '');
   return match ? match.slice(1).map(Number) : null;
@@ -41,6 +43,7 @@ export function shouldSuppressPassiveCheck({
 } = {}) {
   if (!stderrIsTTY || ci || optOut || commandFailed) return true;
   const [top, sub] = argv;
+  if (isExecExplainInvocation(argv)) return true;
   if (top === 'update' || top === 'completion') return true;
   if (top === 'mcp' && (sub === undefined || sub === 'serve')) return true;
   if (argv.includes('--json') || argv.includes('--help') || argv.includes('-h')) return true;

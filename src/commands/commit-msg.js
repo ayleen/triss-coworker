@@ -3,6 +3,7 @@ import pc from 'picocolors';
 import { chat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { git } from '../git.js';
+import { positiveIntegerOption } from '../option-validation.js';
 
 const CONVENTIONAL_SYSTEM = `You are a senior engineer writing a Git commit
 message in Conventional Commits format. Output only the message itself —
@@ -26,6 +27,7 @@ Format: short imperative subject line (≤72 chars), blank line, then
 optional body wrapped at 72 chars explaining *why*.`;
 
 export async function runCommitMsg(opts) {
+  const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 2048);
   const diff = git(['diff', '--staged']);
   if (!diff.trim()) {
     throw new Error(
@@ -58,7 +60,7 @@ export async function runCommitMsg(opts) {
 
   const resp = await chat({
     model,
-    maxTokens: parseInt(opts.maxTokens, 10) || 2048,
+    maxTokens,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: userPrompt },

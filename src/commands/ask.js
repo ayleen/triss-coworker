@@ -5,6 +5,8 @@ import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { readStdin } from '../secrets.js';
 import { shouldStream } from './chat.js';
+import { validateResponseFormat, withEvidenceInstructions } from '../response-format.js';
+import { positiveIntegerOption } from '../option-validation.js';
 
 const SYSTEM_PROMPT =
   'You are a precise code/document analyst. Read the provided sources and ' +
@@ -19,28 +21,36 @@ export async function runAsk(opts) {
   return runAskWithDeps(opts);
 }
 
+export function validateAskOptions(opts, { checkTty = true } = {}) {
+  const responseFormat = validateResponseFormat(opts.format);
+  const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 8192);
+  if (!opts.question) throw new Error('--question is required');
+  if (!opts.paths?.length && !opts.urls?.length && !opts.stdin) {
+    throw new Error('Pass at least one of --paths, --urls, or --stdin');
+  }
+  if (checkTty && opts.stdin && process.stdin.isTTY) {
+    throw new Error(
+      '--stdin requires piped input. Try: cmd | triss ask --stdin --question "..."',
+    );
+  }
+  return { responseFormat, maxTokens };
+}
+
 // Test-only seam for deterministic model-call assertions.
 export async function runAskWithDeps(opts, deps = {}) {
+  const { responseFormat, maxTokens } = validateAskOptions(opts);
   const {
     paths,
     urls,
     stdin,
     question,
-    maxTokens,
     model: modelInput,
     provider: providerInput,
     system,
   } = opts;
-  if (!question) throw new Error('--question is required');
-  if (!paths?.length && !urls?.length && !stdin) {
-    throw new Error('Pass at least one of --paths, --urls, or --stdin');
-  }
-  if (stdin && process.stdin.isTTY) {
-    throw new Error(
-      '--stdin requires piped input. Try: cmd | triss ask --stdin --question "..."',
-    );
-  }
-
+  // Same default the direct `triss ask` CLI applies (its --max-tokens
+  // option defaults to 8192). A routed ask without --max-tokens must behave
+  // identically to a direct ask, mirroring review.js's own default.
   const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
   const sendChat = deps.chat || chat;
   const sendChatStream = deps.chatStream || chatStream;
@@ -88,7 +98,7 @@ export async function runAskWithDeps(opts, deps = {}) {
   );
 
   const messages = [
-    { role: 'system', content: system || SYSTEM_PROMPT },
+    { role: 'system', content: withEvidenceInstructions(system || SYSTEM_PROMPT, responseFormat) },
     { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
     { role: 'user', content: question },
   ];

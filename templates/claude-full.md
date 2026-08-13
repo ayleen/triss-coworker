@@ -17,6 +17,8 @@ triss ask --paths src/**/*.ts --question "..." --model pro --max-tokens 16384
 
 The worker returns a structured bullet summary with file paths and line
 numbers. Read the file yourself only when you need to make precise edits.
+Add `--format evidence` when the answer must use the shared Outcome / Evidence /
+Uncertainty / Decision required contract. Text remains the default.
 
 ### `triss write` — boilerplate generation
 Use for tests, config files, docstrings, repetitive code, or doc scaffolds.
@@ -106,6 +108,15 @@ effect in stdin mode because there is no linked-ticket lookup.
 10-20× since DeepSeek does the inspection and returns concrete bullets
 with file:line citations. If you still need to look at a specific file
 after the review, do so via Read.
+
+### `triss exec` — deterministic routing
+Use `triss exec --explain [task]` to inspect a stable JSON decision without
+executing a model, Git, stdin, integration bootstrap, or filesystem mutation.
+Explicit source/review/code/chat signals select the downstream command;
+ambiguous lexical requests default to chat. Conflicting signals and options
+unsupported by the selected route fail closed instead of being discarded.
+Inspection reports those failures as `route: null` plus a reason; execution
+raises the same reason as an error.
 
 ### `triss fetch` / `triss ask --urls` — web pages
 **Default to Triss for any web read. Use the built-in WebFetch tool only

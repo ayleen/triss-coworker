@@ -303,6 +303,7 @@ and writing**.
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
 | `triss ask`        | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
+| `triss exec`       | Deterministically routes a task to `ask`, `review`, `coder run`, or `chat`; `--explain` prints the JSON decision without executing | Manually choosing the delegation command |
 | `triss chat`       | Bare prompt to the worker model — no corpus           | A separate `gpt`-style CLI          |
 | `triss write`      | Generates code/docs from a spec + reference file      | The agent typing out boilerplate    |
 | `triss extract`    | Pulls readable transcript from JSONL session logs     | Manually scraping `~/.claude/...`   |
@@ -338,11 +339,53 @@ triss ask --paths "src/**/*.ts" \
 triss ask --paths "src/**/*.ts" \
           --question "Find SQL injection risks" \
           --provider kimi --model pro    # Kimi K3 via MOONSHOT_API_KEY
+
+# Optional evidence-oriented Markdown contract (text is the default)
+triss ask --paths "src/**/*.ts" --question "Find SQL injection risks" \
+          --format evidence
 ```
 
 Typical output is a focused answer with cited file paths, not a raw file dump.
 That is the whole trick: the primary agent gets the useful bits, not a
 firehose wearing a moustache.
+
+`--format evidence` appends a trusted instruction requiring the model-authored
+Markdown sections `Outcome`, `Evidence`, `Uncertainty`, and `Decision required`.
+It does not make Triss semantically validate the model's claims. The same
+optional contract is available to `triss review` and MCP `triss_ask` /
+`triss_review` as `response_format: "evidence"`; defaults remain unchanged.
+
+### `triss exec`
+
+```bash
+triss exec --explain --paths README.md "summarize this project"
+triss exec --explain --review "review the current branch"
+triss exec --code "add a bounded validation"
+```
+
+Repeat `--paths <path>` or `--urls <url>` when routing more than one source;
+the final positional argument remains the task:
+
+```bash
+triss exec --paths README.md --paths package.json "summarize this project"
+```
+
+Routing is deterministic: explicit review inputs (`--pr`, `--base`,
+`--review`) take precedence, then `--paths`/`--urls` for `ask`, `--code`, and
+`--chat`. Without an explicit route, review/audit language selects `review`,
+explicit implementation/change language selects `coder run`, and everything
+else selects `chat`. Read-only status phrases such as `show build status` stay
+on `chat`. Contradictory explicit signals and stdin-only routing fail
+closed. Options unsupported by the selected route also fail instead of being
+silently discarded. In `--explain`, such a failure is represented by
+`route: null` with its reason rather than thrown. `--explain` emits
+schema-versioned JSON and performs no model, Git, network, stdin, or filesystem
+mutation.
+
+`exec --max-tokens` is forwarded to ask, review, and chat. For coder routing it
+is supported with `--engine crush`; the OpenCode engine has no per-run token
+budget flag, so `exec --code --max-tokens ...` without Crush fails explicitly
+instead of silently ignoring the requested cap.
 
 ### `triss write`
 
@@ -1052,8 +1095,6 @@ test suite.
 
 **Planned**:
 
-- [ ] `triss exec <task>` — auto-route a freeform task to the right
-      sub-command
 - [ ] More provider recipe blocks in the docs (Kimi, Ollama,
       OpenRouter — examples already present, but with terse setup steps)
 

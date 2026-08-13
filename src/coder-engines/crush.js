@@ -130,6 +130,7 @@ export function buildCrushRunArgv({
   continue: cont,
   cwd,
   timeoutSec = 900,
+  maxTokens,
   restrict = true,
 } = {}) {
   const argv = [
@@ -142,6 +143,7 @@ export function buildCrushRunArgv({
     '--agents',
     'single',
   ];
+  if (maxTokens !== undefined) argv.push('--max-tokens', String(maxTokens));
   if (restrict) {
     argv.push('--restrict-run');
     // CLI allow flags are the load-bearing enforcement (config is inert — see
