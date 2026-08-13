@@ -1,8 +1,10 @@
 import pc from 'picocolors';
 import { fetchAsMarkdown } from '../web.js';
 import { summarize, printResult } from '../integrations/_contract.js';
+import { positiveIntegerOption } from '../option-validation.js';
 
 export async function runFetch(urls, opts) {
+  const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 4096);
   if (!urls?.length) throw new Error('Pass at least one URL');
   const corpus = [];
   for (const u of urls) {
@@ -26,7 +28,7 @@ export async function runFetch(urls, opts) {
       corpus: joined,
       question: opts.question,
       model: opts.model,
-      maxTokens: parseInt(opts.maxTokens, 10) || 4096,
+      maxTokens,
     });
     printResult(out);
   } else {

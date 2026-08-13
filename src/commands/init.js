@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import pc from 'picocolors';
@@ -13,6 +13,11 @@ import {
   END_MARKER,
   renderRules,
 } from '../agent-rules.js';
+import {
+  planManagedPath,
+  validateFileTransaction,
+  applyFileTransaction,
+} from '../marker-transaction.js';
 
 const SUPPORTED = [...SUPPORTED_TARGETS, 'both'];
 
@@ -24,9 +29,24 @@ export async function runInit(opts) {
   }
 
   const targets = raw === 'both' ? [...SUPPORTED_TARGETS] : [raw];
+  const plans = [];
   for (const t of targets) {
-    await writeAgentRules(t, opts);
+    const meta = TARGETS[t];
+    const block = (await renderRules(t, { variant: 'nano' })).trim();
+    const wrapped = `${START_MARKER}\n${block}\n${END_MARKER}\n`;
+    const destPath = opts.global
+      ? join(homedir(), meta.globalDir, meta.filename)
+      : join(process.cwd(), meta.filename);
+    // All marker validation and reads happen before any destination is written.
+    plans.push(planManagedPath(destPath, wrapped));
   }
+  // This call protects the pre-mkdir boundary. applyFileTransaction repeats
+  // the check as defense in depth for callers that do not use runInit.
+  validateFileTransaction(plans);
+  // Directory creation is deliberately after every target has been preflighted.
+  for (const plan of plans) mkdirSync(dirname(plan.targetPath), { recursive: true });
+  applyFileTransaction(plans);
+  for (const plan of plans) reportPlan(plan, opts);
 
   await postInit(opts);
 }
@@ -45,39 +65,15 @@ async function chooseTarget() {
   );
 }
 
-async function writeAgentRules(target, opts) {
-  const meta = TARGETS[target];
-  // `init` writes the nano variant — the always-loaded block stays small.
-  // Full reference is on demand via `triss agent-help`.
-  const block = (await renderRules(target, { variant: 'nano' })).trim();
-  const wrapped = `${START_MARKER}\n${block}\n${END_MARKER}\n`;
-
-  const destPath = opts.global
-    ? join(homedir(), meta.globalDir, meta.filename)
-    : join(process.cwd(), meta.filename);
-
-  mkdirSync(dirname(destPath), { recursive: true });
-
-  if (!existsSync(destPath)) {
-    writeFileSync(destPath, wrapped);
-    process.stdout.write(pc.green(`✓ Created ${destPath}\n`));
-    return;
-  }
-  const existing = readFileSync(destPath, 'utf8');
-  if (existing.includes(START_MARKER) && existing.includes(END_MARKER)) {
-    const replaced = replaceBlock(existing, wrapped);
-    if (replaced === existing) {
-      process.stdout.write(pc.dim(`= ${destPath} already up to date\n`));
-    } else {
-      writeFileSync(destPath, replaced);
-      process.stdout.write(
-        pc.cyan(`${opts.force ? '↻ Force-updated' : '↻ Updated'} triss block in ${destPath}\n`),
-      );
-    }
+function reportPlan(plan, opts) {
+  if (plan.action === 'create') {
+    process.stdout.write(pc.green(`✓ Created ${plan.destination}\n`));
+  } else if (plan.action === 'unchanged') {
+    process.stdout.write(pc.dim(`= ${plan.destination} already up to date\n`));
+  } else if (plan.action === 'update') {
+    process.stdout.write(pc.cyan(`${opts.force ? '↻ Force-updated' : '↻ Updated'} triss block in ${plan.destination}\n`));
   } else {
-    const sep = existing.endsWith('\n') ? '\n' : '\n\n';
-    writeFileSync(destPath, existing + sep + wrapped);
-    process.stdout.write(pc.green(`+ Appended triss block to ${destPath}\n`));
+    process.stdout.write(pc.green(`+ Appended triss block to ${plan.destination}\n`));
   }
 }
 
@@ -123,21 +119,13 @@ async function postInit(opts) {
       process.stdout.write(`     → ${pc.cyan(t.cmd)}\n`);
     }
     process.stdout.write(
-      '\n' + pc.dim('  Tip: ') + pc.cyan('triss init --setup') + pc.dim(' creates the file and runs the wizard in one go.\n'),
+      '\n' +
+        pc.dim('  Tip: ') +
+        pc.cyan('triss init --setup') +
+        pc.dim(' creates the file and runs the wizard in one go.\n'),
     );
   }
 }
 
 // Re-export the helper for tests.
 export { postInit as _postInit };
-
-function replaceBlock(text, replacement) {
-  const start = text.indexOf(START_MARKER);
-  const end = text.indexOf(END_MARKER, start);
-  if (start === -1 || end === -1) return text;
-  const tail = end + END_MARKER.length;
-  // Trim a trailing newline from the original block to avoid duplicates.
-  const before = text.slice(0, start);
-  const after = text.slice(tail).replace(/^\n+/, '');
-  return `${before}${replacement.trimEnd()}\n${after}`;
-}

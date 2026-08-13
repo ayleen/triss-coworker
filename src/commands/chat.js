@@ -2,8 +2,18 @@ import pc from 'picocolors';
 import { chat, chatStream, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';
 import { readStdin } from '../secrets.js';
+import { positiveIntegerOption } from '../option-validation.js';
+
+export function validateChatOptions(opts = {}, prompt) {
+  const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 4096);
+  if (!opts.stdin && !prompt) {
+    throw new Error('Pass a prompt as argument or via --stdin');
+  }
+  return { maxTokens };
+}
 
 export async function runChat(prompt, opts) {
+  const { maxTokens } = validateChatOptions(opts, prompt);
   let resolved = prompt;
   if (opts.stdin) {
     if (process.stdin.isTTY) {
@@ -28,14 +38,14 @@ export async function runChat(prompt, opts) {
   const resp = useStream
     ? await chatStream({
         model,
-        maxTokens: parseInt(opts.maxTokens, 10) || 4096,
+        maxTokens,
         messages,
         label: 'triss/chat',
         onChunk: (d) => process.stdout.write(d),
       })
     : await chat({
         model,
-        maxTokens: parseInt(opts.maxTokens, 10) || 4096,
+        maxTokens,
         messages,
         label: 'triss/chat',
       });

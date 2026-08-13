@@ -15,9 +15,12 @@ import {
   mkdtempSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   mkdirSync,
   existsSync,
+  renameSync,
   rmSync,
+  symlinkSync,
 } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -181,6 +184,29 @@ test('INIT-CODEX-02: --global writes to ~/.codex/AGENTS.md', async () => {
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
 });
 
+test('INIT-BOTH: rejects destinations that resolve to the same symlink target before writes', async () => {
+  await withTmpEnv(async ({ projectDir }) => {
+    const claudePath = join(projectDir, 'CLAUDE.md');
+    const codexPath = join(projectDir, 'AGENTS.md');
+    const backingPath = join(projectDir, 'shared-rules.md');
+    const { runInit } = await import('../src/commands/init.js');
+
+    await runInit({ target: 'claude' });
+    renameSync(claudePath, backingPath);
+    symlinkSync('shared-rules.md', claudePath);
+    symlinkSync('shared-rules.md', codexPath);
+    const before = readFileSync(backingPath);
+    const entriesBefore = readdirSync(projectDir).sort();
+
+    await assert.rejects(
+      () => runInit({ target: 'both' }),
+      /CLAUDE\.md.*AGENTS\.md|AGENTS\.md.*CLAUDE\.md|resolve to the same target/i,
+    );
+    assert.deepEqual(readFileSync(backingPath), before);
+    assert.deepEqual(readdirSync(projectDir).sort(), entriesBefore);
+  });
+});
+
 // ── INIT-03: existing CLAUDE.md without markers → appends block ───────────────
 
 test('INIT-03: existing CLAUDE.md without markers gets block appended', async () => {
@@ -307,6 +333,21 @@ test('INIT-04: re-run updates triss block but preserves surrounding content', as
 
   if (origApiKey !== undefined) process.env.TRISS_WORKER_API_KEY = origApiKey;
   if (origWorkerKey !== undefined) process.env.WORKER_API_KEY = origWorkerKey;
+});
+
+test('INIT-04b: --force never bypasses malformed marker validation', async () => {
+  await withTmpEnv(async ({ projectDir }) => {
+    const destPath = join(projectDir, 'CLAUDE.md');
+    const malformed = `user content\n${START_MARKER}\nunterminated managed block\n`;
+    writeFileSync(destPath, malformed);
+
+    const { runInit } = await import('../src/commands/init.js');
+    await assert.rejects(
+      () => runInit({ target: 'claude', force: true }),
+      /invalid Triss marker layout/i,
+    );
+    assert.equal(readFileSync(destPath, 'utf8'), malformed);
+  });
 });
 
 // ── INIT-07: {{INTEGRATIONS}} placeholder — empty when no integration ready ───

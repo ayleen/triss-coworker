@@ -2,9 +2,8 @@ import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import {
-  REVIEW_SYSTEM_PROMPT,
-  bindReviewPromptToBoundary,
   createReviewBoundaryId,
+  reviewSystemPromptForFormat,
   wrapReviewSection,
 } from '../review-prompt.js';
 import { readStdin } from '../secrets.js';
@@ -19,6 +18,8 @@ import {
   parseTicketKey,
 } from '../git.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
+import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
+import { positiveIntegerOption } from '../option-validation.js';
 
 const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
@@ -27,21 +28,28 @@ export async function runReview(prNumber, opts) {
   return runReviewWithDeps(prNumber, opts);
 }
 
-// Test seam matching ask.js: the production entry point cannot accidentally
-// receive Commander's extra action argument as dependencies, while focused
-// tests can inject the provider response without making a network call.
-export async function runReviewWithDeps(prNumber, opts, deps = {}) {
-  const stdinMode = Boolean(opts.stdin);
-  if (stdinMode && prNumber !== undefined) {
+export function validateReviewOptions(prNumber, opts) {
+  const responseFormat = validateResponseFormat(opts.format);
+  const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 8192);
+  if (opts.stdin && prNumber !== undefined) {
     throw new Error(
       'Cannot combine a PR number with --stdin. Use: git diff | triss review --stdin',
     );
   }
-  if (stdinMode && opts.base !== undefined) {
+  if (opts.stdin && opts.base !== undefined) {
     throw new Error(
       'Cannot combine --base with --stdin. Use: git diff | triss review --stdin',
     );
   }
+  return { responseFormat, maxTokens };
+}
+
+// Test seam matching ask.js: the production entry point cannot accidentally
+// receive Commander's extra action argument as dependencies, while focused
+// tests can inject the provider response without making a network call.
+export async function runReviewWithDeps(prNumber, opts, deps = {}) {
+  const { responseFormat, maxTokens } = validateReviewOptions(prNumber, opts);
+  const stdinMode = Boolean(opts.stdin);
 
   const isTTY = deps.isTTY ?? process.stdin.isTTY;
   const readInput = deps.readStdin || readStdin;
@@ -75,15 +83,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     }
   }
 
-  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
-  const sendChat = deps.chat || chat;
-  const sendChatStream = deps.chatStream || chatStream;
   const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
-  const request = resolveRequest({
-    provider: opts.provider,
-    model: opts.model || 'pro',
-  });
-  const { provider, model } = request;
 
   let title;
   let description = '';
@@ -113,13 +113,23 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     headRef = currentBranch();
     baseRef = baseRef || defaultBranch();
     title = headRef;
-    diff = gitDiff(baseRef, 'HEAD');
+    diff = (deps.gitDiff || gitDiff)(baseRef, 'HEAD');
   }
 
   if (!diff.trim()) {
-    process.stdout.write(pc.dim('(no changes between branches — nothing to review)\n'));
-    return;
+    const empty = emptyReviewResponse(responseFormat);
+    process.stdout.write(responseFormat === 'evidence' ? `${empty}\n` : pc.dim(`${empty}\n`));
+    return responseFormat === 'evidence' ? empty : undefined;
   }
+
+  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
+  const sendChat = deps.chat || chat;
+  const sendChatStream = deps.chatStream || chatStream;
+  const request = resolveRequest({
+    provider: opts.provider,
+    model: opts.model || 'pro',
+  });
+  const { provider, model } = request;
 
   const ticketCorpus = stdinMode || opts.skipIssue
     ? ''
@@ -163,12 +173,11 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   const messages = [
     {
       role: 'system',
-      content: bindReviewPromptToBoundary(REVIEW_SYSTEM_PROMPT, boundaryId),
+      content: reviewSystemPromptForFormat(responseFormat, { boundaryId }),
     },
     { role: 'user', content: corpus },
     { role: 'user', content: opts.question || DEFAULT_QUESTION },
   ];
-  const maxTokens = parseInt(opts.maxTokens, 10) || 8192;
   const useStream = shouldStream(opts);
   const resp = useStream
     ? await sendChatStream({

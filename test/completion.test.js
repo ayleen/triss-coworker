@@ -104,3 +104,16 @@ test('zsh completion surfaces coder models and coder model set flags', () => {
   assert.match(out, /'--small'/);
   assert.match(out, /'--allow-unsafe-bash'/);
 });
+
+test('completion exposes the exec router and explain flag', () => {
+  const program = fixtureProgram();
+  program
+    .command('exec [task]')
+    .description('route a task')
+    .option('--explain')
+    .option('--paths <path>')
+    .action(() => {});
+  const out = captureStdout(() => runCompletion('bash', program));
+  assert.match(out, /compgen -W "ask write config coder exec/);
+  assert.match(out, /exec\)[\s\S]*--explain --paths/);
+});

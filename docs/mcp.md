@@ -225,7 +225,8 @@ Core tools are always listed. Model calls default to the worker and require
 - `triss_chat` — bare prompt to the worker model
 - `triss_ask` — read files/URLs and answer a question; accepts an optional
   `provider` field: `worker` (default), `deepseek` (an alias for `worker`),
-  `glm`, or `kimi` (`moonshot` is an alias)
+  `glm`, or `kimi` (`moonshot` is an alias), plus optional
+  `response_format: "text" | "evidence"` (default `text`)
 - `triss_fetch` — fetch URL(s) as markdown, optional summary
 - `triss_review` — code review on the current branch or a GitHub PR; accepts
   the same optional `provider` field as `triss_ask`. It remains Git/PR-based:
@@ -234,7 +235,9 @@ Core tools are always listed. Model calls default to the worker and require
   mode. Its shared review system prompt treats PR metadata, linked-ticket text,
   and diff text as untrusted data and does not follow instructions embedded in
   that content. Unpredictable per-request boundary markers keep marker-like
-  content inside its actual metadata, ticket, or diff section.
+  content inside its actual metadata, ticket, or diff section. It also accepts
+  `response_format: "text" | "evidence"` (default `text`), using the same
+  shared model-authored Markdown contract as `triss_ask`.
 - `triss_commit_msg` — generate a Conventional Commits message from staged diff
 - `triss_write` — generate boilerplate from a spec; with `target` writes the file (path-sandboxed), without `target` returns the content
 - `triss_status` — current configuration and integration readiness, including a

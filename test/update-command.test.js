@@ -243,6 +243,18 @@ test('generic passive hook suppresses every update mode and machine surfaces', (
   ]) {
     assert.equal(shouldSuppressPassiveCheck({ argv }), true, argv.join(' '));
   }
+  assert.equal(shouldSuppressPassiveCheck({
+    argv: ['exec', '--explain', 'review this change'],
+    stderrIsTTY: true,
+  }), true, 'exec --explain must stay side-effect free in an interactive terminal');
+  assert.equal(shouldSuppressPassiveCheck({
+    argv: ['exec', 'review this change', '--explain'],
+    stderrIsTTY: true,
+  }), true, 'Commander accepts --explain after the positional task');
+  assert.equal(shouldSuppressPassiveCheck({
+    argv: ['exec', '--', '--explain'],
+    stderrIsTTY: true,
+  }), false, '--explain after the option terminator is positional text');
   assert.equal(shouldSuppressPassiveCheck({ argv: ['ask'], stderrIsTTY: true }), false);
 });
 

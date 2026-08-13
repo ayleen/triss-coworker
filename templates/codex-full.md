@@ -16,6 +16,7 @@ reasoning and edits.
 | `triss extract <session.jsonl> -o <out>` | extract human-readable transcript from Claude Code logs |
 | `triss fetch <url> [--question "<q>"]` | fetch URL → markdown (with `--question`, summary) |
 | `triss review [<pr>]` | code review on a branch, GitHub PR, or explicitly piped diff (`--stdin`; linked ticket only for branch/PR) |
+| `triss exec --explain [<task>]` | explain deterministic routing to ask, review, coder run, or chat without executing it |
 | `triss commit-msg [--apply]` | Conventional Commits message from staged diff |
 | `triss usage [--since 7d \| --month] [--by-project]` | cumulative cost / token report |
 | `triss status` | model + integration readiness |
@@ -39,6 +40,20 @@ or infers Git, PR, branch, changed-file, or ticket metadata. Unpredictable
 per-request boundary markers keep marker-like diff text inside the untrusted
 diff section. `--skip-issue` remains accepted for compatibility but has no
 effect in stdin mode.
+
+Add `--format evidence` to `triss ask` or `triss review` when the response must
+use the shared Outcome / Evidence / Uncertainty / Decision required contract.
+Text remains the default. Invalid formats fail before source or model I/O.
+
+### `triss exec` — deterministic routing
+
+Use `triss exec --explain [task]` to inspect the route as stable JSON without a
+model call, Git diff, stdin read, integration bootstrap, or filesystem mutation.
+Explicit `--paths`/`--urls`, review inputs, `--code`, and `--chat` select their
+downstream commands; conservative lexical routing otherwise defaults ambiguous
+requests to chat. Conflicting signals and unsupported route options fail closed.
+Inspection reports those failures as `route: null` plus a reason; execution
+raises the same reason as an error.
 
 ## When to delegate
 

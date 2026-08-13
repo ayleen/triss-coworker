@@ -8,7 +8,7 @@ if (nodeMajor < 22) {
   process.exit(1);
 }
 
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { readFileSync } from 'node:fs';
 import pc from 'picocolors';
 import { runAsk } from '../src/commands/ask.js';
@@ -29,6 +29,7 @@ import { runInit } from '../src/commands/init.js';
 import { runAgentHelp } from '../src/commands/agent-help.js';
 import { runStatus } from '../src/commands/status.js';
 import { runCompletion } from '../src/commands/completion.js';
+import { runExec } from '../src/commands/exec.js';
 import { runUpdate } from '../src/commands/update.js';
 import {
   runWizard,
@@ -43,15 +44,37 @@ import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.
 import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
+import { positiveIntegerOption, positiveNumberOption } from '../src/option-validation.js';
 import { loadEnvFiles } from '../src/config.js';
 import {
   runDefaultPassiveCliCheck,
   shouldSuppressPassiveCheck,
 } from '../src/update/passive.js';
+import { isExecExplainInvocation } from '../src/cli-argv.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 );
+
+function collectOption(value, previous) {
+  return previous.concat(value);
+}
+
+function parsePositiveInteger(value) {
+  try {
+    return positiveIntegerOption(value);
+  } catch (error) {
+    throw new InvalidArgumentError(error.message);
+  }
+}
+
+function parsePositiveNumber(value) {
+  try {
+    return positiveNumberOption(value);
+  } catch (error) {
+    throw new InvalidArgumentError(error.message);
+  }
+}
 
 const program = new Command();
 program
@@ -93,8 +116,9 @@ program
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
   .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
-  .option('--max-tokens <n>', 'token budget for reasoning + answer', (v) => parseInt(v, 10), 8192)
+  .option('--max-tokens <n>', 'token budget for reasoning + answer', parsePositiveInteger, 8192)
   .option('--system <text>', 'override the system prompt')
+  .option('--format <format>', 'response format: text (default) or evidence')
   .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', "disable streaming output (default streams when stdout is a TTY)")
   // Commander also supplies its Command instance to action handlers. Adapt
@@ -108,7 +132,7 @@ program
   .requiredOption('-t, --target <path>', 'output file path')
   .option('-c, --context <path>', 'reference file to mimic in style')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
-  .option('--max-tokens <n>', 'token budget for reasoning + output', (v) => parseInt(v, 10), 16384)
+  .option('--max-tokens <n>', 'token budget for reasoning + output', parsePositiveInteger, 16384)
   .action(wrap(runWrite));
 
 program
@@ -141,6 +165,39 @@ program
   .action((prompt, opts) => wrap(runChat)(prompt, opts));
 
 program
+  .command('exec [task]')
+  .description('Route a task deterministically to ask, review, coder run, or chat')
+  .option('--explain', 'print the JSON route decision without executing anything')
+  .option('--pr <number>', 'explicitly route to review a GitHub PR')
+  .option('--base <branch>', 'explicitly route to review against a base branch')
+  .option('--review', 'explicitly route to review')
+  .option('--skip-issue', 'forward review linked-ticket lookup suppression')
+  .option('--paths <path>', 'explicitly route to ask with a file path; repeat for multiple paths', collectOption, [])
+  .option('--urls <url>', 'explicitly route to ask with a URL; repeat for multiple URLs', collectOption, [])
+  .option('--code', 'explicitly route to coder run')
+  .option('--chat', 'explicitly route to chat')
+  .option('--stdin', 'let the selected downstream command read piped input')
+  .option('--provider <name>', 'forward the inference provider')
+  .option('-m, --model <name>', 'forward the model')
+  .option('--max-tokens <n>', 'forward the token budget')
+  .option('--format <format>', 'forward ask/review response format: text or evidence')
+  .option('--system <text>', 'forward the system prompt to ask/chat')
+  .option('--stream', 'forward streaming preference')
+  .option('--no-stream', 'disable forwarded streaming')
+  .option('--engine <name>', 'forward coder engine')
+  .option('--agent <name>', 'forward coder agent template')
+  .option('--session <id>', 'forward coder session')
+  .option('--continue', 'continue the most recent coder session')
+  .option('--small-model <p/m>', 'forward coder small model')
+  .option('--isolate', 'forward coder isolation')
+  .option('--no-isolate', 'disable coder isolation')
+  .option('--restrict', 'forward coder restriction')
+  .option('--no-restrict', 'disable coder restriction')
+  .option('--cwd <path>', 'forward coder working directory')
+  .option('--timeout <sec>', 'forward coder timeout')
+  .action((task, opts) => wrap(runExec)(task, opts));
+
+program
   .command('commit-msg')
   .description('Generate a Git commit message from staged changes (Conventional Commits by default).')
   .option('--apply', 'run `git commit -m <generated>` immediately instead of printing')
@@ -161,6 +218,7 @@ program
   .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
+  .option('--format <format>', 'response format: text (default) or evidence')
   .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
   .action((pr, opts) => wrap(runReview)(pr, opts));
@@ -294,7 +352,7 @@ coder
   .option('--restrict', 'crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)')
   .option('--no-restrict', 'crush only: disable restrict (crush auto-approves every tool — the default)')
   .option('--cwd <path>', 'working directory (ignored with --isolate)')
-  .option('--timeout <sec>', 'kill the engine after this many seconds', (v) => parseInt(v, 10), 900)
+  .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));
@@ -397,7 +455,14 @@ mcp
   .action(wrap(runMcpStatus));
 
 // Plugin-style integrations (jira, linear, ...). See docs/extending.md.
-const integrations = await loadIntegrations();
+// `exec --explain` is an inspection mode that performs no work at all, so it
+// must not trigger integration *startup* side effects: the github integration
+// bootstraps by spawning `gh auth token` (a credential child process) at load
+// time. Explain skips the load entirely — its route decision needs none of
+// the integration subcommands. Every other command still loads and registers
+// them normally.
+const isExplainOnly = isExecExplainInvocation(process.argv.slice(2));
+const integrations = isExplainOnly ? [] : await loadIntegrations();
 for (const manifest of integrations) {
   const sub = program.command(manifest.name).description(manifest.description || manifest.name);
   manifest.register(sub, { wrap });

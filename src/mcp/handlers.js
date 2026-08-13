@@ -4,9 +4,10 @@
 import { chat as workerChat, reportUsage, responseText } from '../client.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
-import { REVIEW_SYSTEM_PROMPT } from '../review-prompt.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
+import { validateResponseFormat, withEvidenceInstructions } from '../response-format.js';
+import { positiveIntegerOption } from '../option-validation.js';
 import { PACKAGE_VERSION, compareStableVersions } from '../version.js';
 
 const ASK_SYSTEM =
@@ -50,16 +51,19 @@ function withUsage({ content, usageReport }) {
 
 export async function chatHandler({ prompt, system, model, max_tokens }) {
   if (!prompt) throw new Error('prompt is required');
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 4096);
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  return withUsage(await callModel({ model, messages, maxTokens: max_tokens }));
+  return withUsage(await callModel({ model, messages, maxTokens }));
 }
 
 export async function askHandler(
-  { paths, urls, question, provider, model, max_tokens, system },
+  { paths, urls, question, provider, model, max_tokens, system, response_format },
   deps = {},
 ) {
+  const responseFormat = validateResponseFormat(response_format);
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
   if (!question) throw new Error('question is required');
   if (!paths?.length && !urls?.length) {
     throw new Error('Pass at least one of paths or urls');
@@ -77,22 +81,30 @@ export async function askHandler(
         `<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`;
     }
   }
-  return withUsage(await callModel(
+  const { content, usageReport } = await callModel(
     {
       provider,
       model,
-      maxTokens: max_tokens || 8192,
+      maxTokens,
       messages: [
-        { role: 'system', content: system || ASK_SYSTEM },
+        { role: 'system', content: withEvidenceInstructions(system || ASK_SYSTEM, responseFormat) },
         { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
         { role: 'user', content: question },
       ],
     },
     deps,
-  ));
+  );
+  // Evidence mode returns the model-authored contract verbatim: it ends at
+  // "Decision required: none", and appending the usage line after that would
+  // break the contract. Usage observability stays in the persisted usage log
+  // (`triss usage`), not in the tool result. Text mode (the default) keeps
+  // the historical appended report.
+  if (responseFormat === 'evidence') return content;
+  return withUsage({ content, usageReport });
 }
 
 export async function fetchHandler({ urls, question, model, max_tokens }) {
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 4096);
   if (!urls?.length) throw new Error('urls is required');
   const parts = [];
   for (const u of urls) {
@@ -103,7 +115,7 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
   if (!question) return corpus;
   return withUsage(await callModel({
     model,
-    maxTokens: max_tokens || 4096,
+    maxTokens,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
       { role: 'user', content: `<data>\n${corpus}\n</data>` },
@@ -121,9 +133,12 @@ export async function reviewHandler(
     provider,
     model,
     max_tokens,
+    response_format,
   },
   deps = {},
 ) {
+  const responseFormat = validateResponseFormat(response_format);
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
   return runReviewCore({
@@ -133,8 +148,8 @@ export async function reviewHandler(
     question,
     provider,
     model: model || 'pro',
-    maxTokens: max_tokens || 8192,
-    reviewSystem: REVIEW_SYSTEM_PROMPT,
+    maxTokens,
+    responseFormat,
     callModel: deps.callModel || callModel,
     reviewBoundaryId: deps.reviewBoundaryId,
   });
@@ -157,6 +172,7 @@ function stripFences(s) {
 
 export async function writeHandler({ spec, target, context, model, max_tokens }) {
   if (!spec) throw new Error('spec is required');
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 16384);
   const { readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
   const { dirname } = await import('node:path');
   const { assertSafePath } = await import('../safety.js');
@@ -170,7 +186,7 @@ export async function writeHandler({ spec, target, context, model, max_tokens })
 
   const { content, usageReport } = await callModel({
     model,
-    maxTokens: max_tokens || 16384,
+    maxTokens,
     messages: [
       { role: 'system', content: WRITE_SYSTEM },
       { role: 'user', content: `${ctx}Write: ${spec}` },
@@ -1003,6 +1019,7 @@ export async function coderStatusHandler() {
 // ─── commit-msg ─────────────────────────────────────────────────────────────
 
 export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 2048);
   const { git } = await import('../git.js');
   const diff = git(['diff', '--staged']);
   if (!diff.trim()) {
@@ -1026,7 +1043,7 @@ export async function commitMsgHandler({ type, scope, conventional = true, model
     .join('\n');
   return withUsage(await callModel({
     model,
-    maxTokens: max_tokens || 2048,
+    maxTokens,
     messages: [
       { role: 'system', content: SYSTEM },
       { role: 'user', content: userPrompt },

@@ -299,7 +299,6 @@ test('REV-06: MCP review core forwards the selected inference provider and model
       provider: 'glm',
       model: 'zai/glm-5.2',
       maxTokens: 1234,
-      reviewSystem: 'Review.',
       callModel: async (request) => {
         captured = request;
         return { content: 'reviewed', usageReport: '' };
@@ -368,6 +367,9 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
     assert.match(systemPrompt, /one short bullet per concrete issue/i);
     assert.match(systemPrompt, /quote file paths and line numbers exactly/i);
     assert.match(systemPrompt, /do not summarise the diff/i);
+    // Text mode keeps the exact one-line clean output rule.
+    assert.match(systemPrompt, /No issues found/);
+    assert.match(systemPrompt, /in one line/);
     assert.match(systemPrompt, /Identify:\n\n1\. Bugs or regressions/i);
     assert.match(
       captured.messages[1].content,
@@ -400,6 +402,7 @@ test('REV-07: CLI review preserves a successful GLM top-level final_text respons
   const dir = makeTmpDir();
   const originalCwd = process.cwd();
   const captured = [];
+  let modelRequest;
   const originalWrite = process.stdout.write;
 
   try {
@@ -424,17 +427,191 @@ test('REV-07: CLI review preserves a successful GLM top-level final_text respons
       { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', noStream: true },
       {
         resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
-        chat: async () => ({
-          final_text: 'No issues found.',
-          usage: { prompt_tokens: 10, completion_tokens: 4 },
-        }),
+        chat: async (request) => {
+          modelRequest = request;
+          return {
+            final_text: 'No issues found.',
+            usage: { prompt_tokens: 10, completion_tokens: 4 },
+          };
+        },
       },
     );
 
     assert.equal(result, 'No issues found.');
     assert.match(captured.join(''), /No issues found\./);
+    assert.match(modelRequest.messages[0].content, /say "No issues found\." in one line/);
+    assert.match(modelRequest.messages[0].content, /trusted boundary ID/i);
+    assert.doesNotMatch(modelRequest.messages[0].content, /Outcome:/);
   } finally {
     process.stdout.write = originalWrite;
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-08: CLI streaming review evidence prompt drops the one-line clean rule and requires the evidence contract', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  const originalWrite = process.stdout.write;
+  const originalErr = process.stderr.write;
+  let captured;
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/evidence-cli']);
+    addChange(dir, 'evidence.js', 'export const ok = true;\n');
+    process.chdir(dir);
+    process.stdout.write = () => true;
+    process.stderr.write = () => true;
+
+    const { runReviewWithDeps } = await import('../src/commands/review.js');
+    await runReviewWithDeps(
+      undefined,
+      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', format: 'evidence', stream: true },
+      {
+        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+        chatStream: async (request) => {
+          captured = request;
+          request.onChunk('Outcome: no issues found');
+          return { final_text: 'Outcome: no issues found', usage: {} };
+        },
+      },
+    );
+
+    const systemPrompt = captured.messages[0].content;
+    // Evidence mode must not simultaneously require the one-line text verdict.
+    assert.doesNotMatch(systemPrompt, /say "No issues found\." in one line/);
+    // It must require the shared Markdown contract and direct the clean case.
+    assert.match(systemPrompt, /Outcome:/);
+    assert.match(systemPrompt, /Outcome: No issues found\./);
+    assert.match(systemPrompt, /Evidence:/);
+    assert.match(systemPrompt, /Uncertainty:/);
+    assert.match(systemPrompt, /Decision required: none/);
+    assert.match(systemPrompt, /clean verdict/i);
+    assert.match(systemPrompt, /explicit none/i);
+    assert.match(systemPrompt, /trusted boundary ID/i);
+    assert.equal(typeof captured.onChunk, 'function');
+  } finally {
+    process.stdout.write = originalWrite;
+    process.stderr.write = originalErr;
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-09: MCP review evidence prompt drops the one-line clean rule and requires the evidence contract', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  let captured;
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/evidence-mcp']);
+    addChange(dir, 'evidence-mcp.js', 'export const reviewed = true;\n');
+    process.chdir(dir);
+
+    const { reviewHandler } = await import('../src/mcp/handlers.js');
+    await reviewHandler(
+      {
+        base: 'main',
+        skip_issue: true,
+        provider: 'glm',
+        model: 'zai/glm-5.2',
+        max_tokens: 1234,
+        response_format: 'evidence',
+      },
+      {
+        callModel: async (request) => {
+          captured = request;
+          return { content: 'Outcome: no issues found', usageReport: '' };
+        },
+        reviewBoundaryId: 'test-boundary-evidence',
+      },
+    );
+
+    const systemPrompt = captured.messages[0].content;
+    // Evidence mode must not simultaneously require the one-line text verdict.
+    assert.doesNotMatch(systemPrompt, /say "No issues found\." in one line/);
+    // It must require the shared Markdown contract and direct the clean case.
+    assert.match(systemPrompt, /Outcome:/);
+    assert.match(systemPrompt, /Outcome: No issues found\./);
+    assert.match(systemPrompt, /Evidence:/);
+    assert.match(systemPrompt, /Uncertainty:/);
+    assert.match(systemPrompt, /Decision required: none/);
+    assert.match(systemPrompt, /clean verdict/i);
+    assert.match(systemPrompt, /explicit none/i);
+    assert.match(systemPrompt, /trusted boundary ID[^\n]*test-boundary-evidence/i);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-10: MCP review evidence returns the model-authored contract without the usage report', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/evidence-mcp-no-usage']);
+    addChange(dir, 'evidence-no-usage.js', 'export const reviewed = true;\n');
+    process.chdir(dir);
+
+    const { reviewHandler } = await import('../src/mcp/handlers.js');
+    const modelContract = [
+      'Outcome: No issues found.',
+      '',
+      'Evidence:',
+      '- none',
+      '',
+      'Uncertainty:',
+      '- none',
+      '',
+      'Decision required: none',
+    ].join('\n');
+    // A non-empty usageReport proves the report would have been appended —
+    // evidence mode must drop it so the contract still ends at the decision.
+    const report = '[triss/review: 10 input / 4 output | finish: stop]';
+    const result = await reviewHandler(
+      {
+        base: 'main',
+        skip_issue: true,
+        response_format: 'evidence',
+      },
+      {
+        callModel: async () => ({ content: modelContract, usageReport: report }),
+        reviewBoundaryId: 'test-boundary-evidence-no-usage',
+      },
+    );
+    assert.equal(result, modelContract);
+    assert.ok(!result.includes('finish:'), `usage report must not be appended: ${result}`);
+    assert.ok(result.trimEnd().endsWith('Decision required: none'));
+
+    // Text mode (the default) keeps the appended usage report.
+    const textResult = await reviewHandler(
+      { base: 'main', skip_issue: true },
+      {
+        callModel: async () => ({ content: 'reviewed', usageReport: report }),
+        reviewBoundaryId: 'test-boundary-text-usage',
+      },
+    );
+    assert.equal(textResult, `reviewed\n\n${report}`);
+  } finally {
     process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });
   }

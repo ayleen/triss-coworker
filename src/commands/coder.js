@@ -40,6 +40,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
+import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
 // because both sides only touch the imported bindings inside function
@@ -3850,6 +3851,7 @@ async function runCrushFlow({
     continue: !!opts.continue,
     cwd: dir,
     timeoutSec,
+    maxTokens: opts.maxTokens,
     restrict,
   });
   const env = crushEngine.buildSpawnEnv();
@@ -4082,55 +4084,26 @@ function resolveSlug(opts, isolate) {
 
 // ─── runCoderRun ─────────────────────────────────────────────────────────────────
 
-export async function runCoderRun(promptArg, opts = {}, deps = {}) {
-  // The engine env allowlist (buildEngineEnv) and the timeout kill
-  // (negative-PID process-group SIGTERM/SIGKILL in spawnEngine) are both
-  // POSIX-only. Rather than ship a silently half-working Windows path
-  // (no group kill => a hung/retrying engine can never be terminated by
-  // --timeout), refuse explicitly.
-  if (process.platform === 'win32') {
-    throw new Error('triss coder run is POSIX-only for now (Windows is not supported).');
-  }
-
-  const workerShellEnv = captureWorkerShellSnapshot();
+export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   const engine = resolveCoderEngine(opts);
-  loadEnvFiles();
-  const sh = deps.spawnSync || nodeSpawnSync;
-  const spawnFn = deps.spawn || nodeSpawn;
-  // A custom spawn seam usually returns an EventEmitter test double with an
-  // arbitrary pid. Never let that pid authorize real OS signalling. Callers
-  // that deliberately create a real detached group through a custom spawn
-  // must also inject the matching killProcess seam explicitly.
-  const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
-
-  const prompt = await resolveCoderPrompt(promptArg, opts);
-
-  // Effective --isolate. The two engines DEFAULT differently:
-  //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
-  //     reliable safety layer — it actually enforces).
-  //   - crush: isolate-ON. crush 0.1.3's `permissions.run` config block is
-  //     INERT (live-verified, docs/crush-restrict-issues.md) and a denied bash
-  //     command deadlocks to the timeout instead of denying cleanly. So the
-  //     config allowlist is NOT a dependable safety layer today; the disposable
-  //     git worktree is. crush therefore ships isolate-ON by default — the same
-  //     posture it had before the (reverted) Variant-A flip — with opt-in
-  //     `--restrict` adding a CLI allowlist on top for defense-in-depth.
-  // An explicit --isolate / --no-isolate always wins for either engine.
-  // bin/triss.js declares BOTH options on `coder run` (neither carries a
-  // default), so Commander yields the tristate this line relies on:
-  // opts.isolate is `undefined` when neither flag is passed, `true` under
-  // --isolate, `false` under --no-isolate. (Do NOT add a default to either
-  // option — the undefined tristate is load-bearing here.)
+  const maxTokens = opts.maxTokens === undefined
+    ? undefined
+    : positiveIntegerOption(opts.maxTokens, '--max-tokens');
+  if (maxTokens !== undefined && engine !== 'crush') {
+    throw new Error(
+      '--max-tokens for coder runs requires --engine crush; OpenCode exposes no per-run token-budget flag.',
+    );
+  }
+  if (!opts.stdin && !prompt) {
+    throw new Error('Pass a prompt as argument or via --stdin');
+  }
+  if (opts.session && !SLUG_PATTERN.test(opts.session)) {
+    throw new Error(
+      `--session "${opts.session}" is invalid — slugs must match ${SLUG_PATTERN} ` +
+      '(letters, digits, underscore, hyphen; max 64 chars; no path separators).',
+    );
+  }
   const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
-
-  // Pure usage-error checks first, independent of environment/credentials
-  // — a caller should get "you combined two contradictory flags" rather
-  // than "no API key" when both are true.
-  //
-  // --continue resumes whatever opencode session was last active; --isolate
-  // (without --session) creates a brand-new worktree/branch on a random
-  // slug. Combined with no --session, those two are self-contradictory —
-  // there is no session tied to the fresh worktree to continue.
   if (opts.continue && isolate && !opts.session) {
     throw new Error(
       '--continue with --isolate requires --session <id> — without it, --isolate creates a new ' +
@@ -4138,15 +4111,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         'same --session slug you used to start that session.',
     );
   }
-
-  const agent = opts.agent || 'coder';
   const modelOverride = opts.model || null;
   if (opts.smallModel && !opts.provider) {
     throw new Error(
       '--small-model requires --provider <name> (MCP: small_model requires provider) — without an explicit provider, --model keeps its legacy main-only semantics.',
     );
   }
-
   let oneShotProvider = null;
   let oneShotSmallModel = null;
   if (opts.provider) {
@@ -4176,20 +4146,86 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       }
       const actualProvider = coderModelCredential(value).provider;
       if (actualProvider !== oneShotProvider) {
-        throw new Error(
-          `${flag} "${value}" does not belong to provider "${oneShotProvider}".`,
-        );
+        throw new Error(`${flag} "${value}" does not belong to provider "${oneShotProvider}".`);
       }
     }
-    const mainPrefix = String(modelOverride).split('/')[0];
-    const smallPrefix = String(oneShotSmallModel).split('/')[0];
-    if (mainPrefix !== smallPrefix) {
+    if (String(modelOverride).split('/')[0] !== String(oneShotSmallModel).split('/')[0]) {
       throw new Error(
         `--model and --small-model must use the same provider prefix for a one-shot run ` +
-          `(got "${mainPrefix}" and "${smallPrefix}").`,
+          `(got "${String(modelOverride).split('/')[0]}" and "${String(oneShotSmallModel).split('/')[0]}").`,
       );
     }
   }
+  if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env !== 'ZHIPU_API_KEY') {
+    throw new Error(
+      `The crush engine speaks Z.AI GLM only — it cannot run the non-GLM model "${modelOverride}". ` +
+        'Use the opencode engine (drop --engine crush) for triss-worker/*, opencode/*, opencode-go/*, moonshotai/*, or ' +
+        'kimi-for-coding/* models, or choose a GLM model.',
+    );
+  }
+  const timeoutSec = positiveNumberOption(opts.timeout, '--timeout', 900);
+  return {
+    engine,
+    maxTokens,
+    isolate,
+    modelOverride,
+    oneShotProvider,
+    oneShotSmallModel,
+    timeoutSec,
+  };
+}
+
+export async function runCoderRun(promptArg, opts = {}, deps = {}) {
+  // The engine env allowlist (buildEngineEnv) and the timeout kill
+  // (negative-PID process-group SIGTERM/SIGKILL in spawnEngine) are both
+  // POSIX-only. Rather than ship a silently half-working Windows path
+  // (no group kill => a hung/retrying engine can never be terminated by
+  // --timeout), refuse explicitly.
+  if (process.platform === 'win32') {
+    throw new Error('triss coder run is POSIX-only for now (Windows is not supported).');
+  }
+
+  const {
+    engine,
+    maxTokens,
+    isolate,
+    modelOverride,
+    oneShotProvider,
+    oneShotSmallModel,
+    timeoutSec,
+  } = validateCoderRunOptions(opts, { prompt: promptArg });
+  if (maxTokens !== undefined) {
+    opts = { ...opts, maxTokens };
+  }
+  const workerShellEnv = captureWorkerShellSnapshot();
+  loadEnvFiles();
+  const sh = deps.spawnSync || nodeSpawnSync;
+  const spawnFn = deps.spawn || nodeSpawn;
+  // A custom spawn seam usually returns an EventEmitter test double with an
+  // arbitrary pid. Never let that pid authorize real OS signalling. Callers
+  // that deliberately create a real detached group through a custom spawn
+  // must also inject the matching killProcess seam explicitly.
+  const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
+
+  const prompt = await resolveCoderPrompt(promptArg, opts);
+
+  // Effective --isolate. The two engines DEFAULT differently:
+  //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
+  //     reliable safety layer — it actually enforces).
+  //   - crush: isolate-ON. crush 0.1.3's `permissions.run` config block is
+  //     INERT (live-verified, docs/crush-restrict-issues.md) and a denied bash
+  //     command deadlocks to the timeout instead of denying cleanly. So the
+  //     config allowlist is NOT a dependable safety layer today; the disposable
+  //     git worktree is. crush therefore ships isolate-ON by default — the same
+  //     posture it had before the (reverted) Variant-A flip — with opt-in
+  //     `--restrict` adding a CLI allowlist on top for defense-in-depth.
+  // An explicit --isolate / --no-isolate always wins for either engine.
+  // bin/triss.js declares BOTH options on `coder run` (neither carries a
+  // default), so Commander yields the tristate this line relies on:
+  // opts.isolate is `undefined` when neither flag is passed, `true` under
+  // --isolate, `false` under --no-isolate. (Do NOT add a default to either
+  // option — the undefined tristate is load-bearing here.)
+  const agent = opts.agent || 'coder';
 
   const modelUsed = modelOverride || coderModel();
 
@@ -4204,13 +4240,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // with an opaque parse/timeout — reject it upfront with a clear message.
   // (A bare TRISS_CODER_MODEL=opencode/* env default is fine: crush ignores it
   // and runs its GLM atoms, so only the explicit override is a real mistake.)
-  if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env !== 'ZHIPU_API_KEY') {
-    throw new Error(
-      `The crush engine speaks Z.AI GLM only — it cannot run the non-GLM model "${modelOverride}". ` +
-        'Use the opencode engine (drop --engine crush) for triss-worker/*, opencode/*, opencode-go/*, moonshotai/*, or ' +
-        'kimi-for-coding/* models, or choose a GLM model.',
-    );
-  }
 
   const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
   const workerSettings = cred.provider === 'worker'
@@ -4272,11 +4301,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       `One-shot provider credential auditing is verified only for opencode ${OPENCODE_PIN}; ` +
         `found ${found}. Run \`npm install -g opencode-ai@${OPENCODE_PIN}\` and retry.`,
     );
-  }
-
-  const timeoutSec = opts.timeout == null ? 900 : Number(opts.timeout);
-  if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
-    throw new Error(`Invalid --timeout "${opts.timeout}" — must be a positive number of seconds`);
   }
 
   const slug = resolveSlug(opts, isolate);
