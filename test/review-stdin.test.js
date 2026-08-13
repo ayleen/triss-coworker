@@ -99,6 +99,29 @@ test('REV-STDIN-CLI-01: review help exposes the piped diff source', () => {
   assert.match(result.stdout, /piped|standard input|stdin/i);
 });
 
+test('REV-STDIN-CLI-01a: an empty provider response rejects with a stable error and no verdict', async () => {
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  let stdout = '';
+  process.stdout.write = (chunk) => {
+    stdout += String(chunk);
+    return true;
+  };
+  process.stderr.write = () => true;
+  try {
+    const deps = makeDeps('diff --git a/a.js b/a.js\n+export const changed = true;\n');
+    deps.chat = async () => ({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] });
+    await assert.rejects(
+      () => runReviewWithDeps(undefined, { stdin: true, noStream: true }, deps),
+      (error) => error?.code === 'TRISS_EMPTY_MODEL_RESPONSE' && /empty response/.test(error.message),
+    );
+    assert.doesNotMatch(stdout, /No issues found|changed/);
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+  }
+});
+
 test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review prompt', () => {
   const root = mkdtempSync(join(tmpdir(), 'triss-review-pr-gh-'));
   const ghPath = join(root, 'gh');

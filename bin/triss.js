@@ -413,8 +413,12 @@ function wrap(fn) {
     try {
       await withCall(() => fn(...args));
     } catch (err) {
-      process.stderr.write(pc.red(`✗ ${err.message || err}\n`));
-      process.exit(1);
+      const code = typeof err?.code === 'string' && err.code ? `${err.code}: ` : '';
+      process.stderr.write(pc.red(`✗ ${code}${err.message || err}\n`));
+      // Do not synchronously exit from an action handler: piped stderr can
+      // otherwise lose the only diagnostic. Commander can finish its action
+      // and Node flushes the stream before observing this non-zero exit code.
+      process.exitCode = 1;
     }
   };
 }
