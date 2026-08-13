@@ -267,8 +267,10 @@ non-continuing ephemeral native session. Add the fields below.
 Add `result_retention` with enum `none|retained` and nullable `result_id`.
 `retained` means the envelope's `worktree` is a still-existing result
 artifact (not a promise that a native engine
-conversation remains resumable); it is writable only by the user after Triss
-releases it and Triss never treats later user edits as verified run evidence.
+conversation remains resumable). It is an immutable, read-only managed
+artifact: retrieve/export or accept its code into another workspace, then use
+`coder result clean` to release it. Any same-UID permission bypass or Git-ref
+change is a tamper event, never a supported mutable-result update.
 Add `effective_isolation` with enum `isolated_enforced|non_isolated_requested|
 best_effort_caller_worktree`; the last value is an explicit downgrade, never an
 implicit implementation of `--isolate`.
@@ -302,7 +304,8 @@ Example successful implementation result:
     "writable_quota": "enforced",
     "credential_isolation": "enforced",
     "managed_root": "enforced",
-    "persistent_store_quota": "enforced"
+    "persistent_store_quota": "enforced",
+    "result_store_quota": "enforced"
   },
   "provider_status": "usable",
   "expectation": "changes",
@@ -400,7 +403,7 @@ after an otherwise zero exit is `unknown`, not `completed`.
 - `not_applicable`: no child process was created, including spawn failure, or a
   future engine does not create an owned sandbox process tree.
 
-`execution_capabilities` is a required envelope object with exactly seven
+`execution_capabilities` is a required envelope object with exactly eight
 keys, each one of `enforced|best_effort|unavailable`:
 
 - `sandbox`: OS write/network confinement for the engine and its tools;
@@ -415,6 +418,9 @@ keys, each one of `enforced|best_effort|unavailable`:
 - `managed_root`: no-follow, component-wise validated durable-state operations;
 - `persistent_store_quota`: OS-enforced aggregate bound for durable session
   stores and their transactional metadata.
+- `result_store_quota`: OS-enforced aggregate allocation-block bound for
+  `.triss/coder-results-v1/` retained worktrees, result metadata, and their
+  transaction temps.
 
 `enforced` means the named OS guarantee was active for this run. `best_effort`
 means Triss used a weaker host/engine mechanism but cannot make that guarantee.
@@ -426,9 +432,18 @@ process supervision can never yield verified cleanup.
 `credential_isolation` is the sole exception: it must be `enforced` before any
 engine spawn, including a best-effort run; otherwise preflight fails with
 `TRISS_CODER_CREDENTIAL_ISOLATION_REQUIRED`.
-Persistent-state eligibility is also closed and objective: it is true only when
-all seven capabilities are `enforced`; no `best_effort` value may be
-silently promoted into durable-session authority.
+Persistent-session eligibility is closed and objective: it is true only when
+the seven session capabilities (`sandbox`, `process_supervision`, `locking`,
+`writable_quota`, `credential_isolation`, `managed_root`, and
+`persistent_store_quota`) are `enforced`; `result_store_quota` is irrelevant
+to a named session that never creates a retained result. No `best_effort` value
+may be silently promoted into durable-session authority. Retained-result
+eligibility is separate and exact: it requires `sandbox`,
+`process_supervision`, `managed_root`, `credential_isolation`, and
+`result_store_quota` all `enforced`, plus a successful pre-spawn reservation.
+This separation is intentional: snapshot evidence requires the first three,
+but retaining an anonymous implementation result additionally requires a
+bounded result store.
 
 The complete stable non-enforced capability-warning enum is
 `TRISS_CODER_CAP_SANDBOX_BEST_EFFORT`,
@@ -437,6 +452,7 @@ The complete stable non-enforced capability-warning enum is
 `TRISS_CODER_CAP_WRITABLE_QUOTA_BEST_EFFORT`,
 `TRISS_CODER_CAP_MANAGED_ROOT_BEST_EFFORT`, and
 `TRISS_CODER_CAP_PERSISTENT_STORE_QUOTA_BEST_EFFORT`, and
+`TRISS_CODER_CAP_RESULT_STORE_QUOTA_BEST_EFFORT`, and
 `TRISS_CODER_PERSISTENCE_UNAVAILABLE`; one code appears once for each
 capability whose value is not `enforced`, in that field order. `unavailable`
 uses the same code because the machine-readable capability value distinguishes
@@ -889,7 +905,8 @@ byte-exact empty fixture is
 
 Only an explicit `--session <slug>` or omitted slug combined with
 `--keep-session` creates a persistent inventory entry. Persistent sessions are
-available only when all seven capabilities are `enforced`, and are isolated-only
+available only when the seven named session capabilities in the
+persistent-session predicate are `enforced`, and are isolated-only
 in v1.
 Persistence with effective non-isolated mode or without those enforced
 capabilities is downgraded before allocation to a fresh stateless ephemeral run:
@@ -1118,28 +1135,66 @@ ephemeral task HOME/native engine session data, set
 worktree path. This is deliberately separate from conversation persistence.
 
 Result artifacts use a durable registry under `.triss/coder-results-v1/`, not a
-post-hoc file-existence check. Its regular/no-follow mode-`0600` `.registry.lock`
-is a fixed kernel lock inode; while holding shared coder maintenance then this
-exclusive registry lock, read/write mode-`0600`, no-follow `.registry.json` by
-same-directory temp, file fsync, rename, and parent fsync only. The canonical
-JSON-plus-LF registry has exact ordered keys `{schema_version,entries,updated_at}`;
-`schema_version` is integer `1`, `updated_at` is exact millisecond UTC RFC3339,
-and `entries` is raw-ASCII-sorted by `run_id`, capped at 16. Every entry has
+post-hoc file-existence check. `result_store_quota` is a separate execution
+capability: when enforced, the entire result root (worktrees, coder state,
+metadata, tombstones, temps, directories, and allocation blocks) is an
+OS-enforced 4 GiB quota domain with at most one allocation-block overshoot. If
+it is unavailable or best-effort, every unnamed isolated run fails before
+credentials/spawn with `TRISS_CODER_RESULT_QUOTA_REQUIRED`; it must not run and
+later discard a verified implementation. If it is enforced but less than 1 GiB
+plus one block remains, admission fails before spawn with
+`TRISS_CODER_RESULT_CAP`. Only enforced capability plus a durable 1 GiB
+reservation permits spawn; read-only completion releases that reservation.
+Package 0 proves all three paths, concurrent four-1GiB admission, metadata
+pressure, and first-rejection notification. This capability does not alter
+snapshot evidence itself: verified post-run fingerprints require exactly
+enforced sandbox, process supervision, and managed root; result publication
+additionally requires the result-store predicate.
+
+Its regular/no-follow mode-`0600` `.registry.lock` is a fixed kernel lock inode;
+while holding shared coder maintenance then this exclusive registry lock,
+read/write mode-`0600`, no-follow `.registry.json` only by exact bounded
+same-directory temp, file-fsync, rename, parent-fsync. `.registry.json` is at
+most 64 KiB and every `<run-id>.json` index at most 8 KiB; every reader collects
+`limit + 1` bytes before parsing. The canonical JSON-plus-LF registry has exact
+ordered keys `{schema_version,entries,updated_at}`; `schema_version` is integer
+`1`, `updated_at` is exact millisecond UTC RFC3339, entries are raw-ASCII sorted
+by `run_id`, capped at 16, total encoded string bytes are at most 16 KiB, every
+basename is ASCII at most 128 bytes, and every branch ref is at most 256 bytes.
+The byte-exact empty fixture is
+`{"schema_version":1,"entries":[],"updated_at":"2026-08-14T00:00:00.000Z"}\n`.
+Every entry has
 exact ordered keys `{run_id,engine,session_slug,project_root_fingerprint,state,
 reserved_bytes,retained_bytes,sandbox_id,pid,process_start_id,boot_id,
-worktree_basename,branch_ref,coder_state_basename,index_basename,
-transaction_generation,created_at,updated_at}`. `state` is exactly
+worktree_basename,branch_ref,coder_state_basename,index_basename,delete_phase,
+deleting_worktree_basename,deleting_branch_ref,deleting_coder_state_basename,
+deleting_index_basename,transaction_generation,created_at,updated_at}`. `state` is exactly
 `reserved|retained|deleting`; `reserved` has `retained_bytes=0` and
-`index_basename=null`, while its exact live owner tuple is non-null and
-byte-matches the owned process set; `retained` has `reserved_bytes=0`, a
-non-null index basename `<run-id>.json`, and every owner field null; `deleting`
-retains the validated retained fields plus a fresh non-null deleting owner tuple
-until the worktree/state/index and row are gone. `transaction_generation` is
+`index_basename=null`, all deleting fields null, while its exact live owner
+tuple is non-null and byte-matches the owned process set; `retained` has
+`reserved_bytes=0`, a non-null index basename `<run-id>.json`, and every owner/
+deleting field null; `deleting` retains the validated retained fields plus a
+fresh non-null deleting owner tuple, `delete_phase`, and deterministic unique
+tombstone names derived from `run_id + transaction_generation` until cleanup
+completes. `transaction_generation` is
 16 lowercase hex, increments at every durable transition, and makes stale
 writer/recovery updates fail closed. No unknown/missing key, duplicate run ID,
 foreign root, symlink, or impossible state is admission evidence.
 
-Before each unnamed isolated spawn, Package 5 first holds that lock to reconcile
+Registry writes use only `.registry.tmp.<32-lowercase-hex-nonce>` and index
+writes only `<run-id>.json.tmp.<32-lowercase-hex-nonce>`; each is exclusive,
+regular/no-follow, same UID, mode `0600`, in its final parent, and limited to
+its final file cap. Under the registry lock, recovery scans at most 32
+recognized temps and 2 MiB total: a complete byte-valid temp may finish only
+the exactly-next generation publication, while a partial or stale recognized
+temp is removed only when canonical registry/index and process journal prove it
+was never published. Duplicate, foreign, bad-name/mode/owner, symlink,
+future-generation, or unrecognized temp retains and blocks. Tests include
+literal byte-exact single-entry registry/index fixtures (each with one final LF),
+cap-plus-one reads, partial/duplicate/stale temp recovery, and every temp,
+fsync, and rename crash point.
+
+Before each unnamed isolated spawn, Atomic 20C first holds that lock to reconcile
 crash state and verify count/quota admission, then invokes Package 2D2's
 high-level durable allocator with `owner_kind=result_registry` and
 `owner_reference=<run-id>`. Inside that allocator's result-owner adapter lock,
@@ -1150,38 +1205,49 @@ row/reservation on every pre-spawn failure. The per-run sandbox is also bounded
 to that 1 GiB reservation. A verified
 read-only completion deletes task artifacts, removes the reservation row, and
 releases all its bytes. A changed run measures its validated worktree blocks
-under the quota, atomically creates `.triss/coder-results-v1/<run-id>.json`,
-then changes `reserved -> retained`, sets `retained_bytes` to the actual
-allocated blocks, and releases the unused reservation before envelope
-construction. Thus up to 16 small retained results may coexist without ever
-exceeding 4 GiB, while concurrent runs cannot over-admit. The retained index is
+under the quota, freezes its engine-scoped worktree, branch, and coder-state
+record read-only, verifies the post snapshot, atomically creates
+`.triss/coder-results-v1/<run-id>.json`, then changes `reserved -> retained`,
+sets `retained_bytes` to the actual frozen allocation, and releases the unused
+reservation before envelope construction. Thus up to 16 small retained results
+may coexist without ever exceeding 4 GiB, while concurrent runs cannot
+over-admit. The retained index is
 mode-`0600`, no-follow canonical JSON-plus-LF with exact ordered keys
 `{schema_version,run_id,engine,session_slug,project_root_fingerprint,worktree_basename,branch_ref,coder_state_basename,base_snapshot_id,post_snapshot_id,retained_bytes,created_at}`.
 It contains no native engine session ID, HOME path, model output, patch bytes, or credentials.
+The published size and snapshot are immutable provenance, not a live mutable
+workspace measurement. `coder result list` verifies each read-only artifact and
+reports `integrity: intact|tampered|missing`; a user who bypasses permissions or
+moves its branch/worktree creates `tampered|missing`, which recovery and
+rollback retain/block rather than silently rewriting size/snapshot. The physical
+4 GiB result quota remains enforced even against same-UID tampering.
 
 Recovery always holds the same locks and first attaches/terminates/waits for a
-non-empty `reserved` or `deleting` owner sandbox. The exhaustive transitions
-are: `reserved + empty/no result index -> remove row and task artifacts`;
-`reserved + complete matching index/worktree -> promote retained and release
-unused reservation`; `reserved + partial/mismatched artifacts -> retain/block`;
-`retained + complete matching index/worktree -> retain`; `deleting + complete
-artifacts -> delete engine-scoped worktree/branch/state/index then row`; and
-`deleting + absent artifacts -> remove row`. Every other combination retains
-and blocks. Tests inject a crash after reservation, each registry/index fsync or
-rename, quota conversion, deleting tombstone, worktree deletion, and row
-removal; two concurrent admissions plus recovery must converge without double
-release. At result-count/quota admission, fail before credentials/spawn with
-`TRISS_CODER_RESULT_CAP`; never run then discard an otherwise verified result.
-`triss coder
-result clean <run-id>` (and matching MCP action) is the sole explicit removal:
-under managed-root, registry-lock, engine-scoped worktree/branch/state ownership
-and quiescence checks, it transitions `retained -> deleting`, atomically deletes
-the retained artifact, removes its row, and releases capacity. A bounded `coder
-result list` reads the same registry and exposes only retained run ID, engine,
-slug, timestamps, retained bytes, and existing worktree path. Tests cover
-changed default-run retrieval after the envelope, every registry crash point,
-parallel cap admission, read-only auto-clean, and the absence of native
-conversation data from every retained result.
+non-empty `reserved` or `deleting` owner sandbox. It removes only
+`reserved + empty/no index` rows, promotes only `reserved + complete frozen
+matching index/worktree` rows, and retains/blocks partial or mismatched rows.
+`retained` verifies immutable provenance and only reports `intact`, `tampered`,
+or `missing`; neither recovery nor rollback silently modifies it.
+
+`triss coder result clean <run-id>` (and matching MCP action) is the sole
+explicit removal. Under managed-root, registry lock, engine-scoped ownership,
+and quiescence checks it first publishes `retained -> deleting` with
+`delete_phase=prepare` and deterministic unique tombstone names. It moves the
+worktree, branch, coder-state leaf, and index one at a time, publishing after
+each rename `worktree_tombstoned`, `branch_tombstoned`, `state_tombstoned`, and
+`index_tombstoned`; it then deletes those tombstones in the same order and
+publishes `worktree_removed`, `branch_removed`, `state_removed`, and
+`index_removed` before removing the row and releasing capacity. For every phase,
+recovery accepts exactly one of the original or deterministic tombstone for the
+current artifact, completes that phase, and reserves the engine/slug/run
+namespace until row removal. Both/neither, foreign leaves, or another
+generation block. Thus a crash after worktree removal, before branch/state/index
+deletion, continues safely instead of being misclassified as mismatch. Tests
+inject every reservation/index/registry/deleting rename/deletion/row-removal
+crash, concurrent admission, read-only auto-clean, tamper/missing detection,
+and native-session-data absence. `coder result list` exposes only retained run
+ID, engine, slug, publish timestamp, retained bytes, immutable provenance
+snapshot, integrity state, and existing worktree path.
 After failure or parent crash on a host with enforced supervision retain only
 `.triss/ephemeral-recovery-v1/<engine>/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
 capped canonical JSON-plus-LF record with exact ordered keys
@@ -1803,7 +1869,10 @@ was not substituted. `process_supervision` still solely determines whether
 cleanup is `verified`; verified fingerprint change evidence requires all three
 fields enforced. Non-enforced `locking` removes only cross-process
 exclusion/quota attribution; non-enforced `writable_quota` removes only the hard
-write bound; and persistent state requires the all-seven predicate. Every
+write bound; persistent sessions require the seven-session predicate; and an
+unnamed isolated run requires enforced `result_store_quota` plus its 1 GiB
+reservation before spawn, independently of whether the run later changes files.
+Every
 non-enforced field is exposed through its stable warning code and CLI text before
 the engine starts. No other capability loss silently changes the selected target
 or turns a verified snapshot into advisory output.
@@ -2626,22 +2695,24 @@ publication authority. Packages must not be combined to reduce commit count.
 
 ### 12.1 Atomic package sequence
 
-This revision has exactly **49** atomic package headings. `Atomic 00` through
-`Atomic 48` are the normative, strictly increasing execution IDs; the retained
-`Package 2A`-style labels are descriptive compatibility aliases only and never
-determine ordering. Every prerequisite/handoff records the Atomic ID as well as
-the alias. Validate count, uniqueness, and order mechanically before review:
+This revision has exactly **52** atomic package headings. `Atomic 00` through
+`Atomic 20`, then `Atomic 20A..20C`, then `Atomic 21` through `Atomic 48` are
+the normative strictly increasing execution IDs. The lettered 20-series is a
+deliberate split of the retained-result subsystem, not a compatibility alias;
+the retained `Package 2A`-style labels are descriptive only. Every
+prerequisite/handoff records the Atomic ID as well as the alias. Validate count,
+uniqueness, and order mechanically before review:
 
 ```bash
 node --input-type=module -e '
 import fs from "node:fs";
 const s=fs.readFileSync("docs/reliable-delegation-contract-plan.md","utf8");
-const ids=[...s.matchAll(/^#### Atomic ([0-9]{2}) \/ Package /gm)].map(m=>Number(m[1]));
-const expected=Array.from({length:49},(_,i)=>i);
+const ids=[...s.matchAll(/^#### Atomic ([0-9]{2}(?:[A-C])?) \/ Package /gm)].map(m=>m[1]);
+const expected=[...Array.from({length:21},(_,i)=>String(i).padStart(2,"0")),"20A","20B","20C",...Array.from({length:28},(_,i)=>String(i+21).padStart(2,"0"))];
 if (JSON.stringify(ids)!==JSON.stringify(expected)) {
   console.error(JSON.stringify({count:ids.length,ids})); process.exit(1);
 }
-console.log("atomic-packages=49 sequence=00..48");'
+console.log("atomic-packages=52 sequence=00..20,20A..20C,21..48");'
 ```
 
 Every package first runs its focused RED test, implements only its listed
@@ -2875,15 +2946,19 @@ Section 6.5 writable-quota contract. Add `src/coder-write-quota.js` and
 `test/coder-write-quota.test.js`; export generic
 `prepareQuotaBackedDirectory({root,limitBytes,scope})`,
 `subscribeQuotaEvents()`, and the coder-facing wrappers
-`prepareCoderWriteQuota()` / `subscribeCoderQuotaEvents()`. RED/GREEN:
+`prepareCoderWriteQuota()` / `subscribeCoderQuotaEvents()`, plus
+`prepareCoderResultStoreQuota()` which returns the distinct
+`result_store_quota` capability and a root-wide reservation handle. RED/GREEN:
 `node --test test/coder-write-quota.test.js`. Cover 512 MiB additional-block
 accounting, isolated/non-isolated targets, a bounded local-review projection,
 one-block overshoot, many-small-file
 pressure, `filesystem_quota` cause, cleanup, and unavailable-filesystem
 capability reporting. Prove authenticated synchronous first-rejection notification,
 first-cause-before-ack ordering, duplicate-event immunity, and termination when
-the child catches the write error. Non-goals: post-write monitoring or engine
-integration.
+the child catches the write error. Also cover the 4 GiB result-root quota,
+four concurrent 1 GiB reservations, capacity release, metadata/tombstone
+pressure, and unavailable-vs-full capability/error distinction. Non-goals:
+post-write monitoring or engine integration.
 
 #### Atomic 12 / Package 3 — fingerprint primitive
 
@@ -3074,11 +3149,11 @@ bounded backup layout/manifest/completion marker defined in Section 15,
 no-follow copy/hash verification, cap stop with no completion marker,
 exclusive maintenance lock/quiescence, foreign-state retention, and re-upgrade
 restore validation.
-Before Package 5 introduces the result registry, Package 4D treats any
+Before Atomic 20 introduces the result registry, Package 4D treats any
 non-empty `.triss/coder-results-v1/` root as `TRISS_CODER_ROLLBACK_RESULTS_PENDING`
 and fails before copying: it does not parse, delete, or invent a second result
 codec. This conservative temporary guard ensures a backup cannot silently omit
-an unknown deliverable. Package 5 is explicitly responsible for replacing that
+an unknown deliverable. Atomic 20C is explicitly responsible for replacing that
 guard with the Section 15 exact registry preflight before the Release A gate.
 Inventory deduplicates identical slugs across engines, acquires that kernel
 lease once, and copies/validates both engine stores before release; tests include
@@ -3090,47 +3165,65 @@ tarball-installed smoke invokes both commands outside the source checkout.
 Non-goals: a repository-only `scripts/` entry point, invoking Git revert,
 deleting original v2 state, or automatic expiry.
 
-#### Atomic 20 / Package 5 — coder state/workspace orchestration
+#### Atomic 20 / Package 5 — retained-result registry codec
 
-Prerequisites: Packages 1-4D, including 2A-2G. Named reference: Reference
-surface 3, result-registry/state-orchestration subset. Add
-`src/coder-result-registry.js`, `test/coder-result-registry.test.js`,
-`src/coder-run-state.js`, and `test/coder-run-state.test.js`, plus only
-namespace/clean routing in `src/commands/coder.js` and
-`test/coder-clean.test.js`; reuse all earlier exports. The result registry is a
-named durable primitive, not an implied side effect of orchestration: export
-`reserveCoderResultCapacity()`, `publishCoderRetainedResult()`,
+Prerequisites: Packages 4A and 2F/2G. Named reference: Section 6.3 exact
+result-registry schema. Add `src/coder-result-registry-codec.js` and
+`test/coder-result-registry-codec.test.js`; export only encode/decode/read/write
+for the bounded registry and index metadata. It owns no quota, state transition,
+process adapter, command routing, or worktree mutation. RED/GREEN:
+`node --test test/coder-result-registry-codec.test.js`. Cover exact byte fixtures,
+64/8 KiB cap-plus-one reads, aggregate string bounds, fixed lock reuse,
+temp-name/mode/owner limits, partial/duplicate/stale temp recovery, and every
+file/parent fsync/rename failure.
+
+#### Atomic 20A / Package 5A — retained-result transitions and deletion
+
+Prerequisites: Atomic 20 plus Packages 2D2 and 2E. Named reference: Section
+6.3 result quota, immutable provenance, and deletion phases. Add
+`src/coder-result-transitions.js` and `test/coder-result-transitions.test.js`;
+export `reserveCoderResultCapacity()`, `publishCoderRetainedResult()`,
 `releaseCoderResultReservation()`, `beginCoderResultDeletion()`,
-`recoverCoderResultRegistry()`, `listCoderRetainedResults()`, and
-`createCoderResultProcessOwnerAdapter()`. The adapter implements the exact
-Package 2D2 interface under shared maintenance plus the result-registry lock;
-it publishes only its matching `reserved` row before spawn, and its release
-transition is the Section 6.3 retained-or-removed/deleting state machine.
-It alone owns
-the exact registry codec, fixed lock, owner tuple, quota-reservation conversion,
-fsync/rename protocol, and exhaustive recovery table from Section 6.3; no other
-package may check result capacity from file existence. RED/GREEN:
-`node --test test/coder-result-registry.test.js test/coder-run-state.test.js test/coder-clean.test.js`.
-Then compose only that exported primitive with project identity,
-ephemeral-default versus explicit/kept persistent admission, engine-scoped
-workspace/session binding, snapshots, v2 namespace, legacy/v2 clean separation,
-and recoverable finalization as a pure dependency-injected state machine. It
-does not spawn an engine, construct an envelope, or edit event folding.
-It also replaces Package 4D's temporary non-empty-root rollback guard with an
-injected `assertNoRetainedCoderResultsForRollback()` preflight that holds the
-result-registry lock, reconciles the exact codec, and returns
-`TRISS_CODER_ROLLBACK_RESULTS_PENDING` for every reserved/retained/deleting,
-partial, foreign, or mismatched row before backup or validation can claim
-success. Package 4D retains sole ownership of backup layout/manifest/copy; it
-must not import or duplicate the result registry.
-Mixed-version, relocation, ephemeral read-only cleanup, retained changed-result
-worktree retrieval/clean, result-cap/concurrent-admission/crash recovery,
-retained persistent workspace, and workspace-mismatch fixtures are deterministic
-fakes.
+`recoverCoderResultRegistry()`, and `listCoderRetainedResults()`. It alone owns
+the 1 GiB/4 GiB admission, reservation conversion, immutable freeze/verify,
+phase-aware tombstone rename/delete, and recovery table, using Atomic 20 codec.
+RED/GREEN: `node --test test/coder-result-transitions.test.js`. Cover all three
+result-quota outcomes, concurrent admission, tampered/missing provenance,
+and every reservation/index/phase/row crash; no process-owner adapter or CLI.
 
-#### Atomic 21 / Package 5A — OpenCode run and envelope orchestration
+#### Atomic 20B / Package 5B — retained-result process-owner adapter
 
-Prerequisite: Package 5. Named reference: Reference surface 3, OpenCode
+Prerequisites: Atomic 20A and Package 2D2. Named reference: Section 6.5
+`owner_kind=result_registry`. Add `src/coder-result-owner-adapter.js` and
+`test/coder-result-owner-adapter.test.js`; export only
+`createCoderResultProcessOwnerAdapter()`. It composes shared maintenance,
+registry lock, and Atomic 20A transitions into the exact injected
+`withOwnerLock/publishReference/rollbackPublishedReference/inspectReference/
+transitionRelease` interface. RED/GREEN:
+`node --test test/coder-result-owner-adapter.test.js`. Use fakes for worktree
+mutation; cover reserving publication/rollback, live release, and new-host
+release-pending recovery. Non-goals: codec, quota implementation, CLI, engine.
+
+#### Atomic 20C / Package 5C — coder run-state and rollback composition
+
+Prerequisites: Atomic 20B and Package 4D. Named reference: Reference surface 3
+state-orchestration subset and Section 15 result preflight. Add
+`src/coder-run-state.js` and `test/coder-run-state.test.js`, and only
+`assertNoRetainedCoderResultsForRollback()` injection plus clean routing in
+`src/commands/coder.js`/`test/coder-clean.test.js`. RED/GREEN:
+`node --test test/coder-run-state.test.js test/coder-clean.test.js`.
+Compose the exported result subsystem with project identity, ephemeral-default
+versus explicit/kept persistent admission, engine-scoped workspace/session
+binding, snapshots, legacy/v2 clean separation, and recoverable finalization.
+Replace Package 4D's conservative non-empty-root rollback guard with exact
+registry preflight; Package 4D remains sole owner of backup layout/manifest/copy.
+Mixed-version, relocation, read-only cleanup, retained retrieval/clean, rollback
+block/unblock, and workspace mismatch fixtures are deterministic fakes. It does
+not implement codec, transitions, process ownership, spawning, or envelopes.
+
+#### Atomic 21 / Package 5D — OpenCode run and envelope orchestration
+
+Prerequisite: Atomic 20C. Named reference: Reference surface 3, OpenCode
 integration subset. Edit only the isolation/result neighborhoods in
 `src/commands/coder.js`, `test/coder-envelope.test.js`, and
 `test/coder-isolate.test.js`; reuse `src/coder-run-state.js` and every earlier
@@ -3146,8 +3239,11 @@ the returned worktree/result artifact remains retrievable. Include `session_slug
 `result_retention`, `result_id`, and `execution_capabilities` in every safe
 envelope after allocation. Fixtures cover
 enforced and unsupported-host best-effort advisory results, no post-run diff or
-persistent-session transition unless the shared all-seven-capability predicate
-is true,
+persistent-session transition unless its corresponding closed eligibility
+predicate is true: verified post-run fingerprinting requires enforced sandbox,
+process supervision, and managed root; persistent sessions require the seven
+session capabilities; retained anonymous results additionally require enforced
+credential isolation/result-store quota and a successful 1 GiB reservation,
 and removal of the production win32-only coder rejection after Package 0's
 credential-isolation proof. Unsupported-host fixtures require isolation-
 enforcement preflight without the explicit opt-in, then the before-spawn target-
@@ -3162,7 +3258,7 @@ this as acceptance.
 
 #### Atomic 22 / Package 6 — Crush parity
 
-Prerequisite: Package 5A. Named reference: Reference surface 4. Edit only Crush
+Prerequisite: Atomic 21. Named reference: Reference surface 4. Edit only Crush
 result/spawn integration in `src/commands/coder.js`, optionally the pure
 normalizer in `src/coder-engines/crush.js`, plus `test/coder-crush.test.js` and
 shared isolation assertions. RED/GREEN:
@@ -3646,12 +3742,13 @@ above and updates the PR body from live facts. The body must say exactly:
 
 - base `v0.34.0`, pinned SHA
   `2e3db71ddc32c349d918ae32609a03c0775a87c0` for this revision;
-- **49 atomic packages**, normative sequence `Atomic 00..48`;
+- **52 atomic packages**, normative sequence `Atomic 00..20, 20A..20C, 21..48`;
 - Atomic 00 is a separate feasibility/architecture-spike PR and the plan is not
   implementation-ready until that spike merges, its measured backend/ABI/
   standalone results are incorporated, and the resulting plan blob receives
   follow-up architecture approval;
-- Releases A/B/C are Atomic `01..29`, `30..43`, and `44..48` respectively;
+- Releases A/B/C are Atomic `01..20,20A..20C,21..29`, `30..43`, and `44..48`
+  respectively;
 - the branch was rebased and every future movement of `origin/main` is a stop,
   not a silently accepted baseline update.
 
@@ -3778,6 +3875,15 @@ Actions:
    the coder session-store domain records an unavailable coder quota capability;
    failure to enforce the review-fetch domain is a strict PR-acquisition stop
    gate. The latter must not silently select coder's best-effort mode.
+   Also prove the independent aggregate 4 GiB allocation-block result-store
+   domain over the complete `.triss/coder-results-v1` root: four concurrent
+   1 GiB reservations succeed, a fifth and every <1GiB-headroom attempt reject
+   before credentials/spawn, reservation release makes capacity reusable, and
+   metadata/empty-directory/tombstone pressure remains inside the one-block
+   overshoot. Record the exact `result_store_quota` capability result for every
+   supported engine/OS tuple. An unavailable or best-effort result quota is a
+   coder preflight blocker only for unnamed isolated result-capable runs; it is
+   never reclassified as a persistent-session or PR-review quota.
 8. Run the current focused baseline tests before editing.
 
 Commands:
@@ -4510,7 +4616,7 @@ codes. State that process completion is not task satisfaction, show
 `--expect changes --isolate`, require local `git status`/`git diff` inspection,
 distinguish environment blockers, document local metadata schema v1 and its
   lease/cleanup/rollback behavior, explain credential-proxy requirements and the
-  seven `execution_capabilities` values and `effective_isolation`, distinguish enforced from best-effort
+  eight `execution_capabilities` values and `effective_isolation`, distinguish enforced from best-effort
   execution, state that unavailable OS sandbox/cleanup/lock/quota does not by
   itself block a non-isolated/best-effort coder invocation but cannot provide
   those guarantees (and that explicit/default isolation needs the separate
