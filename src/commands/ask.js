@@ -7,6 +7,7 @@ import { readStdin } from '../secrets.js';
 import { shouldStream } from './chat.js';
 import { validateResponseFormat, withEvidenceInstructions } from '../response-format.js';
 import { positiveIntegerOption } from '../option-validation.js';
+import { EmptyModelResponseError } from '../errors.js';
 
 const SYSTEM_PROMPT =
   'You are a precise code/document analyst. Read the provided sources and ' +
@@ -116,13 +117,10 @@ export async function runAskWithDeps(opts, deps = {}) {
 
   const answer = responseText(resp);
   if (!answer) {
-    process.stderr.write(
-      pc.red(
-        '[triss/ask] empty response — model may have run out of tokens during reasoning. ' +
-          'Try --max-tokens 16384.\n',
-      ),
+    throw new EmptyModelResponseError(
+      '[triss/ask] empty response — the model returned no final text. ' +
+        'Retry with a smaller source payload or a different provider; this is not a successful result.',
     );
-    process.exit(1);
   }
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');

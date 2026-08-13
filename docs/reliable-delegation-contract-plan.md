@@ -149,7 +149,7 @@ realpath escape. Pin parent `(device,inode)` identities and perform create,
 rename, fsync, scan, and unlink only by dir-FD-relative openat-style operations;
 never re-resolve an absolute string after validation. Recheck pinned identities
 before destructive transitions. This applies to `project-identity-v1.json`,
-`quarantine-v1`, `ephemeral-recovery-v1`, `wt-v2`, `coder-state-v2`, `locks-v2`,
+`quarantine-v1`, `ephemeral-recovery-v1`, `coder-results-v1`, `wt-v2`, `coder-state-v2`, `locks-v2`,
 `engine-sessions-v2`, `review-fetch`, and `coder-state-backup`,
 plus `process-sets-v2`, including every temp/staging/previous/deleting child. Root substitution or an
 intermediate symlink/mount swap fails before credentials, network, Git mutation,
@@ -232,7 +232,7 @@ write, rename, or deletion leaves the validated project root.
     rather than risk secret disclosure.
 18. An OS-enforced filesystem sandbox is used when the host supplies one. It
     permits writes only within its authorized target (isolated: managed
-    `.triss/wt-v2/<slug>` child; non-isolated: validated caller project
+    `.triss/wt-v2/<engine>/<slug>` child; non-isolated: validated caller project
     worktree) and explicitly denies `.triss/coder-state-v2`, leases,
     review-fetch state, and the source Git common directory. If the host does
     not supply that boundary, coder still runs in explicit `best_effort` mode
@@ -264,6 +264,11 @@ and MCP callers; it is a continuation key only when
 requested `--session` or `--keep-session`, but this host lacks one of the
 enforced persistent-state capabilities and Triss deliberately started a new
 non-continuing ephemeral native session. Add the fields below.
+Add `result_retention` with enum `none|retained` and nullable `result_id`.
+`retained` means the envelope's `worktree` is a still-existing result
+artifact (not a promise that a native engine
+conversation remains resumable); it is writable only by the user after Triss
+releases it and Triss never treats later user edits as verified run evidence.
 Add `effective_isolation` with enum `isolated_enforced|non_isolated_requested|
 best_effort_caller_worktree`; the last value is an explicit downgrade, never an
 implicit implementation of `--isolate`.
@@ -278,6 +283,8 @@ Example successful implementation result:
   "session_id": "ses_123",
   "session_slug": "task",
   "session_persistence": "persistent",
+  "result_retention": "none",
+  "result_id": null,
   "effective_isolation": "isolated_enforced",
   "run_id": "run_7e15c7e2000000000000000000000000",
   "started_at": "2026-08-13T10:00:00.000Z",
@@ -314,7 +321,7 @@ Example successful implementation result:
   "run_files_changed": ["src/a.js"],
   "change_summary": {"added": 0, "modified": 1, "deleted": 0, "mode_changed": 0},
   "diff_stat": "1 file changed, 4 insertions(+)",
-  "worktree": "/repo/.triss/wt-v2/task",
+  "worktree": "/repo/.triss/wt-v2/opencode/task",
   "activity": {
     "events": 12,
     "tool_calls": 5,
@@ -676,13 +683,13 @@ same-filesystem rename, cross-filesystem copy, duplicate project IDs, crash at
 every adopt/quarantine rename, and foreign-state preservation.
 
 At fresh isolation creation, persist the base fingerprint manifest at
-`.triss/coder-state-v2/<validated-session-slug>.json`, outside the child worktree.
+`.triss/coder-state-v2/<engine>/<validated-session-slug>.json`, outside the child worktree.
 The directory is mode `0700`, the file is mode `0600`, and creation uses an
 exclusive same-directory temporary file plus atomic rename. Reject symlinks or
 non-regular files with `lstat` and no-follow opens.
 
-The durable local metadata schema is `schema_version: 1` and contains the
-validated session slug, full managed branch ref, full base commit OID whose
+The durable local metadata schema is `schema_version: 1` and contains the exact
+engine plus validated session slug, full managed branch ref, full base commit OID whose
 length matches the repository object format (`sha1`: 40 hex, `sha256`: 64 hex),
 repository object format, resolved Git-common-directory fingerprint, resolved
 managed-worktree fingerprint, creation timestamp, canonical base-manifest
@@ -728,12 +735,13 @@ The state file has exactly these keys and rejects unknown/missing keys
 ```json
 {
   "schema_version": 1,
+  "engine": "opencode",
   "session_slug": "task-a",
-  "branch_ref": "refs/heads/coder-v2/<64-root-fingerprint-hex>/task-a",
+  "branch_ref": "refs/heads/coder-v2/<64-root-fingerprint-hex>/opencode/task-a",
   "repository_object_format": "sha1",
   "base_commit_oid": "<40 lowercase hex>",
   "repository_fingerprint": "sha256:<64 lowercase hex>",
-  "worktree_parent_realpath": "/repo/.triss/wt-v2",
+  "worktree_parent_realpath": "/repo/.triss/wt-v2/opencode",
   "worktree_basename": "task-a",
   "worktree_fingerprint": "sha256:<64 lowercase hex>",
   "created_at": "2026-08-13T10:00:00.000Z",
@@ -752,7 +760,8 @@ entry kind.
 
 Export one `CODER_BRANCH_PREFIX = "coder-v2/"` constant and derive every full
 managed ref exactly as
-`refs/heads/coder-v2/<project-root-fingerprint-64-hex>/<slug>`. The project-root
+`refs/heads/coder-v2/<project-root-fingerprint-64-hex>/<engine>/<slug>`. Managed
+worktrees use `.triss/wt-v2/<engine>/<slug>/`. The project-root
 fingerprint is the stable random project identity, so same-filesystem rename
 does not change the namespace and linked worktrees with separate identities do
 not collide even when they share one common Git directory.
@@ -775,9 +784,9 @@ tampered, or ambiguous metadata is retained with one bounded warning; cleanup
 must never delete another session's metadata. Rollback inventory follows the
 same ownership checks.
 
-Release A uses a v2-only managed namespace: worktrees under `.triss/wt-v2/`,
-branches under `coder-v2/`, state under `.triss/coder-state-v2/`, and leases
-under `.triss/locks-v2/`. Each slug has an independent host-owned mapping at
+Release A uses a v2-only managed namespace: worktrees under `.triss/wt-v2/<engine>/`,
+branches under `coder-v2/<engine>/`, state under `.triss/coder-state-v2/<engine>/`, and leases
+under `.triss/locks-v2/`. Each engine/slug has an independent host-owned mapping at
 `.triss/engine-sessions-v2/<engine>/<slug>/session.json`; no shared map exists.
 
 Validated-project-worktree-wide session admission is bounded. The regular/no-follow mode-`0600`
@@ -1082,26 +1091,55 @@ generation. A present but
 malformed, unknown-version, foreign, or inconsistent mapping blocks the run and
 is never treated as missing. Tests cover two-run continuation for both engines,
 missing/corrupt mapping, engine mismatch, bare-continue rejection, and cleanup
-of map plus persistent session HOME. A persistent session owns its isolated
-managed worktree and branch for the same lifetime; even a read-only run retains
-both. Only explicit `coder session clean
+of map plus persistent session HOME. A persistent engine/slug session owns its
+engine-scoped isolated managed worktree, branch, and coder-state record for the
+same lifetime; even a read-only run retains all three. Only explicit `coder session clean
 <slug> --engine <opencode|crush>` acquires the lease, validates
 root/engine/slug/workspace ownership and a clean inactive session, then removes
-the engine/session directory, retained worktree, branch, and coder-state record
-as one recoverable transaction. The engine flag is mandatory even when it equals the
-configured default; an identical slug in the other engine is untouched. Mixed-mode and
-different-slug concurrent tests prove serialization without lost mappings.
+only that engine's session directory, retained worktree, branch, and coder-state
+record as one recoverable transaction. The engine flag is mandatory even when it
+equals the configured default; an identical slug in the other engine is untouched
+because it uses a distinct engine-scoped workspace/branch/state path. Tests clean
+one of two same-slug engine sessions, then continue the surviving engine and prove
+its workspace snapshot remains valid. Mixed-mode and different-slug concurrent
+tests prove serialization without lost mappings.
 
 With omitted `--session` and no `--keep-session`, generate `session_slug` only
 as a run correlation key and use a fresh ephemeral native engine session. No
 inventory entry, `session.json`, or `home.current` is published, so ordinary
 runs never consume the four persistent slots and do not retain conversation
-state. On verified completion, envelope serialization, and process-tree
-cleanup, remove the ephemeral task HOME, worktree, branch, and coder state.
+state. On verified completion with empty `run_files_changed`, envelope
+serialization, and process-tree cleanup, remove the ephemeral task HOME,
+worktree, branch, and coder state. A verified non-empty `run_files_changed`
+instead atomically publishes a bounded result artifact: retain the exact
+engine-scoped worktree, branch, and base coder-state record, remove only the
+ephemeral task HOME/native engine session data, set
+`result_retention="retained"`, `result_id=<run_id>`, and return the still-valid
+worktree path. This is deliberately separate from conversation persistence.
+
+Result artifacts live in `.triss/coder-results-v1/<run-id>.json`, a mode-`0600`,
+no-follow, canonical JSON-plus-LF index record with exact ordered keys
+`{schema_version,run_id,engine,session_slug,project_root_fingerprint,worktree_basename,branch_ref,coder_state_basename,base_snapshot_id,post_snapshot_id,created_at}`.
+It contains no native engine session ID, HOME path, model output, patch bytes, or credentials.
+At most 16 retained results and 4 GiB of OS-enforced aggregate result-worktree
+additional blocks exist per project, with a 1 GiB reservation made before each
+unnamed isolated spawn; a read-only completion releases its reservation. A run
+that produces changes consumes its reservation before envelope construction, so
+success is never reported after deleting its only deliverable. At
+result-cap/quota admission, fail before credentials/spawn with
+`TRISS_CODER_RESULT_CAP`; never run then discard an otherwise verified result.
+`triss coder
+result clean <run-id>` (and matching MCP action) is the sole explicit removal:
+under managed-root, engine-scoped worktree/branch/state ownership and quiescence
+checks, it atomically deletes the retained artifact and releases capacity. A
+bounded `coder result list` exposes only run ID, engine, slug, timestamps, and
+existing worktree path. Tests cover changed default-run retrieval after the
+envelope, clean/recovery crash points, cap admission, read-only auto-clean, and
+the absence of native conversation data from every retained result.
 After failure or parent crash on a host with enforced supervision retain only
-`.triss/ephemeral-recovery-v1/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
+`.triss/ephemeral-recovery-v1/<engine>/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
 capped canonical JSON-plus-LF record with exact ordered keys
-`{schema_version,project_root_fingerprint,session_slug,run_id,sandbox_id,
+`{schema_version,engine,project_root_fingerprint,session_slug,run_id,sandbox_id,
 worktree_basename,branch_ref,coder_state_basename,process_status,
 cleanup_status,created_at,expires_at}` and no extras. Common IDs/statuses use
 the existing grammars; basenames/ref are recomputed and equality-checked before
@@ -1202,11 +1240,11 @@ crashes, and prove inode/temp counts and lock identity remain fixed.
 - failed isolated snapshot or comparison: `status = failed`, both file lists
   are `null`, and result construction must not perform the empty-worktree
   cleanup path;
-- `expectation: changes` with effective isolation off fails before spawn only
-  when the caller explicitly selected ordinary non-isolated mode on a host that
-  can otherwise verify an isolated run. When capability resolution selected
-  `best_effort_caller_worktree`, it instead runs advisory with exit `3` and the
-  required downgrade warning below.
+- `expectation: changes` with effective isolation off never receives verified
+  change evidence. If `--isolate` was explicit or Crush's isolation-on default
+  was effective, unavailable enforced isolation fails before spawn unless the
+  caller supplied the Section 7 explicit best-effort caller-worktree opt-in.
+  That opt-in is advisory-only and exits `3`; it cannot satisfy `changes`.
 
 Do not add non-isolated attribution in this release. Correctly detecting edits
 to already-dirty tracked files and untracked files requires a bounded pre/post
@@ -1336,7 +1374,7 @@ engine restrictions and without an OS-sandbox claim, provided the separate
 `credential_isolation` capability remains enforced. Do not broaden a system
 directory to make the strict test pass.
 
-The authorized target is the managed `.triss/wt-v2/<slug>` child for isolated runs
+The authorized target is the managed `.triss/wt-v2/<engine>/<slug>` child for isolated runs
 and the validated caller project worktree for non-isolated runs. Writes are
 limited to that target and task temp when sandbox enforcement is active. Before
 any non-isolated enforced sandbox/quota setup, acquire the regular/no-follow
@@ -1503,12 +1541,18 @@ aged recovery row above. Tests repeat more than 32 rejected fifth-session and
 fourth-PR admissions without exhausting the process-set journal and inject a
 crash before cancellation.
 
-The supervisor remains independent of session and PR modules through one exact
-owner-adapter interface. `allocateOwnedProcessSet()` requires
-`{kind,ownerKind,ownerReference,projectRootFingerprint}` and returns the opaque
-`{sandboxId,controlHandle}`; it rejects an invalid discriminant/reference before
-journal mutation. For `kind=durable`, allocation under the journal mutex also
-rejects any unpruned row with the same exact
+The supervisor remains independent of session and PR modules. Its low-level
+`allocatePlatformProcessSet()` returns only a fresh opaque
+`{sandboxId,controlHandle}` reservation with no child, journal entry, or owner
+reference; it is the sole API owned by Package 2D for platform allocation.
+Package 2D2 alone owns the high-level durable
+`allocateOwnedProcessSet({kind,ownerKind,ownerReference,projectRootFingerprint}, ownerAdapter)`
+transaction: it validates the discriminant/reference, obtains a platform
+reservation, writes the journal `reserving` row, invokes the owner adapter to
+publish the exact reference, promotes the same row to `live`, and only then
+returns the control handle to permit spawn. Any failure before return invokes
+the exact cancellation/ack/prune path; a crash is recovered by the `reserving`
+rows above. For `kind=durable`, allocation under the journal mutex also rejects any unpruned row with the same exact
 `(ownerKind,ownerReference,projectRootFingerprint)`, regardless of its state;
 this atomic uniqueness rule persists through `release_pending` and
 `acknowledged` until final prune and is the sole no-re-admission authority.
@@ -1516,10 +1560,10 @@ Tests race the same owner during the reference-removed/ack gap and admit it only
 after prune. Durable recovery/release accepts an adapter with exactly
 `withOwnerLock(journalRowSnapshot, callback)`, `inspectReference(journalRow)`, and
 `transitionRelease(journalRow)`. The latter two methods may run only inside the
-awaited `withOwnerLock` callback. Package 2D passes the bounded byte-snapshotted
+awaited `withOwnerLock` callback. Package 2D2 passes the bounded byte-snapshotted
 journal row before owner acquisition; the adapter derives only that row's
 engine/slug/root from its owner reference, performs discovery/locking, and then
-Package 2D reacquires the journal mutex and byte-revalidates the same row before
+Package 2D2 reacquires the journal mutex and byte-revalidates the same row before
 inspection or transition. A session adapter is constructed with a
 discriminated context: exactly one opaque active prefix
 `heldOwnerLockContext`, one `sessionAbsenceContext`, or null; a PR adapter uses
@@ -1533,7 +1577,7 @@ and releases it after the callback. A stale, partial, wrong-project, or wrong-se
 closed, and recursive acquisition is forbidden. `inspectReference` returns exactly
 `matching|released|mismatch`; `transitionRelease` performs the idempotent
 session published-to-idle, unpublished-removal, session-deleting, or PR-deleting
-transition just enumerated and returns the same enum after reread. Package 2D snapshots the journal, releases its mutex, enters the
+transition just enumerated and returns the same enum after reread. Package 2D2 snapshots the journal, releases its mutex, enters the
 adapter lock, reacquires and byte-revalidates the journal, invokes those
 methods, then finishes acknowledge/prune without importing either higher-level
 module. `promoteOwnedProcessSetLive(sandboxId, ownerAdapter)` uses the same
@@ -1636,24 +1680,27 @@ linked worktree cannot satisfy both commit support and common-dir isolation.
 Add CLI:
 
 ```text
-triss coder run [prompt] --expect <changes|analysis|either>
+triss coder run [prompt] --expect <changes|analysis|either> [--allow-best-effort-caller-worktree]
 ```
 
 Rules:
 
 - default is `either` for compatibility;
 - invalid values fail before credentials, Git mutation, or spawn;
-- `--expect changes` requires effective isolation for a verified-success claim;
-  on a host selected for best-effort it still runs as advisory and exits `3`,
-  never claiming changes;
-- `--expect changes --no-isolate` fails before spawn only when enforced
-  verification is otherwise available; best-effort execution remains advisory;
-- when requested isolation cannot be enforced, print
-  `TRISS_CODER_ISOLATION_DOWNGRADED` before the engine starts, set
-  `effective_isolation: "best_effort_caller_worktree"`, and state that edits
+- `--expect changes` requires effective isolation for a verified-success claim.
+  If requested/default isolation cannot be enforced, it follows the explicit
+  opt-in rule below; it never silently starts an advisory caller-worktree run;
+- `--expect changes --no-isolate` fails before spawn when enforced verification
+  is otherwise available. A caller-worktree advisory run requires the same
+  explicit best-effort opt-in and can never satisfy `changes`;
+- when `--isolate` is explicit, or Crush's isolation-on default is effective,
+  and enforced isolation cannot be established, fail before credentials/spawn
+  with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` unless the caller explicitly
+  supplies `--allow-best-effort-caller-worktree`. That opt-in prints
+  `TRISS_CODER_ISOLATION_DOWNGRADED` before the engine starts, sets
+  `effective_isolation: "best_effort_caller_worktree"`, and states that edits
   (including delayed descendants) may reach the caller's current Git worktree;
-  the caller may abort before spawn. JSON/MCP expose the field/code but never
-  silently substitute the target;
+  it is recorded in the envelope and cannot be implied by a warning alone;
 - Crush's isolation-on default satisfies `--expect changes`; isolated runs
   reject `--no-restrict`; an OS sandbox is applied when the host provides it
   and otherwise the run reports best-effort capabilities;
@@ -1709,9 +1756,15 @@ Add MCP input:
 
 ```json
 {
-  "expect": "changes | analysis | either"
+  "expect": "changes | analysis | either",
+  "allowBestEffortCallerWorktree": false
 }
 ```
+
+MCP defaults this boolean to `false`. If isolation was requested/effective and
+the capability matrix cannot establish it, MCP returns the same preflight error
+without creating a child unless the caller set it to exactly JSON `true`; an
+interactive CLI warning is never treated as MCP consent.
 
 Keep MCP and CLI default resolution identical by implementing one exported pure
 resolver. Do not duplicate the enum in three runtime branches; export one
@@ -1925,7 +1978,7 @@ All local comparison subprocesses—ref resolution, merge-base, cheap inventory,
 rename inventory, and selected content—have a non-configurable 30-second
 per-command deadline plus the caller's earlier absolute deadline. Collectors
 read incrementally to the applicable cap plus one byte, then cancel and
-terminate/wait the complete Package 2D-owned Git subtree; no partial inventory
+terminate/wait the complete Package 2D platform-owned Git subtree; no partial inventory
 or diff is returned. Deadline/cancel/limit use stable
 `TRISS_REVIEW_GIT_TIMEOUT`, `TRISS_CANCELLED`, or `TRISS_REVIEW_LIMIT` evidence.
 Before any `-M` command, run a bounded no-renames `--name-status -z
@@ -1957,6 +2010,22 @@ quota, owned-process, and no-follow rules; the recorded comparison identity
 still names the original base/head/merge-base OIDs. Failure to establish the
 empty attribute source is `TRISS_REVIEW_GIT_ATTRIBUTES`, not a fallback to
 ordinary `git diff`.
+
+The local sealed projection has its own hard resource contract, separate from
+the returned review payload: it is created under a managed-root mode-`0700`
+directory with an OS-enforced 128 MiB allocation-block quota (at most one block
+overshoot), at most 120 MiB of source object bytes copied, 100,000 object
+entries, 32 temporary/control files, and a non-configurable 60-second total
+projection-build deadline including closure enumeration, object copy, empty-tree
+creation, and fsync. The parent streams the closure one object at a time,
+accounts bytes/objects before creating the next destination object, cancels and
+waits the Package 2D platform subtree at cap-plus-one/deadline, then removes the
+validated projection. Exceeding any bound yields
+`TRISS_REVIEW_LOCAL_PROJECTION_LIMIT` before inventory/content/provider access;
+no partial projection or comparison result is reused. Package 2E owns the
+quota primitive; Atomic 32 owns this projection admission/accounting/deletion
+surface and its exact 120/128 MiB, 100,000/100,001 object, 32/33 temp, timeout,
+cap-plus-one, and source-common-dir-immutability fixtures.
 
 Treat repository-local config as untrusted and override at command scope. Set
 `GIT_NO_REPLACE_OBJECTS=1` and pass
@@ -2007,7 +2076,7 @@ the configured origin. Reject PR input combined with the existing `--base`
 option before acquisition; v1 always uses the PR metadata base and documents
 this compatibility change. Use `gh pr view` only for repository identity and
 exact base/head metadata. Before even the initial call, allocate a durable
-`reserving` Package 2D set, perform the Package 17A registry-locked capacity
+`reserving` Package 2D2 owned-process transaction, perform the Package 17A registry-locked capacity
 check and marker/active-registry publication, promote it `live`, then run both
 metadata calls, fetch, and PR-local Git children inside that same owned set.
 Thus no `gh` call precedes admission/reference publication. Both metadata calls use a non-configurable 30-second
@@ -2536,7 +2605,7 @@ Prerequisite: Package 0. Named reference: Reference surface 1 and Sections
 `normalizeActivity()`, and `deriveCoderResultFacts()`. RED/GREEN:
 `node --test test/coder-result.test.js`. Implement enums, orthogonal lifecycle
 precedence, required `session_slug` versus engine `session_id`, activity
-normalization, artifact facts, and requirement matrix.
+normalization, result-retention facts, and requirement matrix.
 Non-goal: engine/CLI/MCP adapters.
 
 #### Atomic 02 / Package 2 — bounded OpenCode event folding
@@ -2643,7 +2712,7 @@ Prerequisites: Package 2G and Package 0 platform proof. Named reference: Section
 5 and 6.5 process-tree contract. Add `src/coder-process-supervisor.js` and
 `test/coder-process-supervisor.test.js`; export only
 `spawnOwnedCoderTree()`, `terminateAndVerifyCoderTree()`,
-`allocateOwnedProcessSet()`, `attachOwnedProcessSet(sandboxId)`, and
+`allocatePlatformProcessSet()`, `attachOwnedProcessSet(sandboxId)`, and
 `recoverOwnedProcessSetState(sandboxId)`. This package owns only the platform
 process-set primitive and stable sandbox identity, not JSON journals or owner
 state machines.
@@ -2659,8 +2728,8 @@ is diagnostic only. A future wall timestamp, unavailable monotonic epoch, or
 negative age retains/fails closed. The durable `sandbox_id` maps only to a kernel/OS-owned set identity outside
 agent-writable paths; attach returns exactly `live`,
 `verified_empty_tombstone`, or `unknown`, never infers from PID.
-Non-goals: JSON persistence, owner adapters, Git mediation, quotas, or envelope
-derivation.
+Non-goals: JSON persistence, owner adapters, high-level owned allocation, Git
+mediation, quotas, or envelope derivation.
 
 #### Atomic 09 / Package 2D1 — owned-process journal codec and transaction
 
@@ -2682,12 +2751,17 @@ Prerequisite: Package 2D1. Named reference: Section 6.5 owner-adapter and
 release protocol. Add `src/owned-process-reconcile.js` and
 `test/owned-process-reconcile.test.js`; export
 `promoteOwnedProcessSetLive()`, `cancelOwnedProcessSetReservation()`,
+`allocateOwnedProcessSet()`,
 `beginOwnedProcessSetRelease()`, `acknowledgeOwnedProcessSetRelease()`,
 `recoverOwnedProcessSet(sandboxId, ownerAdapter)`, and
 `reconcileOwnedProcessSetRelease()`. Allocation and adapter signatures are
 exactly those in Section 6.5. A durable recovery requires its non-null matching
 adapter; only `kind=ephemeral` accepts null. Use fake owner adapters only; this
-package does not import session inventory or PR registry. Cover every
+package does not import session inventory or PR registry. It is the sole owner
+of high-level `allocateOwnedProcessSet()` and composes Package 2D platform
+reservation with Package 2D1 journal reservation plus injected owner-reference
+publication, promotion, and cancellation; Package 2D exports only
+`allocatePlatformProcessSet()`. Cover every
 begin/reference-remove/ack/prune crash row and adapter mismatch/reentrancy case.
 
 Package 2D1 owns a bounded
@@ -2732,10 +2806,13 @@ Non-goals: deciding mounts, Git mediation, quotas, or envelope derivation.
 
 Prerequisite: Package 2D2 and Package 0 filesystem proof. Named reference:
 Section 6.5 writable-quota contract. Add `src/coder-write-quota.js` and
-`test/coder-write-quota.test.js`; export `prepareCoderWriteQuota()` and
-`subscribeCoderQuotaEvents()`. RED/GREEN:
+`test/coder-write-quota.test.js`; export generic
+`prepareQuotaBackedDirectory({root,limitBytes,scope})`,
+`subscribeQuotaEvents()`, and the coder-facing wrappers
+`prepareCoderWriteQuota()` / `subscribeCoderQuotaEvents()`. RED/GREEN:
 `node --test test/coder-write-quota.test.js`. Cover 512 MiB additional-block
-accounting, isolated/non-isolated targets, one-block overshoot, many-small-file
+accounting, isolated/non-isolated targets, a bounded local-review projection,
+one-block overshoot, many-small-file
 pressure, `filesystem_quota` cause, cleanup, and unavailable-filesystem
 capability reporting. Prove authenticated synchronous first-rejection notification,
 first-cause-before-ack ordering, duplicate-event immunity, and termination when
@@ -2864,7 +2941,7 @@ deletes a real generation. `invalid` always retains/fails closed. The adapter im
 Package 2D2 promotion/recovery/reconcile APIs and proves published-to-idle,
 unpublished-removal, deleting cleanup, and `release_pending + released` after a
 new host process. Slug allocation generates 128 random bits, scans
-reservation/state/worktree/branch/both-engine-store collisions without reuse,
+reservation/engine-scoped-state/worktree/branch/both-engine-store collisions without reuse,
 reserves before spawn, and retries exactly eight times; focused tests cover
 every collision source. A rejected cap/collision after process-set allocation
 calls Package 2D2 cancellation; more than 32 sequential rejected admissions do
@@ -2950,10 +3027,12 @@ surface 3, state-orchestration subset. Add `src/coder-run-state.js` and
 exports. RED/GREEN:
 `node --test test/coder-run-state.test.js test/coder-clean.test.js`.
 Compose project identity, ephemeral-default versus explicit/kept persistent
-admission, workspace/session binding, snapshots, v2 namespace, legacy/v2 clean
-separation, and recoverable finalization as a pure dependency-injected state
-machine. It does not spawn an engine, construct an envelope, or edit event
-folding. Mixed-version, relocation, ephemeral cleanup/TTL, retained persistent
+admission, engine-scoped workspace/session binding, snapshots, v2 namespace,
+result-artifact reservation/publication/list/clean, legacy/v2 clean separation,
+and recoverable finalization as a pure dependency-injected state machine. It
+does not spawn an engine, construct an envelope, or edit event folding.
+Mixed-version, relocation, ephemeral read-only cleanup, retained changed-result
+worktree retrieval/clean, result-cap/crash recovery, retained persistent
 workspace, and workspace-mismatch fixtures are deterministic fakes.
 
 #### Atomic 21 / Package 5A — OpenCode run and envelope orchestration
@@ -2968,15 +3047,19 @@ Implement bounded envelope fields and one OpenCode orchestration path across
 proxy, sandbox capability adapter, toolchain mediator, Git mediator, process
 set, quota, locks, and state machine. A real fake-provider explicit-session
 two-run fixture proves
-workspace-bound generation resume; default unnamed fixtures prove auto-clean
-and zero persistent inventory. Include `session_slug` and
-`execution_capabilities` in every safe envelope after allocation. Fixtures cover
+workspace-bound generation resume; default unnamed read-only fixtures prove
+auto-clean and zero persistent inventory, while changed unnamed fixtures prove
+the returned worktree/result artifact remains retrievable. Include `session_slug`,
+`result_retention`, `result_id`, and `execution_capabilities` in every safe
+envelope after allocation. Fixtures cover
 enforced and unsupported-host best-effort advisory results, no post-run diff or
 persistent-session transition unless the shared all-seven-capability predicate
 is true,
 and removal of the production win32-only coder rejection after Package 0's
-credential-isolation proof. Unsupported-host fixtures require the before-spawn
-target-downgrade warning, `best_effort_caller_worktree`, and a caller abort path.
+credential-isolation proof. Unsupported-host fixtures require isolation-
+enforcement preflight without the explicit opt-in, then the before-spawn target-
+downgrade warning, `best_effort_caller_worktree`, and a caller abort path when
+the opt-in is true.
 They also cover managed-root loss with otherwise enforced sandbox/supervision:
 no project ephemeral recovery artifact or cap is published, while the separate
 process cleanup fact remains truthful.
@@ -3019,6 +3102,9 @@ generated session, omitted session defaults to ephemeral auto-clean, bare
 an explicit `--session`/`--keep-session` that lacks persistent-state eligibility
 starts only a fresh `ephemeral_downgraded` session with the stable warning,
 never reads or mutates the existing persistent slug/store; and
+`--allow-best-effort-caller-worktree` is the only CLI consent to an isolation
+downgrade when isolation was requested/effective; without it the command fails
+before spawn; and
 `triss coder session list` calls only `runCoderSessionList()`, whose subprocess
 contract serializes the bounded Package 4B1 inventory projection to stdout,
 writes typed diagnostics to stderr, exits `0` only for a complete canonical
@@ -3029,6 +3115,9 @@ calls only `runCoderSessionClean()` before removing the selected inactive
 isolated session/workspace transaction. The same CLI owns `triss coder state
 backup|validate|adopt|reset` exact option routing; adopt/reset require explicit
 project IDs/actions and never delete quarantine data.
+It also owns `triss coder result list` and `triss coder result clean <run-id>`;
+the latter removes only a validated retained result artifact, never a persistent
+session selected by a slug.
 Subprocess tests create the same slug for both engines and prove only the
 selected engine is removed. Tests also prove the
 legacy shared map and direct real engine IDs cannot select or clean a v2
@@ -3036,7 +3125,8 @@ session, and cover help/completion text, missing/corrupt mappings, mode
 mismatch, bounded/redacted list output, persistent cap errors, 100 ephemeral
 default runs without inventory growth, `--keep-session`, workspace mismatch,
 relocation/adopt/reset, packed-artifact backup/validation, and explicit cleanup.
-They also cover this persistence downgrade and its help/warning projection.
+They also cover this persistence downgrade, result retention/list/clean, and
+isolation-opt-in help/warning projection.
 Non-goal: MCP.
 
 #### Atomic 24 / Package 8 — MCP expectation adapter
@@ -3045,7 +3135,9 @@ Prerequisite: Package 7. Named reference: Reference surface 6. Edit
 `src/mcp/tools.js`, `src/mcp/handlers.js`, and focused MCP coder/server tests;
 reuse `resolveExpectation()` and result serializers. RED/GREEN:
 `node --test test/mcp-coder.test.js test/mcp-tools.test.js test/mcp-server-cancellation.test.js`.
-Implement schema, handler mapping, safe output, and cancellation. Non-goal: CLI
+Implement schema, handler mapping, safe output, and cancellation, including the
+default-false `allowBestEffortCallerWorktree` opt-in and result list/clean
+actions. Non-goal: CLI
 parsing. MCP tests require top-level `session_slug` for explicit, ephemeral, and
 kept-generated runs; only explicit/kept slugs are continuation/cleanup keys,
 while an ordinary generated slug is correlation/recovery evidence and never an
@@ -3104,13 +3196,17 @@ isolation, mandatory `session clean --engine`, bare-continue rejection,
 legacy-map immunity, workspace deletion/source-movement rejection, stable-ID
 same-filesystem relocation, cross-filesystem quarantine/adopt, and packed-CLI
 rollback backup/re-upgrade validation. It also covers generated-slug collision,
-100 ephemeral default runs with no persistent inventory/HOME, `--keep-session`,
+100 read-only ephemeral default runs with no persistent inventory/HOME, changed
+ephemeral result retrieval/list/clean with an existing worktree path,
+`--keep-session`,
 bounded crash TTL recovery, `session_slug` in CLI/MCP output,
 missing-versus-malformed mapping, and non-Git preflight rejection. Persistent
 admission acceptance creates sessions 1-4, proves the fifth fails before spawn
 with `TRISS_CODER_SESSION_CAP`, lists four bounded rows, cleans one exact
 engine/slug/workspace, and proves capacity is reclaimed. It uses a local fake
-provider and requires no credentials. Non-goal: review acquisition
+provider and requires no credentials. It runs CLI and MCP isolation-requested
+fixtures that prove absent opt-in fails before spawn and explicit opt-in alone
+permits `best_effort_caller_worktree`. Non-goal: review acquisition
 or sharding cases. Atomic 28 owns a `windows-latest` job that installs the
 packed npm tarball in an owned temporary prefix and runs the fake-provider coder
 smoke, asserting no OS-sandbox-only rejection, correct capabilities/warnings,
@@ -3180,8 +3276,8 @@ Non-goals: subprocesses, environment reads, sharding execution, or adapters.
 
 #### Atomic 32 / Package 15 — comparison identity and bounded rename inventory
 
-Prerequisite: Package 14. Named reference: Reference surface 10, local Git
-identity/inventory bullets only. Add `src/review-git.js` and
+Prerequisites: Package 14 and Package 2E. Named reference: Reference surface 10, local Git
+identity/inventory/sealed-projection bullets only. Add `src/review-git.js` and
 `test/review-git.test.js`; export `resolveReviewComparison()`,
 `acquireNameStatusInventory()`, and `expandRenameSelection()`. RED/GREEN:
 `node --test test/review-git.test.js`; these cases use prefix
@@ -3197,7 +3293,11 @@ repository, including the all-objects-present graph whose apparent unique merge
 base is wrong. Build and use the sealed empty-attribute projection for every
 command; global, info, dirty-worktree, and committed attribute canaries must
 produce byte-identical inventory/content framing or fail before provider access.
-Non-goals: content diff, PR/network acquisition, CLI, or MCP.
+This package is the sole local sealed-projection owner: reuse Package 2E to
+enforce its 120 MiB copied-object/128 MiB physical quota, 100,000-object,
+32-temp, 60-second build bounds and cap-plus-one cleanup before any Git
+comparison. Non-goals: selected content diff, PR/network acquisition, CLI, or
+MCP.
 
 #### Atomic 33 / Package 16 — selected local content acquisition
 
@@ -3636,6 +3736,8 @@ RED tests:
 - Crush `exit_reason=error|timeout|max_cost|max_tokens` + child exit zero remains
   unsatisfied;
 - `either` does not claim semantic satisfaction;
+- a verified changed ephemeral run derives `result_retention=retained` and its
+  run-bound `result_id`; a read-only ephemeral run derives `none/null`;
 - whitespace-only final text is not usable;
 - artifact status remains `changes_present` after a failed run when a verified
   deliverable diff exists;
@@ -3730,6 +3832,11 @@ RED tests:
   `change_detection.status: not_checked`;
 - isolated empty diff returns verified `[]`;
 - isolated non-empty diff returns verified exact paths;
+- a changed unnamed isolated run returns `result_retention=retained`, a non-null
+  `result_id`, and an existing engine-scoped worktree path after the envelope;
+  its task HOME/native conversation state is absent until explicit result clean;
+- an unnamed isolated read-only run returns `result_retention=none` and its
+  worktree is auto-cleaned;
 - a reused worktree whose second run is read-only has a cumulative
   `files_changed` list but empty `run_files_changed` and cannot satisfy changes;
 - fresh isolation persists verified base metadata outside the child worktree;
@@ -3763,6 +3870,8 @@ RED tests:
 - process cleanup regressions remain green;
 - real OpenCode continuation restores only the validated generation into a
   fresh task HOME; backup validation and mixed-version isolation remain green.
+- same slug across OpenCode/Crush creates distinct worktree/branch/coder-state
+  paths; cleaning one engine leaves the other's continuation valid.
 
 Implementation notes:
 
@@ -3772,7 +3881,8 @@ Implementation notes:
   evidence;
 - atomically create/load/validate the ignored isolation base metadata and never
   accept agent-controlled metadata from inside the child worktree;
-- do not delete an isolation worktree when change detection failed;
+- do not delete an isolation worktree when change detection failed or a verified
+  unnamed run has a non-empty current-run diff; publish the result index first;
 - generate `run_id` locally from 16 cryptographically random bytes as
   `run_<32 lowercase hex>` without a dependency;
 - set `started_at` after validation but before isolation setup or any other run
@@ -4297,7 +4407,8 @@ provider errors. Expected files after rebase discovery:
 - relevant help/completion sources and `test/init.test.js`,
   `test/agent-help.test.js`, `test/completion.test.js`, MCP/help tests.
 
-Document every new coder field including `session_slug` versus `session_id`, both file lists, `change_summary`, truthful
+Document every new coder field including `session_slug` versus `session_id`,
+`result_retention`/`result_id`, both file lists, `change_summary`, truthful
 `diff_stat` fallback, null/empty semantics, explicit expectation exit codes,
 bounded diagnostics, and stable public provider error
 codes. State that process completion is not task satisfaction, show
@@ -4305,20 +4416,24 @@ codes. State that process completion is not task satisfaction, show
 distinguish environment blockers, document local metadata schema v1 and its
   lease/cleanup/rollback behavior, explain credential-proxy requirements and the
   seven `execution_capabilities` values and `effective_isolation`, distinguish enforced from best-effort
-  execution, state that unavailable OS sandbox/cleanup/lock/quota does not block
-  coder but cannot provide those guarantees, and state that unavailable
+  execution, state that unavailable OS sandbox/cleanup/lock/quota does not by
+  itself block a non-isolated/best-effort coder invocation but cannot provide
+  those guarantees (and that explicit/default isolation needs the separate
+  opt-in or preflight failure), and state that unavailable
   credential isolation always blocks before spawn to protect the real provider
   key. Document that a best-effort envelope is advisory-only (`null` change
   lists, no explicit-expectation success, no persistent session), including the
-  pre-spawn `TRISS_CODER_ISOLATION_DOWNGRADED` warning and possible direct
-  caller-worktree edits, and avoid volatile
+  pre-spawn `TRISS_CODER_ISOLATION_DOWNGRADED` warning, the required explicit
+  CLI/MCP opt-in before possible direct caller-worktree edits, and avoid volatile
 context-window claims. Document the v2 per-engine/per-slug session namespace,
 the required slug grammar, rejection of bare `--continue`, absence of automatic
 legacy-map migration, different isolation-mode ownership, and explicit
 `triss coder session clean <slug> --engine <opencode|crush>` for inactive
 sessions. Document generated 128-bit slugs and top-level `session_slug`, but
-make omitted-session runs ephemeral with automatic successful cleanup and no
-conversation retention. Document explicit `--session` persistence,
+make omitted-session conversations ephemeral: read-only runs auto-clean, but
+verified changed runs retain a bounded result artifact until explicit result
+clean, with no conversation retention. Document `coder result list|clean`,
+explicit `--session` persistence,
 `--keep-session`, workspace/OID/snapshot binding and mismatch rejection,
 bounded crash TTL recovery, stable project identity, rename versus
 cross-filesystem adopt/quarantine/reset, and missing-versus-malformed mapping.
@@ -4558,6 +4673,7 @@ implement it locally; do not restart indefinitely.
 | external diff/textconv/config helpers are disabled | malicious Git environment fixtures |
 | shallow ancestry never claims exact comparison | wrong-single-merge-base fixture in `test/review-git-acquisition.test.js` |
 | mutable Git attributes cannot alter exact diff | global/info/dirty/committed attribute canaries in `test/review-git-acquisition.test.js` |
+| local sealed Git projection is bounded before comparison | 120/128 MiB, 100,000-object, temp-count, deadline, cap-plus-one cleanup, and source-common-dir immutability fixtures |
 | selected scope can be complete without global coverage | local, PR, and stdin coverage fixtures |
 | PR text cannot fetch internal issues | CLI/MCP integration spy tests |
 | MCP root and cancellation are enforced | MCP root/cancel review tests |
@@ -4569,7 +4685,10 @@ implement it locally; do not restart indefinitely.
 | no secret/raw tool data in diagnostics | coder-result and provider-error fixtures |
 | CLI/MCP contract parity | MCP schema/handler and CLI help tests |
 | default unnamed coder runs do not persist | 100-run ephemeral inventory/HOME fixture |
+| changed unnamed coder result remains retrievable | retained worktree/result-index fixture, envelope path existence, explicit result-clean and crash recovery |
+| explicit isolation cannot silently write caller worktree | CLI/MCP no-opt-in preflight and explicit-opt-in downgrade fixtures |
 | persistent conversation matches Git workspace | base/ref/coder-state/snapshot mismatch fixtures for both engines |
+| same slug is isolated across engines | clean one engine then continue the other engine-scoped worktree/branch/state fixture |
 | project rename/adopt cannot strand state | same-device rename and cross-device quarantine crash fixtures |
 | sandbox toolchain is exact and usable | real OpenCode/Crush node-test/lint plus denied-HOME/common-dir canaries |
 | Windows coder remains usable when strict OS boundaries are absent | `windows-latest` npm-installed fake-provider coder smoke, capability/warning fixture, and no win32-only preflight rejection |
@@ -4622,16 +4741,24 @@ engine/project/workspace ownership evidence. Announce the explicit isolated
 flag is mandatory, and retain legacy data untouched for the old binary. A caller that needs an old conversation starts a new v2 slug;
 manual copying or ID import is unsupported.
 
-Release A makes omitted-session runs ephemeral: they retain no conversation,
-automatically remove validated worktree/session artifacts after success, and
-keep only bounded 15-minute recovery metadata after failure/crash. Explicit
+Release A makes omitted-session conversations ephemeral: read-only runs
+automatically remove validated worktree/session artifacts after success, while a
+verified changed run retains a bounded result-only worktree/branch/state artifact
+until explicit `coder result clean <run-id>` so its code can actually be
+retrieved. It retains no conversation/native engine HOME. Failure/crash keeps
+only bounded 15-minute recovery metadata. Explicit
 `--session` is persistent; `--keep-session` explicitly promotes a generated
 slug to persistence. The maximum of four reservations and hard 512 MiB store
 quota applies only to persistent sessions. The fifth new persistent session
 fails before provider/spawn with `TRISS_CODER_SESSION_CAP`; ordinary unnamed
 runs remain usable. Changelog, CLI help, and agent docs show persistent
-`session list`/continue/clean, workspace mismatch/reset, stable project rename,
-cross-filesystem adopt/quarantine, and installed backup/validate commands.
+`session list`/continue/clean, result list/clean, workspace mismatch/reset,
+stable project rename, cross-filesystem adopt/quarantine, and installed
+backup/validate commands. When isolation was requested/effective but cannot be
+enforced, CLI/MCP fail before spawn unless the caller explicitly opts into
+`--allow-best-effort-caller-worktree`/`allowBestEffortCallerWorktree:true`; that
+opt-in is documented as direct caller-worktree access, never equivalent
+isolation.
 
 Release B intentionally removes automatic issue-key discovery from PR and
 branch prose. Callers that want tracker context must pass the new explicit

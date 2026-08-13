@@ -20,6 +20,7 @@ import {
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
 import { positiveIntegerOption } from '../option-validation.js';
+import { EmptyModelResponseError } from '../errors.js';
 
 const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
@@ -191,8 +192,10 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
 
   const out = responseText(resp);
   if (!out) {
-    process.stderr.write(pc.red('[triss/review] empty response — try --max-tokens 16384\n'));
-    process.exit(1);
+    throw new EmptyModelResponseError(
+      '[triss/review] empty response — the model returned no final verdict. ' +
+        'Retry with a smaller source payload or a different provider; this is not a successful review.',
+    );
   }
   if (!useStream) process.stdout.write(out + '\n');
   else process.stdout.write('\n');

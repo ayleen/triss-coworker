@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAsk, runAskWithDeps } from '../src/commands/ask.js';
@@ -8,6 +9,41 @@ import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(ROOT, 'bin', 'triss.js');
+
+function runChild(command, args, options = {}) {
+  return new Promise((resolveChild, reject) => {
+    const child = spawn(command, args, options);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.once('error', reject);
+    child.once('close', (status) => resolveChild({ status, stdout, stderr }));
+  });
+}
+
+async function withEmptyCompletionServer(fn) {
+  const server = createServer((req, res) => {
+    req.resume();
+    req.once('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        model: 'test-empty',
+        choices: [{ message: { content: ' \n\t ' }, finish_reason: 'stop' }],
+      }));
+    });
+  });
+  await new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  try {
+    const { port } = server.address();
+    return await fn(`http://127.0.0.1:${port}/v1`);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+}
 
 test('ASK-01: runAsk forwards GLM provider and model to model resolution', async () => {
   await assert.rejects(
@@ -121,6 +157,60 @@ test('ASK-04: CLI ask preserves a successful GLM top-level final_text response',
   }
 
   assert.match(captured.join(''), /The final answer\./);
+});
+
+test('ASK-04a: an empty provider response rejects with a stable error instead of exiting mid-write', async () => {
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  let stdout = '';
+  process.stdout.write = (chunk) => {
+    stdout += String(chunk);
+    return true;
+  };
+  process.stderr.write = () => true;
+  try {
+    await assert.rejects(
+      () => runAskWithDeps(
+        { paths: ['package.json'], question: 'What is this?', stream: false },
+        {
+          resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2' }),
+          chat: async () => ({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] }),
+        },
+      ),
+      (error) => error?.code === 'TRISS_EMPTY_MODEL_RESPONSE' && /empty response/.test(error.message),
+    );
+    assert.doesNotMatch(stdout, /The final answer|No issues found/);
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+});
+
+test('ASK-04b: real CLI flushes the stable empty-response code instead of silently exiting', async () => {
+  await withEmptyCompletionServer(async (baseUrl) => {
+    const result = await runChild(process.execPath, [
+      BIN,
+      'ask',
+      '--paths',
+      'package.json',
+      '--question',
+      'reply',
+      '--no-stream',
+    ], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        NO_COLOR: '1',
+        TERM: 'dumb',
+        TRISS_WORKER_API_KEY: 'test-key',
+        TRISS_WORKER_BASE_URL: baseUrl,
+      },
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /TRISS_EMPTY_MODEL_RESPONSE/);
+    assert.match(result.stderr, /no final text/);
+    assert.doesNotMatch(result.stdout, /reply|No issues found/);
+  });
 });
 
 test('ASK-05: the real ask stdin caller keeps the helper default trim behavior', () => {
