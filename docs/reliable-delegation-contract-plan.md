@@ -1,6 +1,7 @@
 # Reliable Delegation Contract Plan
 
-Status: implementation-ready plan; no implementation in this branch.
+Status: implementation-ready revision after architecture, execution, and
+security/operations review; no implementation in this branch.
 
 As of: 2026-08-13.
 
@@ -48,8 +49,11 @@ Preserve `exit_reason` for backward compatibility, then add orthogonal,
 machine-readable facts:
 
 - `process_status`: what happened to the engine process;
+- `termination_cause`: why Triss initiated or observed termination;
+- `engine_status`: whether the engine itself reported normal completion;
 - `cleanup_status`: whether the detached process group is gone;
-- `change_detection`: whether Git changes were actually checked;
+- `change_detection`: whether deliverable and current-run Git changes were
+  actually checked;
 - `artifact_status`: what objective artifact exists;
 - `expectation`: what artifact the caller required;
 - `requirement_status`: whether that objective requirement was met;
@@ -80,14 +84,19 @@ rebase:
 | File corpus bounds | `ask --paths` already has per-file, total-corpus, and file-count limits | `src/paths.js` |
 | Empty response | CLI `ask`/`review` exit, while MCP `callModel()` throws | `src/commands/ask.js`, `src/commands/review.js`, `src/mcp/handlers.js` |
 | Provider timeout | all OpenAI-compatible clients support `TRISS_REQUEST_TIMEOUT_MS` | `src/config.js`, `src/client.js` |
-| Z.AI endpoint fallback | only endpoint-routing statuses receive the sibling-endpoint retry | `src/client.js`, `withGlmEndpointFallback()` |
+| Z.AI endpoint fallback | current code retries broad 401/403/429 status shapes before the new policy/rate-limit classifier | `src/client.js`, `withGlmEndpointFallback()` |
 
 There is a separate live worktree on
 `feature/codex-workflow-improvements`. Its evidence response format overlaps
 `ask`, `review`, MCP handlers, templates, and tests. It is not part of this
-plan's base. Before implementing packages that touch those surfaces, fetch and
-determine whether that branch has merged. Rebase first if it has. Do not copy
-files wholesale from either branch.
+plan's base. At review time its known head was `cc75732f`; it also adds the
+`triss exec` router with explicit option allowlists and coder/review forwarding.
+Package 0 must fetch and record the live head and a file-by-file merge matrix.
+If it has merged, every new coder/review option must be forwarded through
+`src/commands/exec.js` and covered by `test/exec.test.js`. The combination
+`--format evidence --payload-mode shard` is rejected in v1 because its
+single-final-decision contract cannot wrap multiple shard reports safely. Do
+not copy files wholesale from either branch.
 
 ## 4. Scope
 
@@ -124,31 +133,47 @@ files wholesale from either branch.
 
 ## 5. Safety and compatibility invariants
 
-1. Existing secrets remain outside envelopes, warnings, activity summaries,
-   review manifests, and test fixtures.
-2. Raw tool input and raw tool output are not copied into `activity`.
+1. Triss-generated metadata, warnings, activity summaries, review manifests,
+   and test fixtures never copy secrets. Model-authored `final_text` and
+   successful CLI review prose are explicitly untrusted output and may repeat
+   supplied context; documentation must tell callers not to treat them as a
+   sanitized artifact.
+2. Raw tool input, raw tool output, engine stderr, provider bodies, and
+   malformed event lines are not copied into public errors, warnings,
+   `activity`, or MCP results.
 3. The existing explicit environment allowlist for coder subprocesses remains
    deny-by-default. Do not replace it with `{ ...process.env }`.
 4. Process-group cleanup remains a release blocker. No new result-building path
    may run before `spawnEngine()` or `spawnCrush()` has verified cleanup.
-5. `files_changed: []` means a Git comparison ran successfully and found no
-   deliverable changes. It must never mean "not checked".
+5. `files_changed: []` means the isolated fingerprint comparison ran
+   successfully and found no deliverable changes. It must never mean "not
+   checked".
 6. `files_changed: null` means no verified change list exists.
-7. A policy rejection is reported exactly and is not converted into consent,
-   an authorization question, or an attempted bypass.
-8. Review payload limits are local reliability limits, not claims about a
+7. `run_files_changed: []` means a verified pre/post comparison found no net
+   visible changes from this run; `run_files_changed: null` means it was not
+   verified.
+8. A policy rejection is reported with its exact stable type/status and a
+   sanitized bounded message; it is not converted into consent, an
+   authorization question, an attempted bypass, or a raw response-body leak.
+9. Review payload limits are local reliability limits, not claims about a
    provider's advertised context window.
-9. Review sharding never drops a file silently. Every file or shard is listed
+10. Review sharding never drops a file silently. Every file or shard is listed
    as reviewed, skipped with a reason, or failed with an error.
-10. A partial review never emits the established clean-verdict phrase as its
+11. A partial review never emits the established clean-verdict phrase as its
     top-level verdict for the complete change. Verbatim output inside a
     completed shard section may contain a shard-local clean verdict.
-11. Automatic retries are allowed only for read-only calls and only when the
+12. Automatic retries are allowed only for read-only calls and only when the
     underlying SDK has not already exhausted its configured retry behavior.
     The initial implementation adds classification, not another retry layer.
-12. Existing dirty worktrees are preserved. `--expect changes` requires
-    isolation in v1 rather than pretending to attribute non-isolated edits.
-13. No package in this plan commits, pushes, opens a PR, or merges.
+13. Existing dirty worktrees are preserved. `--expect changes` requires
+   isolation in v1 rather than pretending to attribute non-isolated edits.
+14. No package in this plan commits, pushes, opens a PR, or merges.
+15. PR title/body and local branch text never triggers Jira, Linear, GitHub, or
+    GitLab issue retrieval. Linked issue content requires an explicit validated
+    caller input in v1.
+16. Every Git/GitHub ref, PR identifier, file selector, stream, subprocess
+    buffer, warning collection, and human-readable path has an explicit bound
+    and injection-safe representation.
 
 ## 6. Public contract: coder envelope v2
 
@@ -169,6 +194,8 @@ Example successful implementation result:
   "duration_ms": 180000,
   "exit_reason": "end_turn",
   "process_status": "completed",
+  "termination_cause": "none",
+  "engine_status": "completed",
   "cleanup_status": "verified",
   "provider_status": "usable",
   "expectation": "changes",
@@ -177,10 +204,15 @@ Example successful implementation result:
   "final_text": "Implemented and tested the requested change.",
   "change_detection": {
     "status": "verified",
-    "basis": "isolated_git_diff",
+    "basis": "isolated_fingerprint_snapshots",
+    "base_snapshot_id": "sha256:0123456789abcdef",
+    "pre_run_snapshot_id": "sha256:123456789abcdef0",
+    "post_run_snapshot_id": "sha256:23456789abcdef01",
     "error": null
   },
   "files_changed": ["src/a.js"],
+  "run_files_changed": ["src/a.js"],
+  "change_summary": {"added": 0, "modified": 1, "deleted": 0, "mode_changed": 0},
   "diff_stat": "1 file changed, 4 insertions(+)",
   "worktree": "/repo/.triss/wt/task",
   "activity": {
@@ -205,6 +237,36 @@ Example successful implementation result:
 - `error`: engine process exited non-zero after parseable output;
 - `timeout`: Triss deadline terminated the engine;
 - `killed`: caller, host signal, or cancellation terminated the engine.
+
+`termination_cause`:
+
+- `none`: no termination was requested or observed;
+- `deadline`: Triss's absolute coder deadline fired;
+- `caller_abort`: the caller's `AbortSignal` fired;
+- `host_signal`: Triss received a terminating host signal;
+- `engine_exit`: the engine exited by itself, including a non-zero exit;
+- `provider_rate_limit`: existing rate-limit handling terminated the process;
+- `output_limit`: a bounded engine-output limit terminated the process.
+
+Set `termination_cause` before sending any signal. A child that handles SIGTERM
+and exits with `code=0, signal=null` remains `process_status: killed` when the
+recorded cause is `caller_abort` or `host_signal`, and remains `timeout` when it
+is `deadline`.
+
+`engine_status`:
+
+- `completed`: the parsed engine protocol reports normal completion;
+- `error`;
+- `timeout`;
+- `rate_limited`;
+- `max_cost`;
+- `max_tokens`;
+- `cancelled`;
+- `unknown`.
+
+OpenCode top-level error events and Crush `exit_reason` values determine this
+field independently of the immediate child exit code. Missing terminal evidence
+after an otherwise zero exit is `unknown`, not `completed`.
 
 `cleanup_status`:
 
@@ -231,7 +293,7 @@ Example successful implementation result:
 `provider_status` is evidence-based:
 
 - `usable` requires a normal provider-backed engine result with no provider
-  failure evidence;
+  failure evidence and `engine_status: completed`;
 - `not_observed` means a host cancellation, outer process timeout, environment
   failure, or other path supplied no provider-level evidence;
 - `timeout` requires an explicit provider request timeout, not merely the outer
@@ -244,19 +306,20 @@ Example successful implementation result:
 `expectation`:
 
 - `changes`: caller requires a verified non-empty deliverable diff;
-- `analysis`: caller requires non-empty final text and no implementation claim;
+- `analysis`: caller requires final text for which `trim().length > 0` and no
+  implementation claim; preserve the original untrimmed text when returning it;
 - `either`: compatibility default; either non-empty text or verified changes is
   an artifact, but semantic task completion is not claimed.
 
 `change_detection.status`:
 
-- `verified`: Git comparison completed successfully;
+- `verified`: isolated fingerprint comparison completed successfully;
 - `not_checked`: run was non-isolated or outside a supported Git comparison;
 - `failed`: comparison was attempted and failed; include a sanitized error.
 
 `change_detection.basis`:
 
-- `isolated_git_diff` for v1;
+- `isolated_fingerprint_snapshots` for v1;
 - `null` for `not_checked` or `failed`.
 
 `artifact_status`:
@@ -275,34 +338,94 @@ Example successful implementation result:
 
 ### 6.2 Deterministic result matrix
 
-Apply the first matching row after process cleanup and change collection:
+Derive `artifact_status` independently from expectation and failure state:
 
-| Process | Expectation | Evidence | Artifact | Requirement |
-| --- | --- | --- | --- | --- |
-| timeout/killed | any | any partial evidence | derive honestly | `unsatisfied` unless no requirement was requested |
-| error | any | any partial evidence | derive honestly | `unsatisfied` |
-| completed | changes | verified non-empty diff | `changes_present` | `satisfied` |
-| completed | changes | verified empty diff | `no_changes` | `unsatisfied` |
-| completed | changes | change check unavailable | `not_checked` | `not_evaluated`; preflight should normally reject this combination |
-| completed | analysis | non-empty final text | `text_only` or `changes_present` | `satisfied` |
-| completed | analysis | empty final text | `no_artifact` | `unsatisfied` |
-| completed | either | changes or text | derive honestly | `not_evaluated` |
-| completed | either | neither | `no_artifact` | `not_evaluated` |
+1. a verified non-empty deliverable diff is `changes_present`;
+2. otherwise usable trimmed final text is `text_only`;
+3. otherwise a verified empty deliverable diff is `no_changes`;
+4. an unavailable comparison with no text is `not_checked`;
+5. everything else is `no_artifact`.
+
+Then apply the first matching requirement row after process cleanup and both
+change comparisons:
+
+| Gate/evidence | Expectation | Requirement |
+| --- | --- | --- |
+| cleanup not verified | any | no envelope; fail closed |
+| process not completed | changes/analysis | `unsatisfied` |
+| engine not completed | changes/analysis | `unsatisfied` |
+| provider not usable | changes/analysis | `unsatisfied` |
+| run comparison failed/unavailable | changes | `not_evaluated` |
+| all gates normal + verified non-empty `run_files_changed` | changes | `satisfied` |
+| all gates normal + verified empty `run_files_changed` | changes | `unsatisfied` |
+| all gates normal + usable trimmed final text | analysis | `satisfied` |
+| all gates normal + empty/whitespace final text | analysis | `unsatisfied` |
+| any | either | `not_evaluated` |
 
 `expectation: either` remains compatible but intentionally does not claim that
 the user's task was satisfied.
 
 ### 6.3 Change-detection behavior
 
-For v1:
+For v1, capture three bounded visible-worktree fingerprint snapshots:
 
+- `base_snapshot`: the exact visible deliverable state at isolated-worktree
+  creation;
+- `pre_run_snapshot`: the visible isolated worktree immediately before spawn;
+- `post_run_snapshot`: the visible isolated worktree after process-group
+  cleanup.
+
+Build each snapshot from NUL-delimited
+`git ls-files --cached --others --exclude-standard -z`, then use `lstat` and
+streaming SHA-256 for regular-file bytes, symlink-target bytes, executable mode,
+and index Gitlink identity. A tracked path absent from the visible worktree is
+represented as absent, not as an error. Enumerate again after hashing; retry
+once if the path/metadata inventory changed, then fail closed on another race.
+Sort by raw path bytes, encode those bytes unambiguously in local metadata, and
+hash the canonical manifest to produce the public snapshot ID. Never store file
+contents, invoke clean filters, mutate the real index, or write Git objects.
+Bound each snapshot to 100,000 entries and 1 GiB of bytes read; overflow or an
+unreadable/racing file makes change detection fail closed. Ignored files are
+outside deliverable evidence. This intentionally hashes a managed isolated
+worktree, never a non-isolated user repository.
+
+Symlinks are never followed. FIFO, socket, device, invalid-UTF-8 path, or dirty
+nested submodule state is unsupported and fails detection in v1; a committed
+Gitlink change remains detectable from its index identity.
+
+At fresh isolation creation, persist the base fingerprint manifest atomically in
+repo-owned ignored metadata under `.triss/`, outside the child worktree. Reuse
+must load and verify that metadata against the expected session/branch. A legacy
+reused worktree without trustworthy base metadata cannot invent a base:
+`expect=changes` fails preflight with instructions to use a new session slug,
+while analysis may continue only with change detection marked failed and both
+file lists null.
+Remove this metadata only when the corresponding managed worktree/branch is
+successfully removed by existing validated cleanup; stale cleanup must never
+delete another session's metadata.
+
+- `files_changed` is the exact `base_snapshot -> post_run_snapshot` path list and
+  describes the complete deliverable currently present in the isolated
+  worktree;
+- `run_files_changed` is the exact `pre_run_snapshot -> post_run_snapshot` path
+  list and is the only diff evidence allowed to satisfy `expectation: changes`;
+- `change_summary` reports exact added/modified/deleted/mode-changed path counts
+  from the base/post manifests. Existing `diff_stat` is retained but is never
+  evidence; if Git cannot produce a truthful bounded line stat for all changed
+  paths, set it to `null` and emit a sanitized warning rather than omitting
+  untracked or committed changes;
+- all path enumeration is NUL-delimited and metadata serializes path bytes with
+  an unambiguous encoding, so LF, tabs, backslashes, and Unicode in valid Git
+  names remain exact; a path that is not valid UTF-8 cannot enter the JSON
+  contract and makes change detection fail rather than being replaced;
 - isolated Git run: `change_detection.status = verified`,
-  `basis = isolated_git_diff`, and `files_changed` is an array;
+  `basis = isolated_fingerprint_snapshots`, and both file lists are arrays;
 - non-isolated run: `status = not_checked`, `basis = null`,
-  `files_changed = null`, `diff_stat = null`, and a warning explains that the
-  caller must inspect Git state;
-- failed isolated Git command: `status = failed`, `files_changed = null`, and
-  result construction must not perform the empty-worktree cleanup path;
+  `files_changed = null`, `run_files_changed = null`, `diff_stat = null`, and a
+  warning explains that the caller must inspect Git state;
+- failed isolated snapshot or comparison: `status = failed`, both file lists
+  are `null`, and result construction must not perform the empty-worktree
+  cleanup path;
 - `expectation: changes` with effective isolation off fails before spawn with an
   actionable error: use `--isolate` or choose `--expect either`.
 
@@ -331,6 +454,22 @@ shape. If the shape is absent or malformed, report zero counts plus a warning;
 do not invent tool activity.
 
 Activity is diagnostic evidence only. An `edit` event does not prove a net diff.
+
+Engine event and diagnostic collection is also bounded:
+
+- parse NDJSON incrementally; never retain the full stdout stream;
+- cap one NDJSON/JSON record and public `final_text` at 1 MiB UTF-8 each and
+  total processed engine stdout at 32 MiB; overflow records a typed engine
+  failure, terminates the process group, and completes normal cleanup;
+- retain at most a 64 KiB private stderr tail per engine for local error
+  construction; never serialize it, and expose only its bounded sanitized
+  category/message projection;
+- emit at most 16 distinct public warnings, each at most 256 UTF-8 bytes;
+- malformed and omitted events increment bounded counters with an
+  `omitted_count`; never include the raw line;
+- cap all tool names and public error fields before envelope construction;
+- exceeding a parser/output bound becomes a typed engine failure after normal
+  process-group cleanup, never an unbounded array growth path.
 
 ## 7. Public contract: coder CLI and MCP inputs
 
@@ -371,6 +510,20 @@ implement locally. This avoids invisible quota consumption and duplicate edits.
 Do not add a read-only inactivity watchdog in v1: a long read may be legitimate,
 and the existing absolute timeout remains the deterministic bound.
 
+For an explicitly requested `changes` or `analysis` expectation, CLI exit codes
+are deterministic: `0` only for `requirement_status: satisfied`, `2` for usage
+or preflight rejection, `3` for a normally completed but unmet/unverifiable
+expectation, and `1` for process, engine, provider, or cleanup failure. The JSON
+envelope is still written for codes `1` and `3` when cleanup was verified. MCP
+returns the same envelope in structured content and marks the tool result as an
+error for codes `1` and `3`. Compatibility-default `either` retains existing
+exit behavior and never claims satisfaction.
+
+Use `TRISS_REQUIREMENT_UNSATISFIED` for an objectively unmet explicit
+expectation and `TRISS_REQUIREMENT_NOT_EVALUATED` when its evidence could not be
+verified. These safe codes accompany the envelope in CLI diagnostics and MCP
+structured errors; they do not replace `requirement_status`.
+
 ## 8. Public contract: provider failures
 
 Create stable Triss error codes without discarding the original `cause`:
@@ -378,25 +531,42 @@ Create stable Triss error codes without discarding the original `cause`:
 | Code | Meaning | Retry advice |
 | --- | --- | --- |
 | `TRISS_PROVIDER_CONNECTION` | DNS, socket, connection reset/refused | caller may retry a read-only request later |
-| `TRISS_PROVIDER_TIMEOUT` | request deadline or abort timeout | narrow input or raise an explicit bounded timeout |
+| `TRISS_PROVIDER_TIMEOUT` | provider request deadline | narrow input or raise an explicit bounded timeout |
 | `TRISS_PROVIDER_EMPTY` | successful transport but no usable response text | increase output budget or narrow input; never approval |
-| `TRISS_PROVIDER_RATE_LIMIT` | HTTP 429 or known quota/reset response | wait for provider reset; do not endpoint-hop unless existing Z.AI routing rule applies |
+| `TRISS_PROVIDER_RATE_LIMIT` | HTTP 429 or known quota/reset response | wait for provider reset; never endpoint-hop |
 | `TRISS_PROVIDER_AUTH` | HTTP 401/403 after existing endpoint discovery | fix credential/endpoint |
 | `TRISS_PROVIDER_MODEL` | model missing or rejected | select a verified model |
 | `TRISS_PROVIDER_POLICY` | explicit provider/platform policy rejection | narrow or remove the blocked material; never bypass |
-| `TRISS_PROVIDER_UNKNOWN` | unclassified provider failure | preserve concise original error |
+| `TRISS_PROVIDER_UNKNOWN` | unclassified provider failure | preserve private cause; expose only safe projection |
+| `TRISS_CANCELLED` | caller/host cancellation, not a provider timeout | caller decides whether to resume |
 
 Requirements:
 
-- attach `code`, `provider`, `model`, optional HTTP status, and `cause` to the
-  Error object;
+- attach `code`, provider identifier, model identifier, optional HTTP status,
+  and private `cause` to the Error object;
 - classify an explicit policy-denial signal before the generic HTTP 403
   authentication fallback; a bare 403 without policy evidence remains auth;
+- trusted policy evidence is limited to structured provider fields with exact
+  allowlisted values: `error.type`/`type` in `policy_error`,
+  `content_policy_error`, or `safety_error`, or `error.code`/`code` in
+  `content_policy_violation`, `policy_violation`, `moderation_blocked`,
+  `safety_blocked`, or `request_blocked`; HTTP status or arbitrary prose alone
+  is never policy evidence and falls back to auth/unknown;
+- run this classifier before `withGlmEndpointFallback()`: proven policy,
+  authentication, and rate-limit failures make exactly one provider request;
+  sibling endpoint discovery is allowed only for the existing explicitly
+  recognized route-mismatch shape, not every 401/403/429;
 - never attach API keys, request messages, or response bodies to new metadata;
-- keep the existing human-facing endpoint hints;
+- separate private causes from a common bounded public projection. CLI prints
+  stable code plus a sanitized message; MCP returns `code`, `provider`, `model`,
+  and `status` in `structuredContent`. Neither transport serializes `cause`, raw
+  body, raw stderr, prompt fragments, local absolute paths, or control bytes;
+- keep existing human-facing endpoint hints only after sanitizing and bounding
+  them through that projection;
 - replace command-local `process.exit(1)` for empty responses with a thrown
   typed error so CLI and MCP share behavior;
-- `review`, `ask`, and MCP must treat empty content as failure;
+- `review`, `ask`, and MCP must treat empty or whitespace-only content as
+  failure while preserving a usable response's original text;
 - an empty or failed GLM response cannot emit a clean review verdict;
 - do not add an automatic cross-provider fallback;
 - do not add a second retry loop around the OpenAI SDK in v1.
@@ -422,15 +592,23 @@ Introduce conservative Triss reliability defaults:
 TRISS_REVIEW_SINGLE_MAX_BYTES=262144      # 256 KiB
 TRISS_REVIEW_SHARD_MAX_BYTES=98304        # 96 KiB
 TRISS_REVIEW_TOTAL_MAX_BYTES=4194304      # 4 MiB
-TRISS_REVIEW_MAX_SHARDS=32
+TRISS_REVIEW_MAX_SHARDS=64
 ```
 
 Parsing rules must match existing safe integer handling:
 
 - positive base-10 integers only;
 - reject zero, signs, decimals, exponent notation, whitespace, Infinity, and
-  values above a documented safe bound;
+  values above these hard maxima: 1 MiB single request, 256 KiB per shard,
+  16 MiB total outbound content, or 128 shards;
 - invalid environment values fall back to defaults and produce no mutation;
+- load all four values through the reloadable configuration snapshot in
+  `src/config.js`; shell/local/global precedence and long-lived MCP reload
+  behavior must match existing configuration;
+- validate the set atomically: `shard_max <= single_max <= total_max` and
+  `shard_max * max_shards` may exceed `total_max` because the total bound is the
+  final independent stop. Any invalid or contradictory set falls back to the
+  complete default set with one bounded warning;
 - v1 has no per-call byte-limit override; later additions must use the same
   parser and may only lower the effective configured limit.
 
@@ -456,6 +634,7 @@ Add file selection for Git and PR sources:
 
 ```text
 triss review --files src/a.js test/a.test.js
+triss review --issue jira:INTERNAL-123
 ```
 
 MCP equivalent:
@@ -463,19 +642,35 @@ MCP equivalent:
 ```json
 {
   "files": ["src/a.js", "test/a.test.js"],
+  "issue": {"source": "jira", "key": "INTERNAL-123"},
   "payload_mode": "single | shard"
 }
 ```
 
 File-selection rules:
 
-- arguments are Git pathspec arguments, never shell fragments;
-- reject NUL and empty entries;
+- selectors are exact decoded repository-relative paths, not Git pathspecs or
+  globs. Reject empty values, NUL, invalid UTF-8, absolute paths, and `.`/`..`
+  components. Treat leading dashes, glob characters, and pathspec-magic-looking
+  text as literal filename bytes rather than options or patterns;
+- accept at most 256 selectors, each at most 1,024 UTF-8 bytes and at most
+  64 KiB total;
 - preserve rename pairs and required diff headers;
 - stdin mode does not accept `--files`; callers must filter before piping;
 - PR mode filters the locally obtained diff after parsing and reports unmatched
   requested files;
 - selection does not weaken MCP path sandboxing.
+
+Issue-selection rules:
+
+- CLI syntax is `--issue <jira|linear>:<KEY>`; MCP uses an object with the same
+  exact source enum and key;
+- keys must match `^[A-Z][A-Z0-9]{1,31}-[1-9][0-9]{0,9}$` and the complete input
+  is at most 50 UTF-8 bytes;
+- access only the explicitly selected configured integration; never probe every
+  ready tracker for the key;
+- retain `--skip-issue` for one compatibility release as a deprecated no-op
+  when no explicit issue is present, and reject combining it with `--issue`.
 
 Path extraction rules:
 
@@ -487,8 +682,13 @@ Path extraction rules:
   both paths in coverage;
 - fail preflight when a section path cannot be decoded reliably; do not assign
   it to an invented filename;
-- use argument arrays for local Git pathspec filtering even after paths are
-  decoded; never interpolate a decoded path into a shell command.
+- pass local selectors after `--` using `:(literal)<path>` argument-array
+  entries; never interpolate a decoded path into a shell command;
+- resolve base/head refs first with `git rev-parse --verify --end-of-options`
+  and pass only resulting commit OIDs to `git diff`;
+- accept a PR only as a positive integer or a canonical GitHub PR URL whose
+  host and repository match the configured origin, reduce it to the numeric PR
+  ID, and never accept user-provided `gh --repo` or other inherited options.
 
 ### 9.4 Payload inventory
 
@@ -497,14 +697,16 @@ Before any model request, build a pure inventory:
 ```json
 {
   "source": "git | pr | stdin",
-  "total_bytes": 1900000,
+  "source_bytes": 1900000,
+  "single_outbound_content_bytes": null,
+  "total_outbound_content_bytes": 3978120,
   "file_count": 84,
-  "binary_entries": 2,
+  "binary_entries": 0,
   "selected_files": ["src/a.js"],
   "unmatched_files": [],
   "mode": "shard",
   "source_coverage": "complete",
-  "coverage_basis": "local_git_name_status",
+  "coverage_basis": "local_exact_oid_diff",
   "unsupported_files": [],
   "shards": [
     {"id": "shard-001", "bytes": 84211, "files": ["src/a.js"]}
@@ -514,31 +716,56 @@ Before any model request, build a pure inventory:
 
 Coverage fields:
 
-- `source_coverage: complete` means an independent source manifest and every
-  parsed diff section agree;
+- `source_coverage: complete` means Triss produced the diff locally from exact
+  independently verified base/head commit OIDs and every parsed section agrees
+  with NUL-delimited name-status from that same comparison;
 - `source_coverage: partial` means a known file or section is missing, failed,
   filtered, binary-only, or otherwise unsupported;
 - `source_coverage: unknown` means Triss cannot prove that the upstream source
   returned the complete change;
-- `coverage_basis` names the evidence, such as `local_git_name_status`,
-  `supplied_stdin`, or a verified paginated PR file manifest;
+- `coverage_basis` names the evidence, such as `local_exact_oid_diff` or
+  `supplied_stdin`;
 - `unsupported_files` lists paths and bounded reasons, never contents.
 
-For local Git, cross-check parsed sections against NUL-delimited name-status
-output from the same base/head. For stdin, completeness is relative only to the
-supplied bytes. For PR mode, do not assume that successful `gh pr diff` output
-is complete: obtain and verify an independent paginated changed-file manifest.
-If the installed GitHub/`gh` path cannot prove pagination and completeness,
-report `source_coverage: unknown` and do not emit an overall clean verdict.
+For local Git, cross-check parsed sections against `git diff --name-status -z`
+from the same resolved OIDs. For stdin, completeness is relative only to the
+supplied bytes. For PR mode, use `gh pr view` only to obtain trusted metadata and
+exact base/head OIDs, fetch those exact objects from the configured origin or
+GitHub pull ref into a unique namespaced temporary ref, verify fetched OIDs
+against metadata, and construct the diff locally without checkout. Delete only
+the exact temporary ref in `finally`; retained Git objects are normal fetch
+artifacts. A paginated filename manifest alone does not prove that every hunk is
+present. If exact objects cannot be obtained or verified, report
+`source_coverage: unknown`; a single-mode result is then framed as partial and
+non-success, never as an overall clean review.
 
-The byte limit applies to the sum of every outbound message's textual content,
-including the review system prompt, authenticated boundaries, metadata,
-linked-ticket text, diff, and question. It does not attempt to predict provider
-tokenization or JSON/HTTP framing overhead. Count UTF-8 content bytes with
-`Buffer.byteLength()` and name the metric `outbound_content_bytes`.
+Use three explicit byte metrics:
 
-Do not print full corpus content in diagnostics. Stderr may print counts,
-selected paths, shard IDs, and byte sizes.
+- `source_bytes`: acquired raw diff bytes before message construction;
+- `outbound_content_bytes`: one request's complete textual contents, including
+  system prompt, boundaries, metadata, explicit linked-ticket text, diff, and
+  question;
+- `total_outbound_content_bytes`: the sum of `outbound_content_bytes` for every
+  planned request, including repeated metadata and questions.
+
+Single mode must satisfy both `single_max` and `total_max`. Shard mode must
+satisfy every `shard_max`, `max_shards`, and the summed `total_max`. Precompute
+the entire request plan before the first provider call. Count UTF-8 bytes with
+`Buffer.byteLength()`; JSON/HTTP framing and provider tokenization are outside
+the metric.
+
+Acquisition is bounded before buffering: single mode stops raw input at
+`min(single_max, total_max) + 1`, shard mode at `total_max + 1`, Git/GitHub
+subprocess output uses the same mode-specific cap, PR metadata pagination is
+bounded, and provider access is forbidden after any acquisition overflow. Do
+not call the existing unbounded `readStdin()` for review input.
+
+Do not print full corpus content in diagnostics. Keep comparison paths exact
+internally, but render all human-facing paths with JSON quoting plus explicit
+`\\uXXXX` escaping for C0/DEL/ESC and bidi control code points so LF, CR, ESC,
+bidi controls, tabs, and backslashes cannot inject headings or terminal control
+sequences. MCP coverage uses structured path arrays. Stderr may print only
+quoted paths, counts, shard IDs, and byte sizes.
 
 ### 9.5 Unified-diff parsing and sharding
 
@@ -564,6 +791,14 @@ The initial sharding implementation is sequential. Stop launching new shards
 after a provider failure. Preserve completed shard results and return an
 explicit partial report.
 
+Do not stream reviews in v1. Reject explicit `--stream` for both payload modes
+and disable review TTY auto-streaming; `ask` streaming remains unchanged. Buffer
+each provider response only up to 1 MiB and the complete rendered CLI report
+only up to 4 MiB. A response overflow is a typed call/shard failure. Check
+`AbortSignal` before acquisition, during every provider call, and before
+starting each next shard; cancellation during shard 2 guarantees that shard 3
+is never invoked.
+
 ### 9.6 Sharded output
 
 Do not use a second model call to summarize or deduplicate findings in v1.
@@ -572,38 +807,62 @@ Return deterministic framing:
 ```text
 Review status: complete | partial | failed
 Coverage: 7/7 shards, 24/24 files
-Source coverage: complete (local_git_name_status)
+Source coverage: complete (local_exact_oid_diff)
 
-## shard-001 — src/a.js, test/a.test.js
+## shard-001 — "src/a.js", "test/a.test.js"
 <model output>
 
-## shard-002 — src/b.js
+## shard-002 — "src/b.js"
 <model output>
 
 Unreviewed:
 - none
 ```
 
+Use the same `ReviewResult` and top-level framing for single and shard mode. A
+single review with `partial` or `unknown` source coverage is `partial`, is fully
+buffered before output, and exits non-success even when the model says that it
+found no issues. A complete single review is also buffered, so a mid-response
+failure cannot publish a premature clean verdict or false complete header.
+
 If any shard failed:
 
 - top-level status is `partial`;
 - list every unreviewed shard and file with the typed provider error code;
 - do not print the repository's clean-verdict phrase as the top-level verdict
-  for the overall review; retain completed shard output verbatim;
+  for the overall review; the CLI may retain completed bounded shard output
+  verbatim beneath shard-local headings;
 - return a non-success CLI exit code after writing the partial report;
-- MCP returns an error result containing the bounded partial report and coverage
-  summary, without raw diff content.
+- MCP returns only structured coverage, completed/failed shard IDs, and typed
+  codes in its partial error. It discards completed model prose because a model
+  may echo the diff; therefore MCP can truthfully guarantee that the error does
+  not contain raw diff content.
 
-The top-level review status is also `partial` when shard calls succeed but
-`source_coverage` is `partial` or `unknown`.
+The top-level review status is `partial` when at least one shard completed but
+any shard failed, or when all calls succeeded but source coverage is partial or
+unknown. It is `failed` when zero provider calls completed successfully.
+
+Stable review outcome codes are `TRISS_REVIEW_LIMIT` for bounded preflight
+overflow, `TRISS_REVIEW_INVALID_INPUT` for rejected mode/ref/selector/issue
+input, `TRISS_REVIEW_OUTPUT_LIMIT` for provider/report output overflow,
+`TRISS_REVIEW_PARTIAL` for any partial result, and `TRISS_REVIEW_FAILED` when
+zero calls completed. Cancellation reuses `TRISS_CANCELLED`. CLI preflight
+errors exit `2`; partial/failed runtime results exit `1`. MCP returns the same
+code and structured coverage through the common safe error projection.
 
 The shared sharded executor returns a result object; it does not write or mutate
 `process.exitCode`. The CLI adapter writes the bounded partial report to stdout,
 sets `process.exitCode = 1`, and returns. The MCP adapter throws a typed
-`ReviewPartialError` whose bounded message contains the partial report and
-coverage summary, so the server returns `isError: true`. Tests that call the CLI
+`ReviewPartialError` whose safe projection contains structured coverage but no
+model output, so the server returns `isError: true`. Tests that call the CLI
 adapter in-process must save and restore `process.exitCode`. Test this through
 `bin/triss.js`, not only by calling `runReviewWithDeps()`.
+
+Provider usage rows are recorded only when an actual response contains usage;
+never invent token counts for a failed call. The in-memory `ReviewResult`
+separately records `provider_attempts`, `completed_calls`, and for each failure
+`usage_status: missing`, so operations can distinguish a charged-or-unknown
+attempt from recorded token usage without a database migration.
 
 ## 10. Environment and policy diagnostics
 
@@ -651,8 +910,9 @@ Allowed `kind` values for v1:
 - `unknown`.
 
 Do not include raw commands, paths, or outputs in `blockers`. The existing final
-text and warnings remain available for human diagnosis, subject to existing
-security behavior.
+text remains available for human diagnosis. Warnings use only the bounded public
+projection defined in Sections 6.4 and 8; existing raw engine/provider warning
+construction must be removed rather than grandfathered.
 
 ## 11. Internal and sensitive material workflow
 
@@ -662,7 +922,8 @@ The supported workflow is:
 1. inventory locally without transmitting content;
 2. choose the minimum files or diff sections needed for the task;
 3. send only that bounded selection through `--files`, `--paths`, or stdin;
-4. if an explicit policy denial occurs, retain its exact error;
+4. if an explicit policy denial occurs, retain its stable code/status and safe
+   bounded projection, not its raw response body;
 5. narrow further or ask the external model for a transformation using a
    synthetic/redacted example;
 6. apply purely mechanical changes locally with the host agent;
@@ -675,6 +936,28 @@ preserved.
 Agent templates must state that task authorization permits configured provider
 use with minimum necessary context, but never secrets, unrelated files,
 publication, destructive actions, or bypassing explicit denial.
+
+Review-linked issue retrieval has a separate trust boundary:
+
+- remove automatic issue-key discovery from PR titles and descriptions;
+- CLI/MCP may fetch an issue only from an explicit validated source-qualified
+  `--issue`/`issue` input in v1; remove all automatic branch/title/body
+  discovery and cross-integration probing;
+- validate project/key syntax and bounds before accessing an integration;
+- PR body/title remains untrusted model context and can never initiate Jira,
+  Linear, GitHub, or GitLab access;
+- count fetched issue text in outbound limits and retain existing prompt
+  boundaries.
+
+MCP review must also use the server's resolved `TRISS_PROJECT_ROOT` as the cwd
+for every Git/gh operation. It must reject a missing/non-repository root and
+never fall back to `process.cwd()`. Resolve symlinks and require the Git
+toplevel used for review to equal that resolved root; do not walk to a parent
+repository outside the declared sandbox. Thread the MCP `AbortSignal` through
+metadata acquisition, provider streaming, and the shard loop. Review-specific Git/gh
+acquisition must use an abort-aware async child process rather than a
+non-interruptible synchronous helper. These are existing sandbox and
+cancellation invariants, not optional review features.
 
 ## 12. Implementation packages
 
@@ -691,13 +974,23 @@ Actions:
 
 1. Run `git fetch --prune`.
 2. Confirm `origin/main`, current worktree SHA, and dirty state.
-3. Inspect whether `feature/codex-workflow-improvements` merged.
-4. Rebase or recreate an isolated implementation worktree from current
-   `origin/main` if needed.
+3. Fetch and record the live head and merge status of
+   `feature/codex-workflow-improvements`; compare its `src/commands/exec.js`,
+   response-format helper, CLI/MCP surfaces, and tests against the plan.
+4. Create the implementation branch from this plan commit
+   `2daa983e26e59d14c5b1c129dd48eb99f67ba8a8`, then rebase that branch onto the
+   verified current `origin/main`. If recreating from `origin/main`, cherry-pick
+   the plan commit before Package 1. Verify that this document still exists and
+   record its blob hash. Never start from `origin/main` without the plan.
 5. Ensure dependencies match `package-lock.json`. In a clean isolated worktree,
    run `npm ci` when `node_modules` is absent; do not reuse or copy a dependency
    tree from an unrelated checkout.
-6. Run the current focused baseline tests before editing.
+6. Write a merge matrix in the package handoff: option registration/forwarding
+   for `expect`, `files`, and `payloadMode`; `evidence + shard` rejection;
+   response-format ownership; and exact tests. If the feature branch merged,
+   later packages must include `src/commands/exec.js`, `test/exec.test.js`, and
+   `test/response-format.test.js` where named by this plan.
+7. Run the current focused baseline tests before editing.
 
 Commands:
 
@@ -706,6 +999,7 @@ git status --short --branch
 git worktree list --porcelain
 git rev-parse HEAD
 git rev-parse origin/main
+git rev-parse HEAD:docs/reliable-delegation-contract-plan.md
 node --test test/coder-envelope.test.js test/coder-isolate.test.js test/coder-crush.test.js
 node --test test/review.test.js test/review-stdin.test.js test/mcp-handlers.test.js
 ```
@@ -724,12 +1018,18 @@ Do not edit `src/commands/coder.js` in this package.
 RED tests:
 
 - enum validation rejects unknown expectations;
-- `changes + verified non-empty` is satisfied;
+- `changes + verified non-empty current-run diff` is satisfied;
 - `changes + verified empty` is unsatisfied;
 - `changes + not_checked` is not evaluated;
-- timeout/killed/error never reports satisfied completion;
+- process, engine, provider, or cleanup failure never reports satisfied
+  completion even when text or a diff exists;
+- top-level OpenCode error + child exit zero remains unsatisfied;
+- Crush `exit_reason=error|timeout|max_cost|max_tokens` + child exit zero remains
+  unsatisfied;
 - `either` does not claim semantic satisfaction;
-- missing text and missing changes becomes `no_artifact`;
+- whitespace-only final text is not usable;
+- artifact status remains `changes_present` after a failed run when a verified
+  deliverable diff exists;
 - activity normalization caps tool-name cardinality;
 - Crush aggregate tool counts normalize without raw payload retention.
 
@@ -739,6 +1039,7 @@ Implementation:
 - export `resolveExpectation(raw)`;
 - export `normalizeActivity(input)`;
 - export `deriveCoderResultFacts(input)`;
+- derive artifacts before the requirement failure gate;
 - keep every function pure and dependency-free;
 - never inspect model prose for completion phrases.
 
@@ -750,12 +1051,12 @@ npm run lint
 git diff --check
 ```
 
-### Package 2 — OpenCode activity folding
+### Package 2 — bounded OpenCode event folding and process causes
 
 Expected files:
 
-- `src/commands/coder.js`, limited to `createEventFolder()` and
-  `foldEventLine()`;
+- `src/commands/coder.js`, limited to `createEventFolder()`, `foldEventLine()`,
+  and spawn lifecycle cause/output collection;
 - `test/coder-envelope.test.js`.
 
 RED tests:
@@ -770,14 +1071,30 @@ RED tests:
   if a fake child later exits zero;
 - more than 32 distinct tool names folds overflow into `other`;
 - no raw `state.input`, `state.output`, or `state.error` appears in the folded
-  public activity object.
+  public activity object;
+- malformed NDJSON increments counters without copying the raw line into a
+  warning;
+- 100,000 malformed lines produce bounded memory, at most 16 warnings, and an
+  exact omitted count;
+- oversized record, final text, and cumulative stdout hit their exact caps,
+  terminate, clean up, and remain unsatisfied;
+- fake secrets, prompt fragments, absolute paths, stderr, and control bytes do
+  not appear anywhere in the complete public envelope;
+- private stderr retention is a 64 KiB tail, not an unbounded array, and its raw
+  bytes never enter public results;
+- caller abort and host signal are recorded before signalling, so a child that
+  exits zero still reports `killed` with the right `termination_cause`;
+- deadline and rate-limit termination remain distinguishable for OpenCode and
+  shared spawn helpers.
 
 Implementation notes:
 
 - keep usage folding unchanged;
 - preserve `onToolUse` progress behavior;
 - count only parseable events;
-- do not use tool names to infer a Git change.
+- do not use tool names to infer a Git change;
+- replace raw-line/raw-error warnings with stable bounded categories and
+  counters; keep private diagnostic causes out of the envelope.
 
 GREEN:
 
@@ -801,6 +1118,18 @@ RED tests:
   `change_detection.status: not_checked`;
 - isolated empty diff returns verified `[]`;
 - isolated non-empty diff returns verified exact paths;
+- a reused worktree whose second run is read-only has a cumulative
+  `files_changed` list but empty `run_files_changed` and cannot satisfy changes;
+- fresh isolation persists verified base metadata outside the child worktree;
+  tampered or missing legacy metadata fails closed instead of guessing;
+- an engine-created commit appears in both tree comparisons instead of
+  disappearing behind the new `HEAD`;
+- names containing LF, tabs, backslashes, and Unicode round-trip through
+  NUL-delimited enumeration and encoded metadata;
+- symlinks are hashed without traversal; FIFO/socket/device, invalid UTF-8, and
+  dirty nested submodule fixtures fail closed;
+- `change_summary` is exact and `diff_stat` becomes null instead of dropping an
+  untracked or committed path;
 - a failed change-collection command returns `status: failed`, not `[]`;
 - envelope carries version, run ID, timestamps, duration, process status,
   cleanup status, artifact status, requirement status, provider status, and
@@ -816,7 +1145,12 @@ RED tests:
 
 Implementation notes:
 
-- make `computeWorktreeChanges()` return an explicit success/failure result;
+- add bounded, streaming `captureWorktreeSnapshot()` and NUL-safe manifest
+  comparison without Git-object writes;
+- compute base-to-post deliverables separately from pre-to-post current-run
+  evidence;
+- atomically create/load/validate the ignored isolation base metadata and never
+  accept agent-controlled metadata from inside the child worktree;
 - do not delete an isolation worktree when change detection failed;
 - generate `run_id` locally without a dependency;
 - set `started_at` after validation but before isolation setup or any other run
@@ -838,7 +1172,8 @@ git diff --check
 
 Expected files:
 
-- `src/commands/coder.js`, limited to `runCrushFlow()` result construction;
+- `src/commands/coder.js`, limited to `runCrushFlow()` result construction and
+  `spawnCrush()` use of the shared bounded collectors;
 - `src/coder-engines/crush.js` only if a pure normalizer belongs there;
 - `test/coder-crush.test.js`;
 - `test/coder-isolate.test.js` only for shared lifecycle assertions.
@@ -852,6 +1187,13 @@ RED tests:
   its default isolation;
 - timeout and cancellation retain partial artifact facts but remain
   unsatisfied;
+- every non-normal Crush `exit_reason` sets `engine_status` and defeats the
+  requirement gate even when the child exit code is zero;
+- graceful code-zero exit after shared caller cancellation stays killed;
+- Crush stdout/stderr and malformed aggregate fields obey the same byte,
+  warning-count, and public-projection bounds as OpenCode, including a flood
+  fixture;
+- `parsed.error` never appears raw in warnings or the envelope;
 - residual process cleanup behavior is unchanged.
 
 GREEN:
@@ -868,6 +1210,8 @@ Expected files:
 
 - `bin/triss.js`;
 - `src/commands/coder.js`, preflight only;
+- conditionally after Package 0, `src/commands/exec.js`, `test/exec.test.js`,
+  and `test/response-format.test.js`;
 - add or update a focused CLI help test, preferably
   `test/coder-envelope.test.js` or a new small `test/coder-expect.test.js`.
 
@@ -879,7 +1223,11 @@ RED tests:
 - OpenCode `--expect changes` without `--isolate` fails before spawn;
 - Crush default isolation accepts `--expect changes`;
 - explicit Crush `--no-isolate --expect changes` fails;
-- `--expect analysis` and `either` preserve current isolation resolution.
+- `--expect analysis` and `either` preserve current isolation resolution;
+- explicit expectations follow the Section 7 exit-code matrix through the real
+  CLI subprocess;
+- routed `triss exec --code` registers and forwards `expect` identically when
+  that router is present.
 
 GREEN:
 
@@ -888,6 +1236,9 @@ node --test test/coder-expect.test.js test/coder-envelope.test.js
 npm run lint
 git diff --check
 ```
+
+When Package 0 says the exec router is present, also run
+`node --test test/exec.test.js test/response-format.test.js`.
 
 ### Package 6 — MCP expectation input and output documentation
 
@@ -903,10 +1254,12 @@ RED tests:
 - schema exposes the exact expectation enum;
 - handler forwards it unchanged;
 - CLI and MCP share the same default;
-- tool description documents `files_changed: null` versus `[]`;
+- tool description documents `files_changed`, `run_files_changed`, and
+  `null` versus `[]`;
+- explicit unmet expectations return `isError` plus the structured envelope;
 - MCP cancellation tests remain green.
 
-Do not change the MCP sandbox root or isolation path checks.
+Do not weaken the MCP sandbox root or isolation path checks.
 
 GREEN:
 
@@ -922,7 +1275,10 @@ Expected files:
 
 - add `src/provider-errors.js`;
 - add `test/provider-errors.test.js`;
-- `src/client.js`.
+- `src/client.js`;
+- `bin/triss.js`;
+- `src/mcp/server.js`;
+- focused CLI/MCP transport tests.
 
 RED tests use synthetic errors only and contain no real endpoints or keys:
 
@@ -935,10 +1291,19 @@ RED tests use synthetic errors only and contain no real endpoints or keys:
 - an explicit policy-denial response;
 - explicit policy evidence on HTTP 403 wins over generic auth classification,
   while a bare 403 remains auth;
+- every allowlisted policy type/code and nearby arbitrary prose that must remain
+  auth/unknown;
+- policy 403 performs exactly one request, while an explicitly recognized route
+  mismatch alone performs sibling discovery;
+- proven rate limit does not endpoint-hop;
 - unknown error fallback;
 - original cause retained;
 - request content and credentials absent from metadata;
-- current Z.AI sibling-endpoint routing tests remain unchanged.
+- common public projection excludes raw body, stderr, prompt, absolute path,
+  secret-like values, and control bytes;
+- CLI subprocess exposes the stable code and non-zero exit;
+- MCP transport returns the stable structured code without `cause` or raw body;
+- current safe Z.AI sibling-endpoint routing tests remain green.
 
 Implementation:
 
@@ -948,12 +1313,14 @@ Implementation:
 - classify failures both while opening a stream and while iterating it; the
   existing endpoint fallback remains limited to failures before any output was
   emitted;
+- classify before endpoint fallback and export one bounded serializer used by
+  CLI and MCP;
 - do not add retries.
 
 GREEN:
 
 ```bash
-node --test test/provider-errors.test.js test/glm-endpoint-fallback.test.js test/request-timeout.test.js
+node --test test/provider-errors.test.js test/glm-endpoint-fallback.test.js test/request-timeout.test.js test/mcp-provider-errors.test.js
 npm run lint
 git diff --check
 ```
@@ -977,6 +1344,10 @@ RED tests:
 - MCP ask/review returns an MCP error result;
 - empty GLM response cannot produce a clean verdict;
 - non-empty top-level `final_text` remains accepted;
+- choice, top-level `final_text`, and streamed whitespace-only responses all
+  throw `TRISS_PROVIDER_EMPTY`, while usable original text is not trimmed on
+  output;
+- coder `expectation=analysis` rejects whitespace-only final text;
 - streamed empty response is also failure;
 - no direct `process.exit()` remains in command bodies for this case.
 
@@ -993,14 +1364,16 @@ git diff --check
 Expected files:
 
 - add `src/review-payload.js`;
-- add `test/review-payload.test.js`.
+- add `test/review-payload.test.js`;
+- `src/config.js` and focused config tests for reloadable limits.
 
 Do not integrate with CLI or MCP yet.
 
 RED tests:
 
 - UTF-8 byte count includes metadata and question;
-- default and environment limit parsing;
+- default, hard-maximum, atomic relational, and reloadable environment limit
+  parsing, including shell/local/global precedence and long-lived reload;
 - exact-boundary acceptance and one-byte-over rejection;
 - split two normal `diff --git` file sections without changing bytes;
 - preserve CRLF input;
@@ -1015,12 +1388,16 @@ RED tests:
 - shard packing preserves source order;
 - max-shard and total-byte limits fail closed;
 - requested file matching reports unmatched files;
-- NUL/empty file selectors reject;
+- literal selectors accept leading-dash/glob/pathspec-looking filenames but
+  reject NUL/empty/invalid-UTF-8/absolute/traversal values plus
+  count/per-item/total overflows;
+- exact internal paths and JSON-quoted display paths are separate; LF, CR, ESC,
+  bidi controls, tabs, backslashes, and Unicode cannot inject report lines;
 - manifest contains no diff contents.
 
-Keep the module pure: input strings and options in, plan/result out. No Git,
-GitHub, provider, stdout, or environment reads inside the core planner. Put env
-resolution in a small exported wrapper if necessary.
+Keep the core planner pure: input strings and options in, plan/result out. No
+Git, GitHub, provider, stdout, or environment reads inside it. Put reloadable
+env resolution in `src/config.js` and inject its frozen result.
 
 GREEN:
 
@@ -1036,25 +1413,49 @@ Expected files:
 
 - `bin/triss.js`;
 - `src/commands/review.js`;
-- `src/git.js` only if a pathspec-safe helper is required;
+- `src/git.js` for exact-OID, literal-selector, NUL-safe, and bounded-output
+  helpers;
+- `src/secrets.js` or a new review-specific bounded stdin reader;
+- conditionally `src/commands/exec.js`, `test/exec.test.js`, and
+  `test/response-format.test.js` from Package 0;
 - `test/review.test.js`;
 - `test/review-stdin.test.js`.
 
 RED tests:
 
 - oversize single request fails before `resolveModelRequest()` and provider call;
+- preflight cases expose the exact `TRISS_REVIEW_LIMIT` or
+  `TRISS_REVIEW_INVALID_INPUT` code and CLI exit `2`;
+- stdin and Git/gh stop at the mode-specific acquisition cap before buffering,
+  and provider/model/ticket access is not called after overflow;
 - diagnostics show bytes and selected files, not corpus content;
-- Git mode filters with argument arrays, never a shell;
+- Git mode resolves refs to OIDs, uses `--end-of-options`, passes exact literal
+  selectors after `--`, and rejects leading-option/ref injection;
+- PR input rejects `--repo`/arbitrary strings, validates number/canonical URL,
+  obtains and verifies exact OIDs, builds the diff locally, and removes only its
+  unique temporary ref on success, failure, or cancellation;
 - PR mode reports unmatched files;
 - local Git parsed sections are cross-checked against NUL-delimited name-status
   output;
-- PR mode is `unknown` until an independent complete file manifest is proved;
+- PR mode is `unknown` until exact base/head objects are verified and diffed
+  locally;
+- a matching filename manifest with an intentionally truncated hunk remains
+  `unknown`; only a local exact-OID diff becomes complete;
 - stdin rejects `--files`;
 - below-limit raw stdin remains byte-for-byte preserved;
 - invalid mode or file selector fails before Git, stdin, linked-ticket, or
   provider access; invalid environment limits follow the documented safe
   default behavior;
-- existing prompt-boundary injection tests remain green.
+- existing prompt-boundary injection tests remain green;
+- PR title/body or local branch containing an issue-like key never triggers
+  tracker access; only explicit validated `issue` does;
+- source-qualified issue input validates enum/key/length, calls only the named
+  integration, and conflicts with deprecated `skipIssue` before acquisition;
+- all single reviews are buffered; partial/unknown results are deterministically
+  framed, exit non-zero, and cannot return an overall clean verdict;
+- explicit review streaming fails preflight and TTY does not enable it;
+- routed `triss exec --review` forwards `files` and `payloadMode`; evidence plus
+  shard fails preflight when that router exists.
 
 Only `single` mode is wired in this package. Accepting `shard` before Package 12
 must fail with a clear "not implemented in this build" error or remain absent
@@ -1068,6 +1469,9 @@ npm run lint
 git diff --check
 ```
 
+When Package 0 says the exec router is present, also run
+`node --test test/exec.test.js test/response-format.test.js`.
+
 ### Package 11 — MCP review preflight parity
 
 Expected files:
@@ -1075,6 +1479,8 @@ Expected files:
 - `src/mcp/review-core.js`;
 - `src/mcp/handlers.js`;
 - `src/mcp/tools.js`;
+- `src/mcp/server.js` only if structured error projection needs transport
+  plumbing already introduced in Package 7;
 - `test/mcp-handlers.test.js`;
 - `test/mcp-tools.test.js`.
 
@@ -1082,10 +1488,16 @@ RED tests:
 
 - same default byte limit as CLI;
 - oversize fails before `callModel()`;
-- file list and mode schema validation;
+- file list, mode, and source-qualified issue schema validation;
 - manifest and error do not contain raw diff;
 - CLI and MCP produce equivalent plan objects for the same synthetic diff;
 - linked-ticket content counts toward outbound bytes;
+- every Git/gh operation runs at the resolved `TRISS_PROJECT_ROOT`, never an
+  unrelated `process.cwd()`; mismatch/outside-root fixtures fail closed;
+- untrusted PR title/body cannot trigger tracker retrieval;
+- `AbortSignal` reaches metadata acquisition, provider call, and result path;
+- partial/unknown single result returns structured coverage and typed error
+  without model prose or raw diff;
 - prompt-boundary behavior remains unchanged.
 
 If CLI/MCP review assembly remains duplicated after rebasing, extract one shared
@@ -1118,12 +1530,23 @@ RED tests:
 - successful shards with unknown or partial source coverage still produce a
   partial top-level review;
 - second-shard provider failure stops before the third shard;
+- cancellation during shard 2 stops before shard 3 and returns
+  `TRISS_CANCELLED`, not provider timeout;
 - partial report retains first-shard output and lists unreviewed coverage;
 - partial report cannot emit an overall clean-verdict phrase at top level;
 - CLI prints partial bounded output and exits non-zero;
-- MCP returns error status with partial bounded output;
+- partial versus zero-completed cases expose `TRISS_REVIEW_PARTIAL` versus
+  `TRISS_REVIEW_FAILED` and CLI exit `1`;
+- MCP returns error status with structured coverage and no completed model
+  output or raw diff marker;
+- explicit review `--stream` fails preflight, TTY auto-stream is disabled, and
+  mid-response failure cannot print a premature clean verdict;
+- per-response and total report output bounds fail safely with
+  `TRISS_REVIEW_OUTPUT_LIMIT`;
 - no second LLM aggregation call occurs;
-- usage is recorded for each actual provider request;
+- `provider_attempts` counts every call, usage is recorded only for responses
+  that supplied it, and failed calls report `usage_status: missing` without
+  fabricated tokens;
 - max shard count blocks before the first provider request.
 
 Do not run shards in parallel in this package.
@@ -1153,6 +1576,9 @@ RED tests:
 - unknown text stays `unknown`;
 - blocker object contains no raw command, tool input, tool output, secret-like
   fixture value, or absolute path;
+- complete envelope scanning proves that a secret placed in raw diagnostic
+  fields does not appear in warnings, blockers, activity, provider errors, or
+  malformed-event counters;
 - at most 16 blocker entries are emitted, with duplicate categories collapsed;
 - blockers never alter change evidence or process status.
 
@@ -1166,88 +1592,126 @@ npm run lint
 git diff --check
 ```
 
-### Package 14 — documentation and agent-rule contract
+### Package 14 — Release A documentation and exact-head gate
 
-Expected files after rebase discovery:
+Scope only Release A: coder envelope, expectation, lifecycle, diagnostics, and
+provider errors. Expected files after rebase discovery:
 
-- `CHANGELOG.md`;
-- `.env.example`;
-- `README.md`;
-- `docs/configuration.md`;
-- `docs/coder-agent-plan.md` or a new current-contract document rather than
-  rewriting historical recon evidence;
-- `docs/mcp.md`;
-- `templates/codex.md`, `templates/claude.md`;
-- full templates if they duplicate the affected instructions;
-- `src/commands/completion.js` if completion candidates are static;
-- `test/init.test.js`, `test/agent-help.test.js`, `test/completion.test.js`, and
-  relevant help tests.
+- `CHANGELOG.md`, `README.md`, coder/current-contract docs, `docs/mcp.md`;
+- `templates/codex.md`, `templates/claude.md`, and full templates when they
+  duplicate these rules;
+- relevant help/completion sources and `test/init.test.js`,
+  `test/agent-help.test.js`, `test/completion.test.js`, MCP/help tests.
 
-Documentation requirements:
+Document every new coder field, both file lists, `change_summary`, truthful
+`diff_stat` fallback, null/empty semantics, explicit expectation exit codes,
+bounded diagnostics, and stable public provider error
+codes. State that process completion is not task satisfaction, show
+`--expect changes --isolate`, require local `git status`/`git diff` inspection,
+distinguish environment blockers, retain lifecycle fail-closed language, and
+avoid volatile context-window claims. Empty/whitespace output is failure, never
+approval. Do not document Release B/C options yet.
 
-- explain all new coder fields and null/empty semantics;
-- state that process completion is not task satisfaction;
-- show `--expect changes --isolate` for implementation work;
-- require actual `git status`/`git diff` review after every coder run;
-- describe review limits, `--files`, and `--payload-mode shard`;
-- document all four review-limit environment variables with defaults and safe
-  parsing behavior;
-- state that empty/no-verdict output is failure, never approval;
-- state that a partial sharded review is not a complete clean review;
-- tell agents to narrow payload after explicit policy denial and never ask for
-  consent already granted by project instructions;
-- distinguish environment blockers from code failures;
-- retain the process lifecycle release-blocker language;
-- avoid time-sensitive provider context-window claims in the contract.
-
-GREEN:
+GREEN and Release A exact-head gate:
 
 ```bash
 node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js
-npm run lint
-git diff --check
-```
-
-### Package 15 — full verification and live acceptance
-
-Automated gates:
-
-```bash
 npm test
 npm run lint
 git diff --check origin/main...HEAD
+node bin/triss.js coder run --help
+node bin/triss.js mcp --help
 ```
 
-Required manual, no-provider CLI checks:
+### Package 15 — Release B documentation and exact-head gate
+
+Scope only safe single review, literal file selection, exact PR diff
+acquisition, issue trust boundary, and configuration. Expected files:
+
+- `CHANGELOG.md`, `.env.example`, `README.md`, `docs/configuration.md`,
+  `docs/mcp.md`, review help/completion, and affected agent templates/tests.
+
+Document all four limits, defaults, hard maxima, atomic fallback, exact byte
+metrics, literal selectors, single partial/unknown framing, explicit issue
+retrieval, MCP root/cancellation behavior, and empty-response failure. Do not
+document sharding as available yet.
+
+GREEN and Release B exact-head gate:
 
 ```bash
-node bin/triss.js coder run --help
+node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js test/review.test.js test/review-stdin.test.js
+npm test
+npm run lint
+git diff --check origin/main...HEAD
 node bin/triss.js review --help
 node bin/triss.js mcp --help
 ```
 
-Live smoke gates require configured provider credentials and must be reported
-separately from unit tests:
+### Package 16 — Release C documentation and exact-head gate
 
-1. OpenCode isolated implementation that creates one harmless file:
-   verify non-empty diff, exact file list, `expectation=changes`, satisfied
-   requirement, verified cleanup, and no delayed write after the envelope.
-2. OpenCode isolated read-only task under `expectation=changes`:
-   verify empty diff and unsatisfied requirement.
-3. Non-isolated analysis:
-   verify `files_changed=null` and `change_detection=not_checked`.
-4. Crush equivalents for one isolated implementation and one explicit
-   non-isolated analysis.
-5. Synthetic 257 KiB review:
-   verify single mode blocks before provider access.
-6. Synthetic multi-file review above 256 KiB:
-   verify sequential shards and complete coverage.
-7. Inject a synthetic empty GLM-compatible response:
-   verify typed failure and no verdict.
-8. Process-list and delayed-file check after coder completion.
+Scope only sequential sharding and coverage. Update changelog, README,
+configuration, MCP docs, review help/completion, and affected templates/tests.
+Document `--payload-mode shard`, review streaming prohibition, sequential cancellation,
+complete/partial/failed definitions, CLI versus MCP partial-output policy, and
+that partial review is never complete approval. Tell agents to narrow after an
+explicit policy denial and never ask again for consent already granted by
+project instructions. Reject `evidence + shard` when the exec router exists.
 
-Do not require a live provider failure or real policy rejection to pass CI.
-Use injected deterministic tests for those paths.
+GREEN and Release C exact-head gate:
+
+```bash
+node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js test/review.test.js test/review-stdin.test.js
+npm test
+npm run lint
+git diff --check origin/main...HEAD
+node bin/triss.js review --help
+node bin/triss.js mcp --help
+```
+
+When Package 0 says the exec router is present, the Release C gate additionally
+runs `node --test test/exec.test.js test/response-format.test.js`.
+
+Packages 14-16 may be split by documentation surface for weak models, but every
+sub-package must retain its release-specific gate and must not pre-document a
+later release.
+
+### Package 17 — reproducible synthetic and live acceptance
+
+Add `scripts/live-smoke-reliable-delegation.mjs` plus focused script tests. It
+must use `fs.mkdtemp()` to create a disposable Git repository, print its exact
+path, initialize known commits, use no user checkout, and remove only that
+validated temporary path in `finally`.
+
+The script exposes two explicit modes:
+
+- `--synthetic` starts a local fake OpenAI-compatible server and requires no
+  credentials. It verifies 257 KiB single preflight rejection before provider
+  access, multi-file sharding order/coverage, whitespace/empty responses,
+  policy and timeout typed errors, cancellation during shard 2, no shard 3,
+  no raw secret/diff marker in MCP errors, and expected exit codes;
+- `--live` uses explicitly selected configured provider/model/engine and records
+  `PASS`, `SKIPPED_NO_CREDENTIALS`, or `BLOCKED_ENVIRONMENT` for each case. It
+  runs OpenCode and Crush isolated implementation/read-only cases, a
+  non-isolated analysis, and verifies exact envelope fields, base/pre/post
+  fingerprint evidence, `files_changed`, `run_files_changed`, Git diff,
+  PID/process-group
+  disappearance, and absence of a delayed write.
+
+Every run records date, exact repository HEAD, command, provider/model/engine
+version, exit status, bounded envelope/coverage assertions, and cleanup result.
+Synthetic gates are mandatory; live credential gates are reported separately
+and never silently counted as passed. A real provider policy rejection is not
+required.
+
+Final commands:
+
+```bash
+node scripts/live-smoke-reliable-delegation.mjs --synthetic
+node scripts/live-smoke-reliable-delegation.mjs --live
+npm test
+npm run lint
+git diff --check origin/main...HEAD
+```
 
 ## 13. Weak-model execution protocol
 
@@ -1316,16 +1780,28 @@ implement it locally; do not restart indefinitely.
 | Contract | Primary automated evidence |
 | --- | --- |
 | `[]` means verified empty | `test/coder-isolate.test.js` |
+| reused/committed run attribution | fingerprint-snapshot cases in `test/coder-isolate.test.js` |
 | non-isolated means `null/not_checked` | `test/coder-envelope.test.js`, `test/mcp-coder.test.js` |
 | changes expectation | `test/coder-result.test.js`, `test/coder-expect.test.js` |
 | read-only completion is not implementation | `test/coder-result.test.js`, fake OpenCode stream |
+| engine/provider failure defeats exit-zero process | OpenCode/Crush envelope fixtures |
+| caller cancellation cause survives graceful exit | coder lifecycle tests for both engines |
 | activity has no raw payload | `test/coder-envelope.test.js` |
+| engine output/warnings remain bounded | malformed-event and stderr flood fixtures |
 | OpenCode/Crush parity | `test/coder-crush.test.js`, `test/coder-isolate.test.js` |
 | cleanup before envelope | existing real-process lifecycle regressions |
 | typed empty/timeout/connection failure | `test/provider-errors.test.js`, command/MCP tests |
+| policy denial never endpoint-hops | `test/glm-endpoint-fallback.test.js` request count |
+| stable errors survive transports safely | CLI subprocess and MCP transport tests |
 | oversized review blocks before model | `test/review-payload.test.js`, review tests |
+| input/ref/selector injection is rejected | Git/PR acquisition and parser tests |
+| PR diff completeness uses exact OIDs | truncated-patch and exact-object fixtures |
+| PR text cannot fetch internal issues | CLI/MCP integration spy tests |
+| MCP root and cancellation are enforced | MCP root/cancel review tests |
 | shard coverage is complete | review payload and adapter tests |
 | partial review is not clean | CLI and MCP sharded failure tests |
+| streaming cannot precede partial status | forced-stream and mid-stream failure tests |
+| display paths cannot inject reports | control/bidi filename fixtures |
 | policy is not bypassed | provider-error and agent-rule tests |
 | no secret/raw tool data in diagnostics | coder-result and provider-error fixtures |
 | CLI/MCP contract parity | MCP schema/handler and CLI help tests |
@@ -1334,17 +1810,30 @@ implement it locally; do not restart indefinitely.
 
 Recommended release sequence:
 
-1. Release A: coder envelope v2, truthful null/empty semantics, expectation,
-   activity, and provider error taxonomy.
-2. Release B: review single-request preflight and file selection.
-3. Release C: sequential sharded review and coverage reporting.
-4. After field experience, separately consider making isolated implementation
+1. Release A: Packages 1-8, 13, and 14 — coder envelope v2, truthful
+   null/empty and per-run semantics, expectation, bounded activity/diagnostics,
+   provider taxonomy, transport projection, and matching documentation.
+2. Release B: Packages 9-11 and 15 — bounded single review, literal file
+   selection, exact PR acquisition, trust boundaries, MCP parity, and matching
+   documentation.
+3. Release C: Packages 12 and 16 — sequential sharding, cancellation, coverage
+   reporting, and matching documentation.
+4. Package 17 runs after the exact Release C candidate; its synthetic portion
+   is mandatory and its credentialed portion is a separately reported gate.
+5. After field experience, separately consider making isolated implementation
    mode the OpenCode default in a breaking release.
 
 Release A has one intentional compatibility change:
 non-isolated `files_changed` becomes `null` rather than `[]`. Announce it in the
 changelog and tool description. Consumers that require an array must branch on
-`envelope_version` and `change_detection.status`.
+`envelope_version` and `change_detection.status`. `run_files_changed` is new and
+is the only changes-expectation evidence; `files_changed` remains the complete
+isolated deliverable list.
+
+Release B intentionally removes automatic issue-key discovery from PR and
+branch prose. Callers that want tracker context must pass the new explicit
+validated `--issue`/`issue` input. Announce this security compatibility change
+in the changelog and CLI/MCP help.
 
 Do not remove `exit_reason`, `final_text`, `diff_stat`, `worktree`, `usage`, or
 `warnings` in these releases.
@@ -1362,9 +1851,10 @@ Stop implementation and return to design review if any of these occur:
 - Crush changes its `tool_calls` envelope incompatibly;
 - `feature/codex-workflow-improvements` merges with a conflicting output
   contract that cannot be composed without changing public defaults;
-- MCP cannot represent a bounded partial review error without losing the
-  completed shard output;
-- PR diff output cannot be split without silently losing files;
+- exact PR base/head objects cannot be acquired and the intended caller cannot
+  accept an explicit partial/unknown result;
+- bounded fingerprint snapshots cannot represent the managed isolated worktree
+  without reading outside it or storing file contents;
 - a proposed diagnostic requires storing raw commands, raw model payloads, or
   secrets;
 - a test requires killing a process group not created by that test;
@@ -1378,15 +1868,24 @@ Decisions fixed by this plan:
    add a per-call unbounded override.
 3. Partial CLI review writes the bounded report and sets `process.exitCode = 1`.
    Partial MCP review throws `ReviewPartialError`, which the existing MCP server
-   converts into `isError: true`. Package 12 must prove this with a focused
-   transport test before broader integration.
+   converts into `isError: true`; its projection intentionally omits completed
+   model prose. Package 12 must prove this with a focused transport test.
+4. `--files` values are literal repository-relative paths, never Git pathspecs.
+5. PR completeness is proven only by a local diff of exact verified OIDs; a
+   filename manifest alone is insufficient.
+6. Every review is buffered and never streamed in v1.
+7. Automatic issue lookup from PR title/body is removed.
+8. `evidence + shard` is rejected when the exec router exists.
 
 ## 17. Definition of done
 
 The work is complete only when:
 
 - every emitted coder envelope distinguishes checked-empty from not checked;
-- an implementation expectation cannot be satisfied by read-only prose;
+- every isolated envelope distinguishes complete deliverable changes from
+  changes created by the current run, including reused and committed cases;
+- an implementation expectation cannot be satisfied by read-only prose, stale
+  worktree changes, or a terminal engine/provider failure;
 - OpenCode and Crush expose the same top-level reliability facts;
 - empty, timed-out, connection-failed, and policy-denied provider calls are
   distinguishable and never treated as approval;
@@ -1394,6 +1893,11 @@ The work is complete only when:
   accounted sequential shards;
 - partial review coverage is explicit and cannot produce an overall clean
   verdict;
+- Git/PR acquisition, selectors, stdin, subprocess output, model output,
+  warnings, and display paths are bounded and injection-safe;
+- MCP review is rooted at `TRISS_PROJECT_ROOT`, honours cancellation, and does
+  not expose raw partial model output;
+- untrusted PR content cannot initiate tracker access;
 - process cleanup regressions, path sandboxing, prompt boundaries, credential
   isolation, usage accounting, and existing command defaults remain green;
 - documentation and generated agent rules teach callers to verify actual Git
