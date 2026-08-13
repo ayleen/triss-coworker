@@ -1,18 +1,3 @@
-#!/usr/bin/env bash
-# Triss Coworker standalone installer.
-# The JavaScript between the markers is generated from
-# scripts/standalone-bootstrap.js. It uses only Node built-ins after the
-# manifest is available; npm/git are used only by the verified transition
-# bridge when the fixed manifest is a confirmed 404 and the latest Release has
-# no manifest asset.
-set -euo pipefail
-
-if ! command -v node >/dev/null 2>&1; then
-  echo "Triss standalone installer: Node.js >=22 is required." >&2
-  exit 1
-fi
-
-exec node --input-type=module - "$@" <<'TRISS_STANDALONE_BOOTSTRAP'
 /*
  * Canonical npm-free standalone installer bootstrap.
  *
@@ -1831,4 +1816,3 @@ export {
   validateManifest,
   validateTree,
 };
-TRISS_STANDALONE_BOOTSTRAP

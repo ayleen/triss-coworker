@@ -303,3 +303,9 @@ Windows. `triss coder init`/`clean` are unaffected.
 Run `triss status` to verify the worker and any integrations are configured.
 Missing credentials? Suggest `triss config wizard` (or `triss config wizard <target>`
 for a single provider; `--local` saves to `./.triss.env` for project-only keys).
+
+Triss may print a throttled update notice to interactive stderr and may notify
+through MCP logging after initialization. Use `triss update` for fresh status;
+apply/rollback only modify receipt-backed standalone installs. Set
+`TRISS_UPDATE_CHECK=0` to disable passive checks. Restart the MCP host after an
+applied update.

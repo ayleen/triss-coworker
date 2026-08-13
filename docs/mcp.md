@@ -204,6 +204,21 @@ integrations.
 The set of MCP tools is **filtered by which integrations are configured**.
 Run `triss status` to see readiness.
 
+## Update notifications
+
+After the client sends `notifications/initialized`, the server reads the shared
+update cache and schedules a bounded check of the fixed GitHub Release endpoint.
+It never sends an update message between transport connection and initialized.
+A newer compatible Release produces a warning-level MCP logging notification
+and intentionally mirrors the same concise notice to the stderr host log; a
+valid Release requiring a newer Node names that requirement instead. Normal
+tool result content is unchanged.
+
+`triss_status` adds a cached update section without performing network I/O.
+Notifications are throttled per version and channel. Set
+`TRISS_UPDATE_CHECK=0` to disable passive MCP checks and notices. Updating files
+does not restart the live MCP process; restart the host to load the new version.
+
 Core tools are always listed. Model calls default to the worker and require
 `TRISS_WORKER_API_KEY`:
 

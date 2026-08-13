@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Automatic, cached stable-release notices for interactive CLI and initialized
+  MCP sessions, with `TRISS_UPDATE_CHECK=0` as the passive-check opt-out.
+- `triss update` text/JSON status plus explicit receipt-backed standalone apply
+  and verified offline rollback. Package-manager, source, legacy, and unknown
+  installations remain read-only.
+- An npm-free standalone artifact/installer with per-version integrity
+  inventories, journaled activation/recovery, retained-size reporting, and
+  guarded public Release promotion.
+
+### Security
+
+- Update endpoints are fixed and strictly allowlisted, downloads/extraction are
+  bounded, and standalone writes require validated receipt ownership.
+
 ## [0.32.0] — 2026-08-12
 
 ### Added

@@ -1,7 +1,7 @@
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import { IntegrationError } from './integrations/_contract.js';
-import { assertPublicUrl } from './net.js';
+import { fetchWithRedirects } from './net.js';
 
 const DEFAULT_UA =
   'triss-coworker/0.5 (+https://github.com/ayleen/triss-coworker)';
@@ -14,31 +14,6 @@ function maxBytes() {
   if (!raw) return DEFAULT_MAX_BYTES;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BYTES;
-}
-
-// Walks 3xx redirects manually so each hop is checked by assertPublicUrl —
-// otherwise a public URL could 302 to http://169.254.169.254/ and bypass
-// the SSRF guard.
-async function fetchFollowingRedirects(url, init) {
-  let current = url;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertPublicUrl(current);
-    const res = await fetch(current, { ...init, redirect: 'manual' });
-    const status = res.status;
-    if (status >= 300 && status < 400 && typeof res.headers?.get === 'function') {
-      const loc = res.headers.get('location');
-      if (loc) {
-        current = new URL(loc, current).toString();
-        // Drain any body to free the socket before the next hop.
-        try { await res.body?.cancel?.(); } catch { /* ignore */ }
-        continue;
-      }
-    }
-    return res;
-  }
-  throw new IntegrationError(
-    `Too many redirects (>${MAX_REDIRECTS}) starting at ${url}`,
-  );
 }
 
 // Tags that almost always carry layout/UI noise rather than article body.
@@ -56,7 +31,12 @@ const STRIP_SELECTORS = [
   '[aria-hidden=true]',
 ];
 
-export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
+export async function fetchUrl(url, {
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  headers = {},
+  requestImpl,
+  lookupImpl,
+} = {}) {
   if (!/^https?:\/\//i.test(url)) {
     throw new IntegrationError(`Refusing to fetch non-http(s) URL: ${url}`);
   }
@@ -64,11 +44,17 @@ export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = 
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     let res;
+    let finalUrl;
     try {
-      res = await fetchFollowingRedirects(url, {
+      const result = await fetchWithRedirects(url, {
+        requestImpl,
+        lookupImpl,
         signal: ctrl.signal,
         headers: { 'User-Agent': DEFAULT_UA, Accept: 'text/html,application/xhtml+xml,*/*', ...headers },
+        maxRedirects: MAX_REDIRECTS,
       });
+      res = result.response;
+      finalUrl = result.url;
     } catch (err) {
       // Surface SSRF / redirect-cap errors as IntegrationError for the
       // standard caller-side error path. assertPublicUrl already produces
@@ -119,7 +105,7 @@ export async function fetchUrl(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = 
       );
     }
     const contentType = res.headers.get('content-type') || '';
-    return { text, url: res.url, contentType };
+    return { text, url: finalUrl, contentType };
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new IntegrationError(`Timeout after ${timeoutMs}ms fetching ${url}`);

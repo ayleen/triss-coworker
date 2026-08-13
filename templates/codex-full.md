@@ -155,3 +155,9 @@ Run `triss status` to verify. Missing credentials? Run
 `triss config wizard` for an interactive setup, or
 `triss config wizard <target>` for one provider. Add `--local` to scope
 to `./.triss.env` instead of the global file.
+
+Triss may print a throttled update notice to interactive stderr and may notify
+through MCP logging after initialization. Use `triss update` for fresh status;
+apply/rollback only modify receipt-backed standalone installs. Set
+`TRISS_UPDATE_CHECK=0` to disable passive checks. Restart the MCP host after an
+applied update.

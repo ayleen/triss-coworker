@@ -50,8 +50,10 @@ tokens of tracker chatter into its own context. Adding a new provider
 
 - **Node.js ≥ 22** (LTS). Check with `node --version`.
   - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
-- **npm** (ships with Node.js) — used for the `npm install -g` path. `pnpm` and `yarn` also work.
-- **git** — used by the bash one-liner installer to clone the repo.
+- **npm** (ships with Node.js) — used only for the package-manager install path.
+  `pnpm` and `yarn` also work.
+- The standalone bash installer and update discovery do not require npm, pnpm,
+  yarn, git, tar, unzip, or a checksum utility once a standalone Release exists.
 - A **DeepSeek API key** (free tier works) for the worker model: <https://platform.deepseek.com/>.
 
 Triss has no other runtime dependencies.
@@ -84,6 +86,14 @@ binary is `triss`.
 curl -fsSL https://raw.githubusercontent.com/ayleen/triss-coworker/main/install.sh | bash
 ```
 
+This installs a receipt-backed standalone copy under
+`~/.local/share/triss` and links `~/.local/bin/triss`. Override those paths for
+the install command with `TRISS_STANDALONE_HOME` and `TRISS_BIN_DIR`.
+`TRISS_HOME` remains reserved for the old git installer and is never interpreted
+as standalone write authority. During the first-release transition only, a
+verified missing standalone asset may use the previous git+npm path for a fresh
+empty legacy target; existing legacy checkouts are never pulled or modified.
+
 ### Option C — from source
 
 ```bash
@@ -100,6 +110,34 @@ triss --version
 triss --help
 triss status
 ```
+
+## Updates
+
+During successful interactive CLI use, Triss checks a fixed GitHub Release
+endpoint at most once per cache window and prints a throttled update notice to
+stderr. A due check is awaited and adds at most 1.1 seconds; a fresh cache adds
+no network wait. Long-running MCP servers begin the same check only after the
+MCP initialization handshake and use MCP logging plus stderr fallback.
+
+```bash
+triss update                  # fresh status and guidance; no file changes
+triss update --json           # one machine-readable object
+triss update --apply          # receipt-backed standalone installs only
+triss update --rollback       # offline rollback to a verified prior version
+```
+
+Apply and rollback require confirmation; add `--yes` for non-interactive
+operation confirmation. Breaking a proven-stale update lock is a separate
+authorization: add `--break-lock` (and also `--yes` when non-interactive).
+Package-manager, source, ephemeral, legacy-git, and unknown installations remain
+read-only and receive installation-specific guidance.
+
+A valid Release that requires a newer Node is reported as available but cannot
+be applied until Node is upgraded. Standalone status reports retained version
+count and receipt-recorded payload bytes; automatic pruning is not performed.
+Set `TRISS_UPDATE_CHECK=0` to disable passive checks and notices. Explicit
+`triss update` remains available. A running MCP host must be restarted after an
+update to load the new version.
 
 ## Configure
 
@@ -278,6 +316,7 @@ and writing**.
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
 | `triss status`     | Shows current model + key + .env sources              | —                                   |
+| `triss update`     | Checks for updates; explicitly applies/rolls back standalone installs | npm registry polling or silent self-update |
 | `triss config`     | Interactive credential management                     | Manual `.env` editing               |
 | `triss mcp`        | Register Triss as MCP server in Claude Code           | Editing `~/.claude.json` by hand    |
 | `triss completion` | Shell completion script (bash/zsh)                    | Hand-rolled completion              |
@@ -922,6 +961,11 @@ Add `--local` to scope any of these to the current project only
 touch the variables directly. The full reference (worker model,
 integrations, tunables, security toggles) lives in
 [docs/configuration.md](docs/configuration.md#environment-reference).
+
+`TRISS_UPDATE_CHECK=0` disables passive update checks. Installer-only
+`TRISS_STANDALONE_HOME` and `TRISS_BIN_DIR` select standalone paths and are
+recorded in the ownership receipt; later environment changes do not grant write
+authority.
 
 `.env` files are loaded from `~/.config/triss/.env` (global) and
 `<project-root>/.triss.env` (project, overrides global). Real `process.env`

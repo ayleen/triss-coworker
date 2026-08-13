@@ -29,14 +29,41 @@ Write commands for trackers (`create`, `update`, `comment --post`,
 transitions, etc.) call the target provider directly and do not ask the model
 to invent the HTTP request.
 
-There are exactly two categories of outbound traffic: the configured model
-endpoint and the tracker APIs you configured. Nothing else.
+There are three categories of outbound traffic: the configured model endpoint,
+the tracker APIs you configured, and a credential-free passive GET to Triss's
+fixed public GitHub Release endpoint when the update cache is due. The update
+request includes no prompt, project path, repository name, command arguments,
+usage record, integration configuration, or API key. GitHub necessarily sees
+ordinary connection metadata such as the source IP and User-Agent.
 
 ## No telemetry
 
-Triss sends no analytics, crash reports, or usage data to its developers.
-There is no phone-home code path. The only network calls are the ones listed
-above, and all of them are triggered by an explicit command.
+Triss sends no analytics, crash reports, prompts, or usage data to its
+developers. Passive update discovery is the only automatic network path and can
+be disabled with `TRISS_UPDATE_CHECK=0`; all other network calls are triggered
+by an explicit command or configured MCP operation.
+
+## Standalone update trust and integrity
+
+Standalone apply is available only to an installation with a validated
+ownership receipt. Package-manager, source, legacy-git, ephemeral, and unknown
+installations are read-only. Every downloaded artifact is size-capped, hashed,
+bounded during extraction, and inventoried per path/mode/size/SHA-256. Every
+installed target, including rollback, is fully revalidated before its code is
+executed or selected. Validation has fixed file, directory, object, depth, and
+byte budgets and hashes expected files incrementally. Payload files and their
+directory hierarchy are flushed before publication. A durable journal precedes
+version publication, and the public launcher stays anchored to the last
+receipt-committed executable until the new receipt is durable, so crash
+recovery remains reachable even when a candidate entry point is damaged.
+
+The checksum proves integrity against the manifest but is not an independent
+signature: HTTPS and the GitHub release account remain trust roots. Release CI
+uses pinned npm, compares two independent clean staging trees and byte-identical
+artifacts, then smokes that exact uploaded artifact on Linux and macOS with
+Node 22 and 24 before the release job publishes the same bytes. This is a
+same-run determinism gate, not third-party reproducible-build provenance.
+The updater never evaluates downloaded shell or package lifecycle scripts.
 
 ## Local usage log
 
@@ -115,4 +142,3 @@ Security-sensitive changes include:
 - tracker commands that mutate remote state
 
 Add tests for these changes and avoid live-network tests.
-
