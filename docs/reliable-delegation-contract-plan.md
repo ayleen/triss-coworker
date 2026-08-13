@@ -724,8 +724,8 @@ and the snapshot ID is
 `sha256:66046349766bc584877519751433e48dce46997d59479dae1162b7ee395f30bf`.
 
 `test/coder-state.test.js` also serializes the full schema example below with
-`worktree_parent_realpath: "/repo/.triss/wt-v2"` and
-`branch_ref: "refs/heads/coder-v2/<64-root-fingerprint-hex>/task-a"` to one byte-exact compact JSON-plus-
+`engine: "opencode"`, `worktree_parent_realpath: "/repo/.triss/wt-v2/opencode"`, and
+`branch_ref: "refs/heads/coder-v2/<64-root-fingerprint-hex>/opencode/task-a"` to one byte-exact compact JSON-plus-
 LF fixture, then round-trips it. This prevents any legacy path from entering
 the v2 ownership contract.
 
@@ -1117,25 +1117,71 @@ ephemeral task HOME/native engine session data, set
 `result_retention="retained"`, `result_id=<run_id>`, and return the still-valid
 worktree path. This is deliberately separate from conversation persistence.
 
-Result artifacts live in `.triss/coder-results-v1/<run-id>.json`, a mode-`0600`,
-no-follow, canonical JSON-plus-LF index record with exact ordered keys
-`{schema_version,run_id,engine,session_slug,project_root_fingerprint,worktree_basename,branch_ref,coder_state_basename,base_snapshot_id,post_snapshot_id,created_at}`.
+Result artifacts use a durable registry under `.triss/coder-results-v1/`, not a
+post-hoc file-existence check. Its regular/no-follow mode-`0600` `.registry.lock`
+is a fixed kernel lock inode; while holding shared coder maintenance then this
+exclusive registry lock, read/write mode-`0600`, no-follow `.registry.json` by
+same-directory temp, file fsync, rename, and parent fsync only. The canonical
+JSON-plus-LF registry has exact ordered keys `{schema_version,entries,updated_at}`;
+`schema_version` is integer `1`, `updated_at` is exact millisecond UTC RFC3339,
+and `entries` is raw-ASCII-sorted by `run_id`, capped at 16. Every entry has
+exact ordered keys `{run_id,engine,session_slug,project_root_fingerprint,state,
+reserved_bytes,retained_bytes,sandbox_id,pid,process_start_id,boot_id,
+worktree_basename,branch_ref,coder_state_basename,index_basename,
+transaction_generation,created_at,updated_at}`. `state` is exactly
+`reserved|retained|deleting`; `reserved` has `retained_bytes=0` and
+`index_basename=null`, while its exact live owner tuple is non-null and
+byte-matches the owned process set; `retained` has `reserved_bytes=0`, a
+non-null index basename `<run-id>.json`, and every owner field null; `deleting`
+retains the validated retained fields plus a fresh non-null deleting owner tuple
+until the worktree/state/index and row are gone. `transaction_generation` is
+16 lowercase hex, increments at every durable transition, and makes stale
+writer/recovery updates fail closed. No unknown/missing key, duplicate run ID,
+foreign root, symlink, or impossible state is admission evidence.
+
+Before each unnamed isolated spawn, Package 5 first holds that lock to reconcile
+crash state and verify count/quota admission, then invokes Package 2D2's
+high-level durable allocator with `owner_kind=result_registry` and
+`owner_reference=<run-id>`. Inside that allocator's result-owner adapter lock,
+`publishReference` reserves exactly `1073741824` bytes in an OS-enforced 4 GiB
+aggregate result-worktree allocation-block quota and publishes one matching
+`reserved` row before credentials/spawn; allocator rollback cancels that exact
+row/reservation on every pre-spawn failure. The per-run sandbox is also bounded
+to that 1 GiB reservation. A verified
+read-only completion deletes task artifacts, removes the reservation row, and
+releases all its bytes. A changed run measures its validated worktree blocks
+under the quota, atomically creates `.triss/coder-results-v1/<run-id>.json`,
+then changes `reserved -> retained`, sets `retained_bytes` to the actual
+allocated blocks, and releases the unused reservation before envelope
+construction. Thus up to 16 small retained results may coexist without ever
+exceeding 4 GiB, while concurrent runs cannot over-admit. The retained index is
+mode-`0600`, no-follow canonical JSON-plus-LF with exact ordered keys
+`{schema_version,run_id,engine,session_slug,project_root_fingerprint,worktree_basename,branch_ref,coder_state_basename,base_snapshot_id,post_snapshot_id,retained_bytes,created_at}`.
 It contains no native engine session ID, HOME path, model output, patch bytes, or credentials.
-At most 16 retained results and 4 GiB of OS-enforced aggregate result-worktree
-additional blocks exist per project, with a 1 GiB reservation made before each
-unnamed isolated spawn; a read-only completion releases its reservation. A run
-that produces changes consumes its reservation before envelope construction, so
-success is never reported after deleting its only deliverable. At
-result-cap/quota admission, fail before credentials/spawn with
+
+Recovery always holds the same locks and first attaches/terminates/waits for a
+non-empty `reserved` or `deleting` owner sandbox. The exhaustive transitions
+are: `reserved + empty/no result index -> remove row and task artifacts`;
+`reserved + complete matching index/worktree -> promote retained and release
+unused reservation`; `reserved + partial/mismatched artifacts -> retain/block`;
+`retained + complete matching index/worktree -> retain`; `deleting + complete
+artifacts -> delete engine-scoped worktree/branch/state/index then row`; and
+`deleting + absent artifacts -> remove row`. Every other combination retains
+and blocks. Tests inject a crash after reservation, each registry/index fsync or
+rename, quota conversion, deleting tombstone, worktree deletion, and row
+removal; two concurrent admissions plus recovery must converge without double
+release. At result-count/quota admission, fail before credentials/spawn with
 `TRISS_CODER_RESULT_CAP`; never run then discard an otherwise verified result.
 `triss coder
 result clean <run-id>` (and matching MCP action) is the sole explicit removal:
-under managed-root, engine-scoped worktree/branch/state ownership and quiescence
-checks, it atomically deletes the retained artifact and releases capacity. A
-bounded `coder result list` exposes only run ID, engine, slug, timestamps, and
-existing worktree path. Tests cover changed default-run retrieval after the
-envelope, clean/recovery crash points, cap admission, read-only auto-clean, and
-the absence of native conversation data from every retained result.
+under managed-root, registry-lock, engine-scoped worktree/branch/state ownership
+and quiescence checks, it transitions `retained -> deleting`, atomically deletes
+the retained artifact, removes its row, and releases capacity. A bounded `coder
+result list` reads the same registry and exposes only retained run ID, engine,
+slug, timestamps, retained bytes, and existing worktree path. Tests cover
+changed default-run retrieval after the envelope, every registry crash point,
+parallel cap admission, read-only auto-clean, and the absence of native
+conversation data from every retained result.
 After failure or parent crash on a host with enforced supervision retain only
 `.triss/ephemeral-recovery-v1/<engine>/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
 capped canonical JSON-plus-LF record with exact ordered keys
@@ -1480,9 +1526,10 @@ ordered entry is
 `{sandbox_id,kind,state,owner_kind,owner_reference,project_root_fingerprint,created_at,updated_at}`.
 `kind` is `durable|ephemeral`; `state` is
 `reserving|live|verified_empty|release_pending|acknowledged`; `owner_kind` is
-`session_inventory|pr_registry|none`. Durable session owner reference is
-`<engine>:<slug>` using existing grammars; durable PR reference is exact
-`entry_id`; ephemeral requires `owner_kind=none,owner_reference=null`.
+`session_inventory|pr_registry|result_registry|none`. Durable session owner
+reference is `<engine>:<slug>` using existing grammars; durable PR reference
+is exact `entry_id`; durable retained-result reference is the exact `run_id`;
+ephemeral requires `owner_kind=none,owner_reference=null`.
 Fingerprint/timestamps use existing exact grammars and states are monotonic.
 The empty byte fixture is exactly
 `{"schema_version":1,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n`.
@@ -1510,8 +1557,13 @@ complete published store becomes `idle` with its owner tuple cleared; matching
 `reserved|running` plus no published mapping/generation removes the unpublished
 entry; matching `deleting` completes its validated tombstone/store deletion and
 removes the entry. Any other store/state combination is a mismatch. The first
-case preserves the session entry, mapping, and generation. For `pr_registry`,
-releasing means the deleting protocol removes the matching registry/marker/directory.
+case preserves the session entry, mapping, and generation. For `result_registry`,
+releasing a matching `reserved` row either promotes its complete validated
+changed-result index/worktree to `retained` and clears the exact owner tuple, or
+removes the read-only reservation and all task artifacts; partial or mismatched
+artifacts retain and block. A `deleting` result row completes only its validated
+result-tombstone protocol. For `pr_registry`, releasing means the deleting protocol
+removes the matching registry/marker/directory.
 `reference_released` means no matching sandbox ID remains in the owner artifact,
 not necessarily that a session row is absent. Reference absence in
 any earlier state and reference presence after acknowledged fail closed except
@@ -1520,10 +1572,11 @@ after grace. Tests crash after every journal temp/write/fsync/rename, OS-set
 transition, owner-reference removal, acknowledge, and prune; cap 31/32/33,
 cross-project fingerprints, and two recovery passes are covered.
 
-Durable allocation first writes `reserving` with the intended owner reference
-and no child. Under the owner hierarchy it publishes the exact session
-inventory reservation or PR marker/registry reference, then promotes the
-journal to `live`, and only then creates/spawns any child. Recovery handles
+The Package 2D2 durable allocation transaction first writes `reserving` with
+the intended owner reference and no child. Under the adapter's owner hierarchy
+it publishes the exact session inventory reservation, PR marker/registry, or
+result-registry reservation reference, then promotes the journal to `live`, and only then returns the
+control handle that permits any child spawn. Recovery handles
 `reserving + reference absent + verified-empty/no child` by validating that no
 owned store/directory exists and pruning after the common monotonic grace;
 `reserving + matching reference` promotes to `live`; any partial/mismatched
@@ -1550,24 +1603,32 @@ Package 2D2 alone owns the high-level durable
 transaction: it validates the discriminant/reference, obtains a platform
 reservation, writes the journal `reserving` row, invokes the owner adapter to
 publish the exact reference, promotes the same row to `live`, and only then
-returns the control handle to permit spawn. Any failure before return invokes
-the exact cancellation/ack/prune path; a crash is recovered by the `reserving`
-rows above. For `kind=durable`, allocation under the journal mutex also rejects any unpruned row with the same exact
+returns the control handle to permit spawn. The adapter interface is exactly
+`withOwnerLock(journalRowSnapshot, callback)`, `publishReference(journalRow)`,
+`rollbackPublishedReference(journalRow)`, `inspectReference(journalRow)`, and
+`transitionRelease(journalRow)`; all but `withOwnerLock` run only inside its
+awaited callback. `publishReference` atomically creates the complete matching
+owner artifact from the bounded row and returns `matching` only after reread/
+byte validation. `rollbackPublishedReference` removes only an artifact bearing
+that exact `sandbox_id`, is idempotent, and returns `released|mismatch`.
+Any failure before return re-enters that owner lock, rolls back a published
+reference when present, then invokes the exact cancellation/ack/prune path; a
+crash is recovered by the `reserving` rows above. No caller may publish a
+durable owner reference or promote a journal row separately. For
+`kind=durable`, allocation under the journal mutex also rejects any unpruned row with the same exact
 `(ownerKind,ownerReference,projectRootFingerprint)`, regardless of its state;
 this atomic uniqueness rule persists through `release_pending` and
 `acknowledged` until final prune and is the sole no-re-admission authority.
 Tests race the same owner during the reference-removed/ack gap and admit it only
-after prune. Durable recovery/release accepts an adapter with exactly
-`withOwnerLock(journalRowSnapshot, callback)`, `inspectReference(journalRow)`, and
-`transitionRelease(journalRow)`. The latter two methods may run only inside the
-awaited `withOwnerLock` callback. Package 2D2 passes the bounded byte-snapshotted
+after prune. Package 2D2 passes the bounded byte-snapshotted
 journal row before owner acquisition; the adapter derives only that row's
 engine/slug/root from its owner reference, performs discovery/locking, and then
 Package 2D2 reacquires the journal mutex and byte-revalidates the same row before
 inspection or transition. A session adapter is constructed with a
 discriminated context: exactly one opaque active prefix
 `heldOwnerLockContext`, one `sessionAbsenceContext`, or null; a PR adapter uses
-its registry context or null. With a valid prefix context, `withOwnerLock` borrows that prefix,
+its registry context or null; a retained-result adapter uses its result-registry
+context or null. With a valid prefix context, `withOwnerLock` borrows that prefix,
 must not reacquire or release it, and acquires only the remaining final owner
 mutex when required. A session context contains maintenance, conditional
 target, and assigned slot, so the adapter briefly adds inventory; a PR context
@@ -1576,17 +1637,19 @@ performs the documented fresh-host discovery/acquisition/revalidation hierarchy
 and releases it after the callback. A stale, partial, wrong-project, or wrong-session context fails
 closed, and recursive acquisition is forbidden. `inspectReference` returns exactly
 `matching|released|mismatch`; `transitionRelease` performs the idempotent
-session published-to-idle, unpublished-removal, session-deleting, or PR-deleting
+session published-to-idle, unpublished-removal, session-deleting,
+result-reserved-to-retained-or-removed, result-deleting, or PR-deleting
 transition just enumerated and returns the same enum after reread. Package 2D2 snapshots the journal, releases its mutex, enters the
 adapter lock, reacquires and byte-revalidates the journal, invokes those
 methods, then finishes acknowledge/prune without importing either higher-level
-module. `promoteOwnedProcessSetLive(sandboxId, ownerAdapter)` uses the same
-lock/revalidation sequence, requires `state=reserving` and
-`inspectReference=matching`, atomically publishes `live`, and returns the same
-control handle; no higher layer writes journal state directly. `mismatch`, a
+module. Allocation itself uses the same lock/revalidation sequence, requires
+`publishReference=matching`, atomically publishes `live`, and returns the
+control handle; no public promotion API or higher layer writes journal state
+directly. `mismatch`, a
 thrown callback, or a changed journal row retains and fails closed. Package 4B
-supplies the session adapter and Package 17A supplies the PR adapter; crash
-tests cover promotion and every `release_pending + released` variant from a new host.
+supplies the session adapter, Package 5 supplies the retained-result adapter,
+and Package 17A supplies the PR adapter; crash tests cover promotion and every
+`release_pending + released` variant from a new host.
 Normal promotion/finalization tests use borrowed contexts while fresh-host
 recovery uses null and prove neither path self-deadlocks or releases a caller's
 lock early.
@@ -2075,11 +2138,13 @@ For PR mode, accept only a positive integer or canonical GitHub PR URL matching
 the configured origin. Reject PR input combined with the existing `--base`
 option before acquisition; v1 always uses the PR metadata base and documents
 this compatibility change. Use `gh pr view` only for repository identity and
-exact base/head metadata. Before even the initial call, allocate a durable
-`reserving` Package 2D2 owned-process transaction, perform the Package 17A registry-locked capacity
-check and marker/active-registry publication, promote it `live`, then run both
-metadata calls, fetch, and PR-local Git children inside that same owned set.
-Thus no `gh` call precedes admission/reference publication. Both metadata calls use a non-configurable 30-second
+exact base/head metadata. Before even the initial call, Package 17A performs
+its registry-locked capacity check and calls the Package 2D2 high-level durable
+allocator; that transaction publishes the marker/active-registry reference and
+returns only after it is `live`. It then runs both metadata calls, fetch, and
+PR-local Git children inside that same owned set. Thus no `gh` call precedes
+admission/reference publication, and no caller separately publishes or promotes
+the durable row. Both metadata calls use a non-configurable 30-second
 deadline plus the earlier caller deadline, incremental 64 KiB-plus-one
 collection, cancellation, kill/wait-until-empty, and no partial JSON. Timeout/
 limit use stable `TRISS_REVIEW_GH_TIMEOUT`/`TRISS_REVIEW_LIMIT`; parent `SIGKILL`
@@ -2750,8 +2815,7 @@ an owner inventory/registry.
 Prerequisite: Package 2D1. Named reference: Section 6.5 owner-adapter and
 release protocol. Add `src/owned-process-reconcile.js` and
 `test/owned-process-reconcile.test.js`; export
-`promoteOwnedProcessSetLive()`, `cancelOwnedProcessSetReservation()`,
-`allocateOwnedProcessSet()`,
+`cancelOwnedProcessSetReservation()`, `allocateOwnedProcessSet()`,
 `beginOwnedProcessSetRelease()`, `acknowledgeOwnedProcessSetRelease()`,
 `recoverOwnedProcessSet(sandboxId, ownerAdapter)`, and
 `reconcileOwnedProcessSetRelease()`. Allocation and adapter signatures are
@@ -2760,7 +2824,7 @@ adapter; only `kind=ephemeral` accepts null. Use fake owner adapters only; this
 package does not import session inventory or PR registry. It is the sole owner
 of high-level `allocateOwnedProcessSet()` and composes Package 2D platform
 reservation with Package 2D1 journal reservation plus injected owner-reference
-publication, promotion, and cancellation; Package 2D exports only
+publication/rollback, live transition, and cancellation; Package 2D exports only
 `allocatePlatformProcessSet()`. Cover every
 begin/reference-remove/ack/prune crash row and adapter mismatch/reentrancy case.
 
@@ -2772,8 +2836,10 @@ reference transition. For `owner_kind=session_inventory`, that transition is
 the exact state-derived three-way adapter rule: published `reserved|running -> idle`
 with the entry/store retained, unpublished `reserved|running -> removed`, or
 `deleting -> validated tombstone/store/entry removal`. For
-`owner_kind=pr_registry`, it is the exact deleting transition,
-validated directory deletion, and registry/marker removal. In both cases,
+`owner_kind=result_registry`, it is the exact reserved-to-retained-or-removed
+run-finalization transition or validated result-deleting transition described in
+Section 6.3. For `owner_kind=pr_registry`, it is the exact deleting transition,
+validated directory deletion, and registry/marker removal. In every case,
 `reference_absent` means that no owner artifact still contains the matching
 `sandbox_id`, not that a persistent session entry is gone. The caller then
 calls `acknowledge...`, which marks the journal entry acknowledged, and a final
@@ -3008,6 +3074,12 @@ bounded backup layout/manifest/completion marker defined in Section 15,
 no-follow copy/hash verification, cap stop with no completion marker,
 exclusive maintenance lock/quiescence, foreign-state retention, and re-upgrade
 restore validation.
+Before Package 5 introduces the result registry, Package 4D treats any
+non-empty `.triss/coder-results-v1/` root as `TRISS_CODER_ROLLBACK_RESULTS_PENDING`
+and fails before copying: it does not parse, delete, or invent a second result
+codec. This conservative temporary guard ensures a backup cannot silently omit
+an unknown deliverable. Package 5 is explicitly responsible for replacing that
+guard with the Section 15 exact registry preflight before the Release A gate.
 Inventory deduplicates identical slugs across engines, acquires that kernel
 lease once, and copies/validates both engine stores before release; tests include
 same-slug OpenCode/Crush backup and rollback without self-deadlock.
@@ -3021,19 +3093,40 @@ deleting original v2 state, or automatic expiry.
 #### Atomic 20 / Package 5 — coder state/workspace orchestration
 
 Prerequisites: Packages 1-4D, including 2A-2G. Named reference: Reference
-surface 3, state-orchestration subset. Add `src/coder-run-state.js` and
-`test/coder-run-state.test.js`, plus only namespace/clean routing in
-`src/commands/coder.js` and `test/coder-clean.test.js`; reuse all earlier
-exports. RED/GREEN:
-`node --test test/coder-run-state.test.js test/coder-clean.test.js`.
-Compose project identity, ephemeral-default versus explicit/kept persistent
-admission, engine-scoped workspace/session binding, snapshots, v2 namespace,
-result-artifact reservation/publication/list/clean, legacy/v2 clean separation,
+surface 3, result-registry/state-orchestration subset. Add
+`src/coder-result-registry.js`, `test/coder-result-registry.test.js`,
+`src/coder-run-state.js`, and `test/coder-run-state.test.js`, plus only
+namespace/clean routing in `src/commands/coder.js` and
+`test/coder-clean.test.js`; reuse all earlier exports. The result registry is a
+named durable primitive, not an implied side effect of orchestration: export
+`reserveCoderResultCapacity()`, `publishCoderRetainedResult()`,
+`releaseCoderResultReservation()`, `beginCoderResultDeletion()`,
+`recoverCoderResultRegistry()`, `listCoderRetainedResults()`, and
+`createCoderResultProcessOwnerAdapter()`. The adapter implements the exact
+Package 2D2 interface under shared maintenance plus the result-registry lock;
+it publishes only its matching `reserved` row before spawn, and its release
+transition is the Section 6.3 retained-or-removed/deleting state machine.
+It alone owns
+the exact registry codec, fixed lock, owner tuple, quota-reservation conversion,
+fsync/rename protocol, and exhaustive recovery table from Section 6.3; no other
+package may check result capacity from file existence. RED/GREEN:
+`node --test test/coder-result-registry.test.js test/coder-run-state.test.js test/coder-clean.test.js`.
+Then compose only that exported primitive with project identity,
+ephemeral-default versus explicit/kept persistent admission, engine-scoped
+workspace/session binding, snapshots, v2 namespace, legacy/v2 clean separation,
 and recoverable finalization as a pure dependency-injected state machine. It
 does not spawn an engine, construct an envelope, or edit event folding.
+It also replaces Package 4D's temporary non-empty-root rollback guard with an
+injected `assertNoRetainedCoderResultsForRollback()` preflight that holds the
+result-registry lock, reconciles the exact codec, and returns
+`TRISS_CODER_ROLLBACK_RESULTS_PENDING` for every reserved/retained/deleting,
+partial, foreign, or mismatched row before backup or validation can claim
+success. Package 4D retains sole ownership of backup layout/manifest/copy; it
+must not import or duplicate the result registry.
 Mixed-version, relocation, ephemeral read-only cleanup, retained changed-result
-worktree retrieval/clean, result-cap/crash recovery, retained persistent
-workspace, and workspace-mismatch fixtures are deterministic fakes.
+worktree retrieval/clean, result-cap/concurrent-admission/crash recovery,
+retained persistent workspace, and workspace-mismatch fixtures are deterministic
+fakes.
 
 #### Atomic 21 / Package 5A — OpenCode run and envelope orchestration
 
@@ -3345,9 +3438,11 @@ never create, replace, unlink, or independently open a lock inode. Package 17A
 also owns the registry-locked three-entry admission,
 `TRISS_REVIEW_FETCH_CAP`, `TRISS_REVIEW_STRICT_CAPABILITY_REQUIRED`, 512 MiB
 whole-root quota/headroom check and release/
-crash reclamation. It uses Packages 2D/2D1/2D2 to allocate the durable `reserving`
-process set before marker/registry publication, promote it before child spawn,
-and attach/recover/begin-release/acknowledge the exact set during every normal
+crash reclamation. It uses Package 2D2 to allocate one already-live durable
+process set; its PR owner adapter publishes/rolls back the marker and active
+registry entry inside that allocator before any child spawn. It never separately
+creates a reserving set or calls promotion, and it attaches/recover/begin-release/
+acknowledges the exact set during every normal
 and crash cleanup; focused tests kill the creator before/after reference
 publication and during a descendant, then prove recovery waits for verified
 emptiness. It reuses Package 2E quota primitives but performs no fetch.
@@ -4843,6 +4938,22 @@ revert the release commits. The old binary ignores these paths, and a later
 re-upgrade revalidates the exact schema, owner/hash records, and allowlist
 before continuation. Never delete an active, foreign, unknown-version, or
 unvalidated engine session during rollback.
+
+Retained unnamed-run results are deliverables, not disposable session state.
+Before creating any rollback backup, hold maintenance plus the result-registry
+lock, reconcile it, and require the result registry and every result index/
+worktree/state leaf to be empty. A `reserved`, `retained`, `deleting`, partial,
+foreign, or mismatched result record fails before copy/revert with
+`TRISS_CODER_ROLLBACK_RESULTS_PENDING`; backup/validate must never report
+success while silently excluding a deliverable. The operator first retrieves
+the retained worktree or exports/accepts its code outside the managed result
+root, then invokes `coder result clean <run-id>` and retries rollback. This
+release deliberately does not define a multi-GiB rollback archive: the existing
+512 MiB state-backup cap remains truthful because it backs up zero retained
+results. Tests cover retained-result preflight rejection, a crash/deleting row,
+foreign result-root retention, explicit clean followed by successful empty
+result-registry backup, and old-binary simulation proving no ignored result
+worktree is called rollback-safe.
 
 Coder-state cleanup may remove an orphan only through Section 6.3 owner/schema
 and missing-leaf-parent checks; otherwise retain it and warn. Rollback tests
