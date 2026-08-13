@@ -6,8 +6,10 @@ this branch.
 
 As of: 2026-08-13.
 
-Base: `origin/main` at `8890ff09257f973e706eca75dd08da6678e95171`
-(`v0.32.0`).
+Base: `origin/main` at `2e3db71ddc32c349d918ae32609a03c0775a87c0`
+(`v0.34.0`). This revision was rebased onto that commit; any later movement of
+`origin/main` invalidates the baseline until Package 0 is repeated and this
+plan receives another follow-up approval.
 
 Plan branch: `plan/reliable-delegation-contract`.
 
@@ -67,8 +69,8 @@ returned, not that its findings are correct.
 
 ## 3. Current repository facts
 
-These facts were verified against the base SHA and must be rechecked after a
-rebase:
+These facts were reverified against `2e3db71ddc32c349d918ae32609a03c0775a87c0`
+(`v0.34.0`) and must be rechecked after every rebase:
 
 | Area | Current behavior | Source |
 | --- | --- | --- |
@@ -86,18 +88,22 @@ rebase:
 | Empty response | CLI `ask`/`review` exit, while MCP `callModel()` throws | `src/commands/ask.js`, `src/commands/review.js`, `src/mcp/handlers.js` |
 | Provider timeout | all OpenAI-compatible clients support `TRISS_REQUEST_TIMEOUT_MS` | `src/config.js`, `src/client.js` |
 | Z.AI endpoint fallback | current code retries broad 401/403/429 status shapes before the new policy/rate-limit classifier | `src/client.js`, `withGlmEndpointFallback()` |
+| Deterministic router | `triss exec` exists, validates route-specific options before side effects, and forwards coder/review options through a fixed allowlist | `src/commands/exec.js`, `test/exec.test.js` |
+| Response format | `text|evidence` is a shared ask/review contract for CLI and MCP; evidence output is model-authored Markdown and is not a structured verdict | `src/response-format.js`, `src/review-prompt.js`, `test/response-format.test.js` |
+| Standalone distribution | one canonical portable Node/POSIX artifact is built on Ubuntu and the downloaded identical bytes are smoke-tested on Ubuntu and macOS | `.github/workflows/test.yml`, `.github/workflows/publish.yml`, `scripts/build-standalone.js`, `test/release-gates.test.js` |
 
-There is a separate live worktree on
-`feature/codex-workflow-improvements`. Its evidence response format overlaps
-`ask`, `review`, MCP handlers, templates, and tests. It is not part of this
-plan's base. At review time its known head was `cc75732f`; it also adds the
-`triss exec` router with explicit option allowlists and coder/review forwarding.
-Package 0 must fetch and record the live head and a file-by-file merge matrix.
-If it has merged, every new coder/review option must be forwarded through
-`src/commands/exec.js` and covered by `test/exec.test.js`. The combination
+The exec/evidence work is already part of this plan's base. Package 0 records a
+concrete merge matrix from v0.34.0: `src/commands/exec.js` and
+`test/exec.test.js` own
+route validation and forwarding; `src/response-format.js`,
+`src/review-prompt.js`, `test/response-format.test.js`, CLI/MCP handlers, and
+templates own the shared evidence contract; the standalone workflows and
+release-gate tests own packaged-artifact parity. Every new coder/review option
+must be forwarded through `src/commands/exec.js` and covered by
+`test/exec.test.js`. The combination
 `--format evidence --payload-mode shard` is rejected in v1 because its
 single-final-decision contract cannot wrap multiple shard reports safely. Do
-not copy files wholesale from either branch.
+not copy historical branch files wholesale.
 
 ## 4. Scope
 
@@ -142,8 +148,9 @@ non-directories, foreign ownership, mount/device changes, `..`, path races, or
 realpath escape. Pin parent `(device,inode)` identities and perform create,
 rename, fsync, scan, and unlink only by dir-FD-relative openat-style operations;
 never re-resolve an absolute string after validation. Recheck pinned identities
-before destructive transitions. This applies to `wt-v2`, `coder-state-v2`,
-`locks-v2`, `engine-sessions-v2`, `review-fetch`, and `coder-state-backup`,
+before destructive transitions. This applies to `project-identity-v1.json`,
+`quarantine-v1`, `ephemeral-recovery-v1`, `wt-v2`, `coder-state-v2`, `locks-v2`,
+`engine-sessions-v2`, `review-fetch`, and `coder-state-backup`,
 plus `process-sets-v2`, including every temp/staging/previous/deleting child. Root substitution or an
 intermediate symlink/mount swap fails before credentials, network, Git mutation,
 spawn, recovery delete, or backup copy. Adversarial tests precreate and race-swap
@@ -190,9 +197,13 @@ write, rename, or deletion leaves the validated project root.
     The initial implementation adds classification, not another retry layer.
 13. Existing dirty worktrees are preserved. `--expect changes` requires
    isolation in v1 rather than pretending to attribute non-isolated edits.
-14. Delegated coding packages never commit, push, open a PR, or merge. The host
-    creates local reviewed checkpoints only in Package 0 and the Release A/B/C
-    exact-head gates. No package pushes, publishes, opens a PR, or merges.
+14. Delegated coding packages never commit, push, open a PR, or merge. After
+    accepting every atomic package, the host verifies that package's exact
+    scope and RED/GREEN evidence, creates one immutable local checkpoint commit,
+    and records its SHA in the next handoff. Checkpoints are not pushed before
+    the applicable release gate. The next worker starts from that exact clean
+    checkpoint and may not rewrite already accepted package files outside its
+    declared overlap. No package publishes, opens a PR, or merges.
 15. PR title/body and local branch text never triggers Jira, Linear, GitHub, or
     GitLab issue retrieval. Linked issue content requires an explicit validated
     caller input in v1.
@@ -391,8 +402,8 @@ rewrite `process_status` or `termination_cause`.
 | caller aborts | `killed` | `caller_abort` | protocol evidence or `not_observed` | provider evidence or `not_observed` |
 | host signal arrives | `killed` | `host_signal` | protocol evidence or `not_observed` | provider evidence or `not_observed` |
 | provider rate limit triggers termination | `killed` | `provider_rate_limit` | `rate_limited` when protocol proves it, otherwise `not_observed` | `rate_limited` |
-| output bound triggers termination | `killed` | `output_limit` | protocol evidence or `unknown` | provider evidence or `not_observed` |
-| writable quota triggers termination | `killed` | `filesystem_quota` | protocol evidence or `unknown` | provider evidence or `not_observed` |
+| output bound triggers termination | `killed` | `output_limit` | `not_observed` with no parseable event; `unknown` with only parseable non-terminal events; otherwise terminal protocol status | provider evidence or `not_observed` |
+| writable quota triggers termination | `killed` | `filesystem_quota` | `not_observed` with no parseable event; `unknown` with only parseable non-terminal events; otherwise terminal protocol status | provider evidence or `not_observed` |
 | child exits by signal | `killed` | `child_signal` | protocol evidence or `not_observed` | provider evidence or `not_observed` |
 | child exits non-zero | `error` | `none` | protocol evidence or `not_observed` | provider evidence or `not_observed` |
 | child exits zero | `completed` | `none` | protocol evidence or `unknown` | provider evidence or `not_observed` |
@@ -408,9 +419,12 @@ cleanup failure after spawn remains fail-closed and emits no envelope.
 
 `expectation`:
 
-- `changes`: caller requires a verified non-empty deliverable diff;
-- `analysis`: caller requires final text for which `trim().length > 0` and no
-  implementation claim; preserve the original untrimmed text when returning it;
+- `changes`: caller requires a verified non-empty current-run diff represented
+  only by `run_files_changed`; cumulative `files_changed` never satisfies it;
+- `analysis`: caller requires final text for which `trim().length > 0` and a
+  verified empty `run_files_changed` in isolated mode; preserve the original
+  untrimmed text when returning it. V1 does not parse prose for an
+  "implementation claim";
 - `either`: compatibility default; either non-empty text or verified changes is
   an artifact, but semantic task completion is not claimed.
 
@@ -462,7 +476,8 @@ change comparisons:
 | run comparison failed/unavailable | changes | `not_evaluated` |
 | all gates normal + verified non-empty `run_files_changed` | changes | `satisfied` |
 | all gates normal + verified empty `run_files_changed` | changes | `unsatisfied` |
-| all gates normal + usable trimmed final text | analysis | `satisfied` |
+| all gates normal + usable trimmed final text + verified empty `run_files_changed` | analysis | `satisfied` |
+| all gates normal + usable text + non-empty/unavailable `run_files_changed` | analysis | `not_evaluated` |
 | all gates normal + empty/whitespace final text | analysis | `unsatisfied` |
 | any | either | `not_evaluated` |
 
@@ -514,6 +529,42 @@ nested submodule state is unsupported and fails detection in v1; the base
 Gitlink identity remains representable, but agent-side index/Gitlink mutation is
 forbidden by Section 6.5.
 
+Before any v2 state lookup, load or create
+`.triss/project-identity-v1.json` through the managed-root primitive. It is a
+mode-`0600`, no-follow, 4 KiB-capped canonical compact JSON-plus-LF file with
+exact ordered keys
+`{schema_version,project_id,creation_device,creation_inode,created_at}` and no
+extras. `schema_version` is integer `1`; `project_id` is 32 lowercase
+hexadecimal characters encoding 16 host-CSPRNG bytes and is created
+exclusively; `creation_device` and `creation_inode` are canonical decimal
+identifiers of the validated project-root directory;
+the timestamp uses the exact millisecond UTC grammar below. The stable
+`project_root_fingerprint` is
+`sha256(UTF8("triss-project-v1") || NUL || raw_16_byte_project_id)` and never
+includes an absolute path. All v2 branch, inventory, session, lock, journal,
+review-fetch, and backup ownership uses this stable value. Runtime realpaths and
+directory `(device,inode)` values remain containment/race evidence only.
+
+A same-filesystem project rename is accepted only while exclusive maintenance
+and all relevant target/slot locks prove quiescence: the stable project ID and
+original `(device,inode)` must match, every managed root must be contained below the new
+validated root, and path-bearing coder-state records are atomically rewritten
+to the new parent realpath before any run. A copied directory has a different
+inode and never auto-adopts even on the same filesystem; a device change also
+never auto-adopts. `triss coder state adopt --from-project-id <32hex>`
+requires an explicit operator action, exclusive maintenance, no live process
+set, a complete validated inventory, and a different newly generated project
+ID; it atomically moves the old owned state to
+`.triss/quarantine-v1/<old-id>-<run-id>/`, rewrites only validated v2 owner
+records to the new identity, and leaves foreign/invalid data quarantined and
+unusable. `triss coder state reset --project` may instead quarantine all
+validated local v2 state and create an empty identity, but never deletes it.
+Both commands print only IDs/counts. Crash recovery completes either the old or
+new identity transaction from an exact journal; ambiguity fails closed without
+blocking a fresh empty identity after explicit reset. Tests cover
+same-filesystem rename, cross-filesystem copy, duplicate project IDs, crash at
+every adopt/quarantine rename, and foreign-state preservation.
+
 At fresh isolation creation, persist the base fingerprint manifest at
 `.triss/coder-state-v2/<validated-session-slug>.json`, outside the child worktree.
 The directory is mode `0700`, the file is mode `0600`, and creation uses an
@@ -525,9 +576,10 @@ validated session slug, full managed branch ref, full base commit OID whose
 length matches the repository object format (`sha1`: 40 hex, `sha256`: 64 hex),
 repository object format, resolved Git-common-directory fingerprint, resolved
 managed-worktree fingerprint, creation timestamp, canonical base-manifest
-entries, and a full `sha256:<64 lowercase hex>` snapshot ID. A fingerprint is
-SHA-256 over the UTF-8 realpath plus a NUL separator and repository identity;
-it is ownership evidence, not a secret. Canonical manifest entries are arrays
+entries, and a full `sha256:<64 lowercase hex>` snapshot ID. The stable project
+fingerprint above is ownership evidence; a worktree fingerprint additionally
+binds the current validated realpath and branch and is only checkout-containment
+evidence. Neither is a secret. Canonical manifest entries are arrays
 `[path_base64, kind, mode, size, identity]`, where Base64 is RFC 4648 standard
 alphabet with required padding. Entries are sorted by raw path bytes and
 serialized as compact UTF-8 JSON with exactly one trailing LF.
@@ -539,10 +591,11 @@ serialized as compact UTF-8 JSON with exactly one trailing LF.
 | `gitlink` | `"160000"` | `null` | `git:<sha1|sha256>:<format-length lowercase oid>` |
 | `absent` | `null` | `null` | `null` |
 
-No other value or numeric/string substitution is canonical. Repository identity
-bytes are `UTF8(object_format) || NUL || UTF8(realpath(git_common_dir)) || NUL`;
-its fingerprint is SHA-256 of those bytes. Worktree-owner bytes are
-`repository_fingerprint_ascii || NUL || UTF8(realpath(worktree)) || NUL ||
+No other value or numeric/string substitution is canonical. Repository runtime
+identity bytes are `UTF8(object_format) || NUL ||
+UTF8(realpath(git_common_dir)) || NUL`; their fingerprint is refreshed after a
+validated relocation and is not persistent project identity. Worktree-owner
+bytes are `project_root_fingerprint_ascii || NUL || UTF8(realpath(worktree)) || NUL ||
 UTF8(full_branch_ref) || NUL`; its fingerprint is SHA-256 of those bytes. The
 snapshot hash covers the canonical entries bytes, not incidental object-key
 order. No abbreviated hashes are valid.
@@ -590,8 +643,9 @@ entry kind.
 Export one `CODER_BRANCH_PREFIX = "coder-v2/"` constant and derive every full
 managed ref exactly as
 `refs/heads/coder-v2/<project-root-fingerprint-64-hex>/<slug>`. The project-root
-fingerprint includes the validated caller worktree realpath and repository
-identity, so linked worktrees sharing one common Git directory never collide.
+fingerprint is the stable random project identity, so same-filesystem rename
+does not change the namespace and linked worktrees with separate identities do
+not collide even when they share one common Git directory.
 Use this for creation, schema validation, reuse, and cleanup tests; no package
 invents a second branch namespace.
 
@@ -711,9 +765,12 @@ reclamation; disagreement retains and fails closed. The
 byte-exact empty fixture is
 `{"schema_version":1,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n`.
 
-Before any credentials/spawn, a new explicit or generated session atomically
-reserves its `(engine,slug)` under the shared maintenance lock plus inventory
-mutex. At four entries or 512 MiB reserved capacity it fails preflight with
+Only an explicit `--session <slug>` or omitted slug combined with
+`--keep-session` creates a persistent inventory entry. Persistent sessions are
+isolated-only in v1; persistence with effective non-isolated mode fails before
+allocation. Before any credentials/spawn, such a session atomically reserves
+its `(engine,slug)` under the shared maintenance lock plus inventory mutex. At
+four entries or 512 MiB reserved capacity it fails preflight with
 `TRISS_CODER_SESSION_CAP`; an existing idle session may continue. Successful
 first-generation publication changes only its exact entry to `idle`. Failure
 before mapping publication removes the reservation in `finally` only after the
@@ -777,11 +834,14 @@ that inventory entry. Tests cover admission at 3/4/cap, concurrent different slu
 same slug across engines, reservation before spawn, failures before mapping and
 before envelope, parent crash, list, recovery, and capacity reclamation.
 
-The mode-`0600`, 4 KiB-capped, no-follow, atomic file has exact schema
-`{schema_version:1,engine,slug,real_session_id,isolation_mode,project_root_fingerprint,current_generation,created_at,updated_at}`,
+The mode-`0600`, 8 KiB-capped, no-follow, atomic file has exact schema
+`{schema_version:1,engine,slug,real_session_id,isolation_mode,project_root_fingerprint,base_commit_oid,branch_ref,coder_state_id,last_snapshot_id,current_generation,created_at,updated_at}`,
 no extra keys, canonical compact UTF-8 JSON plus LF. `isolation_mode` is
-`isolated|non_isolated`; the root fingerprint and slug/engine ownership are
-independent of coder fingerprint state. Bounded persistent engine-owned session
+exactly `isolated` in v1. The root fingerprint and slug/engine ownership bind
+the store to its retained coder workspace. `base_commit_oid` has the repository
+object-format length; `branch_ref` is the exact managed ref; `coder_state_id`
+and `last_snapshot_id` are full `sha256:<64 lowercase hex>` identities of the
+canonical coder-state record and latest post-run snapshot. Bounded persistent engine-owned session
 data lives beside it at `<slug>/home.current/`, mode `0700`, 63 MiB total and
 10,000-entry limits, with 4,096 path-byte and 8 MiB per-file caps. The host
 persists only an engine/version-specific allowlist discovered and approved in
@@ -805,14 +865,19 @@ the JSON integer `1`; `engine` is exactly `opencode` or `crush`; and `slug`
 matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. For OpenCode,
 `real_session_id` matches `^ses_[A-Za-z0-9]{1,128}$`; for Crush it is exactly
 equal to `slug`, because v1 uses Crush's native caller-selected session. The
-root fingerprint is `sha256:<64 lowercase hex>` computed from the validated
-caller project root and repository identity using the Section 6.3 repository
-fingerprint construction. `current_generation` is exactly 32 lowercase hex.
+root fingerprint is `sha256:<64 lowercase hex>` computed from the stable
+project ID above, never the current realpath. Continuation requires the retained
+worktree and branch to exist and their validated base OID, coder-state ID, and
+current snapshot to match the mapping before task HOME is restored. Missing or
+mismatched workspace evidence fails with
+`TRISS_CODER_SESSION_WORKSPACE_MISMATCH`; it never creates a replacement
+checkout or resumes the old native conversation. `current_generation` is
+exactly 32 lowercase hex.
 Both timestamps are UTC RFC 3339 strings in the
 exact millisecond form `YYYY-MM-DDTHH:mm:ss.sssZ`, `created_at <= updated_at`,
 and neither may be more than five minutes in the future relative to the host
-clock. Continuation also requires the current validated root fingerprint and
-requested isolation mode to equal the stored values. Any grammar, ordering,
+clock. Continuation also requires the current stable project fingerprint and
+effective isolated mode to equal the stored values. Any grammar, ordering,
 ownership, clock, or equality failure blocks continuation and cleanup except
 for the explicitly validated foreign-data retention path.
 
@@ -884,24 +949,57 @@ with fresh task HOME prove continuation, and mutation of legacy
 `.triss/sessions.json` cannot affect v2. Cleanup/rollback/mixed-version tests
 cover all engine-session paths.
 
-V2 session selection is slug-first. `--session <slug>` resolves only through
+V2 persistent-session selection is slug-first. `--session <slug>` resolves only through
 the engine-specific v2 map while holding that slug's lease. Bare `--continue`
 is rejected in v2 because it has no unambiguous lease/ownership key; callers
 must pass the slug. A real engine ID such as `ses_*` is never accepted directly
 as a CLI slug or used to bypass mapping validation. Analysis and implementation
-runs use the same rule. A missing per-engine mapping for a validated unused slug
-creates a new engine session and publishes its first generation. A present but
+runs use the same rule. A missing per-engine mapping for a validated unused
+explicit/kept slug creates a new engine session and publishes its first
+generation. A present but
 malformed, unknown-version, foreign, or inconsistent mapping blocks the run and
 is never treated as missing. Tests cover two-run continuation for both engines,
 missing/corrupt mapping, engine mismatch, bare-continue rejection, and cleanup
-of map plus persistent session HOME. Named and generated session stores are
-independent of managed worktree/branch lifetime: neither isolated empty-worktree
-cleanup nor non-isolated completion removes them. Only explicit `coder session clean
+of map plus persistent session HOME. A persistent session owns its isolated
+managed worktree and branch for the same lifetime; even a read-only run retains
+both. Only explicit `coder session clean
 <slug> --engine <opencode|crush>` acquires the lease, validates
-root/engine/slug ownership and a clean inactive session, then removes only that
-engine/session directory. The engine flag is mandatory even when it equals the
+root/engine/slug/workspace ownership and a clean inactive session, then removes
+the engine/session directory, retained worktree, branch, and coder-state record
+as one recoverable transaction. The engine flag is mandatory even when it equals the
 configured default; an identical slug in the other engine is untouched. Mixed-mode and
 different-slug concurrent tests prove serialization without lost mappings.
+
+With omitted `--session` and no `--keep-session`, generate `session_slug` only
+as a run correlation key and use a fresh ephemeral native engine session. No
+inventory entry, `session.json`, or `home.current` is published, so ordinary
+runs never consume the four persistent slots and do not retain conversation
+state. On verified completion, envelope serialization, and process-tree
+cleanup, remove the ephemeral task HOME, worktree, branch, and coder state.
+After failure or parent crash retain only
+`.triss/ephemeral-recovery-v1/<slug>.json`, a mode-`0600`, no-follow, 4 KiB-
+capped canonical JSON-plus-LF record with exact ordered keys
+`{schema_version,project_root_fingerprint,session_slug,run_id,sandbox_id,
+worktree_basename,branch_ref,coder_state_basename,process_status,
+cleanup_status,created_at,expires_at}` and no extras. Common IDs/statuses use
+the existing grammars; basenames/ref are recomputed and equality-checked before
+cleanup; timestamps use exact UTC milliseconds and `expires_at` is exactly 15
+minutes after `created_at`. It never contains engine messages, provider text,
+credentials, HOME, model output, or absolute paths. The TTL uses the common
+bounded monotonic-to-wall-clock epoch. Recovery first empties the owned process
+set, then removes validated ephemeral artifacts and the record. At most 16
+records and 16 MiB exist per project; cap admission performs recovery then
+fails before spawn. `--keep-session` is explicit consent to persistent
+generated state and returns the slug for later `--session`. Tests cover more
+than 100 successful unnamed runs without inventory growth, failure/crash TTL
+recovery, cap-plus-one, and absence of conversation bytes.
+
+A read-only first persistent run, subsequent source/main movement, manual
+worktree deletion, branch replacement, or snapshot mismatch can never silently
+resume the old conversation in a new checkout. Fixtures delete the retained
+workspace after run one and mutate the repository before run two; continuation
+fails with the workspace-mismatch code until explicit engine-scoped clean/reset
+starts a new native session.
 
 Each inventory entry carries exact integer `lock_slot` in `0..3`. Admission
 assigns the lowest free slot for a new unique slug; identical slugs across
@@ -1052,8 +1150,42 @@ read-only runtime/library roots; explicitly selected read-only dependency roots
 inside the target project; and required OS device/time/certificate files. The
 real HOME, source checkout outside the authorized target, sibling checkouts,
 SSH/cloud/keychain/socket directories, `/proc`/process FDs, parent-process
-memory/environment, and IPC to unrelated processes are absent or denied. The
-authorized target is the managed `.triss/wt-v2/<slug>` child for isolated runs
+memory/environment, and IPC to unrelated processes are absent or denied.
+
+Compile that allowlist only from a host-owned toolchain manifest discovered and
+approved by Package 0, never by scanning `PATH` inside the sandbox. The
+mode-`0600`, 64 KiB-capped canonical JSON-plus-LF manifest has exact ordered
+keys `{schema_version,platform,architecture,commands,executables,runtime_roots,
+readonly_project_roots,environment,limits,created_at}` and no extras. Version is
+integer `1`; platform is `darwin|linux`; architecture is the Package 0-approved
+value. `commands` is a sorted unique array of at most 32 exact argv-prefix
+arrays (256 arguments and 8 KiB encoded bytes per command); v1 includes only
+the package-specific `node --test ...`, `npm run lint`, `git status --short`,
+and `git diff -- ...` forms. `executables` is a sorted array of at most 32
+absolute no-symlink regular executable paths with `{path,sha256,version}`.
+`runtime_roots` and `readonly_project_roots` are sorted arrays of at most 32
+validated absolute directory roots and 64 KiB total path bytes; the former
+contains only the dynamic loader, libraries, Node/npm runtime files, shell when
+an exact command requires it, certificate/time/device files, and no broad
+`/usr`, `/usr/local`, package-manager cache, or HOME root. `environment` is an
+exact-key map of at most 32 non-secret values needed by those commands.
+`limits` fixes per-command wall time, process count, stdout/stderr bytes, open
+files, CPU, and writable blocks. Package 0 records byte-exact manifests for
+each supported engine/OS tuple and hashes every executable/runtime-root
+inventory; drift fails preflight and requires a new feasibility approval.
+
+The sandbox launches commands only through a parent mediator that validates the
+manifest prefix, supplies the fixed environment, and applies the same owned
+process-set and output collectors as the engine. Real OpenCode and Crush
+fixtures must successfully execute one focused `node --test` command and
+`npm run lint` inside the sandbox while canaries in real HOME, the source Git
+common object store, sibling checkout, and Triss managed state remain
+unreadable. The tests also prove that an unlisted compiler/interpreter, shell
+flag, runtime root, or environment override is denied. A platform for which the
+exact manifest cannot run the required RED/GREEN commands is unsupported; do
+not broaden a system directory to make the test pass.
+
+The authorized target is the managed `.triss/wt-v2/<slug>` child for isolated runs
 and the validated caller project worktree for non-isolated runs. Writes are
 limited to that target and task temp. Before any non-isolated sandbox/quota
 setup, acquire the regular/no-follow mode-`0600` kernel lease
@@ -1353,17 +1485,18 @@ Rules:
 - help text states that `either` does not verify task completion.
 
 Every run has a slug. An explicit `--session` must match the Section 6.3
-grammar. Without it, the host generates `anon-<32 lowercase hex>` from 16 CSPRNG
-bytes, installs the inventory reservation exclusively, assigns its lowest-free
-fixed lock slot, creates its store/worktree path exclusively, and returns that exact
-value as top-level `session_slug`. A generated-slug collision never means reuse:
-discard it and retry with fresh randomness at most eight times, then fail
-preflight. A reusable slot lock artifact is not a slug collision. Generated sessions use the same persistent-store rules as named
-sessions and remain available for the read-only continuation described below
-until explicit engine-scoped session cleanup; worktree cleanup alone does not
-delete them. Tests inject collisions and prove no pre-existing worktree, branch,
-reservation/state, mapping, or HOME can be reused by an anonymous run; fixed
-slot artifacts are expected and are assigned only after collision-free reservation.
+grammar and selects persistent isolated continuation. Without it, the host
+generates `anon-<32 lowercase hex>` from 16 CSPRNG bytes, exclusively creates
+run-scoped ephemeral workspace/recovery names, and returns that exact value as
+top-level `session_slug`; it does not reserve persistent inventory or publish
+engine HOME. `--keep-session` explicitly promotes the generated slug into the
+persistent isolated admission/store path before spawn. A generated-slug
+collision never means reuse: discard it and retry with fresh randomness at most
+eight times, then fail preflight. A reusable slot lock artifact is not a slug
+collision. Tests inject collisions and prove no pre-existing worktree, branch,
+reservation/state, mapping, HOME, or recovery record can be reused by an
+anonymous run; more than 100 successful default runs leave persistent inventory
+empty.
 
 Every isolated run requires the Section 6.5 sandbox. Non-isolated compatibility
 runs do not create or trust fingerprint state, but require the same sandbox and
@@ -1443,8 +1576,23 @@ Requirements:
   is never policy evidence and falls back to auth/unknown;
 - run this classifier before `withGlmEndpointFallback()`: proven policy,
   authentication, and rate-limit failures make exactly one provider request;
-  sibling endpoint discovery is allowed only for the existing explicitly
-  recognized route-mismatch shape, not every 401/403/429;
+  sibling endpoint discovery is allowed only when
+  `isGlmRouteMismatch(error) === true`, never for status alone;
+- `isGlmRouteMismatch(error)` is a pure structural predicate over an owned
+  error object. It returns true only when `error.type` or top-level `type` is
+  exactly `routing_error` or `invalid_request_error` and `error.code` or
+  top-level `code` is exactly `endpoint_mismatch`, `plan_endpoint_mismatch`,
+  `route_not_found`, or `unsupported_endpoint`. Conflicting nested/top-level
+  values, arbitrary message/body text, missing fields, 401, 403, 429, and bare
+  404/405 return false. Policy classification has first precedence, then rate
+  limit, then authentication, then route mismatch, then other provider errors;
+- a recognized mismatch permits exactly one retry of the same read-only request
+  at the one configured sibling Z.AI endpoint, so the total is at most two
+  model requests. A mismatch on the second request is returned as a model/route
+  error. If the provider cannot supply this structured discriminator, v1
+  requires the endpoint to be configured explicitly and performs no probe or
+  endpoint hop. Package 0 may replace that rule only after documenting and
+  approving a bounded credential-free non-model probe;
 - never attach API keys, request messages, or response bodies to new metadata;
 - separate private causes from a common bounded public projection. CLI prints
   stable code plus a sanitized message; MCP returns `code`, `provider`, `model`,
@@ -1593,20 +1741,39 @@ Run Git with an argument array, explicit verified repository root, and a
 minimal environment. Remove inherited `GIT_*` variables, especially
 `GIT_EXTERNAL_DIFF`, `GIT_DIFF_OPTS`, `GIT_CONFIG_COUNT`, and all
 `GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`; set `GIT_CONFIG_NOSYSTEM=1` and
-`GIT_CONFIG_GLOBAL=/dev/null`, then pass `-c core.attributesFile=/dev/null` for
-diff acquisition. Treat repository-local config as untrusted and override at
-command scope. Set `GIT_NO_REPLACE_OBJECTS=1` and pass
+`GIT_CONFIG_GLOBAL=/dev/null`. `core.attributesFile=/dev/null` alone is
+insufficient because Git can still read common-dir `info/attributes` and
+worktree/committed `.gitattributes`. Perform every metadata, pre-inventory,
+rename-inventory, and content comparison inside a parent-built sealed bare
+projection that contains only the bounded object closure for the exact
+base/head comparison, has no worktree, no alternates, and an empty regular
+`info/attributes`. In that projection create a deterministic empty tree object
+and pass the pinned Git global option `--attr-source=<empty_tree_oid>` before
+each subcommand; Package 0 must prove the pinned Git version supports that
+option and that it suppresses attributes from both compared trees. The source
+worktree and common-dir `info/attributes` are never mounted or read by the
+comparison child. Projection object creation and deletion use the managed-root,
+quota, owned-process, and no-follow rules; the recorded comparison identity
+still names the original base/head/merge-base OIDs. Failure to establish the
+empty attribute source is `TRISS_REVIEW_GIT_ATTRIBUTES`, not a fallback to
+ordinary `git diff`.
+
+Treat repository-local config as untrusted and override at command scope. Set
+`GIT_NO_REPLACE_OBJECTS=1` and pass
 `--no-replace-objects` before every `rev-parse`, `merge-base`, pre-inventory,
 inventory, and content subcommand. Component-wise no-follow read at most one
 sentinel byte from the repository common-dir `info/grafts`; any nonempty file,
 symlink, special file, race, or overflow fails with
 `TRISS_REVIEW_GIT_OBJECT_REWRITE`. Do not trust or traverse `refs/replace`;
-replacement processing is disabled. A nonempty shallow boundary is permitted
-only if the exact requested base/head and unique merge base are already locally
-available without deepening; otherwise local review fails
-`TRISS_REVIEW_SHALLOW_INCOMPLETE` rather than claiming coverage. Tests replace
-base/head with hidden/canary trees, add legacy graft ancestry, and exercise
-complete/incomplete shallow clones; comparison uses original objects or fails.
+replacement processing is disabled. V1 rejects any nonempty common-dir
+`shallow` file before ref resolution or ancestry traversal, even when all named
+objects exist and Git currently reports one merge base. Missing/empty must be a
+same-UID no-follow regular file state; symlink, special file, race, or nonempty
+content fails `TRISS_REVIEW_SHALLOW_UNSUPPORTED`. Tests include a graph where a
+shallow boundary preserves all objects but changes the single merge base from
+the full graph's `P` to `M`; no diff/provider call occurs. Tests also replace
+base/head with hidden/canary trees, add legacy graft ancestry, and prove a
+non-shallow comparison uses original objects.
 Override at
 command scope, for both inventory and content, at least:
 `diff.ignoreSubmodules=none`, `submodule.recurse=false`, `diff.renames=true`,
@@ -1625,7 +1792,11 @@ can suppress an inventory entry or alter parser framing; finding one is a stop
 gate until explicitly neutralized. Malicious fixtures cover
 `diff.ignoreSubmodules=all`, `submodule.<name>.ignore=all`, external/textconv
 drivers, prefix/relative/rename/algorithm settings, aliases, and config include
-files, plus renameLimit/interHunk/suppressBlank/orderFile/abbrev; a changed gitlink remains an `M` inventory entry and selected content is
+files, plus renameLimit/interHunk/suppressBlank/orderFile/abbrev. Attribute
+fixtures cover global attributes, source common-dir `info/attributes`, dirty
+worktree `.gitattributes`, and differing committed `.gitattributes`, including
+`*.txt -diff`; all yield byte-identical text diff output from the sealed empty
+attribute projection. A changed gitlink remains an `M` inventory entry and selected content is
 cross-checked against it. Never enable external diffs or textconv. Fetch may receive
 only the existing narrowly constructed
 authentication environment; never inherit `GIT_SSH_COMMAND`, config injection,
@@ -1915,13 +2086,18 @@ Coverage: 7/7 shards, 24/24 requested files
 ```
 
 `execution_status: completed` means every planned provider call completed; it
-does not claim review completeness. In `context_mode: sharded`, no model sees
-all shard contents, so `global_verdict` is always
-`unavailable_for_sharded`, `cross_shard_analysis` is `unavailable`, and Triss
-must not publish a global clean verdict even when every shard succeeds. Preserve
-bounded shard-local prose under explicit shard headings. A single full-change
-review with complete repository and requested-scope coverage may publish its
-model verdict. Selected or stdin reviews publish `scoped_only` verdict framing.
+does not claim review completeness. Review model text is an opaque bounded
+`model_output` string in single mode and an ordered bounded `shard_outputs`
+array in sharded mode. Triss never derives a `global_verdict`, clean/approval
+enum, or semantic success flag by regex, first line, evidence heading, or other
+prose interpretation. Objective fields are only execution status, both coverage
+axes, coverage basis, and `context_mode`. In `context_mode: sharded`, no model
+sees all shard contents, `cross_shard_analysis` is `unavailable`, and Triss must
+not publish a global clean verdict even when every shard succeeds. Preserve
+bounded shard-local opaque text under explicit shard headings. A single
+full-change review may return its opaque output next to complete coverage facts;
+selected/stdin reviews use objective `scoped_only` framing without interpreting
+the text.
 
 If a shard fails, execution is `partial` after at least one success or `failed`
 after zero successes; list all unreviewed shards/files and typed codes. CLI
@@ -2095,21 +2271,54 @@ targets one helper/test pair or one narrow adapter. The later reference surfaces
 retain detailed RED/GREEN cases but are not delegation units; an implementing
 model receives exactly one atomic package plus only its named reference
 surfaces. The host reviews the diff and runs the package checks before starting
-the next package. Packages must not be combined to reduce commit count.
+the next package. The delegated model never commits. For every accepted package
+the host records the clean starting SHA, verifies the exact name-status/diff and
+focused RED/GREEN output, creates one local immutable checkpoint commit, records
+that SHA plus test evidence in the next handoff, and starts the next worker only
+from that clean checkpoint. A rejected package is restored only to its recorded
+start by the host after preserving evidence; a later worker never edits an
+already accepted surface unless an explicit remediation package names it.
+Checkpoint commits remain local until the applicable release gate and are not
+publication authority. Packages must not be combined to reduce commit count.
 
 ### 12.1 Atomic package sequence
+
+This revision has exactly **49** atomic package headings. `Atomic 00` through
+`Atomic 48` are the normative, strictly increasing execution IDs; the retained
+`Package 2A`-style labels are descriptive compatibility aliases only and never
+determine ordering. Every prerequisite/handoff records the Atomic ID as well as
+the alias. Validate count, uniqueness, and order mechanically before review:
+
+```bash
+node --input-type=module -e '
+import fs from "node:fs";
+const s=fs.readFileSync("docs/reliable-delegation-contract-plan.md","utf8");
+const ids=[...s.matchAll(/^#### Atomic ([0-9]{2}) \/ Package /gm)].map(m=>Number(m[1]));
+const expected=Array.from({length:49},(_,i)=>i);
+if (JSON.stringify(ids)!==JSON.stringify(expected)) {
+  console.error(JSON.stringify({count:ids.length,ids})); process.exit(1);
+}
+console.log("atomic-packages=49 sequence=00..48");'
+```
 
 Every package first runs its focused RED test, implements only its listed
 surface, then runs that focused test, `npm run lint`, and `git diff --check`.
 Release-gate packages additionally run the commands stated below.
 
-#### Package 0 — approved plan identity and baseline
+#### Atomic 00 / Package 0 — approved plan identity and baseline
 
-Perform Reference surface 0. This is host-only work. Record the exact approved
-plan commit/blob, implementation start SHA, current `origin/main`, dirty state,
-feature-branch merge matrix, and baseline results. No source edits.
+Perform Reference surface 0 as a separate feasibility/architecture-spike PR
+based on pinned `v0.34.0`, not in the implementation branch. It owns only
+reviewed spike fixtures, backend selection/build metadata, toolchain manifests,
+standalone packaging proof, and captured reproducible results. Record the exact
+approved plan commit/blob, immutable base/start SHAs, concrete v0.34.0 merge
+matrix, and baseline results. After that PR is reviewed and merged, update this
+plan with the selected backend/ABI/support matrix and obtain another
+architecture approval. Package 1 and every implementation release are hard
+blocked until then; a weak model may not treat spike success as implementation
+authorization.
 
-#### Package 1 — pure result and lifecycle contract
+#### Atomic 01 / Package 1 — pure result and lifecycle contract
 
 Prerequisite: Package 0. Named reference: Reference surface 1 and Sections
 6.1-6.2/6.4. Add `src/coder-result.js` and
@@ -2120,7 +2329,7 @@ precedence, required `session_slug` versus engine `session_id`, activity
 normalization, artifact facts, and requirement matrix.
 Non-goal: engine/CLI/MCP adapters.
 
-#### Package 2 — bounded OpenCode event folding
+#### Atomic 02 / Package 2 — bounded OpenCode event folding
 
 Prerequisite: Package 1. Named reference: Reference surface 2 and Section 6.4.
 Edit only `createEventFolder()`, `foldEventLine()`, and bounded spawn collectors
@@ -2131,7 +2340,7 @@ exports; expose no new public API. RED/GREEN:
 Cover terminal evidence, malformed/output caps, private stderr, activity bounds,
 and first-cause observations. Non-goal: final v2 envelope construction.
 
-#### Package 2A — credential-owning proxy
+#### Atomic 03 / Package 2A — credential-owning proxy
 
 Prerequisite: Package 2. Named reference: Section 6.5. Add
 `src/coder-credential-proxy.js` and `test/coder-credential-proxy.test.js`;
@@ -2141,7 +2350,7 @@ provider/model/endpoint pinning, request/body/deadline caps, no body logging,
 revocation, and exact-secret non-disclosure. Non-goals: engine integration or a
 general forward proxy.
 
-#### Package 2B — filesystem and network sandbox
+#### Atomic 04 / Package 2B — filesystem and network sandbox
 
 Prerequisite: Package 2A and Package 0 platform proof. Named reference: Section
 6.5. Add `src/coder-sandbox.js` and `test/coder-sandbox.test.js`; export
@@ -2152,7 +2361,7 @@ escape, SSH/cloud/HOME/parent-process read denial, non-isolated parity,
 loopback-proxy-only network, and fail-closed unsupported sandbox hosts.
 Non-goal: relying on OpenCode/Crush CLI permission flags as the boundary.
 
-#### Package 2C — bounded Git mediator
+#### Atomic 05 / Package 2C — bounded Git mediator
 
 Prerequisite: Package 2B. Named reference: Section 6.5 Git mediator contract.
 Add `src/coder-git-mediator.js` and `test/coder-git-mediator.test.js`; export
@@ -2166,7 +2375,7 @@ Reject `log` and all `%B`/`%N`/`%ae`/`--all`/`--decorate`/format/revision/path
 attempts; canary messages, notes, author email, refs, and historical objects
 must not enter mediator/model output.
 
-#### Package 2F — managed-root dir-FD primitive
+#### Atomic 06 / Package 2F — managed-root dir-FD primitive
 
 Prerequisites: Package 2C and Package 0's recorded native-backend proof. Named
 reference: Section 5 managed-root invariant. Add `src/managed-root.js` and
@@ -2180,7 +2389,7 @@ creation, intermediate/final symlink and mount substitution, concurrent swap,
 foreign ownership, destructive recheck, and outside canaries. Non-goals:
 implementing any caller schema, lock, session, or PR state machine.
 
-#### Package 2G — fixed kernel advisory-lock primitive
+#### Atomic 07 / Package 2G — fixed kernel advisory-lock primitive
 
 Prerequisites: Package 2F and Package 0 platform proof. Named reference:
 Sections 5, 6.3, and 6.5 fixed-lock rules. Add `src/fixed-kernel-lock.js` and
@@ -2204,36 +2413,59 @@ substitution, parent `SIGKILL`, waiter ordering, and fixed-inode reuse.
 RED/GREEN: `node --test test/fixed-kernel-lock.test.js`. Non-goals: coder lock
 paths, diagnostic sidecars, or any inventory/registry schema.
 
-#### Package 2D — complete descendant supervisor
+#### Atomic 08 / Package 2D — complete descendant supervisor primitive
 
 Prerequisites: Package 2G and Package 0 platform proof. Named reference: Sections
 5 and 6.5 process-tree contract. Add `src/coder-process-supervisor.js` and
-`test/coder-process-supervisor.test.js`; export `spawnOwnedCoderTree()` and
-`terminateAndVerifyCoderTree()`, plus generic cross-process
+`test/coder-process-supervisor.test.js`; export only
+`spawnOwnedCoderTree()`, `terminateAndVerifyCoderTree()`,
 `allocateOwnedProcessSet()`, `attachOwnedProcessSet(sandboxId)`, and
-`recoverOwnedProcessSet(sandboxId, ownerAdapter = null)`, plus
-`promoteOwnedProcessSetLive(sandboxId, ownerAdapter)`,
-`cancelOwnedProcessSetReservation(sandboxId, ownerAdapter)`,
-`beginOwnedProcessSetRelease(sandboxId, ownerReference)` and
-`acknowledgeOwnedProcessSetRelease(sandboxId)`, and
-`reconcileOwnedProcessSetRelease(sandboxId, ownerAdapter)`. Allocation and
-adapter signatures are exactly those in Section 6.5. A durable recovery
-requires its non-null matching adapter; only `kind=ephemeral` accepts null.
+`recoverOwnedProcessSetState(sandboxId)`. This package owns only the platform
+process-set primitive and stable sandbox identity, not JSON journals or owner
+state machines.
 RED/GREEN:
 `node --test test/coder-process-supervisor.test.js`. Cover normal exit,
 deadline/abort/signal causes, `setsid()`, double fork, re-parenting, proxy
 revocation ordering, kill/wait-until-empty, kernel kill-on-parent/control-handle
 close, lease-release ordering, parent `SIGKILL`, and unsupported-host preflight.
-Implement the exact bounded durable/ephemeral release journals and every
-begin/reference-remove/ack/prune crash row from Section 6.5.
-The journal mutex imports Package 2G's `withFixedKernelLock()` and never opens,
-replaces, or unlinks its lock inode independently.
 Export one `OWNED_PROCESS_RECOVERY_GRACE_MS = 300000` constant. Age uses the
 host monotonic clock recorded by the OS ownership adapter; wall-clock RFC3339
 is diagnostic only. A future wall timestamp, unavailable monotonic epoch, or
 negative age retains/fails closed. The durable `sandbox_id` maps only to a kernel/OS-owned set identity outside
-agent-writable paths; attach returns exactly `live`, `verified_empty_tombstone`,
-`release_pending`, or `unknown`, never infers from PID. Package 2D owns a bounded
+agent-writable paths; attach returns exactly `live`,
+`verified_empty_tombstone`, or `unknown`, never infers from PID.
+Non-goals: JSON persistence, owner adapters, Git mediation, quotas, or envelope
+derivation.
+
+#### Atomic 09 / Package 2D1 — owned-process journal codec and transaction
+
+Prerequisite: Package 2D. Named reference: Section 6.5 exact process-journal
+schema. Add `src/owned-process-journal.js` and
+`test/owned-process-journal.test.js`; export bounded codec/read/write functions
+and the atomic `reserving|live|release_pending|acknowledged` transitions, but no
+session/PR owner logic. The journal mutex imports Package 2G's
+`withFixedKernelLock()` and never opens, replaces, or unlinks its lock inode
+independently. RED/GREEN: `node --test test/owned-process-journal.test.js`.
+Cover exact byte vectors, aggregate/temp caps, durable-owner tuple uniqueness,
+fsync/rename crash points, ephemeral immediate prune, grace recovery, and more
+than 32 sequential successful entries. Non-goals: spawning a child or touching
+an owner inventory/registry.
+
+#### Atomic 10 / Package 2D2 — owned-process owner reconciliation
+
+Prerequisite: Package 2D1. Named reference: Section 6.5 owner-adapter and
+release protocol. Add `src/owned-process-reconcile.js` and
+`test/owned-process-reconcile.test.js`; export
+`promoteOwnedProcessSetLive()`, `cancelOwnedProcessSetReservation()`,
+`beginOwnedProcessSetRelease()`, `acknowledgeOwnedProcessSetRelease()`,
+`recoverOwnedProcessSet(sandboxId, ownerAdapter)`, and
+`reconcileOwnedProcessSetRelease()`. Allocation and adapter signatures are
+exactly those in Section 6.5. A durable recovery requires its non-null matching
+adapter; only `kind=ephemeral` accepts null. Use fake owner adapters only; this
+package does not import session inventory or PR registry. Cover every
+begin/reference-remove/ack/prune crash row and adapter mismatch/reentrancy case.
+
+Package 2D1 owns a bounded
 mode-`0600`, no-follow, atomic release journal outside agent-writable paths with
 at most 32 entries. `beginOwnedProcessSetRelease(sandboxId, owner_reference)`
 atomically records `release_pending` after verified emptiness but before caller
@@ -2271,9 +2503,9 @@ attach, terminate, and wait a set created by a first process that is then
 tombstone persists until acknowledgement and disappears only afterward.
 Non-goals: deciding mounts, Git mediation, quotas, or envelope derivation.
 
-#### Package 2E — aggregate writable quota adapter
+#### Atomic 11 / Package 2E — aggregate writable quota adapter
 
-Prerequisite: Package 2D and Package 0 filesystem proof. Named reference:
+Prerequisite: Package 2D2 and Package 0 filesystem proof. Named reference:
 Section 6.5 writable-quota contract. Add `src/coder-write-quota.js` and
 `test/coder-write-quota.test.js`; export `prepareCoderWriteQuota()` and
 `subscribeCoderQuotaEvents()`. RED/GREEN:
@@ -2285,7 +2517,7 @@ first-cause-before-ack ordering, duplicate-event immunity, and termination when
 the child catches the write error. Non-goals: post-write monitoring or engine
 integration.
 
-#### Package 3 — fingerprint primitive
+#### Atomic 12 / Package 3 — fingerprint primitive
 
 Prerequisite: Package 2E. Named reference: Reference surface 3, fingerprint
 subset, and Section 6.3. Add `src/worktree-fingerprint.js` and
@@ -2297,19 +2529,21 @@ retry, exhaustive ignored/untracked enumeration immune to self-ignore and
 global/info excludes, and every entry/path/manifest/read bound. Non-goals: persistence,
 leases, cleanup, or engine integration.
 
-#### Package 4 — metadata persistence and cleanup lifecycle
+#### Atomic 13 / Package 4 — metadata persistence and cleanup lifecycle
 
 Prerequisite: Package 3. Named reference: Reference surface 3, state/cleanup
 subset, and Section 6.3. Add `src/coder-state.js`,
 `test/coder-state.test.js`, and focused `test/coder-clean.test.js` cases; export
-`CODER_BRANCH_PREFIX`, `loadCoderState()`, `writeCoderState()`, and
-`cleanOwnedCoderState()`. RED/GREEN:
+`loadOrCreateProjectIdentity()`, `relocateCoderState()`,
+`adoptOrQuarantineCoderState()`, `CODER_BRANCH_PREFIX`, `loadCoderState()`,
+`writeCoderState()`, and `cleanOwnedCoderState()`. RED/GREEN:
 `node --test test/coder-state.test.js test/coder-clean.test.js`. Implement schema
-v1, modes, atomic write, ownership/bounds, reuse, successful cleanup, retained
-dirty/failed state, stale/foreign behavior, and rollback inventory. Non-goals:
-leases or engine envelope integration.
+v1, stable project-ID schema, same-device relocation, cross-device
+adopt/quarantine/reset journal, modes, atomic write, ownership/bounds, reuse,
+successful cleanup, retained dirty/failed state, stale/foreign behavior, and
+rollback inventory. Non-goals: leases or engine envelope integration.
 
-#### Package 4A — fixed kernel locks and coder leases
+#### Atomic 14 / Package 4A — fixed kernel locks and coder leases
 
 Prerequisites: Packages 4 and 2G. Named reference: Section 6.3 lease contract. Add
 `src/coder-lease.js` and `test/coder-lease.test.js`, plus focused
@@ -2358,43 +2592,57 @@ Cover fixed-slot reuse with no lock-inode unlink, 100 generated run/clean cycles
 same-slug cross-engine slot identity, waiter/crash behavior, and fixed bounded
 lock/sidecar/temp inode counts.
 
-#### Package 4B — project-worktree session inventory and admission
+#### Atomic 15 / Package 4B — project-worktree session inventory codec
 
-Prerequisites: Packages 4A and 2D plus Package 0 quota proof. Named references:
-Section 6.3 inventory/admission and Section 6.5 owner-adapter contracts. Add `src/coder-session-inventory.js`
+Prerequisites: Packages 4A and 2D1 plus Package 0 quota proof. Named reference:
+Section 6.3 exact inventory schema. Add `src/coder-session-inventory-codec.js`
 and `test/coder-session-inventory.test.js`; export
-`reserveCoderSession()`, `markCoderSessionRunning()`,
-`reconcileCoderSessionInventory()`, `listCoderSessions()`, and
-`beginCoderSessionDelete()`, plus
-`createCoderSessionProcessOwnerAdapter({context = null,storeAdapter})`, where `context` is
-exactly one full prefix `heldOwnerLockContext`, one `sessionAbsenceContext`, or
-null and `storeAdapter` implements the exact interface below, plus
-`allocateCoderSessionSlug()`.
-RED/GREEN:
-`node --test test/coder-session-inventory.test.js`. Cover maintenance/inventory
-locks and lock order by importing Package 4A wrappers (never reopening their
-paths), exact inventory/temp schemas and
-byte vectors, four-session/512 MiB admission cap, 63 MiB generations plus
-transactional/metadata headroom, `reserved|running|idle|deleting` transitions,
-cross-process sandbox recovery, `TRISS_CODER_SESSION_CAP`, bounded listing
-primitive, OS-enforced whole-store allocation quota with synchronous events,
-path/empty-directory pressure, concurrent full generation updates, and every
-inventory/admission/deleting crash row. Package 4B defines the exact injected
+`decodeCoderSessionInventory()`, `encodeCoderSessionInventory()`,
+`readCoderSessionInventory()`, and `writeCoderSessionInventory()`. RED/GREEN:
+`node --test test/coder-session-inventory.test.js`. Cover only exact
+inventory/temp schemas, byte vectors, bounds, atomic publication, and pure
+validation of `reserved|running|idle|deleting`; no admission, recovery, store
+mutation, or process-owner adapter.
+
+#### Atomic 16 / Package 4B1 — session admission and inventory transitions
+
+Prerequisite: Package 4B. Named reference: Section 6.3 admission/recovery state
+table. Add `src/coder-session-transitions.js` and
+`test/coder-session-transitions.test.js`; export `reserveCoderSession()`,
+`markCoderSessionRunning()`, `reconcileCoderSessionInventory()`,
+`listCoderSessions()`, `beginCoderSessionDelete()`, and
+`allocateCoderSessionSlug()`. Reuse Package 4A lock contexts and Package 4B
+codec. RED/GREEN: `node --test test/coder-session-transitions.test.js`. Cover
+four-session/512 MiB persistent admission, ephemeral-default bypass,
+project-ID relocation states, 63 MiB generation/headroom accounting, inventory
+state transitions, bounded listing, quota events, path pressure, concurrent
+generation reservation, and every admission/deleting crash row. Non-goals:
+process-journal reconciliation or real generation inspection.
+
+#### Atomic 17 / Package 4B2 — session process-owner adapter
+
+Prerequisites: Packages 4B1 and 2D2. Named reference: Section 6.5 owner-adapter
+contract. Add `src/coder-session-owner-adapter.js` and
+`test/coder-session-owner-adapter.test.js`; export
+`createCoderSessionProcessOwnerAdapter({context = null,storeAdapter})`, where
+`context` is exactly one full prefix `heldOwnerLockContext`, one
+`sessionAbsenceContext`, or null. RED/GREEN:
+`node --test test/coder-session-owner-adapter.test.js`. It defines the exact injected
 store-adapter interface: `inspect(ownerRow)` returns only
 `canonical_complete|deleting_complete|absent|invalid`, and
 `transitionDelete(ownerRow, observedPhase)` idempotently advances exactly one
 validated canonical-to-deleting rename or deleting-directory removal and
 returns the same phase union after reread. It may be called only for a matching
-`state=deleting` row inside the owner-lock callback. Package 4B tests its state
+`state=deleting` row inside the owner-lock callback. Package 4B2 tests its state
 machine with a deterministic fake; it neither hashes, parses, renames, nor
 deletes a real generation. `invalid` always retains/fails closed. The adapter imports and uses
-Package 2D promotion/recovery/reconcile APIs and proves published-to-idle,
+Package 2D2 promotion/recovery/reconcile APIs and proves published-to-idle,
 unpublished-removal, deleting cleanup, and `release_pending + released` after a
 new host process. Slug allocation generates 128 random bits, scans
 reservation/state/worktree/branch/both-engine-store collisions without reuse,
 reserves before spawn, and retries exactly eight times; focused tests cover
 every collision source. A rejected cap/collision after process-set allocation
-calls Package 2D cancellation; more than 32 sequential rejected admissions do
+calls Package 2D2 cancellation; more than 32 sequential rejected admissions do
 not consume journal capacity. Cap/collision tests run inside the outer
 lifecycle maintenance scope and use
 `withCoderSessionAdmissionFromMaintenance()` without a maintenance gap or
@@ -2411,24 +2659,25 @@ inventory, releases inventory, then derives target/slot with
 `withCoderSessionOwnerPrefixFromMaintenance()`; it never releases or reacquires
 maintenance in between. Concurrency tests prove the exact
 maintenance->target-if-needed->slot->inventory order for run/finalize/clean and the exclusive-
-maintenance snapshot/revalidate order for backup without deadlock. Non-goals: copying engine HOME,
-generation hashing, CLI, or engine integration.
+maintenance snapshot/revalidate order for backup without deadlock. Non-goals:
+inventory codec/admission, copying engine HOME, generation hashing, CLI, or
+engine integration.
 
-#### Package 4C — bounded per-session generation store
+#### Atomic 18 / Package 4C — bounded per-session generation store
 
-Prerequisite: Package 4B and Package 0 engine allowlist discovery. Named
+Prerequisite: Package 4B2 and Package 0 engine allowlist discovery. Named
 reference: Section 6.3 per-session generation contract. Add
 `src/coder-session-store.js` and `test/coder-session-store.test.js`; export
 `loadCoderSession()`, `stageCoderSessionHome()`, `publishCoderSessionHome()`,
 `cleanCoderSession()`, and `createCoderSessionStoreAdapter()`. RED/GREEN:
-`node --test test/coder-session-store.test.js`. Reuse Package 4B transitions;
+`node --test test/coder-session-store.test.js`. Reuse Package 4B1 transitions;
 cover exact mapping schema, isolated/non-isolated ownership, generation marker/tree-hash vectors,
 allowlisted files, path/file/total bounds, no-follow/special-file rejection,
 credential/token scan, every first/subsequent-publish fsync/rename crash state,
 idempotent store-level round-trip recovery, same/different-slug concurrency,
 legacy-map immunity, mapping/store-to-inventory reconciliation, and exact
 engine-scoped clean filesystem primitive. The real store adapter implements the
-Package 4B phase/transition interface using all mapping/marker/tree-hash/bounds
+Package 4B2 phase/transition interface using all mapping/marker/tree-hash/bounds
 checks plus dir-FD-relative canonical rename and deleting-directory removal, is
 injected into its owner adapter, and integration tests crash after canonical
 rename, deleting delete, inventory-entry removal, and every journal
@@ -2436,10 +2685,13 @@ release/ack/prune point after first/subsequent publication.
 Non-goals: admission/list CLI or real
 engine continuation/envelope integration.
 
-#### Package 4D — rollback backup orchestrator
+#### Atomic 19 / Package 4D — rollback backup orchestrator
 
 Prerequisite: Package 4C. Named reference: Section 15 rollback contract. Add
-`src/coder-state-backup.js`, `scripts/backup-coder-v2-state.mjs`, and
+`src/coder-state-backup.js`; register installed commands
+`triss coder state backup --project <absolute-path>` and
+`triss coder state validate --project <absolute-path> --backup <basename>` in
+`bin/triss.js`; update `package.json` packaging ownership only as needed, and
 reuse Package 4A's maintenance/slot/inventory wrappers without another lock
 implementation. Add
 `test/coder-state-backup.test.js`; export `inventoryCoderV2State()`,
@@ -2454,38 +2706,47 @@ restore validation.
 Inventory deduplicates identical slugs across engines, acquires that kernel
 lease once, and copies/validates both engine stores before release; tests include
 same-slug OpenCode/Crush backup and rollback without self-deadlock.
-The script requires `--project <absolute-path>`, prints only the final backup
-basename and aggregate counts, and exits nonzero without a completion marker on
-any incomplete inventory. Non-goals: invoking Git revert, deleting original v2
-state, or automatic expiry.
+The installed commands print only the final backup basename and aggregate
+counts and exit nonzero without a completion marker on any incomplete
+inventory. `npm pack --dry-run` must list every runtime module they import; a
+tarball-installed smoke invokes both commands outside the source checkout.
+Non-goals: a repository-only `scripts/` entry point, invoking Git revert,
+deleting original v2 state, or automatic expiry.
 
-#### Package 5 — OpenCode envelope integration
+#### Atomic 20 / Package 5 — coder state/workspace orchestration
 
 Prerequisites: Packages 1-4D, including 2A-2G. Named reference: Reference
-surface 3, integration subset. Edit the isolation/result neighborhoods in
-`src/commands/coder.js`, `test/coder-envelope.test.js`, and
-`test/coder-isolate.test.js`, plus namespace/clean routing in
+surface 3, state-orchestration subset. Add `src/coder-run-state.js` and
+`test/coder-run-state.test.js`, plus only namespace/clean routing in
 `src/commands/coder.js` and `test/coder-clean.test.js`; reuse all earlier
 exports. RED/GREEN:
-`node --test test/coder-result.test.js test/coder-envelope.test.js test/coder-isolate.test.js test/coder-clean.test.js`.
-Implement base/pre/post comparisons, bounded lists, truthful `diff_stat`, v2
-fields, v2 worktree/branch/state/session namespace, legacy/v2 clean separation,
-proxy/sandbox/mediator/supervisor/quota/lease lifecycle, and fail-closed
-cleanup. Mixed-version fixtures prove legacy run/clean cannot see v2 and vice
-versa. Empty-worktree/branch cleanup retains both named and generated session
-stores; only Package 7's explicit engine-scoped action removes them. A real
-fake-provider two-run OpenCode fixture uses a fresh task HOME on
-run two and proves the v2 generation resumes. Non-goal: Crush, CLI option, or
-MCP integration.
+`node --test test/coder-run-state.test.js test/coder-clean.test.js`.
+Compose project identity, ephemeral-default versus explicit/kept persistent
+admission, workspace/session binding, snapshots, v2 namespace, legacy/v2 clean
+separation, and recoverable finalization as a pure dependency-injected state
+machine. It does not spawn an engine, construct an envelope, or edit event
+folding. Mixed-version, relocation, ephemeral cleanup/TTL, retained persistent
+workspace, and workspace-mismatch fixtures are deterministic fakes.
 
-Package 5 consumes Package 4B's `allocateCoderSessionSlug()` and includes
-`session_slug` in every safe envelope after allocation, including failures.
-Package 11 only repeats allocation as acceptance; it is not the first
-implementation point.
+#### Atomic 21 / Package 5A — OpenCode run and envelope orchestration
 
-#### Package 6 — Crush parity
+Prerequisite: Package 5. Named reference: Reference surface 3, OpenCode
+integration subset. Edit only the isolation/result neighborhoods in
+`src/commands/coder.js`, `test/coder-envelope.test.js`, and
+`test/coder-isolate.test.js`; reuse `src/coder-run-state.js` and every earlier
+boundary. RED/GREEN:
+`node --test test/coder-result.test.js test/coder-envelope.test.js test/coder-isolate.test.js`.
+Implement bounded envelope fields and one OpenCode orchestration path across
+proxy, sandbox, toolchain mediator, Git mediator, process set, quota, locks, and
+state machine. A real fake-provider explicit-session two-run fixture proves
+workspace-bound generation resume; default unnamed fixtures prove auto-clean
+and zero persistent inventory. Include `session_slug` in every safe envelope
+after allocation. Non-goals: Crush, CLI option parsing, session list/clean CLI,
+or MCP integration. Package 11 only repeats this as acceptance.
 
-Prerequisite: Package 5. Named reference: Reference surface 4. Edit only Crush
+#### Atomic 22 / Package 6 — Crush parity
+
+Prerequisite: Package 5A. Named reference: Reference surface 4. Edit only Crush
 result/spawn integration in `src/commands/coder.js`, optionally the pure
 normalizer in `src/coder-engines/crush.js`, plus `test/coder-crush.test.js` and
 shared isolation assertions. RED/GREEN:
@@ -2499,55 +2760,67 @@ session restore through Crush. Add the corresponding real
 fake-provider two-run Crush continuation fixture with fresh task HOME.
 Non-goal: OpenCode-only refactor.
 
-#### Package 7 — CLI expectation adapter
+#### Atomic 23 / Package 7 — CLI expectation adapter
 
 Prerequisite: Package 6. Named reference: Reference surface 5. Edit
-`bin/triss.js`, preflight and the new `runCoderSessionList()` and
-`runCoderSessionClean()` exports in
+`bin/triss.js`, preflight and the new `runCoderSessionList()`,
+`runCoderSessionClean()`, `runCoderStateAdopt()`, and `runCoderStateReset()` exports in
 `src/commands/coder.js`, add `test/coder-expect.test.js` and
-`test/coder-session-cli.test.js`, and conditionally edit exec-router files confirmed
-by Package 0. Reuse `resolveExpectation()`. RED/GREEN:
+`test/coder-session-cli.test.js`, and edit the v0.34.0 exec-router files. Reuse
+`resolveExpectation()` and Package 4D installed
+backup/validate exports. RED/GREEN:
 `node --test test/coder-expect.test.js test/coder-session-cli.test.js test/coder-envelope.test.js` plus the
-conditional exec tests. Implement option validation, preflight, exit codes, and
+mandatory exec tests. Implement option validation, preflight, exit codes, and
 help together with the v2 session CLI contract: `--session <slug>` uses only the
-per-engine v2 store, bare `--continue` is rejected with migration guidance, and
+per-engine v2 store, `--keep-session` explicitly persists an otherwise
+generated session, omitted session defaults to ephemeral auto-clean, bare
+`--continue` is rejected with migration guidance, and
 `triss coder session list` calls only `runCoderSessionList()`, whose subprocess
-contract serializes the bounded Package 4B inventory projection to stdout,
+contract serializes the bounded Package 4B1 inventory projection to stdout,
 writes typed diagnostics to stderr, exits `0` only for a complete canonical
 projection, and emits no partial JSON on error;
 `triss coder session clean <slug> --engine <opencode|crush>` requires the engine
-flag, validates engine/root/mode ownership and the inactive assigned slot lease, and
+flag, validates engine/root/workspace ownership and the inactive assigned slot lease, and
 calls only `runCoderSessionClean()` before removing the selected inactive
-isolated or non-isolated session store.
+isolated session/workspace transaction. The same CLI owns `triss coder state
+backup|validate|adopt|reset` exact option routing; adopt/reset require explicit
+project IDs/actions and never delete quarantine data.
 Subprocess tests create the same slug for both engines and prove only the
 selected engine is removed. Tests also prove the
 legacy shared map and direct real engine IDs cannot select or clean a v2
 session, and cover help/completion text, missing/corrupt mappings, mode
-mismatch, bounded/redacted list output, cap errors, failed-envelope slug
-recovery, and explicit cleanup. Non-goal: MCP.
+mismatch, bounded/redacted list output, persistent cap errors, 100 ephemeral
+default runs without inventory growth, `--keep-session`, workspace mismatch,
+relocation/adopt/reset, packed-artifact backup/validation, and explicit cleanup.
+Non-goal: MCP.
 
-#### Package 8 — MCP expectation adapter
+#### Atomic 24 / Package 8 — MCP expectation adapter
 
 Prerequisite: Package 7. Named reference: Reference surface 6. Edit
 `src/mcp/tools.js`, `src/mcp/handlers.js`, and focused MCP coder/server tests;
 reuse `resolveExpectation()` and result serializers. RED/GREEN:
 `node --test test/mcp-coder.test.js test/mcp-tools.test.js test/mcp-server-cancellation.test.js`.
 Implement schema, handler mapping, safe output, and cancellation. Non-goal: CLI
-parsing. MCP tests require top-level `session_slug` for explicit and generated
-sessions and prove the generated slug is the continuation/cleanup key rather
-than the engine `session_id`.
+parsing. MCP tests require top-level `session_slug` for explicit, ephemeral, and
+kept-generated runs; only explicit/kept slugs are continuation/cleanup keys,
+while an ordinary generated slug is correlation/recovery evidence and never an
+implicit persistent conversation.
 
-#### Package 9 — pure provider classifier and fallback policy
+#### Atomic 25 / Package 9 — pure provider classifier and fallback policy
 
 Prerequisite: Package 8. Named reference: Reference surface 7,
 classifier/fallback subset. Add `src/provider-errors.js` and
 `test/provider-errors.test.js`; edit `src/client.js` and focused fallback/
-timeout tests; export `classifyProviderError()` and `serializeProviderError()`.
+timeout tests; export `classifyProviderError()`, `isGlmRouteMismatch()`, and
+`serializeProviderError()`.
 RED/GREEN is the subset command in Reference surface 7. Include
-policy/auth/rate/timeout precedence and endpoint-hop prohibitions. Do not change
+the exact structured route-code grammar, conflicting-field rejection,
+policy/auth/rate/timeout precedence, one-request no-hop cases, and the exact
+two-request recognized-mismatch case. Existing status-only 401/403/429 fixtures
+must become one-request auth/rate results rather than discovery. Do not change
 CLI or MCP transport projection.
 
-#### Package 10 — provider transport and empty response projection
+#### Atomic 26 / Package 10 — provider transport and empty response projection
 
 Prerequisite: Package 9. Named references: Reference surface 7 transport subset
 and Reference surface 8. Edit `bin/triss.js`, `src/mcp/server.js`,
@@ -2556,7 +2829,7 @@ focused transport tests. Reuse Package 9 serializers. RED/GREEN: both subset
 commands in References 7-8. Implement CLI/MCP projection and empty/whitespace
 failure. Non-goal: changing classification/fallback rules.
 
-#### Package 10A — bounded blocker diagnostics
+#### Atomic 27 / Package 10A — bounded blocker diagnostics
 
 Prerequisite: Package 10. Named reference: Reference surface 13. Edit
 `src/coder-result.js`, `src/commands/coder.js` projection only,
@@ -2567,7 +2840,7 @@ cap/deduplicate public diagnostics and prove that raw commands, payloads,
 secrets, and paths cannot enter the envelope. Do not probe servers or delete
 locks.
 
-#### Package 11 — Release A synthetic acceptance harness
+#### Atomic 28 / Package 11 — Release A synthetic acceptance harness
 
 Prerequisites: Packages 1-10A, including 2A-2G and 4A-4D. Named reference: Reference surface 17, Release A
 subset. Add `scripts/live-smoke-reliable-delegation.mjs` and
@@ -2580,24 +2853,34 @@ change/read-only expectations, fingerprint and metadata bounds, cleanup and
 delayed-write absence, concurrent run/run and run/clean leases, sandbox escape
 denial, credential-proxy revocation, provider errors, no raw-secret leakage, and
 no proxy-token leakage in public CLI/MCP output. It also runs real two-run
-OpenCode and Crush continuation with fresh task HOME, same-slug/different-engine
+OpenCode and Crush persistent continuation with fresh task HOME and exact
+workspace snapshot binding, same-slug/different-engine
 isolation, mandatory `session clean --engine`, bare-continue rejection,
-legacy-map immunity, mixed-mode ownership, and rollback backup/re-upgrade
-validation. It also covers generated-slug collision retry/retention,
-`session_slug` in CLI/MCP output, missing-versus-malformed mapping, and non-Git
-preflight rejection. Admission acceptance creates sessions 1-4, proves the
-fifth fails before spawn with `TRISS_CODER_SESSION_CAP`, lists four bounded
-rows, cleans one exact engine/slug, and proves capacity is reclaimed. It uses a local fake provider and requires no credentials. Non-goal: review acquisition
+legacy-map immunity, workspace deletion/source-movement rejection, stable-ID
+same-filesystem relocation, cross-filesystem quarantine/adopt, and packed-CLI
+rollback backup/re-upgrade validation. It also covers generated-slug collision,
+100 ephemeral default runs with no persistent inventory/HOME, `--keep-session`,
+bounded crash TTL recovery, `session_slug` in CLI/MCP output,
+missing-versus-malformed mapping, and non-Git preflight rejection. Persistent
+admission acceptance creates sessions 1-4, proves the fifth fails before spawn
+with `TRISS_CODER_SESSION_CAP`, lists four bounded rows, cleans one exact
+engine/slug/workspace, and proves capacity is reclaimed. It uses a local fake
+provider and requires no credentials. Non-goal: review acquisition
 or sharding cases.
 
 Release A cannot advance until this passes:
 
 ```bash
 node scripts/live-smoke-reliable-delegation.mjs --synthetic --release A
-node --test test/coder-result.test.js test/coder-credential-proxy.test.js test/coder-sandbox.test.js test/coder-git-mediator.test.js test/fixed-kernel-lock.test.js test/coder-process-supervisor.test.js test/coder-write-quota.test.js test/managed-root.test.js test/worktree-fingerprint.test.js test/coder-state.test.js test/coder-lease.test.js test/coder-session-inventory.test.js test/coder-session-store.test.js test/coder-state-backup.test.js test/coder-session-cli.test.js test/coder-clean.test.js
+node --test test/coder-result.test.js test/coder-credential-proxy.test.js test/coder-sandbox.test.js test/coder-git-mediator.test.js test/fixed-kernel-lock.test.js test/coder-process-supervisor.test.js test/owned-process-journal.test.js test/owned-process-reconcile.test.js test/coder-write-quota.test.js test/managed-root.test.js test/worktree-fingerprint.test.js test/coder-state.test.js test/coder-lease.test.js test/coder-session-inventory.test.js test/coder-session-transitions.test.js test/coder-session-owner-adapter.test.js test/coder-session-store.test.js test/coder-state-backup.test.js test/coder-session-cli.test.js test/coder-clean.test.js
+npm pack --dry-run
+# create a real tarball, install it into an owned temporary prefix, then invoke:
+triss coder state backup --project "$FIXTURE_PROJECT"
+triss coder state validate --project "$FIXTURE_PROJECT" --backup "$BACKUP_BASENAME"
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 ```
 
 For Packages 12, 22, and 27, "exact-head gate" has one host-only meaning. After
@@ -2609,14 +2892,14 @@ SHA and the tree is still clean. A dirty/uncommitted tree, changed HEAD, or
 failed command means there is no exact-head evidence. The checkpoint is not
 pushed or published by this plan.
 
-#### Package 12 — Release A docs and exact-head gate
+#### Atomic 29 / Package 12 — Release A docs and exact-head gate
 
 Perform Reference surface 14 only after Package 11 passes. Document local
 metadata schema v1 and rollback behavior as well as the envelope. Record exact
 candidate SHA through the host-only checkpoint procedure and rerun the Release
 A synthetic command on that SHA.
 
-#### Package 13 — review limit configuration
+#### Atomic 30 / Package 13 — review limit configuration
 
 Prerequisite: Package 12. Named reference: Reference surface 9, limit-config
 subset only. Edit `src/config.js` and add `test/config.test.js` if it remains
@@ -2626,7 +2909,7 @@ all cases use prefix `REVIEW-LIMIT-`, confirmed in TAP output. Implement
 only the four reloadable environment values, atomic validation, and
 defaults/hard maxima. Non-goals: diff parsing and CLI options.
 
-#### Package 14 — pure diff parser and coverage model
+#### Atomic 31 / Package 14 — pure diff parser and coverage model
 
 Prerequisite: Package 13. Named reference: Reference surface 9, parser/coverage
 subset only. Add `src/review-payload.js` and `test/review-payload.test.js`;
@@ -2637,7 +2920,7 @@ splitting, quoted-path decoding, exact byte accounting, three scope modes,
 repository/requested coverage, safe display paths, and single-request planning.
 Non-goals: subprocesses, environment reads, sharding execution, or adapters.
 
-#### Package 15 — comparison identity and bounded rename inventory
+#### Atomic 32 / Package 15 — comparison identity and bounded rename inventory
 
 Prerequisite: Package 14. Named reference: Reference surface 10, local Git
 identity/inventory bullets only. Add `src/review-git.js` and
@@ -2651,10 +2934,14 @@ despite ignore-submodule settings, inventory/path bounds, and rename-pair
 expansion. Cover no-renames pre-inventory, 2,000/2,001 rename candidates,
 30-second/absolute deadlines, cancellation, cap-plus-one incremental kill/wait,
 no partial output, disabled replacement objects, graft rejection, and complete/
-incomplete shallow repositories.
+empty shallow metadata acceptance plus rejection of every nonempty shallow
+repository, including the all-objects-present graph whose apparent unique merge
+base is wrong. Build and use the sealed empty-attribute projection for every
+command; global, info, dirty-worktree, and committed attribute canaries must
+produce byte-identical inventory/content framing or fail before provider access.
 Non-goals: content diff, PR/network acquisition, CLI, or MCP.
 
-#### Package 16 — selected local content acquisition
+#### Atomic 33 / Package 16 — selected local content acquisition
 
 Prerequisite: Package 15. Named reference: Reference surface 10, selected local
 content bullets. Edit `src/review-git.js` and `test/review-git.test.js`; export
@@ -2666,9 +2953,11 @@ and new-only rename selection retaining both sides, unmatched selectors, a huge
 full change with a small selected file, and requested-scope success with partial
 repository coverage. Non-goals: PR/network acquisition or CLI/MCP printing.
 Selected-content tests also prove the same deadline/cap/cancellation subtree
-cleanup and no-partial contract.
+cleanup and no-partial contract. Repeat the global/info/dirty/committed
+`.gitattributes` canaries, including `*.txt -diff`, and require byte-identical
+text hunks from the sealed empty-attribute projection.
 
-#### Package 17 — pure PR identity parser
+#### Atomic 34 / Package 17 — pure PR identity parser
 
 Prerequisite: Package 16. Named reference: Reference surface 10, PR acquisition
 identity bullets. Add `src/review-pr-identity.js` and
@@ -2679,9 +2968,9 @@ configured-origin matching, `--base` rejection, and pure exact bounded metadata
 schema/fork/base/head equality. Non-goals: subprocesses, `gh`, directories, Git
 fetch/diff, or CLI/MCP formatting.
 
-#### Package 17A — disposable PR ownership registry
+#### Atomic 35 / Package 17A — disposable PR ownership registry
 
-Prerequisites: Packages 17, 2D, 2E, 2F, and 2G. Named reference: Section 9.4
+Prerequisites: Packages 17, 2D2, 2E, 2F, and 2G. Named reference: Section 9.4
 marker/registry contract.
 Add `src/review-pr-registry.js` and `test/review-pr-registry.test.js`; export
 `createPrRunDirectory()`, `publishPrRunState()`, `recoverPrRunDirectories()`,
@@ -2691,23 +2980,23 @@ registry, basename, discriminated-state, temp, byte-vector, scan-bound, and
 ownership rules plus every fsync/rename/delete crash point and idempotent
 recovery. Export
 `createPrProcessOwnerAdapter({heldOwnerLockContext = null})` with the exact
-Package 2D interface; a borrowed context is the active `.registry.lock` scope
+Package 2D2 interface; a borrowed context is the active `.registry.lock` scope
 and a null context acquires it for fresh recovery. Import Package 2G's
 `withFixedKernelLock()` for `.registry.lock`;
 never create, replace, unlink, or independently open a lock inode. Package 17A
 also owns the registry-locked three-entry admission,
 `TRISS_REVIEW_FETCH_CAP`, 512 MiB whole-root quota/headroom check and release/
-crash reclamation. It uses Package 2D to allocate the durable `reserving`
+crash reclamation. It uses Packages 2D/2D1/2D2 to allocate the durable `reserving`
 process set before marker/registry publication, promote it before child spawn,
 and attach/recover/begin-release/acknowledge the exact set during every normal
 and crash cleanup; focused tests kill the creator before/after reference
 publication and during a descendant, then prove recovery waits for verified
 emptiness. It reuses Package 2E quota primitives but performs no fetch.
-Rejected fourth-run/cap admission invokes Package 2D reservation cancellation;
+Rejected fourth-run/cap admission invokes Package 2D2 reservation cancellation;
 focused tests repeat it beyond the shared journal cap without leakage.
 Non-goals: network, Git commands, per-run pack enforcement, or PR metadata lookup.
 
-#### Package 17B — bounded PR metadata acquisition
+#### Atomic 36 / Package 17B — bounded PR metadata acquisition
 
 Prerequisites: Package 17A plus generic Packages 2D/2F. Named reference: Section
 9.4 `gh` metadata contract. Add `src/review-pr-metadata.js` and
@@ -2718,7 +3007,7 @@ deadlines, cap-plus-one collection, cancellation, no-partial JSON, pure Package
 17 validation, and parent-death kill. Non-goals: registry implementation, Git
 fetch/diff, provider calls, or transport output.
 
-#### Package 17C — bounded disposable PR fetch
+#### Atomic 37 / Package 17C — bounded disposable PR fetch
 
 Prerequisites: Package 17B plus generic Packages 2D/2E/2F. Named reference:
 Section 9.4 bare-repository/resource contract. Add `src/review-pr-fetch.js` and
@@ -2731,7 +3020,7 @@ A parent-`SIGKILL` during fetch test proves registry recovery waits before
 deletion. Non-goals: registry/metadata implementation, diff parsing, provider
 calls, or transport output.
 
-#### Package 17D — PR acquisition composition
+#### Atomic 38 / Package 17D — PR acquisition composition
 
 Prerequisite: Package 17C. Named reference: Sections 9.4/11 and Reference
 surface 10 PR integration bullets. Add `src/review-pr.js` and
@@ -2742,7 +3031,7 @@ inventory-first literal selection, selected content, coverage, cancellation,
 and `finally` cleanup. Non-goals: reimplementing identity/registry/fetch helpers
 or CLI/MCP formatting.
 
-#### Package 18 — bounded stdin and issue trust boundary
+#### Atomic 39 / Package 18 — bounded stdin and issue trust boundary
 
 Prerequisites: Packages 14 and 17D. Named reference: Reference surface 10, stdin
 and issue bullets. Add `src/review-input.js` and `test/review-input.test.js`;
@@ -2761,7 +3050,7 @@ Do not duplicate HTTP/auth in `review-input.js` and do not change default broad
 tracker-command behavior outside the new review-specific methods.
 Non-goals: sharding or transport output.
 
-#### Package 19 — shared single-review executor and CLI framing
+#### Atomic 40 / Package 19 — shared single-review executor and CLI framing
 
 Prerequisites: Packages 13-18. Named reference: Reference surface 10, single
 executor/CLI bullets. Add `src/review-executor.js`; edit `bin/triss.js`,
@@ -2771,10 +3060,10 @@ executor/CLI bullets. Add `src/review-executor.js`; edit `bin/triss.js`,
 `node --test test/review.test.js test/review-stdin.test.js`. Build one buffered
 single executor, then wire CLI mode,
 literal file/issue options, streaming rejection, stable errors, scoped verdict
-framing, the transport matrix, and conditional exec-router forwarding.
+framing, the transport matrix, and mandatory v0.34.0 exec-router forwarding.
 Non-goal: MCP or shard mode.
 
-#### Package 20 — MCP single-review parity
+#### Atomic 41 / Package 20 — MCP single-review parity
 
 Prerequisite: Package 19. Named reference: Reference surface 11. Edit
 `src/mcp/review-core.js`, `src/mcp/handlers.js`, `src/mcp/tools.js`, and focused
@@ -2785,7 +3074,7 @@ Wire the shared executor with project-root enforcement, cancellation, structured
 coverage, and safe error projection. Non-goals: duplicate payload assembly, CLI
 printing imports, or shard mode.
 
-#### Package 21 — Release B synthetic acceptance extension
+#### Atomic 42 / Package 21 — Release B synthetic acceptance extension
 
 Prerequisites: Packages 13-20. Named reference: Reference surface 17, Release B
 subset. Edit `scripts/live-smoke-reliable-delegation.mjs` and
@@ -2807,17 +3096,18 @@ node scripts/live-smoke-reliable-delegation.mjs --synthetic --release B
 node --test test/review-payload.test.js test/review.test.js test/review-stdin.test.js test/mcp-handlers.test.js
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 ```
 
-#### Package 22 — Release B docs and exact-head gate
+#### Atomic 43 / Package 22 — Release B docs and exact-head gate
 
 Perform Reference surface 15 only after Package 21 passes. Document comparison
 identity, both coverage axes, scoped success, inventory bounds, and safe Git
 environment. Use the host-only checkpoint procedure and retest the exact
 Release B candidate SHA.
 
-#### Package 23 — sequential shard executor
+#### Atomic 44 / Package 23 — sequential shard executor
 
 Prerequisite: Package 22. Named reference: Reference surface 12, executor
 bullets. Edit `src/review-payload.js`, `src/review-executor.js`, and
@@ -2829,11 +3119,11 @@ pure planner/executor with source-ordered whole-file shards,
 precomputed total limits, fresh boundaries, cancellation, first-failure stop,
 attempt/usage facts, and no aggregation call. Non-goal: transport adapters.
 
-#### Package 24 — CLI shard adapter and framing
+#### Atomic 45 / Package 24 — CLI shard adapter and framing
 
 Prerequisite: Package 23. Named reference: Reference surface 12, CLI bullets.
 Edit `bin/triss.js`, `src/commands/review.js`, `test/review.test.js`, and
-`test/review-stdin.test.js`; when Package 0 confirms the exec router, also edit
+`test/review-stdin.test.js`; also edit the v0.34.0 exec router
 `src/commands/exec.js`, `test/exec.test.js`, and
 `test/response-format.test.js`. Export/reuse `renderCliReviewResult()`.
 RED/GREEN:
@@ -2844,7 +3134,7 @@ coverage/context fields, `unavailable_for_sharded` global verdict, output caps,
 and exact exit codes. Prove no global clean verdict is printed. Non-goal: MCP.
 Reject `evidence + shard` in the conditional CLI router here.
 
-#### Package 25 — MCP shard adapter
+#### Atomic 46 / Package 25 — MCP shard adapter
 
 Prerequisite: Package 24. Named reference: Reference surface 12, MCP bullets.
 Edit `src/mcp/review-core.js`, `src/mcp/handlers.js`, `src/mcp/tools.js`, and
@@ -2855,7 +3145,7 @@ Add MCP shard mode with cancellation parity, structured partial errors, no
 completed prose/raw diff in errors, usage accounting, and schema tests.
 Non-goal: CLI or exec-router changes.
 
-#### Package 26 — Release C synthetic and live acceptance extension
+#### Atomic 47 / Package 26 — Release C synthetic and live acceptance extension
 
 Prerequisites: Packages 23-25. Named reference: Reference surface 17, Release C
 subset. Edit `scripts/live-smoke-reliable-delegation.mjs` and
@@ -2877,7 +3167,8 @@ passes:
 node scripts/live-smoke-reliable-delegation.mjs --synthetic --release C
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 ```
 
 Then run `node scripts/live-smoke-reliable-delegation.mjs --live --release C`.
@@ -2886,13 +3177,35 @@ Exit `0` means every live case passed, `10` means
 executed assertion failed. Codes 10/11 allow documentation/PR preparation but
 set publication readiness to `BLOCKED_EXTERNAL`; only exit 0 is live PASS.
 
-#### Package 27 — Release C docs and exact-head gate
+#### Atomic 48 / Package 27 — Release C docs and exact-head gate
 
 Perform Reference surface 16 after Package 26. Document that completed
 sharded execution is not a global review, no cross-shard analysis exists, and
 no global approval is available. Use the host-only checkpoint procedure, rerun
 synthetic C, and report the live result without treating credential/environment
 blocks as a pass.
+
+### 12.1.1 PR body and structural refresh gate
+
+Before pushing any revision of this plan, the host reruns the Atomic-ID checker
+above and updates the PR body from live facts. The body must say exactly:
+
+- base `v0.34.0`, pinned SHA
+  `2e3db71ddc32c349d918ae32609a03c0775a87c0` for this revision;
+- **49 atomic packages**, normative sequence `Atomic 00..48`;
+- Atomic 00 is a separate feasibility/architecture-spike PR and the plan is not
+  implementation-ready until that spike merges, its measured backend/ABI/
+  standalone results are incorporated, and the resulting plan blob receives
+  follow-up architecture approval;
+- Releases A/B/C are Atomic `01..29`, `30..43`, and `44..48` respectively;
+- the branch was rebased and every future movement of `origin/main` is a stop,
+  not a silently accepted baseline update.
+
+The body must remove every `18 packages`, `0-17`, `implementation-ready`, stale
+feature-branch, or v0.32.0 claim. The host verifies the rendered body with
+`gh pr view 39 --json body,headRefOid,baseRefName,isDraft` after update; changing
+the body is publication and occurs only under the user's existing explicit PR
+authorization.
 
 ### 12.2 Detailed reference surfaces
 
@@ -2904,9 +3217,13 @@ Actions:
 
 1. Run `git fetch --prune`.
 2. Confirm `origin/main`, current worktree SHA, and dirty state.
-3. Fetch and record the live head and merge status of
-   `feature/codex-workflow-improvements`; compare its `src/commands/exec.js`,
-   response-format helper, CLI/MCP surfaces, and tests against the plan.
+3. Record the concrete v0.34.0 merge matrix: `src/commands/exec.js` plus
+   `test/exec.test.js` own route validation/forwarding;
+   `src/response-format.js`, `src/review-prompt.js`, CLI/MCP handlers and
+   `test/response-format.test.js` own `text|evidence`; `.github/workflows/test.yml`,
+   `.github/workflows/publish.yml`, `scripts/build-standalone.js`, and
+   `test/release-gates.test.js` own one canonical standalone artifact built on
+   Ubuntu and smoke-tested from identical downloaded bytes on Ubuntu/macOS.
 4. Before creating the implementation worktree, the host supplies two reviewed
    immutable values: `APPROVED_PLAN_COMMIT` and `APPROVED_PLAN_BLOB`. The former
    is the final follow-up-approved revision of this document, never an
@@ -2920,18 +3237,23 @@ Actions:
    byte-identical approved plan document (not code from the plan branch). If the
    blob is not already present, the host reviews and creates a local plan-only
    checkpoint commit. Require a clean tree, capture `IMPLEMENTATION_START_SHA`,
-   and prove `ORIGIN_MAIN_SHA` is its ancestor. Record all four SHAs/OIDs in the
-   handoff. Fail before Package 1 on mismatch. Never start implementation
+   and prove the complete `ORIGIN_MAIN_SHA -> IMPLEMENTATION_START_SHA` tree
+   delta is either empty (approved plan already in main) or exactly one `M|A`
+   entry for `docs/reliable-delegation-contract-plan.md`; any other path or
+   second commit-tree change fails even when main is an ancestor. Record all
+   four SHAs/OIDs and the NUL-safe name-status evidence in the handoff. Fail
+   before Package 1 on mismatch. Never start implementation
    directly from an older approved-plan commit and never omit the approved plan
    blob.
 5. Ensure dependencies match `package-lock.json`. In a clean isolated worktree,
    run `npm ci` when `node_modules` is absent; do not reuse or copy a dependency
    tree from an unrelated checkout.
-6. Write a merge matrix in the package handoff: option registration/forwarding
+6. Write the concrete merge matrix in the package handoff: option registration/forwarding
    for `expect`, `files`, and `payloadMode`; `evidence + shard` rejection;
-   response-format ownership; and exact tests. If the feature branch merged,
-   later packages must include `src/commands/exec.js`, `test/exec.test.js`, and
-   `test/response-format.test.js` where named by this plan.
+   response-format ownership; standalone build/package ownership; and exact
+   tests. Later packages must include `src/commands/exec.js`,
+   `test/exec.test.js`, and `test/response-format.test.js` where named by this
+   plan; these scopes are mandatory, not conditional on a historical branch.
 7. In disposable fixtures, prove that the current OpenCode and Crush versions
    can route provider traffic through a loopback base URL without receiving the
    provider key, and identify the supported OS sandbox adapter that confines the
@@ -2959,6 +3281,20 @@ Actions:
    `package.json`/lockfile/native-source/build files. If no reviewed backend
    satisfies the tests, stop before Package 2F; a weak model may not invent one
    or substitute path-based `fs` calls.
+   Package 0 is an architecture spike because this repository is currently a
+   pure Node package. Its PR records backend name/version/checksum, source and
+   license, native ABI, Node 22 loading contract, build toolchain, privileges,
+   install/uninstall behavior, supported OS/architecture/filesystem matrix, and
+   exact dependency/lockfile/native-source ownership. It must build the same
+   canonical standalone artifact through the current Ubuntu build job and
+   execute the identical artifact bytes on Ubuntu and macOS. A repository-built
+   helper must contain all per-target binaries or a reviewed runtime selection
+   scheme inside the signed artifact; a host-built/downloaded-at-runtime helper
+   is forbidden. Failure on either smoke target stops the design. Merge the
+   spike PR, pin its resulting commit, revise this document with those measured
+   decisions, and obtain follow-up architecture approval before Package 1.
+   Also produce the exact Section 6.5 toolchain manifest for each supported
+   engine/OS tuple and run the real in-sandbox Node test/lint and denial canaries.
    Also prove the independent 512 MiB allocation-block quota over the complete
    `.triss/engine-sessions-v2` store under metadata/path pressure and concurrent
    generation publication. Prove the independent aggregate 512 MiB
@@ -2980,11 +3316,21 @@ git rev-parse --verify --end-of-options "${APPROVED_PLAN_COMMIT}^{commit}"
 test "$(git rev-parse --verify --end-of-options "${APPROVED_PLAN_COMMIT}:docs/reliable-delegation-contract-plan.md")" = "${APPROVED_PLAN_BLOB}"
 test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
 git merge-base --is-ancestor "${ORIGIN_MAIN_SHA}" "${IMPLEMENTATION_START_SHA}"
+git diff --name-status -z "${ORIGIN_MAIN_SHA}" "${IMPLEMENTATION_START_SHA}"
 test "$(git rev-parse "${IMPLEMENTATION_START_SHA}:docs/reliable-delegation-contract-plan.md")" = "${APPROVED_PLAN_BLOB}"
 test -z "$(git status --porcelain)"
 node --test test/coder-envelope.test.js test/coder-isolate.test.js test/coder-crush.test.js
 node --test test/review.test.js test/review-stdin.test.js test/mcp-handlers.test.js
+node --test test/exec.test.js test/response-format.test.js test/release-gates.test.js
 ```
+
+The host parses the NUL-delimited name-status result; shell command
+substitution is illustrative only and may not be used for the proof. Before
+every package and release gate, fetch and require
+`git rev-parse origin/main == ORIGIN_MAIN_SHA`. Movement is a hard stop: rebase,
+repeat Package 0 baseline/spike applicability checks, regenerate the plan blob,
+and obtain new approval. Every diff/lint/documentation gate compares against
+the pinned `ORIGIN_MAIN_SHA`, never the moving remote-tracking ref.
 
 Stop if tracked user changes overlap the target files. Do not reset or clean.
 
@@ -3238,8 +3584,7 @@ npm run lint
 git diff --check
 ```
 
-When Package 0 says the exec router is present, also run
-`node --test test/exec.test.js test/response-format.test.js`.
+Always run `node --test test/exec.test.js test/response-format.test.js`.
 
 ### Reference surface 6 — MCP expectation input and output documentation
 
@@ -3357,8 +3702,8 @@ Expected files:
 - `src/mcp/handlers.js`;
 - focused existing tests for those commands.
 
-If `feature/codex-workflow-improvements` merged, re-read its response-format
-helper first and integrate there rather than duplicating output logic.
+Reuse the v0.34.0 `src/response-format.js` helper and
+`test/response-format.test.js`; do not duplicate output logic.
 
 RED tests:
 
@@ -3457,7 +3802,7 @@ Package-owned file split is authoritative:
 | 18 | `src/review-input.js`, `test/review-input.test.js`, `src/integrations/_contract.js`, `src/integrations/jira/client.js`, `src/integrations/linear/client.js`, `test/contract-http.test.js`, `test/jira-client.test.js`, `test/linear-client.test.js` | bounded primitives from `src/secrets.js` |
 | 19 | `src/review-executor.js`, `bin/triss.js`, `src/commands/review.js`, `test/review.test.js`, `test/review-stdin.test.js` | Packages 13-18 modules |
 
-When Package 0 confirms the exec router, Package 19 also edits
+Package 19 also edits
 `src/commands/exec.js`, `test/exec.test.js`, and
 `test/response-format.test.js` for single-mode forwarding. Package 24 owns the
 later shard/evidence incompatibility in those same router files. No package may
@@ -3525,8 +3870,7 @@ npm run lint
 git diff --check
 ```
 
-When Package 0 says the exec router is present, also run
-`node --test test/exec.test.js test/response-format.test.js`.
+Always run `node --test test/exec.test.js test/response-format.test.js`.
 
 ### Reference surface 11 — MCP review preflight parity
 
@@ -3587,9 +3931,9 @@ RED tests:
   per-shard/total byte limits, and includes repeated metadata in totals;
 - calls shards sequentially in source order;
 - every shard uses a fresh unpredictable review boundary ID;
-- completed run reports all shards/files and `execution_status: completed` but
-  always reports `global_verdict: unavailable_for_sharded` and
-  `cross_shard_analysis: unavailable`;
+- completed run reports all shards/files and `execution_status: completed`, an
+  ordered bounded `shard_outputs` array, and
+  `cross_shard_analysis: unavailable`; no `global_verdict` field exists;
 - successful shards with unknown or partial repository coverage preserve that
   coverage without converting completed delivery into a global review verdict;
 - second-shard provider failure stops before the third shard;
@@ -3612,7 +3956,7 @@ RED tests:
   that supplied it, and failed calls report `usage_status: missing` without
   fabricated tokens;
 - max shard count blocks before the first provider request.
-- when Package 0 confirms the exec router, CLI Package 24 rejects
+- CLI Package 24 rejects
   `evidence + shard` before provider access and its conditional GREEN includes
   `node --test --test-name-pattern='shard|evidence' test/exec.test.js test/response-format.test.js`,
   with at least one matching TAP case required.
@@ -3683,11 +4027,16 @@ context-window claims. Document the v2 per-engine/per-slug session namespace,
 the required slug grammar, rejection of bare `--continue`, absence of automatic
 legacy-map migration, different isolation-mode ownership, and explicit
 `triss coder session clean <slug> --engine <opencode|crush>` for inactive
-sessions. Document generated 128-bit slugs, top-level `session_slug`, explicit
-retention/cleanup, missing-versus-malformed mapping behavior, and the new Git-
-root requirement for non-isolated mode. Document the four-session/512 MiB cap,
-`TRISS_CODER_SESSION_CAP`, bounded `session list`, and list/continue/clean slot-
-reclamation workflow. State
+sessions. Document generated 128-bit slugs and top-level `session_slug`, but
+make omitted-session runs ephemeral with automatic successful cleanup and no
+conversation retention. Document explicit `--session` persistence,
+`--keep-session`, workspace/OID/snapshot binding and mismatch rejection,
+bounded crash TTL recovery, stable project identity, rename versus
+cross-filesystem adopt/quarantine/reset, and missing-versus-malformed mapping.
+Document the four-session/512 MiB cap as persistent-session-only,
+`TRISS_CODER_SESSION_CAP`, bounded `session list`, and list/continue/clean slot
+reclamation. Document installed `triss coder state backup|validate|adopt|reset`
+and packed-artifact availability. State
 that legacy and v2 stores coexist without discovery across the boundary and
 that rollback retains v2 session data for later re-upgrade. Empty/whitespace
 output is failure, never approval. Do not document Release B/C options yet.
@@ -3699,7 +4048,8 @@ node scripts/live-smoke-reliable-delegation.mjs --synthetic --release A
 node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 node bin/triss.js coder run --help
 node bin/triss.js mcp --help
 ```
@@ -3726,7 +4076,8 @@ node scripts/live-smoke-reliable-delegation.mjs --synthetic --release B
 node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js test/review.test.js test/review-stdin.test.js
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 node bin/triss.js review --help
 node bin/triss.js mcp --help
 ```
@@ -3749,7 +4100,8 @@ node scripts/live-smoke-reliable-delegation.mjs --synthetic --release C
 node --test test/init.test.js test/agent-help.test.js test/completion.test.js test/mcp-tools.test.js test/review.test.js test/review-stdin.test.js
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 node bin/triss.js review --help
 node bin/triss.js mcp --help
 ```
@@ -3758,8 +4110,8 @@ Run the live C command separately with the Package 26 exit-code semantics. A
 10/11 result does not invalidate exact-head synthetic evidence, but it keeps
 publication readiness `BLOCKED_EXTERNAL`.
 
-When Package 0 says the exec router is present, the Release C gate additionally
-runs `node --test test/exec.test.js test/response-format.test.js`.
+The Release C gate also runs
+`node --test test/exec.test.js test/response-format.test.js`.
 
 Documentation reference surfaces are executed only by atomic Packages 12, 22,
 and 27. They must retain their release-specific gates and must not pre-document
@@ -3808,7 +4160,8 @@ Final commands:
 node scripts/live-smoke-reliable-delegation.mjs --synthetic --release C
 npm test
 npm run lint
-git diff --check origin/main...HEAD
+test "$(git rev-parse origin/main)" = "${ORIGIN_MAIN_SHA}"
+git diff --check "${ORIGIN_MAIN_SHA}"...HEAD
 ```
 
 After the mandatory commands, run the live C command and record its classified
@@ -3901,6 +4254,7 @@ implement it locally; do not restart indefinitely.
 | every legal envelope component fits aggregate cap | near-limit `test/coder-envelope.test.js` fixture |
 | typed empty/timeout/connection failure | `test/provider-errors.test.js`, command/MCP tests |
 | policy denial never endpoint-hops | `test/glm-endpoint-fallback.test.js` request count |
+| GLM route mismatch is structural and at most two requests | `test/glm-endpoint-fallback.test.js` code/conflict/status-only fixtures |
 | stable errors survive transports safely | CLI subprocess and MCP transport tests |
 | oversized review blocks before model | `test/review-payload.test.js`, review tests |
 | input/ref/selector injection is rejected | Git/PR acquisition and parser tests |
@@ -3908,6 +4262,8 @@ implement it locally; do not restart indefinitely.
 | PR diff identity is exact merge-base to head | moved-base, ambiguous-merge-base, and exact-object fixtures |
 | PR fetch cannot mutate source common dir | disposable bare-repository config/hook/fork fixtures |
 | external diff/textconv/config helpers are disabled | malicious Git environment fixtures |
+| shallow ancestry never claims exact comparison | wrong-single-merge-base fixture in `test/review-git-acquisition.test.js` |
+| mutable Git attributes cannot alter exact diff | global/info/dirty/committed attribute canaries in `test/review-git-acquisition.test.js` |
 | selected scope can be complete without global coverage | local, PR, and stdin coverage fixtures |
 | PR text cannot fetch internal issues | CLI/MCP integration spy tests |
 | MCP root and cancellation are enforced | MCP root/cancel review tests |
@@ -3918,20 +4274,27 @@ implement it locally; do not restart indefinitely.
 | policy is not bypassed | provider-error and agent-rule tests |
 | no secret/raw tool data in diagnostics | coder-result and provider-error fixtures |
 | CLI/MCP contract parity | MCP schema/handler and CLI help tests |
+| default unnamed coder runs do not persist | 100-run ephemeral inventory/HOME fixture |
+| persistent conversation matches Git workspace | base/ref/coder-state/snapshot mismatch fixtures for both engines |
+| project rename/adopt cannot strand state | same-device rename and cross-device quarantine crash fixtures |
+| sandbox toolchain is exact and usable | real OpenCode/Crush node-test/lint plus denied-HOME/common-dir canaries |
+| rollback commands ship in public artifacts | npm-pack installed-prefix backup/validate and canonical standalone smokes |
+| each atomic handoff is immutable | local checkpoint SHA/scope/test-evidence verifier |
 
 ## 15. Rollout and compatibility
 
 Recommended release sequence:
 
-1. Package 0 establishes the approved plan identity and live baseline.
-2. Release A: Packages 1-2, 2A-2G, 3-4, 4A-4D, 5-10, 10A, and 11-12 — coder envelope v2,
+1. Atomic 00 is a separate feasibility PR; after merge, revise and reapprove
+   this plan. It is not an implementation release.
+2. Release A: Atomic 01-29 — coder envelope v2,
    fingerprint/metadata lifecycle, expectation, bounded activity/diagnostics,
    provider taxonomy/projection, synthetic acceptance, and exact-head
    documentation gate.
-3. Release B: Packages 13-17, 17A-17D, and 18-22 — bounded single review, exact merge-base identity,
+3. Release B: Atomic 30-43 — bounded single review, exact merge-base identity,
    rename-aware literal selection, exact PR acquisition, stdin/issue boundaries,
    CLI/MCP parity, synthetic acceptance, and exact-head documentation gate.
-4. Release C: Packages 23-27 — sequential sharding, transport adapters,
+4. Release C: Atomic 44-48 — sequential sharding, transport adapters,
    no-global-verdict semantics, synthetic/live acceptance, and exact-head docs.
 5. No release may publish before its own acceptance and documentation package;
    a later release's harness cannot retroactively validate an earlier candidate.
@@ -3956,19 +4319,21 @@ Release A also replaces ambiguous continuation with the v2 slug-owned session
 contract. Callers must use `--session <slug>`; bare `--continue`, direct real
 engine IDs, and the legacy shared `.triss/sessions.json` map cannot select v2
 state. There is no automatic migration because legacy entries lack the v2
-engine/root/mode ownership evidence. Announce the explicit non-isolated
+engine/project/workspace ownership evidence. Announce the explicit isolated
 `triss coder session clean <slug> --engine <opencode|crush>` path, whose engine
 flag is mandatory, and retain legacy data untouched for the old binary. A caller that needs an old conversation starts a new v2 slug;
 manual copying or ID import is unsupported.
 
-Release A also retains omitted-session runs as generated persistent sessions
-and enforces a maximum of four validated-project-worktree session reservations within a hard
-512 MiB store quota. The fifth new session fails before provider/spawn with
-`TRISS_CODER_SESSION_CAP`; this is intentional bounded behavior. Changelog,
-CLI help, and agent docs must show `triss coder session list`, continuation with
-the returned `session_slug`, and explicit
-`triss coder session clean <slug> --engine <opencode|crush>` to reclaim a slot.
-Existing active sessions may continue while the cap is full.
+Release A makes omitted-session runs ephemeral: they retain no conversation,
+automatically remove validated worktree/session artifacts after success, and
+keep only bounded 15-minute recovery metadata after failure/crash. Explicit
+`--session` is persistent; `--keep-session` explicitly promotes a generated
+slug to persistence. The maximum of four reservations and hard 512 MiB store
+quota applies only to persistent sessions. The fifth new persistent session
+fails before provider/spawn with `TRISS_CODER_SESSION_CAP`; ordinary unnamed
+runs remain usable. Changelog, CLI help, and agent docs show persistent
+`session list`/continue/clean, workspace mismatch/reset, stable project rename,
+cross-filesystem adopt/quarantine, and installed backup/validate commands.
 
 Release B intentionally removes automatic issue-key discovery from PR and
 branch prose. Callers that want tracker context must pass the new explicit
@@ -3995,14 +4360,19 @@ headroom, and 512 MiB aggregate cap;
 if the complete validated inventory exceeds a cap, rollback stops for an
 explicit operator-selected archival destination rather than omitting data.
 Do not print manifest, path, message, or session content to stdout or logs.
-The operator invokes only:
+The operator invokes only the installed CLI from the candidate package:
 
 ```bash
-node scripts/backup-coder-v2-state.mjs --project /absolute/validated/project
+triss coder state backup --project /absolute/validated/project
+triss coder state validate --project /absolute/validated/project --backup complete-<timestamp>-<run-id>
 ```
 
-and proceeds only after exit zero, a final `complete-*` basename, and a second
-read-only `validateCoderV2Backup()` pass over that exact basename.
+and proceeds only after both exit zero, a final `complete-*` basename, and the
+second read-only validation pass over that exact basename. Release A runs
+`npm pack --dry-run`, creates the tarball, installs it into a temporary prefix
+outside the repository, and runs backup plus validation through that installed
+`triss`; direct source imports or an unpublished `scripts/` path do not satisfy
+the gate.
 
 The incomplete directory contains `payload/coder-state-v2/` and
 `payload/engine-sessions-v2/` preserving only validated relative path bytes,
@@ -4076,8 +4446,8 @@ Stop implementation and return to design review if any of these occur:
   coder run;
 - the writable-quota adapter cannot synchronously notify the parent on first
   rejected allocation before acknowledging the child write;
-- `feature/codex-workflow-improvements` merges with a conflicting output
-  contract that cannot be composed without changing public defaults;
+- `origin/main` moves from the pinned Package 0 SHA, or the v0.34.0 exec,
+  evidence-format, or standalone contract changes before a release gate;
 - exact PR base/head objects, stable metadata, or a unique merge base cannot be
   acquired inside the bounded disposable repository;
 - bounded fingerprint snapshots cannot represent the managed isolated worktree
@@ -4124,8 +4494,10 @@ Decisions fixed by this plan:
     error projection; adapters cannot infer success from execution alone.
 15. Every coder run requires Git and exposes a Triss `session_slug`; omitted
     slugs are 128-bit CSPRNG values created exclusively and never reused on
-    collision. Session stores outlive worktree/branch cleanup and are removed
-    only by explicit engine-scoped session cleanup.
+    collision. Omitted sessions are ephemeral unless `--keep-session` is
+    explicit. Persistent explicit/kept sessions retain and bind their isolated
+    worktree, branch, base OID, coder-state ID, and last snapshot until one
+    recoverable engine-scoped cleanup transaction removes all of them.
 16. Local repository config is untrusted review input. Inventory/content use
     the fixed Section 9.4 command-scope invariants, and changed gitlinks cannot
     be hidden by submodule ignore configuration.
