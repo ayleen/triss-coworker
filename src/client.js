@@ -316,9 +316,9 @@ export function reportUsage(resp, label = 'worker', { provider } = {}) {
 // absent answer with an intentionally short one.
 export function responseText(resp) {
   const content = resp?.choices?.[0]?.message?.content;
-  if (typeof content === 'string' && content.trim().length > 0) return content;
+  if (typeof content === 'string' && content.length > 0) return content;
   const finalText = resp?.final_text;
-  if (typeof finalText === 'string' && finalText.trim().length > 0) return finalText;
+  if (typeof finalText === 'string' && finalText.length > 0) return finalText;
   return '';
 }
 

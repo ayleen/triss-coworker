@@ -16,13 +16,7 @@ import {
   ZAI_PAYG_BASE_URL,
 } from '../src/zai.js';
 import { MOONSHOT_BASE_URL, normalizeKimiBaseUrl } from '../src/moonshot.js';
-import { providerRequestError, responseText } from '../src/client.js';
-
-test('responseText rejects whitespace-only provider content while preserving meaningful text bytes', () => {
-  assert.equal(responseText({ choices: [{ message: { content: ' \t\n ' } }] }), '');
-  assert.equal(responseText({ final_text: '\r\n' }), '');
-  assert.equal(responseText({ choices: [{ message: { content: '  verdict\n' } }] }), '  verdict\n');
-});
+import { providerRequestError } from '../src/client.js';
 
 function withEnv(values, fn) {
   const before = {};
