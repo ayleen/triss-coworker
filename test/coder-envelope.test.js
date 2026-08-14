@@ -735,3 +735,54 @@ test('CODER-EVENT-14: activity first/last timestamps are host-observed and never
   assert.equal(state.activity.first_event_at, 500);
   assert.equal(state.activity.last_event_at, 600);
 });
+
+// ─── Package 5E envelope fields (Atomic 21) ──────────────────────────────────
+
+test('CODER-EVENT-15: every safe envelope carries session_slug, result_retention, result_id, execution_capabilities', () => {
+  const child = new EventEmitter();
+  child.pid = 777015;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  setImmediate(() => {
+    child.stdout.end(
+      JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
+      JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n',
+    );
+    setImmediate(() => child.emit('close', 0, null));
+  });
+  return withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const capture = stdoutCapture();
+    await runCoderRun(
+      'do something',
+      { session: 'explicit-slug-1' },
+      {
+        spawn: () => child,
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: capture.stdoutWrite,
+        killProcess: (_pid, sig) => {
+          if (sig === 0) { const e = new Error('ESRCH'); e.code = 'ESRCH'; throw e; }
+          return true;
+        },
+      },
+    );
+    const envelope = JSON.parse(capture.text().trim());
+    assert.equal(envelope.session_slug, 'explicit-slug-1');
+    assert.equal(envelope.result_retention, 'none');
+    assert.equal(envelope.result_id, null);
+    assert.equal(typeof envelope.execution_capabilities, 'object');
+    for (const key of [
+      'sandbox',
+      'process_supervision',
+      'locking',
+      'writable_quota',
+      'credential_isolation',
+      'managed_root',
+      'persistent_store_quota',
+      'result_store_quota',
+    ]) {
+      assert.ok(['enforced', 'best_effort', 'unavailable'].includes(envelope.execution_capabilities[key]), key);
+    }
+    // The capability tuple is honest: no enforced claim without a backend.
+    assert.equal(envelope.execution_capabilities.sandbox, 'unavailable');
+  })();
+});

@@ -40,6 +40,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
+import { buildExecutionCapabilities } from '../coder-orchestration.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
@@ -4175,6 +4176,15 @@ async function runCrushFlow({
     engine: 'crush',
     engine_version: engineVersion,
     session_id: parsed.session_id || null,
+    // Package 5E: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / Reference surface 3).
+    session_slug: opts.session || null,
+    result_retention: 'none',
+    result_id: null,
+    execution_capabilities: buildExecutionCapabilities({
+      engine: 'crush',
+      proxyAvailable: !!deps.proxyAvailable,
+    }),
     exit_reason,
     final_text: parsed.final_text ?? null,
     files_changed: filesChanged,
@@ -4703,6 +4713,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     engine: 'opencode',
     engine_version: engineVersion,
     session_id: result.sessionRealId || null,
+    // Package 5E: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / Reference surface 3).
+    session_slug: opts.session || null,
+    result_retention: 'none',
+    result_id: null,
+    execution_capabilities: buildExecutionCapabilities({
+      engine: 'opencode',
+      proxyAvailable: !!deps.proxyAvailable,
+    }),
     exit_reason,
     final_text: result.finalText,
     files_changed: filesChanged,
