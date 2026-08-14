@@ -114,17 +114,10 @@ function severityColor(sev) {
 // ─── `triss coder models` — read-only listing ────────────────────────────────
 
 export async function runCoderModels(opts = {}) {
-  // Phase 4: V2 model management (backend mapping + shared-config warnings)
-  // is not implemented yet — refuse explicitly instead of rendering the V1
-  // opencode.json view for a V2 ask.
-  const enginePre = resolveCoderEngine(opts);
-  if (enginePre === 'opencode2') {
-    throw new Error(
-      '`triss coder models --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
-        'so inspect/mutate it with `triss coder models` (default engine). ' +
-        'See docs/opencode2-engine-plan.md Phase 4.',
-    );
-  }
+  // Phase 4 (docs/opencode2-engine-plan.md): V2 renders through the SAME
+  // inspectCoderModelState service (shared opencode.json backend). The JSON
+  // contract gains one additive field; the human render adds a shared-config
+  // note. Engine identity stays `opencode2` — never conflated with V1.
   // Capture the true parent shell exports BEFORE loadEnvFiles merges the .env
   // files. This allows inspectCoderModelState to distinguish between a real
   // shell export and a dotenv-loaded value, reporting the correct provenance
@@ -166,6 +159,11 @@ export async function runCoderModels(opts = {}) {
   if (opts.json) {
     // Stable, additive-only JSON contract (docs/glm-clients.md §4). The
     // service already guarantees no credential value is serialized.
+    // Phase 4: V2 has no effective small role (plan §"Small-model role"):
+    // additive field, never a removal or rename of a V1 field.
+    if (engine === 'opencode2') {
+      state.small_role_effective = false;
+    }
     process.stdout.write(JSON.stringify(state) + '\n');
     return;
   }
@@ -202,6 +200,16 @@ function renderModelsHuman(state) {
   );
   out.write(pc.dim(`scope: ${state.scope}\n\n`));
 
+  // Phase 4 shared-config note: V2 reads/writes the SAME opencode.json as
+  // OpenCode 1; the small role is a V1-compatibility value only.
+  if (state.engine === 'opencode2') {
+    out.write(
+      pc.yellow(
+        'Note: opencode2 shares the opencode.json config with OpenCode 1 — model changes apply to both engines. The small role has no effect in opencode2 (OpenCode 1 compatibility value).\n\n',
+      ),
+    );
+  }
+
   const cur = state.current || {};
   const renderRole = (label, role) => {
     const r = cur[role] || {};
@@ -216,6 +224,9 @@ function renderModelsHuman(state) {
   if (state.engine === 'crush') {
     renderRole('Crush large:    ', 'main');
     renderRole('Crush fast:     ', 'small');
+  } else if (state.engine === 'opencode2') {
+    renderRole('Triss runtime main: ', 'main');
+    renderRole('OpenCode config small (OpenCode 1 compat): ', 'small');
   } else if (state.engine === 'opencode') {
     renderRole('Triss runtime main: ', 'main');
     renderRole('OpenCode config small: ', 'small');
@@ -277,15 +288,6 @@ function renderModelsHuman(state) {
 // ─── `triss coder model set` — persistent switch ─────────────────────────────
 
 export async function runCoderModelSet(mainArg, opts = {}) {
-  // Phase 4: V2 persistent model mutation routes through the shared
-  // opencode.json backend mapping — not implemented yet; refuse explicitly.
-  if (resolveCoderEngine(opts) === 'opencode2') {
-    throw new Error(
-      '`triss coder model set --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
-        'so mutate it with `triss coder model set` (default engine; the change applies to both engines). ' +
-        'See docs/opencode2-engine-plan.md Phase 4.',
-    );
-  }
   // Capture shell-exported model pins BEFORE loadEnvFiles merges the .env
   // files, so a higher-precedence shell export that would shadow what we are
   // about to write is detectable after the apply (mirrors runCoderInit's
@@ -795,6 +797,16 @@ function renderApplySuccess(result, scope) {
   process.stderr.write(`  main:         ${pc.cyan(result.model)}\n`);
   process.stderr.write(`  small:        ${pc.cyan(result.small_model)}\n`);
   process.stderr.write(pc.dim(`  opencode.json: ${result.path}\n`));
+  // Phase 4: V2 mutation targets the SHARED config — state explicitly that
+  // both OpenCode engines see the change and the small value is a V1
+  // compatibility value (plan §"Small-model role").
+  if (result.engine === 'opencode2') {
+    process.stderr.write(
+      pc.yellow(
+        '  note: this opencode.json is shared with OpenCode 1 — both engines see this change. The small value is an OpenCode 1 compatibility value (no effect in opencode2).\n',
+      ),
+    );
+  }
   if (result.envPath) {
     process.stderr.write(pc.dim(`  env pins:     ${result.envPath}\n`));
   }

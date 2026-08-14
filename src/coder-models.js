@@ -2004,6 +2004,10 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
   return {
     ok: true,
     scope,
+    // Engine identity from the plan (manifest already records it). The
+    // opencode2 engine targets the SAME shared config; callers use this to
+    // render the shared-config compatibility note.
+    engine: plan.engine,
     path: configPath,
     envPath,
     model: changes.model,
