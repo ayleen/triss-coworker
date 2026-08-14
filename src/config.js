@@ -133,6 +133,73 @@ export function getConfig() {
   };
 }
 
+// ─── review limit configuration (Package 13 / Atomic 30) ────────────────────
+
+export const REVIEW_LIMIT_DEFAULTS = Object.freeze({
+  singleMaxBytes: 262144, // 256 KiB
+  shardMaxBytes: 98304, // 96 KiB
+  totalMaxBytes: 4194304, // 4 MiB
+  maxShards: 64,
+});
+
+export const REVIEW_LIMIT_HARD_MAXIMA = Object.freeze({
+  singleMaxBytes: 1024 * 1024, // 1 MiB
+  shardMaxBytes: 256 * 1024, // 256 KiB
+  totalMaxBytes: 16 * 1024 * 1024, // 16 MiB
+  maxShards: 128,
+});
+
+const REVIEW_LIMIT_ENV = {
+  singleMaxBytes: 'TRISS_REVIEW_SINGLE_MAX_BYTES',
+  shardMaxBytes: 'TRISS_REVIEW_SHARD_MAX_BYTES',
+  totalMaxBytes: 'TRISS_REVIEW_TOTAL_MAX_BYTES',
+  maxShards: 'TRISS_REVIEW_MAX_SHARDS',
+};
+
+// Positive base-10 integers only: reject zero, signs, decimals, exponents,
+// whitespace, Infinity, and anything above the hard maximum.
+function parsePositiveInteger(raw, hardMax) {
+  if (typeof raw !== 'string' || !/^[1-9]\d*$/.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > hardMax) return null;
+  return value;
+}
+
+/**
+ * Load the four reloadable review limits through the configuration snapshot.
+ * The set is validated atomically: shard_max <= single_max <= total_max
+ * (shard_max * max_shards MAY exceed total_max — the total bound is the final
+ * independent stop). Any invalid or contradictory set falls back to the
+ * complete default set with one bounded warning.
+ *
+ * @param {object} [seams]
+ * @param {Function} [seams.pick] env picker (defaults to the provider env
+ *   snapshot used by requestTimeoutMs)
+ * @returns {{limits: object, warning: string|null}}
+ */
+export function reviewLimitConfig(seams = {}) {
+  const pick = seams.pick || ((key) => process.env[key]);
+  const parsed = {};
+  for (const [key, envName] of Object.entries(REVIEW_LIMIT_ENV)) {
+    const value = parsePositiveInteger(pick(envName), REVIEW_LIMIT_HARD_MAXIMA[key]);
+    parsed[key] = value === null ? REVIEW_LIMIT_DEFAULTS[key] : value;
+  }
+
+  // Atomic relational validation. shard*max_shards exceeding total is legal
+  // (total is the independent final stop).
+  const valid =
+    parsed.shardMaxBytes <= parsed.singleMaxBytes &&
+    parsed.singleMaxBytes <= parsed.totalMaxBytes;
+
+  if (!valid) {
+    return {
+      limits: { ...REVIEW_LIMIT_DEFAULTS },
+      warning: 'invalid review limit set — falling back to defaults (shard_max <= single_max <= total_max)',
+    };
+  }
+  return { limits: parsed, warning: null };
+}
+
 function existsForScope(scope) {
   const f = activeEnvFiles().find((x) => x.scope === scope);
   return f && f.exists ? f.path : null;
