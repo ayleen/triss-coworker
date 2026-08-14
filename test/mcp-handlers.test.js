@@ -516,3 +516,63 @@ test('MCP-REVIEW-SINGLE-04: an oversized payload fails with the stable limit cod
   assert.equal(r.ok, false);
   assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
 });
+
+// ─── MCP-REVIEW-SHARD-* cases (Package 25 / Atomic 46) ──────────────────────
+
+const SHARD_DIFF =
+  'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n' + '-x\n' + 'y'.repeat(60000) + '\n' +
+  'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n' + '-p\n' + 'q'.repeat(60000) + '\n';
+
+test('MCP-REVIEW-SHARD-01: shard mode returns per-shard verdicts with usage accounting and no global verdict', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    question: 'review',
+    callModel: async () => 'shard ok',
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.shards.length >= 1);
+  assert.ok(r.attempts >= 1);
+  assert.equal(r.verdict, undefined, 'no global verdict');
+  for (const s of r.shards) {
+    assert.ok(s.verdict, 'per-shard verdict present');
+    assert.ok(s.bytes > 0, 'usage accounting present');
+  }
+});
+
+test('MCP-REVIEW-SHARD-02: a second-shard failure stops the sequence with structured partial errors', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const calls = [];
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    callModel: async ({ shard }) => {
+      const path = shard.sections[0].new_path;
+      calls.push(path);
+      if (path === 'b.txt') {
+        const err = new Error('provider exploded');
+        err.code = 'TRISS_PROVIDER_AUTH';
+        throw err;
+      }
+      return 'ok';
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_PROVIDER_AUTH');
+  assert.deepEqual(calls, ['a.txt', 'b.txt'], 'no third shard');
+  assert.ok(Array.isArray(r.partial), 'structured partial errors present');
+  assert.equal(r.partial[0].shard_index, 1);
+  assert.equal(r.message.includes('diff --git'), false, 'no raw diff in errors');
+});
+
+test('MCP-REVIEW-SHARD-03: cancellation propagates with cancellation parity', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const controller = new AbortController();
+  controller.abort();
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    signal: controller.signal,
+    callModel: async () => 'should not run',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_CANCELLED');
+});

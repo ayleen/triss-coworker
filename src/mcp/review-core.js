@@ -154,6 +154,70 @@ export async function runReviewCoreSingle({ diff, question, selectors = [], call
   };
 }
 
+/**
+ * MCP shard parity (Package 25 / Atomic 46): sequential whole-file shards
+ * through the shared executor, cancellation parity, structured partial
+ * errors, usage accounting, and NO completed prose or raw diff in errors.
+ *
+ * @param {object} opts
+ * @param {string} opts.diff acquired diff text
+ * @param {string} [opts.question]
+ * @param {string} [opts.metadata='']
+ * @param {Function} opts.callModel ({shard, question, metadata, signal}) =>
+ *   Promise<string>
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<{ok: boolean, shards?: Array, attempts?: number,
+ *   code?: string, message?: string, partial?: Array}>}
+ */
+export async function runReviewCoreShard({ diff, question, metadata = '', callModel, signal }) {
+  if (typeof callModel !== 'function') throw new TypeError('callModel is required');
+  const { parseUnifiedDiff, planSequentialShards } = await import('../review-payload.js');
+  const { executeReviewPlan } = await import('../review-executor.js');
+  const { reviewLimitConfig } = await import('../config.js');
+  const limits = reviewLimitConfig().limits;
+
+  const parsed = parseUnifiedDiff(diff);
+  if (parsed.error) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: parsed.error, partial: [] };
+  }
+  const planned = planSequentialShards({
+    sections: parsed.sections,
+    question: question || 'Review this change. List concrete issues; do not summarise the diff.',
+    metadata,
+    limits,
+  });
+  if (planned.error) {
+    return {
+      ok: false,
+      code: 'TRISS_REVIEW_LIMIT',
+      message: `${planned.error}${planned.path ? `: ${planned.path}` : ''}`,
+      partial: [],
+    };
+  }
+
+  const result = await executeReviewPlan(
+    { callModel: (args) => callModel(args), limits },
+    {
+      shards: planned.plan.shards,
+      question: question || 'Review this change. List concrete issues; do not summarise the diff.',
+      metadata,
+      signal,
+    },
+  );
+  if (!result.ok) {
+    // Structured partial errors: completed shard verdicts only, never
+    // completed prose or raw diff content.
+    return {
+      ok: false,
+      code: result.code,
+      message: result.message,
+      partial: (result.shards || []).map((s) => ({ shard_index: s.shard_index, verdict: s.verdict, bytes: s.bytes })),
+      attempts: result.attempts,
+    };
+  }
+  return { ok: true, shards: result.shards, attempts: result.attempts };
+}
+
 async function fetchLinkedIssue(key) {
   const integrations = await loadIntegrations();
   for (const m of integrations) {
