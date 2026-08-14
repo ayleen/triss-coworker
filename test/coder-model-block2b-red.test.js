@@ -335,9 +335,10 @@ test('rollbackModelChange fails closed when OpenCode env target.existed=false bu
       'Rollback should fail closed when existed:false env file disappeared'
     );
 
-    // Assert the injected lock received expected engine and local scope
+    // Assert the injected lock received the shared backend key and local scope
+    // (docs/opencode2-engine-plan.md: rollback locks are backend-derived).
     assert.ok(lockCall, 'lock should have been called');
-    assert.strictEqual(lockCall.engine, 'opencode', 'lock should receive opencode engine');
+    assert.strictEqual(lockCall.engine, 'opencode-v1', 'lock should receive the shared opencode-v1 backend key');
     assert.strictEqual(lockCall.scope, 'local', 'lock should receive local scope');
   } finally {
     // Cleanup only the exact mkdtemp root

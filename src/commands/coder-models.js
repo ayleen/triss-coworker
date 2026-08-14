@@ -114,6 +114,17 @@ function severityColor(sev) {
 // ─── `triss coder models` — read-only listing ────────────────────────────────
 
 export async function runCoderModels(opts = {}) {
+  // Phase 4: V2 model management (backend mapping + shared-config warnings)
+  // is not implemented yet — refuse explicitly instead of rendering the V1
+  // opencode.json view for a V2 ask.
+  const enginePre = resolveCoderEngine(opts);
+  if (enginePre === 'opencode2') {
+    throw new Error(
+      '`triss coder models --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
+        'so inspect/mutate it with `triss coder models` (default engine). ' +
+        'See docs/opencode2-engine-plan.md Phase 4.',
+    );
+  }
   // Capture the true parent shell exports BEFORE loadEnvFiles merges the .env
   // files. This allows inspectCoderModelState to distinguish between a real
   // shell export and a dotenv-loaded value, reporting the correct provenance
@@ -266,6 +277,15 @@ function renderModelsHuman(state) {
 // ─── `triss coder model set` — persistent switch ─────────────────────────────
 
 export async function runCoderModelSet(mainArg, opts = {}) {
+  // Phase 4: V2 persistent model mutation routes through the shared
+  // opencode.json backend mapping — not implemented yet; refuse explicitly.
+  if (resolveCoderEngine(opts) === 'opencode2') {
+    throw new Error(
+      '`triss coder model set --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
+        'so mutate it with `triss coder model set` (default engine; the change applies to both engines). ' +
+        'See docs/opencode2-engine-plan.md Phase 4.',
+    );
+  }
   // Capture shell-exported model pins BEFORE loadEnvFiles merges the .env
   // files, so a higher-precedence shell export that would shadow what we are
   // about to write is detectable after the apply (mirrors runCoderInit's

@@ -85,6 +85,7 @@ import { crush as crushEngine } from '../coder-engines/crush.js';
 import {
   opencode2 as opencode2Engine,
   opencode2VersionPin,
+  detectOpenCode2,
   createOpenCode2EventFolder,
   foldOpenCode2EventLine,
   opencode2LogPath,
@@ -1255,6 +1256,16 @@ commands — report findings as text only.
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
+  // OpenCode 2 init (config backend wiring, V2 XDG state setup, static
+  // plugin/agent preflight) is Phase 4 work; until it lands, refuse
+  // explicitly rather than silently configuring the V1 surface for a V2 ask.
+  if (resolveCoderEngine(opts) === 'opencode2') {
+    throw new Error(
+      '`triss coder init --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
+        'so configure it once via `triss coder init` (default engine), then run with --engine opencode2. ' +
+        'See docs/opencode2-engine-plan.md Phase 4.',
+    );
+  }
   // Capture model overrides that are in the environment BEFORE loadEnvFiles()
   // merges the .env files — i.e. genuine shell exports, which have higher
   // precedence than any .env file and so would shadow whatever init pins.
@@ -1460,6 +1471,15 @@ async function setupKey(path, provider = 'zai', opts = {}) {
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
 export async function runCoderSetup(input = {}, deps = {}) {
+  // Same Phase-4 refusal as runCoderInit: the wizard's postSetup path must
+  // never silently configure the V1 surface for a V2 ask.
+  if (input.engine === 'opencode2') {
+    throw new Error(
+      'OpenCode 2 setup is not implemented yet — V2 shares the V1 opencode.json; configure it via ' +
+        '`triss coder init` (default engine), then run with --engine opencode2. ' +
+        'See docs/opencode2-engine-plan.md Phase 4.',
+    );
+  }
   loadEnvFiles();
   const resolvedScope = input.scope || 'global';
   const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
@@ -2766,6 +2786,14 @@ export function describeCoderStatus(deps = {}) {
     const path = crushConfigPath(scope);
     return { scope, path, exists: existsSync(path) };
   });
+  // opencode2 engine #3 — same detect shape as crush, but the pin is an
+  // EXACT match (non-semver beta builds: any other number is a different,
+  // unverified build). `opencode2 --version` is a one-shot read-only probe:
+  // it leaves no service behind (verified live), unlike debug config /
+  // serve. V2 shares V1's opencode.json (Triss never writes V2-native
+  // config), so there are no separate config rows — the shared files above
+  // already describe them.
+  const oc2Detect = detectOpenCode2(sh);
   // What a bare `triss coder run` (no --engine) resolves to right now.
   const defaultEngine = resolveCoderEngine({});
   // The model a bare `triss coder run` on the opencode engine would use — i.e.
@@ -2784,6 +2812,12 @@ export function describeCoderStatus(deps = {}) {
       satisfiesPin: crushDetect.satisfiesPin,
       pin: crushEngine.CRUSH_PIN,
       configs: crushConfigs,
+    },
+    opencode2: {
+      found: oc2Detect.found,
+      version: oc2Detect.version,
+      satisfiesPin: oc2Detect.satisfiesPin,
+      pin: opencode2VersionPin(),
     },
     defaultEngine,
     defaultModel,
@@ -3119,26 +3153,54 @@ function lookupSessionRealId(engine, slug) {
   return namespace[slug] || null;
 }
 
+// The session store's own mutation lock path. Keyed per project (TRISS_STATE_DIR
+// lives under projectRoot) so two projects never contend on one lock, while
+// every engine's writer within THIS project serializes on the same file.
+export function sessionsLockPath() {
+  return join(projectRoot(), TRISS_STATE_DIR, 'sessions.lock');
+}
+
 // Persist slug -> realId under the engine's namespace. Read-modify-write of
 // the VERSIONED shape (legacy content migrates here), atomic write-then-
-// rename, best-effort concurrent-writer mitigation (same contract as V1's
-// persistSessionMapping: sequential writers both survive; the true
-// lost-update window is Phase 4's locked store's to close).
-function persistSessionMapping(sh, engine, slug, realId) {
+// rename, all under the engine-neutral session-store mutation lock
+// (Phase 4: concurrent V1/V2 writers cannot drop a mapping after another
+// writer has returned success — the read-modify-write is fully serialized,
+// and dead-PID stale locks are reclaimed automatically).
+export function persistSessionMapping(sh, engine, slug, realId) {
   const path = sessionsFilePath();
   mkdirSync(dirname(path), { recursive: true });
 
-  const store = readSessionStore();
-  if (!store.engines[engine]) store.engines[engine] = {};
-  store.engines[engine][slug] = realId;
-  atomicWriteJson(path, store);
+  const lockHandle = acquireCoderMutationLock('sessions', 'store', {
+    lockPath: sessionsLockPath(),
+  });
+  let store;
+  try {
+    store = readSessionStore();
+    if (!store.engines[engine]) store.engines[engine] = {};
+    store.engines[engine][slug] = realId;
+    atomicWriteJson(path, store);
+  } finally {
+    if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
+  }
 
+  // Post-commit verify under a FRESH lock acquisition: if another writer
+  // committed between release and verify, its write is also intact by
+  // construction (it held the lock) — only a genuinely lost update (crash
+  // between rename and lock release) can surface here, and re-persisting
+  // under the lock repairs it.
   const verify = readSessionStore();
   if (verify.engines[engine]?.[slug] !== realId) {
-    const retryStore = readSessionStore();
-    if (!retryStore.engines[engine]) retryStore.engines[engine] = {};
-    retryStore.engines[engine][slug] = realId;
-    atomicWriteJson(path, retryStore);
+    const retryHandle = acquireCoderMutationLock('sessions', 'store', {
+      lockPath: sessionsLockPath(),
+    });
+    try {
+      const retryStore = readSessionStore();
+      if (!retryStore.engines[engine]) retryStore.engines[engine] = {};
+      retryStore.engines[engine][slug] = realId;
+      atomicWriteJson(path, retryStore);
+    } finally {
+      if (retryHandle && typeof retryHandle.release === 'function') retryHandle.release();
+    }
   }
 
   if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
