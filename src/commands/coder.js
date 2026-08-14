@@ -86,10 +86,17 @@ import {
   opencode2 as opencode2Engine,
   opencode2VersionPin,
   detectOpenCode2,
+  installHintOpenCode2,
+  opencode2DataRoot,
+  opencode2StateRoot,
   createOpenCode2EventFolder,
   foldOpenCode2EventLine,
   opencode2LogPath,
 } from '../coder-engines/opencode2.js';
+// Canonical OpenCode source enumeration (Phase 4): one walker for every
+// opencode.json layer + plugin/agent discovery, shared by the V2 static
+// preflight and model inspection.
+import { enumerateOpenCodeSources } from '../opencode-config.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
 // 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
@@ -1256,15 +1263,14 @@ commands — report findings as text only.
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
-  // OpenCode 2 init (config backend wiring, V2 XDG state setup, static
-  // plugin/agent preflight) is Phase 4 work; until it lands, refuse
-  // explicitly rather than silently configuring the V1 surface for a V2 ask.
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4) ──────────────
+  // V2 shares the V1-compatible opencode.json surface: the SAME
+  // setupKey/runCoderSetup flow configures the shared config, then the V2
+  // specifics (XDG state roots + static plugin/agent preflight + binary pin
+  // report) run BEFORE any V2 process is spawned. Nothing here spawns a V2
+  // service: detectOpenCode2 only probes `opencode2 --version`.
   if (resolveCoderEngine(opts) === 'opencode2') {
-    throw new Error(
-      '`triss coder init --engine opencode2` is not implemented yet — V2 shares the V1 opencode.json, ' +
-        'so configure it once via `triss coder init` (default engine), then run with --engine opencode2. ' +
-        'See docs/opencode2-engine-plan.md Phase 4.',
-    );
+    return runOpenCode2Init(opts, deps);
   }
   // Capture model overrides that are in the environment BEFORE loadEnvFiles()
   // merges the .env files — i.e. genuine shell exports, which have higher
@@ -1404,12 +1410,77 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// Warn when the model just pinned by init will be overridden in a fresh process
-// by a higher-precedence source: a shell export (beats every .env file) or a
-// higher-precedence .env file (local `.triss.env` beats global). Silent here
-// means a green "Done." followed by `ZHIPU_API_KEY is not set` on the next run.
-// Returns true if it emitted any shadow warning (so the caller can withhold the
-// green "Done.").
+// ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────
+//
+// Reuses the shared V1 surface (same env file, same key setup, same
+// runCoderSetup flow onto the shared opencode.json) and adds the V2 specifics:
+//   1. Static source/plugin/agent preflight via the canonical enumerator —
+//      REJECTS before any credential write and any V2 spawn (fail closed).
+//   2. Triss-owned V2 XDG data/state roots under <project>/.triss/opencode2
+//      (0o700) so V2 state never lands on V1 turf.
+//   3. Binary pin report via detectOpenCode2 (`opencode2 --version` only —
+//      never a service spawn).
+async function runOpenCode2Init(opts = {}, deps = {}) {
+  // 1. STATIC PREFLIGHT — before setupKey (credential write) and before any
+  //    child process. enumerateOpenCodeSources walks every config layer and
+  //    every plugin/agent source with the DOCUMENTED precedence (no
+  //    XDG_CONFIG_HOME override: the walker is anchored to ~ and cwd).
+  const cwd = deps.cwd || process.cwd();
+  let sources;
+  try {
+    sources = enumerateOpenCodeSources({ cwd });
+  } catch (err) {
+    throw new Error(
+      `OpenCode 2 init aborted: cannot enumerate configuration sources — ${err.message}`,
+      { cause: err },
+    );
+  }
+  // Plugin gate (docs/opencode2-engine-plan.md "Plugin compatibility gate"):
+  // no V2-native plugin is fixture-verified yet, so ANY configured or
+  // discovered plugin source rejects init. The error names the source path
+  // (never secrets), so the user can remove it and re-run.
+  const offender = sources.plugins.find((p) => p.origin === 'configured' || p.origin === 'discovered');
+  if (offender) {
+    throw new Error(
+      `OpenCode 2 init aborted: unsupported plugin source "${offender.path}" ` +
+        `(${offender.origin}${offender.exists === false ? ', target missing' : ''}). ` +
+        'No OpenCode 2 plugin is verified compatible yet — remove or disable the plugin reference, ' +
+        'then re-run. See docs/opencode2-engine-plan.md "Plugin compatibility gate".',
+    );
+  }
+  // 2. Banner + pin report BEFORE the shared setup (matching V1's flow), so
+  //    the user sees the V2 context while the shared key/config steps run.
+  process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
+  const sh = deps.spawnSync || nodeSpawnSync;
+  const det = detectOpenCode2(sh);
+  if (det.found && det.satisfiesPin) {
+    process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
+  } else if (det.found) {
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ opencode2 ${det.version} found, pinned version is ${opencode2VersionPin()} (not auto-upgrading)\n`,
+      ),
+    );
+  } else {
+    process.stderr.write(
+      pc.yellow(`  ⚠ opencode2 not found — install: ${installHintOpenCode2()}\n`),
+    );
+  }
+  // 3. Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
+  //    XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
+  const root = projectRoot();
+  for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      process.stderr.write(pc.dim(`  · created ${dir}\n`));
+    }
+  }
+  // 4. Shared surface: the SAME V1 flow (key + config + templates + gates).
+  //    Re-enter with an EXPLICIT engine:'opencode' — undefined would consult
+  //    TRISS_CODER_ENGINE, and an env-pinned 'opencode2' would loop forever.
+  return runCoderInit({ ...opts, engine: 'opencode' }, deps);
+}
+
 function warnIfPinShadowed(scope, pinned, inherited) {
   let shadowed = false;
   const warn = (m) => {
@@ -1471,21 +1542,16 @@ async function setupKey(path, provider = 'zai', opts = {}) {
 // instead of driving real stdin. `deps.fetch` / `deps.promptChoice` let
 // tests stub the provider probe and the interactive model pick.
 export async function runCoderSetup(input = {}, deps = {}) {
-  // Same Phase-4 refusal as runCoderInit: the wizard's postSetup path must
-  // never silently configure the V1 surface for a V2 ask.
-  if (input.engine === 'opencode2') {
-    throw new Error(
-      'OpenCode 2 setup is not implemented yet — V2 shares the V1 opencode.json; configure it via ' +
-        '`triss coder init` (default engine), then run with --engine opencode2. ' +
-        'See docs/opencode2-engine-plan.md Phase 4.',
-    );
-  }
   loadEnvFiles();
   const resolvedScope = input.scope || 'global';
   const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
   if (input.engine === 'crush') {
     return runCoderSetupUnlocked({ ...input, scope: resolvedScope, provider: resolvedProvider }, deps);
   }
+  // Both OpenCode engines share the opencode-v1 configuration backend: the
+  // lock key below (config backend 'opencode') and the config surface are
+  // identical for engine 'opencode' and 'opencode2', so the wizard's
+  // postSetup path with engine 'opencode2' flows into this same locked setup.
 
   const lockHandle = typeof deps.lock === 'function'
     ? deps.lock('opencode', resolvedScope)
