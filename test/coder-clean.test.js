@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -175,6 +175,48 @@ test('CODER-LEASE-03: release in finally even when the callback throws', async (
       return acquireCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' });
     })();
     await handle.release();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+// ─── RUN-STATE-* clean cases (Package 5C host gate) ──────────────────────────
+
+test('RUN-STATE-01: clean with retained results blocked by Section 15 preflight', async () => {
+  const fx = await fixture();
+  try {
+    const { assertNoRetainedCoderResultsForRollback } = await import('../src/coder-run-state.js');
+    // No results root: clean may proceed.
+    const clean = await assertNoRetainedCoderResultsForRollback({
+      resultsRoot: join(fx.trissRoot, 'coder-results-v1'),
+    });
+    assert.equal(clean.ok, true);
+
+    // Non-empty results root: blocked with the stable code.
+    await mkdir(join(fx.trissRoot, 'coder-results-v1', 'runs'), { recursive: true });
+    const blocked = await assertNoRetainedCoderResultsForRollback({
+      resultsRoot: join(fx.trissRoot, 'coder-results-v1'),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, 'TRISS_CODER_ROLLBACK_RESULTS_PENDING');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('RUN-STATE-02: legacy/v2 clean separation — v2 state records are the only clean target', async () => {
+  const fx = await fixture();
+  try {
+    // v2 state under coder-state-v2 is cleanable; a legacy .triss/sessions.json
+    // map must never be touched by the v2 clean path.
+    await writeCoderState(fx.stateDir, 'task-a.json', sessionRecord('task-a'));
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(fx.trissRoot, 'sessions.json'), '{"legacy":true}', { mode: 0o600 });
+    const result = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
+    assert.equal(result.action, 'removed');
+    // Legacy map survives untouched.
+    const legacy = await readFile(join(fx.trissRoot, 'sessions.json'), 'utf8');
+    assert.equal(legacy, '{"legacy":true}');
   } finally {
     await fx.cleanup();
   }
