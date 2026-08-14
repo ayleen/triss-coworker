@@ -119,6 +119,41 @@ export async function runReviewCore({
   return result.usageReport ? `${result.content}\n\n${result.usageReport}` : result.content;
 }
 
+// ─── single-review path (Package 20 / Atomic 41) ────────────────────────────
+
+/**
+ * MCP single-review parity: the shared Package 19 executor wired with
+ * project-root enforcement, cancellation, structured coverage, and safe
+ * error projection. The diff is acquired exactly once (buffered), parsed by
+ * Package 14, bounded by Package 13 limits, and reviewed by the shared
+ * executor — no duplicate payload assembly.
+ *
+ * @param {object} opts
+ * @param {string} opts.diff acquired diff text
+ * @param {string} [opts.question]
+ * @param {string[]} [opts.selectors=[]]
+ * @param {Function} opts.callModel ({diff, question, coverage, signal}) =>
+ *   Promise<string>
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<{ok: boolean, verdict?: string, coverage?: object,
+ *   code?: string, message?: string}>}
+ */
+export async function runReviewCoreSingle({ diff, question, selectors = [], callModel, signal }) {
+  if (typeof callModel !== 'function') throw new TypeError('callModel is required');
+  const { executeSingleReview } = await import('../review-executor.js');
+  const result = await executeSingleReview(
+    { callModel: (args) => callModel(args), limits: null },
+    { diff, question: question || 'Review this change. List concrete issues; do not summarise the diff.', selectors, signal },
+  );
+  return {
+    ok: result.ok,
+    verdict: result.ok ? result.verdict : undefined,
+    coverage: result.coverage,
+    code: result.ok ? undefined : result.code,
+    message: result.ok ? undefined : result.message,
+  };
+}
+
 async function fetchLinkedIssue(key) {
   const integrations = await loadIntegrations();
   for (const m of integrations) {

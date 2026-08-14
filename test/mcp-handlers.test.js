@@ -466,3 +466,53 @@ test('MCP-H-08: statusHandler reports GLM readiness, endpoint, and presets', asy
     restore();
   }
 });
+
+// ─── MCP-REVIEW-SINGLE-* cases (Package 20 / Atomic 41) ─────────────────────
+
+test('MCP-REVIEW-SINGLE-01: the shared single-review path returns verdict + structured coverage', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n',
+    question: 'review',
+    selectors: ['a.txt'],
+    callModel: async () => 'Verdict: approved',
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.verdict, 'Verdict: approved');
+  assert.equal(r.coverage.requested.coverage, 'complete');
+});
+
+test('MCP-REVIEW-SINGLE-02: an empty provider verdict projects the safe error', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n',
+    callModel: async () => '',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_PROVIDER_EMPTY');
+  assert.equal(r.verdict, undefined);
+});
+
+test('MCP-REVIEW-SINGLE-03: cancellation propagates without partial output', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const controller = new AbortController();
+  controller.abort();
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n',
+    signal: controller.signal,
+    callModel: async () => 'should not run',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_CANCELLED');
+  assert.equal(r.verdict, undefined);
+});
+
+test('MCP-REVIEW-SINGLE-04: an oversized payload fails with the stable limit code', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'x'.repeat(5 * 1024 * 1024), // > 4 MiB total cap
+    callModel: async () => 'x',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
+});
