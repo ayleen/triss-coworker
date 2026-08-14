@@ -2937,7 +2937,74 @@ export function createEventFolder() {
     sawStepFinish: false,
     warnings: [],
     rateLimit: null,
+    // Bounded activity facts (Section 6.4 of the approved plan): counts and
+    // tool-name aggregates only — never input/output/error/command bytes.
+    activity: {
+      events: 0,
+      tool_uses: 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: false,
+      first_event_at: null,
+      last_event_at: null,
+    },
+    // Malformed/omitted events increment this counter; the raw line is never
+    // copied into a warning (bounded categories only).
+    omittedCount: 0,
+    // A top-level `error` event is an internal engine-error observation even
+    // if a fake child later exits zero (Reference surface 2).
+    engineErrorObserved: false,
   };
+}
+
+// At most 16 distinct public warnings, each at most 256 UTF-8 bytes
+// (Section 6.4). Control bytes are stripped so raw diagnostics can never
+// smuggle terminal escapes or secrets into the envelope.
+const MAX_PUBLIC_WARNINGS = 16;
+const MAX_WARNING_BYTES = 256;
+
+// Replace control bytes (C0 controls + DEL) with '?' so raw diagnostics can
+// never smuggle terminal escapes or secrets into the envelope. Implemented
+// via charCodeAt because the no-control-regex lint rule forbids control
+// escapes inside a RegExp literal.
+function sanitizeControlBytes(text) {
+  let out = '';
+  for (const ch of String(text)) {
+    const code = ch.charCodeAt(0);
+    const isControl =
+      (code >= 0x00 && code <= 0x08) ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f;
+    out += isControl ? '?' : ch;
+  }
+  return out;
+}
+
+function pushWarning(state, text) {
+  if (state.warnings.length >= MAX_PUBLIC_WARNINGS) return;
+  const sanitized = sanitizeControlBytes(text).slice(0, MAX_WARNING_BYTES);
+  if (state.warnings.includes(sanitized)) return;
+  state.warnings.push(sanitized);
+}
+
+// Cap distinct tool names at 32, collecting the remainder under `other`
+// (Section 6.4). Missing or non-string tool names normalize to `unknown`.
+const MAX_DISTINCT_TOOLS = 32;
+
+function bumpToolActivity(activity, rawTool) {
+  const tool = typeof rawTool === 'string' && rawTool.length > 0 ? rawTool : 'unknown';
+  if (Object.prototype.hasOwnProperty.call(activity.by_tool, tool)) {
+    activity.by_tool[tool] += 1;
+    return;
+  }
+  const named = Object.keys(activity.by_tool).filter((k) => k !== 'other').length;
+  if (named >= MAX_DISTINCT_TOOLS) {
+    activity.by_tool.other = (activity.by_tool.other ?? 0) + 1;
+    return;
+  }
+  activity.by_tool[tool] = 1;
 }
 
 // Folds one raw ndjson line into `state` (mutated in place). Unknown
@@ -2946,7 +3013,7 @@ export function createEventFolder() {
 // events" rule. `onToolUse(evt)` is an optional side-effect hook (used by
 // the live spawn path to print a progress line; the fixture-replay tests
 // don't need it).
-export function foldEventLine(state, rawLine, { onToolUse } = {}) {
+export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
   const line = String(rawLine).trim();
   if (!line) return;
 
@@ -2954,16 +3021,29 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
   try {
     evt = JSON.parse(line);
   } catch {
-    state.warnings.push(`unparseable line: ${line.slice(0, 200)}`);
+    // Malformed NDJSON: bounded category warning + exact counter; the raw
+    // line is never copied into a warning (Reference surface 2).
+    state.omittedCount += 1;
+    pushWarning(state, 'unparseable line (omitted)');
     return;
   }
   state.parsedAnyEvent = true;
+  state.activity.events += 1;
+  // Host-observed arrival timestamps for the first and last parseable events
+  // (Section 6.4); engine-supplied clocks are never trusted or required.
+  if (arrivedAt !== undefined) {
+    if (state.activity.first_event_at === null) state.activity.first_event_at = arrivedAt;
+    state.activity.last_event_at = arrivedAt;
+  }
   if (!state.sessionRealId && evt.sessionID) state.sessionRealId = evt.sessionID;
 
   switch (evt.type) {
     case 'step_start':
       break;
     case 'tool_use':
+      state.activity.tool_uses += 1;
+      bumpToolActivity(state.activity, evt.part?.tool);
+      if (evt.part?.state?.status === 'error') state.activity.tool_errors += 1;
       if (onToolUse) onToolUse(evt);
       break;
     case 'step_finish': {
@@ -2978,6 +3058,9 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       const { tokens: folded } = finalizeOpencodeUsage(state.usage);
       state.usage.input_total = folded.input_total;
       state.usage.output_total = folded.output_total;
+      // Only a terminal `stop` marks terminal stop; intermediate
+      // `reason=tool-calls` does not (Section 6.4).
+      if (evt.part?.reason === 'stop') state.activity.saw_terminal_stop = true;
       break;
     }
     case 'text':
@@ -2986,8 +3069,11 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       if (evt.part?.text != null) state.finalText = evt.part.text;
       break;
     case 'error': {
+      // A top-level engine error is an internal engine-error observation even
+      // if a fake child later exits zero (Reference surface 2).
+      state.engineErrorObserved = true;
       const msg = evt.error?.data?.message || evt.error?.name || 'unknown engine error';
-      state.warnings.push(`engine error: ${msg}`);
+      pushWarning(state, `engine error: ${msg}`);
       // A terminal rate-limit error (rare on stdout — usually retried
       // silently and only logged) still gets recognised here so the live
       // path can kill early and report the reset time.
@@ -2996,7 +3082,7 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       break;
     }
     default:
-      state.warnings.push(`unknown event type: ${evt.type}`);
+      pushWarning(state, `unknown event type: ${evt.type}`);
   }
 }
 
@@ -3430,7 +3516,23 @@ function spawnEngine({
     let pollTimer = null;
     let residualCleanupPromise = null;
     const state = createEventFolder();
-    const stderrChunks = [];
+    // First termination cause wins and is recorded BEFORE sending any signal
+    // (Section 6.1), so a child that exits zero still reports `killed` with
+    // the right cause. `none` means no termination was requested/observed.
+    let terminationCause = 'none';
+    // Private stderr retention is a bounded 64 KiB tail, never an unbounded
+    // array; its raw bytes never enter public results (Section 6.4).
+    const MAX_STDERR_TAIL_BYTES = 64 * 1024;
+    let stderrTail = '';
+    // Bounded engine-output accounting (Section 6.4): one NDJSON record and
+    // the public final_text are capped at 1 MiB UTF-8 each, cumulative
+    // processed stdout at 32 MiB; overflow terminates the tree and completes
+    // normal cleanup.
+    const MAX_RECORD_BYTES = 1024 * 1024;
+    const MAX_FINAL_TEXT_BYTES = 1024 * 1024;
+    const MAX_TOTAL_STDOUT_BYTES = 32 * 1024 * 1024;
+    let totalStdoutBytes = 0;
+    let outputLimitObserved = false;
 
     const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true });
 
@@ -3499,6 +3601,7 @@ function spawnEngine({
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (terminationCause === 'none') terminationCause = 'deadline';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
@@ -3522,6 +3625,7 @@ function spawnEngine({
         }
         if (info) {
           state.rateLimit = info;
+          if (terminationCause === 'none') terminationCause = 'provider_rate_limit';
           requestGroupSignal('SIGTERM');
           scheduleSigkill();
         }
@@ -3554,6 +3658,7 @@ function spawnEngine({
     process.on('SIGTERM', onHostSignal);
 
     const onAbort = () => {
+      if (terminationCause === 'none') terminationCause = 'caller_abort';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -3607,18 +3712,40 @@ function spawnEngine({
     if (child.stdout) {
       const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
       rl.on('line', (line) => {
+        // Bounded output accounting (Section 6.4): an oversized record or
+        // cumulative stdout overflow is a typed engine failure that
+        // terminates the sandbox-owned tree and completes normal cleanup.
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        totalStdoutBytes += lineBytes + 1;
+        if (!outputLimitObserved && (lineBytes > MAX_RECORD_BYTES || totalStdoutBytes > MAX_TOTAL_STDOUT_BYTES)) {
+          outputLimitObserved = true;
+          requestGroupSignal('SIGTERM');
+          scheduleSigkill();
+        }
         const hadRateLimit = state.rateLimit;
         foldEventLine(state, line, {
+          arrivedAt: Date.now(),
           onToolUse: (evt) => {
             const tool = evt.part?.tool || 'tool';
             const denied = evt.part?.state?.status === 'error';
             process.stderr.write(pc.dim(`  → ${tool}${denied ? ' (denied/error)' : ''}\n`));
           },
         });
+        // Oversized public final_text is also a typed engine failure.
+        if (
+          !outputLimitObserved &&
+          state.finalText != null &&
+          Buffer.byteLength(state.finalText, 'utf8') > MAX_FINAL_TEXT_BYTES
+        ) {
+          outputLimitObserved = true;
+          requestGroupSignal('SIGTERM');
+          scheduleSigkill();
+        }
         // A rate-limit error that DID reach stdout: kill early, same as the
         // log-poll path, so we don't wait out --timeout. Guard on `settled`
         // so a line buffered past 'close' can't signal a reaped/recycled pid.
         if (state.rateLimit && !hadRateLimit && !settled) {
+          if (terminationCause === 'none') terminationCause = 'provider_rate_limit';
           requestGroupSignal('SIGTERM');
           scheduleSigkill();
         }
@@ -3626,7 +3753,12 @@ function spawnEngine({
     }
 
     if (child.stderr) {
-      child.stderr.on('data', (chunk) => stderrChunks.push(chunk.toString('utf8')));
+      child.stderr.on('data', (chunk) => {
+        stderrTail += chunk.toString('utf8');
+        if (Buffer.byteLength(stderrTail, 'utf8') > MAX_STDERR_TAIL_BYTES) {
+          stderrTail = stderrTail.slice(-MAX_STDERR_TAIL_BYTES);
+        }
+      });
     }
 
     child.on('close', (code, signal) => {
@@ -3635,7 +3767,9 @@ function spawnEngine({
           code,
           signal,
           timedOut,
-          stderrTail: stderrChunks.join(''),
+          terminationCause,
+          outputLimitObserved,
+          stderrTail,
           ...state,
         }),
       );
@@ -3686,7 +3820,13 @@ function spawnCrush({
     let graceTimer = null;
     let residualCleanupPromise = null;
     const stdoutChunks = [];
-    const stderrChunks = [];
+    // First termination cause wins and is recorded BEFORE sending any signal
+    // (Section 6.1), so a child that exits zero still reports `killed` with
+    // the right cause.
+    let terminationCause = 'none';
+    // Private stderr retention is a bounded 64 KiB tail (Section 6.4).
+    const MAX_STDERR_TAIL_BYTES = 64 * 1024;
+    let stderrTail = '';
 
     const killGroup = (sig) =>
       killProcessGroup(child.pid, sig, killProcess, { strict: true, label: 'Crush' });
@@ -3738,6 +3878,7 @@ function spawnCrush({
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (terminationCause === 'none') terminationCause = 'deadline';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
@@ -3747,6 +3888,7 @@ function spawnCrush({
     // long-lived MCP server). Removed on settle so a host handling many crush
     // runs doesn't accumulate one listener pair per call.
     const onHostSignal = () => {
+      if (terminationCause === 'none') terminationCause = 'host_signal';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -3754,6 +3896,7 @@ function spawnCrush({
     process.on('SIGTERM', onHostSignal);
 
     const onAbort = () => {
+      if (terminationCause === 'none') terminationCause = 'caller_abort';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -3797,7 +3940,16 @@ function spawnCrush({
     // stderr is captured for the error-tail on the throw path; NOT forwarded
     // live — crush's WARN noise + `▶ <tool>` heartbeats would interleave with
     // this module's own dim stderr logs (a later step can forward it dimmed).
-    if (child.stderr) child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+    // Retention is a bounded 64 KiB tail (Section 6.4), never an unbounded
+    // array.
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        stderrTail += chunk.toString('utf8');
+        if (Buffer.byteLength(stderrTail, 'utf8') > MAX_STDERR_TAIL_BYTES) {
+          stderrTail = stderrTail.slice(-MAX_STDERR_TAIL_BYTES);
+        }
+      });
+    }
 
     child.on('close', (code, signal) => {
       settle(() =>
@@ -3805,8 +3957,9 @@ function spawnCrush({
           code,
           signal,
           timedOut,
+          terminationCause,
           stdout: stdoutChunks.join(''),
-          stderrTail: stderrChunks.join(''),
+          stderrTail,
         }),
       );
     });
@@ -4456,7 +4609,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   let exit_reason;
   if (result.timedOut) exit_reason = 'timeout';
-  else if (result.signal) exit_reason = 'killed';
+  // A child that handles SIGTERM and exits with code=0/signal=null is still
+  // `killed` when Triss recorded a termination cause before signalling
+  // (Section 6.1); the cause is set BEFORE the signal is sent.
+  else if (result.outputLimitObserved) exit_reason = 'error';
+  else if (['caller_abort', 'host_signal', 'provider_rate_limit', 'output_limit', 'filesystem_quota', 'child_signal'].includes(result.terminationCause)) {
+    exit_reason = 'killed';
+  } else if (result.signal) exit_reason = 'killed';
   else if (result.code === 0) exit_reason = 'end_turn';
   else exit_reason = 'error';
 
