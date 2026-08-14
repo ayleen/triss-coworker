@@ -4008,7 +4008,7 @@ async function runCrushFlow({
     maxTokens: opts.maxTokens,
     restrict,
   });
-  const env = crushEngine.buildSpawnEnv();
+  const env = crushEngine.buildSpawnEnv(undefined, deps.proxy || null);
 
   // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
   // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow

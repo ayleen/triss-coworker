@@ -117,6 +117,27 @@ test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets neither ZHIPU_API_KEY nor 
   assert.equal('ZHIPU_API_KEY' in env, false);
 });
 
+// ─── Package 6 Crush parity: credential proxy wiring (Atomic 22) ────────────
+
+test('buildCrushSpawnEnv: with a proxy plan, the engine gets the token + loopback URL, never the real key', () => {
+  const env = buildCrushSpawnEnv(
+    { ZHIPU_API_KEY: 'zk-REAL-SECRET', PATH: '/bin', HOME: '/h' },
+    { token: 'proxy-token-123', baseUrl: 'http://127.0.0.1:51001' },
+  );
+  assert.equal(env.ZHIPU_API_KEY, 'proxy-token-123');
+  assert.equal(env.ZAI_API_KEY, 'proxy-token-123');
+  assert.equal(env.ZAI_BASE_URL, 'http://127.0.0.1:51001');
+  // The real credential never reaches the engine environment.
+  assert.equal(env.ZHIPU_API_KEY.includes('REAL'), false);
+  assert.equal(env.ZAI_API_KEY.includes('REAL'), false);
+});
+
+test('buildCrushSpawnEnv: without a proxy, the real key is forwarded as before', () => {
+  const env = buildCrushSpawnEnv({ ZHIPU_API_KEY: 'zk-real', PATH: '/bin' }, null);
+  assert.equal(env.ZHIPU_API_KEY, 'zk-real');
+  assert.equal(env.ZAI_BASE_URL, undefined);
+});
+
 test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PATH/HOME/TMPDIR/LANG/LC_ALL/ZHIPU_API_KEY/ZAI_API_KEY)', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk',
