@@ -1,0 +1,350 @@
+/**
+ * coder-opencode1-characterization.test.js — Phase 1 of
+ * docs/opencode2-engine-plan.md: lock the CURRENT OpenCode 1 engine behavior
+ * BEFORE any opencode2 dispatch refactor moves shared code.
+ *
+ * These tests are the regression shield proving `--engine opencode` keeps its
+ * exact binary, argv, env allowlist, session-map shape, event fold, and
+ * envelope identity while engine #3 (opencode2) slots in. They characterize
+ * what the code does TODAY — a failing test here means the V1 contract
+ * drifted, not that the test is wrong. Existing suites already cover fold
+ * semantics and envelope shape in depth (coder-envelope.test.js); this file
+ * adds the surfaces those suites do NOT pin: the exact spawned command line,
+ * the env allowlist as forwarded today, the flat session-map persistence and
+ * its best-effort (non-CAS) concurrency behavior, engine precedence text,
+ * and the V1 pin identity.
+ *
+ * No live network, no real opencode/npm calls.
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  OPENCODE_PIN,
+  resolveCoderEngine,
+  runCoderRun,
+} from '../src/commands/coder.js';
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function withEnv(vars, fn) {
+  return async () => {
+    const saved = {};
+    for (const k of Object.keys(vars)) saved[k] = process.env[k];
+    Object.assign(process.env, vars);
+    try {
+      await fn();
+    } finally {
+      for (const k of Object.keys(vars)) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  };
+}
+
+function stdoutCapture() {
+  const chunks = [];
+  return {
+    stdoutWrite: (s) => {
+      chunks.push(s);
+      return true;
+    },
+    text: () => chunks.join(''),
+  };
+}
+
+// Fake spawn that records the exact (cmd, argv, options) and replays a
+// fixture stream. `killProcess` is NOT injected: runCoderRun defaults it to
+// noInjectedProcessGroup when spawnFn !== nodeSpawn, whose ESRCH-coded throw
+// marks the group gone — the same seam the existing suites rely on.
+function recordingSpawn(streamText, { code = 0, signal = null } = {}) {
+  const calls = [];
+  const spawnFn = (cmd, argv, options) => {
+    calls.push({ cmd, argv, options });
+    const child = new EventEmitter();
+    child.pid = 555001;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(streamText);
+      child.stderr.end('');
+      setImmediate(() => child.emit('close', code, signal));
+    });
+    return child;
+  };
+  return { spawnFn, calls };
+}
+
+const MINIMAL_SUCCESS_STREAM = [
+  JSON.stringify({ type: 'step_start', sessionID: 'ses_char_v1_0001' }),
+  JSON.stringify({ type: 'text', sessionID: 'ses_char_v1_0001', part: { text: 'done' } }),
+  JSON.stringify({
+    type: 'step_finish',
+    sessionID: 'ses_char_v1_0001',
+    part: { tokens: { input: 11, output: 7, cache: { read: 3, write: 0 } }, cost: { total: 0.002 } },
+  }),
+].join('\n') + '\n';
+
+// ─── engine resolution & pin ────────────────────────────────────────────────
+
+test('characterization: default engine is opencode; precedence explicit > env > default', () => {
+  const prev = process.env.TRISS_CODER_ENGINE;
+  try {
+    delete process.env.TRISS_CODER_ENGINE;
+    assert.equal(resolveCoderEngine({}), 'opencode');
+    process.env.TRISS_CODER_ENGINE = 'crush';
+    assert.equal(resolveCoderEngine({}), 'crush');
+    assert.equal(resolveCoderEngine({ engine: 'opencode' }), 'opencode');
+  } finally {
+    if (prev === undefined) delete process.env.TRISS_CODER_ENGINE;
+    else process.env.TRISS_CODER_ENGINE = prev;
+  }
+});
+
+test('characterization: unknown engine error lists exactly opencode, crush today', () => {
+  const prev = process.env.TRISS_CODER_ENGINE;
+  try {
+    delete process.env.TRISS_CODER_ENGINE;
+    assert.throws(
+      () => resolveCoderEngine({ engine: 'opencode2' }),
+      /Unknown coder engine "opencode2" — valid values: opencode, crush/,
+    );
+  } finally {
+    if (prev === undefined) delete process.env.TRISS_CODER_ENGINE;
+    else process.env.TRISS_CODER_ENGINE = prev;
+  }
+});
+
+test('characterization: V1 pin surface is opencode-ai@1.18.7 (module constant; env override path exercised via TRISS_CODER_OPENCODE_VERSION in status tests)', () => {
+  assert.equal(OPENCODE_PIN, '1.18.7');
+});
+
+// ─── exact spawned command line + env allowlist (fake spawn seam) ───────────
+
+test(
+  'characterization: bare V1 run spawns `opencode run <prompt> --format json --auto --model <m>` with the allowlist env',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-char-1',
+      OPENCODE_API_KEY: 'sk-zen-char',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+      const capture = stdoutCapture();
+      await runCoderRun('do the thing', {}, {
+        spawn: rec.spawnFn,
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: capture.stdoutWrite,
+      });
+      assert.equal(rec.calls.length, 1);
+      const { cmd, argv, options } = rec.calls[0];
+      assert.equal(cmd, 'opencode');
+      assert.deepEqual(argv, [
+        'run',
+        'do the thing',
+        '--format', 'json',
+        '--auto',
+        '--model', 'zai-coding-plan/glm-5.2',
+        '--agent', 'coder',
+      ]);
+      // detached POSIX group + piped stdio, exactly as today
+      assert.equal(options.detached, true);
+      assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+      // env allowlist: base five + the ONE selected credential. HOME/LANG/
+      // LC_ALL/TMPDIR ride only when present in the parent env.
+      assert.equal(options.env.PATH, process.env.PATH);
+      assert.equal(options.env.ZHIPU_API_KEY, 'zk-char-1');
+      assert.equal(options.env.OPENCODE_API_KEY, undefined);
+      assert.equal(options.env.OPENCODE_CONFIG_CONTENT, undefined);
+      for (const banned of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'TRISS_WORKER_API_KEY']) {
+        assert.equal(options.env[banned], undefined, `${banned} must not be forwarded`);
+      }
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.engine, 'opencode');
+      assert.equal(envelope.exit_reason, 'end_turn');
+    },
+  ),
+);
+
+test(
+  'characterization: one-shot provider run adds --pure and OPENCODE_CONFIG_CONTENT (model+small_model overlay)',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-char',
+      ZHIPU_API_KEY: 'zk-char-1',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+      const capture = stdoutCapture();
+      await runCoderRun(
+        'task',
+        { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+        {
+          spawn: rec.spawnFn,
+          // one-shot provider runs demand the exact V1 pin via
+          // detectOpencodeVersion; the fake binary reports it. The effective
+          // audit then runs `opencode debug config --pure` via spawnSync —
+          // replay a matching effective config for the overlay.
+          spawnSync: (c, a) => {
+            if (c === 'opencode' && a[0] === '--version') {
+              return { status: 0, stdout: OPENCODE_PIN, error: null };
+            }
+            if (c === 'opencode' && a[0] === 'debug') {
+              return {
+                status: 0,
+                error: null,
+                stdout: JSON.stringify({
+                  model: 'opencode/deepseek-v4-flash-free',
+                  small_model: 'opencode/deepseek-v4-flash-free',
+                }),
+              };
+            }
+            return { status: 1, stdout: '', error: null };
+          },
+          stdoutWrite: capture.stdoutWrite,
+        },
+      );
+      const { argv, options } = rec.calls[0];
+      assert.ok(argv.includes('--pure'), 'one-shot provider run carries --pure');
+      const overlay = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+      assert.deepEqual(overlay, {
+        model: 'opencode/deepseek-v4-flash-free',
+        small_model: 'opencode/deepseek-v4-flash-free',
+      });
+      // only the selected provider's key rides along
+      assert.equal(options.env.OPENCODE_API_KEY, 'sk-zen-char');
+      assert.equal(options.env.ZHIPU_API_KEY, undefined);
+    },
+  ),
+);
+
+// ─── session map: flat {slug: realId} today, written after a successful run ─
+
+test(
+  'characterization: --session <slug> reads the flat map, unknown slug spawns with NO --session flag, then persists the ses_ id',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-char-1',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'oc1-sess-'));
+      const prevRoot = process.env.TRISS_PROJECT_ROOT;
+      process.env.TRISS_PROJECT_ROOT = dir;
+      try {
+        const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+        const capture = stdoutCapture();
+        await runCoderRun('hello', { session: 'alpha' }, {
+          spawn: rec.spawnFn,
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: capture.stdoutWrite,
+        });
+        // unknown slug -> first run passes NO --session to opencode
+        assert.equal(rec.calls[0].argv.includes('--session'), false);
+        // after the run the real id landed in the FLAT (unversioned) map
+        const raw = JSON.parse(readFileSync(join(dir, '.triss', 'sessions.json'), 'utf8'));
+        assert.deepEqual(raw, { alpha: 'ses_char_v1_0001' });
+        // and a second run with the known slug forwards --session <real-id>
+        const rec2 = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+        await runCoderRun('again', { session: 'alpha' }, {
+          spawn: rec2.spawnFn,
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: capture.stdoutWrite,
+        });
+        const sIdx = rec2.calls[0].argv.indexOf('--session');
+        assert.notEqual(sIdx, -1, 'known slug forwards --session <real-id>');
+        assert.equal(rec2.calls[0].argv[sIdx + 1], 'ses_char_v1_0001');
+      } finally {
+        if (prevRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+        else process.env.TRISS_PROJECT_ROOT = prevRoot;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  ),
+);
+
+test(
+  'characterization: sequential writers to the flat session map both survive (persist re-reads fresh; the unsolvable window is between that read and the rename — best-effort, NOT CAS)',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-char-1',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      // What CAN be pinned deterministically: writer B, starting after writer
+      // A fully persisted, re-reads the file inside its own persist and keeps
+      // A's mapping. The lost-update counterexample itself (two read-modify-
+      // write cycles overlapping between read and atomic rename) has no
+      // injection seam today — it is the window Phase 4's locked store
+      // closes; see docs/opencode2-engine-plan.md "Session contract".
+      const dir = mkdtempSync(join(tmpdir(), 'oc1-seq-'));
+      const prevRoot = process.env.TRISS_PROJECT_ROOT;
+      process.env.TRISS_PROJECT_ROOT = dir;
+      try {
+        const cap = stdoutCapture();
+        const deps = (stream) => ({
+          spawn: recordingSpawn(stream).spawnFn,
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          stdoutWrite: cap.stdoutWrite,
+        });
+        await runCoderRun('a', { session: 'sa' }, deps(
+          MINIMAL_SUCCESS_STREAM.replace(/ses_char_v1_0001/g, 'ses_seq_a'),
+        ));
+        await runCoderRun('b', { session: 'sb' }, deps(
+          MINIMAL_SUCCESS_STREAM.replace(/ses_char_v1_0001/g, 'ses_seq_b'),
+        ));
+        const finalMap = JSON.parse(readFileSync(join(dir, '.triss', 'sessions.json'), 'utf8'));
+        assert.equal(finalMap.sa, 'ses_seq_a');
+        assert.equal(finalMap.sb, 'ses_seq_b');
+      } finally {
+        if (prevRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+        else process.env.TRISS_PROJECT_ROOT = prevRoot;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  ),
+);
+
+// ─── envelope identity ──────────────────────────────────────────────────────
+
+test(
+  'characterization: V1 envelope carries engine "opencode", schema v2 usage, and session ids verbatim',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-char-1',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+      const capture = stdoutCapture();
+      await runCoderRun('x', {}, {
+        spawn: rec.spawnFn,
+        // version probe fails -> engineVersion falls back to the pin string
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: capture.stdoutWrite,
+      });
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.engine, 'opencode');
+      assert.equal(envelope.engine_version, '1.18.7');
+      assert.equal(envelope.session_id, 'ses_char_v1_0001');
+      assert.equal(envelope.usage.schema_version, 2);
+      assert.equal(envelope.usage.tokens.input_uncached, 11);
+      assert.equal(envelope.usage.tokens.output_visible, 7);
+      assert.equal(envelope.usage.tokens.input_total, 14);
+      assert.deepEqual(envelope.warnings, []);
+    },
+  ),
+);
