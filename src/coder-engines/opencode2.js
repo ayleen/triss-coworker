@@ -1,0 +1,268 @@
+// opencode2 adapter — the THIRD coding engine (OpenCode 2 beta) behind
+// `triss coder run --engine opencode2`. See docs/opencode2-engine-plan.md for
+// the verified facts this adapter follows. Scope mirrors crush.js: PURE
+// adapter functions — detect, argv/env builders, event fold, capabilities.
+// NO process orchestration (that stays in src/commands/coder.js spawnEngine),
+// NO isolation logic, NO logUsage.
+//
+// Verified-against-the-pin facts encoded here (live recon 2026-08-14, exact
+// pin 0.0.0-next-17430, docs/opencode2-engine-plan.md "Pinned-build recon"):
+//   - CLI surface: `run --standalone --format json --auto --model <m>
+//     [--agent <a>] [--session <id> | --continue] <prompt>`; NO --pure, NO
+//     --dir (unsupported on this build — child cwd selects the project).
+//   - Events on stdout are ndjson with the SAME event vocabulary as V1
+//     (step_start/tool_use/step_finish/text/error) but TWO differences the
+//     fold must handle: (1) `error.message` is populated (V1 parsers read
+//     only error.data.message/error.name); (2) `step_finish` may arrive BEFORE
+//     the final `text` event on tool runs — order-independent folding only.
+//   - `--standalone` is REQUIRED for managed runs: every other startup mode
+//     leaves a resident `opencode2 serve --service` process behind (verified
+//     live — even `opencode2 debug config` spawns one). Standalone leaves no
+//     descendant.
+//   - Version string is a non-semver beta (`v0.0.0-next-17430`), so the pin
+//     is an EXACT MATCH, not a semver range: any other build fails the pin.
+//   - Auto-update must be disabled per invocation (OPENCODE_DISABLE_AUTOUPDATE
+//     =1) so the verified pin cannot drift under us.
+//   - Runtime state is isolated into a Triss-owned XDG root
+//     (<project>/.triss/opencode2/{data,state}) so V2's SQLite/log files can
+//     never collide with V1's ~/.local/share/opencode.
+
+import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { join } from 'node:path';
+
+import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
+import { parseRateLimitReset } from '../commands/coder.js';
+
+// The exact npm dist-tag build verified live. NOT semver: `next-<n>` builds
+// are opaque sequences — a newer number is a different, unverified build, so
+// detect() requires an EXACT match and every mismatch warns/fails closed.
+const OPENCODE2_PIN_DEFAULT = '0.0.0-next-17430';
+
+export function opencode2VersionPin() {
+  return process.env.TRISS_CODER_OPENCODE2_VERSION || OPENCODE2_PIN_DEFAULT;
+}
+
+export { OPENCODE2_PIN_DEFAULT };
+
+// detectOpenCode2: spawnSync('opencode2', ['--version']) — NEVER shell:true.
+// Output looks like `opencode2 v0.0.0-next-17430`. Returns
+// {found, version, satisfiesPin} where `version` is the bare build string and
+// `satisfiesPin` is EXACT equality with the configured pin (see above for why
+// not >=). NEVER throws; missing binary / spawn error / garbage output all
+// yield {found:false, version:null, satisfiesPin:false}. `sh` is injectable
+// for tests.
+export function detectOpenCode2(sh = nodeSpawnSync) {
+  let r;
+  try {
+    r = sh('opencode2', ['--version']);
+  } catch {
+    return { found: false, version: null, satisfiesPin: false };
+  }
+  if (!r || r.error || r.status !== 0) {
+    return { found: false, version: null, satisfiesPin: false };
+  }
+  const out = String(r.stdout || '').trim();
+  const m = /v(\S+)/.exec(out);
+  const version = m ? m[1] : out || null;
+  if (!version) return { found: false, version: null, satisfiesPin: false };
+  return { found: true, version, satisfiesPin: version === opencode2VersionPin() };
+}
+
+export function installHintOpenCode2() {
+  return `npm install -g @opencode-ai/cli@${opencode2VersionPin()}`;
+}
+
+// buildOpenCode2RunArgv: argv for `opencode2 run`. Flag order mirrors the
+// verified CLI surface; the prompt is the positional LAST.
+//  - `--standalone` ALWAYS: non-standalone modes leave a resident service.
+//  - `--format json --auto`: ndjson events on stdout; headless auto-approve.
+//  - `--model <m>` ALWAYS explicit — same determinism argument as V1 (the
+//    wrong config-file default loops forever with nothing on stdout).
+//  - `--agent <a>` optional (triss passes its `coder` agent).
+//  - `--session <real-id>` XOR `--continue` — the CLI accepts both together
+//    but the semantics are ambiguous (which session does --continue resume
+//    when --session also names one?), so the adapter refuses the combo
+//    BEFORE any spawn. `--session` takes a REAL engine session id; the
+//    slug->real-id map is the caller's job (needsSessionMap: true).
+//  - NO --pure, NO --dir, NO --cwd flag: this build supports neither, the
+//    child process cwd selects the project.
+export function buildOpenCode2RunArgv({ prompt, model, agent, sessionRealId, cont } = {}) {
+  if (sessionRealId && cont) {
+    throw new Error(
+      '--session and --continue are mutually exclusive on the opencode2 engine — ' +
+        'passing both states an ambiguous resume intent.',
+    );
+  }
+  const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', model];
+  if (agent) argv.push('--agent', agent);
+  if (sessionRealId) argv.push('--session', sessionRealId);
+  if (cont) argv.push('--continue');
+  argv.push(prompt); // positional message, LAST
+  return argv;
+}
+
+// The Triss-owned XDG roots for V2 runtime state, derived from the project
+// root (NOT the user's home): V2's SQLite/log/cache must never collide with
+// V1's ~/.local/share/opencode. Exported because the log scanner needs the
+// same derivation (V2 writes $XDG_DATA_HOME/opencode/log/opencode.log).
+export function opencode2DataRoot(projectRoot) {
+  return join(projectRoot, '.triss', 'opencode2', 'data');
+}
+
+export function opencode2StateRoot(projectRoot) {
+  return join(projectRoot, '.triss', 'opencode2', 'state');
+}
+
+// buildOpenCode2SpawnEnv: allowlist env for the opencode2 subprocess.
+// NEVER spread process.env. Beyond the V1 allowlist (PATH/HOME/TMPDIR/LANG/
+// LC_ALL + the ONE selected credential):
+//  - OPENCODE_DISABLE_AUTOUPDATE=1 always (pin drift guard).
+//  - XDG_DATA_HOME / XDG_STATE_HOME pinned to the Triss-owned project-local
+//    roots above, OVERRIDING whatever the parent shell had — this is what
+//    keeps V2 state off V1's turf (and vice versa).
+//  - XDG_CONFIG_HOME is deliberately NOT forwarded: the parent shell's
+//    override must not redirect which opencode.json V2 loads. V2 resolves
+//    config from the documented default (~/.config/opencode) plus the child
+//    cwd chain — preflight audits exactly that chain (Phase 4).
+export function buildOpenCode2SpawnEnv({
+  projectRoot,
+  baseEnv = process.env,
+  credentialEnv,
+  credentialValue,
+} = {}) {
+  const env = {};
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
+    if (baseEnv[key] != null) env[key] = baseEnv[key];
+  }
+  const value = credentialValue === undefined ? baseEnv[credentialEnv] : credentialValue;
+  if (credentialEnv && value) env[credentialEnv] = value;
+  env.OPENCODE_DISABLE_AUTOUPDATE = '1';
+  env.XDG_DATA_HOME = opencode2DataRoot(projectRoot);
+  env.XDG_STATE_HOME = opencode2StateRoot(projectRoot);
+  return env;
+}
+
+// ─── event fold ─────────────────────────────────────────────────────────────
+//
+// Same accumulator shape as V1's createEventFolder (the usage fold is shared:
+// foldOpencodeStep/finalizeOpencodeUsage in usage-schema.js — V2 step_finish
+// `part` is byte-compatible with V1's), plus TWO V2-only fields:
+//   - terminalError / terminalErrorType: a V2 `error` event is terminal even
+//     when the process later exits 0 (verified live: the auth-error capture
+//     exits 1, but a mid-stream provider error after partial text can exit 0).
+//     The envelope classifies terminalError as exit_reason "error" BEATS the
+//     exit code.
+
+export function createOpenCode2EventFolder() {
+  return {
+    parsedAnyEvent: false,
+    sessionRealId: null,
+    finalText: null,
+    usage: emptyOpencodeUsage(),
+    sawStepFinish: false,
+    warnings: [],
+    rateLimit: null,
+    terminalError: null,
+    terminalErrorType: null,
+  };
+}
+
+// V2 error payloads carry a human-readable `message` V1 never populated.
+// Precedence: message > data.message (V1 compat) > name > null.
+export function extractOpenCode2ErrorMessage(evt) {
+  const err = evt && evt.error;
+  if (!err || typeof err !== 'object') return null;
+  if (typeof err.message === 'string' && err.message) return err.message;
+  if (err.data && typeof err.data.message === 'string' && err.data.message) return err.data.message;
+  if (typeof err.name === 'string' && err.name) return err.name;
+  return null;
+}
+
+// foldOpenCode2EventLine: folds one raw ndjson line into `state` (mutated in
+// place). Mirrors V1's foldEventLine contract — unknown event types and
+// unparseable lines add a warning instead of throwing — with the V2
+// differences: error.message precedence + terminal error capture, and a
+// V2-specific unknown-event warning so a V2 stream is never misread as V1.
+// NOTE: `text` handling keeps overwrite semantics and is deliberately
+// order-independent w.r.t. step_finish (V2 emits step_finish BEFORE the final
+// text on tool runs — verified live).
+export function foldOpenCode2EventLine(state, rawLine, { onToolUse } = {}) {
+  const line = String(rawLine).trim();
+  if (!line) return;
+
+  let evt;
+  try {
+    evt = JSON.parse(line);
+  } catch {
+    state.warnings.push(`unparseable line: ${line.slice(0, 200)}`);
+    return;
+  }
+  state.parsedAnyEvent = true;
+  if (!state.sessionRealId && evt.sessionID) state.sessionRealId = evt.sessionID;
+
+  switch (evt.type) {
+    case 'step_start':
+      break;
+    case 'tool_use':
+      if (onToolUse) onToolUse(evt);
+      break;
+    case 'step_finish': {
+      // Per-step tokens, same as V1: the envelope usage is the SUM across
+      // all step_finish events (foldOpencodeStep maintains it).
+      state.sawStepFinish = true;
+      foldOpencodeStep(state.usage, evt.part);
+      const { tokens: folded } = finalizeOpencodeUsage(state.usage);
+      state.usage.input_total = folded.input_total;
+      state.usage.output_total = folded.output_total;
+      break;
+    }
+    case 'text':
+      if (evt.part?.text != null) state.finalText = evt.part.text;
+      break;
+    case 'error': {
+      const msg = extractOpenCode2ErrorMessage(evt) || 'unknown engine error';
+      state.warnings.push(`engine error: ${msg}`);
+      state.terminalError = msg;
+      state.terminalErrorType = (evt.error && evt.error.type) || null;
+      const rl = parseRateLimitReset(msg) || parseRateLimitReset(line);
+      if (rl && !state.rateLimit) state.rateLimit = rl;
+      break;
+    }
+    default:
+      state.warnings.push(`unknown OpenCode 2 event type: ${evt.type}`);
+  }
+}
+
+// The V2 run-log location under the Triss-owned data root (the engine still
+// writes $XDG_DATA_HOME/opencode/log/opencode.log — inside OUR root). Used by
+// both the live rate-limit watchdog and the fallback post-run scan.
+export function opencode2LogPath(projectRoot) {
+  return join(opencode2DataRoot(projectRoot), 'opencode', 'log', 'opencode.log');
+}
+
+// The adapter object — same member shape as crush.js so coder.js dispatches
+// uniformly. `logPathFor` is V2's analog of V1's opencodeLogPath().
+export const opencode2 = {
+  id: 'opencode2',
+  binaryName: 'opencode2',
+  versionPin: opencode2VersionPin,
+  detect: detectOpenCode2,
+  installHint: installHintOpenCode2,
+  buildRunArgv: buildOpenCode2RunArgv,
+  buildSpawnEnv: buildOpenCode2SpawnEnv,
+  createState: createOpenCode2EventFolder,
+  foldLine: foldOpenCode2EventLine,
+  logPathFor: ({ projectRoot }) => opencode2LogPath(projectRoot),
+  // OpenCode 2 sessions use the same ses_* real ids as V1 — slug->real-id
+  // mapping is required, namespaced per engine in the versioned store.
+  needsSessionMap: true,
+  // This pin has no small-model role surface: no --small-model, ever.
+  supportsSmallModel: false,
+  // Every managed invocation MUST run --standalone (resident-service guard).
+  requiresStandalone: true,
+  // --pure / OPENCODE_CONFIG_CONTENT are V1-only overlays; V2 shares the
+  // on-disk opencode.json instead (never written by Triss).
+  supportsPureConfig: false,
+};
+
+export default opencode2;

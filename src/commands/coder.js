@@ -82,6 +82,13 @@ import {
 // orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
 // docs/coder-agent-plan.md and docs/crush-issues.md.
 import { crush as crushEngine } from '../coder-engines/crush.js';
+import {
+  opencode2 as opencode2Engine,
+  opencode2VersionPin,
+  createOpenCode2EventFolder,
+  foldOpenCode2EventLine,
+  opencode2LogPath,
+} from '../coder-engines/opencode2.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
 // 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
@@ -101,7 +108,7 @@ const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // compensates by defaulting --isolate ON for crush and making restrict opt-in).
 // Override per-call via --engine or globally via TRISS_CODER_ENGINE.
 export const DEFAULT_CODER_ENGINE = 'opencode';
-const VALID_CODER_ENGINES = ['opencode', 'crush'];
+const VALID_CODER_ENGINES = ['opencode', 'opencode2', 'crush'];
 
 // Resolve + validate the engine selection. --engine beats TRISS_CODER_ENGINE
 // beats the default. An invalid name throws a clear Error listing valid values
@@ -3057,6 +3064,86 @@ function readSessionsMap() {
   }
 }
 
+// ─── versioned, engine-namespaced session store ─────────────────────────────
+//
+// Shape v2 (docs/opencode2-engine-plan.md "Session contract"):
+//   { "version": 2, "engines": { "opencode": {slug: realId}, "opencode2": {...} } }
+// A legacy flat file {slug: realId} is all-V1 (the only engine that existed)
+// and migrates atomically on first write. Migration is read-time lazy: the
+// accessors below normalize BOTH shapes in memory so readers never see the
+// flat form, while the on-disk file is only rewritten when a mapping is
+// actually persisted (an existing safe V1 file is not rewritten merely by a
+// V2 read — Phase 4 acceptance).
+
+const SESSION_STORE_VERSION = 2;
+const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
+
+// Normalize any on-disk shape (legacy flat map OR versioned) into the
+// versioned in-memory shape. Pure: never mutates the argument, never throws.
+function normalizeSessionStore(raw) {
+  const store = { version: SESSION_STORE_VERSION, engines: { opencode: {}, opencode2: {} } };
+  if (!raw || typeof raw !== 'object') return store;
+  if (raw.version === 2 && raw.engines && typeof raw.engines === 'object') {
+    for (const engine of SESSION_STORE_ENGINES) {
+      const namespace = raw.engines[engine];
+      if (namespace && typeof namespace === 'object') {
+        for (const [slug, realId] of Object.entries(namespace)) {
+          if (typeof slug === 'string' && typeof realId === 'string') {
+            store.engines[engine][slug] = realId;
+          }
+        }
+      }
+    }
+    return store;
+  }
+  // Legacy flat map: every entry belongs to the V1 engine (the only writer
+  // that ever produced this shape).
+  for (const [slug, realId] of Object.entries(raw)) {
+    if (typeof slug === 'string' && typeof realId === 'string') {
+      store.engines.opencode[slug] = realId;
+    }
+  }
+  return store;
+}
+
+function readSessionStore() {
+  return normalizeSessionStore(readSessionsMap());
+}
+
+// Look up a slug's real session id for ONE engine. Cross-engine lookups are
+// impossible by construction — an opencode2 run never sees opencode's ids
+// (equal slugs across engines never cross-resume).
+function lookupSessionRealId(engine, slug) {
+  const store = readSessionStore();
+  const namespace = store.engines[engine] || {};
+  return namespace[slug] || null;
+}
+
+// Persist slug -> realId under the engine's namespace. Read-modify-write of
+// the VERSIONED shape (legacy content migrates here), atomic write-then-
+// rename, best-effort concurrent-writer mitigation (same contract as V1's
+// persistSessionMapping: sequential writers both survive; the true
+// lost-update window is Phase 4's locked store's to close).
+function persistSessionMapping(sh, engine, slug, realId) {
+  const path = sessionsFilePath();
+  mkdirSync(dirname(path), { recursive: true });
+
+  const store = readSessionStore();
+  if (!store.engines[engine]) store.engines[engine] = {};
+  store.engines[engine][slug] = realId;
+  atomicWriteJson(path, store);
+
+  const verify = readSessionStore();
+  if (verify.engines[engine]?.[slug] !== realId) {
+    const retryStore = readSessionStore();
+    if (!retryStore.engines[engine]) retryStore.engines[engine] = {};
+    retryStore.engines[engine][slug] = realId;
+    atomicWriteJson(path, retryStore);
+  }
+
+  if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
+}
+
 // Write-then-rename so a reader never observes a partially-written file.
 // renameSync is atomic on the same filesystem, which the tmp file always
 // is (same directory as the target).
@@ -3070,34 +3157,15 @@ function atomicWriteJson(path, obj) {
 // config.js's maybeAddGitignore guard) — a non-git cwd still gets the
 // mapping file written, just not a .gitignore entry for it.
 //
-// Read-modify-write race: two concurrent `coder run` calls with different
+// The persist path itself now lives in persistSessionMapping above (the
+// versioned engine-namespaced store); this comment block retains the V1
+// concurrency rationale: two concurrent `coder run` calls with different
 // slugs can each read the map before the other writes, then each write
 // back a version missing the other's fresh mapping — the loser's slug
 // silently vanishes from sessions.json, breaking its future --continue.
-// The atomic write above only prevents torn reads; it doesn't close this
-// window. Narrow it further by re-reading immediately after our write and,
-// if our own slug's value was clobbered by a concurrent writer, redo the
-// merge once. This is a best-effort mitigation, not a lock: two processes
-// racing on the SAME slug is still inherently last-write-wins (there is
-// no source of truth for "which write is correct" in that case, and it's
-// not the scenario this guards against).
-function persistSessionMapping(sh, slug, realId) {
-  const path = sessionsFilePath();
-  mkdirSync(dirname(path), { recursive: true });
-
-  const map = readSessionsMap();
-  map[slug] = realId;
-  atomicWriteJson(path, map);
-
-  const verify = readSessionsMap();
-  if (verify[slug] !== realId) {
-    const retryMap = readSessionsMap();
-    retryMap[slug] = realId;
-    atomicWriteJson(path, retryMap);
-  }
-
-  if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
-}
+// The atomic write only prevents torn reads; it doesn't close this
+// window. The re-read-and-retry below narrows it. This is a best-effort
+// mitigation, not a lock.
 
 // ─── isolation (worktree) setup — Phase 3 helpers reused ───────────────────────
 
@@ -3403,24 +3471,34 @@ function spawnEngine({
   residualTermGraceMs = RESIDUAL_GROUP_TERM_GRACE_MS,
   residualKillWaitMs = RESIDUAL_GROUP_KILL_WAIT_MS,
   processGroupPollMs = PROCESS_GROUP_POLL_MS,
+  // ── engine seam (OpenCode 2, engine #3) ──
+  // The V1 path is unchanged when these are omitted: binary 'opencode',
+  // V1 event fold, V1 diagnostics labels (tests pin the exact messages).
+  // V2 passes its adapter's members.
+  binary = 'opencode',
+  label = 'opencode',
+  createState = createEventFolder,
+  foldLine = foldEventLine,
+  cwd,
 }) {
   // pollMs === 0 disables the watchdog entirely; null/undefined uses the
   // default cadence. Tests set a small value to exercise the poll path.
   const resolvedPollMs = pollMs == null ? RATE_LIMIT_POLL_MS : pollMs;
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
-      reject(new Error('OpenCode run was cancelled before the engine started.'));
+      reject(new Error(`${label} run was cancelled before the engine started.`));
       return;
     }
     let child;
     try {
-      child = spawnFn('opencode', argv, {
+      child = spawnFn(binary, argv, {
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env,
+        ...(cwd !== undefined ? { cwd } : {}),
       });
     } catch (err) {
-      reject(new Error(`Failed to spawn opencode: ${err.message}`));
+      reject(new Error(`Failed to spawn ${label}: ${err.message}`));
       return;
     }
 
@@ -3429,7 +3507,7 @@ function spawnEngine({
     let graceTimer = null;
     let pollTimer = null;
     let residualCleanupPromise = null;
-    const state = createEventFolder();
+    const state = createState();
     const stderrChunks = [];
 
     const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true });
@@ -3456,7 +3534,7 @@ function spawnEngine({
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
         throw new Error(
-          `OpenCode process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
+          `${label} process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
     };
@@ -3601,14 +3679,14 @@ function spawnEngine({
       // A ChildProcess error means the engine did not spawn successfully; do
       // not replace that exact diagnostic with a speculative group-cleanup
       // failure for a pid that may never have become a process leader.
-      settle(() => reject(new Error(`Failed to spawn opencode: ${err.message}`)), { cleanup: false });
+      settle(() => reject(new Error(`Failed to spawn ${label}: ${err.message}`)), { cleanup: false });
     });
 
     if (child.stdout) {
       const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
       rl.on('line', (line) => {
         const hadRateLimit = state.rateLimit;
-        foldEventLine(state, line, {
+        foldLine(state, line, {
           onToolUse: (evt) => {
             const tool = evt.part?.tool || 'tool';
             const denied = evt.part?.state?.status === 'error';
@@ -4120,8 +4198,15 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   let oneShotProvider = null;
   let oneShotSmallModel = null;
   if (opts.provider) {
-    if (engine !== 'opencode') {
+    if (engine === 'crush') {
       throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
+    }
+    if (engine === 'opencode2') {
+      throw new Error(
+        '--provider/--small-model one-shot runs are unsupported on the opencode2 engine for now: ' +
+          'every advertised provider route needs a verified translation fixture on the pinned build first ' +
+          '(docs/opencode2-engine-plan.md). Use --engine opencode for one-shot provider runs.',
+      );
     }
     if (!modelOverride) {
       throw new Error(
@@ -4370,7 +4455,233 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     });
   }
 
-  const sessionRealIdArg = opts.session ? readSessionsMap()[opts.session] || null : null;
+  // Engine-namespaced slug -> real-id lookup (versioned store): an opencode2
+  // run never sees opencode's ids even for the same slug.
+  const sessionRealIdArg = opts.session ? lookupSessionRealId(engine, opts.session) : null;
+
+  // ─── OpenCode 2 (engine #3) ────────────────────────────────────────────────
+  //
+  // Shares spawnEngine's process management through the engine seam (binary/
+  // label/createState/foldLine/cwd) but diverges from V1 on: XDG-isolated
+  // runtime state, ALWAYS --standalone (resident-service guard), no --pure/
+  // --dir/--small-model surface, error.message precedence, terminal error
+  // classification, and the never-zero missing-usage rule. The six provider
+  // routes are fixture-gated: any route without a deterministic current-pin
+  // translation fixture fails closed BEFORE a credential is forwarded.
+  if (engine === 'opencode2') {
+    if (opts.session && opts.continue) {
+      throw new Error(
+        '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
+          'pass one or the other, never both.',
+      );
+    }
+    if (oneShotProvider) {
+      throw new Error(
+        `--provider/--small-model one-shot overlays are not implemented for the opencode2 engine yet — ` +
+          'the six advertised provider routes each need a verified translation fixture first ' +
+          '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
+      );
+    }
+
+    const root = projectRoot();
+    const argv2 = opencode2Engine.buildRunArgv({
+      prompt,
+      model: modelUsed,
+      agent,
+      sessionRealId: sessionRealIdArg,
+      cont: !!opts.continue,
+    });
+    const env2 = opencode2Engine.buildSpawnEnv({
+      projectRoot: root,
+      credentialEnv: cred.env,
+      credentialValue,
+    });
+    const engine2Version = opencode2VersionPin();
+    const logPath2 = opencode2LogPath(root);
+
+    process.stderr.write(
+      pc.dim(
+        `[coder run] engine=opencode2 agent=${agent} model=${modelUsed}` +
+          (isolation ? ` isolate=${isolation.wtPath}` : '') +
+          '\n',
+      ),
+    );
+
+    const spawnStartMs2 = Date.now();
+    let result2;
+    let rateLimit2;
+    try {
+      result2 = await spawnEngine({
+        argv: argv2,
+        env: env2,
+        timeoutSec,
+        spawnFn,
+        sinceMs: spawnStartMs2,
+        scanRateLimit: deps.scanRateLimit,
+        logPath: deps.logPath || logPath2,
+        pollMs: deps.pollMs,
+        abortSignal: deps.abortSignal,
+        killProcess,
+        residualTermGraceMs: deps.residualTermGraceMs,
+        residualKillWaitMs: deps.residualKillWaitMs,
+        processGroupPollMs: deps.processGroupPollMs,
+        binary: opencode2Engine.binaryName,
+        label: 'opencode2',
+        createState: createOpenCode2EventFolder,
+        foldLine: foldOpenCode2EventLine,
+        cwd: isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : process.cwd(),
+      });
+
+      rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });
+      if (rateLimit2 && !result2.finalText) {
+        const err = new Error(rateLimitMessage(rateLimit2));
+        err.rateLimit = rateLimit2;
+        throw err;
+      }
+      if (!result2.parsedAnyEvent) {
+        const tailLines = result2.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+        const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+        throw new Error(
+          `opencode2 produced no parseable output (exit ${result2.code ?? 'null'}` +
+            `${result2.signal ? `, signal ${result2.signal}` : ''}).${detail}`,
+        );
+      }
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) {
+        cleanupAbandonedIsolation(sh, isolation);
+      }
+      throw err;
+    }
+
+    if (rateLimit2) result2.warnings.push(rateLimitMessage(rateLimit2));
+
+    // Terminal-error precedence: a V2 error event is terminal even when the
+    // process exits 0 (verified live — see the adapter header). This BEATS
+    // every exit-code/signal-based classification.
+    let exit_reason2;
+    if (result2.terminalError) exit_reason2 = 'error';
+    else if (result2.timedOut) exit_reason2 = 'timeout';
+    else if (result2.signal) exit_reason2 = 'killed';
+    else if (result2.code === 0) exit_reason2 = 'end_turn';
+    else exit_reason2 = 'error';
+
+    if (opts.session && result2.sessionRealId) {
+      persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
+    }
+
+    let filesChanged2 = [];
+    let diffStat2 = null;
+    let worktreeOut2 = null;
+    if (isolation) {
+      const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
+      if (changes.warnings.length) result2.warnings.push(...changes.warnings);
+      if (changes.filesChanged.length === 0) {
+        try {
+          gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+          if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
+            const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
+            if (!branchDeleted) {
+              result2.warnings.push(
+                `branch ${isolation.branch} kept — not fully merged; a future --isolate --session ` +
+                  `<slug> reusing this slug will fail until it's removed (see \`triss coder clean --all\`)`,
+              );
+            }
+          }
+        } catch (err) {
+          result2.warnings.push(`isolate cleanup failed: ${err.message}`);
+        }
+      } else {
+        filesChanged2 = changes.filesChanged;
+        diffStat2 = changes.diffStat;
+        worktreeOut2 = isolation.wtPath;
+      }
+    }
+
+    // Never-zero missing usage: exit 0 without step_finish is NOT zero usage —
+    // usage_status "missing", null canonical counters, null cost, explicit
+    // warning. (estimateCanonicalCost would return plan-$0 for a subscription
+    // model even with no counters; V2 must not claim that.)
+    if (!result2.sawStepFinish) {
+      result2.warnings.push(
+        'OpenCode 2 emitted no step_finish event — usage counters unknown (usage_status "missing"); ' +
+          'never reported as zero.',
+      );
+    }
+
+    const { tokens: tokens2, usage_status: usageStatus2, warnings: normalizeWarnings2 } =
+      finalizeOpencodeUsage(result2.usage);
+    if (normalizeWarnings2.length) result2.warnings.push(...normalizeWarnings2);
+
+    // Missing usage -> null cost object with explicit unknowns (the plan's
+    // "never reported as zero" rule); reported usage -> normal canonical cost.
+    let cost2;
+    if (usageStatus2 === 'missing' || !result2.sawStepFinish) {
+      cost2 = {
+        input_uncached_usd: null,
+        cache_read_usd: null,
+        cache_write_usd: null,
+        output_visible_usd: null,
+        reasoning_usd: null,
+        output_total_usd: null,
+        reported_total_usd: null,
+        reported_total_source: null,
+        total_usd: null,
+        source: 'unknown',
+        complete: false,
+        unknown_components: ['no_step_finish'],
+      };
+    } else {
+      cost2 = estimateCanonicalCost({
+        billing_model: modelUsed,
+        billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
+        tokens: tokens2,
+        reported_total_usd: result2.usage.reported_total_usd,
+        reported_total_source: result2.usage.reported_total_source,
+      });
+    }
+
+    const promptTokens2 = tokens2.input_uncached ?? 0;
+    const completionTokens2 = tokens2.output_visible ?? 0;
+    const ctx2 = currentCall();
+    logUsage({
+      model: modelUsed,
+      billing_model: modelUsed,
+      billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
+      usage_source: 'opencode2',
+      engine: 'opencode2',
+      usage_status: usageStatus2,
+      tokens: tokens2,
+      cost: cost2,
+      label: 'coder',
+      call_id: ctx2?.callId,
+      parent_call_id: ctx2?.parentCallId,
+    });
+
+    const envelope2 = {
+      engine: 'opencode2',
+      engine_version: engine2Version,
+      session_id: result2.sessionRealId || null,
+      exit_reason: exit_reason2,
+      final_text: result2.finalText,
+      files_changed: filesChanged2,
+      diff_stat: diffStat2,
+      worktree: worktreeOut2,
+      usage: {
+        schema_version: 2,
+        usage_status: usageStatus2,
+        tokens: tokens2,
+        cost: cost2,
+        prompt_tokens: promptTokens2,
+        completion_tokens: completionTokens2,
+      },
+      warnings: result2.warnings,
+    };
+
+    const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
+    writeStdout2(JSON.stringify(envelope2) + '\n');
+    return;
+  }
+
   const dir = isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : null;
 
   const argv = buildOpencodeArgv({
@@ -4461,7 +4772,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   else exit_reason = 'error';
 
   if (opts.session && result.sessionRealId) {
-    persistSessionMapping(sh, opts.session, result.sessionRealId);
+    persistSessionMapping(sh, engine, opts.session, result.sessionRealId);
   }
 
   let filesChanged = [];

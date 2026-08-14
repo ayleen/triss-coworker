@@ -802,7 +802,9 @@ test('runCoderRun: persists slug -> real opencode session id in .triss/sessions.
     const sessionsPath = join(repoRoot, '.triss', 'sessions.json');
     assert.equal(existsSync(sessionsPath), true);
     const map = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    assert.equal(map['my-session'], 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
+    // Phase 3/4 versioned engine-namespaced store.
+    assert.equal(map.version, 2);
+    assert.equal(map.engines.opencode['my-session'], 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
 
     let capturedArgv2 = null;
     await runCoderRun(
@@ -831,6 +833,8 @@ test('runCoderRun: persists slug -> real opencode session id in .triss/sessions.
 test('runCoderRun: preserves unrelated slugs already in sessions.json when persisting a new one (merge, not replace)', async () => {
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
+    // Pre-seed the LEGACY flat shape: the store migrates it losslessly into
+    // the opencode namespace while persisting the new mapping.
     mkdirSync(join(repoRoot, '.triss'), { recursive: true });
     writeFileSync(
       join(repoRoot, '.triss', 'sessions.json'),
@@ -844,8 +848,9 @@ test('runCoderRun: preserves unrelated slugs already in sessions.json when persi
     );
 
     const map = JSON.parse(readFileSync(join(repoRoot, '.triss', 'sessions.json'), 'utf8'));
-    assert.equal(map['other-session'], 'ses_preexisting');
-    assert.equal(map['my-session'], 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
+    assert.equal(map.version, 2);
+    assert.equal(map.engines.opencode['other-session'], 'ses_preexisting');
+    assert.equal(map.engines.opencode['my-session'], 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
   });
   try {
     await run();

@@ -108,13 +108,13 @@ test('characterization: default engine is opencode; precedence explicit > env > 
   }
 });
 
-test('characterization: unknown engine error lists exactly opencode, crush today', () => {
+test('characterization: unknown engine error lists opencode, opencode2, crush (Phase 3 widened the enum)', () => {
   const prev = process.env.TRISS_CODER_ENGINE;
   try {
     delete process.env.TRISS_CODER_ENGINE;
     assert.throws(
-      () => resolveCoderEngine({ engine: 'opencode2' }),
-      /Unknown coder engine "opencode2" — valid values: opencode, crush/,
+      () => resolveCoderEngine({ engine: 'nope' }),
+      /Unknown coder engine "nope" — valid values: opencode, opencode2, crush/,
     );
   } finally {
     if (prev === undefined) delete process.env.TRISS_CODER_ENGINE;
@@ -252,9 +252,11 @@ test(
         });
         // unknown slug -> first run passes NO --session to opencode
         assert.equal(rec.calls[0].argv.includes('--session'), false);
-        // after the run the real id landed in the FLAT (unversioned) map
+        // after the run the real id landed in the VERSIONED engine-namespaced
+        // store (Phase 3/4 contract: {version:2, engines:{opencode:{...}}})
         const raw = JSON.parse(readFileSync(join(dir, '.triss', 'sessions.json'), 'utf8'));
-        assert.deepEqual(raw, { alpha: 'ses_char_v1_0001' });
+        assert.equal(raw.version, 2);
+        assert.equal(raw.engines.opencode.alpha, 'ses_char_v1_0001');
         // and a second run with the known slug forwards --session <real-id>
         const rec2 = recordingSpawn(MINIMAL_SUCCESS_STREAM);
         await runCoderRun('again', { session: 'alpha' }, {
@@ -306,8 +308,8 @@ test(
           MINIMAL_SUCCESS_STREAM.replace(/ses_char_v1_0001/g, 'ses_seq_b'),
         ));
         const finalMap = JSON.parse(readFileSync(join(dir, '.triss', 'sessions.json'), 'utf8'));
-        assert.equal(finalMap.sa, 'ses_seq_a');
-        assert.equal(finalMap.sb, 'ses_seq_b');
+        assert.equal(finalMap.engines.opencode.sa, 'ses_seq_a');
+        assert.equal(finalMap.engines.opencode.sb, 'ses_seq_b');
       } finally {
         if (prevRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
         else process.env.TRISS_PROJECT_ROOT = prevRoot;
