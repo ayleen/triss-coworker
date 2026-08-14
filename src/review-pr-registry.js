@@ -20,7 +20,6 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 import { withFixedKernelLock } from './fixed-kernel-lock.js';
-import { prepareQuotaBackedDirectory } from './coder-write-quota.js';
 
 export const PR_REGISTRY_MAX_RUNS = 3;
 export const PR_REGISTRY_ROOT_QUOTA_BYTES = 512 * 1024 * 1024; // 512 MiB whole root

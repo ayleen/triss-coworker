@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,7 +29,6 @@ import {
   cleanPrRunDirectory,
   createPrProcessOwnerAdapter,
   assertPrStrictCapabilities,
-  prRootFor,
 } from '../src/review-pr-registry.js';
 
 async function fixture() {
