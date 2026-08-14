@@ -560,6 +560,16 @@ Review runs are bounded and fail closed (see
 - **Empty responses** fail with `TRISS_PROVIDER_EMPTY` instead of
   producing a clean verdict; usable non-empty text is never trimmed.
 
+### Sharding (Release C)
+
+`triss review --payload-mode shard` runs source-ordered whole-file shards
+sequentially. A file is never split across shards; the first failure or
+cancellation stops the sequence. **Completed sharded execution is not a
+global review**: there is no aggregation call, no cross-shard analysis, and
+no global approval — the CLI prints `global verdict: unavailable_for_sharded`.
+Partial errors carry completed shard verdicts only (never raw diff content).
+`evidence + shard` and `shard + --stream` are rejected before any model call.
+
 The three diff sources are mutually exclusive: local Git (`triss review` or
 `--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text piped to
 `triss review --stdin`. `--stdin` cannot be combined with a PR number or

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-08-15
+
+### Added
+
+- **Reliable delegation (Release C)** — sequential sharding per
+  `docs/reliable-delegation-contract-plan.md`:
+  - `--payload-mode shard` CLI + MCP shard parity: source-ordered
+    whole-file shards (a file is never split across shards);
+  - sequential executor with first-failure stop, cancellation
+    between/in-flight shards, fresh limit re-checks, and per-shard
+    attempt/usage facts;
+  - **no global verdict**: completed sharded execution prints
+    `global verdict: unavailable_for_sharded`; no aggregation call, no
+    cross-shard analysis, no global approval;
+  - structured partial errors carry completed shard verdicts only —
+    never completed prose or raw diff content;
+  - `evidence + shard` and `shard + --stream` rejected before any model
+    call;
+  - Release C synthetic acceptance (`--synthetic --release C`) and live
+    acceptance (`--live --release C`; PASS / SKIPPED_NO_CREDENTIALS /
+    BLOCKED_ENVIRONMENT recorded separately, never upgraded to success).
+
 ## [0.36.0] — 2026-08-15
 
 ### Added

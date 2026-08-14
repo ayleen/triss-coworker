@@ -2,7 +2,10 @@
 
 > **Release B** (Atomic 30–43) extends the contract with bounded single
 > review, exact PR acquisition, and the issue trust boundary. The Release B
-> section at the end of this file is authoritative for that scope.
+> section below is authoritative for that scope.
+>
+> **Release C** (Atomic 44–48) adds sequential sharding. The Release C
+> section at the end is authoritative for that scope.
 
 This document is the Release A documentation gate (Reference surface 14 of
 `docs/reliable-delegation-contract-plan.md`). It covers the coder envelope v2
@@ -216,3 +219,37 @@ An empty or whitespace-only provider response fails with the stable
 never trimmed on output. MCP single-review parity (`runReviewCoreSingle`)
 enforces project root, cancellation, structured coverage, and safe error
 projection with no partial output.
+
+---
+
+# Reliable Delegation — Release C contract
+
+Scope: sequential sharding and coverage (Reference surface 16 of
+`docs/reliable-delegation-contract-plan.md`). `--payload-mode shard`
+executes source-ordered whole-file shards sequentially.
+
+## Completed sharded execution is NOT a global review
+
+- **No global verdict**: after every shard completes, the CLI prints
+  `global verdict: unavailable_for_sharded` — there is NO cross-shard
+  analysis and NO global approval anywhere, on CLI or MCP.
+- **No aggregation call**: the executor never synthesizes a combined
+  verdict; results are per-shard only.
+- **Sequential execution**: shards run in source order; the FIRST failure
+  or cancellation stops the sequence — after a second-shard failure there
+  is never a third model call.
+- **Cancellation**: pre-flight, between-shard, and in-flight cancellation
+  surface `TRISS_CANCELLED` (exit 130); partial results carry completed
+  shard verdicts only.
+- **Fresh boundaries**: every limit is re-checked at execution time
+  (`shard_max_exceeded` / `shard_count_exceeded` / `total_max_exceeded`
+  fail closed; an oversized single file fails with its path, never split).
+- **Output caps**: shard-local sections stay bounded; an oversized file
+  fails with its path before any model call.
+- **Partial-output policy**: CLI and MCP partial errors carry structured
+  completed-shard verdicts only — never completed prose or raw diff
+  content.
+- **Rejections**: `evidence + shard` is rejected in the CLI router and
+  `shard + --stream` before any model call.
+- **Agents**: narrow after an explicit policy denial; never ask again for
+  consent already granted by project instructions.
