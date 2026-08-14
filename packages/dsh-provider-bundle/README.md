@@ -47,7 +47,7 @@ Tested tuple (packed-tarball fixture, `dsh plugin` full cycle — add, remove, r
 | pnpm | `9.0.0` (lockfileVersion `9.0`) |
 | `@deepseek-ai/dsh` | `0.1.0-rc.6` |
 | Profile template | `dsh-headless@0.1.0-rc.6` (bundles: `dsh-base` + `dsh-headless`) |
-| This package | `0.34.0` (sha256 `4d25762daecb5f9d1d97a2ba08cf4cdd53c451026a5b672d36d73d2fff31db7d`) |
+| This package | `0.35.0` (sha256 `e9a92fa4432bba13ccf3a01a05388bd3d167e50026c91cd0865059a49aef2f65`) |
 | Install integrity | `sha512-AdZeopWdPdYENOMXFvMxVd8+Xx5emMpGaNMYH6U1D6WuN2QUXq0WNIURHgPREe+fHCw5hknuXsuEP6sSLSoEAQ==` |
 
 The `llm-pi-ai` adapter and its `pi-ai` dependency are supplied by the profile's `dsh-base` bundle, not by this package (the companion declares no dependencies).
