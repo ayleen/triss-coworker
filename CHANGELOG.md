@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-08-14
+
+### Added
+
+- **Reliable delegation (Release A)** — coder envelope v2 orchestration per
+  `docs/reliable-delegation-contract-plan.md`:
+  - envelope fields `session_slug`, `result_retention`, `result_id`, and
+    `execution_capabilities` (eight honest `enforced|best_effort|unavailable`
+    values + `effective_isolation`) on every safe envelope
+    (`docs/reliable-delegation-release-a.md`);
+  - v2 session CLI: `triss coder session list`, `triss coder session clean
+    <slug> --engine <opencode|crush>` (per-engine store only, legacy
+    `.triss/sessions.json` never touched);
+  - retained-result registry: `triss coder result list`, `triss coder result
+    clean <run-id>`, and the exact result-registry codec/transitions
+    (1 GiB reservation / 3 GiB payload budget + 1 GiB headroom,
+    `TRISS_CODER_RESULT_CAP`, `TRISS_CODER_RESULT_QUOTA_REQUIRED`);
+  - rollback contract: `triss coder state backup|validate|adopt|reset` with
+    bounded no-follow backup, completion marker, and
+    `TRISS_CODER_ROLLBACK_RESULTS_PENDING` guard;
+  - quarantine transaction and quarantine clean (`quarantine-v1`,
+    phase-aware manifest machine, completion-marker hashing);
+  - credential proxy (loopback one-run token) on both engines — the real
+    provider key never reaches the engine environment; every run requires
+    the proxy (Release A rejects runs when it is unavailable);
+  - pure provider error classifier with stable public codes
+    (`TRISS_PROVIDER_AUTH/POLICY/RATE/TIMEOUT/NOT_FOUND/CONNECTION/UNKNOWN/
+    CONFLICT/EMPTY`);
+  - bounded blocker diagnostics (`environment_permission`,
+    `execution_policy`, `lock_or_process_state`, `unknown`; ≤16 entries,
+    duplicate categories collapsed);
+  - MCP: `allowBestEffortCallerWorktree` (default false),
+    `triss_coder_result_list`, `triss_coder_result_clean`.
+
+### Changed
+
+- Non-isolated `files_changed` is now `null` rather than `[]`;
+  `run_files_changed` is the only changes-expectation evidence. Consumers
+  must branch on `envelope_version` and `change_detection.status`.
+- Bare `--continue` is rejected with migration guidance; v2 state is
+  selected only via `--session <slug>`.
+- `ask`/`review`/MCP fail empty responses with the stable
+  `TRISS_PROVIDER_EMPTY` code instead of a direct `process.exit`.
+- Capability-dependent Windows npm support wording: an unavailable OS
+  sandbox/cleanup/lock/quota never blocks a non-isolated/best-effort run but
+  provides none of those guarantees; unavailable credential isolation always
+  blocks before spawn.
+
+### Fixed
+
+- `fd.readFile` position semantics in fixed-kernel-lock release (marker
+  clearing reads via path, keeping the fixed inode).
+- Quarantine `readdir` import; result-state deletion moved to an immutable
+  tombstone sidecar.
+
+
 ## [0.34.0] — 2026-08-13
 
 ### Added

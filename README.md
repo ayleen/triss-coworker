@@ -597,7 +597,27 @@ triss coder run "add input validation to /signup" --isolate
 triss coder run "..." --engine crush              # crush engine (isolates by default; restrict is opt-in)
 triss coder run "..." --engine crush --restrict   # crush + CLI allowlist on top of the worktree
 triss coder clean                                 # remove finished isolation worktrees
+triss coder session list                          # list v2 sessions (per engine)
+triss coder session clean <slug> --engine opencode # remove one inactive isolated session
+triss coder result list                           # list retained result artifacts
+triss coder state backup --project <path>         # Section 15 rollback backup
+triss coder state validate --project <path> --backup <dir>
 ```
+
+Every `triss coder run` envelope (and the matching MCP tool) carries the
+Release A contract fields: `session_slug` (explicit slug or an anonymous
+generated one — never an implicit persistent conversation), `result_retention`
+/ `result_id` (`retained` only for isolated changed runs with enforced
+result-store quota and a successful reservation), and `execution_capabilities`
+(eight honest `enforced|best_effort|unavailable` values plus
+`effective_isolation`). Non-isolated `files_changed` is `null`; the only
+changes-expectation evidence is `run_files_changed`. Process completion is not
+task satisfaction — use `--expect changes --isolate` and inspect `git status`
+yourself. Unavailable OS sandbox/cleanup/lock/quota does not block a
+non-isolated/best-effort run but provides none of those guarantees; explicit
+or default isolation needs `--allow-best-effort-caller-worktree` (default
+off) or fails before spawn, and unavailable credential isolation always
+blocks before spawn. Full details: `docs/reliable-delegation-release-a.md`.
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases
