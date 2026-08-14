@@ -452,3 +452,88 @@ export function deriveCoderResultFacts(input = {}) {
     noEnvelopeReason,
   };
 }
+
+// ─── bounded blocker diagnostics (Atomic 27 / Package 10A) ──────────────────
+
+export const BLOCKER_CATEGORIES = Object.freeze([
+  'environment_permission',
+  'execution_policy',
+  'lock_or_process_state',
+  'unknown',
+]);
+
+export const BLOCKER_MAX_ENTRIES = 16;
+
+// Explicit evidence shapes. Prose is never scanned for completion phrases;
+// only these structured signals classify a blocker.
+const PERMISSION_EVIDENCE_RE = [
+  /\b(EPERM|EACCES)\b/,
+  /\bpermission denied\b/i,
+  /\boperation not permitted\b/i,
+];
+const POLICY_EVIDENCE_RE = [
+  /\b(?:denied|rejected|blocked|not allowed|not permitted|prohibited).*(?:policy|guideline|safety|moderation|allowlist)/i,
+  /\b(?:policy|safety|moderation|allowlist).*(?:denied|rejection|blocked|violation)/i,
+];
+const LOCK_EVIDENCE_RE = [
+  /\b(lock|unlock)\b/i,
+  /\bprocess(?:es)? (?:already )?(?:running|exist|alive)\b/i,
+  /\bslot .*held\b/i,
+];
+
+/**
+ * Classify bounded blocker diagnostics from raw tool/engine error evidence.
+ * Pure and dependency-free: never probes servers, never deletes locks, never
+ * inspects prose for completion phrases. The returned objects contain NO raw
+ * command, tool input/output, secret-like value, or absolute path.
+ *
+ * @param {Array<{text?: string}>} rawEvidence
+ * @returns {Array<{category: string, hint: string|null}>} at most 16 entries
+ *   with duplicate categories collapsed (first-wins hint)
+ */
+export function classifyCoderBlockers(rawEvidence) {
+  if (!Array.isArray(rawEvidence)) return [];
+  const seen = new Set();
+  const blockers = [];
+  for (const item of rawEvidence) {
+    const text = typeof item?.text === 'string' ? item.text : '';
+    // Sanitize evidence before matching: strip control bytes, secret-like
+    // tokens, URLs, and absolute paths so they can never enter a hint.
+    let clean = '';
+    for (const ch of text) {
+      const cp = ch.codePointAt(0);
+      if (cp < 0x20 || cp === 0x7f) clean += ' ';
+      else clean += ch;
+    }
+    clean = clean
+      .replace(/(sk-|zk-|zai-)[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
+      .replace(/\s+[^\s]*:\/\/[^\s]+/g, ' [URL-REDACTED]')
+      .replace(/(^|\s)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+){2,}/g, '$1/[PATH-REDACTED]')
+      .trim()
+      .slice(0, 512);
+    if (clean.length === 0) continue;
+
+    // Duplicate categories are collapsed (first-wins hint). Compute the
+    // category first, then push only when unseen.
+    let category;
+    let hint = null;
+    if (POLICY_EVIDENCE_RE.some((re) => re.test(clean))) {
+      category = 'execution_policy';
+      hint = 'execution policy denial (permission-policy evidence)';
+    } else if (PERMISSION_EVIDENCE_RE.some((re) => re.test(clean))) {
+      category = 'environment_permission';
+      hint = 'environment permission failure (EPERM/EACCES)';
+    } else if (LOCK_EVIDENCE_RE.some((re) => re.test(clean))) {
+      category = 'lock_or_process_state';
+      hint = 'lock or process-state evidence — check slot/process ownership';
+    } else {
+      category = 'unknown';
+    }
+
+    if (seen.has(category)) continue;
+    seen.add(category);
+    blockers.push({ category, hint });
+    if (blockers.length >= BLOCKER_MAX_ENTRIES) break;
+  }
+  return blockers;
+}

@@ -34,6 +34,8 @@ import {
   resolveExpectation,
   normalizeActivity,
   deriveCoderResultFacts,
+  BLOCKER_MAX_ENTRIES,
+  classifyCoderBlockers,
 } from '../src/coder-result.js';
 
 // ─── helper: default "all gates normal" input ────────────────────────────────
@@ -512,4 +514,64 @@ test('deriveCoderResultFacts is pure: same input → same output, input untouche
   const b = deriveCoderResultFacts(input);
   assert.deepEqual(a, b);
   assert.equal(JSON.stringify(input), snapshot);
+});
+
+// ─── bounded blocker diagnostics (Atomic 27 / Package 10A) ──────────────────
+
+test('classifyCoderBlockers: EPERM/EACCES tool errors add only environment_permission', () => {
+  const blockers = classifyCoderBlockers([{ text: 'tool failed: EPERM: operation not permitted on /var/lib/x' }]);
+  assert.deepEqual(blockers, [
+    { category: 'environment_permission', hint: 'environment permission failure (EPERM/EACCES)' },
+  ]);
+  const acces = classifyCoderBlockers([{ text: 'EACCES permission denied while writing' }]);
+  assert.equal(acces[0].category, 'environment_permission');
+});
+
+test('classifyCoderBlockers: explicit permission-policy denial adds execution_policy', () => {
+  const blockers = classifyCoderBlockers([{ text: 'tool blocked: denied by bash policy allowlist' }]);
+  assert.deepEqual(blockers, [
+    { category: 'execution_policy', hint: 'execution policy denial (permission-policy evidence)' },
+  ]);
+});
+
+test('classifyCoderBlockers: lock-related text adds only the lock_or_process_state hint', () => {
+  const blockers = classifyCoderBlockers([{ text: 'slot-2.lock is held by another process' }]);
+  assert.deepEqual(blockers, [
+    { category: 'lock_or_process_state', hint: 'lock or process-state evidence — check slot/process ownership' },
+  ]);
+});
+
+test('classifyCoderBlockers: unknown text stays unknown with no hint', () => {
+  const blockers = classifyCoderBlockers([{ text: 'the widget exploded for no obvious reason' }]);
+  assert.deepEqual(blockers, [{ category: 'unknown', hint: null }]);
+});
+
+test('classifyCoderBlockers: raw commands, paths, and secrets never enter the result', () => {
+  const blockers = classifyCoderBlockers([
+    { text: 'denied by policy: sk-live-secret-abcdef123456 used from /Users/me/.ssh/id_rsa\n\x00\x1f' },
+  ]);
+  assert.equal(blockers[0].category, 'execution_policy');
+  assert.ok(!JSON.stringify(blockers).includes('sk-live-secret'), 'secret-like value must be redacted');
+  assert.ok(!JSON.stringify(blockers).includes('/Users/me'), 'absolute path must be redacted');
+  assert.ok(!JSON.stringify(blockers).includes('\x00'), 'control bytes must be stripped');
+});
+
+test('classifyCoderBlockers: at most 16 entries with duplicate categories collapsed', () => {
+  const many = [];
+  for (let i = 0; i < 40; i += 1) {
+    many.push({ text: i % 2 === 0 ? `EPERM on write ${i}` : `unrelated failure ${i}` });
+  }
+  const blockers = classifyCoderBlockers(many);
+  assert.ok(blockers.length <= BLOCKER_MAX_ENTRIES);
+  // Duplicate categories collapsed: EPERM appears once, unknowns once.
+  const categories = blockers.map((b) => b.category);
+  assert.equal(new Set(categories).size, categories.length);
+  assert.ok(blockers.length >= 2, 'both categories still represented');
+});
+
+test('classifyCoderBlockers: non-array and empty input yield no blockers', () => {
+  assert.deepEqual(classifyCoderBlockers(null), []);
+  assert.deepEqual(classifyCoderBlockers(undefined), []);
+  assert.deepEqual(classifyCoderBlockers([]), []);
+  assert.deepEqual(classifyCoderBlockers([{ text: '' }, { text: '   ' }]), []);
 });
