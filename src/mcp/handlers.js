@@ -1016,6 +1016,34 @@ export async function coderStatusHandler() {
   return lines.join('\n');
 }
 
+// ─── retained-result actions (Atomic 24 / Package 8) ─────────────────────────
+
+export async function coderResultListHandler() {
+  const { runCoderResultList } = await import('../commands/coder.js');
+  const capture = [];
+  await runCoderResultList({}, { stdoutWrite: (s) => capture.push(s) });
+  return capture.join('');
+}
+
+export async function coderResultCleanHandler({ run_id }) {
+  if (!run_id || !/^run-[0-9a-f]{32}$/.test(run_id)) {
+    throw new Error('result clean requires a valid run_id (run-<32 lowercase hex>)');
+  }
+  const { runCoderResultClean } = await import('../commands/coder.js');
+  const stderr = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    stderr.push(String(chunk));
+    return true;
+  };
+  try {
+    await runCoderResultClean(run_id);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return stderr.join('').trim();
+}
+
 // ─── commit-msg ─────────────────────────────────────────────────────────────
 
 export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {

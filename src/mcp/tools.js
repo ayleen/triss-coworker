@@ -16,6 +16,8 @@ import {
   writeHandler,
   coderRunHandler,
   coderStatusHandler,
+  coderResultListHandler,
+  coderResultCleanHandler,
   jiraSearchHandler,
   jiraIssueHandler,
   jiraCreateHandler,
@@ -871,6 +873,7 @@ const CODER_TOOLS = [
         model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'Override the model for this run only, as <provider>/<id> — e.g. Triss worker (triss-worker/deepseek-v4-flash), Z.AI GLM (zai-coding-plan/glm-5.2), OpenCode Zen (opencode/deepseek-v4-flash-free), OpenCode Go (opencode-go/deepseek-v4-flash), Moonshot Kimi (moonshotai/kimi-k2.7-code), or Kimi for Coding (kimi-for-coding/k3)' },
         small_model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'With provider, override small_model for this run; defaults to model' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
+        allowBestEffortCallerWorktree: { type: 'boolean', description: 'Atomic 24: explicit opt-in (default FALSE) to an isolation downgrade to a best-effort caller worktree when isolation was requested/effective but the enforced sandbox is unavailable. Without this flag such a run fails before spawn.' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },
@@ -888,6 +891,28 @@ const CODER_TOOLS = [
       'many isolation worktrees are currently live.',
     inputSchema: { type: 'object', properties: {} },
     handler: coderStatusHandler,
+  },
+  {
+    name: 'triss_coder_result_list',
+    description:
+      'List retained coder result artifacts (bounded projection: run_id, engine, ' +
+      'session_slug, published_at, state). Never lists persistent sessions.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: coderResultListHandler,
+  },
+  {
+    name: 'triss_coder_result_clean',
+    description:
+      'Remove ONLY a validated retained result artifact by its run-id ' +
+      '(run-<32 lowercase hex>). Never removes a persistent session selected by a slug.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'string', pattern: '^run-[0-9a-f]{32}$', description: 'run-id of the retained result to remove' },
+      },
+      required: ['run_id'],
+    },
+    handler: coderResultCleanHandler,
   },
 ];
 

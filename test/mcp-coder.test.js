@@ -152,6 +152,42 @@ test(
   }),
 );
 
+// ─── Atomic 24 (Package 8) MCP additions ─────────────────────────────────────
+
+test(
+  'listTools: triss_coder_run exposes allowBestEffortCallerWorktree (default-false opt-in)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const tools = await listTools();
+    const run = tools.find((t) => t.name === 'triss_coder_run');
+    assert.ok('allowBestEffortCallerWorktree' in run.inputSchema.properties);
+    const prop = run.inputSchema.properties.allowBestEffortCallerWorktree;
+    assert.equal(prop.type, 'boolean');
+    assert.ok(/default FALSE/.test(prop.description), 'the opt-in is documented as default-false');
+  }),
+);
+
+test(
+  'listTools: triss_coder_result_list and triss_coder_result_clean appear with a provider key',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const tools = await listTools();
+    const names = tools.map((t) => t.name);
+    assert.ok(names.includes('triss_coder_result_list'));
+    assert.ok(names.includes('triss_coder_result_clean'));
+    const clean = tools.find((t) => t.name === 'triss_coder_result_clean');
+    assert.deepEqual(clean.inputSchema.required, ['run_id']);
+    assert.equal(clean.inputSchema.properties.run_id.pattern, '^run-[0-9a-f]{32}$');
+  }),
+);
+
+test(
+  'coderResultCleanHandler: validates the run-id grammar before any removal',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const { coderResultCleanHandler } = await import('../src/mcp/handlers.js');
+    await assert.rejects(() => coderResultCleanHandler({ run_id: 'task-a' }), /run-<32 lowercase hex>/);
+    await assert.rejects(() => coderResultCleanHandler({}), /run-<32 lowercase hex>/);
+  }),
+);
+
 // ─── triss_coder_status ──────────────────────────────────────────────────────
 
 test(
