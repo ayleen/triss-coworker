@@ -127,14 +127,24 @@ jobs:
           test "$(npm --version)" = "$NPM_VERSION"
       - name: Show npm version
         run: npm --version
-      - name: Verify tag matches package version
+      - name: Verify tag matches both package versions
         run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "Tag $TAG_VERSION does not match package.json version $PKG_VERSION"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          COMPANION_VERSION=$(node -p "require('./packages/dsh-provider-bundle/package.json').version")
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ] || [ "$COMPANION_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $TAG_VERSION does not match package.json $PKG_VERSION / companion $COMPANION_VERSION"
             exit 1
           fi
+          node scripts/publish-gate.js verify-versions --tag "$GITHUB_REF_NAME"
+      - name: Inspect both packed tarballs before publishing
+        run: |
+          node scripts/publish-gate.js pack-inspect --workdir "$RUNNER_TEMP/publish-pack" \
+            | tee "$RUNNER_TEMP/publish-pack/local-manifest.json"
+      - name: Check already-published versions fail closed on mismatch
+        run: |
+          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
+          node scripts/publish-gate.js verify-registry --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))")
       - name: Verify tag is the exact origin/main release
         run: |
           git fetch --no-tags origin \
@@ -152,7 +162,16 @@ jobs:
             exit 1
           }
       - run: npm ci
-      - run: npm publish --access public --provenance
+      - name: Publish companion package triss-dsh-provider-bundle (safe retry)
+        working-directory: packages/dsh-provider-bundle
+        run: npm publish --access public --provenance
+      - name: Publish root package triss-coworker
+        run: npm publish --access public --provenance
+      - name: Registry-verify the companion after publication
+        run: |
+          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
+          node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))" > "$RUNNER_TEMP/companion-local.json"
+          node scripts/publish-gate.js verify-registry --local-manifest "$RUNNER_TEMP/companion-local.json"
 
   release:
     needs: [standalone-smoke, npm-publish]
