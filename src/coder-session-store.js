@@ -118,7 +118,6 @@ async function hashFileNoFollow(filePath, state) {
   const fd = await open(filePath, 'r');
   try {
     const chunk = Buffer.alloc(256 * 1024);
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { bytesRead } = await fd.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
