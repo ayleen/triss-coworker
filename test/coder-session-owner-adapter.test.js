@@ -45,7 +45,7 @@ function fakeStoreAdapter(initialLedger = []) {
   return {
     ledger,
     inspectCalls: 0,
-    async inspect(ownerRow) {
+    async inspect(_ownerRow) {
       this.inspectCalls += 1;
       const last = ledger[ledger.length - 1];
       if (!last) return 'absent';
