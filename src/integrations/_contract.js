@@ -62,7 +62,7 @@ async function readBodyCapped(res, limit, ctx) {
   return text;
 }
 
-export async function httpJson(url, { method = 'GET', headers = {}, body, signal } = {}) {
+export async function httpJson(url, { method = 'GET', headers = {}, body, signal, maxBytes } = {}) {
   const init = {
     method,
     headers: { Accept: 'application/json', ...headers },
@@ -87,7 +87,9 @@ export async function httpJson(url, { method = 'GET', headers = {}, body, signal
   let text;
   try {
     res = await fetch(url, init);
-    text = await readBodyCapped(res, httpMaxBytes(), `${method} ${url}`);
+    // Per-call maxBytes overrides the global cap (Package 18 review-specific
+    // calls use bounded abort-aware response reading).
+    text = await readBodyCapped(res, maxBytes ?? httpMaxBytes(), `${method} ${url}`);
   } catch (err) {
     if (err.name === 'AbortError') {
       if (res) {
@@ -203,25 +205,16 @@ export function stripHtml(input) {
   while (i < len) {
     // Detect an opening tag: '<' followed by a letter or '/'
     if (s[i] === '<' && i + 1 < len && /[a-zA-Z/]/.test(s[i + 1])) {
-      // Read the tag name to check for script/style
-      let j = i + 1;
-      if (s[j] === '/') j++;
-      const tagStart = j;
-      while (j < len && /[a-zA-Z0-9]/.test(s[j])) j++;
-      const tagName = s.slice(tagStart, j).toLowerCase();
+      const { tagName, next, closing } = readHtmlTagName(s, i + 1);
 
       // Find the matching close '>' for this tag
-      while (j < len && s[j] !== '>') j++;
-      if (j < len) j++; // skip past '>'
+      let j = findHtmlTagEnd(s, next);
 
-      if (tagName === 'script' || tagName === 'style') {
+      if (!closing && (tagName === 'script' || tagName === 'style')) {
         // Skip everything until we find the corresponding closing tag
-        const closeTag = '</' + tagName;
         while (j < len) {
-          if (s[j] === '<' && s.slice(j, j + closeTag.length).toLowerCase() === closeTag) {
-            // Skip past the closing tag entirely
-            while (j < len && s[j] !== '>') j++;
-            if (j < len) j++;
+          if (isHtmlClosingTag(s, j, tagName)) {
+            j = findHtmlTagEnd(s, j + tagName.length + 2);
             break;
           }
           j++;
@@ -235,4 +228,50 @@ export function stripHtml(input) {
   }
 
   return out;
+}
+
+function readHtmlTagName(s, start) {
+  let j = start;
+  const closing = s[j] === '/';
+  if (closing) j++;
+  const tagStart = j;
+  while (j < s.length && isHtmlTagNameChar(s[j])) j++;
+  return {
+    tagName: s.slice(tagStart, j).toLowerCase(),
+    next: j,
+    closing,
+  };
+}
+
+function isHtmlTagNameChar(ch) {
+  return /[a-zA-Z0-9:-]/.test(ch);
+}
+
+function findHtmlTagEnd(s, start) {
+  let quote = null;
+  let i = start;
+  while (i < s.length) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return i + 1;
+    }
+    i++;
+  }
+  return i;
+}
+
+function isHtmlClosingTag(s, start, tagName) {
+  if (s[start] !== '<' || s[start + 1] !== '/') return false;
+  const nameStart = start + 2;
+  const nameEnd = nameStart + tagName.length;
+  if (s.slice(nameStart, nameEnd).toLowerCase() !== tagName) return false;
+  return isHtmlTagNameBoundary(s[nameEnd]);
+}
+
+function isHtmlTagNameBoundary(ch) {
+  return ch === undefined || ch === '>' || ch === '/' || /\s/.test(ch);
 }
