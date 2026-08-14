@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSyntheticReleaseA, SESSION_CAP_CODE, runSyntheticReleaseB } from '../src/release-a-acceptance.js';
+import { runSyntheticReleaseA, SESSION_CAP_CODE, runSyntheticReleaseB, runSyntheticReleaseC } from '../src/release-a-acceptance.js';
 import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 
@@ -78,4 +78,17 @@ test('SMOKE-B-01: the Release B synthetic suite passes end-to-end with zero fail
   assert.ok(passed.some((p) => p.startsWith('issue trust')), 'issue trust case ran');
   assert.ok(passed.some((p) => p.startsWith('malicious')), 'malicious env case ran');
   assert.ok(passed.some((p) => p.startsWith('empty provider')), 'empty response case ran');
+});
+
+// ─── SMOKE-C-* cases (Package 26 / Atomic 47) ────────────────────────────────
+
+test('SMOKE-C-01: the Release C synthetic suite passes end-to-end with zero failures', async () => {
+  const { passed, failed } = await runSyntheticReleaseC();
+  assert.deepEqual(failed, [], `synthetic C cases failed: ${JSON.stringify(failed)}`);
+  assert.ok(passed.some((p) => p.startsWith('sharding order')), 'sharding order case ran');
+  assert.ok(passed.some((p) => p.startsWith('no-global-verdict')), 'no-global-verdict case ran');
+  assert.ok(passed.some((p) => p.startsWith('second-shard failure')), 'no-third-call case ran');
+  assert.ok(passed.some((p) => p.startsWith('shard cancellation')), 'cancellation case ran');
+  assert.ok(passed.some((p) => p.startsWith('output limits')), 'output limits case ran');
+  assert.ok(passed.some((p) => p.startsWith('CLI/MCP partial policy')), 'partial policy case ran');
 });

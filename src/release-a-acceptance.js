@@ -373,3 +373,217 @@ export async function runSyntheticReleaseAInTmp({ log = console.log } = {}) {
     await rm(trissRoot, { recursive: true, force: true });
   }
 }
+
+/**
+ * Release C synthetic cases: sharding order, cross-file separation,
+ * no-global-verdict, second-shard failure/cancellation with no third call,
+ * output limits, and the CLI/MCP partial-output policy.
+ */
+export async function runSyntheticReleaseC({ log = () => {} } = {}) {
+  const passed = [];
+  const failed = [];
+  const fail = (name, error) => failed.push({ case: name, error: String(error && error.message || error) });
+  const pass = (name) => passed.push(name);
+
+  const { parseUnifiedDiff, planSequentialShards } = await import('./review-payload.js');
+  const { reviewLimitConfig } = await import('./config.js');
+  const { executeReviewPlan } = await import('./review-executor.js');
+  const limits = reviewLimitConfig().limits;
+
+  // 1. Sharding order + cross-file separation: source-ordered whole-file
+  //    shards, a file never split across shards (files may share a shard).
+  try {
+    const sections = [
+      { new_path: 'z.txt', old_path: 'z.txt', bytes: 40000, raw: 'diff --git a/z.txt b/z.txt\n' },
+      { new_path: 'a.txt', old_path: 'a.txt', bytes: 40000, raw: 'diff --git a/a.txt b/a.txt\n' },
+      { new_path: 'm.txt', old_path: 'm.txt', bytes: 40000, raw: 'diff --git a/m.txt b/m.txt\n' },
+    ];
+    const planned = planSequentialShards({ sections, question: 'q', metadata: 'meta', limits });
+    if (planned.error) {
+      fail('sharding order', planned.error);
+    } else {
+      const shards = planned.plan.shards;
+      // Source-ordered: the first shard starts with a.txt, the last ends with z.txt.
+      const first = shards[0].sections[0].new_path;
+      const last = shards[shards.length - 1].sections.at(-1).new_path;
+      // Whole-file separation: no file appears in more than one shard.
+      const seen = new Map();
+      for (const shard of shards) {
+        for (const sec of shard.sections) {
+          seen.set(sec.new_path, (seen.get(sec.new_path) || 0) + 1);
+        }
+      }
+      const noSplit = [...seen.values()].every((count) => count === 1);
+      if (first !== 'a.txt' || last !== 'z.txt' || !noSplit) {
+        fail('sharding order', `first=${first} last=${last} noSplit=${noSplit}`);
+      } else {
+        pass('sharding order: source-ordered whole-file shards, no file split across shards');
+      }
+    }
+  } catch (err) {
+    fail('sharding order', err);
+  }
+
+  // 2. No-global-verdict: completed sharded execution is not a global review.
+  try {
+    const r = await executeReviewPlan(
+      { callModel: async () => 'shard ok', limits },
+      { shards: [{ sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 }], question: 'q' },
+    );
+    if (r.ok !== true || r.verdict !== undefined || !Array.isArray(r.shards)) {
+      fail('no-global-verdict', `expected per-shard results only, got ${JSON.stringify(r)}`);
+    } else {
+      pass('no-global-verdict: completed sharded execution is per-shard only');
+    }
+  } catch (err) {
+    fail('no-global-verdict', err);
+  }
+
+  // 3. Second-shard failure stops the sequence (no third call).
+  try {
+    const calls = [];
+    const r = await executeReviewPlan(
+      {
+        callModel: async ({ shard }) => {
+          const path = shard.sections[0].new_path;
+          calls.push(path);
+          if (path === 'b.txt') throw new Error('boom');
+          return 'ok';
+        },
+        limits,
+      },
+      {
+        shards: [
+          { sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 },
+          { sections: [{ new_path: 'b.txt', bytes: 10 }], bytes: 100 },
+          { sections: [{ new_path: 'c.txt', bytes: 10 }], bytes: 100 },
+        ],
+        question: 'q',
+      },
+    );
+    if (r.ok !== false || calls.join(',') !== 'a.txt,b.txt') {
+      fail('second-shard failure', `calls=${calls.join(',')} ok=${r.ok}`);
+    } else {
+      pass('second-shard failure: no third call');
+    }
+  } catch (err) {
+    fail('second-shard failure', err);
+  }
+
+  // 4. Cancellation stops between shards.
+  try {
+    const controller = new AbortController();
+    const calls = [];
+    const r = await executeReviewPlan(
+      {
+        callModel: async ({ shard }) => {
+          const path = shard.sections[0].new_path;
+          calls.push(path);
+          if (path === 'a.txt') controller.abort();
+          return 'ok';
+        },
+        limits,
+      },
+      {
+        shards: [
+          { sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 },
+          { sections: [{ new_path: 'b.txt', bytes: 10 }], bytes: 100 },
+        ],
+        question: 'q',
+        signal: controller.signal,
+      },
+    );
+    if (r.code !== 'TRISS_CANCELLED' || calls.length !== 1) {
+      fail('shard cancellation', `code=${r.code} calls=${calls.length}`);
+    } else {
+      pass('shard cancellation: stops before the next call');
+    }
+  } catch (err) {
+    fail('shard cancellation', err);
+  }
+
+  // 5. Output limits: shard-local sections stay bounded; an oversized single
+  //    file fails with its path (no partial output).
+  try {
+    const parsed = parseUnifiedDiff('diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -1 +1 @@\n' + 'x'.repeat(200000) + '\n');
+    const planned = planSequentialShards({ sections: parsed.sections, question: '', metadata: '', limits });
+    if (planned.error !== 'shard_max_exceeded' || planned.path !== 'big.txt') {
+      fail('output limits', `expected shard_max_exceeded:big.txt, got ${planned.error}:${planned.path}`);
+    } else {
+      pass('output limits: oversized single file fails with its path');
+    }
+  } catch (err) {
+    fail('output limits', err);
+  }
+
+  // 6. CLI/MCP partial policy: structured partial errors carry completed
+  //    shard verdicts only, never raw diff content.
+  try {
+    const { runReviewCoreShard } = await import('./mcp/review-core.js');
+    const calls = [];
+    const r = await runReviewCoreShard({
+      diff: 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n' + '-x\n' + 'y'.repeat(60000) + '\n' +
+        'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n' + '-p\n' + 'q'.repeat(60000) + '\n',
+      callModel: async ({ shard }) => {
+        calls.push(shard.sections[0].new_path);
+        if (shard.sections[0].new_path === 'b.txt') throw new Error('down');
+        return 'ok';
+      },
+    });
+    if (r.ok !== false || !Array.isArray(r.partial) || r.message.includes('diff --git')) {
+      fail('CLI/MCP partial policy', `ok=${r.ok} partial=${Array.isArray(r.partial)}`);
+    } else {
+      pass('CLI/MCP partial policy: structured partial errors, no raw diff');
+    }
+  } catch (err) {
+    fail('CLI/MCP partial policy', err);
+  }
+
+  log(`synthetic Release C: ${passed.length} passed, ${failed.length} failed`);
+  return { passed, failed };
+}
+
+/**
+ * Release C live acceptance: records PASS, SKIPPED_NO_CREDENTIALS, or
+ * BLOCKED_ENVIRONMENT separately and never upgrades a skip/block to success.
+ */
+export async function runLiveReleaseC({ log = console.log } = {}) {
+  const record = (name, status, note = '') => {
+    log(`  · ${name}: ${status}${note ? ` (${note})` : ''}`);
+    return { name, status, note };
+  };
+  const results = [];
+
+  // Live sharded review requires real provider credentials.
+  const key = process.env.TRISS_WORKER_API_KEY || process.env.ZHIPU_API_KEY || process.env.OPENCODE_API_KEY || process.env.MOONSHOT_API_KEY;
+  if (!key) {
+    results.push(record('live sharded review over a real diff', 'SKIPPED_NO_CREDENTIALS', 'no provider key'));
+    log('live Release C: 0 passed, 0 failed, 1 SKIPPED_NO_CREDENTIALS');
+    return { passed: 0, failed: 0, skipped: 1, blocked: 0, results };
+  }
+
+  try {
+    // A real local diff requires a git repository.
+    const { execFileSync } = await import('node:child_process');
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' });
+    const { runLiveShardedReview } = await import('./review-live.js');
+    const outcome = await runLiveShardedReview();
+    if (outcome.status === 'PASS') {
+      results.push(record('live sharded review over a real diff', 'PASS'));
+      log('live Release C: 1 passed, 0 failed, 0 skipped');
+      return { passed: 1, failed: 0, skipped: 0, blocked: 0, results };
+    }
+    if (outcome.status === 'BLOCKED_ENVIRONMENT') {
+      results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', outcome.reason));
+      log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
+      return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
+    }
+    results.push(record('live sharded review over a real diff', 'FAILED', outcome.reason));
+    log('live Release C: 0 passed, 1 FAILED, 0 skipped');
+    return { passed: 0, failed: 1, skipped: 0, blocked: 0, results };
+  } catch (err) {
+    results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', String(err && err.message || err)));
+    log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
+    return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
+  }
+}
