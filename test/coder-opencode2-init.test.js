@@ -157,6 +157,37 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     assert.match(threw.message, /local\.js/u);
   }));
 
+  await t.test('a configured agent block fails the static agent gate before any spawn', () => withHome(async ({ home }) => {
+    const commands = await loadCommands();
+    const cfg = join(home, '.config', 'opencode', 'opencode.json');
+    mkdirSync(dirname(cfg), { recursive: true });
+    writeFileSync(cfg, JSON.stringify({ model: 'zai/glm-4.7', agent: { custom: { model: 'zai/glm-4.7' } } }));
+    let threw = null;
+    try {
+      await runInit(commands, home);
+    } catch (err) {
+      threw = err;
+    }
+    assert.ok(threw, 'agent gate must reject');
+    assert.match(threw.message, /agent/u);
+    assert.doesNotMatch(threw.message, /sk-/u, 'no secrets in the error');
+  }));
+
+  await t.test('a discovered local .opencode/agent dir fails the static agent gate', () => withHome(async ({ home }) => {
+    const commands = await loadCommands();
+    const agentDir = join(home, '.opencode', 'agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'helper.txt'), 'name: helper');
+    let threw = null;
+    try {
+      await runInit(commands, home);
+    } catch (err) {
+      threw = err;
+    }
+    assert.ok(threw, 'discovered agent gate must reject');
+    assert.match(threw.message, /agent/u);
+  }));
+
   await t.test('a parent-shell XDG_CONFIG_HOME override is ignored', () => withHome(async ({ home }) => {
     const commands = await loadCommands();
     const poison = join(home, 'xdg-override', 'opencode', 'opencode.json');

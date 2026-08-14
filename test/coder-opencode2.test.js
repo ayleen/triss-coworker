@@ -41,15 +41,22 @@ const readFixture = (name) => readFileSync(join(FIXTURES, name), 'utf8');
 function withEnv(vars, fn) {
   return async () => {
     const saved = {};
-    for (const k of Object.keys(vars)) saved[k] = process.env[k];
-    Object.assign(process.env, vars);
+    // Isolated HOME: the V2 run path runs staticOpenCode2Preflight, which
+    // enumerates REAL ~/.config/opencode sources — a developer machine's
+    // agents/plugins must never leak into test outcomes. A clean tmp HOME
+    // (no opencode dir at all) is the neutral tree every test starts from.
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'oc2env-'));
+    const allVars = { HOME: isolatedHome, ...vars };
+    for (const k of Object.keys(allVars)) saved[k] = process.env[k];
+    Object.assign(process.env, allVars);
     try {
       await fn();
     } finally {
-      for (const k of Object.keys(vars)) {
+      for (const k of Object.keys(allVars)) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
+      rmSync(isolatedHome, { recursive: true, force: true });
     }
   };
 }

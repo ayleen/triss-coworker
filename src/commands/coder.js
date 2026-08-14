@@ -1420,34 +1420,51 @@ export async function runCoderInit(opts = {}, deps = {}) {
 //      (0o700) so V2 state never lands on V1 turf.
 //   3. Binary pin report via detectOpenCode2 (`opencode2 --version` only —
 //      never a service spawn).
-async function runOpenCode2Init(opts = {}, deps = {}) {
-  // 1. STATIC PREFLIGHT — before setupKey (credential write) and before any
-  //    child process. enumerateOpenCodeSources walks every config layer and
-  //    every plugin/agent source with the DOCUMENTED precedence (no
-  //    XDG_CONFIG_HOME override: the walker is anchored to ~ and cwd).
-  const cwd = deps.cwd || process.cwd();
+// Static source/plugin/agent preflight shared by `coder init` and `coder run`
+// for the opencode2 engine (docs/opencode2-engine-plan.md §"Configuration
+// and permission audit"). enumerateOpenCodeSources walks every config layer
+// and every plugin/agent source with the DOCUMENTED precedence (no
+// XDG_CONFIG_HOME override: the walker is anchored to ~ and cwd). No V2
+// plugin or subagent is fixture-verified to preserve the deny-first policy
+// yet, so ANY configured/discovered source fails closed — before any
+// credential write or child process. Errors name the source, never secrets.
+function staticOpenCode2Preflight(cwd) {
   let sources;
   try {
     sources = enumerateOpenCodeSources({ cwd });
   } catch (err) {
     throw new Error(
-      `OpenCode 2 init aborted: cannot enumerate configuration sources — ${err.message}`,
+      `OpenCode 2 preflight aborted: cannot enumerate configuration sources — ${err.message}`,
       { cause: err },
     );
   }
-  // Plugin gate (docs/opencode2-engine-plan.md "Plugin compatibility gate"):
-  // no V2-native plugin is fixture-verified yet, so ANY configured or
-  // discovered plugin source rejects init. The error names the source path
-  // (never secrets), so the user can remove it and re-run.
   const offender = sources.plugins.find((p) => p.origin === 'configured' || p.origin === 'discovered');
   if (offender) {
     throw new Error(
-      `OpenCode 2 init aborted: unsupported plugin source "${offender.path}" ` +
+      `OpenCode 2 preflight aborted: unsupported plugin source "${offender.path}" ` +
         `(${offender.origin}${offender.exists === false ? ', target missing' : ''}). ` +
         'No OpenCode 2 plugin is verified compatible yet — remove or disable the plugin reference, ' +
         'then re-run. See docs/opencode2-engine-plan.md "Plugin compatibility gate".',
     );
   }
+  const agentOffender = sources.agentSources.find(
+    (a) => a.origin === 'configured' || a.origin === 'discovered',
+  );
+  if (agentOffender) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: unsupported agent source "${agentOffender.path}" ` +
+        `(${agentOffender.origin}). No OpenCode 2 subagent is verified to retain ` +
+        'the deny-first shell policy — remove or disable the agent source, then re-run. ' +
+        'See docs/opencode2-engine-plan.md "Static preflight".',
+    );
+  }
+  return sources;
+}
+
+async function runOpenCode2Init(opts = {}, deps = {}) {
+  // 1. STATIC PREFLIGHT — before setupKey (credential write) and before any
+  //    child process (plugin + agent gates, shared with the run path).
+  staticOpenCode2Preflight(deps.cwd || process.cwd());
   // 2. Banner + pin report BEFORE the shared setup (matching V1's flow), so
   //    the user sees the V2 context while the shared key/config steps run.
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
@@ -4597,6 +4614,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // routes are fixture-gated: any route without a deterministic current-pin
   // translation fixture fails closed BEFORE a credential is forwarded.
   if (engine === 'opencode2') {
+    // Static preflight FIRST (plan §"Configuration and permission audit"):
+    // walk every config layer and reject any plugin/agent source BEFORE any
+    // opencode2 process or credential forwarding.
+    staticOpenCode2Preflight(deps.cwd || process.cwd());
     if (opts.session && opts.continue) {
       throw new Error(
         '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
