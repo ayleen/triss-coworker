@@ -188,15 +188,31 @@ configuration backend
   crush       -> used by crush
 ```
 
-Both OpenCode engines read the same V1-compatible configuration locations:
+Both OpenCode engines read the same layered V1-compatible configuration graph.
+The graph is not limited to one global and one project file: V2 accepts JSON
+and JSONC, walks from the exact child `cwd` to the detected project boundary,
+and applies direct and `.opencode` files in different precedence groups.
+
+Introduce one engine-family `enumerateOpenCodeSources({ cwd,
+projectBoundary, home })` implementation. It is the only source of paths and
+precedence for preflight, init, status, model inspection, and their tests. It
+returns, in effective order:
 
 ```text
-global: ~/.config/opencode/opencode.json
-local:  <project>/opencode.json
+~/.config/opencode/opencode.json(c)
+<project-boundary>.. <child-cwd>/opencode.json(c)       (root -> cwd)
+<project-boundary>.. <child-cwd>/.opencode/opencode.json(c) (root -> cwd)
 ```
 
-This is deliberate: the V1 file is the compatibility source of truth that both
-engines can consume. Triss never rewrites it to V2-native fields.
+The same result includes all configured plugin references; global
+`~/.config/opencode/plugin{,s}/`; every discovered
+`<level>/.opencode/plugin{,s}/`; and JSON- or file-defined agent sources under
+the supported `agent{,s}` and `mode{,s}` directories. Each entry retains its
+source path, kind, precedence, and existence state. Ambiguous project-boundary
+detection or an unreadable candidate fails closed.
+
+This is deliberate: the layered V1 graph is the compatibility source of truth
+that both engines can consume. Triss never rewrites it to V2-native fields.
 
 Consequences that must be documented in help and human output:
 
@@ -307,11 +323,14 @@ The override is:
 TRISS_CODER_OPENCODE2_VERSION
 ```
 
-Detection executes only:
+Detection executes only the selected binary path with `--version`:
 
 ```text
-opencode2 --version
+<resolved-opencode2-path> --version
 ```
+
+The normal installation may resolve that path from `PATH`; the immutable
+fallback must use and re-verify its private absolute path.
 
 Installation executes with argv arrays, never a shell:
 
@@ -322,6 +341,25 @@ npm install -g @opencode-ai/cli@<exact-pin>
 The adapter must parse the beta version string without assuming stable semver.
 Init and one-shot credential auditing require an exact verified pin during the
 beta. Status reports a mismatch without silently replacing either engine.
+
+Every Triss-managed V2 invocation, including `--version`, qualification probes,
+and `run`, sets:
+
+```text
+OPENCODE_DISABLE_AUTOUPDATE=1
+```
+
+Phase 0 must prove that this flag is recognized by the exact pinned build and
+that the binary/package files and reported version do not change when global
+`autoupdate` is `true` or `"notify"`. Detection runs immediately before every
+managed V2 spawn, and live acceptance repeats the version check after each run
+and once at the end of the matrix. A mismatch is a terminal compatibility
+failure, never a warning.
+
+If the exact pin cannot reliably disable update checks and installation, Triss
+must use a private immutable exact-pin installation, invoke it by resolved
+absolute path, and verify that path before and after the run. A mutable global
+binary is not an acceptable fallback.
 
 The existing `OPENCODE_PIN`, `opencodeVersionPin()`,
 `TRISS_CODER_OPENCODE_VERSION`, `detectOpencodeVersion()`, and
@@ -381,7 +419,7 @@ run
 --model <resolved-model>
 [--agent <agent>]
 [--session <real-session-id>]
-[--continue]
+[--continue] # mutually exclusive with --session
 <prompt>
 ```
 
@@ -390,10 +428,29 @@ pass V1-only `--pure` or `--dir` to V2.
 
 The prompt remains an argv item. Never use `shell: true`.
 
+The adapter must never emit `--session` and `--continue` together. Triss owns
+this exact option matrix:
+
+| Triss input                         | V2 argv                                             | Meaning                                                 |
+| ----------------------------------- | --------------------------------------------------- | ------------------------------------------------------- |
+| neither flag                        | neither                                             | create a new session                                    |
+| `--session <slug>`, unknown mapping | neither on first run                                | create, then persist the emitted real ID under the slug |
+| `--session <slug>`, known mapping   | `--session <real-id>`                               | resume that exact session                               |
+| `--continue`, without isolation     | `--continue`                                        | continue V2's last session                              |
+| `--session <slug> --continue`       | reject before preflight/spawn                       | ambiguous resume intent                                 |
+| `--continue --isolate`              | reject before preflight/spawn                       | last session is not bound to the new worktree           |
+| `--session <slug> --isolate`        | same mapping rules, child `cwd` is the new worktree | resume/create in the isolated checkout                  |
+
+Session storage is rooted at the original project, so a known V2 real ID can
+resume while the child `cwd` is a newly created isolated worktree. Tests must
+prove the resumed session observes that new `cwd`, and that failure keeps the
+worktree under the existing cleanup contract.
+
 ### Provider and credential contract
 
-Provider/model behavior is engine-family shared unless a live V2 smoke proves
-otherwise:
+Provider/model behavior is fail-closed for V2. A route is supported only after
+its exact V1-to-V2 translation has a deterministic sanitized fixture for the
+pinned build; sharing a catalogue entry with V1 is not evidence of V2 support.
 
 | Provider        | Model prefix                    | Credential             |
 | --------------- | ------------------------------- | ---------------------- |
@@ -404,12 +461,21 @@ otherwise:
 | Moonshot        | `moonshotai/`, `moonshotai-cn/` | `MOONSHOT_API_KEY`     |
 | Kimi for Coding | `kimi-for-coding/`              | `KIMI_API_KEY`         |
 
+Add one translation fixture for each of these six advertised routes, covering
+the selected model, provider ID, endpoint/package/settings shape, effective
+credential placeholder, and absence of unrelated providers. An advertised
+route without a current-pin fixture fails before credential forwarding or
+spawn. Credential-gated live acceptance must cover every distinct translated
+configuration shape; when two routes share a proven identical shape, the
+fixture records that equivalence explicitly instead of assuming it.
+
 `buildEngineEnv()` continues to start from an allowlist. It must not spread
 `process.env`. V2 receives only:
 
 - `PATH`, `HOME`, `TMPDIR`, `LANG`, and `LC_ALL` when present;
 - the selected provider credential;
 - `OPENCODE_CONFIG_CONTENT` only for a one-shot provider run;
+- `OPENCODE_DISABLE_AUTOUPDATE=1` for every V2 invocation;
 - the two Triss-owned XDG runtime variables.
 
 No credential value may appear in logs, status, JSON, help, transaction
@@ -436,18 +502,51 @@ The V2 preflight is separate from the V1 `debug config --pure` preflight. In
 `auditEffectiveOneShotProviderConfiguration()`, `pure: !!oneShotProvider`, or
 the V1 argv are evaluated:
 
-1. Audit every applicable global/project V1 config layer before forwarding a
-   credential.
-2. Reject malformed JSON/JSONC states under the same fail-closed rules used by
-   the V1 one-shot audit.
-3. Reject an effective cross-provider override for the selected model.
-4. Run `opencode2 debug config` in the exact runtime `cwd` and sanitized env.
-5. Parse the returned ordered source/document array.
-6. Verify that the selected model and translated deny-first shell rule are
-   present in the effective document.
-7. Reject incompatible configured V1 plugins with an actionable message. Do
-   not migrate or disable them automatically.
-8. Never write V2 `cli.json` as part of preflight or init.
+1. Resolve the final child `cwd` (including an already-created isolated
+   worktree) and project boundary, then call the canonical source enumerator.
+2. Before any `opencode2` process or credential forwarding, parse every JSON
+   and JSONC document and file-defined agent source in precedence order.
+3. Statically reject every unapproved configured or discovered plugin,
+   configured reference whose target is missing, malformed source, unsupported
+   dynamic agent source, and ambiguous project boundary. An absent optional
+   candidate path is normal. The error names the source but contains no file
+   contents or secrets.
+4. Build a deterministic effective projection in Triss using fixtures captured
+   from the exact pin. Reject a cross-provider model override and any provider
+   route without its translation fixture.
+5. Resolve the primary agent: explicit `--agent`, otherwise effective
+   `default_agent`, otherwise the pinned build's characterized default. Merge
+   ordered defaults, global rules, and that agent's rules exactly as V2 does;
+   last match wins.
+6. Resolve every enabled subagent reachable through the primary agent's final
+   ordered `subagent` policy. Compute each subagent's final ordered shell
+   policy independently; a subagent does not inherit a safe subset from its
+   parent. Wildcard/dynamic reachability that cannot be enumerated fails closed.
+7. Require the final result for every shell command to remain deny-first for
+   the primary agent and every reachable subagent. Any later matching
+   `shell/*/allow` or `ask` that `--auto` could approve fails preflight. Merely
+   finding an earlier translated global deny is insufficient.
+8. Verify the selected model and provider overlay against this static effective
+   projection. Only after all checks pass may the selected credential enter the
+   child environment.
+
+`opencode2 debug config` is not a runtime security authority and must never be
+the first parser of a user tree. It is allowed only as a pin-qualification and
+fixture-capture probe after static rejection succeeds. The probe uses the same
+detached process-group, timeout, signal forwarding, residual-group check, and
+TERM-to-KILL cleanup as a normal run, but receives no provider credential.
+Before and after it, the harness snapshots hashes, modes, directory entries,
+and mtimes for shared config sources, `~/.config/opencode/cli.json`, discovered
+plugin directories, package/plugin caches, and the resolved binary. It also
+checks that no `opencode2 serve --service` process remains.
+
+Qualification first runs against a disposable mirrored HOME/project fixture.
+The exact pin is accepted for real-user paths only if the probe is proven
+read-only and no delayed mutation appears during the bounded post-exit check.
+If `debug config` mutates state, imports/installs a plugin, starts a service, or
+cannot be proven read-only, Triss omits it from runtime preflight and relies on
+the canonical static effective-config implementation. Init and status are
+always static/read-only and never launch V2 merely to inspect configuration.
 
 For one-shot provider selection, generate a V1-compatible in-memory overlay
 containing `model` and only the provider definition required by the existing
@@ -502,15 +601,38 @@ Migration rules:
 - unknown versions fail closed without rewriting the file.
 
 Replace the current unversioned `readSessionsMap()` /
-`persistSessionMapping()` pair as one transaction-safe change. No old caller
-may receive the versioned root object and then execute `map[slug] = realId`.
-The new API returns an engine-scoped map and performs read-normalize-modify-
-verify-write under the existing atomic retry/CAS behavior. Characterization
-tests must capture the current concurrent-write retry behavior before the
-migration, then prove it for both V1 flat input and V2 versioned input.
+`persistSessionMapping()` pair as one transaction-safe change. The existing
+read-write-verify-retry sequence is explicitly only a best-effort mitigation;
+it is not CAS and must not be described as lossless. No old caller may receive
+the versioned root object and then execute `map[slug] = realId`.
 
-All existing atomic-write, malformed-file, lock, collision, and concurrent
-writer protections remain.
+Generalize the existing dead-PID-recovering coder mutation lock into one
+engine-neutral lock for the entire session store. The lock is shared by V1 and
+V2 writers and covers the complete critical section:
+
+```text
+acquire
+-> read
+-> normalize and validate version
+-> migrate flat V1 shape if needed
+-> modify one engine-scoped mapping
+-> atomic write
+-> read-back verify
+-> release
+```
+
+Lock acquisition is bounded. Recovery may remove a stale lock only after the
+existing owner-identity/dead-PID proof; a live or ambiguous owner fails closed.
+Atomic temp files and crash recovery follow the existing mutation-lock
+contract. The API returns only an immutable engine-scoped snapshot and exposes
+one locked mutation operation.
+
+Add adversarial multiprocess tests that pause writer B until writer A has
+successfully verified its write, then prove B re-reads under the lock and
+preserves A. Cover V1/V1, V1/V2, and V2/V2 writers; crash between temp write and
+rename; crash while holding the lock; dead-PID stale-lock recovery; live-lock
+timeout; malformed/unknown versions; and atomic flat-V1 to versioned-V2
+migration with no lost mapping.
 
 ### Event, error, and usage contract
 
@@ -519,6 +641,7 @@ Reuse the canonical OpenCode step fold for verified common event shapes.
 The V2 adapter adds:
 
 - `error.message` before the existing fallbacks;
+- terminal error state containing the normalized error type/message;
 - engine-specific unknown-event warnings;
 - a warning when an exit-0 response contains final text but no `step_finish`;
 - V2-specific rate-limit parsing only from the isolated V2 log.
@@ -533,7 +656,30 @@ exception:
   "final_text": "...",
   "usage": {
     "schema_version": 2,
-    "usage_status": "missing"
+    "usage_status": "missing",
+    "tokens": {
+      "input_uncached": null,
+      "cache_read": null,
+      "cache_write": null,
+      "output_visible": null,
+      "reasoning": null,
+      "input_total": null,
+      "input_total_source": null,
+      "output_total": null,
+      "output_total_source": null,
+      "total": null,
+      "total_source": null,
+      "combined": null
+    },
+    "cost": {
+      "reported_total_usd": null,
+      "reported_total_source": null,
+      "total_usd": null,
+      "source": "unknown",
+      "complete": false
+    },
+    "prompt_tokens": 0,
+    "completion_tokens": 0
   },
   "warnings": [
     "OpenCode 2 emitted no step_finish event; token and cost usage are unavailable"
@@ -542,6 +688,26 @@ exception:
 ```
 
 Never infer zero tokens or zero cost from a missing V2 event.
+
+Exit classification uses this explicit order:
+
+```text
+terminal rate-limit event         -> rate-limit rules below
+terminal non-rate-limit error event -> error
+timeout                         -> timeout
+terminating signal              -> killed
+exit code 0                     -> end_turn
+other exit code                 -> error
+```
+
+A parseable terminal error event therefore returns `exit_reason: "error"`
+even when the child exits `0`. The envelope preserves partial `final_text`, all
+usage reported before the error, and the normalized diagnostic. Rate-limit
+events remain a distinct terminal kind and follow the rate-limit envelope
+versus thrown-error rules below rather than being collapsed into a generic
+terminal error. If both terminal kinds appear, the rate-limit classification
+wins and the generic error remains in warnings, so the result does not depend
+on event arrival order.
 
 When `step_finish` exists, fold tokens and engine cost with the existing
 OpenCode usage normalizer. Persist `engine: "opencode2"` and
@@ -629,7 +795,9 @@ Initial behavior:
   proceed only when a fixture and live smoke cover it;
 - any other configured plugin: fail before forwarding the selected credential,
   naming the config source and the unsupported plugin without printing secrets;
-- local `.opencode/plugin*` discovery must be included in the audit;
+- configured plugin references plus global and every discovered local
+  `.opencode/plugin{,s}` directory must be included in the canonical source
+  graph and rejected statically before any V2 process;
 - Triss never rewrites, moves, installs, disables, or migrates a plugin.
 
 ## CLI and MCP contract
@@ -695,7 +863,8 @@ Add characterization tests before changing dispatch:
 - exact V1 env allowlist;
 - current config preflight and deny-first audit;
 - current session flat-map reading/writing;
-- current concurrent session-write retry/CAS behavior;
+- current concurrent session-write best-effort retry and its characterized
+  lost-update counterexample (do not label it CAS);
 - current event/error fold;
 - current usage and envelope identity;
 - current process-group cleanup;
@@ -713,9 +882,16 @@ Add fixtures captured from the pinned live binary:
 
 - no-tool success without `step_finish`;
 - tool success with two `step_finish` events and usage;
-- `error.message` event;
+- terminal `error.message` with exit `0` and non-zero exit;
+- terminal error after partial text and usage;
+- rate-limit event kept distinct from a generic terminal error;
 - session resume using the same real ID;
-- translated V1 config source/document array;
+- translated V1 config source/document array for JSON and JSONC;
+- nested-monorepo direct/`.opencode` precedence and isolated-worktree `cwd`;
+- global/local plugin discovery and JSON/file-defined agents;
+- primary-agent resolution through `default_agent` and explicit `--agent`;
+- delegated-subagent permission override attempts;
+- all six provider translation routes;
 - invalid V1-only `--pure` / `--dir` expectations.
 
 Add focused failing tests for:
@@ -726,11 +902,18 @@ Add focused failing tests for:
 - mandatory `--standalone`;
 - XDG runtime isolation;
 - no unrelated credential forwarding;
-- config-array parsing and deny-first verification;
-- plugin rejection;
+- forced auto-update disable and before/after exact-version verification;
+- canonical config-source enumeration reused by run/init/status/model paths;
+- static plugin rejection before any process spawn;
+- final ordered deny-first verification for the primary and every reachable
+  subagent, including JSON/file agents and attempted later allows;
 - no effective small-model override;
-- namespaced session-map migration;
-- V2 error text and missing-usage behavior;
+- namespaced session-map migration under the engine-neutral mutation lock;
+- adversarial multiprocess, crash, and stale-lock session cases;
+- the complete `--session`/`--continue` matrix, including isolated resume;
+- V2 terminal-error precedence, partial text/usage, rate-limit separation, and
+  missing-usage behavior;
+- fail-closed provider support and six deterministic translation fixtures;
 - `engine` / `usage_source` output identity;
 - service-process absence and group cleanup through deterministic fakes.
 
@@ -758,16 +941,20 @@ Acceptance:
 ### Phase 4 — configuration, init, status, and model management
 
 Introduce the explicit config-backend mapping. Add V2 detection/init, effective
-config parsing, plugin preflight, XDG state setup, model inspection, shared
+config parsing through the canonical source enumerator, static plugin and
+agent/permission preflight, XDG state setup, model inspection, shared
 transaction writes, manifest compatibility, rollback dispatch, and status.
 
-Update the session store to the versioned engine-namespaced shape with atomic
-flat-map migration.
+Update the session store to the versioned engine-namespaced shape with an
+engine-neutral mutation lock and atomic flat-map migration.
 
 Acceptance:
 
 - existing safe V1 config is not migrated or rewritten merely by V2 init;
 - unsafe or incompatible config fails before credential forwarding;
+- no V2 process starts before static source/plugin/agent/permission validation;
+- nested direct and `.opencode` JSON/JSONC layers are audited in exact order;
+- the selected primary and every reachable subagent retain final shell deny;
 - model mutations state that the config is shared;
 - old rollback records still restore correctly;
 - V1 and V2 equal slugs never cross-resume;
@@ -777,6 +964,8 @@ Acceptance:
   runtime both resolve the documented `~/.config/opencode/opencode.json`;
 - both live and fallback V2 rate-limit scans receive the explicit isolated V2
   log path.
+- concurrent V1/V2 session writers cannot drop a mapping after another writer
+  has returned success, and stale-lock/crash recovery is deterministic.
 
 ### Phase 5 — CLI, MCP, docs, and generated templates
 
@@ -830,16 +1019,24 @@ match this command block.
 Then run one minimal live matrix against the exact pin with already-configured
 credentials:
 
-1. `opencode` no-tool V1 smoke to prove the old default still works.
-2. `opencode2` no-tool smoke and honest missing-usage assertion when no
+1. Verify the exact V2 pin with auto-update disabled and snapshot the binary,
+   config, `cli.json`, plugin/cache directories, and process list.
+2. `opencode` no-tool V1 smoke to prove the old default still works.
+3. `opencode2` no-tool smoke and honest missing-usage assertion when no
    `step_finish` appears.
-3. `opencode2` read-only tool smoke proving deny-first plus one explicit allow.
-4. `opencode2` session-resume smoke through a Triss slug.
-5. `opencode2` isolated-worktree smoke with no changes and automatic cleanup.
-6. A V2 denied-command smoke proving `--auto` never overrides explicit deny.
-7. Process-list verification proving no run descendant or service remains.
-8. A delayed-file check proving no writes occur after the envelope.
-9. Redacted status/help/MCP inspection proving no secret value is exposed.
+4. `opencode2` read-only tool smoke proving deny-first plus one explicit allow.
+5. `opencode2` session-resume smoke through a Triss slug, then resume the same
+   real session inside a newly created isolated worktree.
+6. A V2 primary-agent and delegated-subagent smoke where both deliberately try
+   to append or use a shell allow; preflight or execution must deny it despite
+   `--auto`.
+7. Credential-gated smokes for every distinct provider translation shape and
+   fixture-backed assertions for all six advertised routes.
+8. Process-list verification proving no run descendant or service remains.
+9. Repeat the filesystem snapshots after a bounded delayed-mutation window and
+   prove shared config, `cli.json`, plugin/cache paths, and binary are unchanged.
+10. Repeat exact-version verification and fail if the pin changed.
+11. Redacted status/help/MCP inspection proving no secret value is exposed.
 
 Do not enable subscriptions, regional hosting, privacy opt-ins, or plugin
 migrations during validation.
@@ -850,22 +1047,25 @@ release.
 
 ## File-level implementation map
 
-| File                               | Required change                                                                                 |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `src/coder-engines/opencode2.js`   | New pure V2 adapter, pin, detection, argv, capabilities, event differences                      |
-| `src/commands/coder.js`            | Engine resolution, adapter dispatch, cwd/env, config preflight, sessions, init, status metadata |
-| `src/coder-models.js`              | Engine-to-backend mapping, V2 state metadata, transaction manifest compatibility, shared lock   |
-| `src/commands/coder-models.js`     | V2 rendering, shared-config warnings, small-role semantics, rollback routing                    |
-| `src/usage-schema.js`              | Reuse fold; add only explicit V2 source/metadata handling if required                           |
-| `src/usage.js`                     | Accept `opencode2` engine/source without conflating it with V1                                  |
-| `src/commands/status.js`           | Independent V2 binary/pin row and shared-config labels                                          |
-| `src/mcp/tools.js`                 | Add engine enum and V2 capability descriptions                                                  |
-| `src/mcp/handlers.js`              | Preserve engine/cancellation routing and status text                                            |
-| `bin/triss.js`                     | Update CLI help for all engine-aware commands                                                   |
-| `test/fixtures/opencode2-*.ndjson` | Sanitized live-contract fixtures                                                                |
-| `test/coder-opencode2.test.js`     | Adapter, run, config, session, error, usage, and safety contract                                |
-| Existing coder tests               | OpenCode 1 characterization and shared regression coverage                                      |
-| Docs/templates listed in Phase 5   | Same-PR public contract update                                                                  |
+| File                              | Required change                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/coder-engines/opencode2.js`  | New pure V2 adapter, pin, detection, argv, capabilities, terminal-event differences            |
+| `src/commands/coder.js`           | Engine resolution, adapter dispatch, cwd/env, static preflight, locked sessions, init metadata |
+| New shared OpenCode config module | Canonical JSON/JSONC/plugin/agent source enumeration and deterministic effective projection    |
+| `src/coder-lock.js`               | Generalized engine-neutral session-store mutation lock with dead-PID recovery                  |
+| `src/coder-models.js`             | Engine-to-backend mapping, V2 state metadata, transaction manifest compatibility, shared lock  |
+| `src/commands/coder-models.js`    | V2 rendering, shared-config warnings, small-role semantics, rollback routing                   |
+| `src/usage-schema.js`             | Reuse fold; add only explicit V2 source/metadata handling if required                          |
+| `src/usage.js`                    | Accept `opencode2` engine/source without conflating it with V1                                 |
+| `src/commands/status.js`          | Independent V2 binary/pin row and shared-config labels                                         |
+| `src/mcp/tools.js`                | Add engine enum and V2 capability descriptions                                                 |
+| `src/mcp/handlers.js`             | Preserve engine/cancellation routing and status text                                           |
+| `bin/triss.js`                    | Update CLI help for all engine-aware commands                                                  |
+| `test/fixtures/opencode2-*`       | Sanitized events plus config, agent, plugin, and six provider-translation fixtures             |
+| `test/coder-opencode2.test.js`    | Adapter, source graph, permissions, providers, run, error, usage, and safety contracts         |
+| Session concurrency test/helper   | Real multiprocess scheduling, migration, crash, live/stale lock, and lost-update prevention    |
+| Existing coder tests              | OpenCode 1 characterization and shared regression coverage                                     |
+| Docs/templates listed in Phase 5  | Same-PR public contract update                                                                 |
 
 ## Acceptance criteria
 
@@ -873,20 +1073,32 @@ release.
 - `--engine opencode` still spawns `opencode` with the existing pin and V1
   contract.
 - `--engine opencode2` spawns only `opencode2` at the exact verified pin.
+- Every managed V2 invocation disables auto-update; versions immediately
+  before and after live execution match the exact pin.
 - Installing or running V2 never replaces, upgrades, or invokes the V1 binary.
 - V2 always runs standalone and leaves no service or process descendant.
 - V1 and V2 runtime databases/logs do not collide.
 - Both engines consume the V1-compatible `opencode.json`; Triss never writes
   native V2 config.
 - Existing safe V1 config and unrelated fields are preserved.
-- Effective deny-first enforcement is verified before a provider credential is
+- One canonical enumerator covers JSON/JSONC direct and `.opencode` layers,
+  plugin directories, and file/JSON agents from the exact child `cwd` to its
+  project boundary.
+- Static config/plugin/agent validation finishes before any V2 process or
+  provider credential; any qualification probe is read-only, bounded, and
+  leaves no service or cache/config mutation.
+- Effective ordered deny-first enforcement is verified for the selected
+  primary agent and every reachable subagent before a provider credential is
   forwarded.
 - Only the selected provider key enters the V2 environment.
 - Configured incompatible plugins fail closed without mutation.
 - V2 uses child `cwd`; it never receives unsupported `--dir` or `--pure`.
 - V2 session mappings are namespaced and existing V1 flat mappings migrate
-  without loss.
-- V2 `error.message` is preserved in diagnostics.
+  without loss under a shared engine-neutral store lock.
+- `--session` and `--continue` are never emitted together; isolated resume by
+  mapped slug uses the new worktree as child `cwd`.
+- V2 `error.message` is preserved in diagnostics, and every terminal error
+  event yields `exit_reason: "error"` even when the process exits `0`.
 - Missing `step_finish` produces `usage_status: "missing"`, null canonical
   counters/cost, and an explicit warning; it is never reported as zero usage.
 - Tool-bearing V2 usage folds all reported steps exactly once.
@@ -894,6 +1106,8 @@ release.
 - Persistent model mutation uses the shared OpenCode lock and transaction
   backend; legacy rollback records remain supported.
 - `--small-model` is not silently accepted for a V2 run.
+- Every advertised V2 provider route has a deterministic current-pin
+  translation fixture; unsupported/unverified routes fail closed.
 - CLI, MCP, status, docs, and templates expose the same three-engine contract.
 - Existing OpenCode 1 and Crush tests stay green.
 - Focused tests, lint, full suite, and the live acceptance matrix pass.
