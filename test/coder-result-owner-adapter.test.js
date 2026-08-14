@@ -27,11 +27,11 @@ function fakeTransitions(overrides = {}) {
       calls.push(['release', runId]);
       return { released: 1024 * 1024 * 1024 };
     },
-    async listCoderRetainedResults({ runDirs }) {
-      calls.push(['list', runDirs.length]);
+    async listCoderRetainedResults({ runDirs: _runDirs }) {
+      calls.push(['list', _runDirs.length]);
       return [];
     },
-    async beginCoderResultDeletion({ runDir, runId }) {
+    async beginCoderResultDeletion({ runDir: _runDir, runId }) {
       calls.push(['beginDelete', runId]);
       return { run_id: runId, delete_phase: 'worktree_tombstoned' };
     },
