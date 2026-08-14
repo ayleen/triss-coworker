@@ -23,7 +23,6 @@
  */
 
 import {
-  decodeJournalEntry,
   isSafeSandboxId,
   readJournal,
   transitionJournal,
