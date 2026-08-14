@@ -1,0 +1,9 @@
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode:
+        apiKeyEnv: OPENCODE_API_KEY
+      opencode-go:
+        apiKeyEnv: OPENCODE_API_KEY
+      zai:
+        apiKeyEnv: ZAI_API_KEY
