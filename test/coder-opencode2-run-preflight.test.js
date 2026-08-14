@@ -13,7 +13,7 @@ import {
   mkdtempSync, mkdirSync, writeFileSync, rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 
