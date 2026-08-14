@@ -23,7 +23,7 @@ function fakeTransitions(overrides = {}) {
       calls.push(['publish', _runDir, record.run_id]);
       return record;
     },
-    async releaseCoderResultReservation(quota, { runId }) {
+    async releaseCoderResultReservation(_quota, { runId }) {
       calls.push(['release', runId]);
       return { released: 1024 * 1024 * 1024 };
     },
