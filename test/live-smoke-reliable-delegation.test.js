@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSyntheticReleaseA, SESSION_CAP_CODE } from '../src/release-a-acceptance.js';
+import { runSyntheticReleaseA, SESSION_CAP_CODE, runSyntheticReleaseB } from '../src/release-a-acceptance.js';
 import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 
@@ -66,4 +66,16 @@ test('RELEASE-A: the inventory on disk is bounded after the suite (no leftover r
 
 test('RELEASE-A: SESSION_CAP_CODE is the stable documented constant', () => {
   assert.equal(SESSION_CAP_CODE, 'TRISS_CODER_SESSION_CAP');
+});
+
+// ─── SMOKE-B-* cases (Package 21 / Atomic 42) ────────────────────────────────
+
+test('SMOKE-B-01: the Release B synthetic suite passes end-to-end with zero failures', async () => {
+  const { passed, failed } = await runSyntheticReleaseB();
+  assert.deepEqual(failed, [], `synthetic B cases failed: ${JSON.stringify(failed)}`);
+  assert.ok(passed.some((p) => p.startsWith('full local review')), 'full review case ran');
+  assert.ok(passed.some((p) => p.startsWith('rename selection')), 'rename case ran');
+  assert.ok(passed.some((p) => p.startsWith('issue trust')), 'issue trust case ran');
+  assert.ok(passed.some((p) => p.startsWith('malicious')), 'malicious env case ran');
+  assert.ok(passed.some((p) => p.startsWith('empty provider')), 'empty response case ran');
 });

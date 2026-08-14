@@ -10,21 +10,29 @@
  * and exits 0 when every case passes, 1 otherwise.
  */
 
-import { runSyntheticReleaseAInTmp } from '../src/release-a-acceptance.js';
+import { runSyntheticReleaseAInTmp, runSyntheticReleaseB } from '../src/release-a-acceptance.js';
 
 const args = process.argv.slice(2);
-if (!args.includes('--synthetic') || !args.includes('--release') || args[args.indexOf('--release') + 1] !== 'A') {
-  process.stderr.write('usage: node scripts/live-smoke-reliable-delegation.mjs --synthetic --release A\n');
+const releaseIndex = args.indexOf('--release');
+const release = releaseIndex >= 0 ? args[releaseIndex + 1] : null;
+if (!args.includes('--synthetic') || !['A', 'B'].includes(release)) {
+  process.stderr.write('usage: node scripts/live-smoke-reliable-delegation.mjs --synthetic --release A|B\n');
   process.exit(2);
 }
 
-const { passed, failed } = await runSyntheticReleaseAInTmp({ log: (s) => process.stderr.write(`  · ${s}\n`) });
+let result;
+if (release === 'A') {
+  result = await runSyntheticReleaseAInTmp({ log: (s) => process.stderr.write(`  · ${s}\n`) });
+} else {
+  result = await runSyntheticReleaseB({ log: (s) => process.stderr.write(`  · ${s}\n`) });
+}
+const { passed, failed } = result;
 
 if (failed.length > 0) {
   for (const f of failed) {
     process.stderr.write(`✗ ${f.case}: ${f.error}\n`);
   }
-  process.stderr.write(`synthetic Release A: ${passed.length} passed, ${failed.length} FAILED\n`);
+  process.stderr.write(`synthetic Release ${release}: ${passed.length} passed, ${failed.length} FAILED\n`);
   process.exit(1);
 }
-process.stderr.write(`synthetic Release A: ${passed.length} passed, 0 failed\n`);
+process.stderr.write(`synthetic Release ${release}: ${passed.length} passed, 0 failed\n`);

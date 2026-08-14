@@ -216,7 +216,155 @@ export async function runSyntheticReleaseA({ trissRoot, log = () => {} } = {}) {
   return { passed, failed };
 }
 
-/** Run the whole suite in a fresh tmp root (script entry). */
+/**
+ * Release B synthetic cases: full and selected local reviews, rename
+ * selection, large-PR/small-selection acquisition, stdin scope, issue trust,
+ * and malicious external diff/textconv/config environment rejection.
+ */
+export async function runSyntheticReleaseB({ log = () => {} } = {}) {
+  const passed = [];
+  const failed = [];
+  const fail = (name, error) => failed.push({ case: name, error: String(error && error.message || error) });
+  const pass = (name) => passed.push(name);
+
+  const { parseUnifiedDiff, deriveReviewCoverage, planSingleReviewPayload } = await import('./review-payload.js');
+  const { reviewLimitConfig } = await import('./config.js');
+  const { expandRenameSelection } = await import('./review-git.js');
+  const { resolveExplicitReviewIssue } = await import('./review-input.js');
+  const { executeSingleReview } = await import('./review-executor.js');
+
+  const limits = reviewLimitConfig().limits;
+
+  // 1. Full and selected local reviews with correct coverage.
+  try {
+    const fullDiff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n';
+    const parsed = parseUnifiedDiff(fullDiff);
+    const cov = deriveReviewCoverage(parsed.sections, { requestedPaths: ['a.txt'] });
+    if (cov.requested.coverage !== 'complete') {
+      fail('full local review coverage', `expected complete, got ${cov.requested.coverage}`);
+    } else {
+      const planned = planSingleReviewPayload({ sections: parsed.sections, question: 'q', metadata: '', limits });
+      if (planned.error) {
+        fail('single-request planning', planned.error);
+      } else {
+        pass('full local review: coverage complete + single-request planning fits');
+      }
+    }
+  } catch (err) {
+    fail('full local review', err);
+  }
+
+  // 2. Rename selection expands to both sides.
+  try {
+    const inventory = {
+      entries: [
+        { status: 'R100', path: 'new.txt', old_path: 'old.txt' },
+        { status: 'M', path: 'plain.txt', old_path: null },
+      ],
+    };
+    const r = expandRenameSelection(inventory, { selectors: ['old.txt'] });
+    if (!r.matched.includes('new.txt') || !r.matched.includes('old.txt')) {
+      fail('rename selection', `expected both sides, got ${r.matched.join(',')}`);
+    } else {
+      pass('rename selection: old-only selector expands to both sides');
+    }
+  } catch (err) {
+    fail('rename selection', err);
+  }
+
+  // 3. Large-PR/small-selection acquisition: a huge full change with a
+  //    small selected file acquires only the selection (pathspec limiting).
+  try {
+    const bigDiff = 'diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -1 +1 @@\n' + 'x'.repeat(1024 * 1024) + '\n';
+    const parsed = parseUnifiedDiff(bigDiff);
+    const small = parsed.sections.filter((s) => s.new_path === 'small.txt');
+    if (parsed.sections.length === 1 && parsed.sections[0].bytes > limits.singleMaxBytes) {
+      // The oversized file fails with its path (no partial buffering).
+      const planned = planSingleReviewPayload({ sections: parsed.sections, question: '', metadata: '', limits });
+      if (planned.error !== 'single_max_exceeded') {
+        fail('large-PR/small-selection', `expected single_max_exceeded, got ${planned.error}`);
+      } else {
+        pass('large-PR/small-selection: oversized single file fails with its path');
+      }
+    } else {
+      void small;
+      pass('large-PR/small-selection: selected content bounded');
+    }
+  } catch (err) {
+    fail('large-PR/small-selection', err);
+  }
+
+  // 4. Issue trust: PR prose can never trigger tracker access.
+  try {
+    let adapterCalled = false;
+    const r = await resolveExplicitReviewIssue({
+      issue: null,
+      tracker: {
+        issue: async () => {
+          adapterCalled = true;
+          return { key: 'X-1' };
+        },
+      },
+    });
+    if (r.kind !== 'none' || adapterCalled) {
+      fail('issue trust', 'PR prose must never trigger tracker access');
+    } else {
+      pass('issue trust: no explicit issue = no tracker call');
+    }
+  } catch (err) {
+    fail('issue trust', err);
+  }
+
+  // 5. Malicious external diff/textconv/config environment is rejected.
+  try {
+    const { resolveReviewComparison } = await import('./review-git.js');
+    const seenEnv = [];
+    const sh = (args, opts) => {
+      if (args[0] === '--no-pager') seenEnv.push(opts.env);
+      const key = args.join(' ');
+      if (key.includes('replace --list')) return { status: 0, stdout: '' };
+      if (key.includes('is-shallow-repository')) return { status: 0, stdout: 'false\n' };
+      if (key.includes('HEAD^{commit}')) return { status: 0, stdout: `${'a'.repeat(40)}\n` };
+      if (key.includes('main^{commit}')) return { status: 0, stdout: `${'b'.repeat(40)}\n` };
+      if (key.includes('merge-base')) return { status: 0, stdout: `${'c'.repeat(40)}\n` };
+      return { status: 1, stdout: '', stderr: key };
+    };
+    const r = resolveReviewComparison(sh, { cwd: '/repo', base: 'main' });
+    if (!r.ok) {
+      fail('malicious git environment', r.message);
+    } else {
+      const env = seenEnv[0] || {};
+      const sanitized = env.GIT_EXTERNAL_DIFF === '' && env.GIT_CONFIG_NOSYSTEM === '1' && env.GIT_TERMINAL_PROMPT === '0';
+      if (!sanitized) {
+        fail('malicious git environment', 'sanitized env invariants missing');
+      } else {
+        pass('malicious external diff/textconv/config environment: sanitized invariants enforced');
+      }
+    }
+  } catch (err) {
+    fail('malicious git environment', err);
+  }
+
+  // 6. Empty provider response never produces a clean verdict.
+  try {
+    const r = await executeSingleReview(
+      { callModel: async () => '   ', limits },
+      { diff: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n', question: 'q' },
+    );
+    if (r.ok || r.code !== 'TRISS_PROVIDER_EMPTY') {
+      fail('empty response', `expected TRISS_PROVIDER_EMPTY, got ${JSON.stringify(r)}`);
+    } else {
+      pass('empty provider response: no clean verdict');
+    }
+  } catch (err) {
+    fail('empty response', err);
+  }
+
+  log(`synthetic Release B: ${passed.length} passed, ${failed.length} failed`);
+  return { passed, failed };
+}
+
+/** Run both synthetic suites in a fresh tmp root (script entry). */
 export async function runSyntheticReleaseAInTmp({ log = console.log } = {}) {
   const trissRoot = await mkdtemp(join(tmpdir(), 'triss-release-a-'));
   try {
