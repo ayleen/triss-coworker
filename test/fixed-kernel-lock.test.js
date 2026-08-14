@@ -53,29 +53,46 @@ test('exclusive lock creates a mode-0600 regular file and releases idempotently'
       basename: 'run.lock',
       mode: 'exclusive',
     });
-    const { stat } = await import('node:fs/promises');
+    const { stat, readFile } = await import('node:fs/promises');
     const stats = await stat(join(root.path, 'run.lock'));
     assert.equal(stats.mode & 0o777, 0o600);
     assert.equal(stats.isFile(), true);
+    // Marker present while held.
+    const held = await readFile(join(root.path, 'run.lock'), 'utf8');
+    assert.match(held, /^pid=\d+;ts=\d+;r=[A-Za-z0-9-]+$/);
 
     await handle.release();
     await handle.release(); // idempotent
-    await assert.rejects(() => stat(join(root.path, 'run.lock')), /ENOENT/);
+    // The fixed inode survives (never unlinked); the marker is cleared.
+    const after = await readFile(join(root.path, 'run.lock'), 'utf8');
+    assert.equal(after, '');
   } finally {
     await fx.cleanup();
   }
 });
 
-test('a second exclusive acquisition while held fails closed', async () => {
+test('a second exclusive acquisition blocks until release (kernel wait semantics)', async () => {
   const fx = await fixture();
   try {
     const root = await openManagedTrissRoot(fx.base);
     const first = await acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' });
-    await assert.rejects(
-      () => acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' }),
-      /lock is held/,
-    );
+
+    // The second acquisition must not complete while the first is held.
+    let secondDone = false;
+    const second = (async () => {
+      const h = await acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' });
+      secondDone = true;
+      await h.release();
+    })();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(secondDone, false, 'second acquisition must block while held');
+
+    // Releasing the first unblocks the second.
     await first.release();
+    await second;
+    assert.equal(secondDone, true);
+
+    // The slot is free again afterwards.
     const again = await acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' });
     await again.release();
   } finally {
@@ -85,17 +102,21 @@ test('a second exclusive acquisition while held fails closed', async () => {
 
 // ─── shared mode ─────────────────────────────────────────────────────────────
 
-test('shared lock requires an existing pinned lock file', async () => {
+test('shared lock observes the marker and works when the file exists', async () => {
   const fx = await fixture();
   try {
     const root = await openManagedTrissRoot(fx.base);
-    await assert.rejects(
-      () => acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'shared' }),
-      /lock is held|ENOENT/,
-    );
-    await writeFile(join(root.path, 'run.lock'), 'x', { mode: 0o600 });
+    // Shared opens (or creates) the fixed file but never writes a marker.
     const shared = await acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'shared' });
     await shared.release();
+    const { readFile } = await import('node:fs/promises');
+    assert.equal(await readFile(join(root.path, 'run.lock'), 'utf8'), '');
+    // A stale (dead-PID) marker is reclaimed by the next exclusive acquirer.
+    await writeFile(join(root.path, 'run.lock'), 'pid=999999999;ts=1;r=dead', { mode: 0o600 });
+    const ex = await acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' });
+    const marker = await readFile(join(root.path, 'run.lock'), 'utf8');
+    assert.match(marker, /^pid=\d+;ts=\d+;r=[A-Za-z0-9-]+$/);
+    await ex.release();
   } finally {
     await fx.cleanup();
   }
@@ -150,11 +171,17 @@ test('withFixedKernelLock holds the lock for the callback and releases in finall
         // The token is active and non-serializable.
         assert.equal(token.active, true);
         assert.throws(() => JSON.stringify(token));
-        // While held, a second acquisition fails.
-        await assert.rejects(
-          () => acquireFixedKernelLock({ parentHandle: root, basename: 'run.lock', mode: 'exclusive' }),
-          /lock is held/,
-        );
+        // While held, a second acquisition blocks; abort rejects it.
+        const controller = new AbortController();
+        const blocked = acquireFixedKernelLock({
+          parentHandle: root,
+          basename: 'run.lock',
+          mode: 'exclusive',
+          signal: controller.signal,
+        });
+        await new Promise((r) => setTimeout(r, 30));
+        controller.abort();
+        await assert.rejects(() => blocked, /aborted/);
         // The lock file exists for the duration.
         const { stat } = await import('node:fs/promises');
         await stat(join(root.path, 'run.lock'));
@@ -162,10 +189,12 @@ test('withFixedKernelLock holds the lock for the callback and releases in finall
       },
     );
     assert.equal(result, 'done');
-    // Released after the callback returned.
-    const { stat } = await import('node:fs/promises');
-    await assert.rejects(() => stat(join(root.path, 'run.lock')), /ENOENT/);
-    assert.equal(released, false); // internal flag not exposed; file absence is the proof
+    // Released after the callback returned: the marker is cleared even
+    // though the fixed inode survives.
+    const { readFile } = await import('node:fs/promises');
+    const after = await readFile(join(root.path, 'run.lock'), 'utf8');
+    assert.equal(after, '');
+    assert.equal(released, false); // internal flag not exposed; marker cleared is the proof
   } finally {
     await fx.cleanup();
   }
@@ -185,8 +214,10 @@ test('withFixedKernelLock releases even when the callback throws', async () => {
         ),
       /callback exploded/,
     );
-    const { stat } = await import('node:fs/promises');
-    await assert.rejects(() => stat(join(root.path, 'run.lock')), /ENOENT/);
+    // Marker cleared after the throw (release in finally).
+    const { readFile } = await import('node:fs/promises');
+    const after = await readFile(join(root.path, 'run.lock'), 'utf8');
+    assert.equal(after, '');
   } finally {
     await fx.cleanup();
   }

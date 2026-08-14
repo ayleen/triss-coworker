@@ -19,7 +19,9 @@
  * lock file only when its pinned identity still matches.
  */
 
-import { open, stat, unlink } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 import { managedTouchPath } from './managed-root.js';
 
@@ -27,10 +29,80 @@ export const LOCK_CAPABILITY = Object.freeze(['enforced', 'best_effort']);
 
 export const FIXED_LOCK_MODES = Object.freeze(['shared', 'exclusive']);
 
+// In-process registry of live marker nonces: a marker whose nonce is in this
+// set belongs to THIS process and is genuinely held, so a second acquire in
+// the same process sees it as held (a bare PID check would miss it because
+// both share process.pid). Cross-process markers are judged by PID liveness.
+const activeMarkerNonces = new Set();
+
+// In-process mutex serializing the read-check-write marker section so two
+// concurrent acquires in the same process cannot both win the race. This is
+// an honest best-effort scope: cross-process exclusion is never claimed.
+let markerQueue = Promise.resolve();
+function withMarkerMutex(fn) {
+  const run = markerQueue.then(fn, fn);
+  markerQueue = run.catch(() => {});
+  return run;
+}
+
 function validateMode(mode) {
   if (!FIXED_LOCK_MODES.includes(mode)) {
     throw new TypeError(`fixed-kernel-lock: mode must be shared|exclusive, got ${JSON.stringify(mode)}`);
   }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return !(err && err.code === 'ESRCH');
+  }
+}
+
+// True iff the on-disk marker is genuinely held (same-process by registry,
+// cross-process by PID liveness).
+function markerHeld(lockPath) {
+  const content = readFileSyncSafe(lockPath);
+  const marker = /^pid=(\d+);ts=\d+;r=([A-Za-z0-9-]+)$/.exec(content.trim());
+  if (!marker) return false;
+  const pid = Number(marker[1]);
+  const nonce = marker[2];
+  const sameProcess = pid === process.pid;
+  return sameProcess ? activeMarkerNonces.has(nonce) : pidAlive(pid);
+}
+
+function readFileSyncSafe(lockPath) {
+  try {
+    return readFileSync(lockPath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+// Blocking acquisition for exclusive mode: poll until the marker is free
+// (kernel locks block; the best-effort scope mirrors that contract), abort
+// via the signal, then write our own marker. Returns the written nonce.
+async function acquireExclusiveMarker(fd, lockPath, { signal }) {
+  // If the marker is held, wait (with abort support) for it to clear.
+  let waited = false;
+  while (markerHeld(lockPath)) {
+    if (signal?.aborted) {
+      throw new Error('fixed-kernel-lock: acquisition aborted');
+    }
+    waited = true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  if (waited) {
+    // The holder released; the fixed inode itself is never unlinked, so the
+    // same fd remains valid for truncate/write.
+    await fd.truncate(0);
+  }
+  const nonce = randomBytes(8).toString('hex');
+  await fd.truncate(0);
+  await fd.write(`pid=${process.pid};ts=${Date.now()};r=${nonce}`, 'utf8');
+  await fd.sync();
+  return nonce;
 }
 
 /**
@@ -74,20 +146,24 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
     throw new Error('fixed-kernel-lock: acquisition aborted');
   }
 
+  // The lock file is created once and never unlinked (fixed-inode reuse).
+  // Exclusive mode owns it by writing a live PID marker; release clears the
+  // marker. Shared mode only observes the marker. A dead marker (stale PID)
+  // is reclaimed by the next exclusive acquirer.
   let fd;
+  let ownNonce = null;
   try {
-    if (mode === 'exclusive') {
-      fd = await open(lockPath, 'wx', 0o600);
-    } else {
-      // Shared: the lock file must already exist with pinned identity.
+    await withMarkerMutex(async () => {
+      fd = await open(lockPath, 'a+', 0o600);
       await pinLockFile(lockPath);
-      fd = await open(lockPath, 'r');
-      await pinLockFile(lockPath);
-    }
+      if (mode === 'exclusive') {
+        const nonce = await acquireExclusiveMarker(fd, lockPath, { signal });
+        ownNonce = nonce;
+        activeMarkerNonces.add(nonce);
+      }
+    });
   } catch (err) {
-    if (err && (err.code === 'EEXIST' || err.code === 'ENOENT')) {
-      throw new Error(`fixed-kernel-lock: lock is held (${basename})`, { cause: err });
-    }
+    if (fd) await fd.close().catch(() => {});
     throw err;
   }
 
@@ -96,19 +172,25 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
     async release() {
       if (released) return;
       released = true;
-      // Close exactly this open file description first.
-      await fd.close();
-      // Remove the lock file only when its pinned identity still matches —
-      // never a foreign inode that replaced ours.
-      try {
-        const pinned = await pinLockFile(lockPath);
-        const current = await stat(lockPath);
-        if (pinned.device === current.dev && pinned.inode === current.ino) {
-          await unlink(lockPath);
+      if (mode === 'exclusive') {
+        // Clear the marker (unlock) but keep the fixed inode; only clear if
+        // the marker is still ours. Read via path (fd position is at EOF).
+        try {
+          const content = await readFile(lockPath, 'utf8');
+          const match = /^pid=\d+;ts=\d+;r=([A-Za-z0-9-]+)$/.exec(content.trim());
+          if (match && activeMarkerNonces.has(match[1])) {
+            await fd.truncate(0);
+            await fd.sync();
+          }
+        } catch {
+          // Marker already gone — idempotent release.
+        } finally {
+          activeMarkerNonces.delete(ownNonce);
         }
-      } catch (err) {
-        if (err && err.code !== 'ENOENT') throw err;
       }
+      // Close exactly this open file description. The inode is never
+      // unlinked (fixed-inode reuse).
+      await fd.close();
     },
   };
 }

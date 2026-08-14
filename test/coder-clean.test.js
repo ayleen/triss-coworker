@@ -23,9 +23,12 @@ async function fixture() {
   const base = await mkdtemp(join(tmpdir(), 'triss-clean-'));
   const trissRoot = join(base, '.triss');
   await mkdir(join(trissRoot, 'coder-state-v2', 'opencode'), { mode: 0o700, recursive: true });
+  const { openManagedTrissRoot } = await import('../src/managed-root.js');
+  const root = await openManagedTrissRoot(base);
   return {
     base,
     trissRoot,
+    root,
     stateDir: join(trissRoot, 'coder-state-v2', 'opencode'),
     async cleanup() {
       await rm(base, { recursive: true, force: true });
@@ -109,6 +112,69 @@ test('rollback inventory records what was removed so a crashed clean can be retr
     // Retry after a crash is idempotent: the file is gone.
     const second = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
     assert.equal(second.action, 'absent');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+// ─── CODER-LEASE-* cleanup cases (Package 4A host gate) ──────────────────────
+
+test('CODER-LEASE-01: run/clean serializes via the fixed slot lease', async () => {
+  const fx = await fixture();
+  try {
+    const { withCoderSlotLease } = await import('../src/coder-lease.js');
+    const events = [];
+    const cycle = async (i) =>
+      withCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' }, async () => {
+        events.push(`run-${i}`);
+        await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: `task-a-${i}.json`, ownedSlug: `task-a-${i}` });
+        events.push(`clean-${i}`);
+      });
+    await Promise.all([cycle(1), cycle(2)]);
+    assert.deepEqual(events, ['run-1', 'clean-1', 'run-2', 'clean-2']);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('CODER-LEASE-02: different-slug non-isolated targets serialize via the target lease', async () => {
+  const fx = await fixture();
+  try {
+    const { withCoderTargetLease } = await import('../src/coder-lease.js');
+    const events = [];
+    const work = async (slug) =>
+      withCoderTargetLease({ parentHandle: fx.root }, async () => {
+        events.push(`${slug}-start`);
+        await new Promise((r) => setTimeout(r, 5));
+        events.push(`${slug}-end`);
+      });
+    await Promise.all([work('slug-a'), work('slug-b')]);
+    assert.equal(events[0], 'slug-a-start');
+    assert.equal(events[1], 'slug-a-end');
+    assert.equal(events[2], 'slug-b-start');
+    assert.equal(events[3], 'slug-b-end');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('CODER-LEASE-03: release in finally even when the callback throws', async () => {
+  const fx = await fixture();
+  try {
+    const { withCoderSlotLease } = await import('../src/coder-lease.js');
+    await assert.rejects(
+      () =>
+        withCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' }, async () => {
+          throw new Error('boom');
+        }),
+      /boom/,
+    );
+    // The slot is free again after the failed callback.
+    const handle = await (async () => {
+      const { acquireCoderSlotLease } = await import('../src/coder-lease.js');
+      return acquireCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' });
+    })();
+    await handle.release();
   } finally {
     await fx.cleanup();
   }
