@@ -232,6 +232,7 @@ program
   .option('--format <format>', 'response format: text (default) or evidence')
   .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
+  .option('--payload-mode <mode>', 'review payload mode: single (default) or shard (sequential whole-file shards; no global verdict)')
   .action((pr, opts) => wrap(runReview)(pr, opts));
 
 program

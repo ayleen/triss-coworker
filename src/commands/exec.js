@@ -29,6 +29,7 @@ const ROUTE_OPTION_SUPPORT = {
   timeout: new Set(['coder']),
   stream: new Set(['ask', 'review', 'chat']),
   noStream: new Set(['ask', 'review', 'chat']),
+  payloadMode: new Set(['review']),
 };
 
 const OPTION_LABELS = {
@@ -188,6 +189,7 @@ function reviewOptions(input) {
     format: input.format,
     stream: input.stream,
     noStream: input.noStream,
+    payloadMode: input.payloadMode,
   };
 }
 

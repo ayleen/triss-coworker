@@ -42,6 +42,10 @@ export function validateReviewOptions(prNumber, opts) {
       'Cannot combine --base with --stdin. Use: git diff | triss review --stdin',
     );
   }
+  // Atomic 45 / Package 24: evidence + shard is rejected in the CLI router.
+  if (opts.payloadMode === 'shard' && responseFormat === 'evidence') {
+    throw new Error('--payload-mode shard cannot be combined with --format evidence');
+  }
   return { responseFormat, maxTokens };
 }
 
@@ -162,6 +166,79 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     wrapReviewSection(boundaryId, 'diff', `<diff>\n${diff}\n</diff>`),
   ].filter(Boolean);
   const corpus = sections.join('\n\n');
+
+  // Atomic 45 / Package 24: CLI shard mode — sequential whole-file shards,
+  // separated execution/scope/coverage/context fields, no global verdict.
+  if (opts.payloadMode === 'shard') {
+    if (shouldStream(opts)) {
+      throw new Error('--payload-mode shard cannot be combined with --stream');
+    }
+    const { parseUnifiedDiff, planSequentialShards } = await import('../review-payload.js');
+    const { executeReviewPlan, REVIEW_EXIT_CODES } = await import('../review-executor.js');
+    const { reviewLimitConfig } = await import('../config.js');
+    const limits = reviewLimitConfig().limits;
+
+    const parsed = parseUnifiedDiff(diff);
+    if (parsed.error) {
+      process.stderr.write(pc.dim(`[triss/review] ${parsed.error}\n`));
+      process.exitCode = 2;
+      return undefined;
+    }
+    const planned = planSequentialShards({
+      sections: parsed.sections,
+      question: opts.question || DEFAULT_QUESTION,
+      metadata: changeCorpus,
+      limits,
+    });
+    if (planned.error) {
+      process.stderr.write(pc.dim(`[triss/review] ${planned.error}${planned.path ? `: ${planned.path}` : ''}\n`));
+      process.exitCode = 2;
+      return undefined;
+    }
+
+    const result = await executeReviewPlan(
+      {
+        callModel: async ({ shard, question, metadata }) => {
+          const shardCorpus = [
+            wrapReviewSection(boundaryId, 'change', metadata),
+            wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((s) => s.raw).join('\n')}\n</diff>`),
+          ].join('\n\n');
+          const resp = await sendChat({
+            ...request,
+            maxTokens,
+            messages: [
+              { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
+              { role: 'user', content: shardCorpus },
+              { role: 'user', content: question },
+            ],
+            label: 'triss/review',
+          });
+          return assertProviderText(responseText(resp));
+        },
+        limits,
+      },
+      {
+        shards: planned.plan.shards,
+        question: opts.question || DEFAULT_QUESTION,
+        metadata: changeCorpus,
+        signal: undefined,
+      },
+    );
+
+    if (!result.ok) {
+      process.stderr.write(pc.dim(`[triss/review] shard execution failed: ${result.message}\n`));
+      process.exitCode = result.exit ?? REVIEW_EXIT_CODES.provider;
+      return undefined;
+    }
+    // Separated execution/scope fields + no global verdict (per-shard only).
+    process.stderr.write(pc.dim(`[triss/review] shards=${result.attempts} bytes=${result.shards.reduce((a, s) => a + s.bytes, 0)}\n`));
+    for (const shard of result.shards) {
+      process.stdout.write(`--- shard ${shard.shard_index} ---\n`);
+      process.stdout.write(`${shard.verdict}\n`);
+    }
+    process.stdout.write('global verdict: unavailable_for_sharded\n');
+    return result.shards.map((s) => s.verdict).join('\n\n');
+  }
 
   const diagnostic = stdinMode
     ? `[triss/review] provider=${provider} model=${model} source=stdin ` +

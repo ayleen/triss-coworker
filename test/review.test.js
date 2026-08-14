@@ -616,3 +616,91 @@ test('REV-10: MCP review evidence returns the model-authored contract without th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ─── REVIEW-SHARD-CLI-* cases (Atomic 45 / Package 24) ──────────────────────
+
+test('REVIEW-SHARD-CLI-01: shard mode prints per-shard verdicts and no global clean verdict', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  const originalWrite = process.stdout.write;
+  const originalErr = process.stderr.write;
+  let captured = [];
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    g(['switch', '-c', 'feat/shard']);
+    addChange(dir, 'alpha.js', 'export const a = 1;\n');
+    addChange(dir, 'beta.js', 'export const b = 2;\n');
+    process.chdir(dir);
+    process.stdout.write = (chunk) => {
+      captured.push(String(chunk));
+      return true;
+    };
+
+    const { runReviewWithDeps } = await import('../src/commands/review.js');
+    const result = await runReviewWithDeps(
+      undefined,
+      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', noStream: true, payloadMode: 'shard' },
+      {
+        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+        chat: async () => ({
+          final_text: 'shard verdict',
+          usage: { prompt_tokens: 10, completion_tokens: 4 },
+        }),
+      },
+    );
+    assert.ok(result, 'shard mode returns per-shard verdicts');
+    const text = captured.join('');
+    assert.match(text, /--- shard 1 ---/);
+    assert.match(text, /global verdict: unavailable_for_sharded/);
+    assert.doesNotMatch(text, /^No issues found\.$/m, 'no single clean global verdict line');
+  } finally {
+    process.stdout.write = originalWrite;
+    process.stderr.write = originalErr;
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REVIEW-SHARD-CLI-02: evidence + shard is rejected before any model call', async () => {
+  const { validateReviewOptions } = await import('../src/commands/review.js');
+  assert.throws(
+    () => validateReviewOptions(undefined, { payloadMode: 'shard', format: 'evidence' }),
+    /cannot be combined/,
+  );
+});
+
+test('REVIEW-SHARD-CLI-03: shard + stream is rejected before any model call', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    g(['switch', '-c', 'feat/shard-stream']);
+    addChange(dir, 'alpha.js', 'export const a = 1;\n');
+    process.chdir(dir);
+    let modelCalled = false;
+    const { runReviewWithDeps } = await import('../src/commands/review.js');
+    await assert.rejects(
+      () =>
+        runReviewWithDeps(
+          undefined,
+          { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', payloadMode: 'shard', stream: true },
+          {
+            resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+            chat: async () => {
+              modelCalled = true;
+              return { final_text: 'x' };
+            },
+          },
+        ),
+      /cannot be combined with --stream/,
+    );
+    assert.equal(modelCalled, false, 'no model call before the rejection');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
