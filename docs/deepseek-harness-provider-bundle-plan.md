@@ -1,96 +1,171 @@
-# DeepSeek Harness provider bundle and upstream contribution plan
+# DeepSeek Harness provider bundle and ecosystem proposal plan
 
-Implementation contract for an opt-in DeepSeek Harness bundle that makes the existing OpenCode and Z.AI catalogue routes usable without hand-writing provider profiles.
+Implementation contract for an opt-in DeepSeek Harness bundle that activates existing OpenCode and Z.AI catalogue routes without hand-written provider profiles.
 
-## Status
+## Status and verified baseline
 
-The plan is based on upstream `deepseek-ai/deepseek-harness` commit `47f943859bef60e4160492346772ded9b24f765a` and its pinned `@earendil-works/pi-ai@0.82.1` dependency.
+This plan was verified against `deepseek-ai/deepseek-harness` commit `47f943859bef60e4160492346772ded9b24f765a` on 2026-08-14.
 
-That `pi-ai` release already ships the `opencode`, `opencode-go`, and `zai` providers.
+At that commit, `@deepseek-ai/dsh-llm-pi-ai@0.1.0-rc.5` declares `@earendil-works/pi-ai` with the semver range `^0.82.1`; the inspected upstream `pnpm-lock.yaml` resolves `pi-ai@0.82.1`.
 
-The `opencode-go` catalogue includes `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.1`, and `glm-5.2`, and its native credential discovery uses `OPENCODE_API_KEY`.
+The resolved `pi-ai@0.82.1` catalogue contains the `opencode`, `opencode-go`, and `zai` provider ids.
 
-The Harness base bundle already mounts `@deepseek-ai/dsh-llm-pi-ai` in a dormant state and registers its complete catalogue as configurable providers.
+Its `opencode-go` catalogue contains `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.1`, and `glm-5.2`, while its `opencode` catalogue contains `deepseek-v4-flash` and other models.
 
-The missing product layer is therefore an installable profile bundle, not another LLM transport adapter.
+The Harness base bundle mounts `@deepseek-ai/dsh-llm-pi-ai` with no active routes and exposes its catalogue providers through the configurable-provider directory.
+
+The missing product layer is an installable provider-profile bundle, not another LLM transport adapter.
+
+The current Harness `CONTRIBUTING.md` does not accept external pull requests.
+
+The supported contribution route is a community ecosystem plugin, a GitHub Discussion, and the `dsh-plugin` repository topic.
+
+The npm registry returned `E404` for `triss-dsh-provider-bundle` during planning, but absence is not a reservation; availability must be checked again immediately before publication.
 
 ## Accepted decisions
 
-- Build a configuration-only `dsh.bundle`; do not implement endpoints, wire protocols, model catalogues, or authentication logic already owned by `pi-ai`.
+- Build a configuration-only `dsh.bundle`; do not duplicate endpoints, protocols, model catalogues, or authentication logic owned by `pi-ai`.
+- Publish the bundle under the distinct npm identity `triss-dsh-provider-bundle`.
+- Develop and release the companion package from the Triss repository and coordinated Triss release train, while keeping it out of the `triss-coworker` tarball.
 - Activate three catalogue routes in v1: OpenCode Zen (`opencode`), OpenCode Go (`opencode-go`), and direct Z.AI (`zai`).
-- Reuse `OPENCODE_API_KEY` for both OpenCode routes and use the upstream-native `ZAI_API_KEY` reference for the direct Z.AI route.
-- Leave the Harness default provider and model unchanged because the package cannot know which subscription or key the user has.
-- Distribute the community bundle inside the existing `triss-coworker` npm package before upstream acceptance.
-- Contribute the same behavior upstream as an official opt-in bundle, proposed as `@deepseek-ai/dsh-opencode-zai` under `packages/bundle/opencode-zai`.
-- Change only Triss npm distribution metadata, bundle assets, tests, and the bundle's own documentation; keep Triss runtime, CLI, MCP, templates, and provider configuration unchanged.
-- Treat later Triss support as a separate change with its own plan and approval.
+- Reuse `OPENCODE_API_KEY` for both OpenCode routes and use `ZAI_API_KEY` for direct Z.AI.
+- Leave the Harness default provider and model unchanged because the bundle cannot infer the user's entitlement or preferred route.
+- Treat provider ids and credential references as the stable bundle contract.
+- Treat exact model ids as release evidence for the dependency version actually resolved during acceptance, not as an independently maintained catalogue.
+- Publish and maintain the bundle as a standalone community ecosystem plugin.
+- Propose possible official adoption through a GitHub Discussion; prepare an upstream PR only after a direct maintainer invitation or an upstream contribution-policy change.
+- Keep Triss runtime, coder-engine, CLI, MCP, templates, and provider routing unchanged.
+
+## Why the bundle needs a separate package identity
+
+Harness resolves every bundle from the running `dsh` installation before it tries the profile's `node_modules`.
+
+The same resolver is used after `dsh plugin add` to decide whether an installed dependency declares `dsh.bundle`.
+
+Publishing the bundle inside `triss-coworker` would make a globally installed Triss package eligible at the installation-first anchor before the profile-local version.
+
+An older global Triss without the manifest could make the profile dependency look bundle-less, while a different global bundled version could load the wrong patch.
+
+The distinct identity `triss-dsh-provider-bundle` prevents an ordinary global `triss-coworker` installation from colliding with the profile bundle lookup.
+
+The companion package must be installed only into Harness profiles; globally installing the companion package is unsupported because it would recreate an installation-anchor ambiguity for its own name.
 
 ## Goals
 
-- Let a Harness user install one package instead of hand-authoring an `llm-pi-ai.providers` mapping.
-- Make one existing OpenCode key available to both Zen and Go routes without copying the secret.
-- Expose DeepSeek V4 and GLM 5.x models through the catalogue owned by the installed `pi-ai` version.
+- Let a Harness user install one profile dependency instead of authoring an `llm-pi-ai.providers` mapping.
+- Make one OpenCode credential reference available to both Zen and Go without copying the secret.
+- Expose DeepSeek V4 and GLM 5.x through the model catalogue resolved by the user's Harness installation.
 - Support direct Z.AI GLM access through the catalogue-owned `zai` route.
-- Keep provider credentials in Harness credential sources and references, never in the bundle or settings values.
-- Keep the embedded bundle assets structurally close enough to the upstream package that upstream acceptance requires packaging and repository metadata changes rather than a behavioral rewrite.
-- Provide keyless composition tests and opt-in live acceptance without making CI depend on paid services.
+- Keep credentials in Harness credential sources and references, never in bundle configuration or package contents.
+- Keep the community package close enough to a possible official bundle that future adoption requires repository integration rather than a behavioral rewrite.
+- Prove package resolution, configuration layering, provider routing, model selection, and tool use before publication.
+- Release the companion package through the same reviewed Triss version and tag while preserving its separate npm identity.
 
 ## Non-goals
 
 - Adding a `deepseek-harness` engine to `triss coder` in this change.
-- Publishing or maintaining a second Triss-owned npm package for the bundle.
-- Replacing OpenCode, changing Triss's existing OpenCode or Z.AI behavior, or migrating Triss users automatically.
+- Embedding `dsh.bundle` metadata or bundle assets in `triss-coworker`.
+- Replacing OpenCode or changing existing Triss OpenCode and Z.AI behavior.
 - Forking or patching `pi-ai` provider implementations.
 - Maintaining a second model catalogue in this repository.
-- Selecting a default provider, model, reasoning effort, or tool policy for the user's Harness profile.
+- Selecting a default provider, model, reasoning effort, or tool policy for a Harness profile.
 - Buying subscriptions, enabling regional hosting, changing privacy settings, or treating a configured key as proof of entitlement.
-- Supporting arbitrary provider definitions in v1; Harness already exposes that through user settings and patch layers.
-- Publishing a GitHub pull request, npm package, or release without the user's separate authorization for that external action.
+- Supporting arbitrary custom providers in v1; Harness already exposes that through settings and patch layers.
+- Creating an upstream pull request while upstream policy rejects external PRs.
+- Publishing an npm version, GitHub tag, GitHub Discussion, or future upstream PR without separate authorization for that external action.
 
-## Package topology
+## Package and release topology
 
-### Triss npm distribution
-
-The community bundle lives under `dsh/providers/` and ships in the existing `triss-coworker` tarball.
-
-The root manifest remains the single package manifest and release authority.
-
-The distribution-specific files are:
+The repository becomes an npm workspace with the existing root package and one publishable companion package:
 
 ```text
-dsh/providers/
+packages/dsh-provider-bundle/
+├── package.json
 ├── cordis.patch.yml
-└── README.md
+├── README.md
+└── LICENSE
 
 test/
 └── dsh-provider-bundle.test.js
 ```
 
-The root `package.json` adds `dsh/providers/` to `files` and declares `dsh.bundle.patch: ./dsh/providers/cordis.patch.yml` alongside the existing Triss CLI metadata.
+The root `package.json` adds `packages/dsh-provider-bundle` to `workspaces` but does not add the companion to `files`, dependencies, optional dependencies, or bundled dependencies.
 
-No JavaScript entry point, generated output, `prepare`, postinstall hook, runtime dependency, peer dependency, new npm script, or second version number is needed for the bundle.
+The root `triss-coworker` tarball therefore remains the Triss CLI package and contains no Harness manifest or bundle patch.
 
-The root package already requires Node 22 or newer, matching the current Harness requirement.
+The companion manifest declares:
 
-Because Harness is in developer preview, the bundle README and Triss release evidence name the exact tested Harness version, and compatibility claims widen only after the same `triss-coworker` tarball passes against the newer release.
+```json
+{
+  "name": "triss-dsh-provider-bundle",
+  "version": "<release-version>",
+  "type": "module",
+  "files": ["cordis.patch.yml", "README.md", "LICENSE"],
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
+```
 
-Installing `triss-coworker` normally continues to install the Triss CLI.
+The companion has no JavaScript entry point, runtime dependency, peer dependency, build output, `prepare`, preinstall, install, postinstall, or second release script.
 
-Installing the same package through `dsh plugin add` additionally activates the manifest-declared bundle in that Harness profile; no Triss process participates at runtime.
+The root and companion manifests use the same selected release version and are published from one exact `v<version>` tag.
 
-### Upstream package
+Before the publication authorization gate, implementation must:
 
-The upstream PR adds the equivalent package at `packages/bundle/opencode-zai/` with the repository's current version, publish metadata, bilingual README pair, and workspace conventions.
+- select a new version greater than the currently published Triss version;
+- update the version in root `package.json`;
+- update the top-level and root-package version fields in `package-lock.json`;
+- add the workspace package and its matching version to `package-lock.json` through npm, not by manual lockfile editing;
+- set the same version in `packages/dsh-provider-bundle/package.json`;
+- move the relevant `CHANGELOG.md` content from `Unreleased` into the dated release section and recreate an empty `Unreleased` section;
+- describe both the companion bundle and the unchanged Triss runtime boundary in the changelog;
+- update release workflow tests and `.github/workflows/publish.yml` so tag-to-version checks cover both manifests, both tarballs are inspected, and both npm packages publish with provenance.
 
-The upstream package name proposed in the PR is `@deepseek-ai/dsh-opencode-zai`.
+The release workflow must be safely retryable when one npm publication succeeds before the other.
 
-Maintainers may request a different official name, but the package responsibility remains fixed: it is an opt-in provider-profile bundle and not a new adapter.
+An already-published target version is acceptable only when registry metadata and tarball integrity match the locally verified artifact; any mismatch fails closed and requires a new version.
 
-The upstream package owns no model-facing prompt text and has no direct KV-cache effect.
+## Compatibility evidence contract
+
+Every local tarball acceptance, CI run, and registry smoke records this tuple:
+
+```text
+Node version
+pnpm version
+@deepseek-ai/dsh version
+@deepseek-ai/dsh-llm-pi-ai version
+resolved @earendil-works/pi-ai version
+resolved pi-ai package integrity from the profile lockfile
+triss-dsh-provider-bundle version and tarball integrity
+```
+
+The isolated profile smoke retains the output of `pnpm list @earendil-works/pi-ai --depth Infinity --json` and the relevant integrity entry from its lockfile.
+
+Release evidence must not call `pi-ai` pinned merely because the adapter declares `^0.82.1`.
+
+Provider-id and credential-reference assertions always run.
+
+Exact model-id assertions are derived from and reported with the resolved `pi-ai` version.
+
+If the resolved catalogue removes or renames an acceptance model, implementation selects a current model and updates evidence rather than declaring a stale local model.
+
+Compatibility is never claimed from the Harness version alone.
+
+## Runtime prerequisites
+
+Normal Triss CLI installation retains its current `Node >=22` contract.
+
+Using the companion bundle through Harness requires Node `^22.19.0 || >=24.0.0`, matching the verified Harness engine range.
+
+Bundle CI and tarball acceptance run on at least Node `22.19.0` and Node `24`; Node `26` is included while upstream supports it.
+
+The `dsh plugin` command forwards directly to `pnpm`, so `pnpm` must be installed and available on `PATH`.
+
+The bundle README lists Node, pnpm, tested `dsh`, resolved `dsh-llm-pi-ai`, and resolved `pi-ai` versions before the installation command.
 
 ## Bundle contract
 
-The bundle replaces the dormant base row's entire configuration, as required by Harness patch layering:
+The bundle replaces the dormant base row's complete composition configuration:
 
 ```yaml
 - id: llm-pi-ai
@@ -104,203 +179,232 @@ The bundle replaces the dormant base row's entire configuration, as required by 
         apiKeyEnv: ZAI_API_KEY
 ```
 
-The route keys must match the installed `pi-ai` provider ids exactly.
+The bundle-owned composition base declares exactly `opencode`, `opencode-go`, and `zai`.
 
-The bundle must not declare `baseURL`, `api`, `models`, headers, context windows, output limits, reasoning formats, or pricing.
+The bundle must not declare `baseURL`, `api`, models, headers, context windows, output limits, reasoning formats, or pricing.
 
-Omitting those fields makes `dsh-llm-pi-ai` reuse each catalogue provider's protocol implementation, endpoint, model metadata, compatibility settings, and authentication support.
+Omitting those fields makes `dsh-llm-pi-ai` reuse each resolved catalogue provider's protocol, endpoint, model metadata, compatibility settings, and authentication support.
 
-The package does not override the `agent-default-model` row.
+The bundle does not override the `agent-default-model` row.
 
-Users select a provider and model through existing Harness settings, the Web Models surface, a later profile patch, or the relevant CLI surface.
+## Configuration layering contract
 
-Because a later profile patch wins by row id and replaces the whole config, users can retain only a subset or change credential references by restating the `llm-pi-ai` row in their profile's `cordis.patch.yml`.
+Harness resolves provider profiles through schema defaults, the bundle-owned composition base, user settings, and later patch layers.
 
-Removing the npm bundle removes all three base profiles; user-layer provider settings remain user-owned and are not deleted by package removal.
+The effective runtime configuration may therefore contain additional routes or override bundle-owned fields.
+
+A user setting may change `opencode.apiKeyEnv`, override its endpoint or models, or keep a route active after the bundle is removed.
+
+Removing the bundle restores the dormant base posture only in a clean isolated profile with no user `llm-pi-ai` settings and no later patch that activates routes.
+
+Removing the bundle never deletes user settings.
+
+A provider route registered by another adapter family conflicts with the same route from this bundle and must fail loud with the upstream duplicate-adapter contract; the bundle never silently takes ownership.
 
 ## Credential and security contract
 
-The bundle stores only credential references.
+The bundle stores credential references only.
 
 It never receives, reads, copies, logs, serializes, or publishes credential values.
 
 Both OpenCode routes reference `OPENCODE_API_KEY`, allowing one managed Harness credential or inherited environment value to serve Zen and Go without duplication.
 
-The direct Z.AI route uses `ZAI_API_KEY` because that is the environment name owned by the pinned `pi-ai` provider.
+Direct Z.AI references `ZAI_API_KEY`, the name owned by the resolved `pi-ai` provider.
 
-Triss currently uses `ZHIPU_API_KEY` for its Z.AI integration, but the bundle must not add a Triss-specific alias to an upstream package.
+Triss uses `ZHIPU_API_KEY` for its own Z.AI integration, but the companion bundle does not copy, rename, or alias that secret.
 
-A user who wants the same underlying Z.AI credential in both products explicitly stores it under the Harness reference `ZAI_API_KEY`; this plan does not copy it between stores.
+A user who wants the same underlying credential in both products explicitly stores it under each product's expected reference.
 
-No credential value may appear in tests, fixtures, snapshots, package metadata, `npm pack` output inspection, logs, documentation examples, or an upstream PR.
-
-Live tests inherit only the credential required for the selected route and redact provider responses before retaining evidence.
+Live tests receive only the credential required by the selected route and never retain a credential value in logs, fixtures, snapshots, package metadata, release evidence, or a Discussion.
 
 ## User contract
 
 Installation into an existing Harness profile is:
 
 ```bash
-dsh plugin --profile headless add triss-coworker@<version>
+pnpm --version
+node --version
+dsh plugin --profile headless add triss-dsh-provider-bundle@<version>
 dsh --profile headless --dump-config
 ```
 
-The same package can be added to any profile that already includes `@deepseek-ai/dsh-base`; it does not own the runner or UI layer.
+The companion package can be installed into any profile that already includes `@deepseek-ai/dsh-base`; it does not own the runner or UI layer.
 
-The README documents the active routes and their model-qualified identities:
+The README documents these release-acceptance routes:
 
-| Route | Credential reference | Initial live acceptance models |
+| Route | Credential reference | Initial acceptance model for resolved `pi-ai@0.82.1` |
 | --- | --- | --- |
-| `opencode` | `OPENCODE_API_KEY` | one model currently returned by the installed catalogue |
+| `opencode` | `OPENCODE_API_KEY` | `deepseek-v4-flash` |
 | `opencode-go` | `OPENCODE_API_KEY` | `deepseek-v4-flash`, `glm-5.2` |
 | `zai` | `ZAI_API_KEY` | `glm-5.2` |
 
-The table names acceptance targets, not a package-owned static catalogue.
+The table is release evidence, not a package-owned static catalogue.
 
-The README states that model availability, billing, quota, regional hosting, and provider policy are runtime facts controlled by each service.
+Model availability, billing, quota, regional hosting, and provider policy remain service-owned runtime facts.
 
-An HTTP 401, 403, 429, billing rejection, free-usage limit, or regional-opt-in response is surfaced as the provider's failure and does not trigger configuration mutation or fallback to another route.
+An HTTP 401, 403, 429, billing rejection, free-usage limit, or regional-opt-in response is surfaced without mutating configuration or falling back to a different route.
 
-## Upstream contribution
+## Keyless package and composition tests
 
-### Problem statement
+### Package contract
 
-Harness can already serve these providers after a user writes `llm-pi-ai` settings, but headless and reproducible profiles have no small official bundle that activates the common OpenCode and Z.AI catalogue routes with their conventional credential references.
+Focused tests prove:
 
-The PR must describe that configuration gap accurately and must not claim to introduce the underlying transports or models.
+- the companion owns a distinct package name and the root tarball contains neither its manifest nor patch;
+- the package manifest resolves `cordis.patch.yml` from the packed tarball;
+- the public file allowlist contains only the manifest plus `cordis.patch.yml`, README, and license;
+- the companion has no executable lifecycle hooks or undeclared dependency closure;
+- its Node engine matches the verified Harness range;
+- the bundle patch declares only the three intended catalogue profiles and credential references;
+- forbidden duplicated provider fields are absent;
+- installation does not change the Harness default provider or model.
 
-### Upstream file scope
+### Package-resolution isolation matrix
 
-The expected upstream change contains:
+End-to-end fixtures exercise both globally installed and `npx`-style Harness layouts with:
 
-- `packages/bundle/opencode-zai/package.json` with the official `dsh.bundle` manifest and repository metadata;
-- `packages/bundle/opencode-zai/cordis.patch.yml` with the three provider profiles;
-- `packages/bundle/opencode-zai/README.md` and `README.zh.md` describing installation, routes, credential references, override behavior, and limitations;
-- an implemented feature Agent Note and Chinese counterpart under `.agents/notes/implemented/feature/`, recording the accepted bundle boundary and rejected adapter/default-model alternatives;
-- the Agent Note consistency sidecar required by upstream gates;
-- focused composition tests that install or compose the bundle over `dsh-base` and inspect the effective row and provider directory;
-- an app-level keyless snapshot or equivalent observable composition fixture showing the three dormant-to-active route transitions without issuing network requests;
-- the minimal workspace, release, documentation-navigation, and package-limitations gate updates required by upstream checks.
+1. no global `triss-coworker` installation;
+2. an older global Triss without `dsh.bundle`;
+3. an older global Triss carrying a deliberately different bundle patch;
+4. a newer global Triss than the profile companion;
+5. companion installation into a new profile;
+6. companion update between two fixture versions with different non-secret marker metadata;
+7. companion removal;
+8. companion reinstallation.
 
-The implementation must inspect upstream at its then-current HEAD before editing because package version, dependency conventions, documentation budgets, and Agent Note policy may change during developer preview.
+Every case asserts that Harness resolves `triss-dsh-provider-bundle` from the profile's `node_modules`, never from a `triss-coworker` package at the installation anchor.
 
-### Upstream tests
+The update case must change the effective companion patch, and removal must delete the companion from `dsh.profile.bundles`.
 
-The upstream test contour proves:
+### Settings-layer matrix
 
-- the bundle manifest resolves `cordis.patch.yml` from the packed package;
-- composing it after `@deepseek-ai/dsh-base` leaves the existing plugin identity intact and replaces only the `llm-pi-ai` config;
-- `llm.providers` reports `opencode`, `opencode-go`, and `zai` as active;
-- both OpenCode profiles resolve the exact reference `OPENCODE_API_KEY`;
-- the Z.AI profile resolves `ZAI_API_KEY`;
-- `llm.models` derives entries from the pinned catalogue and includes `opencode-go/deepseek-v4-flash` and `opencode-go/glm-5.2` when those ids remain present in the pinned dependency;
-- no provider becomes the agent default merely because the bundle is installed;
-- removing the bundle layer restores the dormant base posture;
-- no test performs a billable request unless its explicit live-test credential is present.
+Composition tests cover:
 
-If an upstream dependency update removes or renames an acceptance model, implementation updates the evidence and acceptance target rather than adding a stale local model declaration.
+1. a clean profile, where the bundle base activates the three routes;
+2. user settings that add a fourth provider, which remains present beside the three base routes;
+3. user settings that override `opencode.apiKeyEnv`, which win in the effective configuration;
+4. bundle removal with retained user settings, which preserves user-owned routes and values;
+5. bundle reinstallation, which restores the composition base without deleting user overrides;
+6. a route collision with another adapter family, which fails loud with the duplicate-adapter error;
+7. clean-profile removal, which alone restores the dormant `llm-pi-ai` posture.
 
-### Upstream validation
+## Live and tool-use acceptance
 
-Run the package-focused tests first, followed by the repository-required documentation, constraints, type, lint, build, and hygiene gates.
+Every live request explicitly names its provider and model and captures session or event evidence proving the resolved pair.
 
-The expected full validation includes the current equivalents of:
+Before publishing, the configured acceptance account must complete successful minimal text requests through:
 
-```bash
-pnpm run doc-sync
-pnpm run constraints
-pnpm run typecheck
-pnpm run lint
-pnpm run build
-pnpm run hygiene
-```
+- `opencode/deepseek-v4-flash`;
+- `opencode-go/deepseek-v4-flash`;
+- `opencode-go/glm-5.2`;
+- `zai/glm-5.2`.
 
-The final command list must come from the upstream HEAD's contributing instructions and package scripts, not from this historical snapshot.
+If the resolved catalogue changes, the exact replacements are selected from that catalogue and recorded with the compatibility tuple.
 
-Before publication, build the package tarball and install that tarball into an isolated Harness home and profile.
+An entitlement or billing failure proves error propagation but does not satisfy successful live acceptance.
 
-## Triss distribution implementation sequence
+Coding-tool acceptance runs two disposable tasks with explicit routing:
 
-1. Re-verify the current upstream Harness release and exact pinned `pi-ai` catalogue.
-2. Add RED tests for the root `dsh.bundle` manifest, published-file allowlist, exact patch shape, route ids, credential references, forbidden duplicated provider fields, and absence of bundle lifecycle code.
-3. Add `dsh/providers/cordis.patch.yml`, its focused README, the root manifest field, and the `files` allowlist entry needed to make the tests pass.
-4. Run the focused test, complete root Triss tests, lint, `git diff --check`, and a packed-tarball inspection.
-5. Prove the tarball still exposes the existing `triss` binary and contains the two declared bundle assets without unrelated files or secrets.
-6. Install that tarball into a temporary Harness profile with an isolated `DSH_HOME`, inspect `--dump-config`, list providers and models, and prove that the default model is unchanged.
-7. With already-configured credentials, run minimal live text requests through `opencode-go/deepseek-v4-flash`, `opencode-go/glm-5.2`, and `zai/glm-5.2`.
-8. Run one isolated coding-tool task that changes a disposable fixture and verify the expected file diff.
-9. Review the final diff against this contract and prove that no Triss runtime, engine, CLI, MCP, template, or provider-resolution path changed.
-10. Only after all local and tarball gates pass, ask for explicit authorization to publish the new `triss-coworker` version.
-11. After publication, install the registry version into a fresh isolated profile and repeat the keyless composition check plus one minimal live OpenCode Go request.
-12. Only after the registry smoke passes, prepare the upstream branch and PR from the current upstream HEAD, reusing the proven bundle behavior and adapting only packaging, naming, and repository conventions.
+1. provider `opencode-go`, model `deepseek-v4-flash`;
+2. provider `opencode-go`, model `glm-5.2`.
 
-The npm release and upstream PR are separate publication actions and require separate explicit approval.
+Each task must produce captured evidence containing the selected provider and model, at least one tool call, the matching tool result, and the expected disposable file diff.
 
-## Upstream and embedded-bundle lifecycle
+A successful final diff without route and tool-event evidence is a failed acceptance test.
 
-The embedded bundle in `triss-coworker` is the usable distribution channel while upstream review is pending.
+No live test may silently retry through `deepseek-official` or another provider.
 
-Its focused README links to the upstream proposal once that PR exists and states that the bundle is community-maintained.
+## Community ecosystem proposal
 
-If upstream accepts and publishes the official bundle with equivalent behavior, a later Triss release may:
+The bundle is published and documented as an independently maintained community plugin, not as a temporary copy awaiting an official package.
 
-- update the bundle README to recommend the official package;
-- document the explicit profile migration command;
-- retain the embedded bundle for a documented compatibility window;
-- remove the embedded manifest and assets only through a separately reviewed migration plan.
+After registry acceptance, and only with explicit authorization, create a GitHub Discussion that includes:
 
-Users migrate explicitly by removing `triss-coworker` from the Harness profile and adding the official bundle to that profile; this does not uninstall any separately installed Triss CLI.
+- the configuration gap and why a transport adapter is unnecessary;
+- the three provider profiles and credential references;
+- the package-resolution, layering, and live acceptance evidence;
+- the published package and repository link;
+- the compatibility tuple;
+- a question asking whether maintainers want an official provider-preset bundle or prefer the ecosystem package to remain external.
 
-If upstream rejects the package because the behavior belongs in documentation or settings rather than a bundle, the embedded community bundle remains maintained with Triss and its README records the upstream decision without claiming endorsement.
+Associate the Triss repository with the `dsh-plugin` topic after separate authorization.
+
+Do not prepare an upstream branch, Agent Note, bilingual upstream documentation, repository tests, or pull request while `CONTRIBUTING.md` rejects external PRs.
+
+A future upstream implementation begins only after a direct maintainer invitation or a verified policy change and follows the then-current repository instructions rather than this snapshot.
+
+## Implementation sequence
+
+1. Re-verify current Harness contribution policy, engine range, plugin resolution, `dsh-llm-pi-ai` dependency range, and resolved catalogue.
+2. Re-check npm availability for `triss-dsh-provider-bundle`; stop before implementation if the name is no longer available.
+3. Add RED tests for package identity, workspace metadata, public files, lifecycle-hook absence, patch shape, route ids, credentials, default preservation, and forbidden duplicated fields.
+4. Add RED package-resolution fixtures for every global-Triss, install, update, remove, and reinstall scenario.
+5. Add RED composition fixtures for clean, added-provider, overridden-key, retained-settings removal, reinstall, duplicate-adapter, and clean removal behavior.
+6. Add the minimal workspace package, patch, README, and license needed to make those tests pass without changing Triss runtime code.
+7. Update release-gate tests and workflows to version, pack, inspect, provenance-publish, retry, and registry-verify both package identities from one tag.
+8. Add the dedicated Node `22.19.0`, `24`, and `26` bundle matrix and verify `pnpm`-missing diagnostics separately.
+9. Run focused tests, the complete root Triss suite, lint, `git diff --check`, workspace lockfile validation, and packed-tarball inspection.
+10. Install the packed companion into isolated global and `npx`-style Harness fixtures and run the package-resolution and settings-layer matrices.
+11. Record the complete dependency and integrity tuple from each accepted tarball installation.
+12. Run all four explicit text-route smokes and both explicit coding-tool smokes, retaining only redacted route, model, tool-event, and result evidence.
+13. Select the release version, update both manifests and generated lockfile fields, move the changelog entry out of `Unreleased`, and rerun every release and tarball gate.
+14. Review the final diff and both tarballs for secrets, unrelated files, generated debris, root-package contamination, and any Triss runtime integration.
+15. Ask for explicit authorization to create the coordinated version tag and publish both npm packages.
+16. After publication, install the registry companion into fresh isolated profiles on Node `22.19.0` and `24`, verify install/update/remove, and repeat all three provider-route families with explicit model evidence.
+17. Ask separately for authorization to add the `dsh-plugin` topic and publish the maintainer Discussion.
+
+The coordinated npm release and ecosystem proposal are separate external actions and require separate approval.
 
 ## Deferred Triss integration
 
-This plan intentionally adds no Triss runtime or coder-engine support; Triss is only the npm distribution envelope for the Harness bundle.
+This plan adds no Triss runtime or coder-engine support.
 
-The following files and surfaces remain unchanged during bundle implementation and publication:
+The following surfaces remain unchanged during bundle implementation and publication:
 
 - `src/coder.js` and all coder engine/provider routing;
 - CLI commands, help, completion, status, and config wizard behavior;
 - MCP tool schemas and descriptions;
 - agent instruction templates and `triss init` output;
 - `TRISS_CODER_*`, worker, OpenCode, and Z.AI environment contracts;
-- the root package dependency graph; only the `dsh` manifest field and published bundle-file allowlist change.
+- the root `triss-coworker` published-file allowlist and runtime dependency graph.
 
-A later Triss integration plan begins only when all of these facts are true:
+A later Triss integration plan begins only when:
 
-1. a registry version of `triss-coworker` containing the bundle is publicly installable;
-2. its packed contents and install path are stable;
-3. a fresh Harness profile passes the required OpenCode Go and GLM smoke;
-4. the intended Harness invocation can satisfy Triss's deny-first command policy, credential isolation, non-interactive execution, output capture, cancellation, and worktree rules;
-5. the user explicitly authorizes Triss integration work.
+1. the companion package is publicly installable and registry-verified;
+2. its packed contents and installation path are stable;
+3. fresh profiles pass all required provider and tool-use smokes;
+4. Harness invocation satisfies Triss deny-first command policy, credential isolation, non-interactive execution, output capture, cancellation, and worktree rules;
+5. the user explicitly authorizes integration work.
 
-That later plan decides whether DeepSeek Harness is a new coder engine, a user-managed external engine, or an unsupported manual recipe.
-
-This provider bundle must not pre-commit that architectural decision.
+That later plan decides whether Harness becomes a new coder engine, a user-managed external engine, or a documented manual option.
 
 ## Acceptance criteria
 
-- The implementation is developed in an isolated worktree and preserves the main Triss worktree's unrelated untracked files.
-- The only artifact produced by this planning change is this document.
-- The bundle ships inside `triss-coworker`; no second Triss-owned npm package, version, or release pipeline exists.
-- The bundle is configuration-only and contains no provider transport, endpoint, protocol, or model catalogue duplication.
-- Its effective `llm-pi-ai` configuration activates exactly `opencode`, `opencode-go`, and `zai`.
-- OpenCode Zen and OpenCode Go both use the credential reference `OPENCODE_API_KEY`.
-- Direct Z.AI uses `ZAI_API_KEY` and no automatic `ZHIPU_API_KEY` copying or aliasing occurs.
+- The bundle publishes as `triss-dsh-provider-bundle`, not as part of `triss-coworker`.
+- Both packages live in the Triss repository, share the selected version and tag, and have independently inspected tarballs.
+- Global or `npx` Triss installations at older, newer, bundle-less, and different-patch versions cannot change which companion package the Harness profile resolves.
+- Install, update, remove, and reinstall behavior is verified through `dsh plugin` with `pnpm` on `PATH`.
+- The bundle-owned composition base declares exactly `opencode`, `opencode-go`, and `zai`; effective settings may add or override routes.
+- Clean, overridden, additive, retained-settings removal, reinstall, clean removal, and adapter-conflict fixtures have explicit expected outcomes.
+- OpenCode Zen and Go base profiles use `OPENCODE_API_KEY`; direct Z.AI uses `ZAI_API_KEY`.
+- No secret copying or `ZHIPU_API_KEY` aliasing occurs.
 - Installing the bundle does not change the Harness default provider or model.
-- The packed `triss-coworker` tarball retains the existing CLI files, adds only the declared bundle assets, and contains no bundle-specific install-time executable hooks.
-- Keyless tests prove composition, provider activation, credential-reference names, override behavior, removal behavior, and unchanged defaults.
-- Live acceptance proves one DeepSeek V4 request and one GLM 5.2 request through OpenCode Go, plus one GLM 5.2 request through direct Z.AI when the corresponding configured keys are available.
-- A disposable coding task proves Harness tool use through at least one activated route.
-- Provider entitlement, billing, quota, and regional errors are surfaced without mutating settings or trying a different provider.
-- Root Triss tests and lint remain green without any Triss runtime integration.
-- The upstream PR includes its required Agent Note, bilingual durable docs, real composition test, observable keyless snapshot, and current repository gates.
-- Neither npm publication nor upstream PR creation occurs without explicit authorization.
-- Triss integration remains absent until the published package and engine contract satisfy the deferred-entry gates.
+- Compatibility evidence records exact Node, pnpm, Harness, adapter, resolved `pi-ai`, lockfile integrity, package version, and tarball integrity facts.
+- Exact model assertions are tied to the recorded resolved catalogue.
+- Successful live text acceptance explicitly proves `opencode`, `opencode-go`, and `zai` routes with captured provider/model evidence.
+- Coding-tool acceptance explicitly proves `opencode-go/deepseek-v4-flash` and `opencode-go/glm-5.2`, including tool call, tool result, provider/model evidence, and expected file diff.
+- Bundle validation passes on Node `22.19.0`, `24`, and `26`; normal Triss retains `Node >=22`.
+- The README requires `pnpm` on `PATH` and reports the tested compatibility tuple.
+- Root and companion manifest versions, generated lockfile versions, tag, and changelog release section agree before publication authorization.
+- Release gates pack, inspect, publish, and registry-verify both packages with provenance and safe retry semantics.
+- The root Triss tarball contains no companion manifest or patch, and Triss runtime tests remain green without Harness integration.
+- The community package is presented as an independent ecosystem plugin.
+- No upstream PR artifacts are required or created while upstream rejects external PRs.
+- Neither npm publication nor the Discussion/topic write occurs without explicit authorization.
 
 ## Validation for this planning change
 
-This document must be checked with:
+This document-only correction requires:
 
 ```bash
 git diff --check
@@ -308,4 +412,4 @@ git status --short --branch
 git diff -- docs/deepseek-harness-provider-bundle-plan.md
 ```
 
-No package, source, test, lockfile, or runtime configuration change belongs in the planning commit.
+No package, source, workflow, lockfile, changelog, or runtime configuration change belongs in the planning commit.
