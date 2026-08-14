@@ -130,6 +130,11 @@ async function hashFileNoFollow(filePath, state) {
  * Inventory the v2 coder state under a project root: the engine session
  * stores and coder-state records, bounded, no-follow.
  *
+ * Before Atomic 20C introduces the result registry, any non-empty
+ * `.triss/coder-results-v1/` root is reported as
+ * TRISS_CODER_ROLLBACK_RESULTS_PENDING and the backup fails before copying:
+ * the backup never parses, deletes, or invents a second result codec.
+ *
  * @param {string} projectRoot
  * @returns {Promise<{entries: Array, totalBytes: number}>}
  */
@@ -137,6 +142,25 @@ export async function inventoryCoderV2State(projectRoot) {
   const trissRoot = join(projectRoot, '.triss');
   const entries = [];
   const state = { totalBytes: 0 };
+
+  // Conservative temporary guard: a non-empty result root blocks the backup.
+  try {
+    const resultNames = await readdir(join(trissRoot, 'coder-results-v1'));
+    if (resultNames.length > 0) {
+      const err = new Error(
+        'backup: non-empty .triss/coder-results-v1 present — TRISS_CODER_ROLLBACK_RESULTS_PENDING (no result codec yet)',
+      );
+      err.code = 'TRISS_CODER_ROLLBACK_RESULTS_PENDING';
+      throw err;
+    }
+  } catch (err) {
+    if (err && err.code === 'TRISS_CODER_ROLLBACK_RESULTS_PENDING') throw err;
+    if (err && err.code === 'ENOENT') {
+      // No results root at all: fine.
+    } else {
+      throw err;
+    }
+  }
 
   const walk = async (relDir) => {
     const abs = join(trissRoot, relDir);

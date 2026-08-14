@@ -170,3 +170,37 @@ test('manifest and completion schema are byte-exact constants', () => {
   assert.deepEqual(BACKUP_COMPLETION_KEYS, ['schema_version', 'manifest_sha256', 'completed_at']);
   assert.equal(BACKUP_LIMITS.maxTotalBytes, 512 * 1024 * 1024);
 });
+
+test('a non-empty coder-results-v1 root blocks the backup with TRISS_CODER_ROLLBACK_RESULTS_PENDING', async () => {
+  const fx = await fixture();
+  try {
+    await mkdir(join(fx.trissRoot, 'coder-results-v1'), { recursive: true });
+    await writeFile(join(fx.trissRoot, 'coder-results-v1', 'something'), 'x');
+    await assert.rejects(
+      () => inventoryCoderV2State(fx.base),
+      (err) => {
+        assert.equal(err.code, 'TRISS_CODER_ROLLBACK_RESULTS_PENDING');
+        return true;
+      },
+    );
+    // The backup command also fails before copying.
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'a'.repeat(32) }),
+      /TRISS_CODER_ROLLBACK_RESULTS_PENDING/,
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('an EMPTY coder-results-v1 root does not block the backup', async () => {
+  const fx = await fixture();
+  try {
+    await mkdir(join(fx.trissRoot, 'coder-results-v1'), { recursive: true });
+    const inventory = await inventoryCoderV2State(fx.base);
+    assert.equal(inventory.entries.length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
