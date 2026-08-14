@@ -20,6 +20,7 @@ import {
   classifyProviderError,
   isGlmRouteMismatch,
   serializeProviderError,
+  assertProviderText,
 } from '../src/provider-errors.js';
 
 function httpError(status, body, extra = {}) {
@@ -157,4 +158,18 @@ test('serializeProviderError is the single bounded projection shape', () => {
   assert.equal(s.policy, null);
   // Unknown input never crashes and yields the stable unknown code.
   assert.equal(serializeProviderError(null).code, PROVIDER_ERROR_CODES.UNKNOWN);
+});
+
+// ─── empty-response projection (Reference surface 8 / Package 10) ───────────
+
+test('assertProviderText throws TRISS_PROVIDER_EMPTY for empty, whitespace-only, and non-string input', () => {
+  assert.throws(() => assertProviderText(''), (err) => err.code === 'TRISS_PROVIDER_EMPTY');
+  assert.throws(() => assertProviderText('   \n\t '), (err) => err.code === 'TRISS_PROVIDER_EMPTY');
+  assert.throws(() => assertProviderText(undefined), (err) => err.code === 'TRISS_PROVIDER_EMPTY');
+  assert.throws(() => assertProviderText(null), (err) => err.code === 'TRISS_PROVIDER_EMPTY');
+});
+
+test('assertProviderText returns usable original text UNTRIMMED', () => {
+  assert.equal(assertProviderText('  hello world  '), '  hello world  ');
+  assert.equal(assertProviderText('x'), 'x');
 });

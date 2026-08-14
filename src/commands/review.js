@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
+import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
 import {
   createReviewBoundaryId,
@@ -189,11 +190,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       })
     : await sendChat({ ...request, maxTokens, messages, label: 'triss/review' });
 
-  const out = responseText(resp);
-  if (!out) {
-    process.stderr.write(pc.red('[triss/review] empty response — try --max-tokens 16384\n'));
-    process.exit(1);
-  }
+  const out = assertProviderText(responseText(resp));
   if (!useStream) process.stdout.write(out + '\n');
   else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review', { provider: request.provider }) + '\n'));

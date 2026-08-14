@@ -2,6 +2,7 @@
 // to stdout. Each handler keeps its scope small and is testable on its own.
 
 import { chat as workerChat, reportUsage, responseText } from '../client.js';
+import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
@@ -30,7 +31,9 @@ async function callModel({ provider, model, messages, maxTokens = 4096 }, deps =
     maxTokens,
   });
   const text = responseText(resp);
-  if (!text) throw new Error('Worker returned empty response — increase max_tokens');
+  // Reference surface 8: empty/whitespace-only responses fail with the
+  // stable TRISS_PROVIDER_EMPTY code (MCP transports it as an error result).
+  assertProviderText(text);
   // Content and the usage report are separate values; handlers compose them
   // at the response boundary, so writeHandler can drop the report entirely.
   // The provider is passed through so the line matches the persisted record.

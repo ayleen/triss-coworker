@@ -235,6 +235,33 @@ export function isGlmRouteMismatch(err) {
   return GLM_ROUTE_HINTS.some((re) => re.test(body)) || typeof err?.config?.url === 'string' && GLM_ROUTE_HINTS.some((re) => re.test(err.config.url));
 }
 
+export const PROVIDER_EMPTY_CODE = 'TRISS_PROVIDER_EMPTY';
+
+/**
+ * Fail an empty/whitespace-only provider response with the stable
+ * TRISS_PROVIDER_EMPTY code (Reference surface 8). Non-empty original text
+ * is returned UNTRIMMED (usable output is never trimmed on the way out).
+ *
+ * @param {string} text
+ * @returns {string} the original untrimmed text when usable
+ * @throws {Error} code TRISS_PROVIDER_EMPTY when text is empty/whitespace
+ */
+export function assertProviderText(text) {
+  if (typeof text !== 'string') {
+    const err = new Error('TRISS_PROVIDER_EMPTY: provider returned no text');
+    err.code = PROVIDER_EMPTY_CODE;
+    throw err;
+  }
+  if (text.trim().length === 0) {
+    const err = new Error(
+      'TRISS_PROVIDER_EMPTY: provider returned an empty response — the model may have run out of tokens during reasoning. Try --max-tokens 16384.',
+    );
+    err.code = PROVIDER_EMPTY_CODE;
+    throw err;
+  }
+  return text;
+}
+
 /**
  * The ONE bounded public serializer (CLI and MCP share it; no second
  * serializer exists). The projection never contains the raw body, stderr,

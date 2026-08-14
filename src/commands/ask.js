@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
+import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
@@ -114,16 +115,7 @@ export async function runAskWithDeps(opts, deps = {}) {
       })
     : await sendChat({ ...request, maxTokens, messages, label: 'triss/ask' });
 
-  const answer = responseText(resp);
-  if (!answer) {
-    process.stderr.write(
-      pc.red(
-        '[triss/ask] empty response — model may have run out of tokens during reasoning. ' +
-          'Try --max-tokens 16384.\n',
-      ),
-    );
-    process.exit(1);
-  }
+  const answer = assertProviderText(responseText(resp));
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');
   process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask', { provider: request.provider }) + '\n'));
