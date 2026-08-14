@@ -362,8 +362,12 @@ test('bin/triss.js coder help description is provider-neutral', () => {
   const helpText = result.stdout;
   // This should FAIL RED: current description is "Run a GLM coding agent (opencode or crush engine)"
   assert.ok(!/Run a GLM coding agent/i.test(helpText), 'coder help should not say "Run a GLM coding agent"');
-  // Positive contract: must use provider-neutral wording
-  assert.ok(/Run a coding agent \(OpenCode or Crush engine\)/i.test(helpText), 'coder help should say "Run a coding agent (OpenCode or Crush engine)"');
+  // Positive contract: must use provider-neutral wording. Phase 5 widened the
+  // engine list to three: V1 default, the opencode2 V2 beta, and crush.
+  assert.ok(
+    /Run a coding agent \(OpenCode V1, OpenCode 2 beta, or Crush engine\)/i.test(helpText),
+    'coder help should say "Run a coding agent (OpenCode V1, OpenCode 2 beta, or Crush engine)"',
+  );
 });
 
 test('README.md coder models description resolves to one provider, not GLM+Zen aggregation', () => {
