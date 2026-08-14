@@ -193,7 +193,7 @@ test('managedRmdir removes only validated empty directories', async () => {
   const fx = await fixture();
   try {
     const root = await openManagedTrissRoot(fx.base);
-    const child = await managedCreate(root, 'wt-v2');
+    await managedCreate(root, 'wt-v2');
     await managedRmdir(root, 'wt-v2');
     await assert.rejects(() => managedRmdir(root, 'wt-v2'), /ENOENT/);
   } finally {
