@@ -220,3 +220,68 @@ export function planSingleReviewPayload({
   }
   return { plan: { sections: selected, total_bytes: total }, error: null };
 }
+
+// ─── sequential shard planning (Atomic 44 / Package 23) ─────────────────────
+
+/**
+ * Plan source-ordered whole-file shards for sequential execution.
+ * Whole-file shards keep each file's hunks together (no cross-file mixing);
+ * shards are source-ordered by the first section's path. The total bound is
+ * precomputed against the injected Package 13 limits (shardMaxBytes,
+ * maxShards, totalMaxBytes). Fresh boundaries are returned as a pure plan —
+ * the executor re-checks every limit at execution time.
+ *
+ * @param {object} opts
+ * @param {Array} opts.sections parsed sections (Package 14)
+ * @param {string} opts.question
+ * @param {string} [opts.metadata='']
+ * @param {object} opts.limits Package 13 frozen limits
+ * @returns {{plan?: {shards: Array, total_bytes: number},
+ *   error?: string, path?: string|null}}
+ */
+export function planSequentialShards({ sections, question, metadata = '', limits }) {
+  if (!Array.isArray(sections)) return { error: 'sections must be an array' };
+  if (!limits || typeof limits.shardMaxBytes !== 'number' || typeof limits.maxShards !== 'number') {
+    return { error: 'limits are required (inject Package 13 frozen config)' };
+  }
+  if (typeof question !== 'string') return { error: 'question must be a string' };
+  if (typeof metadata !== 'string') return { error: 'metadata must be a string' };
+
+  const fixed = METADATA_OVERHEAD_BYTES + Buffer.byteLength(metadata, 'utf8') + Buffer.byteLength(question, 'utf8');
+
+  // Source-ordered whole-file shards: group sections by path, never split a
+  // file across shards (a single oversized file fails with its path).
+  const byPath = new Map();
+  for (const sec of sections) {
+    if (sec.bytes > limits.shardMaxBytes) {
+      return { error: 'shard_max_exceeded', path: sec.new_path || sec.old_path || '(unknown)' };
+    }
+    const path = sec.new_path || sec.old_path || '(unknown)';
+    if (!byPath.has(path)) byPath.set(path, []);
+    byPath.get(path).push(sec);
+  }
+
+  const shards = [];
+  let current = [];
+  let currentBytes = fixed;
+  for (const path of [...byPath.keys()].sort()) {
+    const fileBytes = byPath.get(path).reduce((acc, s) => acc + s.bytes, 0);
+    if (current.length > 0 && currentBytes + fileBytes > limits.shardMaxBytes) {
+      shards.push({ sections: current, bytes: currentBytes });
+      current = [];
+      currentBytes = fixed;
+    }
+    current.push(...byPath.get(path));
+    currentBytes += fileBytes;
+  }
+  if (current.length > 0) shards.push({ sections: current, bytes: currentBytes });
+
+  if (shards.length > limits.maxShards) {
+    return { error: 'shard_count_exceeded', path: null };
+  }
+  const totalBytes = shards.reduce((acc, s) => acc + s.bytes, 0);
+  if (totalBytes > limits.totalMaxBytes) {
+    return { error: 'total_max_exceeded', path: null };
+  }
+  return { plan: { shards, total_bytes: totalBytes }, error: null };
+}

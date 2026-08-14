@@ -19,6 +19,7 @@ import {
   parseUnifiedDiff,
   deriveReviewCoverage,
   planSingleReviewPayload,
+  planSequentialShards,
 } from '../src/review-payload.js';
 
 const LIMITS = { singleMaxBytes: 262144, shardMaxBytes: 98304, totalMaxBytes: 4194304, maxShards: 64 };
@@ -187,4 +188,58 @@ test('manifest contains no diff contents', () => {
   const { sections } = parseUnifiedDiff(text);
   const cov = deriveReviewCoverage(sections);
   assert.ok(!JSON.stringify(cov).includes('SECRET_DIFF_LINE'), 'coverage must not embed diff bodies');
+});
+
+// ─── sequential shard planning (Atomic 44 / Package 23) ─────────────────────
+
+const SHARD_LIMITS = { singleMaxBytes: 262144, shardMaxBytes: 5000, totalMaxBytes: 65536, maxShards: 8 };
+
+function smallSection(path, size) {
+  const body = ['@@ -1 +1 @@', '-old', '+new'];
+  return { new_path: path, old_path: path, bytes: size, raw: `diff --git a/${path} b/${path}\n${body.join('\n')}\n` };
+}
+
+test('REVIEW-SHARD-PLAN-01: source-ordered whole-file shards never split a file', () => {
+  const sections = [
+    smallSection('z.txt', 1200),
+    smallSection('a.txt', 1200),
+    smallSection('m.txt', 1200),
+  ];
+  const { plan, error } = planSequentialShards({ sections, question: 'q', limits: SHARD_LIMITS });
+  assert.equal(error, null);
+  assert.ok(plan.shards.length >= 2, 'fits in multiple shards');
+  // Source-ordered: a.txt first, z.txt last.
+  const firstPath = plan.shards[0].sections[0].new_path;
+  const lastPath = plan.shards[plan.shards.length - 1].sections.at(-1).new_path;
+  assert.equal(firstPath, 'a.txt');
+  assert.equal(lastPath, 'z.txt');
+  // A file is never split: each shard's sections belong to one path.
+  for (const shard of plan.shards) {
+    const paths = new Set(shard.sections.map((s) => s.new_path));
+    assert.equal(paths.size, 1, 'shard must hold exactly one file');
+  }
+});
+
+test('REVIEW-SHARD-PLAN-02: a single oversized file fails with its path', () => {
+  const sections = [smallSection('huge.txt', 9000)];
+  const { error, path } = planSequentialShards({ sections, question: 'q', limits: SHARD_LIMITS });
+  assert.equal(error, 'shard_max_exceeded');
+  assert.equal(path, 'huge.txt');
+});
+
+test('REVIEW-SHARD-PLAN-03: shard-count and total-bound overflows fail closed', () => {
+  const many = Array.from({ length: 20 }, (_, i) => smallSection(`f${i}.txt`, 100));
+  const countFail = planSequentialShards({ sections: many, question: 'q', limits: { ...SHARD_LIMITS, maxShards: 1 } });
+  assert.equal(countFail.error, 'shard_count_exceeded');
+
+  const big = Array.from({ length: 10 }, (_, i) => smallSection(`g${i}.txt`, 1000));
+  // All files fit in one shard (each 1000 < 2048, sum 10000) but the total
+  // exceeds totalMaxBytes 3000.
+  const totalFail = planSequentialShards({ sections: big, question: 'q', limits: { ...SHARD_LIMITS, totalMaxBytes: 3000, maxShards: 64 } });
+  assert.equal(totalFail.error, 'total_max_exceeded');
+});
+
+test('REVIEW-SHARD-PLAN-04: limits are required (injected Package 13 frozen config)', () => {
+  const r = planSequentialShards({ sections: [smallSection('a.txt', 10)], question: 'q' });
+  assert.match(r.error, /limits are required/);
 });

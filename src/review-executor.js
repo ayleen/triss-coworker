@@ -102,3 +102,74 @@ export function renderCliReviewResult(result, { write = (s) => process.stdout.wr
   write(`${result.verdict}\n`);
   return REVIEW_EXIT_CODES.ok;
 }
+
+// ─── sequential shard execution (Atomic 44 / Package 23) ────────────────────
+
+/**
+ * Execute a planned shard plan sequentially: each shard is one model call,
+ * source-ordered; the FIRST failure or cancellation stops the sequence (no
+ * third call after a second-shard failure). There is NO aggregation call and
+ * NO global verdict — results are per-shard only. Attempt/usage facts are
+ * returned per shard; every limit is re-checked at execution time (fresh
+ * boundaries, never trusting the plan alone).
+ *
+ * @param {object} deps injected seams
+ * @param {Function} deps.callModel one-shot provider call (text in/out)
+ * @param {object} deps.limits Package 13 frozen limits
+ * @param {object} opts
+ * @param {Array} opts.shards planned shards [{sections, bytes}]
+ * @param {string} opts.question
+ * @param {string} [opts.metadata='']
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<{ok: boolean, code?: string, shards?: Array,
+ *   attempts?: number, message?: string}>}
+ */
+export async function executeReviewPlan(deps, { shards, question, metadata = '', signal }) {
+  if (typeof deps?.callModel !== 'function') throw new TypeError('callModel is required');
+  if (!Array.isArray(shards) || shards.length === 0) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'an empty shard plan cannot execute' };
+  }
+  if (signal?.aborted) return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled', exit: REVIEW_EXIT_CODES.cancelled };
+
+  const limits = deps.limits || reviewLimitConfig().limits;
+  const results = [];
+  let attempts = 0;
+
+  for (const shard of shards) {
+    if (signal?.aborted) {
+      return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled between shards', shards: results, attempts, exit: REVIEW_EXIT_CODES.cancelled };
+    }
+    // Fresh boundary re-check: the plan may be stale.
+    if (shard.bytes > limits.shardMaxBytes) {
+      return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `shard exceeds ${limits.shardMaxBytes} bytes`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
+    }
+    const payloadBytes = shard.bytes;
+    if (payloadBytes > limits.totalMaxBytes) {
+      return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `shard payload exceeds ${limits.totalMaxBytes} bytes`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
+    }
+
+    attempts += 1;
+    try {
+      const verdict = await deps.callModel({ shard, question, metadata, signal });
+      if (typeof verdict !== 'string' || verdict.trim().length === 0) {
+        return { ok: false, code: 'TRISS_PROVIDER_EMPTY', message: `shard ${attempts} returned an empty verdict`, shards: results, attempts, exit: REVIEW_EXIT_CODES.provider };
+      }
+      results.push({ shard_index: attempts, verdict, bytes: payloadBytes, attempt: attempts });
+    } catch (err) {
+      if (err?.name === 'AbortError' || signal?.aborted) {
+        return { ok: false, code: 'TRISS_CANCELLED', message: `cancelled during shard ${attempts}`, shards: results, attempts, exit: REVIEW_EXIT_CODES.cancelled };
+      }
+      return {
+        ok: false,
+        code: err?.code || 'TRISS_REVIEW_INVALID_INPUT',
+        message: err?.message || String(err),
+        shards: results,
+        attempts,
+        exit: REVIEW_EXIT_CODES.provider,
+      };
+    }
+  }
+
+  // No aggregation: per-shard results only, no global verdict.
+  return { ok: true, shards: results, attempts, exit: REVIEW_EXIT_CODES.ok };
+}

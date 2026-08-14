@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import {
   REVIEW_EXIT_CODES,
   executeSingleReview,
+  executeReviewPlan,
   renderCliReviewResult,
 } from '../src/review-executor.js';
 
@@ -146,4 +147,130 @@ test('the transport matrix exit codes are the documented constants', () => {
   assert.equal(REVIEW_EXIT_CODES.invalidInput, 2);
   assert.equal(REVIEW_EXIT_CODES.cancelled, 130);
   assert.equal(REVIEW_EXIT_CODES.provider, 1);
+});
+
+// ─── sequential shard execution (Atomic 44 / Package 23) ────────────────────
+
+test('executes all shards sequentially with per-shard attempt facts and no aggregation', async () => {
+  const calls = [];
+  const r = await executeReviewPlan(
+    {
+      callModel: async ({ shard }) => {
+        calls.push(shard.sections[0].new_path);
+        return `verdict-${shard.sections[0].new_path}`;
+      },
+      limits: LIMITS,
+    },
+    {
+      shards: [
+        { sections: [{ new_path: 'a.txt', bytes: 100 }], bytes: 200 },
+        { sections: [{ new_path: 'b.txt', bytes: 100 }], bytes: 200 },
+      ],
+      question: 'q',
+    },
+  );
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls, ['a.txt', 'b.txt']);
+  assert.equal(r.attempts, 2);
+  assert.equal(r.shards.length, 2);
+  assert.equal(r.shards[0].verdict, 'verdict-a.txt');
+  assert.equal(r.exit, REVIEW_EXIT_CODES.ok);
+  assert.equal(r.verdict, undefined, 'no global verdict');
+});
+
+test('a second-shard failure stops the sequence (no third call)', async () => {
+  const calls = [];
+  const r = await executeReviewPlan(
+    {
+      callModel: async ({ shard }) => {
+        const path = shard.sections[0].new_path;
+        calls.push(path);
+        if (path === 'b.txt') {
+          const err = new Error('provider down');
+          err.code = 'TRISS_PROVIDER_AUTH';
+          throw err;
+        }
+        return 'ok';
+      },
+      limits: LIMITS,
+    },
+    {
+      shards: [
+        { sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 },
+        { sections: [{ new_path: 'b.txt', bytes: 10 }], bytes: 100 },
+        { sections: [{ new_path: 'c.txt', bytes: 10 }], bytes: 100 },
+      ],
+      question: 'q',
+    },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_PROVIDER_AUTH');
+  assert.deepEqual(calls, ['a.txt', 'b.txt'], 'third shard never runs');
+  assert.equal(r.attempts, 2);
+});
+
+test('cancellation between shards stops before the next call', async () => {
+  const controller = new AbortController();
+  const calls = [];
+  const r = await executeReviewPlan(
+    {
+      callModel: async ({ shard }) => {
+        const path = shard.sections[0].new_path;
+        calls.push(path);
+        if (path === 'a.txt') controller.abort();
+        return 'ok';
+      },
+      limits: LIMITS,
+    },
+    {
+      shards: [
+        { sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 },
+        { sections: [{ new_path: 'b.txt', bytes: 10 }], bytes: 100 },
+      ],
+      question: 'q',
+      signal: controller.signal,
+    },
+  );
+  assert.equal(r.code, 'TRISS_CANCELLED');
+  assert.deepEqual(calls, ['a.txt']);
+  assert.equal(r.exit, REVIEW_EXIT_CODES.cancelled);
+});
+
+test('an empty shard plan fails closed before any call', async () => {
+  let called = false;
+  const r = await executeReviewPlan(
+    {
+      callModel: async () => {
+        called = true;
+        return 'x';
+      },
+      limits: LIMITS,
+    },
+    { shards: [], question: 'q' },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_INVALID_INPUT');
+  assert.equal(called, false);
+});
+
+test('an empty shard verdict stops with TRISS_PROVIDER_EMPTY and no further calls', async () => {
+  const calls = [];
+  const r = await executeReviewPlan(
+    {
+      callModel: async ({ shard }) => {
+        calls.push(shard.sections[0].new_path);
+        return '';
+      },
+      limits: LIMITS,
+    },
+    {
+      shards: [
+        { sections: [{ new_path: 'a.txt', bytes: 10 }], bytes: 100 },
+        { sections: [{ new_path: 'b.txt', bytes: 10 }], bytes: 100 },
+      ],
+      question: 'q',
+    },
+  );
+  assert.equal(r.code, 'TRISS_PROVIDER_EMPTY');
+  assert.deepEqual(calls, ['a.txt']);
 });
