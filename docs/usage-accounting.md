@@ -133,8 +133,8 @@ Rules:
 | `model` | the reporting/grouping key. `triss usage --by-model` groups strictly by this. |
 | `billing_model` | the **only** key used for price lookup. Keeps the endpoint/plan prefix (`zai/glm-5.2` vs `zai-coding-plan/glm-5.2`). |
 | `provider` | informational identity for diagnostics. Never selects a price. Never inferred from which API keys happen to be set. |
-| `usage_source` | which payload contract Triss parsed: `api`, `opencode`, or `crush`. |
-| `engine` | `opencode`, `crush`, or `null` for direct API calls. |
+| `usage_source` | which payload contract Triss parsed: `api`, `opencode`, `opencode2`, or `crush`. |
+| `engine` | `opencode`, `opencode2`, `crush`, or `null` for direct API calls. |
 | `billing_mode` | `payg`, `subscription`, `free`, or `unknown`. |
 | `usage_status` | `reported` or `missing`. |
 
