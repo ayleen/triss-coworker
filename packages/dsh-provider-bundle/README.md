@@ -39,6 +39,19 @@ Removing the bundle never deletes your user settings; in a clean profile with no
 
 Every acceptance records Node, pnpm, `@deepseek-ai/dsh`, `@deepseek-ai/dsh-llm-pi-ai`, resolved `pi-ai` version + lockfile integrity, and this package's version + tarball integrity. Compatibility is never claimed from the Harness version alone.
 
+Tested tuple (packed-tarball fixture, `dsh plugin` full cycle — add, remove, reinstall):
+
+| Fact | Value |
+| --- | --- |
+| Node | `v22.23.1` (satisfies `^22.19.0`) |
+| pnpm | `9.0.0` (lockfileVersion `9.0`) |
+| `@deepseek-ai/dsh` | `0.1.0-rc.6` |
+| Profile template | `dsh-headless@0.1.0-rc.6` (bundles: `dsh-base` + `dsh-headless`) |
+| This package | `0.34.0` (sha256 `4d25762daecb5f9d1d97a2ba08cf4cdd53c451026a5b672d36d73d2fff31db7d`) |
+| Install integrity | `sha512-AdZeopWdPdYENOMXFvMxVd8+Xx5emMpGaNMYH6U1D6WuN2QUXq0WNIURHgPREe+fHCw5hknuXsuEP6sSLSoEAQ==` |
+
+The `llm-pi-ai` adapter and its `pi-ai` dependency are supplied by the profile's `dsh-base` bundle, not by this package (the companion declares no dependencies).
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
