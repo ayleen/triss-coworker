@@ -532,7 +532,33 @@ git diff main...HEAD | triss review --stdin  # review this branch's merge-base d
 triss review --skip-issue    # don't try ticket lookup
 triss review --provider glm  # same review flow, one-shot GLM inference
 triss review --provider kimi # …or Kimi (pro preset = kimi-k3)
+triss review --files src/a.js test/b.test.js  # literal file selection (after --)
+triss review --issue ENG-42  # explicit tracker issue (never inferred from prose)
 ```
+
+### Reliable delegation — review safety (Release B)
+
+Review runs are bounded and fail closed (see
+[`docs/reliable-delegation-release-a.md`](docs/reliable-delegation-release-a.md)):
+
+- **Limits**: single request (256 KiB default / 1 MiB hard max), shard
+  (96 KiB / 256 KiB), total corpus (4 MiB / 16 MiB), shard count (64 /
+  256) — all reloadable via `TRISS_REVIEW_*_BYTES` / `TRISS_REVIEW_MAX_SHARDS`;
+  any contradiction falls back to the complete default set.
+- **Git**: exact merge-base-to-head identity, one unique merge base, a
+  sanitized environment (no external diff/textconv/config injection,
+  grafts and nonempty shallow repositories rejected).
+- **Selection**: literal `--files` selectors are expanded across renames
+  and only the selected content is acquired — a huge change with a small
+  selected file never buffers the full diff first.
+- **PRs**: canonical input only, exact OID re-verification, disposable
+  bare repository under a registry lock (3 concurrent runs, 120 MiB pack /
+  128 MiB filesystem quotas); the source directory is never mutated.
+- **Issues**: PR or branch prose NEVER triggers tracker access. Only an
+  explicit `--issue KEY` performs a bounded minimum-field lookup;
+  `--skip-issue` is deprecated.
+- **Empty responses** fail with `TRISS_PROVIDER_EMPTY` instead of
+  producing a clean verdict; usable non-empty text is never trimmed.
 
 The three diff sources are mutually exclusive: local Git (`triss review` or
 `--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text piped to

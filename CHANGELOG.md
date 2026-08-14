@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] — 2026-08-15
+
+### Added
+
+- **Reliable delegation (Release B)** — bounded single review, exact PR
+  diff acquisition, and the issue trust boundary per
+  `docs/reliable-delegation-contract-plan.md`:
+  - reloadable review limits (`TRISS_REVIEW_SINGLE_MAX_BYTES`,
+    `TRISS_REVIEW_SHARD_MAX_BYTES`, `TRISS_REVIEW_TOTAL_MAX_BYTES`,
+    `TRISS_REVIEW_MAX_SHARDS`) with atomic validation and full-default
+    fallback on contradictions;
+  - pure diff parser with exact byte accounting and coverage model
+    (repository vs requested-scope axes);
+  - exact merge-base-to-head comparison identity with sanitized Git
+    execution (no external diff/textconv/config, grafts and nonempty
+    shallow repositories rejected) and sealed empty-attribute projection;
+  - inventory-first rename expansion (old-only/new-only selection keeps
+    both sides) and selected-content acquisition bounded by pathspec;
+  - bounded PR acquisition: canonical input, minimum-field `gh`
+    metadata, disposable bare repository under a registry lock (three
+    concurrent runs, 120 MiB pack / 128 MiB filesystem quotas), exact
+    OID re-verification, source-common-dir immutability;
+  - streaming bounded stdin with no partial buffering;
+  - issue trust boundary: PR prose never triggers tracker access;
+    explicit `--issue` uses minimum-field bounded queries; `--skip-issue`
+    deprecated;
+  - shared single-review executor with stable error codes
+    (`TRISS_REVIEW_LIMIT`, `TRISS_REVIEW_INVALID_INPUT`,
+    `TRISS_PROVIDER_EMPTY`, `TRISS_CANCELLED`) and scoped verdict
+    framing; MCP single-review parity with root enforcement and
+    structured coverage.
+
 ## [0.35.0] — 2026-08-14
 
 ### Added

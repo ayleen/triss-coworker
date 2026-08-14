@@ -1,5 +1,9 @@
 # Reliable Delegation — Release A contract
 
+> **Release B** (Atomic 30–43) extends the contract with bounded single
+> review, exact PR acquisition, and the issue trust boundary. The Release B
+> section at the end of this file is authoritative for that scope.
+
 This document is the Release A documentation gate (Reference surface 14 of
 `docs/reliable-delegation-contract-plan.md`). It covers the coder envelope v2
 fields, expectation semantics, lifecycle, bounded diagnostics, provider error
@@ -113,3 +117,102 @@ marker (the only validity evidence), manifest schema
 and exact registry preflight. A non-empty `coder-results-v1` root blocks
 rollback with `TRISS_CODER_ROLLBACK_RESULTS_PENDING` until the exact registry
 preflight is satisfied. Quarantine data is never deleted by adopt/reset.
+
+---
+
+# Reliable Delegation — Release B contract
+
+Scope: safe single review, literal file selection, exact PR diff
+acquisition, the issue trust boundary, and review configuration
+(Reference surface 15 of `docs/reliable-delegation-contract-plan.md`).
+Sharding is NOT available yet — `--payload-mode shard` is not documented as
+usable and `evidence + shard` is rejected when the exec router exists.
+
+## Review limits (all four, reloadable)
+
+| Limit | Env var | Default | Hard max |
+| --- | --- | --- | --- |
+| single request payload | `TRISS_REVIEW_SINGLE_MAX_BYTES` | 262,144 B (256 KiB) | 1,048,576 B (1 MiB) |
+| shard payload | `TRISS_REVIEW_SHARD_MAX_BYTES` | 98,304 B (96 KiB) | 262,144 B (256 KiB) |
+| total corpus | `TRISS_REVIEW_TOTAL_MAX_BYTES` | 4,194,304 B (4 MiB) | 16,777,216 B (16 MiB) |
+| shard count | `TRISS_REVIEW_MAX_SHARDS` | 64 | 256 |
+
+Validation is atomic: every value is independently parsed and clamped to its
+hard max; a value that contradicts another (e.g. shard_max > single_max, or
+single_max > total_max) makes the whole configuration fall back to the
+complete default set — never a partial application. Exact byte metrics are
+reported in diagnostics (bytes + selected files, never corpus content).
+
+## Acquisition bounds
+
+- stdin is read in a streaming bounded fashion (cap-plus-one stops
+  immediately, no partial buffering) and rejects `--files`;
+- Git/`gh` stop at the mode-specific acquisition cap before buffering;
+  provider/model/ticket access is never called after overflow;
+- the name-status inventory is bounded (NUL-delimited, overflow fails
+  closed with `TRISS_REVIEW_LIMIT`) and runs BEFORE content acquisition;
+- literal selectors after `--` are expanded to both sides of a rename
+  (old-only or new-only selection retains rename metadata); unmatched
+  selectors are reported;
+- a full diff above `total_max` with a small selected file acquires and
+  reviews only the selected content without first buffering the full diff;
+- the selected-content subtree shares the same deadline/cap/cancellation
+  and no-partial contract.
+
+## Exact comparison identity and sanitized Git
+
+Git mode resolves exact commit OIDs, requires ONE merge base (multiple
+bases fail closed), and uses one merge-base-to-head comparison. Every
+command runs with a sanitized environment: `GIT_EXTERNAL_DIFF=''`,
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`, `GIT_OPTIONAL_LOCKS=0`,
+`GIT_TERMINAL_PROMPT=0`, replacement objects rejected (grafts fail
+closed), and nonempty shallow repositories rejected. The sealed
+empty-attribute projection (`core.attributesFile=/dev/null`) makes
+global/info/dirty/committed `.gitattributes` canaries (including
+`*.txt -diff`) produce byte-identical text hunks. Malicious external
+diff/textconv/config environment is never honored.
+
+## PR acquisition
+
+- PR input is canonical: a bare number (requires a configured origin),
+  `owner/repo#number`, or a `github.com/.../pull/N` URL; arbitrary
+  strings and `--repo` are rejected; `--base` is rejected with PR input;
+- metadata is acquired via a minimum-field `gh pr view --json` round with
+  a 30-second/absolute deadline, cap-plus-one collection, cancellation,
+  no-partial JSON, and pure validation (exact bounded schema, 40-hex
+  OIDs, base != head, boolean fork);
+- exact base/head OIDs are re-verified and the diff is built in a bounded
+  owned disposable bare repository (registry-locked, three concurrent
+  runs, 120 MiB pack / 128 MiB filesystem quotas) — the source common
+  directory is NEVER mutated and only that validated directory is
+  removed; a parent `SIGKILL` during fetch proves registry recovery waits
+  before deletion;
+- PR repository coverage is unknown until exact objects and the unique
+  merge base are verified; a complete selected scope may then succeed
+  with partial repository coverage; a matching filename manifest with an
+  intentionally truncated hunk remains unknown — only the local
+  merge-base-to-head diff makes repository coverage complete.
+
+## Coverage and scoped verdicts
+
+Repository coverage and requested-scope coverage are SEPARATE axes.
+Scoped success (requested `complete`, repository `partial`) is a normal
+outcome. Verdicts are scoped to the acquired content; diagnostics show
+bytes and selected files, not corpus content.
+
+## Issue trust boundary
+
+PR prose can NEVER trigger tracker access: without an explicit `--issue`,
+no tracker call happens (tested). An explicit issue resolves through the
+tracker's minimum-field query with a bounded abort-aware response (per-call
+`maxBytes`); `--skip-issue` is deprecated; not-found/tracker-failure/
+missing-tracker all fail closed. Deprecated default broad tracker-command
+behavior outside the new review-specific methods is unchanged.
+
+## Empty responses
+
+An empty or whitespace-only provider response fails with the stable
+`TRISS_PROVIDER_EMPTY` code on both CLI and MCP; usable non-empty text is
+never trimmed on output. MCP single-review parity (`runReviewCoreSingle`)
+enforces project root, cancellation, structured coverage, and safe error
+projection with no partial output.
