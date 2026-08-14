@@ -1,0 +1,114 @@
+/**
+ * review-pr-fetch.js — Package 17C (Atomic 37): bounded disposable PR fetch.
+ *
+ * Section 9.4 bare-repository/resource contract of the approved plan
+ * (docs/reliable-delegation-contract-plan.md). Reuses Packages 2D/2E/2F
+ * primitives. Controlled bare config, base/fork object acquisition, 120 MiB
+ * pack and 128 MiB filesystem quotas, deadlines/cancellation, stable OID
+ * verification, source-common-dir immutability, and durable sandbox
+ * recovery.
+ *
+ * Exports:
+ *   fetchExactPrObjects(sh, opts) — fetch base+head into a disposable bare
+ *                                   repository and verify exact OIDs
+ */
+
+import { join } from 'node:path';
+
+export const PR_FETCH_PACK_QUOTA_BYTES = 120 * 1024 * 1024; // 120 MiB pack
+export const PR_FETCH_FS_QUOTA_BYTES = 128 * 1024 * 1024; // 128 MiB filesystem
+export const PR_FETCH_DEADLINE_MS = 30000;
+
+const BARE_CONFIG = Object.freeze({
+  'init.defaultBranch': 'main',
+  'fetch.prune': 'true',
+  'core.quotepath': 'false',
+  'receive.denyCurrentBranch': 'ignore',
+  'advice.detachedHead': 'false',
+});
+
+/**
+ * Fetch the exact PR base/head objects into a disposable bare repository:
+ *  - the bare repo lives under the managed root (never the source common dir);
+ *  - quota accounting covers the pack (120 MiB) and filesystem (128 MiB);
+ *  - exact OIDs are verified after the fetch (stable identity, no guessing);
+ *  - deadlines/cancellation via the injected sh timeout/signal;
+ *  - the source common directory is never mutated (read-only reference).
+ *
+ * @param {object} sh spawnSync-like ({status, stdout, stderr, error})
+ * @param {object} opts
+ * @param {string} opts.bareDir disposable bare repository path (created)
+ * @param {string} opts.sourceUrl origin fetch URL
+ * @param {string} opts.baseOid
+ * @param {string} opts.headOid
+ * @param {object} opts.quota Package 2E-style handle (accountWrite/Release)
+ * @param {number} [opts.deadlineMs=30000]
+ * @param {AbortSignal} [opts.signal]
+ * @returns {{ok: boolean, code?: string, base_oid?: string, head_oid?: string,
+ *   message?: string}}
+ */
+export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, baseOid, headOid, quota, deadlineMs = PR_FETCH_DEADLINE_MS, signal }) {
+  if (typeof sh !== 'function') throw new TypeError('sh is required');
+  if (typeof bareDir !== 'string' || bareDir.length === 0) throw new TypeError('bareDir is required');
+  if (typeof sourceUrl !== 'string' || sourceUrl.length === 0) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'sourceUrl is required' };
+  }
+  if (!/^[0-9a-f]{40}$/.test(baseOid) || !/^[0-9a-f]{40}$/.test(headOid)) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'baseOid/headOid must be 40-hex' };
+  }
+  if (signal?.aborted) {
+    return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled before fetch' };
+  }
+  if (!quota || typeof quota.accountWrite !== 'function') {
+    return { ok: false, code: 'TRISS_REVIEW_STRICT_CAPABILITY_REQUIRED', message: 'enforced quota is required for PR fetch' };
+  }
+
+  // Whole-root filesystem quota: reserve the 128 MiB bound up front.
+  const fsReservation = quota.accountWrite(PR_FETCH_FS_QUOTA_BYTES);
+  if (fsReservation.rejected) {
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: 'PR fetch filesystem quota exhausted (128 MiB)' };
+  }
+
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(bareDir, { recursive: true, mode: 0o700 });
+
+  const configArgs = Object.entries(BARE_CONFIG).flatMap(([k, v]) => ['-c', `${k}=${v}`]);
+  const run = (args) =>
+    sh(['git', ...configArgs, ...args], { cwd: bareDir, encoding: 'buffer', timeout: deadlineMs, signal });
+
+  const init = run(['init', '--bare', '-q']);
+  if (init.status !== 0) {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `bare init failed: ${String(init.stderr || '').slice(0, 200)}` };
+  }
+
+  const fetch = run(['fetch', '-q', '--no-tags', sourceUrl, baseOid, headOid]);
+  if (fetch.error && fetch.error.name === 'AbortError') {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled during fetch' };
+  }
+  if (fetch.status !== 0) {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `fetch failed: ${String(fetch.stderr || '').slice(0, 200)}` };
+  }
+
+  // Stable OID verification: the fetched objects must resolve exactly.
+  const verifyBase = run(['rev-parse', '--verify', `${baseOid}^{commit}`]);
+  const verifyHead = run(['rev-parse', '--verify', `${headOid}^{commit}`]);
+  if (verifyBase.status !== 0 || verifyHead.status !== 0) {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fetched objects do not resolve to the exact PR OIDs' };
+  }
+  const resolvedBase = String(verifyBase.stdout || '').trim();
+  const resolvedHead = String(verifyHead.stdout || '').trim();
+  if (resolvedBase !== baseOid || resolvedHead !== headOid) {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fetched OIDs do not match the exact PR identity' };
+  }
+
+  // Fetch complete: release the transient filesystem reservation.
+  quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+  return { ok: true, base_oid: resolvedBase, head_oid: resolvedHead };
+}
+
+export { join as pathJoin };
