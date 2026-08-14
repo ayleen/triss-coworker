@@ -70,7 +70,7 @@ function parseArgs(argv) {
   return options;
 }
 
-function ignored(relativePath, isDirectory) {
+function ignored(relativePath, isDirectory, info) {
   const parts = relativePath.split('/');
   if (!INCLUDED_TOP_LEVEL.has(parts[0])) return true;
   if (parts.some((part) => EXCLUDED_NAMES.has(part))) return true;
@@ -81,6 +81,11 @@ function ignored(relativePath, isDirectory) {
   // standalone launcher never invokes package binaries, and the artifact
   // format intentionally cannot represent symlinks, so omit the shims.
   if (relativePath === 'node_modules/.bin' || relativePath.startsWith('node_modules/.bin/')) return true;
+  // Workspaces install workspace members as node_modules symlinks.  The
+  // companion bundle is a dev-side publish surface, never a runtime
+  // dependency of the standalone launcher, so skip its symlink entry; the
+  // check below still rejects any other symlink outright.
+  if (relativePath === 'node_modules/triss-dsh-provider-bundle' && info.isSymbolicLink()) return true;
   if (/\.(pem|key|crt|p12|pfx)$/i.test(relativePath)) return true;
   return false;
 }
@@ -99,7 +104,7 @@ function copyTree(source, target) {
       const sourcePath = join(frame.source, entry.name);
       const targetPath = join(frame.target, entry.name);
       const info = lstatSync(sourcePath);
-      if (ignored(relativePath, info.isDirectory())) continue;
+      if (ignored(relativePath, info.isDirectory(), info)) continue;
       objects += 1;
       if (objects > ARTIFACT_LIMITS.maxFiles + ARTIFACT_LIMITS.maxDirectories) {
         throw new Error(`standalone staging object count exceeds ${ARTIFACT_LIMITS.maxFiles + ARTIFACT_LIMITS.maxDirectories}`);

@@ -140,6 +140,25 @@ test('artifact and standalone staging reject special permission bits', () => {
   assert.equal(existsSync(stage), false);
 });
 
+test('standalone staging ignores the workspace companion symlink', () => {
+  const source = temp('artifact-companion-symlink');
+  mkdirSync(join(source, 'node_modules'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), '{"name":"triss-coworker","version":"0.35.0"}\n');
+  symlinkSync('../../packages/dsh-provider-bundle', join(source, 'node_modules', 'triss-dsh-provider-bundle'));
+  const stage = join(temp('artifact-companion-stage'), 'stage');
+  buildStandalone({ sourceDir: source, stageDir: stage, version: '0.35.0' });
+  assert.equal(existsSync(join(stage, 'node_modules', 'triss-dsh-provider-bundle')), false,
+    'the companion is a workspace dev-surface, never a standalone runtime dependency');
+  // The registry install path (real directory, not symlink) still stages.
+  const registry = temp('artifact-companion-real');
+  mkdirSync(join(registry, 'node_modules', 'triss-dsh-provider-bundle'), { recursive: true });
+  writeFileSync(join(registry, 'package.json'), '{"name":"triss-coworker","version":"0.35.0"}\n');
+  writeFileSync(join(registry, 'node_modules', 'triss-dsh-provider-bundle', 'package.json'), '{"name":"triss-dsh-provider-bundle"}\n');
+  const stage2 = join(temp('artifact-companion-real-stage'), 'stage');
+  buildStandalone({ sourceDir: registry, stageDir: stage2, version: '0.35.0' });
+  assert.equal(existsSync(join(stage2, 'node_modules', 'triss-dsh-provider-bundle', 'package.json')), true);
+});
+
 test('standalone builder reports directory depth violations before generic path validation', () => {
   const source = temp('artifact-deep-source');
   let current = source;
