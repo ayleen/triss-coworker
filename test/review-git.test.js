@@ -18,6 +18,7 @@ import {
   resolveReviewComparison,
   acquireNameStatusInventory,
   expandRenameSelection,
+  acquireSelectedLocalDiff,
 } from '../src/review-git.js';
 
 function fakeSh(script) {
@@ -169,4 +170,96 @@ test('REVIEW-GIT-INVENTORY-09: unmatched selectors are reported', () => {
 
 test('REVIEW-GIT-INVENTORY-10: the rename candidate limit constant is 2,000', () => {
   assert.equal(REVIEW_RENAME_CANDIDATE_LIMIT, 2000);
+});
+
+// ─── selected local content acquisition (Atomic 33 / Package 16) ────────────
+
+const SEL_DIFF_KEY =
+  '--no-pager -c core.quotepath=false -c core.attributesFile=/dev/null -c core.quotepath=false diff --no-ext-diff --text --no-color --unified=3 ' +
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --';
+
+test('REVIEW-GIT-SELECTED-01: literal selectors acquire only the selected content (huge full change, small selected file)', () => {
+  const sh = fakeSh({
+    [SEL_DIFF_KEY + ' small.txt']: {
+      stdout: Buffer.from('diff --git a/small.txt b/small.txt\n@@ -1 +1 @@\n-a\n+b\n'),
+    },
+  });
+  const r = acquireSelectedLocalDiff(sh, {
+    cwd: CWD,
+    baseOid: 'b'.repeat(40),
+    headOid: 'a'.repeat(40),
+    selectors: ['small.txt'],
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.diff.includes('small.txt'));
+  assert.ok(r.bytes > 0);
+});
+
+test('REVIEW-GIT-SELECTED-02: old-only and new-only rename selection retains both sides', () => {
+  // The selection list already contains BOTH sides after expandRenameSelection;
+  // acquisition must pass both pathspecs through unchanged.
+  const sh = fakeSh({
+    [SEL_DIFF_KEY + ' old.txt new.txt']: {
+      stdout: Buffer.from('diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n'),
+    },
+  });
+  const r = acquireSelectedLocalDiff(sh, {
+    cwd: CWD,
+    baseOid: 'b'.repeat(40),
+    headOid: 'a'.repeat(40),
+    selectors: ['old.txt', 'new.txt'],
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.diff.includes('rename from old.txt'));
+  assert.ok(r.diff.includes('rename to new.txt'));
+});
+
+test('REVIEW-GIT-SELECTED-03: a missing selector yields an empty byte-identical result, not an error', () => {
+  const sh = fakeSh({ [SEL_DIFF_KEY + ' missing.txt']: { stdout: Buffer.alloc(0) } });
+  const r = acquireSelectedLocalDiff(sh, {
+    cwd: CWD,
+    baseOid: 'b'.repeat(40),
+    headOid: 'a'.repeat(40),
+    selectors: ['missing.txt'],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.diff, '');
+  assert.equal(r.bytes, 0);
+});
+
+test('REVIEW-GIT-SELECTED-04: an empty selector list fails before any git access', () => {
+  const sh = fakeSh({});
+  const r = acquireSelectedLocalDiff(sh, { cwd: CWD, baseOid: 'b'.repeat(40), headOid: 'a'.repeat(40), selectors: [] });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_INVALID_INPUT');
+});
+
+test('REVIEW-GIT-SELECTED-05: selected content above the cap fails closed', () => {
+  const sh = fakeSh({
+    [SEL_DIFF_KEY + ' big.txt']: { stdout: Buffer.from('x'.repeat(1024)) },
+  });
+  const r = acquireSelectedLocalDiff(sh, {
+    cwd: CWD,
+    baseOid: 'b'.repeat(40),
+    headOid: 'a'.repeat(40),
+    selectors: ['big.txt'],
+    maxBytes: 512,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
+});
+
+test('REVIEW-GIT-SELECTED-06: git failure surfaces TRISS_REVIEW_LIMIT without partial output', () => {
+  const sh = fakeSh({
+    [SEL_DIFF_KEY + ' bad.txt']: { status: 128, stdout: '', stderr: 'fatal: bad path' },
+  });
+  const r = acquireSelectedLocalDiff(sh, {
+    cwd: CWD,
+    baseOid: 'b'.repeat(40),
+    headOid: 'a'.repeat(40),
+    selectors: ['bad.txt'],
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
+  assert.equal(r.diff, undefined, 'no partial output');
 });

@@ -203,3 +203,58 @@ export function expandRenameSelection(inventory, { selectors = [] } = {}) {
     candidates: candidates.length,
   };
 }
+
+// ─── selected local content acquisition (Atomic 33 / Package 16) ─────────────
+
+const SEALED_ATTRIBUTES = Object.freeze([
+  '-c', 'core.attributesFile=/dev/null',
+  '-c', 'core.quotepath=false',
+]);
+
+/**
+ * Acquire the selected local diff content: literal selectors wire to
+ * inventory-first acquisition with pathspec limiting, so a huge full change
+ * with a small selected file acquires ONLY that selected content without
+ * first buffering the full diff. Every command uses the sealed empty-
+ * attribute projection (global/info/dirty/committed .gitattributes canaries
+ * must produce byte-identical text hunks).
+ *
+ * @param {object} sh
+ * @param {object} opts
+ * @param {string} opts.cwd
+ * @param {string} opts.baseOid
+ * @param {string} opts.headOid
+ * @param {string[]} opts.selectors literal paths (already rename-expanded)
+ * @param {number} [opts.deadlineMs=30000]
+ * @param {number} [opts.maxBytes] selected-content cap
+ * @returns {{ok: boolean, code?: string, diff?: string, bytes?: number,
+ *   message?: string}}
+ */
+export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors, deadlineMs = 30000, maxBytes = 16 * 1024 * 1024 }) {
+  if (typeof sh !== 'function') throw new TypeError('sh is required');
+  if (!Array.isArray(selectors) || selectors.length === 0) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'selectors are required' };
+  }
+  const run = (args) =>
+    sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'buffer', timeout: deadlineMs });
+
+  // Pathspec-limited diff over the exact merge-base..head pair. No external
+  // diff/textconv, no config injection; sealed empty-attribute projection.
+  const out = run([
+    ...SEALED_ATTRIBUTES,
+    'diff', '--no-ext-diff', '--text', '--no-color', '--unified=3',
+    baseOid, headOid, '--', ...selectors,
+  ]);
+  if (out.status !== 0) {
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `selected diff failed: ${String(out.stderr || '').slice(0, 200)}` };
+  }
+  const buf = Buffer.isBuffer(out.stdout) ? out.stdout : Buffer.from(out.stdout || '');
+  if (buf.length === 0) {
+    // No hunks for the selection: byte-identical empty result.
+    return { ok: true, diff: '', bytes: 0 };
+  }
+  if (buf.length > maxBytes) {
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `selected diff exceeds ${maxBytes} bytes` };
+  }
+  return { ok: true, diff: buf.toString('utf8'), bytes: buf.length };
+}
