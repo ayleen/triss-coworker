@@ -153,7 +153,13 @@ Differences from the OpenCode 1 argv currently built by
 - Two successful no-tool runs emitted `step_start` and `text`, exited `0`, and
   emitted no `step_finish`. The current usage fold would correctly report
   `usage_status: "missing"`; the V2 adapter must preserve that result and add a
-  V2-specific warning.
+  V2-specific warning. (Re-verified 2026-08-14 against a fresh install of the
+  exact pin: a plain no-tool run DOES emit a terminal `step_finish` carrying
+  tokens/cost; the Phase 0 "no step_finish" observation is reproducible only
+  in specific interrupted/cancelled flows. The adapter therefore handles BOTH
+  shapes — `step_finish` present folds normally, absent yields
+  `usage_status: "missing"` + the V2-specific warning — and the live matrix
+  re-checks which shape the current pin produces before release.)
 - A cancelled stalled run emitted an error shaped as
   `{error: {type: "unknown", message: "Transport"}}`. The current OpenCode 1
   parser does not read `error.message` and would degrade it to
@@ -165,7 +171,11 @@ Differences from the OpenCode 1 argv currently built by
   service in successful smokes.
 - A non-standalone diagnostic/export flow started `opencode2 serve --service`
   processes and did not return promptly. The initial Triss integration must not
-  use that path.
+  use that path. (Re-verified 2026-08-14: even a plain `opencode2 debug config`
+  in an isolated XDG root exits `0` but LEAVES a resident
+  `opencode2 serve --service` process behind — it must never run in any Triss
+  runtime path, including pin qualification; qualification probes that need a
+  config view must use `--standalone` flows or pure static parsing only.)
 - OpenCode 2 uses a separate `opencode-next.db`, but its default log location
   overlaps the OpenCode data tree used by V1. The V2 engine must use a
   Triss-owned XDG data/state root so V1 and V2 log watchers cannot consume each

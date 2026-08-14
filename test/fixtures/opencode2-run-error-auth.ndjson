@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1786724764343,"sessionID":"ses_ffee7bd4bffe25QTj6DdamVsux","part":{"id":"prt_001184ab7001f1my2Tc2Gd6nIV","sessionID":"ses_ffee7bd4bffe25QTj6DdamVsux","messageID":"msg_00118432f001j0Y9RDLjATYsWE","type":"step-start"}}
+{"type":"error","timestamp":1786724764352,"sessionID":"ses_ffee7bd4bffe25QTj6DdamVsux","error":{"type":"provider.auth","message":"Provider request failed with HTTP 401: token expired or incorrect","status":401}}
