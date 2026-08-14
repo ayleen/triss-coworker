@@ -26,10 +26,12 @@ Tested with: `@deepseek-ai/dsh` at commit `47f9438`, `@deepseek-ai/dsh-llm-pi-ai
 
 ## Install
 
+Prerequisites check, then install into a profile whose template boots a one-shot application. **Profile name selects the application template** in DeepSeek Harness: `headless` boots the one-shot CLI application; any other profile name boots the interactive web application, which waits for a browser client forever. If you smoke-test this bundle from a terminal, create or use a `headless` profile:
+
 ```bash
 pnpm --version
 node --version
-dsh plugin --profile headless add triss-dsh-provider-bundle@0.34.0
+dsh plugin --profile headless add triss-dsh-provider-bundle@0.35.0
 dsh --profile headless --dump-config
 ```
 
@@ -47,8 +49,11 @@ Tested tuple (packed-tarball fixture, `dsh plugin` full cycle — add, remove, r
 | pnpm | `9.0.0` (lockfileVersion `9.0`) |
 | `@deepseek-ai/dsh` | `0.1.0-rc.6` |
 | Profile template | `dsh-headless@0.1.0-rc.6` (bundles: `dsh-base` + `dsh-headless`) |
-| This package | `0.35.0` (sha256 `e9a92fa4432bba13ccf3a01a05388bd3d167e50026c91cd0865059a49aef2f65`) |
-| Install integrity | `sha512-AdZeopWdPdYENOMXFvMxVd8+Xx5emMpGaNMYH6U1D6WuN2QUXq0WNIURHgPREe+fHCw5hknuXsuEP6sSLSoEAQ==` |
+| This package | `0.35.0` |
+
+Artifact integrity (tarball sha256/sha512) for each release is recorded in the
+root repository `CHANGELOG.md` release entry — it cannot be embedded here,
+because this README ships inside the tarball it would describe.
 
 The `llm-pi-ai` adapter and its `pi-ai` dependency are supplied by the profile's `dsh-base` bundle, not by this package (the companion declares no dependencies).
 
