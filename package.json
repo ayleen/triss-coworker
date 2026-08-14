@@ -6,6 +6,9 @@
   "bin": {
     "triss": "bin/triss.js"
   },
+  "workspaces": [
+    "packages/dsh-provider-bundle"
+  ],
   "files": [
     "bin/",
     "src/",
