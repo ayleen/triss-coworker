@@ -24,11 +24,14 @@ export function projectRoot() {
   const fromEnv = process.env[PROJECT_ROOT_ENV];
   if (fromEnv && fromEnv.trim()) return resolve(fromEnv.trim());
   const cwd = resolve(process.cwd());
-  // When running inside a Claude Code worktree (.claude/worktrees/<id>/…),
-  // step up to the real project root so .triss.env is found there.
-  const marker = sep + '.claude' + sep + 'worktrees' + sep;
-  const idx = cwd.indexOf(marker);
-  if (idx !== -1) return cwd.slice(0, idx);
+  // When running inside a coding-agent worktree (.claude/worktrees/<id>/… or
+  // .codex/worktrees/<id>/…), step up to the real project root so .triss.env
+  // is found there.
+  const markers = [sep + '.claude' + sep + 'worktrees' + sep, sep + '.codex' + sep + 'worktrees' + sep];
+  for (const marker of markers) {
+    const idx = cwd.indexOf(marker);
+    if (idx !== -1) return cwd.slice(0, idx);
+  }
   return cwd;
 }
 
