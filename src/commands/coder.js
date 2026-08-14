@@ -4826,3 +4826,116 @@ export async function runCoderClean(opts = {}, deps = {}) {
     process.stderr.write(pc.dim('  · nothing to clean\n'));
   }
 }
+
+// ─── v2 session CLI (Atomic 23 / Package 7) ──────────────────────────────────
+
+/**
+ * `triss coder session list [--engine <name>]`: serialize the bounded
+ * Package 4B1 inventory projection. Exits 0 only for a complete canonical
+ * projection; on error writes typed diagnostics to stderr and emits no
+ * partial JSON.
+ */
+export async function runCoderSessionList(opts = {}, deps = {}) {
+  const { listCoderSessions } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine || 'opencode');
+  const sessions = await listCoderSessions({ inventoryDir });
+  const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
+}
+
+/**
+ * `triss coder session clean <slug> --engine <opencode|crush>`: requires the
+ * engine flag; validates ownership and removes only the selected engine's
+ * inactive isolated session row.
+ */
+export async function runCoderSessionClean(slug, opts = {}) {
+  if (!opts.engine || !['opencode', 'crush'].includes(opts.engine)) {
+    throw new Error('--engine <opencode|crush> is required for session clean');
+  }
+  const { removeCoderSessionRow, listCoderSessions } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
+  const sessions = await listCoderSessions({ inventoryDir });
+  const row = sessions.find((s) => s.slug === slug);
+  if (!row) {
+    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
+    return;
+  }
+  if (row.state !== 'idle') {
+    throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
+  }
+  await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
+  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${opts.engine})\n`));
+}
+
+/**
+ * `triss coder state adopt --from-project-id <32hex>`: explicit operator
+ * action; moves old owned state to quarantine with a NEW project id.
+ */
+export async function runCoderStateAdopt(opts = {}) {
+  const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  const { adoptOrQuarantineCoderState } = await import('../coder-state.js');
+  if (!opts.fromProjectId || !/^[0-9a-f]{32}$/.test(opts.fromProjectId)) {
+    throw new Error('--from-project-id <32hex> is required for state adopt');
+  }
+  const trissRoot = join(projectRoot(), '.triss');
+  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  if (identity.project_id === opts.fromProjectId) {
+    throw new Error('adopt requires a DIFFERENT newly generated project id');
+  }
+  const result = await adoptOrQuarantineCoderState({
+    trissRootPath: trissRoot,
+    oldProjectId: opts.fromProjectId,
+    newProjectId: identity.project_id,
+  });
+  process.stderr.write(
+    pc.dim(`  · quarantined ${opts.fromProjectId} -> ${identity.project_id} at ${result.quarantine_dir}\n`),
+  );
+}
+
+/**
+ * `triss coder state reset --project`: quarantine all validated local v2
+ * state and create an empty identity (never deletes it).
+ */
+export async function runCoderStateReset(opts = {}) {
+  if (!opts.project) {
+    throw new Error('--project is required for state reset');
+  }
+  const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  const trissRoot = join(projectRoot(), '.triss');
+  // A fresh identity is created only after the old one is quarantined;
+  // the identity itself is never deleted.
+  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  process.stderr.write(pc.dim(`  · reset requested for project ${identity.project_id}\n`));
+}
+
+/**
+ * `triss coder result list`: bounded retained-result projection.
+ */
+export async function runCoderResultList(deps = {}) {
+  const { listCoderRetainedResults } = await import('../coder-result-transitions.js');
+  const { readdir } = await import('node:fs/promises');
+  const resultsRoot = join(projectRoot(), '.triss', 'coder-results-v1', 'runs');
+  let runDirs = [];
+  try {
+    runDirs = (await readdir(resultsRoot)).map((name) => join(resultsRoot, name));
+  } catch {
+    // No results root: empty list.
+  }
+  const results = await listCoderRetainedResults({ runDirs });
+  const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  writeStdout(`${JSON.stringify({ schema_version: 1, results })}\n`);
+}
+
+/**
+ * `triss coder result clean <run-id>`: removes only a validated retained
+ * result artifact, never a persistent session selected by a slug.
+ */
+export async function runCoderResultClean(runId) {
+  if (!runId || !/^run-[0-9a-f]{32}$/.test(runId)) {
+    throw new Error('result clean requires a valid <run-id> (run-<32 lowercase hex>)');
+  }
+  const { rm } = await import('node:fs/promises');
+  const runDir = join(projectRoot(), '.triss', 'coder-results-v1', 'runs', runId);
+  await rm(runDir, { recursive: true, force: true });
+  process.stderr.write(pc.dim(`  · removed retained result ${runId}\n`));
+}

@@ -40,7 +40,17 @@ import {
   runEdit,
   runUnset,
 } from '../src/commands/config.js';
-import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.js';
+import {
+  runCoderInit,
+  runCoderRun,
+  runCoderClean,
+  runCoderSessionList,
+  runCoderSessionClean,
+  runCoderStateAdopt,
+  runCoderStateReset,
+  runCoderResultList,
+  runCoderResultClean,
+} from '../src/commands/coder.js';
 import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
 import { runCoderStateBackup, runCoderStateValidate } from '../src/commands/coder-state-backup.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
@@ -430,6 +440,50 @@ coderState
   .requiredOption('--backup <basename>', 'backup directory to validate')
   .option('--json', 'print the stable machine-readable result (no secrets)')
   .action((opts) => wrap(runCoderStateValidate)(opts));
+
+coderState
+  .command('adopt')
+  .description('Adopt owned v2 state under a NEW project id: quarantine the old id, rewrite validated owner records')
+  .requiredOption('--from-project-id <32hex>', 'the old project id (32 lowercase hex) to quarantine')
+  .action((opts) => wrap(runCoderStateAdopt)(opts));
+
+coderState
+  .command('reset')
+  .description('Quarantine all validated local v2 state and create an empty identity (never deletes it)')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .action((opts) => wrap(runCoderStateReset)(opts));
+
+// `coder session` group (v2 session CLI contract, Atomic 23).
+const coderSession = coder
+  .command('session')
+  .description('List or clean v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)');
+
+coderSession
+  .command('list')
+  .description('Serialize the bounded v2 session inventory projection to stdout')
+  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .action((opts) => wrap(runCoderSessionList)(opts));
+
+coderSession
+  .command('clean <slug>')
+  .description('Remove a selected inactive v2 isolated session/workspace transaction')
+  .requiredOption('--engine <name>', 'coding engine: opencode or crush (MANDATORY)')
+  .action((slug, opts) => wrap(runCoderSessionClean)(slug, opts));
+
+// `coder result` group (retained-result CLI, Atomic 23).
+const coderResult = coder
+  .command('result')
+  .description('List or clean retained result artifacts (never persistent sessions)');
+
+coderResult
+  .command('list')
+  .description('Serialize the bounded retained-result projection to stdout')
+  .action((opts) => wrap(runCoderResultList)(opts));
+
+coderResult
+  .command('clean <run-id>')
+  .description('Remove only a validated retained result artifact (run-<32 lowercase hex>)')
+  .action((runId, opts) => wrap(runCoderResultClean)(runId, opts));
 
 function wrap(fn) {
   return async (...args) => {
