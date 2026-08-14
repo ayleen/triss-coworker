@@ -862,7 +862,7 @@ const CODER_TOOLS = [
           description: 'Session slug, reused across calls via .triss/sessions.json to continue a conversation',
         },
         continue: { type: 'boolean', description: 'Continue the most recent session of the resolved engine (opencode/opencode2 keep separate session maps)' },
-        agent: { type: 'string', description: 'opencode agent template to use (default: coder)' },
+        agent: { type: 'string', description: 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)' },
         provider: {
           type: 'string',
           enum: ['zai', 'worker', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding'],

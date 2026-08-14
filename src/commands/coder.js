@@ -4455,7 +4455,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // opts.isolate is `undefined` when neither flag is passed, `true` under
   // --isolate, `false` under --no-isolate. (Do NOT add a default to either
   // option — the undefined tristate is load-bearing here.)
-  const agent = opts.agent || 'coder';
+  // V1 resolves the agent default here; V2 must NOT inject a default agent:
+  // the V2 binary does not auto-load the V1 `.opencode/agents` templates, so
+  // `--agent coder` failed live with "Agent not found" unless agent files
+  // were hand-installed — and the static agent-source preflight rejects
+  // those. A beta V2 run without an explicit --agent uses the engine's
+  // BUILT-IN primary agent instead (live-matrix finding, Phase 6).
+  const agent = opts.agent || (engine === 'opencode2' ? null : 'coder');
 
   const modelUsed = modelOverride || coderModel();
 

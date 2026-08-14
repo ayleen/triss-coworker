@@ -393,10 +393,17 @@ test(
       });
       const { cmd, argv, options } = rec.calls[0];
       assert.equal(cmd, 'opencode2');
+      // Live-matrix finding (Phase 6): V2 does NOT auto-load the V1
+      // `.opencode/agents` templates the way V1 does, so injecting the
+      // default `--agent coder` made every run fail with "Agent not found"
+      // unless the user hand-installed agent files — which the static
+      // preflight then rejects. A beta V2 run therefore uses the engine's
+      // BUILT-IN primary agent when --agent is not passed explicitly; an
+      // explicit --agent is still forwarded (and still gated upstream by the
+      // agent-source preflight).
       assert.deepEqual(argv, [
         'run', '--standalone', '--format', 'json', '--auto',
         '--model', 'zai-coding-plan/glm-5.2',
-        '--agent', 'coder',
         'x',
       ]);
       assert.equal(options.env.OPENCODE_DISABLE_AUTOUPDATE, '1');

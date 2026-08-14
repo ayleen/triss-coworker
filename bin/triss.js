@@ -343,7 +343,7 @@ coder
   .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/opencode2.md), or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
-  .option('--agent <name>', 'opencode agent template to use', 'coder')
+  .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
   .option('--provider <name>', 'OpenCode only: select a provider for one run; requires --model and does not modify .env or opencode.json')
   .option('--model <p/m>', 'override the MAIN model for this one run only (does not change small_model or repair persistent config; use `triss coder model set` for that)')
   .option('--small-model <p/m>', 'with --provider, override small_model for one run (defaults to the one-shot main model)')
