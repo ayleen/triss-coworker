@@ -42,6 +42,7 @@ import {
 } from '../src/commands/config.js';
 import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.js';
 import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
+import { runCoderStateBackup, runCoderStateValidate } from '../src/commands/coder-state-backup.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
 import { positiveIntegerOption, positiveNumberOption } from '../src/option-validation.js';
@@ -407,6 +408,28 @@ coderModel
   .option('-g, --global', 'restore to the global scope (~/.config/opencode/ or ~/.local/share/crush/)')
   .option('-l, --local', 'restore to the project scope (./opencode.json or ./.crush/crush.json)')
   .action((opts) => wrap(runCoderModelRollback)(opts.from, opts));
+
+// `coder state` is a command GROUP whose leaves are `backup` and `validate`
+// (Section 15 rollback contract).
+const coderState = coder
+  .command('state')
+  .description('Back up or validate the v2 coder state of a project (rollback contract)');
+
+coderState
+  .command('backup')
+  .description('Create a bounded rollback backup of the v2 coder state (both engine session stores + coder-state-v2)')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .option('--backup <path>', 'backup destination directory (default: <project>/.triss/backups/<timestamp>)')
+  .option('--json', 'print the stable machine-readable result (no secrets)')
+  .action((opts) => wrap(runCoderStateBackup)(opts));
+
+coderState
+  .command('validate')
+  .description('Validate a rollback backup: manifest schema, completion marker hash, per-entry verification')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .requiredOption('--backup <basename>', 'backup directory to validate')
+  .option('--json', 'print the stable machine-readable result (no secrets)')
+  .action((opts) => wrap(runCoderStateValidate)(opts));
 
 function wrap(fn) {
   return async (...args) => {
