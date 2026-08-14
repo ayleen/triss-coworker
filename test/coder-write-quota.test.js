@@ -52,7 +52,7 @@ test('accounting accepts writes up to the limit and rejects at cap plus one', ()
 
 test('many-small-file pressure stays bounded', () => {
   const h = prepareQuotaBackedDirectory({ root: '/wt/task', limitBytes: 1024 });
-  for (let i = 0; i < 1000; i += 1) {
+  for (let i = 0; i < 1030; i += 1) {
     const r = h.accountWrite(1);
     assert.equal(Boolean(r.accepted), i < 1024);
     if (i >= 1024) assert.equal(r.rejected, true);
