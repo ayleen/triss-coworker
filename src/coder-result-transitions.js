@@ -168,6 +168,16 @@ export async function beginCoderResultDeletion({ runDir, runId }) {
   if (existing === null) {
     return null; // already gone — idempotent
   }
+  // The directory's own record must name THIS run: a valid record for run B
+  // planted inside run A's directory must never make `result clean run-A`
+  // delete that directory (wrong-target deletion).
+  if (existing.run_id !== runId) {
+    const err = new Error(
+      `result-registry: state record run_id ${existing.run_id} does not match the directory's run id ${runId} (fail closed)`,
+    );
+    err.code = 'RESULT_CONFLICT';
+    throw err;
+  }
   const tombstone = {
     run_id: runId,
     delete_phase: RESULT_DELETE_PHASE[0],
@@ -175,6 +185,37 @@ export async function beginCoderResultDeletion({ runDir, runId }) {
   };
   await writeFile(tombstonePath, `${JSON.stringify(tombstone)}\n`, { mode: 0o600 });
   return tombstone;
+}
+
+/**
+ * Advance the deletion tombstone to a later phase (durable crash breadcrumb):
+ * phases only move forward; the terminal `state_removed` phase is written
+ * right before the run directory itself is removed.
+ */
+export async function advanceCoderResultDeletionPhase({ runDir, runId, phase }) {
+  const idx = RESULT_DELETE_PHASE.indexOf(phase);
+  if (idx === -1) {
+    throw new TypeError(`result-registry: unknown deletion phase ${JSON.stringify(phase)}`);
+  }
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const tombstonePath = join(runDir, '.deleting.json');
+  let tombstone;
+  try {
+    tombstone = JSON.parse(await readFile(tombstonePath, 'utf8'));
+  } catch {
+    throw new Error('result-registry: cannot advance a deletion without a tombstone');
+  }
+  if (tombstone.run_id !== runId) {
+    const err = new Error(`result-registry: tombstone run_id mismatch (fail closed)`);
+    err.code = 'RESULT_CONFLICT';
+    throw err;
+  }
+  const current = RESULT_DELETE_PHASE.indexOf(tombstone.delete_phase);
+  if (idx <= current) return tombstone; // forward-only
+  const next = { ...tombstone, delete_phase: phase };
+  await writeFile(tombstonePath, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+  return next;
 }
 
 /**

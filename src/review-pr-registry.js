@@ -43,15 +43,22 @@ function encodeState(record) {
 }
 
 /**
- * Strict-capability preflight: without enforced managed root + quota the PR
- * acquisition must not start (metadata/network must never run without them).
+ * Acquisition preflight: the PR path requires a REAL managed-root handle and
+ * a REAL quota handle with working accounting methods — not a mutable
+ * `capability` label (assigning `quota.capability = 'enforced'` proved
+ * nothing). The handles here are Triss-managed best-effort accounting; the
+ * preflight proves the structure is wired, never an OS-enforcement claim.
  */
 export function assertPrStrictCapabilities({ managedRoot, quota }) {
-  if (!managedRoot || managedRoot.capability !== 'enforced') {
-    throw new Error(`${STRICT_CAPABILITY_CODE}: enforced managed root is required for PR acquisition`);
+  if (!managedRoot || typeof managedRoot.path !== 'string' || managedRoot.path.length === 0) {
+    throw new Error(`${STRICT_CAPABILITY_CODE}: a managed-root handle is required for PR acquisition`);
   }
-  if (!quota || quota.capability !== 'enforced') {
-    throw new Error(`${STRICT_CAPABILITY_CODE}: enforced quota is required for PR acquisition`);
+  if (
+    !quota ||
+    typeof quota.accountWrite !== 'function' ||
+    typeof quota.accountRelease !== 'function'
+  ) {
+    throw new Error(`${STRICT_CAPABILITY_CODE}: a quota handle with accounting is required for PR acquisition`);
   }
 }
 

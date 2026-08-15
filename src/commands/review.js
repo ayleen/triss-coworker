@@ -176,12 +176,39 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     baseRef = baseRef || pr.baseRefName;
     headRef = pr.headRefName;
     urlNote = pr.url;
-    diff = gh(['pr', 'diff', prNumber]);
+    if (deps.gitDiff) {
+      diff = gh(['pr', 'diff', prNumber]);
+    } else {
+      // P1 fix: the default PR path also acquires through the exact
+      // inventory-first machinery (exact OIDs, disposable repo, fork-aware
+      // fetch, bounded output) instead of legacy unbounded `gh pr diff`.
+      const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+        deps.scopedDeps || {},
+        { pr: prNumber, base: baseRef, selectors: [] },
+      );
+      if (!scoped.ok) {
+        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'PR acquisition failed'}`);
+      }
+      diff = scoped.diff;
+    }
   } else {
     headRef = currentBranch();
     baseRef = baseRef || defaultBranch();
     title = headRef;
-    diff = (deps.gitDiff || gitDiff)(baseRef, 'HEAD');
+    if (deps.gitDiff) {
+      diff = deps.gitDiff(baseRef, 'HEAD');
+    } else {
+      // P1 fix: exact merge-base comparison under the sealed Git projection
+      // with bounded output — never a 50 MiB buffered legacy diff.
+      const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+        deps.scopedDeps || {},
+        { base: baseRef, selectors: [] },
+      );
+      if (!scoped.ok) {
+        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'acquisition failed'}`);
+      }
+      diff = scoped.diff;
+    }
   }
 
   if (!diff.trim()) {
@@ -402,6 +429,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       diff: selectedDiff,
       question: opts.question || DEFAULT_QUESTION,
       selectors,
+      metadataBytes:
+        Buffer.byteLength(changeCorpus, 'utf8') + Buffer.byteLength(ticketCorpus, 'utf8'),
     },
   );
 
@@ -418,7 +447,11 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       `[triss/review] scope: ${req.coverage} — ${req.matched.length}/${req.matched.length + req.unmatched.length} requested file(s) reviewed\n`,
     ));
   }
-  process.stdout.write(singleResult.verdict + '\n');
+  // When streaming, the verdict was already printed chunk-by-chunk; printing
+  // it again would duplicate the full text on stdout.
+  if (!shouldStream(opts)) {
+    process.stdout.write(singleResult.verdict + '\n');
+  }
   return singleResult.verdict;
 }
 

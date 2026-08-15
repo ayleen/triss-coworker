@@ -35,7 +35,7 @@ export async function runReviewCore({
   responseFormat: responseFormatInput = 'text',
   callModel,
   reviewBoundaryId,
-  gitDiffFn = gitDiff,
+  gitDiffFn = null,
   files = null,
   issue = null,
   acquireScopedDiff = acquireScopedReviewDiff,
@@ -89,12 +89,16 @@ export async function runReviewCore({
     baseRef = baseRef || meta.baseRefName;
     headRef = meta.headRefName;
     urlNote = meta.url;
-    diff = gh(['pr', 'diff', String(pr)]);
+    diff = gitDiffFn
+      ? gitDiffFn(baseRef, 'HEAD')
+      : await acquireFullDiff({ pr, base: baseRef });
   } else {
     headRef = currentBranch();
     baseRef = baseRef || defaultBranch();
     title = headRef;
-    diff = gitDiffFn(baseRef, 'HEAD');
+    diff = gitDiffFn
+      ? gitDiffFn(baseRef, 'HEAD')
+      : await acquireFullDiff({ base: baseRef });
   }
 
   if (!diff.trim()) return emptyReviewResponse(responseFormat);
@@ -210,6 +214,7 @@ export async function runReviewCore({
       diff: selectedDiff,
       question: question || 'Review this change. List concrete issues; do not summarise the diff.',
       selectors,
+      metadataBytes: Buffer.byteLength(changeCorpus, 'utf8') + Buffer.byteLength(ticketCorpus, 'utf8'),
     },
   );
   if (!result.ok) {
@@ -320,6 +325,19 @@ export async function runReviewCoreShard({ diff, question, metadata = '', callMo
   return { ok: true, shards: result.shards, attempts: result.attempts };
 }
 
+// P1 parity: without an injected test seam, the full diff also comes from
+// the exact inventory-first machinery (merge-base OIDs, sealed projection,
+// bounded output, fork-aware PR fetch) — never an unbounded legacy diff.
+async function acquireFullDiff({ pr, base }) {
+  const scoped = await acquireScopedReviewDiff({}, { pr, base, selectors: [] });
+  if (!scoped.ok) {
+    const err = new Error(scoped.message || scoped.code || 'acquisition failed');
+    err.code = scoped.code || 'TRISS_REVIEW_LIMIT';
+    throw err;
+  }
+  return scoped.diff;
+}
+
 /**
  * Acquire the diff for the dedicated MCP shard tool: scoped (inventory-first)
  * when literal `files` selectors are given, full otherwise. Shared with the
@@ -330,7 +348,7 @@ export async function acquireReviewDiffForShard({
   pr,
   base,
   files = null,
-  gitDiffFn = gitDiff,
+  gitDiffFn = null,
   acquireScopedDiff = acquireScopedReviewDiff,
 }) {
   const selectors = Array.isArray(files) ? files : [];
@@ -354,14 +372,16 @@ export async function acquireReviewDiffForShard({
     }
     return { diff: scoped.diff };
   }
-  if (pr) {
-    if (!hasCommand('gh')) {
-      throw new Error('PR mode requires the GitHub CLI (`gh`).');
-    }
-    return { diff: gh(['pr', 'diff', String(pr)]) };
+  const scoped = await acquireScopedDiff({}, { pr, base, selectors });
+  if (!scoped.ok) {
+    const err = new Error(scoped.message || scoped.code || 'acquisition failed');
+    err.code = scoped.code || 'TRISS_REVIEW_LIMIT';
+    throw err;
   }
-  const baseRef = base || defaultBranch();
-  return { diff: gitDiffFn(baseRef, 'HEAD') };
+  if (!scoped.diff.trim()) {
+    return { diff: '' };
+  }
+  return { diff: scoped.diff };
 }
 
 async function fetchLinkedIssue(key) {

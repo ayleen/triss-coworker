@@ -188,6 +188,9 @@ export async function inventoryCoderV2State(projectRoot) {
       if (entries.length >= BACKUP_LIMITS.maxEntries) {
         throw new Error(`backup: entries exceed ${BACKUP_LIMITS.maxEntries} cap`);
       }
+      if (stats.size > BACKUP_LIMITS.maxFileBytes) {
+        throw new Error(`backup: file exceeds ${BACKUP_LIMITS.maxFileBytes}-byte cap: ${absPath}`);
+      }
       const entry = await hashFileNoFollow(absPath, state);
       entries.push({ path: rel, sha256: entry.sha256, size: entry.size });
     }
@@ -233,13 +236,16 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
 
   // Copy every entry into the backup tree (no-follow, bounded).
   await mkdir(join(backupDir, 'state'), { recursive: true });
+  // ONE aggregate accumulator across every verification: seeding each file
+  // with a fresh {totalBytes: 0} made the 512 MiB total cap a per-file cap.
+  const verifyState = { totalBytes: inventory.totalBytes };
   for (const entry of inventory.entries) {
     const src = join(trissRoot, entry.path);
     const dst = join(backupDir, 'state', entry.path);
     await mkdir(join(dst, '..'), { recursive: true }).catch(() => {});
     await doCopy(src, dst);
     // Verify the copied bytes match the source hash.
-    const verify = await hashFileNoFollow(dst, { totalBytes: 0 });
+    const verify = await hashFileNoFollow(dst, verifyState);
     if (verify.sha256 !== entry.sha256) {
       throw new Error(`backup: copy verification failed for ${entry.path} (no completion marker)`);
     }
@@ -322,7 +328,9 @@ export async function validateCoderV2Backup(backupDir) {
     }
   }
 
-  // Verify every backed-up entry exists and hashes match.
+  // Verify every backed-up entry exists and hashes match. The aggregate
+  // accumulator spans the WHOLE validation, so the 512 MiB total cap holds.
+  const verifyState = { totalBytes: 0 };
   for (const entry of manifest.entries) {
     const dst = join(backupDir, 'state', entry.path);
     try {
@@ -331,7 +339,7 @@ export async function validateCoderV2Backup(backupDir) {
         reasons.push(`size mismatch: ${entry.path}`);
         continue;
       }
-      const verify = await hashFileNoFollow(dst, { totalBytes: 0 });
+      const verify = await hashFileNoFollow(dst, verifyState);
       if (verify.sha256 !== entry.sha256) {
         reasons.push(`hash mismatch: ${entry.path}`);
       }

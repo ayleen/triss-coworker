@@ -30,6 +30,7 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
+import { accessSync, constants as fsConstants } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import pc from 'picocolors';
@@ -4251,12 +4252,18 @@ async function runCrushFlow({
   // Isolation teardown — engine-agnostic, same helpers/logic as the opencode
   // path: stage everything, integrity-check seeded config, auto-remove a
   // zero-diff worktree + its branch.
-  let filesChanged = [];
+  // v2 contract: files_changed is [] ONLY for a successfully performed
+  // comparison that found nothing; a run with no comparison (non-isolated)
+  // reports null — never a fabricated empty list.
+  let filesChanged = null;
   let diffStat = null;
   let worktreeOut = null;
   if (isolation) {
     const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
     if (changes.warnings.length) warnings.push(...changes.warnings);
+    // The comparison was PERFORMED: [] is the honest result for a verified
+    // empty change (null stays reserved for no-comparison runs).
+    filesChanged = changes.filesChanged;
     if (changes.filesChanged.length === 0) {
       try {
         gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
@@ -4273,7 +4280,6 @@ async function runCrushFlow({
         warnings.push(`isolate cleanup failed: ${err.message}`);
       }
     } else {
-      filesChanged = changes.filesChanged;
       diffStat = changes.diffStat;
       worktreeOut = isolation.wtPath;
     }
@@ -4321,7 +4327,7 @@ async function runCrushFlow({
   const runIdentity = allocateRunIdentity({
     slug: session || null,
     isolated: !!isolation,
-    changed: filesChanged.length > 0,
+    changed: (filesChanged || []).length > 0,
   });
 
   const envelope = {
@@ -4680,6 +4686,39 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // loopback proxy FIRST; the child receives only the one-run token and the
   // loopback base URL. If the proxy cannot start (or no canonical endpoint
   // is known for this credential), the run fails closed BEFORE spawn.
+  // ─── Credential-store isolation preflight (P0): the loopback token proxy
+  // removes the raw key from the child's env/argv/config, but a same-UID
+  // child can still READ the raw credential stores (project/global
+  // .triss.env) directly. Per the plan (Section 6.5), a best-effort run is
+  // only allowed when the boundary is actually absent: if any raw store is
+  // readable, the run fails closed BEFORE spawn unless the operator has
+  // explicitly acknowledged the best-effort scope via
+  // TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.
+  if (!deps.allowBestEffortIsolation && process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION !== '1') {
+    const readableStores = [];
+    for (const storePath of [
+      join(projectRoot(), '.triss.env'),
+      join(homedir(), '.triss.env'),
+      join(projectRoot(), '.triss.env.local'),
+    ]) {
+      try {
+        accessSync(storePath, fsConstants.R_OK);
+        readableStores.push(storePath);
+      } catch {
+        /* absent or unreadable: not a leak channel */
+      }
+    }
+    if (readableStores.length > 0) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `credential isolation unavailable: the raw credential store(s) ${readableStores.join(', ')} ` +
+          `are readable by the same-UID engine child, so the loopback token proxy alone cannot ` +
+          `contain the real key. Move the credentials into your shell environment, or ` +
+          `acknowledge the best-effort scope with TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`,
+      );
+    }
+  }
+
   const proxyTarget = coderCredentialEndpoint(cred.env, modelUsed);
   let credentialProxy = null;
   if (
@@ -4891,12 +4930,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     persistSessionMapping(sh, opts.session, result.sessionRealId);
   }
 
-  let filesChanged = [];
+  // v2 contract: files_changed is [] ONLY for a successfully performed
+  // comparison that found nothing; a run with no comparison (non-isolated)
+  // reports null — never a fabricated empty list.
+  let filesChanged = null;
   let diffStat = null;
   let worktreeOut = null;
   if (isolation) {
     const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
     if (changes.warnings.length) result.warnings.push(...changes.warnings);
+    // The comparison was PERFORMED: [] is the honest result for a verified
+    // empty change (null stays reserved for no-comparison runs).
+    filesChanged = changes.filesChanged;
     if (changes.filesChanged.length === 0) {
       try {
         // force: true — even with zero real changes, the seeded
@@ -4919,7 +4964,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         result.warnings.push(`isolate cleanup failed: ${err.message}`);
       }
     } else {
-      filesChanged = changes.filesChanged;
       diffStat = changes.diffStat;
       worktreeOut = isolation.wtPath;
     }
@@ -4935,7 +4979,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const runIdentity = allocateRunIdentity({
     slug: opts.session || slug || null,
     isolated: !!isolation,
-    changed: filesChanged.length > 0,
+    changed: (filesChanged || []).length > 0,
   });
 
   const { tokens, reported_total_usd, reported_total_source, usage_status, warnings: normalizeWarnings } =
@@ -5131,6 +5175,11 @@ export async function runCoderSessionClean(slug, opts = {}) {
   if (row.state !== 'idle') {
     throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
   }
+  // The state machine requires reserved/running/idle -> deleting BEFORE a
+  // row can be removed; skipping the transition made every idle clean fail
+  // with 'row must be deleting before removal'.
+  const { beginCoderSessionDelete } = await import('../coder-session-transitions.js');
+  await beginCoderSessionDelete({ inventoryDir, engine: opts.engine, slug });
   await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
   process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${opts.engine})\n`));
 }
@@ -5168,10 +5217,13 @@ export async function runCoderStateReset(opts = {}) {
   if (!opts.project) {
     throw new Error('--project is required for state reset');
   }
+  const { resolve: resolvePath } = await import('node:path');
   const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
   const { randomBytes } = await import('node:crypto');
   const { mkdir, readdir, rename, rm } = await import('node:fs/promises');
-  const trissRoot = join(projectRoot(), '.triss');
+  // --project names the target tree: resetting repo-B from repo-A's cwd must
+  // never quarantine repo-A's state. Resolve the EXPLICIT path, not cwd.
+  const trissRoot = join(resolvePath(opts.project), '.triss');
   // A fresh identity is created only after the old one is quarantined;
   // the identity itself is never deleted.
   const identity = await loadOrCreateProjectIdentity(trissRoot);
@@ -5256,6 +5308,19 @@ export async function runCoderResultClean(runId) {
   const tombstone = await beginCoderResultDeletion({ runDir, runId });
   if (tombstone === null) {
     throw new Error(`retained result ${runId} has no valid state record (refusing blind delete)`);
+  }
+  // Durable phase breadcrumbs: every artifact class is confirmed gone before
+  // the terminal phase, so a crash mid-delete leaves a recoverable marker
+  // naming exactly what remains.
+  const { advanceCoderResultDeletionPhase, RESULT_DELETE_PHASE } = await import('../coder-result-transitions.js');
+  const runSub = (name) => join(runDir, name);
+  for (const [phase, artifact] of [
+    [RESULT_DELETE_PHASE[1], 'worktree'],
+    [RESULT_DELETE_PHASE[2], 'branch'],
+    [RESULT_DELETE_PHASE[3], 'state'],
+  ]) {
+    await rm(runSub(artifact), { recursive: true, force: true }).catch(() => {});
+    await advanceCoderResultDeletionPhase({ runDir, runId, phase });
   }
   await rm(runDir, { recursive: true, force: true });
   process.stderr.write(pc.dim(`  · removed retained result ${runId}\n`));

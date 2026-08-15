@@ -103,7 +103,7 @@ test('REVIEW-GIT-INVENTORY-04: sanitized environment is applied to every command
 
 test('REVIEW-GIT-INVENTORY-05: bounded NUL-delimited name-status parses with renames', () => {
   const sh = fakeSh({
-    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% -l2000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
       stdout: Buffer.from(`M\u0000file1.txt\u0000R100\u0000old.txt\u0000new.txt\u0000D\u0000gone.txt\u0000`),
     },
   });
@@ -122,7 +122,7 @@ test('REVIEW-GIT-INVENTORY-05: bounded NUL-delimited name-status parses with ren
 test('REVIEW-GIT-INVENTORY-06: inventory overflow fails closed with TRISS_REVIEW_LIMIT', () => {
   // 3 entries > maxEntries 2.
   const sh = fakeSh({
-    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% -l2000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
       stdout: Buffer.from('M\u0000a\u0000M\u0000b\u0000M\u0000c\u0000'),
     },
   });
@@ -341,7 +341,7 @@ test('REVIEW-GIT-INVENTORY-11: rename candidates beyond the documented bound fai
   }
   parts.push('');
   const sh = fakeSh({
-    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% -l2000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
       stdout: parts.join('\u0000'),
     },
   });
@@ -354,7 +354,7 @@ test('REVIEW-GIT-INVENTORY-11: rename candidates beyond the documented bound fai
 test('REVIEW-GIT-INVENTORY-12: rename candidates within the bound pass and are counted', () => {
   const parts = ['R100\u0000old.txt\u0000new.txt', 'M\u0000mod.txt', ''];
   const sh = fakeSh({
-    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% -l2000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
       stdout: parts.join('\u0000'),
     },
   });

@@ -154,9 +154,16 @@ export function acquireNameStatusInventory(sh, { cwd, baseOid, headOid, maxEntri
 
   // P1 fix: deterministic bounded rename detection. `--no-renames` made the
   // R* parsing below unreachable for real Git (a rename would be emitted as
-  // separate A/D entries). Rename detection is explicitly ON with a bounded
-  // candidate limit so the cost stays capped.
-  const out = run(['diff', '--name-status', '-z', '--find-renames=' + '50%', baseOid, headOid]);
+  // separate A/D entries). Rename detection is explicitly ON with the
+  // documented candidate limit passed to Git itself (-l caps the
+  // source/destination matrix BEFORE the expensive comparison, not only as
+  // a post-parse rejection) plus the post-parse bound below as a backstop.
+  const out = run([
+    'diff', '--name-status', '-z',
+    '--find-renames=50%',
+    '-l' + REVIEW_RENAME_CANDIDATE_LIMIT,
+    baseOid, headOid,
+  ]);
   if (out.status !== 0) {
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `name-status failed: ${String(out.stderr || '').slice(0, 200)}` };
   }

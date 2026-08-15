@@ -226,3 +226,45 @@ test('withFixedKernelLock releases even when the callback throws', async () => {
 test('withFixedKernelLock requires a callback', async () => {
   await assert.rejects(() => withFixedKernelLock({}), TypeError);
 });
+
+// ─── adversarial: symlink planting and mode hygiene ─────────────────────────
+
+test('FIXED-LOCK-SYMLINK-01: a symlinked lock path fails closed without truncating the target', async () => {
+  const { symlink, writeFile, readFile, mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { openManagedTrissRoot } = await import('../src/managed-root.js');
+
+  const base = await mkdtemp(join(tmpdir(), 'triss-lock-sym-'));
+  try {
+    const root = await openManagedTrissRoot(base);
+    const victim = join(base, 'victim.txt');
+    await writeFile(victim, 'PRECIOUS CONTENT\n', { mode: 0o600 });
+    // Plant a symlink where the lock file would be created. The managed
+    // root handle points at <base>/.triss, so the plant goes there; the
+    // basename is a single safe segment, but the path itself can still be
+    // pre-planted as a symlink by any same-UID process.
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(base, '.triss'), { recursive: true, mode: 0o700 });
+    await symlink(victim, join(base, '.triss', 'evil.lock'), 'file');
+
+    const { acquireFixedKernelLock } = await import('../src/fixed-kernel-lock.js');
+    let rejected = false;
+    try {
+      await acquireFixedKernelLock({
+        parentHandle: root,
+        basename: 'evil.lock',
+        mode: 'exclusive',
+      });
+    } catch (err) {
+      rejected = true;
+      assert.ok(['ELOOP', 'SYMLINK'].some((c) => String(err.code || err.message).includes(c)) || /symbolic link/i.test(err.message), String(err));
+    }
+    assert.equal(rejected, true, 'a symlinked lock path must fail closed');
+    const content = await readFile(victim, 'utf8');
+    assert.equal(content, 'PRECIOUS CONTENT\n', 'the symlink target must never be truncated');
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    await rm(base, { recursive: true, force: true });
+  }
+});

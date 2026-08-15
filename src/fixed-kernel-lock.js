@@ -19,8 +19,10 @@
  * lock file only when its pinned identity still matches.
  */
 
-import { open, readFile, stat } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+
+const { O_CREAT, O_NOFOLLOW, O_RDWR } = fsConstants;
 import { randomBytes } from 'node:crypto';
 
 import { managedTouchPath } from './managed-root.js';
@@ -60,43 +62,46 @@ function pidAlive(pid) {
   }
 }
 
-// True iff the on-disk marker is genuinely held (same-process by registry,
-// cross-process by PID liveness).
-function markerHeld(lockPath) {
-  const content = readFileSyncSafe(lockPath);
-  const marker = /^pid=(\d+);ts=\d+;r=([A-Za-z0-9-]+)$/.exec(content.trim());
-  if (!marker) return false;
-  const pid = Number(marker[1]);
-  const nonce = marker[2];
-  const sameProcess = pid === process.pid;
-  return sameProcess ? activeMarkerNonces.has(nonce) : pidAlive(pid);
-}
-
-function readFileSyncSafe(lockPath) {
+// Marker I/O goes STRICTLY through the pinned file descriptor: a pathname
+// re-resolution between operations could hit a swapped file (the open itself
+// is O_NOFOLLOW, so the fd can never be a symlink target).
+async function readMarkerViaFd(fd) {
+  const buf = Buffer.alloc(256);
   try {
-    return readFileSync(lockPath, 'utf8');
+    const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+    return buf.toString('utf8', 0, bytesRead);
   } catch {
     return '';
   }
 }
 
+function parseMarker(content) {
+  const marker = /^pid=(\d+);ts=\d+;r=([A-Za-z0-9-]+)$/.exec(String(content).trim());
+  if (!marker) return null;
+  return { pid: Number(marker[1]), nonce: marker[2] };
+}
+
+// True iff the pinned inode's marker is genuinely held (same-process by
+// registry, cross-process by PID liveness).
+async function markerHeldViaFd(fd) {
+  const marker = parseMarker(await readMarkerViaFd(fd));
+  if (!marker) return false;
+  const sameProcess = marker.pid === process.pid;
+  return sameProcess ? activeMarkerNonces.has(marker.nonce) : pidAlive(marker.pid);
+}
+
 // Blocking acquisition for exclusive mode: poll until the marker is free
 // (kernel locks block; the best-effort scope mirrors that contract), abort
 // via the signal, then write our own marker. Returns the written nonce.
-async function acquireExclusiveMarker(fd, lockPath, { signal }) {
-  // If the marker is held, wait (with abort support) for it to clear.
-  let waited = false;
-  while (markerHeld(lockPath)) {
+async function acquireExclusiveMarker(fd, { signal }) {
+  // If the marker is held, wait (with abort support) for it to clear. All
+  // reads and writes go through the SAME pinned fd: the fixed inode itself
+  // is never unlinked or re-resolved by pathname.
+  while (await markerHeldViaFd(fd)) {
     if (signal?.aborted) {
       throw new Error('fixed-kernel-lock: acquisition aborted');
     }
-    waited = true;
     await new Promise((r) => setTimeout(r, 10));
-  }
-  if (waited) {
-    // The holder released; the fixed inode itself is never unlinked, so the
-    // same fd remains valid for truncate/write.
-    await fd.truncate(0);
   }
   const nonce = randomBytes(8).toString('hex');
   await fd.truncate(0);
@@ -113,13 +118,18 @@ export function fixedLockCapability() {
   return { value: 'best_effort', crossProcess: false };
 }
 
-async function pinLockFile(lockPath) {
-  const stats = await stat(lockPath);
+// Identity pinning on the OPEN DESCRIPTOR (fstat), never the pathname: a
+// path-based stat can race with a swap and would follow symlinks.
+async function pinLockFileFd(fd, lockPath) {
+  const stats = await fd.stat();
   if (!stats.isFile()) {
     throw new Error(`fixed-kernel-lock: not a regular file: ${lockPath}`);
   }
   if (typeof stats.uid === 'number' && stats.uid !== process.getuid()) {
     throw new Error(`fixed-kernel-lock: foreign ownership: ${lockPath}`);
+  }
+  if ((stats.mode & 0o022) !== 0) {
+    throw new Error(`fixed-kernel-lock: insecure lock file mode ${stats.mode.toString(8)}: ${lockPath}`);
   }
   return { device: stats.dev, inode: stats.ino };
 }
@@ -154,12 +164,25 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
   let ownNonce = null;
   try {
     await withMarkerMutex(async () => {
-      fd = await open(lockPath, 'a+', 0o600);
-      await pinLockFile(lockPath);
+      // O_NOFOLLOW: a pre-planted symlink at the lock path fails closed
+      // (ELOOP) instead of truncating an arbitrary same-UID target. The
+      // descriptor pins the inode; every later marker read/write/truncate
+      // goes through THIS fd, never a pathname re-resolution.
+      fd = await open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600);
+      await pinLockFileFd(fd, lockPath);
       if (mode === 'exclusive') {
-        const nonce = await acquireExclusiveMarker(fd, lockPath, { signal });
+        const nonce = await acquireExclusiveMarker(fd, { signal });
         ownNonce = nonce;
         activeMarkerNonces.add(nonce);
+      } else {
+        // Shared mode MUST still wait out a live exclusive holder: without
+        // this, shared and exclusive scopes could overlap entirely.
+        while (await markerHeldViaFd(fd)) {
+          if (signal?.aborted) {
+            throw new Error('fixed-kernel-lock: acquisition aborted');
+          }
+          await new Promise((r) => setTimeout(r, 10));
+        }
       }
     });
   } catch (err) {
@@ -174,18 +197,17 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
       released = true;
       if (mode === 'exclusive') {
         // Clear the marker (unlock) but keep the fixed inode; only clear if
-        // the marker is still ours. Read via path (fd position is at EOF).
+        // the marker is still ours. Read through the SAME pinned fd.
         try {
-          const content = await readFile(lockPath, 'utf8');
-          const match = /^pid=\d+;ts=\d+;r=([A-Za-z0-9-]+)$/.exec(content.trim());
-          if (match && activeMarkerNonces.has(match[1])) {
+          const marker = parseMarker(await readMarkerViaFd(fd));
+          if (marker && activeMarkerNonces.has(marker.nonce)) {
             await fd.truncate(0);
             await fd.sync();
           }
         } catch {
           // Marker already gone — idempotent release.
         } finally {
-          activeMarkerNonces.delete(ownNonce);
+          if (ownNonce) activeMarkerNonces.delete(ownNonce);
         }
       }
       // Close exactly this open file description. The inode is never

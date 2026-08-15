@@ -191,7 +191,10 @@ test(
     assert.equal(envelope.session_id, 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
     assert.equal(envelope.exit_reason, 'end_turn');
     assert.equal(envelope.final_text, '`hello`');
-    assert.deepEqual(envelope.files_changed, []);
+    // v2 contract: a NON-ISOLATED run performs no change comparison, so
+    // files_changed is null (no fabricated empty list); [] is reserved for
+    // a performed comparison that found nothing.
+    assert.equal(envelope.files_changed, null);
     assert.equal(envelope.diff_stat, null);
     assert.equal(envelope.worktree, null);
     // v2 usage contract (docs/usage-accounting.md, "Coder envelope"). Deprecated

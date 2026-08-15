@@ -152,10 +152,17 @@ export async function startCoderCredentialProxy(opts = {}) {
     return true;
   }
 
+  // Exact inference-endpoint pinning: ONLY the canonical completion route
+  // for the pinned protocol is forwarded — the whole prefix subtree is NOT
+  // open (other mutating or billed provider routes must be unreachable).
+  const allowedPaths = new Set(
+    authStyle === 'anthropic'
+      ? [`${pathPrefix}/messages`]
+      : [`${pathPrefix}/chat/completions`],
+  );
+
   function pathAllowed(url) {
-    // Boundary-exact prefix match: '/v1' accepts '/v1' and '/v1/...' but
-    // NOT '/v10/...'.
-    return url === pathPrefix || url.startsWith(`${pathPrefix}/`);
+    return allowedPaths.has(url);
   }
 
   function tokenOk(req) {
@@ -351,6 +358,15 @@ export async function startCoderCredentialProxy(opts = {}) {
     }
   }
 
+  // Request-lifecycle bounds: headers must arrive promptly and the full
+  // request body within a bounded window, so an authenticated chunked
+  // request that never ends cannot hold the listener (and revoke's close)
+  // open indefinitely. Responses are relayed streamingly, so no response
+  // timeout is imposed server-side here.
+  server.headersTimeout = 30000;
+  server.requestTimeout = 120000;
+  server.keepAliveTimeout = 5000;
+
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port ?? 0, opts.host || LOOPBACK_HOST, resolve);
@@ -384,6 +400,12 @@ export async function startCoderCredentialProxy(opts = {}) {
     });
     if (typeof server.closeIdleConnections === 'function') {
       server.closeIdleConnections();
+    }
+    // Hard-close EVERY connection, not just idle ones: a client stuck mid-
+    // request (never-ending chunked upload) would otherwise keep the close
+    // callback pending forever.
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
     }
   }
 

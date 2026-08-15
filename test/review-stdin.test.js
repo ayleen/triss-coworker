@@ -113,6 +113,14 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
     let diagnostic = '';
     process.stderr.write = (chunk) => { diagnostic += String(chunk); return true; };
     await runReviewWithDeps('42', { provider: 'glm', model: 'pro', noStream: true, issue: 'PROJ-42' }, {
+      acquireScopedDiff: async () => ({
+        ok: true,
+        diff: 'diff --git a/pr.js b/pr.js\\n--- a/pr.js\\n+++ b/pr.js\\n@@ -1 +1 @@\\n+export const reviewed = true;\\n',
+        base_ref: 'main',
+        head_ref: 'feature/PROJ-42-review',
+        changed_files: ['pr.js'],
+        unmatched: [],
+      }),
       resolveModelRequest: (input) => ({ provider: input.provider, model: 'glm-5.2' }),
       loadLinkedIssue: async (key) => {
         linkedIssue = key;
@@ -132,6 +140,10 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
   writeFileSync(ghPath, [
     '#!/bin/sh',
     'if [ "$1" = "--version" ]; then echo "gh version fake"; exit 0; fi',
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then',
+    '  printf \'%s\\n\' \'{"owner":{"login":"test"},"name":"repo"}\'',
+    '  exit 0',
+    'fi',
     'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then',
     '  printf \'%s\\n\' \'{"title":"feat: PR review","body":"PROJ-42 ticket body","headRefName":"feature/PROJ-42-review","baseRefName":"main","url":"https://github.com/test/repo/pull/42"}\'',
     '  exit 0',
@@ -165,7 +177,16 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
     assert.match(corpus, /<linked-issue source="test">Injected ticket instructions\.<\/linked-issue>/);
     assert.match(corpus, /<<<TRISS-REVIEW:test-boundary:diff:BEGIN>>>/);
     assert.match(corpus, /diff --git a\/pr\.js b\/pr\.js/);
-    const prDiff = 'diff --git a/pr.js b/pr.js\n+export const reviewed = true;\n';
+    // The exact acquisition seam supplies the full unified-diff form of the
+    // same change, so the byte count is that of the scoped diff.
+    const prDiff = [
+      'diff --git a/pr.js b/pr.js',
+      '--- a/pr.js',
+      '+++ b/pr.js',
+      '@@ -1 +1 @@',
+      '+export const reviewed = true;',
+      '',
+    ].join('\n');
     assert.match(diagnostic, new RegExp(`bytes=${Buffer.byteLength(prDiff, 'utf8')}\\b`));
     assert.match(systemPrompt, /senior code reviewer/i);
     assert.match(systemPrompt, /untrusted/i);

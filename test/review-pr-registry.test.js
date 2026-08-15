@@ -51,9 +51,14 @@ async function fixture() {
 // ─── preflight ───────────────────────────────────────────────────────────────
 
 test('strict-capability preflight fails before any metadata/network work', () => {
-  assert.throws(() => assertPrStrictCapabilities({ quota: { capability: 'unavailable' }, managedRoot: { capability: 'enforced' } }), new RegExp(STRICT_CAPABILITY_CODE));
-  assert.throws(() => assertPrStrictCapabilities({ quota: { capability: 'enforced' }, managedRoot: { capability: 'best_effort' } }), new RegExp(STRICT_CAPABILITY_CODE));
-  assert.doesNotThrow(() => assertPrStrictCapabilities({ quota: { capability: 'enforced' }, managedRoot: { capability: 'enforced' } }));
+  // The preflight validates REAL handle structure (a mutable `capability`
+  // label proved nothing and was forgeable by any caller).
+  assert.throws(() => assertPrStrictCapabilities({ quota: { accountWrite() {} }, managedRoot: null }), new RegExp(STRICT_CAPABILITY_CODE));
+  assert.throws(() => assertPrStrictCapabilities({ quota: null, managedRoot: { path: '/x' } }), new RegExp(STRICT_CAPABILITY_CODE));
+  assert.throws(() => assertPrStrictCapabilities({ quota: { capability: 'enforced' }, managedRoot: { path: '/x' } }), new RegExp(STRICT_CAPABILITY_CODE));
+  assert.throws(() => assertPrStrictCapabilities({ quota: { accountWrite() {}, accountRelease() {} }, managedRoot: { capability: 'enforced' } }), new RegExp(STRICT_CAPABILITY_CODE));
+  assert.doesNotThrow(() =>
+    assertPrStrictCapabilities({ quota: { accountWrite() {}, accountRelease() {} }, managedRoot: { path: '/managed/root' } }));
 });
 
 // ─── admission cap ───────────────────────────────────────────────────────────

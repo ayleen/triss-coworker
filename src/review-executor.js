@@ -44,7 +44,7 @@ const SINGLE_REVIEW_METADATA_OVERHEAD_BYTES = 4096;
  * @returns {Promise<{ok: boolean, code?: string, verdict?: string,
  *   coverage?: object, bytes?: number, exit?: number, message?: string}>}
  */
-export async function executeSingleReview(deps, { diff, question, selectors = [], signal }) {
+export async function executeSingleReview(deps, { diff, question, selectors = [], metadataBytes = 0, signal }) {
   if (typeof deps?.callModel !== 'function') throw new TypeError('callModel is required');
   if (signal?.aborted) return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled', exit: REVIEW_EXIT_CODES.cancelled };
 
@@ -81,11 +81,15 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
 
   // Single-request byte bound (Package 13 limits injected). P1 fix: the
   // bound is singleMaxBytes (the advertised single-request cap), NOT the
-  // looser totalMaxBytes; metadata overhead is accounted too.
+  // looser totalMaxBytes; the REAL metadata size (change corpus + linked
+  // issue corpus) is accounted, not just the fixed envelope allowance —
+  // a large issue body must not push the actual request past the advertised
+  // cap while the accounting still says it fits.
   const payloadBytes =
     Buffer.byteLength(diff, 'utf8') +
     Buffer.byteLength(question, 'utf8') +
-    SINGLE_REVIEW_METADATA_OVERHEAD_BYTES;
+    SINGLE_REVIEW_METADATA_OVERHEAD_BYTES +
+    Math.max(0, metadataBytes|0);
   if (payloadBytes > limits.singleMaxBytes) {
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `review payload exceeds ${limits.singleMaxBytes} bytes`, exit: REVIEW_EXIT_CODES.limit };
   }

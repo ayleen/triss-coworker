@@ -202,8 +202,24 @@ test('anthropic authStyle: a Bearer token is not accepted downstream', async () 
   const stub = stubFetch();
   const { proxy } = await startProxy({ authStyle: 'anthropic' }, stub);
   try {
-    const res = await post(proxy); // sends authorization: Bearer <token>
+    const res = await post(proxy, { path: '/v1/messages' }); // Bearer auth header
     assert.equal(res.status, 401);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('only the exact inference endpoint is forwarded (subtree is closed)', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    // Non-completion routes under the pinned prefix must be unreachable —
+    // the engine must not be able to reach mutating or billed endpoints.
+    for (const path of ['/v1/embeddings', '/v1/models', '/v1/files', '/v1/completions']) {
+      const res = await post(proxy, { path });
+      assert.equal(res.status, 404, path);
+    }
     assert.equal(stub.calls.length, 0);
   } finally {
     proxy.revoke();

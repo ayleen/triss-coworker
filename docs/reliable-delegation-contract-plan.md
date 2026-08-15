@@ -2829,7 +2829,10 @@ completed calls, and `usage_status: missing` for failed calls.
 - a loopback token proxy alone is NOT OS-enforced credential isolation: the
   same-UID engine child can still read raw credential stores, so
   `credential_isolation` must never be reported as `enforced` until a reviewed
-  platform backend actually denies those reads;
+  platform backend actually denies those reads — and until then, a run is
+  REFUSED before spawn whenever a raw store (project/global `.triss.env`) is
+  readable, unless the operator explicitly acknowledges the best-effort scope
+  with `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`;
 - a scoped review whose selectors matched nothing is NOT a clean verdict: it is
   `TRISS_REVIEW_SCOPE_EMPTY`, exit 2, before any provider call.
 

@@ -222,13 +222,20 @@ export function deriveReviewCoverage(sections, { requestedPaths = null } = {}) {
       continue;
     }
     if (requestedPaths) {
+      // Rename-aware matching: a selector naming EITHER side of a rename
+      // counts as matched (acquisition selects both sides); matching only
+      // new_path made an old-name request review the right diff and then
+      // be rejected as zero-match.
       if (requestedPaths.includes(path)) requestedMatched.add(path);
+      if (sec.old_path && sec.old_path !== path && requestedPaths.includes(sec.old_path)) {
+        requestedMatched.add(sec.old_path);
+      }
     }
   }
 
   if (requestedPaths) {
     for (const p of requestedPaths) {
-      if (!repositoryFiles.has(p) && !unsupportedFiles.includes(p)) unmatched.push(p);
+      if (!requestedMatched.has(p) && !repositoryFiles.has(p) && !unsupportedFiles.includes(p)) unmatched.push(p);
     }
   }
 

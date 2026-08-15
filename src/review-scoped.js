@@ -18,6 +18,8 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
+import { defaultBranch } from './git.js';
+
 import {
   resolveReviewComparison,
   acquireNameStatusInventory,
@@ -65,11 +67,35 @@ function selectorHasRejectedChar(sel) {
  * @param {string[]} selectors
  * @returns {{ok: true} | {ok: false, message: string}}
  */
+const SELECTOR_MAX_COUNT = 64;
+const SELECTOR_MAX_BYTES = 512;
+const SELECTOR_MAX_AGGREGATE_BYTES = 4096;
+
 export function validateReviewSelectors(selectors) {
   if (!Array.isArray(selectors)) return { ok: false, message: '--files expects literal path selectors' };
+  if (selectors.length > SELECTOR_MAX_COUNT) {
+    return { ok: false, message: `at most ${SELECTOR_MAX_COUNT} file selectors are allowed, got ${selectors.length}` };
+  }
+  let aggregateBytes = 0;
   for (const sel of selectors) {
     if (typeof sel !== 'string' || sel.length === 0) {
       return { ok: false, message: 'file selectors must be non-empty strings' };
+    }
+    const bytes = Buffer.byteLength(sel, 'utf8');
+    if (bytes > SELECTOR_MAX_BYTES) {
+      return { ok: false, message: `a file selector exceeds ${SELECTOR_MAX_BYTES} bytes` };
+    }
+    aggregateBytes += bytes;
+    if (aggregateBytes > SELECTOR_MAX_AGGREGATE_BYTES) {
+      return { ok: false, message: `file selectors exceed the ${SELECTOR_MAX_AGGREGATE_BYTES}-byte aggregate bound` };
+    }
+    // Control characters and newlines never appear in a literal path and
+    // would smuggle terminal escapes into diagnostics.
+    for (const ch of sel) {
+      const code = ch.charCodeAt(0);
+      if (code < 0x20 || code === 0x7f) {
+        return { ok: false, message: 'file selectors must not contain control characters' };
+      }
     }
     if (sel.startsWith(':')) {
       return { ok: false, message: `file selectors are literal paths, not Git pathspecs: ${sel}` };
@@ -80,7 +106,8 @@ export function validateReviewSelectors(selectors) {
     if (sel.startsWith('/')) {
       return { ok: false, message: `file selectors are repository-relative, not absolute: ${sel}` };
     }
-    if (sel === '..' || sel.startsWith('../')) {
+    // Any '..' component traverses, not just a leading one.
+    if (sel.split('/').includes('..')) {
       return { ok: false, message: `file selectors cannot traverse outside the repository: ${sel}` };
     }
   }
@@ -119,6 +146,20 @@ export async function acquireScopedReviewDiff(
     if (!Number.isInteger(number) || number < 1) {
       return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: `invalid PR number: ${pr}` };
     }
+    // Preflight FIRST — before any gh/network access: the managed root,
+    // quota accounting, and registry lock all live under ONE pinned tree
+    // (<project>/.triss/review-pr-v1), and the structural capability check
+    // must pass before the first network byte moves.
+    const trissRootPath = join(projectRoot(), '.triss');
+    const runsRoot = join(trissRootPath, 'review-pr-v1');
+    const quota = prepareQuotaBackedDirectory({
+      root: runsRoot,
+      limitBytes: 4 * PR_REGISTRY_ROOT_QUOTA_BYTES,
+    });
+    const parentHandle = await openManagedTrissRoot(projectRoot());
+    const { assertPrStrictCapabilities } = await import('./review-pr-registry.js');
+    assertPrStrictCapabilities({ managedRoot: parentHandle, quota });
+
     // The base owner/repo come from the ambient `gh` context, matching the
     // selector-less PR path (`gh pr diff` uses the same resolution).
     let repoInfo;
@@ -135,13 +176,6 @@ export async function acquireScopedReviewDiff(
     const meta = (deps.acquirePrMetadata || acquirePrMetadata)(procSh, { owner, repo, number });
     if (!meta.ok) return meta;
 
-    const trissRootPath = projectRoot();
-    const quota = prepareQuotaBackedDirectory({
-      root: join(trissRootPath, '.triss', 'review-pr-v1'),
-      limitBytes: 4 * PR_REGISTRY_ROOT_QUOTA_BYTES,
-    });
-    quota.capability = 'enforced';
-    const parentHandle = await openManagedTrissRoot(trissRootPath);
     const acquired = await (deps.acquirePrDiff || acquireSelectedPrDiff)(
       {
         sh: procSh,
@@ -153,7 +187,7 @@ export async function acquireScopedReviewDiff(
       {
         trissRootPath,
         quota,
-        managedRoot: { path: trissRootPath, capability: 'enforced' },
+        managedRoot: parentHandle,
         parentHandle,
         meta: meta.meta,
         sourceUrl: `https://github.com/${owner}/${repo}`,
@@ -175,10 +209,17 @@ export async function acquireScopedReviewDiff(
   }
 
   // Local mode: exact comparison identity + bounded inventory + selected
-  // content under the sealed Git projection (see review-git.js).
+  // content under the sealed Git projection (see review-git.js). Without an
+  // explicit --base the default branch is resolved the same way the legacy
+  // full-diff path does — passing undefined here would make the comparison
+  // HEAD..HEAD (an always-empty scope) instead.
+  let baseRef = base;
+  if (!baseRef) {
+    baseRef = (deps.defaultBranch || defaultBranch)();
+  }
   const comparison = (deps.resolveComparison || resolveReviewComparison)(gitSh, {
     cwd: workDir,
-    base: base || undefined,
+    base: baseRef,
     head: 'HEAD',
   });
   if (!comparison.ok) return comparison;
@@ -191,7 +232,9 @@ export async function acquireScopedReviewDiff(
   if (!inventory.ok) return inventory;
 
   const expanded = (deps.expandSelection || expandRenameSelection)(inventory, { selectors });
-  if (expanded.matched.length === 0 || expanded.unmatched.length === selectors.length) {
+  // Zero-match applies ONLY to an explicit selector set — an empty selector
+  // list means FULL scope (everything in the inventory).
+  if (selectors.length > 0 && (expanded.matched.length === 0 || expanded.unmatched.length === selectors.length)) {
     return {
       ok: false,
       code: 'TRISS_REVIEW_SCOPE_EMPTY',
