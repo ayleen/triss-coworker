@@ -226,6 +226,20 @@ test('only the exact inference endpoint is forwarded (subtree is closed)', async
   }
 });
 
+test('a query string on the exact inference endpoint still matches the pin', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    const res = await post(proxy, { path: '/v1/chat/completions?api-version=2026' });
+    assert.equal(res.status, 200);
+    assert.equal(stub.calls.length, 1);
+    // Forwarded verbatim, query included.
+    assert.equal(stub.calls[0].url, `${ENDPOINT}/v1/chat/completions?api-version=2026`);
+  } finally {
+    proxy.revoke();
+  }
+});
+
 test('an upstream response above the response cap is refused whole', async () => {
   const fetchImpl = async () => new Response('x', {
     status: 200,
@@ -350,10 +364,10 @@ test('rate cap rejects bursts beyond the sustained rate', async () => {
 
 test('deadline cap rejects requests after the lifetime deadline', async () => {
   const stub = stubFetch();
-  const { proxy } = await startProxy({ deadlineMs: 30 }, stub);
+  const { proxy } = await startProxy({ deadlineMs: 200 }, stub);
   try {
     assert.equal((await post(proxy)).status, 200);
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 400));
     const late = await post(proxy);
     assert.equal(late.status, 408);
   } finally {

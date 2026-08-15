@@ -162,7 +162,11 @@ export async function startCoderCredentialProxy(opts = {}) {
   );
 
   function pathAllowed(url) {
-    return allowedPaths.has(url);
+    // Compare the PATH component only: a query string (harmless client
+    // bookkeeping) must not break the exact endpoint pin, and it is
+    // forwarded verbatim with the request.
+    const pathOnly = String(url).split('?')[0];
+    return allowedPaths.has(pathOnly);
   }
 
   function tokenOk(req) {

@@ -176,8 +176,10 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     baseRef = baseRef || pr.baseRefName;
     headRef = pr.headRefName;
     urlNote = pr.url;
-    if (deps.gitDiff) {
-      diff = gh(['pr', 'diff', prNumber]);
+    if (deps.prDiff) {
+      // Dedicated PR seam (tests/embedders): deps.gitDiff is a LOCAL-diff
+      // seam and must never gate the PR path.
+      diff = deps.prDiff(prNumber);
     } else {
       // P1 fix: the default PR path also acquires through the exact
       // inventory-first machinery (exact OIDs, disposable repo, fork-aware
