@@ -171,7 +171,8 @@ jobs:
           ' "$RUNNER_TEMP/publish-pack/publish-plan.json"
       - name: Authorize the tag against origin/main (fresh release or safe retry)
         run: |
-          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
           TAG_SHA=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
           MAIN_SHA=$(git rev-parse 'refs/remotes/origin/main^{commit}')
           EXACT=0
