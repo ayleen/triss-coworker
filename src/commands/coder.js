@@ -3830,13 +3830,23 @@ function spawnEngine({
       let pending = Buffer.alloc(0);
       child.stdout.on('data', (chunk) => {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        pending = pending.length ? Buffer.concat([pending, buf]) : buf;
+        // Split on newlines WITHIN the chunk; a partial trailing line is the
+        // only part carried over (concatenated at most once per emitted
+        // line), so the scan is linear in total bytes — never a full
+        // re-concat of the pending buffer on every chunk.
+        let start = 0;
         let newlineAt;
-        while ((newlineAt = pending.indexOf(0x0a)) !== -1) {
-          // foldEventLine trims, so a trailing \r from CRLF input is dropped.
-          const line = pending.subarray(0, newlineAt).toString('utf8');
-          pending = pending.subarray(newlineAt + 1);
-          feedLine(line);
+        while ((newlineAt = buf.indexOf(0x0a, start)) !== -1) {
+          const lineBuf = pending.length
+            ? Buffer.concat([pending, buf.subarray(start, newlineAt)])
+            : buf.subarray(start, newlineAt);
+          pending = Buffer.alloc(0);
+          start = newlineAt + 1;
+          feedLine(lineBuf.toString('utf8'));
+        }
+        const tail = buf.subarray(start);
+        if (tail.length) {
+          pending = pending.length ? Buffer.concat([pending, tail]) : Buffer.from(tail);
         }
         // An unterminated record already above the cap is dropped without
         // being buffered: the typed failure fires and the drain continues.

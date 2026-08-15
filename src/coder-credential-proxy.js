@@ -324,7 +324,15 @@ export async function startCoderCredentialProxy(opts = {}) {
           res.destroy();
           return;
         }
-        res.write(Buffer.from(value));
+        if (!res.write(Buffer.from(value))) {
+          // Honor backpressure: a slow client must not let the proxy buffer
+          // the whole upstream response in memory while draining its socket.
+          await new Promise((resolveDrain) => {
+            res.once('drain', resolveDrain);
+            res.once('close', resolveDrain);
+            res.once('error', resolveDrain);
+          });
+        }
       }
       res.end();
     } catch (err) {
