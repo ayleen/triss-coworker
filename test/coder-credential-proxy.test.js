@@ -17,7 +17,10 @@ import { connect as netConnect } from 'node:net';
 import { startCoderCredentialProxy } from '../src/coder-credential-proxy.js';
 
 const REAL_CREDENTIAL = 'sk-real-provider-secret-0123456789abcdef';
-const ENDPOINT = 'https://api.provider.example/v1';
+// P0 fix: `endpoint` is the upstream ORIGIN only — the engine sends the API
+// path (pathPrefix) verbatim, so forwarding is a plain origin+path join and
+// the prefix can never be doubled.
+const ENDPOINT = 'https://api.provider.example';
 
 function stubFetch({ onRequest } = {}) {
   const calls = [];
@@ -102,9 +105,122 @@ test('a valid token forwards to the pinned endpoint with the real credential', a
     const res = await post(proxy);
     assert.equal(res.status, 200);
     assert.equal(stub.calls.length, 1);
+    // No prefix doubling: the ORIGIN plus the request path verbatim.
     assert.equal(stub.calls[0].url, `${ENDPOINT}/v1/chat/completions`);
     // The real credential is attached upstream, never placed in engine env.
     assert.equal(stub.calls[0].headers.authorization, `Bearer ${REAL_CREDENTIAL}`);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('scopedBaseUrl is the loopback origin plus the pinned prefix', async () => {
+  const { proxy } = await startProxy({ pathPrefix: '/api/coding/paas/v4' });
+  try {
+    assert.equal(proxy.baseUrl, `http://127.0.0.1:${proxy.port}`);
+    assert.equal(proxy.scopedBaseUrl, `http://127.0.0.1:${proxy.port}/api/coding/paas/v4`);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('an endpoint that already carries an API path fails closed (no doubled prefix)', async () => {
+  await assert.rejects(
+    () => startCoderCredentialProxy({
+      provider: 'zai',
+      model: 'glm-5.2',
+      endpoint: 'https://api.z.ai/api/coding/paas/v4',
+      credential: 'x',
+      pathPrefix: '/api/coding/paas/v4',
+    }),
+    TypeError,
+  );
+});
+
+test('a request naming a different model is refused before any upstream call', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    const res = await post(proxy, { body: '{"model":"glm-4.7","messages":[]}' });
+    assert.equal(res.status, 403);
+    const text = await res.text();
+    assert.match(text, /model is not pinned/);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('a non-JSON body is refused (fail-closed body contract)', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    const res = await post(proxy, { body: 'not-json' });
+    assert.equal(res.status, 403);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('the path pin is boundary-exact: /v10 does not pass a /v1 pin', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    const res = await post(proxy, { path: '/v10/chat/completions' });
+    assert.equal(res.status, 404);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('anthropic authStyle: token via x-api-key, credential via x-api-key upstream', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy(
+    { authStyle: 'anthropic', pathPrefix: '/coding/v1' },
+    stub,
+  );
+  try {
+    const res = await fetch(`${proxy.baseUrl}/coding/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': proxy.token, 'content-type': 'application/json', 'anthropic-version': '2023-06-01' },
+      body: '{"model":"glm-5.2","messages":[]}',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0].url, `${ENDPOINT}/coding/v1/messages`);
+    assert.equal(stub.calls[0].headers['x-api-key'], REAL_CREDENTIAL);
+    assert.equal(stub.calls[0].headers['anthropic-version'], '2023-06-01');
+    assert.equal(stub.calls[0].headers.authorization, undefined);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('anthropic authStyle: a Bearer token is not accepted downstream', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({ authStyle: 'anthropic' }, stub);
+  try {
+    const res = await post(proxy); // sends authorization: Bearer <token>
+    assert.equal(res.status, 401);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('an upstream response above the response cap is refused whole', async () => {
+  const fetchImpl = async () => new Response('x', {
+    status: 200,
+    headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024) },
+  });
+  const { proxy } = await startProxy({ maxResponseBytes: 1024, fetchImpl });
+  try {
+    const res = await post(proxy);
+    assert.equal(res.status, 502);
+    const text = await res.text();
+    assert.match(text, /exceeds proxy cap/);
   } finally {
     proxy.revoke();
   }

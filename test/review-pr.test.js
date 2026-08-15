@@ -35,6 +35,8 @@ const meta = {
   fork: false,
   owner: 'acme',
   repo: 'widgets',
+  head_owner: null,
+  head_repo: null,
 };
 
 async function fixture() {
@@ -198,6 +200,106 @@ test('a fetch failure propagates and the finally cleanup still runs', async () =
     });
     assert.equal(r.ok, false);
     assert.match(r.message, /fetch failed/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+
+// ─── quota lifecycle (P1: reservations are released exactly once) ────────────
+
+test('a successful run releases BOTH the 512 MiB root and 128 MiB fetch reservations', async () => {
+  const fx = await fixture();
+  try {
+    const releases = [];
+    const recordingQuota = {
+      capability: 'enforced',
+      accountWrite: fx.quota.accountWrite.bind(fx.quota),
+      accountRelease: (bytes) => {
+        releases.push(bytes);
+        return fx.quota.accountRelease(bytes);
+      },
+    };
+    const r = await acquireSelectedPrDiff(happyDeps(), {
+      trissRootPath: fx.base,
+      quota: recordingQuota,
+      managedRoot: fx.managedRoot,
+      parentHandle: fx.root,
+      meta,
+      sourceUrl: 'https://github.com/acme/widgets.git',
+      selectors: ['a.txt'],
+    });
+    assert.equal(r.ok, true);
+    assert.ok(
+      releases.includes(512 * 1024 * 1024),
+      `root reservation released; saw: ${releases.join(',')}`,
+    );
+    assert.ok(
+      releases.includes(128 * 1024 * 1024),
+      `fetch reservation released; saw: ${releases.join(',')}`,
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a mid-flow failure still releases the fetch reservation after cleanup', async () => {
+  const fx = await fixture();
+  try {
+    const releases = [];
+    const recordingQuota = {
+      capability: 'enforced',
+      accountWrite: fx.quota.accountWrite.bind(fx.quota),
+      accountRelease: (bytes) => {
+        releases.push(bytes);
+        return fx.quota.accountRelease(bytes);
+      },
+    };
+    const deps = happyDeps();
+    deps.resolveComparison = () => ({ ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'no merge base' });
+    const r = await acquireSelectedPrDiff(deps, {
+      trissRootPath: fx.base,
+      quota: recordingQuota,
+      managedRoot: fx.managedRoot,
+      parentHandle: fx.root,
+      meta,
+      sourceUrl: 'https://github.com/acme/widgets.git',
+    });
+    assert.equal(r.ok, false);
+    assert.ok(releases.includes(128 * 1024 * 1024), `fetch reservation released; saw: ${releases.join(',')}`);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+// ─── fork acquisition (P1: head OID comes from the fork repository) ──────────
+
+test('a fork PR fetches base and head OIDs from their own repositories', async () => {
+  const fx = await fixture();
+  try {
+    const fetchCommands = [];
+    const deps = happyDeps();
+    deps.sh = (args) => {
+      const key = args.join(' ');
+      if (key.includes(' fetch ')) fetchCommands.push(key);
+      if (key.includes(`rev-parse --verify ${BASE}^{commit}`)) return { status: 0, stdout: Buffer.from(`${BASE}\n`), stderr: '' };
+      if (key.includes(`rev-parse --verify ${HEAD}^{commit}`)) return { status: 0, stdout: Buffer.from(`${HEAD}\n`), stderr: '' };
+      return { status: 0, stdout: Buffer.from(''), stderr: '' };
+    };
+    const r = await acquireSelectedPrDiff(deps, {
+      trissRootPath: fx.base,
+      quota: fx.quota,
+      managedRoot: fx.managedRoot,
+      parentHandle: fx.root,
+      meta: { ...meta, fork: true, head_owner: 'fork-owner', head_repo: 'widgets-fork' },
+      sourceUrl: 'https://github.com/acme/widgets.git',
+      selectors: ['a.txt'],
+    });
+    assert.equal(r.ok, true);
+    const baseFetch = fetchCommands.find((c) => c.includes('acme/widgets.git') && c.includes(BASE));
+    const headFetch = fetchCommands.find((c) => c.includes('fork-owner/widgets-fork') && c.includes(HEAD));
+    assert.ok(baseFetch, `base fetched from the base repo: ${fetchCommands.join(' | ')}`);
+    assert.ok(headFetch, `head fetched from the fork: ${fetchCommands.join(' | ')}`);
   } finally {
     await fx.cleanup();
   }

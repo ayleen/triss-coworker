@@ -23,7 +23,7 @@ export const GH_METADATA_MAX_BYTES = 256 * 1024;
 // from the caller's arguments rather than the JSON payload.
 const GH_METADATA_JSON_FIELDS = [
   'number', 'baseRefOid', 'headRefOid', 'baseRefName', 'headRefName',
-  'isCrossRepository',
+  'isCrossRepository', 'headRepository', 'headRepositoryOwner',
 ].join(',');
 
 /**
@@ -79,15 +79,30 @@ export function acquirePrMetadata(sh, { owner, repo, number, deadlineMs = GH_MET
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'gh metadata is not valid JSON (no partial parse)' };
   }
 
+  const fork = Boolean(parsed.isCrossRepository);
+  // Fork identity: the head repository's own owner/name (null for
+  // same-repository PRs). Without these, a single-source fetch would look
+  // for the fork's head commit in the base repository and fail.
+  const headOwner = fork ? String(parsed.headRepositoryOwner?.login || '') : null;
+  const headRepo = fork ? String(parsed.headRepository?.name || '') : null;
+  if (fork && (!headOwner || !headRepo)) {
+    return {
+      ok: false,
+      code: 'TRISS_REVIEW_INVALID_INPUT',
+      message: 'fork PR metadata is missing headRepository/headRepositoryOwner (no partial identity)',
+    };
+  }
   const meta = {
     number: parsed.number ?? number,
     base_oid: parsed.baseRefOid,
     head_oid: parsed.headRefOid,
     base_ref: parsed.baseRefName,
     head_ref: parsed.headRefName,
-    fork: Boolean(parsed.isCrossRepository),
+    fork,
     owner,
     repo,
+    head_owner: headOwner,
+    head_repo: headRepo,
   };
   const validated = validatePrMetadata(meta);
   if (!validated.ok) {

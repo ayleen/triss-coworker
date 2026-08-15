@@ -11,6 +11,7 @@ import {
   chatHandler,
   fetchHandler,
   reviewHandler,
+  reviewShardHandler,
   statusHandler,
   commitMsgHandler,
   writeHandler,
@@ -171,6 +172,36 @@ const CORE_TOOLS = [
       },
     },
     handler: reviewHandler,
+  },
+  {
+    name: 'triss_review_shard',
+    description:
+      'Sharded code review: sequential whole-file shards with per-shard verdicts ' +
+      'and NO global verdict (use triss_review for single-request reviews). ' +
+      'Literal `files` selectors acquire ONLY the selected content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr: { type: ['string', 'number'], description: 'GitHub PR number' },
+        base: { type: 'string', description: 'Base branch (default: auto-detect)' },
+        question: { type: 'string', description: 'Override the review question' },
+        provider: {
+          type: 'string',
+          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
+          description:
+            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
+        },
+        model: { type: 'string', description: 'Default: pro' },
+        max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Literal path selectors: review ONLY these files (renames select both sides)',
+        },
+      },
+    },
+    handler: reviewShardHandler,
   },
   {
     name: 'triss_status',

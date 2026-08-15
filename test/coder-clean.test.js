@@ -131,7 +131,14 @@ test('CODER-LEASE-01: run/clean serializes via the fixed slot lease', async () =
         events.push(`clean-${i}`);
       });
     await Promise.all([cycle(1), cycle(2)]);
-    assert.deepEqual(events, ['run-1', 'clean-1', 'run-2', 'clean-2']);
+    // Serialization, not acquisition order: each run/clean pair must be
+    // adjacent, but either cycle may win the race to acquire first.
+    assert.equal(events.length, 4, `both cycles ran: ${events.join(',')}`);
+    for (let i = 0; i < 4; i += 2) {
+      const runIdx = Number(events[i].replace(/^run-/, ''));
+      assert.ok(Number.isInteger(runIdx), `pair starts with run-N: ${events.join(',')}`);
+      assert.equal(events[i + 1], `clean-${runIdx}`, `cycle ${runIdx} ran exclusively: ${events.join(',')}`);
+    }
   } finally {
     await fx.cleanup();
   }
@@ -149,10 +156,17 @@ test('CODER-LEASE-02: different-slug non-isolated targets serialize via the targ
         events.push(`${slug}-end`);
       });
     await Promise.all([work('slug-a'), work('slug-b')]);
-    assert.equal(events[0], 'slug-a-start');
-    assert.equal(events[1], 'slug-a-end');
-    assert.equal(events[2], 'slug-b-start');
-    assert.equal(events[3], 'slug-b-end');
+    // The lease guarantees SERIALIZATION (each holder's start/end pair runs
+    // exclusively), not acquisition order — either slug may win the race to
+    // acquire first, so asserting "slug-a ran first" is a scheduling
+    // assumption, not the contract.
+    assert.equal(events.length, 4, `both holders ran: ${events.join(',')}`);
+    for (let i = 0; i < 4; i += 2) {
+      const startSlug = events[i].replace(/-start$/, '');
+      assert.equal(events[i], `${startSlug}-start`);
+      assert.equal(events[i + 1], `${startSlug}-end`, `holder ${startSlug} ran exclusively: ${events.join(',')}`);
+    }
+    assert.notEqual(events[0], events[2], 'the two holders serialized');
   } finally {
     await fx.cleanup();
   }

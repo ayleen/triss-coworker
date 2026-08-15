@@ -124,3 +124,17 @@ RED tests must establish:
 Acceptance requires focused tests, the full Node test/lint suite, package
 smoke, a live synthetic worker run from a GLM-persisted temporary project, and
 sequential GLM 5.2 plus independent agent reviews.
+
+## Current credential-proxy limitation (2026-08)
+
+The parent-owned credential proxy pins the upstream ORIGIN plus a path prefix
+per provider. For opencode built-in providers without a documented base-URL
+override (`moonshot`, `kimi-for-coding`), the engine cannot be verifiably
+pointed at the proxy, so `triss coder run` fails closed BEFORE spawn instead
+of handing the real upstream a one-run proxy token it would reject. `zai`
+(ZAI_BASE_URL/ZHIPU_BASEURL), `opencode-zen/go` (OPENCODE_BASE_URL), the
+managed `triss-worker` overlay, and every crush run keep working. Direct
+non-coder calls (`triss ask/review/chat --provider kimi|moonshot`) are
+unaffected — they never spawn an engine. Lifting the limitation requires an
+audited provider overlay (the same mechanism the worker block uses) for these
+providers.

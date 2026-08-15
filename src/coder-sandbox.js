@@ -72,9 +72,11 @@ function isAbsolutePath(value) {
  *    cleanup exist, but complete descendant-tree ownership is not proven);
  *  - `locking`: `best_effort` (PID-file locks are in-process, not kernel
  *    advisory locks);
- *  - `credential_isolation`: `enforced` only when a proxy launch plan was
- *    supplied and the platform can run it; otherwise `unavailable` (and the
- *    preflight rejects — see resolveCoderCredentialIsolation).
+ *  - `credential_isolation`: `best_effort` when a proxy launch plan was
+ *    supplied and the platform can run it, `unavailable` otherwise (and the
+ *    preflight rejects — see resolveCoderCredentialIsolation). Never
+ *    `enforced` until an OS-enforced backend denies raw provider stores to
+ *    the same-UID child.
  *
  * @param {object} input
  * @param {string} [input.platform] darwin|linux|win32 (default process.platform)
@@ -104,7 +106,14 @@ export function resolveCoderSandbox({
     process_supervision: 'best_effort',
     locking: 'best_effort',
     writable_quota: 'unavailable',
-    credential_isolation: proxyAvailable ? 'enforced' : 'unavailable',
+    // P0 honesty fix: the loopback token proxy removes the raw credential
+    // from the engine's env/argv/config — a real boundary — but the child
+    // still runs as the same unrestricted user who can read the raw
+    // credential stores (project/global .triss.env, HOME). Until an
+    // OS-enforced filesystem/network backend exists, this is best_effort,
+    // never 'enforced'; the proxy itself remains the mandatory boundary
+    // (missing proxy = stable preflight rejection, never a silent env plan).
+    credential_isolation: proxyAvailable ? 'best_effort' : 'unavailable',
     managed_root: 'unavailable',
     persistent_store_quota: 'unavailable',
     result_store_quota: 'unavailable',
@@ -229,11 +238,14 @@ export function resolveCoderCredentialIsolation({
   }
 
   const caps = platformCapabilities || resolveCoderSandbox({ proxyAvailable: true });
-  if (caps.credential_isolation !== 'enforced') {
+  // The proxy IS the mandatory boundary, so a valid plan is accepted when the
+  // capability is honestly reported as best_effort (loopback token proxy,
+  // no OS-enforced store denial yet) or enforced (future backend).
+  if (caps.credential_isolation !== 'enforced' && caps.credential_isolation !== 'best_effort') {
     return {
       ok: false,
       code: CREDENTIAL_ISOLATION_REQUIRED_CODE,
-      message: 'credential isolation capability is not enforced on this platform',
+      message: 'credential isolation capability is not available on this platform',
     };
   }
 

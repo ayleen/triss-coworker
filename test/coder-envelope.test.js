@@ -557,9 +557,10 @@ test('CODER-EVENT-06: top-level error event records an internal engine-error obs
       },
     );
     const envelope = JSON.parse(capture.text().trim());
-    // v2 engine_status projection is Package 3's surface; Package 2 only
-    // requires the internal observation plus the engine-error warning.
-    assert.equal(envelope.exit_reason, 'end_turn');
+    // v2 engine_status projection is Package 3's surface; the typed exit
+    // reason must reflect the observed engine error even on a fake zero
+    // exit (P1 fix: engineErrorObserved can never map to end_turn).
+    assert.equal(envelope.exit_reason, 'error');
     assert.match(envelope.warnings.join(' '), /engine error: boom/);
   })();
 });

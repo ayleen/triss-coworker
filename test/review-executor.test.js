@@ -274,3 +274,44 @@ test('an empty shard verdict stops with TRISS_PROVIDER_EMPTY and no further call
   assert.equal(r.code, 'TRISS_PROVIDER_EMPTY');
   assert.deepEqual(calls, ['a.txt']);
 });
+
+// ─── scoped-selection fail-closed (P0: no false clean on empty scope) ───────
+
+test('selectors that match NOTHING fail closed before any model call', async () => {
+  let called = false;
+  const diff = [
+    'diff --git a/a.txt b/a.txt',
+    '--- a/a.txt',
+    '+++ b/a.txt',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const r = await executeSingleReview(
+    { callModel: async () => { called = true; return 'clean'; }, limits: LIMITS },
+    { diff, question: 'q', selectors: ['missing-file.js'] },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_SCOPE_EMPTY');
+  assert.equal(r.exit, REVIEW_EXIT_CODES.invalidInput);
+  assert.equal(called, false);
+});
+
+test('partial selector matches proceed and report unmatched coverage', async () => {
+  const diff = [
+    'diff --git a/a.txt b/a.txt',
+    '--- a/a.txt',
+    '+++ b/a.txt',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const r = await executeSingleReview(
+    { callModel: async ({ coverage }) => JSON.stringify(coverage), limits: LIMITS },
+    { diff, question: 'q', selectors: ['a.txt', 'missing-file.js'] },
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.coverage.requested.coverage, 'partial');
+  assert.deepEqual(r.coverage.requested.matched, ['a.txt']);
+  assert.deepEqual(r.coverage.requested.unmatched, ['missing-file.js']);
+});

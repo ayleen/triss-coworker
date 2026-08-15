@@ -57,6 +57,8 @@ test('a forked PR is reported with fork=true and the pinned base owner', () => {
         baseRefName: 'main',
         headRefName: 'patch-1',
         isCrossRepository: true,
+        headRepository: { name: 'widgets-fork' },
+        headRepositoryOwner: { login: 'fork-owner' },
       }),
     ),
   });
@@ -67,6 +69,29 @@ test('a forked PR is reported with fork=true and the pinned base owner', () => {
   // caller's --repo arguments, not parsed from the payload.
   assert.equal(r.meta.owner, 'acme');
   assert.equal(r.meta.repo, 'widgets');
+  // Fork identity: the head repository's own coordinates drive the
+  // head-side fetch (the head commit lives in the fork, not the base).
+  assert.equal(r.meta.head_owner, 'fork-owner');
+  assert.equal(r.meta.head_repo, 'widgets-fork');
+});
+
+test('a fork PR without headRepository identity fails closed (no partial identity)', () => {
+  const sh = () => ({
+    status: 0,
+    stdout: Buffer.from(
+      JSON.stringify({
+        number: 7,
+        baseRefOid: 'a'.repeat(40),
+        headRefOid: 'b'.repeat(40),
+        baseRefName: 'main',
+        headRefName: 'patch-1',
+        isCrossRepository: true,
+      }),
+    ),
+  });
+  const r = acquirePrMetadata(sh, { owner: 'acme', repo: 'widgets', number: 7 });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /missing headRepository/);
 });
 
 // ─── failure modes ───────────────────────────────────────────────────────────

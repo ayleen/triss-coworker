@@ -10,6 +10,7 @@ import {
 import { readBoundedReviewStdin, REVIEW_STDIN_MAX_BYTES } from '../review-input.js';
 import { executeSingleReview, REVIEW_EXIT_CODES } from '../review-executor.js';
 import { parseUnifiedDiff, planSingleReviewPayload } from '../review-payload.js';
+import { acquireScopedReviewDiff, validateReviewSelectors } from '../review-scoped.js';
 import { reviewLimitConfig } from '../config.js';
 import { shouldStream } from './chat.js';
 import {
@@ -53,6 +54,8 @@ export function validateReviewOptions(prNumber, opts) {
   if (opts.files !== undefined && !Array.isArray(opts.files)) {
     throw new Error('--files expects literal path selectors');
   }
+  const selectorCheck = validateReviewSelectors(Array.isArray(opts.files) ? opts.files : []);
+  if (!selectorCheck.ok) throw new Error(selectorCheck.message);
   return { responseFormat, maxTokens };
 }
 
@@ -116,9 +119,50 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   let headRef;
   let urlNote = '';
 
+  const scopedSelectors = Array.isArray(opts.files) ? opts.files : [];
+  let changedFilesFromInventory = null;
+
   if (stdinMode) {
     title = 'stdin';
     diff = stdinDiff;
+  } else if (scopedSelectors.length > 0) {
+    // Inventory-first scoped acquisition (P0 fix): with literal --files
+    // selectors the full diff is NEVER buffered — only the selected content
+    // is acquired, against exact comparison OIDs, through the sealed Git
+    // projection / disposable PR repository. The planner later sees ONLY
+    // these sections, so an unrelated huge file can no longer fail a small
+    // scoped review.
+    const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+      deps.scopedDeps || {},
+      { pr: prNumber, base: opts.base, selectors: scopedSelectors },
+    );
+    if (!scoped.ok) {
+      if (scoped.code === 'TRISS_REVIEW_SCOPE_EMPTY') {
+        process.stderr.write(pc.dim(`✗ ${scoped.message}\n`));
+        process.exitCode = REVIEW_EXIT_CODES.invalidInput;
+        return undefined;
+      }
+      throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'scoped acquisition failed'}`);
+    }
+    diff = scoped.diff;
+    baseRef = scoped.base_ref || baseRef;
+    headRef = scoped.head_ref || headRef;
+    title = prNumber ? `PR #${prNumber}` : headRef || 'scoped review';
+    const unmatched = scoped.unmatched || [];
+    if (unmatched.length > 0) {
+      process.stderr.write(pc.dim(
+        `[triss/review] scope: ${unmatched.length} requested file(s) not in the change: ` +
+          `${unmatched.join(', ')}\n`,
+      ));
+    }
+    if (!diff.trim()) {
+      // Zero-match scoped selections fail closed; an empty acquired diff at
+      // this point means the same thing for the PR path.
+      process.stderr.write(pc.dim('✗ none of the requested files appear in the acquired diff\n'));
+      process.exitCode = REVIEW_EXIT_CODES.invalidInput;
+      return undefined;
+    }
+    changedFilesFromInventory = scoped.changed_files || [];
   } else if (prNumber) {
     if (!hasCommand('gh')) {
       throw new Error(
@@ -170,7 +214,9 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   }
 
   let changedFiles = [];
-  if (!prNumber && !stdinMode) {
+  if (changedFilesFromInventory) {
+    changedFiles = changedFilesFromInventory;
+  } else if (!prNumber && !stdinMode) {
     try {
       changedFiles = gitChangedFiles(baseRef);
     } catch {
@@ -287,15 +333,27 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   // that cannot fit singleMaxBytes fails closed with a shard hint instead
   // of a silent clean verdict over truncated files).
   const limits = reviewLimitConfig().limits;
-  const selectors = Array.isArray(opts.files) ? opts.files : [];
+  const selectors = scopedSelectors;
   const parsedSections = parseUnifiedDiff(diff);
   if (parsedSections.error) {
     throw new Error(`failed to parse diff: ${parsedSections.error}`);
   }
+  // Literal --files selection happens BEFORE planning (P0 fix): the planner
+  // sees only the requested sections, so an unrelated huge file in the same
+  // change can no longer fail a small scoped review with single_max_exceeded.
+  const selectedSections = selectors.length > 0
+    ? parsedSections.sections.filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
+    : parsedSections.sections;
+  // Byte-exactness: a selector-less review forwards the acquired diff
+  // VERBATIM (a section rebuild would drop pre-header bytes like a BOM
+  // line); only the scoped path uses the section-filtered rebuild.
+  const selectedDiff = selectors.length > 0
+    ? selectedSections.map((s) => s.raw).join('\n')
+    : diff;
   // Coverage flows through executeSingleReview; requested-scope reporting
   // is derived there from the literal selectors.
   const plan = planSingleReviewPayload({
-    sections: parsedSections.sections,
+    sections: selectedSections,
     question: opts.question || DEFAULT_QUESTION,
     metadata: changeCorpus,
     limits,
@@ -308,13 +366,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     process.exitCode = REVIEW_EXIT_CODES.limit;
     return undefined;
   }
-  // Literal --files selection: only the requested sections are sent.
-  const selectedDiff = selectors.length > 0
-    ? plan.plan.sections
-        .filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
-        .map((s) => s.raw)
-        .join('\n')
-    : diff;
 
   const singleResult = await executeSingleReview(
     {
@@ -358,6 +409,14 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     process.stderr.write(pc.dim(`✗ ${singleResult.message || singleResult.code}\n`));
     process.exitCode = singleResult.exit ?? REVIEW_EXIT_CODES.provider;
     return undefined;
+  }
+  // Scoped reviews surface their honest coverage on stderr (stdout stays the
+  // verdict only): a partial scope must never read as a full clean review.
+  if (singleResult.coverage?.requested) {
+    const req = singleResult.coverage.requested;
+    process.stderr.write(pc.dim(
+      `[triss/review] scope: ${req.coverage} — ${req.matched.length}/${req.matched.length + req.unmatched.length} requested file(s) reviewed\n`,
+    ));
   }
   process.stdout.write(singleResult.verdict + '\n');
   return singleResult.verdict;

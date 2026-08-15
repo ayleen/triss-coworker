@@ -150,7 +150,7 @@ export async function reviewHandler(
   if (payload_mode === 'shard') {
     // Shard mode requires an explicitly acquired diff; the MCP tool schema
     // exposes it as diff_text for callers that already hold the payload.
-    throw new Error('payload_mode=shard requires the dedicated review_shard tool');
+    throw new Error('payload_mode=shard requires the dedicated triss_review_shard tool');
   }
   return runReviewCore({
     pr,
@@ -166,6 +166,61 @@ export async function reviewHandler(
     files,
     issue,
   });
+}
+
+export async function reviewShardHandler(
+  { pr, base, question, provider, model, max_tokens, files = null },
+  deps = {},
+) {
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
+  const { acquireReviewDiffForShard, runReviewCoreShard } = await import('./review-core.js');
+  const { createReviewBoundaryId, reviewSystemPromptForFormat, wrapReviewSection } =
+    await import('../review-prompt.js');
+  const { assertProviderText } = await import('../provider-errors.js');
+
+  const { diff } = await acquireReviewDiffForShard({
+    pr,
+    base,
+    files,
+    gitDiffFn: deps.gitDiff,
+    acquireScopedDiff: deps.acquireScopedDiff,
+  });
+  if (!diff.trim()) return '(no changes between branches — nothing to review)';
+
+  const boundaryId = deps.reviewBoundaryId || createReviewBoundaryId();
+  const metadata = `<change base="${base || 'auto'}">
+Sharded review: sequential whole-file shards, per-shard verdicts only.
+</change>`;
+  const result = await runReviewCoreShard({
+    diff,
+    question,
+    metadata,
+    callModel: async ({ shard, question: q }) => {
+      const sections = [
+        wrapReviewSection(boundaryId, 'change', metadata),
+        wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((sec) => sec.raw).join('\n')}\n</diff>`),
+      ].join('\n\n');
+      const response = await (deps.callModel || callModel)({
+        provider,
+        model: model || 'pro',
+        maxTokens,
+        messages: [
+          { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
+          { role: 'user', content: sections },
+          { role: 'user', content: q },
+        ],
+      });
+      return assertProviderText(response.content);
+    },
+  });
+  if (!result.ok) {
+    const err = new Error(result.message || result.code || 'shard review failed');
+    err.code = result.code;
+    throw err;
+  }
+  return result.shards
+    .map((shard) => `--- shard ${shard.shard_index} ---\n${shard.verdict}`)
+    .join('\n\n') + '\nglobal verdict: unavailable_for_sharded';
 }
 
 const WRITE_SYSTEM =

@@ -22,6 +22,7 @@ import { positiveIntegerOption } from '../option-validation.js';
 import { executeSingleReview, REVIEW_EXIT_CODES } from '../review-executor.js';
 import { parseUnifiedDiff, planSingleReviewPayload } from '../review-payload.js';
 import { reviewLimitConfig } from '../config.js';
+import { acquireScopedReviewDiff, validateReviewSelectors } from '../review-scoped.js';
 
 export async function runReviewCore({
   pr,
@@ -37,6 +38,7 @@ export async function runReviewCore({
   gitDiffFn = gitDiff,
   files = null,
   issue = null,
+  acquireScopedDiff = acquireScopedReviewDiff,
 }) {
   const responseFormat = validateResponseFormat(responseFormatInput);
   const validatedMaxTokens = positiveIntegerOption(maxTokens, 'max_tokens', 8192);
@@ -46,8 +48,37 @@ export async function runReviewCore({
   let baseRef = base;
   let headRef;
   let urlNote = '';
+  const selectors = Array.isArray(files) ? files : [];
+  const selectorCheck = validateReviewSelectors(selectors);
+  if (!selectorCheck.ok) {
+    const err = new Error(selectorCheck.message);
+    err.code = 'TRISS_REVIEW_INVALID_INPUT';
+    throw err;
+  }
+  let changedFilesFromInventory = null;
 
-  if (pr) {
+  if (selectors.length > 0) {
+    // Inventory-first scoped acquisition (P0 parity with the CLI): only the
+    // selected content is acquired — never the full diff.
+    const scoped = await acquireScopedDiff({}, { pr, base, selectors });
+    if (!scoped.ok) {
+      const err = new Error(scoped.message || scoped.code || 'scoped acquisition failed');
+      err.code = scoped.code || 'TRISS_REVIEW_LIMIT';
+      if (scoped.code === 'TRISS_REVIEW_SCOPE_EMPTY') err.exit = REVIEW_EXIT_CODES.invalidInput;
+      throw err;
+    }
+    diff = scoped.diff;
+    baseRef = scoped.base_ref || baseRef;
+    headRef = scoped.head_ref || headRef;
+    title = pr ? `PR #${pr}` : headRef || 'scoped review';
+    changedFilesFromInventory = scoped.changed_files || [];
+    if (!diff.trim()) {
+      const err = new Error('none of the requested files appear in the acquired diff');
+      err.code = 'TRISS_REVIEW_SCOPE_EMPTY';
+      err.exit = REVIEW_EXIT_CODES.invalidInput;
+      throw err;
+    }
+  } else if (pr) {
     if (!hasCommand('gh')) {
       throw new Error('PR mode requires the GitHub CLI (`gh`).');
     }
@@ -83,7 +114,9 @@ export async function runReviewCore({
   }
 
   let changedFiles = [];
-  if (!pr) {
+  if (changedFilesFromInventory) {
+    changedFiles = changedFilesFromInventory;
+  } else if (!pr) {
     try {
       changedFiles = gitChangedFiles(baseRef);
     } catch {
@@ -106,31 +139,32 @@ export async function runReviewCore({
   // coverage. A payload that cannot fit fails closed (shard hint) instead
   // of silently truncating files.
   const limits = reviewLimitConfig().limits;
-  const selectors = Array.isArray(files) ? files : [];
   const parsedSections = parseUnifiedDiff(diff);
   if (parsedSections.error) {
     throw new Error(`failed to parse diff: ${parsedSections.error}`);
   }
+  // Selection happens BEFORE planning (P0 parity): the planner sees only the
+  // requested sections, so unrelated files cannot fail a scoped review.
+  const selectedSections = selectors.length > 0
+    ? parsedSections.sections.filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
+    : parsedSections.sections;
+  const selectedDiff = selectors.length > 0
+    ? selectedSections.map((s) => s.raw).join('\n')
+    : diff;
   const plan = planSingleReviewPayload({
-    sections: parsedSections.sections,
+    sections: selectedSections,
     question: question || 'Review this change. List concrete issues; do not summarise the diff.',
     metadata: changeCorpus,
     limits,
   });
   if (plan.error) {
     const err = new Error(
-      `${plan.error}${plan.path ? `: ${plan.path}` : ''} — retry with payload_mode=shard`,
+      `${plan.error}${plan.path ? `: ${plan.path}` : ''} — retry with the triss_review_shard tool`,
     );
     err.code = 'TRISS_REVIEW_LIMIT';
     err.exit = REVIEW_EXIT_CODES.limit;
     throw err;
   }
-  const selectedDiff = selectors.length > 0
-    ? plan.plan.sections
-        .filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
-        .map((s) => s.raw)
-        .join('\n')
-    : diff;
 
   const result = await executeSingleReview(
     {
@@ -284,6 +318,50 @@ export async function runReviewCoreShard({ diff, question, metadata = '', callMo
     };
   }
   return { ok: true, shards: result.shards, attempts: result.attempts };
+}
+
+/**
+ * Acquire the diff for the dedicated MCP shard tool: scoped (inventory-first)
+ * when literal `files` selectors are given, full otherwise. Shared with the
+ * single-review path's acquisition contract; never buffers more than the
+ * reviewed scope.
+ */
+export async function acquireReviewDiffForShard({
+  pr,
+  base,
+  files = null,
+  gitDiffFn = gitDiff,
+  acquireScopedDiff = acquireScopedReviewDiff,
+}) {
+  const selectors = Array.isArray(files) ? files : [];
+  const check = validateReviewSelectors(selectors);
+  if (!check.ok) {
+    const err = new Error(check.message);
+    err.code = 'TRISS_REVIEW_INVALID_INPUT';
+    throw err;
+  }
+  if (selectors.length > 0) {
+    const scoped = await acquireScopedDiff({}, { pr, base, selectors });
+    if (!scoped.ok) {
+      const err = new Error(scoped.message || scoped.code || 'scoped acquisition failed');
+      err.code = scoped.code || 'TRISS_REVIEW_LIMIT';
+      throw err;
+    }
+    if (!scoped.diff.trim()) {
+      const err = new Error('none of the requested files appear in the acquired diff');
+      err.code = 'TRISS_REVIEW_SCOPE_EMPTY';
+      throw err;
+    }
+    return { diff: scoped.diff };
+  }
+  if (pr) {
+    if (!hasCommand('gh')) {
+      throw new Error('PR mode requires the GitHub CLI (`gh`).');
+    }
+    return { diff: gh(['pr', 'diff', String(pr)]) };
+  }
+  const baseRef = base || defaultBranch();
+  return { diff: gitDiffFn(baseRef, 'HEAD') };
 }
 
 async function fetchLinkedIssue(key) {

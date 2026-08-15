@@ -28,6 +28,8 @@ function meta(overrides = {}) {
     fork: false,
     owner: 'acme',
     repo: 'widgets',
+    head_owner: null,
+    head_repo: null,
     ...overrides,
   };
 }

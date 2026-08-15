@@ -32,7 +32,6 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import readline from 'node:readline';
 import pc from 'picocolors';
 import {
   captureWorkerShellSnapshot,
@@ -42,7 +41,6 @@ import {
 import { acquireCoderMutationLock } from '../coder-lock.js';
 import { buildExecutionCapabilities, allocateRunIdentity } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
-import { MOONSHOT_BASE_URL } from '../moonshot.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
@@ -72,10 +70,7 @@ import {
 } from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
-import {
-  ZAI_CODING_PLAN_BASE_URL,
-  ZAI_PAYG_BASE_URL,
-} from '../zai.js';
+import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
 import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
   isTransientOpenCodeReadError,
@@ -1944,34 +1939,61 @@ export function resolveCrushRestrict(opts = {}) {
 // The production run path must start the parent-owned loopback credential
 // proxy BEFORE spawning either engine and hand the child only the one-run
 // token + loopback base URL (never the raw credential). These helpers map
-// the resolved credential env key to the canonical upstream endpoint and
-// OpenAI-compatible path prefix the proxy pins.
+// the resolved credential env key to the canonical upstream ORIGIN (no API
+// path — the engine sends the prefix verbatim, so a path here would double
+// it), the OpenAI-compatible path prefix the proxy pins, and the upstream
+// auth style. `engineRedirect` names whether the spawned engine can be
+// verifiably pinned to the proxy; 'none' means the engine would present the
+// one-run token to the REAL upstream (guaranteed auth failure), so the run
+// fails closed before spawn instead.
 export function coderCredentialEndpoint(credEnv, modelUsed) {
   switch (credEnv) {
     case 'ZHIPU_API_KEY': {
       // Coding-plan models go to the coding endpoint; everything else to PAYG.
-      // Both are OpenAI-compatible under their /api/.../v4 scope.
+      // Both are OpenAI-compatible under their /api/.../v4 scope; the origin
+      // carries NO path (the prefix travels with the request).
       const coding = /^(zai-coding-plan|glm-coding)\//.test(String(modelUsed || ''));
       return coding
-        ? { endpoint: ZAI_CODING_PLAN_BASE_URL, pathPrefix: '/api/coding/paas/v4' }
-        : { endpoint: ZAI_PAYG_BASE_URL, pathPrefix: '/api/paas/v4' };
+        ? { endpoint: 'https://api.z.ai', pathPrefix: '/api/coding/paas/v4' }
+        : { endpoint: 'https://api.z.ai', pathPrefix: '/api/paas/v4' };
     }
     case 'OPENCODE_API_KEY':
       // Zen/Go models are served by opencode's own OpenAI-compatible router.
-      return { endpoint: 'https://opencode.ai/zen/v1', pathPrefix: '/v1' };
+      return {
+        endpoint: 'https://opencode.ai',
+        pathPrefix: '/zen/v1',
+        engineRedirectEnv: 'OPENCODE_BASE_URL',
+      };
     case 'MOONSHOT_API_KEY':
-      return { endpoint: MOONSHOT_BASE_URL, pathPrefix: '/v1' };
+      // PAYG Moonshot is OpenAI-compatible Bearer auth. The opencode built-in
+      // moonshot provider exposes no documented base-URL env override, so the
+      // engine cannot be pinned to the proxy — the run must fail closed.
+      return { endpoint: 'https://api.moonshot.ai', pathPrefix: '/v1', engineRedirect: 'none' };
     case 'KIMI_API_KEY':
-      // Kimi for Coding subscription endpoint (api.moonshot.ai compat scope).
-      return { endpoint: 'https://api.moonshot.ai/v1', pathPrefix: '/v1' };
+      // Kimi for Coding is a SEPARATE service from PAYG Moonshot: it lives on
+      // api.kimi.com under /coding/v1 and speaks the ANTHROPIC protocol
+      // (x-api-key + anthropic-version; see src/moonshot.js). Routing it to
+      // the PAYG OpenAI endpoint with Bearer auth can never authenticate.
+      return {
+        endpoint: 'https://api.kimi.com',
+        pathPrefix: '/coding/v1',
+        authStyle: 'anthropic',
+        engineRedirect: 'none',
+      };
     case 'TRISS_WORKER_API_KEY': {
       // The worker profile pins its own base URL (default DeepSeek). A test
       // or partial environment without TRISS_WORKER_BASE_URL falls back to
-      // the same default the worker client itself uses.
+      // the same default the worker client itself uses. The URL is split
+      // into origin + prefix so forwarding can never double the path.
       const settings = readWorkerConfigSnapshot({ scope: 'effective' });
       const baseUrl = settings.baseUrl || 'https://api.deepseek.com/v1';
       if (!/^https:\/\//.test(String(baseUrl))) return null;
-      return { endpoint: baseUrl, pathPrefix: new URL(baseUrl).pathname.replace(/\/+$/, '') || '/' };
+      const parsed = new URL(baseUrl);
+      const prefix = parsed.pathname.replace(/\/+$/, '') || '/';
+      return {
+        endpoint: parsed.origin,
+        pathPrefix: prefix,
+      };
     }
     default:
       return null;
@@ -3761,8 +3783,12 @@ function spawnEngine({
     });
 
     if (child.stdout) {
-      const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-      rl.on('line', (line) => {
+      // Bounded line scanner (P1 fix): readline buffers an entire line in
+      // memory BEFORE emitting it, so one huge unterminated record could
+      // exhaust memory before MAX_RECORD_BYTES ever fired. Here the pending
+      // bytes are capped as they arrive; an unterminated oversized record
+      // trips the same typed output-limit failure without being buffered.
+      const feedLine = (line) => {
         // Bounded output accounting (Section 6.4): an oversized record or
         // cumulative stdout overflow is a typed engine failure that
         // terminates the sandbox-owned tree and completes normal cleanup.
@@ -3799,6 +3825,35 @@ function spawnEngine({
           if (terminationCause === 'none') terminationCause = 'provider_rate_limit';
           requestGroupSignal('SIGTERM');
           scheduleSigkill();
+        }
+      };
+      let pending = Buffer.alloc(0);
+      child.stdout.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        pending = pending.length ? Buffer.concat([pending, buf]) : buf;
+        let newlineAt;
+        while ((newlineAt = pending.indexOf(0x0a)) !== -1) {
+          // foldEventLine trims, so a trailing \r from CRLF input is dropped.
+          const line = pending.subarray(0, newlineAt).toString('utf8');
+          pending = pending.subarray(newlineAt + 1);
+          feedLine(line);
+        }
+        // An unterminated record already above the cap is dropped without
+        // being buffered: the typed failure fires and the drain continues.
+        if (pending.length > MAX_RECORD_BYTES) {
+          if (!outputLimitObserved) {
+            outputLimitObserved = true;
+            requestGroupSignal('SIGTERM');
+            scheduleSigkill();
+          }
+          pending = Buffer.alloc(0);
+        }
+      });
+      child.stdout.on('end', () => {
+        if (pending.length && pending.length <= MAX_RECORD_BYTES) {
+          const line = pending.toString('utf8');
+          pending = Buffer.alloc(0);
+          feedLine(line);
         }
       });
     }
@@ -3871,6 +3926,13 @@ function spawnCrush({
     let graceTimer = null;
     let residualCleanupPromise = null;
     const stdoutChunks = [];
+    // crush emits ONE JSON envelope at end of run, so stdout is buffered —
+    // but boundedly: past the cap the run is a typed engine failure (the
+    // envelope contract caps the output well below this), never unbounded
+    // memory growth.
+    const CRUSH_STDOUT_MAX_BYTES = 16 * 1024 * 1024;
+    let crushStdoutBytes = 0;
+    let crushStdoutOverflow = false;
     // First termination cause wins and is recorded BEFORE sending any signal
     // (Section 6.1), so a child that exits zero still reports `killed` with
     // the right cause.
@@ -3987,7 +4049,22 @@ function spawnCrush({
 
     // crush emits the whole envelope at end-of-run, so buffer stdout fully
     // (parseEnvelope takes the last non-empty line on close).
-    if (child.stdout) child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+        crushStdoutBytes += bytes;
+        if (crushStdoutBytes > CRUSH_STDOUT_MAX_BYTES) {
+          if (!crushStdoutOverflow) {
+            crushStdoutOverflow = true;
+            if (terminationCause === 'none') terminationCause = 'output_limit';
+            killGroup('SIGTERM');
+            scheduleSigkill();
+          }
+          return; // stop buffering past the cap
+        }
+        stdoutChunks.push(chunk);
+      });
+    }
     // stderr is captured for the error-tail on the throw path; NOT forwarded
     // live — crush's WARN noise + `▶ <tool>` heartbeats would interleave with
     // this module's own dim stderr logs (a later step can forward it dimmed).
@@ -4062,7 +4139,7 @@ async function runCrushFlow({
   const env = crushEngine.buildSpawnEnv(
     undefined,
     credentialProxy
-      ? { token: credentialProxy.token, baseUrl: credentialProxy.baseUrl }
+      ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
       : deps.proxy || null,
   );
 
@@ -4595,6 +4672,24 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // is known for this credential), the run fails closed BEFORE spawn.
   const proxyTarget = coderCredentialEndpoint(cred.env, modelUsed);
   let credentialProxy = null;
+  if (
+    engine === 'opencode' &&
+    proxyTarget?.engineRedirect === 'none' &&
+    !deps.disableCredentialProxy
+  ) {
+    // Honest fail-closed: the opencode built-in provider for this credential
+    // exposes no documented base-URL override, so the engine would present
+    // the one-run PROXY token to the REAL upstream (a guaranteed auth
+    // failure, possibly with the token logged upstream). Refuse before spawn
+    // instead of handing over a credential that cannot work.
+    if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw new Error(
+      `credential isolation unavailable: ${cred.env} runs through opencode cannot be ` +
+        `pinned to the parent-owned credential proxy (no documented engine base-URL ` +
+        `override for this provider); refusing to spawn the engine with a one-run ` +
+        `proxy token the upstream would reject`,
+    );
+  }
   if (!deps.disableCredentialProxy && proxyTarget) {
     try {
       credentialProxy = await startCoderCredentialProxy({
@@ -4602,6 +4697,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         model: modelUsed,
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,
+        authStyle: proxyTarget.authStyle,
         credential: credentialValue,
         deadlineMs: (timeoutSec + 60) * 1000,
         ...(deps.credentialProxyOptions || {}),
@@ -4675,7 +4771,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           ...(overlay.provider?.['triss-worker'] || {}),
           options: {
             ...(overlay.provider?.['triss-worker']?.options || {}),
-            baseURL: `${credentialProxy.baseUrl}${proxyTarget.pathPrefix}`,
+            baseURL: credentialProxy.scopedBaseUrl,
             apiKey: credentialProxy.token,
           },
         },
@@ -4686,7 +4782,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     cred.env,
     credentialProxy.token,
     proxiedConfigContent,
-    `${credentialProxy.baseUrl}${proxyTarget.pathPrefix}`,
+    credentialProxy.scopedBaseUrl,
   );
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
@@ -4775,6 +4871,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   else if (['caller_abort', 'host_signal', 'provider_rate_limit', 'output_limit', 'filesystem_quota', 'child_signal'].includes(result.terminationCause)) {
     exit_reason = 'killed';
   } else if (result.signal) exit_reason = 'killed';
+  // A parseable top-level engine error event is a typed engine failure even
+  // when the child exits zero (a fake-clean `end_turn` must never win).
+  else if (result.engineErrorObserved) exit_reason = 'error';
   else if (result.code === 0) exit_reason = 'end_turn';
   else exit_reason = 'error';
 

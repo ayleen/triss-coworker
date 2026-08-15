@@ -31,6 +31,32 @@ const SANITIZED_ENV = Object.freeze({
   GIT_TERMINAL_PROMPT: '0',
 });
 
+// Strict allowlist environment for every git invocation in this module.
+// process.env is NEVER spread: an inherited GIT_DIR / GIT_WORK_TREE /
+// GIT_OBJECT_DIRECTORY / GIT_CONFIG_* could redirect the supposedly exact
+// comparison at a different object store or repository state, so the sealed
+// env forwards only the basics a local read-only git needs, disables config
+// injection explicitly, and lets nothing else through.
+const SEALED_ENV_ALLOWLIST = Object.freeze([
+  'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
+  // Windows spawnSync basics (harmless elsewhere; only set when present).
+  'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'PATHEXT',
+]);
+
+export function buildSealedGitEnv(baseEnv = process.env) {
+  const env = {};
+  for (const key of SEALED_ENV_ALLOWLIST) {
+    if (baseEnv[key] != null) env[key] = baseEnv[key];
+  }
+  return {
+    ...env,
+    ...SANITIZED_ENV,
+    // The sealed projection must not read the user's global gitconfig either:
+    // aliases, diff drivers, and replacement config there are out of scope.
+    GIT_CONFIG_GLOBAL: '/dev/null',
+  };
+}
+
 const SHALLOW_MARKER = 'shallow'; // resolved against `rev-parse --absolute-git-dir`
 
 function gitArgs(opts, args) {
@@ -52,7 +78,7 @@ function gitArgs(opts, args) {
  */
 export function resolveReviewComparison(sh, { cwd, base, head = 'HEAD', deadlineMs = 30000 }) {
   if (typeof sh !== 'function') throw new TypeError('sh is required');
-  const run = (args) => sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'utf8', timeout: deadlineMs });
+  const run = (args) => sh(gitArgs({}, args), { cwd, env: buildSealedGitEnv(), encoding: 'utf8', timeout: deadlineMs });
 
   // Graft rejection: refs/replace disabled + shallow check.
   const replaceCheck = run(['replace', '--list']);
@@ -124,7 +150,7 @@ export function resolveReviewComparison(sh, { cwd, base, head = 'HEAD', deadline
 export function acquireNameStatusInventory(sh, { cwd, baseOid, headOid, maxEntries = 100000, deadlineMs = 30000 }) {
   if (typeof sh !== 'function') throw new TypeError('sh is required');
   const run = (args) =>
-    sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'buffer', timeout: deadlineMs });
+    sh(gitArgs({}, args), { cwd, env: buildSealedGitEnv(), encoding: 'buffer', timeout: deadlineMs });
 
   // P1 fix: deterministic bounded rename detection. `--no-renames` made the
   // R* parsing below unreachable for real Git (a rename would be emitted as
@@ -163,7 +189,18 @@ export function acquireNameStatusInventory(sh, { cwd, baseOid, headOid, maxEntri
   if (overflow) {
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `name-status exceeds ${maxEntries} entries` };
   }
-  return { ok: true, entries };
+  // The rename candidate bound is enforced, not decorative: detection cost is
+  // capped by rejecting inventories whose rename pair count exceeds the
+  // documented limit (fail closed instead of silently accepting the cost).
+  const renameCandidates = entries.filter((e) => e.status.startsWith('R')).length;
+  if (renameCandidates > REVIEW_RENAME_CANDIDATE_LIMIT) {
+    return {
+      ok: false,
+      code: 'TRISS_REVIEW_LIMIT',
+      message: `rename candidates ${renameCandidates} exceed the ${REVIEW_RENAME_CANDIDATE_LIMIT} bound`,
+    };
+  }
+  return { ok: true, entries, rename_candidates: renameCandidates };
 }
 
 /**
@@ -252,7 +289,7 @@ export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors,
   // bounded pathspec the sealed diff needs.)
   const effectiveSelectors = selectors.length > 0 ? selectors : [':/'];
   const run = (args) =>
-    sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'buffer', timeout: deadlineMs });
+    sh(gitArgs({}, args), { cwd, env: buildSealedGitEnv(), encoding: 'buffer', timeout: deadlineMs });
 
   // Pathspec-limited diff over the exact merge-base..head pair. No external
   // diff/textconv, no config injection; sealed empty-attribute projection.

@@ -59,6 +59,26 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
     requestedPaths: selectors.length > 0 ? selectors : null,
   });
 
+  // Scoped-selection fail-closed (P0): a selector set that matched NOTHING
+  // must never reach the model — an empty diff could yield an externally
+  // plausible "clean" verdict for files that were never reviewed. Partial
+  // matches proceed with honest partial coverage.
+  if (
+    selectors.length > 0 &&
+    coverage?.requested &&
+    coverage.requested.matched.length === 0
+  ) {
+    return {
+      ok: false,
+      code: 'TRISS_REVIEW_SCOPE_EMPTY',
+      message:
+        `none of the requested files (${selectors.join(', ')}) appear in the acquired diff; ` +
+        'refusing to review an empty scope',
+      coverage,
+      exit: REVIEW_EXIT_CODES.invalidInput,
+    };
+  }
+
   // Single-request byte bound (Package 13 limits injected). P1 fix: the
   // bound is singleMaxBytes (the advertised single-request cap), NOT the
   // looser totalMaxBytes; metadata overhead is accounted too.

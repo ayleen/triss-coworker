@@ -30,7 +30,7 @@ test('execution_capabilities carries the honest tuple for both engines', () => {
   assert.equal(withProxy.sandbox, 'unavailable'); // no Package 0 backend
   assert.equal(withProxy.process_supervision, 'best_effort');
   assert.equal(withProxy.locking, 'best_effort');
-  assert.equal(withProxy.credential_isolation, 'enforced');
+  assert.equal(withProxy.credential_isolation, 'best_effort');
 
   const withoutProxy = buildExecutionCapabilities({ engine: 'crush', proxyAvailable: false });
   assert.equal(withoutProxy.credential_isolation, 'unavailable');

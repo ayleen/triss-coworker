@@ -73,6 +73,40 @@ test('decodes Git-quoted paths (spaces, tabs, backslashes, Unicode)', () => {
   assert.equal(decodeGitQuotedPath(''), null);
 });
 
+test('parses a real C-quoted diff --git header end-to-end (quotepath default)', () => {
+  // Git emits this exact form when core.quotepath is left at its default
+  // (true) and a path contains a space: BOTH tokens are C-quoted. The
+  // scanner must keep the closing quote inside each token so
+  // decodeGitQuotedPath sees a complete quoted literal.
+  const text = [
+    'diff --git "a/foo bar.txt" "b/foo bar.txt"',
+    'index 1111111..2222222 100644',
+    '--- "a/foo bar.txt"',
+    '+++ "b/foo bar.txt"',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const { sections } = parseUnifiedDiff(text);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].old_path, 'foo bar.txt');
+  assert.equal(sections[0].new_path, 'foo bar.txt');
+});
+
+test('parses a C-quoted header with escapes (quote and backslash in the name)', () => {
+  const text = [
+    'diff --git "a/we\\"ird.txt" "b/we\\"ird.txt"',
+    '--- "a/we\\"ird.txt"',
+    '+++ "b/we\\"ird.txt"',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const { sections } = parseUnifiedDiff(text);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].new_path, 'we"ird.txt');
+});
+
 test('rename, create/delete, and binary sections keep headers and classify', () => {
   const text = [
     'diff --git a/old.txt b/new.txt',

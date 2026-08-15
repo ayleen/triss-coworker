@@ -61,13 +61,17 @@ test('without a Package 0 backend, sandbox and quotas are unavailable, not claim
   }
 });
 
-test('credential_isolation is enforced only when a proxy plan exists', () => {
+test('credential_isolation is honestly best_effort when a proxy plan exists (never enforced)', () => {
   const without = resolveCoderSandbox({ platform: 'darwin', proxyAvailable: false });
   assert.equal(without.credential_isolation, 'unavailable');
   assert.ok(without.warnings.includes(CREDENTIAL_ISOLATION_REQUIRED_CODE));
 
   const withProxy = resolveCoderSandbox({ platform: 'linux', proxyAvailable: true });
-  assert.equal(withProxy.credential_isolation, 'enforced');
+  // The loopback token proxy is a real boundary but NOT OS-enforced store
+  // denial: a same-UID child can still read raw credential stores, so the
+  // honest value is best_effort with an explicit warning, never 'enforced'.
+  assert.equal(withProxy.credential_isolation, 'best_effort');
+  assert.ok(withProxy.warnings.includes('TRISS_CODER_CAP_CREDENTIAL_ISOLATION_BEST_EFFORT'));
   assert.equal(withProxy.warnings.includes(CREDENTIAL_ISOLATION_REQUIRED_CODE), false);
 });
 

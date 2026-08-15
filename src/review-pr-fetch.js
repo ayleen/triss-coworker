@@ -47,12 +47,17 @@ const BARE_CONFIG = Object.freeze({
  * @returns {{ok: boolean, code?: string, base_oid?: string, head_oid?: string,
  *   message?: string}}
  */
-export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, baseOid, headOid, quota, deadlineMs = PR_FETCH_DEADLINE_MS, signal }) {
+export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, headSourceUrl, baseOid, headOid, quota, deadlineMs = PR_FETCH_DEADLINE_MS, signal }) {
   if (typeof sh !== 'function') throw new TypeError('sh is required');
   if (typeof bareDir !== 'string' || bareDir.length === 0) throw new TypeError('bareDir is required');
   if (typeof sourceUrl !== 'string' || sourceUrl.length === 0) {
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'sourceUrl is required' };
   }
+  // Fork PRs fetch base and head from DIFFERENT repositories: the head commit
+  // exists only in the fork, so a single-source fetch can never resolve it.
+  const headUrl = typeof headSourceUrl === 'string' && headSourceUrl.length > 0
+    ? headSourceUrl
+    : sourceUrl;
   if (!/^[0-9a-f]{40}$/.test(baseOid) || !/^[0-9a-f]{40}$/.test(headOid)) {
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'baseOid/headOid must be 40-hex' };
   }
@@ -82,7 +87,22 @@ export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, baseOid, hea
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `bare init failed: ${String(init.stderr || '').slice(0, 200)}` };
   }
 
-  const fetch = run(['fetch', '-q', '--no-tags', sourceUrl, baseOid, headOid]);
+  let fetch;
+  if (headUrl === sourceUrl) {
+    fetch = run(['fetch', '-q', '--no-tags', sourceUrl, baseOid, headOid]);
+  } else {
+    // Fork acquisition: each exact OID comes from its own repository.
+    const fetchBase = run(['fetch', '-q', '--no-tags', sourceUrl, baseOid]);
+    if (fetchBase.error && fetchBase.error.name === 'AbortError') {
+      quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+      return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled during base fetch' };
+    }
+    if (fetchBase.status !== 0) {
+      quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+      return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `base fetch failed: ${String(fetchBase.stderr || '').slice(0, 200)}` };
+    }
+    fetch = run(['fetch', '-q', '--no-tags', headUrl, headOid]);
+  }
   if (fetch.error && fetch.error.name === 'AbortError') {
     quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
     return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled during fetch' };

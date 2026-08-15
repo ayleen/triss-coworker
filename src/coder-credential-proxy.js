@@ -10,14 +10,26 @@
  * Guarantees implemented here:
  *  - one-run token: random per run (or caller-supplied for tests), accepted
  *    only for this run's provider/model scope;
- *  - provider/model/endpoint pinning: only the configured upstream endpoint
- *    is reachable, only through the loopback listener;
- *  - request-count, body-byte, rate, and lifetime-deadline caps, none greater
- *    than the parent request itself;
- *  - revocation before cleanup completes; a revoked proxy refuses everything;
+ *  - provider/model/endpoint pinning: only the configured upstream ORIGIN is
+ *    reachable, only through the loopback listener, only under the pinned
+ *    path prefix (boundary-exact: `/v1` does not match `/v10`), and only for
+ *    requests whose JSON body names the pinned model;
+ *  - request-count, body-byte, response-byte, rate, and lifetime-deadline
+ *    caps, none greater than the parent request itself;
+ *  - revocation before cleanup completes; a revoked proxy refuses everything
+ *    and aborts every in-flight upstream fetch;
  *  - no body logging, no CONNECT/general forward-proxy route;
  *  - exact-secret non-disclosure: the real credential is never returned,
  *    logged, or placed in engine env/argv/config by this module.
+ *
+ * URL contract (P0 fix): `endpoint` is the upstream ORIGIN
+ * (`https://host[:port]`, no path). The engine's base URL points at
+ * `scopedBaseUrl` (loopback origin + pathPrefix), so requests arrive with
+ * the prefix verbatim and forwarding is a plain origin + path join — the
+ * prefix can never be doubled. Anthropic-protocol upstreams (Kimi for
+ * Coding) use `authStyle: 'anthropic'`: the one-run token is accepted from
+ * `x-api-key` and the real credential is attached upstream as `x-api-key`
+ * plus `anthropic-version`, never as a Bearer token.
  *
  * Pure Node http/https; no dependency on the platform backend.
  */
@@ -27,16 +39,35 @@ import { randomBytes } from 'node:crypto';
 
 const LOOPBACK_HOST = '127.0.0.1';
 
-// Default caps: request count, body bytes, sustained rate, and lifetime
-// deadline. The caller (coder run) passes tighter caps derived from the
-// parent request; these defaults are only a fail-closed floor.
+// Default caps: request count, body bytes, response bytes, sustained rate,
+// and lifetime deadline. The caller (coder run) passes tighter caps derived
+// from the parent request; these defaults are only a fail-closed floor.
 const DEFAULT_MAX_REQUESTS = 1000;
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_RATE_PER_SEC = 20;
 const DEFAULT_DEADLINE_MS = 30 * 60 * 1000;
 
+// Anthropic-protocol requests must carry an api-version header; forward the
+// engine's own value when present, otherwise pin the documented default.
+const ANTHROPIC_VERSION_DEFAULT = '2023-06-01';
+
 function generateToken() {
   return randomBytes(16).toString('hex');
+}
+
+function isValidOrigin(endpoint) {
+  try {
+    const url = new URL(endpoint);
+    return (
+      url.protocol === 'https:' &&
+      (url.pathname === '/' || url.pathname === '') &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -45,16 +76,19 @@ function generateToken() {
  * @param {object} opts
  * @param {string} opts.provider       provider id (e.g. 'zai', 'worker')
  * @param {string} opts.model          pinned model id for this run
- * @param {string} opts.endpoint       canonical provider base URL (https)
+ * @param {string} opts.endpoint       canonical upstream ORIGIN (https, no path)
  * @param {string} opts.credential     real provider credential (in-memory only)
+ * @param {string} [opts.pathPrefix='/v1'] OpenAI-compatible scope prefix
+ * @param {string} [opts.authStyle='bearer'] 'bearer' | 'anthropic'
  * @param {string} [opts.token]        pre-generated single-run token (tests)
  * @param {number} [opts.maxRequests]  request-count cap
  * @param {number} [opts.maxBodyBytes] per-request body-byte cap
+ * @param {number} [opts.maxResponseBytes] per-response body-byte cap
  * @param {number} [opts.maxRatePerSec] sustained request-rate cap
  * @param {number} [opts.deadlineMs]   proxy lifetime from start
  * @param {Function} [opts.fetchImpl]  injectable fetch (tests)
  * @returns {Promise<object>} resolves once listening:
- *   { host, port, token, baseUrl, provider, model, revoke(), closed }
+ *   { host, port, token, baseUrl, scopedBaseUrl, provider, model, revoke(), closed }
  */
 export async function startCoderCredentialProxy(opts = {}) {
   const {
@@ -63,20 +97,26 @@ export async function startCoderCredentialProxy(opts = {}) {
     endpoint,
     credential,
   } = opts;
-  // Path prefix the upstream serves the OpenAI-compatible scope under
-  // (default /v1). The engine's baseURL points at the loopback proxy with
-  // this same prefix, so requests arrive verbatim and no rewrite is needed.
+  // Path prefix the upstream serves the model scope under (default /v1). The
+  // engine's baseURL points at `scopedBaseUrl` (loopback origin + this
+  // prefix), so requests arrive verbatim and no rewrite is needed.
   const pathPrefix = typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')
     ? opts.pathPrefix.replace(/\/+$/, '') || '/'
     : '/v1';
+  const authStyle = opts.authStyle === 'anthropic' ? 'anthropic' : 'bearer';
   if (typeof provider !== 'string' || provider.length === 0) {
     throw new TypeError('startCoderCredentialProxy: provider is required');
   }
   if (typeof model !== 'string' || model.length === 0) {
     throw new TypeError('startCoderCredentialProxy: model is required');
   }
-  if (typeof endpoint !== 'string' || !/^https:\/\//.test(endpoint)) {
-    throw new TypeError('startCoderCredentialProxy: endpoint must be an https URL');
+  // Endpoint pinning is origin-exact: an endpoint that already carries an
+  // API path would double the prefix on every forward (the exact P0 this
+  // validation exists to catch), so it fails closed at construction.
+  if (typeof endpoint !== 'string' || !isValidOrigin(endpoint)) {
+    throw new TypeError(
+      'startCoderCredentialProxy: endpoint must be an https ORIGIN (no path), e.g. https://api.z.ai',
+    );
   }
   if (typeof credential !== 'string' || credential.length === 0) {
     throw new TypeError('startCoderCredentialProxy: credential is required');
@@ -87,6 +127,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     : generateToken();
   const maxRequests = opts.maxRequests ?? DEFAULT_MAX_REQUESTS;
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const maxResponseBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxRatePerSec = opts.maxRatePerSec ?? DEFAULT_MAX_RATE_PER_SEC;
   const deadlineMs = opts.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
@@ -97,6 +138,9 @@ export async function startCoderCredentialProxy(opts = {}) {
   const startedAt = now();
   let revoked = false;
   let requestCount = 0;
+  // In-flight upstream fetches: revoke() aborts them all so `closed` can
+  // never hang on a stuck upstream response.
+  const activeFetches = new Set();
 
   // Monotonic rate check: drop entries older than one second, then enforce
   // the cap on the remaining window.
@@ -106,6 +150,19 @@ export async function startCoderCredentialProxy(opts = {}) {
     if (requestTimes.length >= maxRatePerSec) return false;
     requestTimes.push(t);
     return true;
+  }
+
+  function pathAllowed(url) {
+    // Boundary-exact prefix match: '/v1' accepts '/v1' and '/v1/...' but
+    // NOT '/v10/...'.
+    return url === pathPrefix || url.startsWith(`${pathPrefix}/`);
+  }
+
+  function tokenOk(req) {
+    if (authStyle === 'anthropic') {
+      return req.headers['x-api-key'] === token;
+    }
+    return (req.headers.authorization || '') === `Bearer ${token}`;
   }
 
   const server = createServer((req, res) => {
@@ -139,21 +196,19 @@ export async function startCoderCredentialProxy(opts = {}) {
         res.end(JSON.stringify({ error: { message: 'absolute-URI forward-proxy route denied' } }));
         return;
       }
-      // Provider/model pinning: only the OpenAI-compatible /v1 scope is
-      // forwarded; everything else is denied. When the canonical upstream
-      // lives on a different OpenAI-compatible prefix (e.g. Z.AI /v4), the
-      // caller pins `pathPrefix` and the request must carry it verbatim.
-      if (!req.url.startsWith(pathPrefix)) {
+      // Provider/model pinning: only the pinned OpenAI-compatible scope is
+      // forwarded; everything else is denied. The prefix match is
+      // boundary-exact — a `/v10` route must not pass a `/v1` pin.
+      if (!pathAllowed(req.url)) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'unknown proxy route' } }));
         return;
       }
 
     // Token check. The real credential is never accepted here — only the
-    // single-run token.
-    const auth = req.headers.authorization || '';
-    const expected = `Bearer ${token}`;
-    if (auth !== expected) {
+    // single-run token (Bearer for OpenAI-style clients, x-api-key for
+    // Anthropic-protocol clients).
+    if (!tokenOk(req)) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'invalid proxy token' } }));
       return;
@@ -195,38 +250,96 @@ export async function startCoderCredentialProxy(opts = {}) {
     });
     req.on('end', async () => {
       if (bodyOverflow) return; // 413 already sent from the data handler
+      // Model pinning: every forwarded body must be JSON naming the pinned
+      // model. A body naming any other model is a routing escape attempt —
+      // refused before any upstream call.
+      let parsedBody;
+      try {
+        parsedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        parsedBody = null;
+      }
+      if (
+        !parsedBody || typeof parsedBody !== 'object' ||
+        typeof parsedBody.model !== 'string' || parsedBody.model !== model
+      ) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'model is not pinned for this proxy run' } }));
+        return;
+      }
       requestCount += 1;
-      const body = Buffer.concat(chunks).toString('utf8');
-      await forward(req.url, res, body);
+      const body = JSON.stringify(parsedBody);
+      await forward(req, res, body);
     });
   });
 
-  // Forward to the pinned upstream endpoint, attaching the REAL credential
+  // Forward to the pinned upstream ORIGIN, attaching the REAL credential
   // (in-memory only; never logged, never returned downstream). The upstream
-  // path is exactly the validated request path; no absolute-URI route can
-  // reach this point (rejected above).
-  async function forward(upstreamPath, res, body) {
-    const upstreamUrl = endpoint + upstreamPath;
+  // URL is the origin joined with the validated request path verbatim — no
+  // rewrite, no doubling, no absolute-URI route can reach this point.
+  async function forward(req, res, body) {
+    const upstreamUrl = endpoint + req.url;
+    const controller = new AbortController();
+    activeFetches.add(controller);
+    let responseBytes = 0;
     try {
+      const headers = { 'content-type': 'application/json' };
+      if (authStyle === 'anthropic') {
+        headers['x-api-key'] = credential;
+        headers['anthropic-version'] =
+          (typeof req.headers['anthropic-version'] === 'string' && req.headers['anthropic-version']) ||
+          ANTHROPIC_VERSION_DEFAULT;
+      } else {
+        headers.authorization = `Bearer ${credential}`;
+      }
       const upstream = await fetchImpl(upstreamUrl, {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${credential}`,
-          'content-type': 'application/json',
-        },
+        headers,
         body,
+        signal: controller.signal,
       });
-      const upstreamBody = await upstream.arrayBuffer();
+      const declaredLength = Number(upstream.headers.get('content-length') || 0);
+      if (declaredLength > maxResponseBytes) {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'upstream response exceeds proxy cap' } }));
+        return;
+      }
+      // Bounded response relay: stream through with a hard byte cap instead
+      // of buffering the whole body; overflow aborts the upstream fetch and
+      // fails the response closed.
       res.writeHead(upstream.status, {
         'content-type': upstream.headers.get('content-type') || 'application/json',
       });
-      res.end(Buffer.from(upstreamBody));
+      const reader = upstream.body?.getReader();
+      if (!reader) {
+        res.end();
+        return;
+      }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        responseBytes += value.byteLength;
+        if (responseBytes > maxResponseBytes) {
+          controller.abort();
+          res.destroy();
+          return;
+        }
+        res.write(Buffer.from(value));
+      }
+      res.end();
     } catch (err) {
+      if (res.destroyed) return;
       // Never include the credential or request bodies in the error.
-      res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        error: { message: `upstream error: ${err?.message || 'unknown'}` },
-      }));
+      if (!res.headersSent) {
+        res.writeHead(502, { 'content-type': 'application/json' });
+      }
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({
+          error: { message: `upstream error: ${err?.message || 'unknown'}` },
+        }));
+      }
+    } finally {
+      activeFetches.delete(controller);
     }
   }
 
@@ -252,6 +365,9 @@ export async function startCoderCredentialProxy(opts = {}) {
   function revoke() {
     if (revoked) return;
     revoked = true;
+    // Abort every in-flight upstream fetch so a stuck response can never
+    // keep `closed` pending indefinitely.
+    for (const controller of activeFetches) controller.abort();
     // closeIdleConnections releases keep-alive sockets held by HTTP clients
     // (undici pools them), so the close callback fires promptly instead of
     // waiting for idle connections to expire.
@@ -268,6 +384,9 @@ export async function startCoderCredentialProxy(opts = {}) {
     port,
     token,
     baseUrl: `http://${LOOPBACK_HOST}:${port}`,
+    // Loopback origin + pinned prefix: the exact base URL an
+    // OpenAI/Anthropic-compatible engine should be configured with.
+    scopedBaseUrl: `http://${LOOPBACK_HOST}:${port}${pathPrefix}`,
     provider,
     model,
     revoke,

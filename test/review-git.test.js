@@ -274,3 +274,92 @@ test('REVIEW-GIT-SELECTED-06: git failure surfaces TRISS_REVIEW_LIMIT without pa
   assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
   assert.equal(r.diff, undefined, 'no partial output');
 });
+
+// ─── sealed environment (P0: strict GIT_* allowlist) ─────────────────────────
+
+test('REVIEW-GIT-ENV-01: the sealed env never inherits GIT_* or unrelated vars', async () => {
+  const { buildSealedGitEnv } = await import('../src/review-git.js');
+  const env = buildSealedGitEnv({
+    PATH: '/usr/bin',
+    HOME: '/home/user',
+    GIT_DIR: '/evil/elsewhere.git',
+    GIT_WORK_TREE: '/evil/tree',
+    GIT_OBJECT_DIRECTORY: '/evil/objects',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.pager',
+    GIT_CONFIG_VALUE_0: 'evil',
+    GIT_SSH_COMMAND: 'evil-command',
+    HTTP_PROXY: 'http://evil.example',
+    HOOKS_PATH_SENTINEL: 'yes',
+  });
+  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.GIT_EXTERNAL_DIFF, '');
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+  assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+  // No GIT_* control variable from the caller survives, and unrelated env is
+  // not forwarded at all.
+  for (const key of Object.keys(env)) {
+    assert.match(key, /^(PATH|HOME|TMPDIR|LANG|LC_ALL|TZ|GIT_EXTERNAL_DIFF|GIT_CONFIG_NOSYSTEM|GIT_CONFIG_GLOBAL|GIT_ATTR_NOSYSTEM|GIT_OPTIONAL_LOCKS|GIT_TERMINAL_PROMPT|SystemRoot|SYSTEMROOT|ComSpec|PATHEXT)$/, `unexpected key leaked: ${key}`);
+  }
+  assert.equal(env.GIT_DIR, undefined);
+  assert.equal(env.GIT_WORK_TREE, undefined);
+  assert.equal(env.GIT_CONFIG_COUNT, undefined);
+});
+
+test('REVIEW-GIT-ENV-02: resolveReviewComparison runs git under the sealed env', () => {
+  let seenEnv = null;
+  const sh = (args, opts) => {
+    seenEnv = opts.env;
+    const key = args.join(' ');
+    if (key === '--no-pager -c core.quotepath=false replace --list') return { status: 0, stdout: '' };
+    if (key === '--no-pager -c core.quotepath=false rev-parse --is-shallow-repository') {
+      return { status: 0, stdout: 'false\n' };
+    }
+    if (key.includes('rev-parse --verify HEAD^{commit}')) return { status: 0, stdout: `${'a'.repeat(40)}\n` };
+    if (key.includes('rev-parse --verify main^{commit}')) return { status: 0, stdout: `${'b'.repeat(40)}\n` };
+    if (key.includes('merge-base')) return { status: 0, stdout: `${'c'.repeat(40)}\n` };
+    return { status: 1, stdout: '', stderr: key };
+  };
+  const savedGitDir = process.env.GIT_DIR;
+  process.env.GIT_DIR = '/evil/elsewhere.git';
+  try {
+    const r = resolveReviewComparison(sh, { cwd: CWD, base: 'main' });
+    assert.equal(r.ok, true);
+    assert.equal(seenEnv.GIT_DIR, undefined);
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = savedGitDir;
+  }
+});
+
+// ─── rename candidate bound (P1: enforced, not decorative) ───────────────────
+
+test('REVIEW-GIT-INVENTORY-11: rename candidates beyond the documented bound fail closed', () => {
+  const parts = [];
+  for (let i = 0; i < REVIEW_RENAME_CANDIDATE_LIMIT + 1; i += 1) {
+    parts.push(`R100\u0000old-${i}.txt\u0000new-${i}.txt`);
+  }
+  parts.push('');
+  const sh = fakeSh({
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+      stdout: parts.join('\u0000'),
+    },
+  });
+  const r = acquireNameStatusInventory(sh, { cwd: CWD, baseOid: 'b'.repeat(40), headOid: 'a'.repeat(40) });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
+  assert.match(r.message, /rename candidates/i);
+});
+
+test('REVIEW-GIT-INVENTORY-12: rename candidates within the bound pass and are counted', () => {
+  const parts = ['R100\u0000old.txt\u0000new.txt', 'M\u0000mod.txt', ''];
+  const sh = fakeSh({
+    '--no-pager -c core.quotepath=false diff --name-status -z --find-renames=50% bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {
+      stdout: parts.join('\u0000'),
+    },
+  });
+  const r = acquireNameStatusInventory(sh, { cwd: CWD, baseOid: 'b'.repeat(40), headOid: 'a'.repeat(40) });
+  assert.equal(r.ok, true);
+  assert.equal(r.entries.length, 2);
+  assert.equal(r.rename_candidates, 1);
+});

@@ -125,6 +125,10 @@ function parseDiffGitHeaderPaths(header) {
           continue;
         }
         if (ch === '"') {
+          // Keep the closing quote in the token: decodeGitQuotedPath expects
+          // a complete quoted literal ("..."), and dropping it made every
+          // real C-quoted header decode to null.
+          token += ch;
           closed = true;
           i += 1;
           break;
@@ -165,8 +169,10 @@ export function parseUnifiedDiff(text) {
     let oldPath = null;
     let newPath = null;
     if (tokens) {
-      oldPath = decodeGitQuotedPath(tokens[0].replace(/^a\//, ''));
-      newPath = decodeGitQuotedPath(tokens[1].replace(/^b\//, ''));
+      // The a//b prefix sits INSIDE the quotes for C-quoted headers
+      // (`"a/foo bar.txt"`), so strip it after the opening quote when present.
+      oldPath = decodeGitQuotedPath(tokens[0].replace(/^("?)a\//, '$1'));
+      newPath = decodeGitQuotedPath(tokens[1].replace(/^("?)b\//, '$1'));
     }
     const body = sec.body;
     const isBinary =

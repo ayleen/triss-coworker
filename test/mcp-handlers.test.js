@@ -576,3 +576,130 @@ test('MCP-REVIEW-SHARD-03: cancellation propagates with cancellation parity', as
   assert.equal(r.ok, false);
   assert.equal(r.code, 'TRISS_CANCELLED');
 });
+
+// ─── triss_review_shard (dedicated shard tool) ───────────────────────────────
+
+test('MCP-REVIEW-SHARD-01: the dedicated shard tool is registered', async () => {
+  const { listTools } = await import('../src/mcp/tools.js');
+  const tools = await listTools();
+  const shard = tools.find((t) => t.name === 'triss_review_shard');
+  assert.ok(shard, 'triss_review_shard must be registered');
+  assert.equal(shard.inputSchema.properties.files.type, 'array');
+});
+
+test('MCP-REVIEW-SHARD-02: the shard handler runs per-shard verdicts with no global verdict', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  const diff = [
+    'diff --git a/a.txt b/a.txt',
+    '--- a/a.txt',
+    '+++ b/a.txt',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const result = await reviewShardHandler(
+    { base: 'main' },
+    {
+      gitDiff: () => diff,
+      callModel: async () => ({ content: 'shard verdict text', usageReport: 'usage line' }),
+    },
+  );
+  assert.match(result, /--- shard 1 ---/);
+  assert.match(result, /global verdict: unavailable_for_sharded/);
+});
+
+test('MCP-REVIEW-SHARD-03: scoped files acquisition routes through the inventory-first seam', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  let scopedCalled = false;
+  const diff = [
+    'diff --git a/small.js b/small.js',
+    '--- a/small.js',
+    '+++ b/small.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const result = await reviewShardHandler(
+    { base: 'main', files: ['small.js'] },
+    {
+      acquireScopedDiff: async (_deps, opts) => {
+        scopedCalled = true;
+        assert.deepEqual(opts.selectors, ['small.js']);
+        return { ok: true, diff, base_ref: 'main', head_ref: 'HEAD', changed_files: ['small.js'] };
+      },
+      callModel: async () => ({ content: 'shard verdict text' }),
+    },
+  );
+  assert.equal(scopedCalled, true);
+  assert.match(result, /--- shard 1 ---/);
+});
+
+test('MCP-REVIEW-SHARD-04: a zero-match scoped shard review fails closed', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  await assert.rejects(
+    () =>
+      reviewShardHandler(
+        { base: 'main', files: ['missing.js'] },
+        {
+          acquireScopedDiff: async () => ({
+            ok: false,
+            code: 'TRISS_REVIEW_SCOPE_EMPTY',
+            message: 'none of the requested files (missing.js) appear in the change inventory',
+          }),
+          callModel: async () => {
+            throw new Error('model must not run');
+          },
+        },
+      ),
+    (err) => {
+      assert.equal(err.code, 'TRISS_REVIEW_SCOPE_EMPTY');
+      return true;
+    },
+  );
+});
+
+test('MCP-REVIEW-SCOPED-01: runReviewCore files selection is inventory-first and zero-match fails closed', async () => {
+  const { runReviewCore } = await import('../src/mcp/review-core.js');
+  let scopedCalled = false;
+  const verdict = await runReviewCore({
+    base: 'main',
+    files: ['small.js'],
+    acquireScopedDiff: async (_deps, opts) => {
+      scopedCalled = true;
+      assert.deepEqual(opts.selectors, ['small.js']);
+      return {
+        ok: true,
+        diff: ['diff --git a/small.js b/small.js', '--- a/small.js', '+++ b/small.js', '@@ -1 +1 @@', '-old', '+new'].join('\n'),
+        base_ref: 'main',
+        head_ref: 'HEAD',
+        changed_files: ['small.js'],
+      };
+    },
+    callModel: async ({ messages }) => {
+      assert.equal(String(messages[1].content).includes('unrelated'), false);
+      return { content: 'LGTM', usageReport: 'usage' };
+    },
+  });
+  assert.equal(scopedCalled, true);
+  assert.match(verdict, /LGTM/);
+
+  await assert.rejects(
+    () =>
+      runReviewCore({
+        base: 'main',
+        files: ['missing.js'],
+        acquireScopedDiff: async () => ({
+          ok: false,
+          code: 'TRISS_REVIEW_SCOPE_EMPTY',
+          message: 'none of the requested files (missing.js) appear in the change inventory',
+        }),
+        callModel: async () => {
+          throw new Error('model must not run');
+        },
+      }),
+    (err) => {
+      assert.equal(err.code, 'TRISS_REVIEW_SCOPE_EMPTY');
+      return true;
+    },
+  );
+});

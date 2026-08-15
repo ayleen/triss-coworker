@@ -79,6 +79,10 @@ const METADATA_KEYS = Object.freeze([
   'fork',
   'owner',
   'repo',
+  // Fork identity (P1 fix): for cross-repository PRs the head commit lives
+  // in the FORK, so acquisition needs the head repository's own coordinates.
+  'head_owner',
+  'head_repo',
 ]);
 
 const OID_RE = /^[0-9a-f]{40}$/;
@@ -135,6 +139,16 @@ export function validatePrMetadata(meta, opts = {}) {
   }
   if (typeof meta.repo !== 'string' || meta.repo.length === 0) {
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'repo is required' };
+  }
+  if (meta.fork) {
+    if (typeof meta.head_owner !== 'string' || meta.head_owner.length === 0) {
+      return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fork PRs require head_owner' };
+    }
+    if (typeof meta.head_repo !== 'string' || meta.head_repo.length === 0) {
+      return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fork PRs require head_repo' };
+    }
+  } else if (meta.head_owner !== null || meta.head_repo !== null) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'head_owner/head_repo must be null for same-repository PRs' };
   }
   return { ok: true, meta };
 }

@@ -34,19 +34,24 @@ export async function withDisposablePrRepository({ trissRootPath, quota, managed
   if (typeof callback !== 'function') throw new TypeError('callback is required');
   const run = await createPrRunDirectory({ trissRootPath, quota, managedRoot, parentHandle });
   try {
-    const value = await callback(run);
-    // P1 fix: complete the lifecycle — a finished run passes through
-    // release_pending into acknowledged BEFORE recovery/cleanup, so
-    // cleanPrRunDirectory (acknowledged-markers-only) actually removes the
-    // directory. Without this every run leaked until the 3-run cap blocked
-    // the fourth.
-    await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'release_pending' } });
-    await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'acknowledged' } });
-    return value;
+    return await callback(run);
   } finally {
-    // Idempotent recovery + exact cleanup (acknowledged markers only).
-    await recoverPrRunDirectories({ trissRootPath });
+    // Complete the lifecycle — on success OR failure — so the exact cleanup
+    // path can run: publish release_pending -> acknowledged, then
+    // cleanPrRunDirectory removes the acknowledged directory and releases the
+    // 512 MiB root reservation. Recovery for OTHER stale runs runs only
+    // afterwards: recoverPrRunDirectories deletes acknowledged directories
+    // itself WITHOUT releasing the quota, so running it first (the old
+    // order) leaked the whole reservation on every successful run.
+    try {
+      await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'release_pending' } });
+      await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'acknowledged' } });
+    } catch {
+      // Degraded: cleanPrRunDirectory refuses non-acknowledged markers, the
+      // directory stays for the bounded 3-run cap / grace recovery.
+    }
     await cleanPrRunDirectory({ trissRootPath, runId: run.runId, quota });
+    await recoverPrRunDirectories({ trissRootPath });
   }
 }
 
@@ -81,59 +86,76 @@ export async function acquireSelectedPrDiff(
   if (!meta || typeof meta.base_oid !== 'string' || typeof meta.head_oid !== 'string') {
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'validated PR metadata is required' };
   }
+  // Fork PRs fetch the head OID from the fork's own repository; same-repo
+  // PRs use the single source for both OIDs.
+  const headSourceUrl = meta.fork && meta.head_owner && meta.head_repo
+    ? `https://github.com/${meta.head_owner}/${meta.head_repo}`
+    : sourceUrl;
 
-  return withDisposablePrRepository(
-    { trissRootPath, quota, managedRoot, parentHandle },
-    async (run) => {
-      if (signal?.aborted) return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled' };
-      await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'live' } });
+  // The 128 MiB fetch filesystem reservation is held while the bare repo is
+  // on disk; it is released exactly once here, AFTER the disposable
+  // repository (and its directory) are gone.
+  let fetchReservationBytes = 0;
+  try {
+    return await withDisposablePrRepository(
+      { trissRootPath, quota, managedRoot, parentHandle },
+      async (run) => {
+        if (signal?.aborted) return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled' };
+        await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'live' } });
 
-      // Identity recheck + exact fetch into the disposable bare repo.
-      const fetchResult = await fetchExactPrObjects(sh, {
-        bareDir: join(run.runDir, 'bare.git'),
-        sourceUrl,
-        baseOid: meta.base_oid,
-        headOid: meta.head_oid,
-        quota,
-        signal,
-      });
-      if (!fetchResult.ok) return fetchResult;
+        // Identity recheck + exact fetch into the disposable bare repo.
+        const fetchResult = await fetchExactPrObjects(sh, {
+          bareDir: join(run.runDir, 'bare.git'),
+          sourceUrl,
+          headSourceUrl,
+          baseOid: meta.base_oid,
+          headOid: meta.head_oid,
+          quota,
+          signal,
+        });
+        if (!fetchResult.ok) return fetchResult;
+        fetchReservationBytes = fetchResult.fsReservationBytes || 0;
 
-      // Unique merge base inside the disposable repo.
-      const comparison = resolveComparison(sh, {
-        cwd: join(run.runDir, 'bare.git'),
-        base: meta.base_oid,
-        head: meta.head_oid,
-        deadlineMs: 30000,
-      });
-      if (!comparison.ok) return comparison;
+        // Unique merge base inside the disposable repo.
+        const comparison = resolveComparison(sh, {
+          cwd: join(run.runDir, 'bare.git'),
+          base: meta.base_oid,
+          head: meta.head_oid,
+          deadlineMs: 30000,
+        });
+        if (!comparison.ok) return comparison;
 
-      // Inventory-first literal selection.
-      const inventory = acquireInventory(sh, {
-        cwd: join(run.runDir, 'bare.git'),
-        baseOid: comparison.merge_base_oid,
-        headOid: meta.head_oid,
-      });
-      if (!inventory.ok) return inventory;
+        // Inventory-first literal selection.
+        const inventory = acquireInventory(sh, {
+          cwd: join(run.runDir, 'bare.git'),
+          baseOid: comparison.merge_base_oid,
+          headOid: meta.head_oid,
+        });
+        if (!inventory.ok) return inventory;
 
-      let selection = selectors;
-      if (selectors.length > 0) {
-        const expanded = expandSelection(inventory, { selectors });
-        selection = expanded.matched;
-      }
+        let selection = selectors;
+        if (selectors.length > 0) {
+          const expanded = expandSelection(inventory, { selectors });
+          selection = expanded.matched;
+        }
 
-      // Selected content (pathspec-limited).
-      const diff = acquireDiff(sh, {
-        cwd: join(run.runDir, 'bare.git'),
-        baseOid: comparison.merge_base_oid,
-        headOid: meta.head_oid,
-        selectors: selection,
-      });
-      if (!diff.ok) return diff;
+        // Selected content (pathspec-limited).
+        const diff = acquireDiff(sh, {
+          cwd: join(run.runDir, 'bare.git'),
+          baseOid: comparison.merge_base_oid,
+          headOid: meta.head_oid,
+          selectors: selection,
+        });
+        if (!diff.ok) return diff;
 
-      return { ok: true, diff: diff.diff, merge_base_oid: comparison.merge_base_oid };
-    },
-  );
+        return { ok: true, diff: diff.diff, merge_base_oid: comparison.merge_base_oid };
+      },
+    );
+  } finally {
+    if (fetchReservationBytes > 0 && quota && typeof quota.accountRelease === 'function') {
+      quota.accountRelease(fetchReservationBytes);
+    }
+  }
 }
 
 export { prRootFor, mkdtemp, tmpdir, join };

@@ -701,6 +701,7 @@ test(
         model: 'moonshotai/kimi-k2.7-code',
         key: 'MOONSHOT_API_KEY',
         value: 'sk-moonshot-fake',
+        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
       {
         provider: 'opencode-go',
@@ -713,12 +714,13 @@ test(
         model: 'kimi-for-coding/k3',
         key: 'KIMI_API_KEY',
         value: 'sk-kimi-fake',
+        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
     ];
 
     for (const entry of cases) {
       let childEnv;
-      await runCoderRun(
+      const run = runCoderRun(
         'mechanical task',
         { provider: entry.provider, model: entry.model },
         {
@@ -729,6 +731,15 @@ test(
           stdoutWrite: () => true,
         },
       );
+      if (entry.rejected) {
+        // Honest fail-closed: the opencode built-ins with no documented
+        // base-URL override must refuse to spawn rather than hand the real
+        // upstream a one-run proxy token it would reject.
+        await assert.rejects(run, entry.rejected);
+        assert.equal(childEnv, undefined);
+        continue;
+      }
+      await run;
 
       assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
         model: entry.model,
