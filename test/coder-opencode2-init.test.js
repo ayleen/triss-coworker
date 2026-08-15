@@ -59,11 +59,18 @@ const withHome = async (fn) => {
   }
 };
 
-// Answers BOTH engine probes: `opencode2 --version` (V2 pin report) and
-// `opencode --version` (the shared flow's ensureEngine). Anything else fails
-// closed like a missing binary.
+// Answers the V2 binary RESOLUTION chain (which -> realpath -> --version on
+// the resolved absolute path, round-2 #5) plus the `opencode --version`
+// probe. Anything else fails closed like a missing binary.
+const FAKE_OC2_PATH = '/resolved/bin/opencode2';
 const fakeSh = () => (cmd, args) => {
-  if (cmd === 'opencode2' && (args || [])[0] === '--version') {
+  if (cmd === 'which' && (args || [])[0] === 'opencode2') {
+    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
+  }
+  if (cmd === 'realpath' && (args || [])[0] === FAKE_OC2_PATH) {
+    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
+  }
+  if ((cmd === 'opencode2' || cmd === FAKE_OC2_PATH) && (args || [])[0] === '--version') {
     return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
   }
   if (cmd === 'opencode' && (args || [])[0] === '--version') {

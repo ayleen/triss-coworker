@@ -366,10 +366,10 @@ coder
 coder
   .command('models')
   .description('List current + live coder models, provider compatibility, and credential readiness (read-only)\n\n' +
-    'Configuration sources:\n' +
-    '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global)\n' +
+    'Configuration sources (layered; later sources win):\n' +
+    '  • opencode & opencode2: JSONC-aware layered config — global ~/.config/opencode/opencode.json, then every opencode.json/.opencode/opencode.json up from the project root to the Git boundary (project-local wins)\n' +
     '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--json', 'print the stable machine-readable state object (no secrets)')
   .action(wrap(runCoderModels));
@@ -391,7 +391,7 @@ coderModel
       '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)'
   )
   .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
   .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')

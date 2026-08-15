@@ -29,7 +29,7 @@
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
 import { parseRateLimitReset } from '../commands/coder.js';
@@ -45,33 +45,64 @@ export function opencode2VersionPin() {
 
 export { OPENCODE2_PIN_DEFAULT };
 
-// detectOpenCode2: spawnSync('opencode2', ['--version']) — NEVER shell:true.
-// Output looks like `opencode2 v0.0.0-next-17430`. Returns
-// {found, version, satisfiesPin} where `version` is the bare build string and
-// `satisfiesPin` is EXACT equality with the configured pin (see above for why
-// not >=). NEVER throws; missing binary / spawn error / garbage output all
-// yield {found:false, version:null, satisfiesPin:false}. `sh` is injectable
-// for tests.
-// OPENCODE_DISABLE_AUTOUPDATE=1 is set for EVERY probe (review P1-3): a
-// version check must never trigger the updater, and the env is allowlisted
-// (PATH/HOME only) so no credential leaks into a probe either.
+// detectOpenCode2: resolve `opencode2` ONCE to an absolute path and pin the
+// spawn to THAT path (review round-2 #5). A bare name means the parent's PATH
+// lookup and the child's PATH lookup can disagree (relative PATH entries are
+// resolved against each process's own cwd): the pre-check could verify
+// /trusted/bin/opencode2 while the credential-bearing spawn — running with a
+// different child cwd — picks up /repo/opencode2. Returning { path } and
+// spawning exactly that path closes the gap.
+//
+// Resolution: `which opencode2` via the allowlisted env (PATH/HOME only, plus
+// OPENCODE_DISABLE_AUTOUPDATE=1 — a version probe must never trigger the
+// updater, and no credential may leak into a probe). `realpath` is applied so
+// symlinked installs resolve to the real file. Returns
+// { found, path, version, satisfiesPin } — NEVER throws; missing binary /
+// spawn error / garbage output all yield { found:false, version:null,
+// satisfiesPin:false }. `sh` is injectable for tests.
 export function detectOpenCode2(sh = nodeSpawnSync) {
+  const probeEnv = {
+    ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+    ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+  };
+  let resolvedPath = null;
+  try {
+    const w = sh('which', ['opencode2'], { env: probeEnv });
+    if (w && !w.error && w.status === 0) {
+      const p = String(w.stdout || '').trim().split('\n').filter(Boolean).pop();
+      if (p) resolvedPath = p;
+    }
+  } catch {
+    // fall through: no `which` on PATH (unusual) or spawn failure
+  }
+  if (!resolvedPath) {
+    return { found: false, path: null, version: null, satisfiesPin: false };
+  }
+  let realPath = resolvedPath;
+  try {
+    const rp = sh('realpath', [resolvedPath], { env: probeEnv });
+    if (rp && !rp.error && rp.status === 0) {
+      const v = String(rp.stdout || '').trim();
+      if (v) realPath = v;
+    }
+  } catch {
+    // keep the non-realpath path
+  }
   let r;
   try {
-    r = sh('opencode2', ['--version'], {
-      env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), OPENCODE_DISABLE_AUTOUPDATE: '1' },
-    });
+    r = sh(realPath, ['--version'], { env: probeEnv });
   } catch {
-    return { found: false, version: null, satisfiesPin: false };
+    return { found: false, path: realPath, version: null, satisfiesPin: false };
   }
   if (!r || r.error || r.status !== 0) {
-    return { found: false, version: null, satisfiesPin: false };
+    return { found: false, path: realPath, version: null, satisfiesPin: false };
   }
   const out = String(r.stdout || '').trim();
   const m = /v(\S+)/.exec(out);
   const version = m ? m[1] : out || null;
-  if (!version) return { found: false, version: null, satisfiesPin: false };
-  return { found: true, version, satisfiesPin: version === opencode2VersionPin() };
+  if (!version) return { found: false, path: realPath, version: null, satisfiesPin: false };
+  return { found: true, path: realPath, version, satisfiesPin: version === opencode2VersionPin() };
 }
 
 export function installHintOpenCode2() {
@@ -126,20 +157,67 @@ export function opencode2StateRoot(projectRoot) {
 // final mode after chmod so a umask/failure cannot silently leave it loose.
 // NOTE: this module is a PURE adapter — process.stderr writes live in the
 // caller; here we stay silent and just return what changed.
+// ensureOpenCode2RuntimeDirs(root): create the two Triss-owned XDG roots
+// under the project (not $HOME) — <root>/.triss/opencode2/{data,state} — with
+// mode 0700 (review P1/P2-7). An existing 0755 directory is CHMOD-corrected,
+// not tolerated; a symlink or non-directory at either root is a hard failure.
+// Re-checks the final mode after chmod so a umask/failure cannot silently
+// leave it loose.
+//
+// Round-2 #8: mkdirSync({recursive}) passes THROUGH intermediate components
+// (<root>/.triss, <root>/.triss/opencode2) without validating them, so a
+// symlinked .triss would redirect the credential-bearing state outside the
+// project while the final data/state dirs still pass lstat. The whole
+// ancestor chain is now walked: every component of the path BELOW `root`
+// must be a real directory (no symlinks), creating missing ones 0700.
+// NOTE: this module is a PURE adapter — process.stderr writes live in the
+// caller; here we stay silent and just return what changed.
+function assertNoSymlinkAncestors(root, dir) {
+  const rel = relative(root, dir);
+  if (!rel || rel.startsWith('..')) {
+    throw new Error(`OpenCode 2 runtime root ${dir} is not inside ${root}.`);
+  }
+  const parts = rel.split(sep).filter(Boolean);
+  let cur = root;
+  for (const part of parts) {
+    cur = join(cur, part);
+    let st;
+    try {
+      st = lstatSync(cur);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') {
+        throw new Error(`Cannot inspect OpenCode 2 runtime path component ${cur}: ${err.message}`, { cause: err });
+      }
+      mkdirSync(cur, { mode: 0o700 });
+      st = lstatSync(cur);
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `OpenCode 2 runtime path component ${cur} is a symlink — refusing to place credential state ` +
+          'behind a symlink. Remove the symlink and let Triss recreate the directory.',
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`OpenCode 2 runtime path component ${cur} is not a directory.`);
+    }
+    if ((st.mode & 0o777) !== 0o700) {
+      chmodSync(cur, 0o700);
+      const after = lstatSync(cur);
+      if ((after.mode & 0o777) !== 0o700) {
+        throw new Error(
+          `OpenCode 2 runtime path component ${cur} mode could not be corrected to 0700 ` +
+            `(still ${((after.mode & 0o777) >>> 0).toString(8)}).`,
+        );
+      }
+    }
+  }
+}
+
 export function ensureOpenCode2RuntimeDirs(root) {
   const created = [];
   for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
-    let st;
-    try {
-      st = lstatSync(dir);
-    } catch (err) {
-      if (err?.code !== 'ENOENT') {
-        throw new Error(`Cannot inspect OpenCode 2 runtime root ${dir}: ${err.message}`, { cause: err });
-      }
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      created.push(dir);
-      st = lstatSync(dir);
-    }
+    assertNoSymlinkAncestors(root, dir);
+    const st = lstatSync(dir);
     if (st.isSymbolicLink()) {
       throw new Error(
         `OpenCode 2 runtime root ${dir} is a symlink — refusing to run with credential state behind a symlink. ` +
@@ -148,18 +226,6 @@ export function ensureOpenCode2RuntimeDirs(root) {
     }
     if (!st.isDirectory()) {
       throw new Error(`OpenCode 2 runtime root ${dir} is not a directory.`);
-    }
-    const mode = st.mode & 0o777;
-    if (mode !== 0o700) {
-      chmodSync(dir, 0o700);
-      const after = lstatSync(dir);
-      if ((after.mode & 0o777) !== 0o700) {
-        throw new Error(
-          `OpenCode 2 runtime root ${dir} mode could not be corrected to 0700 ` +
-            `(still ${((after.mode & 0o777) >>> 0).toString(8)}).`,
-        );
-      }
-      created.push(`${dir} (chmod 0700)`);
     }
   }
   return created;

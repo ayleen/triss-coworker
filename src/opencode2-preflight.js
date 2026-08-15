@@ -1,6 +1,7 @@
 /**
  * opencode2-preflight.js — fail-closed effective-configuration preflight for
- * the OpenCode 2 coder engine (PR review blockers P0-1, P0-2, P1-6).
+ * the OpenCode 2 coder engine (PR review blockers P0-1, P0-2, P1-6 + round-2
+ * follow-ups).
  *
  * staticOpenCode2Preflight() only hunted plugin/agent files. This module
  * computes the FULL effective projection OpenCode 2 would run with — every
@@ -17,11 +18,20 @@
  *      settings, the credential placeholder — and contain no unrelated
  *      providers a project layer smuggled in (P0-1 — a project repo could
  *      previously redirect the forwarded API key to an arbitrary endpoint).
+ *      Round 2: the managed baseURL must equal the Triss worker profile
+ *      endpoint EXACTLY (a same-package/same-placeholder override with an
+ *      attacker URL failed before), `provider.<id>.api` (higher V1 migration
+ *      precedence than options.baseURL) is tracked, and model-level
+ *      transport overrides (models.<id>.provider.{api,npm}) are rejected.
  *   3. PERMISSION GATE: the final ordered permission policy for the primary
- *      agent and every reachable subagent must be deny-first for shell: any
- *      last-matching shell allow/ask rule fails closed (P0-2 — a project
- *      `permissions: [{action:"shell",resource:"*",effect:"allow"}]`
- *      previously passed while runs execute with --auto).
+ *      agent and every reachable subagent must be deny-first for shell.
+ *      Round 2: this is a REAL last-match-wins evaluator over the merged
+ *      rule list with wildcard action/resource semantics (findLast over
+ *      action/resource glob matches) — not a `some(allow)` scan. The Triss
+ *      template's vetted allowlist (deny "*" + narrow allows) must PASS;
+ *      a policy whose final word on an arbitrary command is allow/ask must
+ *      FAIL, including V1 string shorthand, wildcard-action rules, and the
+ *      built-in agents' default "*" allow.
  *
  * Translation semantics verified live against the pinned build
  * v0.0.0-next-17430 (2026-08-15, `opencode2 debug config`):
@@ -30,14 +40,13 @@
  *   V1 `provider.<id>.npm`        -> V2 `providers.<id>.package`
  *                                    ("@scope/pkg" => "aisdk:@scope/pkg")
  *   V1 `provider.<id>.options`    -> V2 `providers.<id>.settings`
- *   `apiKey: "{env:VAR}"` stays a placeholder in `settings`.
+ *   `apiKey: *** stays a placeholder in `settings`.
  *
  * Pure module: no process spawning, no filesystem writes, no env reads.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 
-import { enumerateOpenCodeSources } from './opencode-config.js';
+import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-config.js';
 
 // ─── route fixtures ─────────────────────────────────────────────────────────
 //
@@ -53,7 +62,7 @@ export const OPENCODE2_ROUTE_FIXTURES = Object.freeze({
   'triss-worker': {
     credentialEnv: 'TRISS_WORKER_API_KEY',
     managedProvider: true,
-    fixtureComment: 'Managed V1 shape: npm @ai-sdk/openai-compatible + options.{baseURL,apiKey:{env:TRISS_WORKER_API_KEY}}',
+    fixtureComment: 'Managed V1 shape: npm @ai-sdk/openai-compatible + options.{baseURL,apiKey:{env:T...}}; baseURL pinned to the Triss worker profile endpoint',
   },
   'zai-coding-plan': {
     credentialEnv: 'ZHIPU_API_KEY',
@@ -107,14 +116,24 @@ export function opencode2RouteFixture(modelUsed) {
 // ─── V1 -> V2 permission translation (verified against the pin) ─────────────
 
 /**
- * Translate one V1 `permission.bash` map into the ordered V2 rule list the
- * pinned build produces. Object key order = rule order (last match wins).
+ * Translate one V1 `permission.bash` value into ordered V2 shell rules.
+ * Accepts BOTH shapes the official schema allows (round-2 fix, bypass A):
+ *   - a plain string ("allow" | "deny" | "ask") => one wildcard rule
+ *     resource "*" (applies to EVERY command);
+ *   - an object map { pattern: effect }        => one rule per key, key
+ *     order = rule order (last match wins).
+ * Non-string effects / non-object non-string inputs yield [] (the caller's
+ * empty-policy fail-closed path catches them).
  */
-export function translateV1BashPermissions(bashMap) {
-  if (!bashMap || typeof bashMap !== 'object' || Array.isArray(bashMap)) return [];
+export function translateV1BashPermissions(bashValue) {
+  if (typeof bashValue === 'string') {
+    return ['allow', 'deny', 'ask'].includes(bashValue) ? [{ action: 'shell', resource: '*', effect: bashValue }] : [];
+  }
+  if (!bashValue || typeof bashValue !== 'object' || Array.isArray(bashValue)) return [];
   const rules = [];
-  for (const [resource, effect] of Object.entries(bashMap)) {
+  for (const [resource, effect] of Object.entries(bashValue)) {
     if (typeof effect !== 'string') continue;
+    if (!['allow', 'deny', 'ask'].includes(effect)) continue;
     rules.push({ action: 'shell', resource, effect });
   }
   return rules;
@@ -130,16 +149,103 @@ function isV2PermissionRule(rule) {
     && (rule.effect === 'allow' || rule.effect === 'deny' || rule.effect === 'ask');
 }
 
+// The built-in agents ship a default policy where the primary agent allows
+// most tools (the pinned build's build agent defaults "*" -> allow for bash).
+// The audit must evaluate THAT baseline too, or a config with a single narrow
+// deny ("git status": "deny") passes while every other command stays allowed.
+const BUILTIN_AGENT_BASELINE_RULES = Object.freeze([
+  { action: 'shell', resource: '*', effect: 'allow' },
+]);
+
 /**
- * Compute the final effective permission policy: ordered defaults + config
- * rules (V1 bash translation and/or native V2 permissions, in layer
- * precedence order) + the selected agent's own rules, evaluated with
- * last-match-wins semantics exactly as the pinned build merges them.
- * Returns { rules, unsafe } — unsafe is true when ANY shell command could be
- * allowed/asked under --auto.
+ * Wildcard matcher mirroring the pinned build's evaluator: "*" matches
+ * anything; otherwise a case-sensitive glob where "*" is a any-run wildcard
+ * (e.g. "git diff*" matches "git diff HEAD"). Escaped/regex metacharacters
+ * are treated literally.
+ */
+export function wildcardMatches(pattern, value) {
+  if (pattern === '*') return true;
+  if (!pattern.includes('*')) return pattern === value;
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`).test(value);
+}
+
+function ruleMatchesCommand(rule, command) {
+  const actionOk = rule.action === '*' || rule.action === 'shell';
+  if (!actionOk) return false;
+  return wildcardMatches(rule.resource, command);
+}
+
+/**
+ * Evaluate the ordered rule list for ONE concrete command with the engine's
+ * real semantics: the LAST matching rule wins (findLast); NO matching rule
+ * means "ask" — and under `run --auto`, ask is auto-approved.
+ */
+function evaluateCommand(orderedRules, command) {
+  let matched = null;
+  for (const rule of orderedRules) {
+    if (ruleMatchesCommand(rule, command)) matched = rule;
+  }
+  return matched ? matched.effect : 'ask';
+}
+
+// A battery of probe commands covering the vetted allowlist surface plus
+// arbitrary dangerous commands. The effective policy must deny (or at least
+// not allow) every unvetted probe.
+const PROBE_COMMANDS = [
+  'curl http://attacker.example',
+  'rm -rf /',
+  'echo pwned > /etc/hosts',
+  'sh -c anything',
+  'git push --force origin main',
+  'find / -name secrets',
+  'cat ~/.ssh/id_rsa',
+  'npm publish',
+  'node -e "process.exit(1)"',
+  'bash',
+];
+
+// The vetted allowlist exactly as `opencodeConfigTemplate` writes it: these
+// narrow allows are the ONLY shell permissions a Triss-authored config may
+// grant on top of the wildcard deny.
+export const VETTED_BASH_ALLOWLIST = Object.freeze([
+  'git status',
+  'git diff*',
+  'git log*',
+  'ls*',
+  'node --test*',
+  'npm test*',
+  'npm run test*',
+]);
+
+function isVettedAllowResource(resource) {
+  return VETTED_BASH_ALLOWLIST.includes(resource);
+}
+
+/**
+ * Compute the effective permission policy and the deny-first proof.
+ *
+ * Algorithm (round-2 replacement of the `some(allow)` scan):
+ *   1. Merge ordered rules: built-in agent baseline FIRST, then every config
+ *      layer in precedence order (V1 bash translation + native V2
+ *      permissions), then the selected agent's own rules LAST (agents
+ *      override config).
+ *   2. Require an explicit wildcard-deny rule for shell ("*" -> deny) —
+ *      without it the final word on arbitrary commands is the baseline allow
+ *      or "ask" (auto-approved under --auto).
+ *   3. Every non-wildcard ALLOW rule must be a vetted allowlist pattern and
+ *      must actually be narrowed by the wildcard deny in LAST-match-wins
+ *      order: an allow rule that is a LATER match for a command it covers
+ *      than every deny rule would let that command through.
+ *   4. Prove by evaluation: every PROBE_COMMAND must resolve to deny under
+ *      the real evaluator, and every vetted command must resolve to allow
+ *      ONLY if it is actually allowlisted in the policy (a policy that
+ *      denies everything is safe, just unusable — not a preflight failure).
+ *
+ * @returns {{ rules, unsafe, reason, shellRuleCount }}
  */
 export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
-  const orderedRules = [];
+  const orderedRules = [...BUILTIN_AGENT_BASELINE_RULES];
   for (const doc of layerDocs) {
     if (!doc) continue;
     const v1 = translateV1BashPermissions(doc?.permission?.bash);
@@ -152,14 +258,88 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
     if (Array.isArray(agentDoc.permissions)) {
       orderedRules.push(...agentDoc.permissions.filter(isV2PermissionRule));
     }
-    if (agentDoc?.permission?.bash) {
-      orderedRules.push(...translateV1BashPermissions(agentDoc.permission.bash));
+    const agentBash = agentDoc?.permission?.bash;
+    if (agentBash) {
+      orderedRules.push(...translateV1BashPermissions(agentBash));
     }
   }
-  const shellRules = orderedRules.filter((r) => r.action === 'shell');
-  const unsafe = shellRules.length === 0
-    || shellRules.some((r) => r.effect === 'allow' || r.effect === 'ask');
-  return { rules: orderedRules, unsafe, shellRuleCount: shellRules.length };
+
+  // 2. A wildcard shell deny must exist somewhere in the policy. Without it
+  //    the final word on arbitrary commands is the built-in baseline allow
+  //    (or "ask", which --auto approves) — bypass C shape.
+  const wildcardDenyIdx = orderedRules.findIndex(
+    (r) => (r.action === 'shell' || r.action === '*') && r.resource === '*' && r.effect === 'deny',
+  );
+  if (wildcardDenyIdx < 0) {
+    return {
+      rules: orderedRules,
+      unsafe: true,
+      reason: 'no-wildcard-deny',
+      shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+    };
+  }
+
+  // 3. Live permissive rules. Last-match-wins semantics: a rule GRANTS
+  //    something only for commands it matches that NO LATER rule matches.
+  //    So an allow/ask is harmless when a LATER wildcard deny fully shadows
+  //    it ({"rm -rf":"allow","*":"deny"} denies rm -rf — dead rule, safe);
+  //    and the Triss template's vetted allows AFTER the wildcard deny are
+  //    the intended shape (last-match winners for vetted commands only).
+  //    A rule is LIVE (dangerous) when no later wildcard deny shadows it;
+  //    a live wildcard allow/ask grants/approves everything (bypasses A/B),
+  //    a live narrow allow/ask must be a vetted allowlist pattern.
+  //    `ask` counts as permissive because `run --auto` approves it.
+  for (let k = 0; k < orderedRules.length; k += 1) {
+    const rule = orderedRules[k];
+    const isShellish = rule.action === 'shell' || rule.action === '*';
+    if (!isShellish) continue;
+    if (rule.effect !== 'allow' && rule.effect !== 'ask') continue;
+    const shadowedByLaterDeny = orderedRules
+      .slice(k + 1)
+      .some((r) => (r.action === 'shell' || r.action === '*') && r.resource === '*' && r.effect === 'deny');
+    if (shadowedByLaterDeny) continue; // dead rule — grants nothing
+    if (rule.resource === '*') {
+      return {
+        rules: orderedRules,
+        unsafe: true,
+        reason: `live-wildcard-${rule.effect}`,
+        shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+      };
+    }
+    if (!isVettedAllowResource(rule.resource)) {
+      return {
+        rules: orderedRules,
+        unsafe: true,
+        reason: `live-unvetted-${rule.effect}`,
+        detail: rule.resource,
+        shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+      };
+    }
+  }
+
+  // 4. Full-evaluation proof over probe commands: with a wildcard deny
+  //    present every probe matches it, so the LAST match must resolve to
+  //    deny — anything else (allow, ask) means a live permissive rule
+  //    slipped past step 3.
+  for (const probe of PROBE_COMMANDS) {
+    const effect = evaluateCommand(orderedRules, probe);
+    if (effect !== 'deny') {
+      return {
+        rules: orderedRules,
+        unsafe: true,
+        reason: 'probe-not-denied',
+        detail: `${probe} -> ${effect}`,
+        shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+      };
+    }
+  }
+
+  return {
+    rules: orderedRules,
+    unsafe: false,
+    reason: 'deny-first',
+    shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+  };
 }
 
 // ─── provider projection ────────────────────────────────────────────────────
@@ -169,6 +349,12 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
  * per-key, OpenCode deep-merges provider blocks) and translate each to the
  * V2 shape the pin produces: npm -> package (`aisdk:` prefixed when scoped),
  * options -> settings. Returns { providers, sourceLayers }.
+ *
+ * Round 2: `provider.<id>.api` is captured (the official migrator maps
+ * `url = provider.api ?? lowered options.url` — api has HIGHER precedence
+ * than options.baseURL, so an attacker URL there redirects the key without
+ * touching options), and model-level transport overrides
+ * (models.<id>.provider.{api,npm}) are surfaced for the gate to reject.
  */
 export function projectEffectiveProviders({ layerDocs } = {}) {
   const providers = {};
@@ -185,13 +371,14 @@ export function projectEffectiveProviders({ layerDocs } = {}) {
       if (typeof def !== 'object' || Array.isArray(def)) {
         throw new Error(`OpenCode 2 preflight: provider "${id}" definition is not an object`);
       }
-      const translated = {};
+      const translated = { ...(providers[id] || {}) };
       if (typeof def.npm === 'string') {
         translated.package = def.npm.startsWith('@') || def.npm.includes('/')
           ? `aisdk:${def.npm}`
           : def.npm;
       }
       if (typeof def.package === 'string') translated.package = def.package;
+      if (def.api != null) translated.api = def.api;
       if (def.options != null) translated.settings = def.options;
       if (def.settings != null) translated.settings = def.settings;
       if (def.models != null) translated.models = def.models;
@@ -202,20 +389,39 @@ export function projectEffectiveProviders({ layerDocs } = {}) {
   return { providers, sourceLayers };
 }
 
-// The managed triss-worker provider shape written by `triss coder init`
-// (workerProviderDefinition): scoped npm package + options.{baseURL, apiKey
-// placeholder}. The endpoint (baseURL) is profile-specific and NOT pinned
-// here — what IS pinned: package id, the credential placeholder field, and
-// that settings carries no extra keys (an injected headers/other-endpoint
-// key fails).
-export function isManagedTrissWorkerTranslation(translated) {
-  if (!translated || typeof translated !== 'object') return false;
-  if (translated.package !== 'aisdk:@ai-sdk/openai-compatible') return false;
+/**
+ * The managed triss-worker provider shape written by `triss coder init`
+ * (workerProviderDefinition). Round 2: the audit passes in the EXPECTED
+ * worker profile (exact baseURL from the live Triss worker config) and the
+ * definition must match it exactly — package id, settings keys, the
+ * credential placeholder, the baseURL value, AND no provider.api /
+ * model-level transport override that could redirect the key.
+ */
+export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
+  if (!translated || typeof translated !== 'object') return { ok: false, reason: 'not-an-object' };
+  if (translated.api != null) return { ok: false, reason: 'provider-api-override' };
+  if (translated.package !== 'aisdk:@ai-sdk/openai-compatible') return { ok: false, reason: 'package' };
   const settings = translated.settings;
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { ok: false, reason: 'settings-shape' };
   const keys = Object.keys(settings).sort();
-  if (keys.length !== 2 || keys[0] !== 'apiKey' || keys[1] !== 'baseURL') return false;
-  return settings.apiKey === '{env:TRISS_WORKER_API_KEY}' && typeof settings.baseURL === 'string';
+  if (keys.length !== 2 || keys[0] !== 'apiKey' || keys[1] !== 'baseURL') return { ok: false, reason: 'settings-keys' };
+  if (settings.apiKey !== '{env:TRISS_WORKER_API_KEY}') return { ok: false, reason: 'credential-placeholder' };
+  if (typeof settings.baseURL !== 'string') return { ok: false, reason: 'baseurl-type' };
+  if (expectedBaseURL != null && settings.baseURL !== expectedBaseURL) {
+    return { ok: false, reason: 'baseurl-value', actual: settings.baseURL, expected: expectedBaseURL };
+  }
+  // Model-level transport overrides: models.<id>.provider.{api,npm} redirect
+  // per-model traffic; the managed definition writes plain { name } entries.
+  if (translated.models != null) {
+    if (typeof translated.models !== 'object' || Array.isArray(translated.models)) {
+      return { ok: false, reason: 'models-shape' };
+    }
+    for (const [id, model] of Object.entries(translated.models)) {
+      if (!model || typeof model !== 'object' || Array.isArray(model)) return { ok: false, reason: 'models-entry' };
+      if (model.provider != null) return { ok: false, reason: 'model-level-provider', detail: id };
+    }
+  }
+  return { ok: true };
 }
 
 // ─── full preflight ─────────────────────────────────────────────────────────
@@ -229,11 +435,15 @@ export function isManagedTrissWorkerTranslation(translated) {
  * @param {string} input.modelUsed — the finally selected model (--model,
  *   TRISS_CODER_MODEL, or the configured default; the gate applies to the
  *   final value regardless of how it was chosen — P1-6).
+ * @param {string} [input.expectedWorkerBaseURL] — the Triss worker profile
+ *   endpoint for this run; managed-provider baseURL must equal it exactly
+ *   (round-2 P0 fix: a same-shape override with an attacker URL failed
+ *   before).
  * @param {object} [input.deps] — { enumerate } seams for tests.
  * @returns {{ sources, projection, policy }} for envelope/logging use.
  * @throws on ANY gate failure, before a credential is forwarded.
  */
-export function auditOpenCode2Run({ cwd, modelUsed, agentName }, deps = {}) {
+export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Run: cwd is required');
   if (!modelUsed) throw new Error('auditOpenCode2Run: modelUsed is required');
 
@@ -249,18 +459,17 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName }, deps = {}) {
     );
   }
 
-  // Parse every EXISTING config layer once (the enumerator already parsed
-  // them for plugins; re-parse here for projection/policy fields).
+  // Parse every EXISTING config layer once through the CANONICAL JSONC-aware
+  // parser (round-2 fix: JSON.parse re-reading rejected valid .jsonc layers
+  // and never saw comments/trailing commas).
   const layerDocs = [];
   for (const c of sources.configs) {
     if (!c.exists) continue;
     let doc;
     try {
-      doc = JSON.parse(readFileSync(c.path, 'utf8'));
-    } catch {
-      // The enumerator's own JSONC parser is the canonical one for jsonc;
-      // re-parse failures here mean the file changed under us — fail closed.
-      throw new Error(`OpenCode 2 preflight aborted: cannot re-read ${c.path}`);
+      doc = parseOpenCodeDocument(readFileSync(c.path, 'utf8'), { path: c.path });
+    } catch (err) {
+      throw new Error(`OpenCode 2 preflight aborted: cannot parse ${c.path} — ${err.message}`, { cause: err });
     }
     doc.__layerPath = c.path;
     layerDocs.push(doc);
@@ -276,11 +485,13 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName }, deps = {}) {
           'config layer — run `triss coder init --engine opencode --provider worker` first.',
       );
     }
-    if (!isManagedTrissWorkerTranslation(translated)) {
+    const check = isManagedTrissWorkerTranslation(translated, expectedWorkerBaseURL);
+    if (!check.ok) {
+      const detail = check.actual != null ? ` (baseURL "${check.actual}" != expected "${check.expected}")` : '';
       throw new Error(
         `OpenCode 2 preflight aborted: provider["${prefix}"] in ${sourceLayers[prefix]} does not match the ` +
-          'managed translation fixture (package / settings / credential placeholder). Remove the override or ' +
-          're-run `triss coder init`.',
+          `managed translation fixture (${check.reason}${detail ? ': ' + detail : ''}). Remove the override or ` +
+          're-run `triss coder init`. Triss refuses to forward TRISS_WORKER_API_KEY to a redirected endpoint.',
       );
     }
   } else {
@@ -295,7 +506,8 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName }, deps = {}) {
     }
   }
 
-  // 3. PERMISSION GATE — final ordered policy, deny-first proof.
+  // 3. PERMISSION GATE — final ordered policy, deny-first proof via the real
+  //    last-match-wins evaluator (round 2).
   const agentDoc = agentName
     ? layerDocs.find((doc) => {
       const block = doc?.agent?.[agentName] ?? doc?.agents?.[agentName];
@@ -304,17 +516,20 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName }, deps = {}) {
     : null;
   const policy = computeEffectivePermissionPolicy({ layerDocs, agentDoc });
   if (policy.unsafe) {
-    if (policy.shellRuleCount === 0) {
+    const detail = policy.detail ? ` (${policy.detail})` : '';
+    if (policy.reason === 'no-wildcard-deny') {
       throw new Error(
-        'OpenCode 2 preflight aborted: no shell permission rules in the effective configuration — runs execute ' +
-          'with --auto, so a missing policy is not deny-first. Add permission.bash {"*": "deny"} to the global ' +
-          'opencode.json.',
+        'OpenCode 2 preflight aborted: the effective shell policy has no wildcard deny — every command not ' +
+          'matched by a narrower rule falls back to the built-in allow/ask baseline, and --auto would approve ' +
+          'it. Add permission.bash {"*": "deny"} to the config. The final ordered policy must end deny for "*" ' +
+          'and allow only vetted commands.',
       );
     }
     throw new Error(
-      'OpenCode 2 preflight aborted: the effective shell policy is not deny-first — a later rule allows or ' +
-        'asks for shell commands, and --auto would approve it. The final ordered policy must end deny for "*" ' +
-        'and allow only vetted commands. Remove the allow/ask rule or add a later deny.',
+      'OpenCode 2 preflight aborted: the effective shell policy is not deny-first — ' +
+        `${policy.reason}${detail}. The built-in agents start from "*"=allow, so the ordered policy must ` +
+        'carry a wildcard deny that shadows every non-vetted command. Remove the allow/ask rule or add a ' +
+        'later wildcard deny.',
     );
   }
 

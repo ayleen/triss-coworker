@@ -1464,45 +1464,81 @@ function staticOpenCode2Preflight(cwd) {
 }
 
 async function runOpenCode2Init(opts = {}, deps = {}) {
-  // 1. STATIC PREFLIGHT — before setupKey (credential write) and before any
-  //    child process (plugin + agent gates, shared with the run path).
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4; review
+  // round-2 P1-4 full rewrite). The V2 init OWNS its whole flow:
+  //   1. STATIC PREFLIGHT before any credential write or child process
+  //      (plugin + agent gates, shared with the run path).
+  //   2. Exact-pin gate TERMINALLY — a missing/mismatched binary must not
+  //      mutate any configuration (beta contract).
+  //   3. Credential + scope handling mirroring the V1 runCoderInit head:
+  //      --local/--global resolution, .env file creation, setupKey prompt,
+  //      .gitignore for local .triss.env. (Round-2 fix: previously the V2
+  //      path jumped straight into runCoderSetup and skipped all of this,
+  //      so a missing key only failed at the late gate AFTER config/pins
+  //      were written, and --local was silently ignored.)
+  //   4. Shared config/model setup WITHOUT the V1-only steps: no V1 binary
+  //      check/install (ensureEngine), no agent templates the V2 preflight
+  //      itself rejects.
+  //   5. Post-setup FULL audit (auditOpenCode2Run + static gate) over the
+  //      final filesystem state — not just the plugin/agent scan.
   staticOpenCode2Preflight(deps.cwd || process.cwd());
-  // 2. Banner + pin report BEFORE the shared setup (matching V1's flow), so
-  //    the user sees the V2 context while the shared key/config steps run.
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
   const sh = deps.spawnSync || nodeSpawnSync;
+  // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
   const det = detectOpenCode2(sh);
-  if (det.found && det.satisfiesPin) {
-    process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
-  } else if (det.found) {
-    process.stderr.write(
-      pc.yellow(
-        `  ⚠ opencode2 ${det.version} found, pinned version is ${opencode2VersionPin()} (not auto-upgrading)\n`,
-      ),
-    );
-  } else {
-    process.stderr.write(
-      pc.yellow(`  ⚠ opencode2 not found — install: ${installHintOpenCode2()}\n`),
+  if (!det.found || !det.satisfiesPin) {
+    throw new Error(
+      `opencode2 ${det.found ? `v${det.version}` : 'not found'} does not match the exact pin ` +
+        `v${opencode2VersionPin()} — managed V2 setup requires the verified build first (${installHintOpenCode2()}). ` +
+        'A version mismatch is a terminal compatibility failure, never a warning; no configuration was changed.',
     );
   }
-  // 3. Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
-  //    XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
+  process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
+  // (3) Credential + scope — the V1 head flow.
+  loadEnvFiles();
+  const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
+  let scope = resolveScope(opts);
+  if (!scope) scope = await chooseScope('Where to save the coder key and config?');
+  const workerShellEnv = captureWorkerShellSnapshot();
+  const envPath = ensureEnvFile(scope);
+  const scopedWorker = provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
+    : null;
+  await setupKey(envPath, provider, provider === 'worker' ? { existing: scopedWorker?.apiKey } : {});
+  if (scope === 'local' && addToGitignore('.triss.env')) {
+    process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
+  }
+  // Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
+  // XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
   ensureOpenCode2RuntimeDirs(projectRoot(), { note: 'init' });
-  // 4. Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
-  //    runCoderInit path checks/installs the V1 `opencode` binary and then
-  //    scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
-  //    itself REJECTS, making a fresh V2 init deterministically poison the
-  //    next V2 run. V2 init therefore reuses only the shared key/config
-  //    setup (runCoderSetup with engine-aware template skipping) — the same
-  //    setupKey / opencode.json / model-pin flow — and re-runs the static
-  //    preflight against the FINAL filesystem state before printing Done.
+  // (4) Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
+  // runCoderInit path checks/installs the V1 `opencode` binary and then
+  // scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
+  // itself REJECTS, making a fresh V2 init deterministically poison the
+  // next V2 run. V2 init therefore reuses only the shared key/config
+  // setup (runCoderSetup with engine-aware template skipping) — the same
+  // opencode.json / model-pin flow.
   const setup = await runCoderSetup(
-    { ...opts, engine: 'opencode2', skipAgentTemplates: true },
+    { ...opts, engine: 'opencode2', scope, provider, skipAgentTemplates: true },
     deps,
   );
-  // 5. Post-setup preflight over the resulting tree: the shared setup must
-  //    not have created any source the V2 gate rejects.
-  staticOpenCode2Preflight(deps.cwd || process.cwd());
+  // (5) Post-setup preflight over the resulting tree: the shared setup must
+  // not have created any source the V2 gate rejects — and the FULL audit
+  // (provider + permission) must pass over the written config.
+  const postDir = deps.cwd || process.cwd();
+  staticOpenCode2Preflight(postDir);
+  const pinnedModel = process.env.TRISS_CODER_MODEL || readOpencodeModels(opencodeConfigPath(scope)).model;
+  const postWorkerProfile = pinnedModel && pinnedModel.startsWith('triss-worker/')
+    ? workerCoderProfile()
+    : null;
+  auditOpenCode2Run(
+    {
+      cwd: postDir,
+      modelUsed: pinnedModel,
+      expectedWorkerBaseURL: postWorkerProfile ? postWorkerProfile.baseUrl : null,
+    },
+    { enumerate: deps.enumerateOpenCodeSources },
+  );
   return setup;
 }
 
@@ -3252,11 +3288,30 @@ function normalizeSessionStore(raw) {
       }
       for (const engine of SESSION_STORE_ENGINES) {
         const namespace = raw.engines[engine];
-        if (namespace && typeof namespace === 'object') {
-          for (const [slug, realId] of Object.entries(namespace)) {
-            if (typeof slug === 'string' && typeof realId === 'string') {
-              store.engines[engine][slug] = realId;
-            }
+        if (namespace == null) continue; // absent is fine
+        if (typeof namespace !== 'object' || Array.isArray(namespace)) {
+          // Round-2 7.2: a string/array namespace (corrupted or future
+          // shape) used to be silently skipped; the next persist then
+          // REWROTE the store without that data. Fail closed instead —
+          // the file is never rewritten when its shape is not understood.
+          throw new Error(
+            `Session store at ${sessionsFilePath()} has a malformed "${engine}" namespace ` +
+              `(expected an object of slug -> session id, got ${Array.isArray(namespace) ? 'an array' : `a ${typeof namespace}`}) — ` +
+              'refusing to read or rewrite it (fail-closed). Fix or remove the file manually.',
+          );
+        }
+        for (const [slug, realId] of Object.entries(namespace)) {
+          if (typeof slug === 'string' && typeof realId === 'string') {
+            store.engines[engine][slug] = realId;
+          } else {
+            // Non-string slug/value entries are corruption too — same
+            // fail-closed contract (round-2 7.2: silent drops lose data
+            // on the next rewrite).
+            throw new Error(
+              `Session store at ${sessionsFilePath()} has a malformed entry in "engines.${engine}" ` +
+                `(${JSON.stringify(String(slug))} -> ${typeof realId}) — refusing to read or rewrite it ` +
+                '(fail-closed). Fix or remove the file manually.',
+            );
           }
         }
       }
@@ -4668,8 +4723,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
 
   // Engine-namespaced slug -> real-id lookup (versioned store): an opencode2
-  // run never sees opencode's ids even for the same slug.
-  const sessionRealIdArg = opts.session ? lookupSessionRealId(engine, opts.session) : null;
+  // run never sees opencode's ids even for the same slug. Deferred into the
+  // engine branches (round-2 7.1): the store read FAILS CLOSED on malformed/
+  // unknown shapes, and the V2 branch must clean up a freshly-created
+  // isolation worktree when it throws — previously this line ran BEFORE the
+  // V2 try/catch existed, leaking .triss/wt/<slug> + the coder/<slug> branch.
+  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSessionRealId(engineName, opts.session) : null);
+  const sessionRealIdV1 = engine === 'opencode2' ? null : (opts.session ? lookupSessionRealId(engine, opts.session) : null);
 
   // ─── OpenCode 2 (engine #3) ────────────────────────────────────────────────
   //
@@ -4711,13 +4771,36 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
       );
     }
+    // Session lookup INSIDE the guarded zone (round-2 7.1): the store read
+    // fails closed on malformed/unknown shapes and must not leak a
+    // freshly-created isolation worktree.
+    let sessionRealIdArg2;
+    try {
+      sessionRealIdArg2 = sessionRealIdArgFor('opencode2');
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
     // Full effective-configuration audit BEFORE the credential is read:
     // route fixture gate (final modelUsed prefix, however selected —
-    // P1-6), provider projection vs fixture (P0-1), deny-first permission
-    // proof incl. agents (P0-2), plus the existing plugin/agent source
-    // rejection. Any failure leaves NO worktree/branch behind (P2-12).
+    // P1-6), provider projection vs fixture with the EXACT worker profile
+    // baseURL (P0-1 round 2), deny-first permission proof incl. agents via
+    // the real last-match-wins evaluator (P0-2 round 2), plus the existing
+    // plugin/agent source rejection. Any failure leaves NO worktree/branch
+    // behind (P2-12).
+    const workerProfile = modelUsed.startsWith('triss-worker/')
+      ? workerCoderProfile()
+      : null;
     try {
-      auditOpenCode2Run({ cwd: runtimeDir, modelUsed, agentName: agent }, { enumerate: deps.enumerateOpenCodeSources });
+      auditOpenCode2Run(
+        {
+          cwd: runtimeDir,
+          modelUsed,
+          agentName: agent,
+          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+        },
+        { enumerate: deps.enumerateOpenCodeSources },
+      );
       staticOpenCode2Preflight(runtimeDir);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
@@ -4731,7 +4814,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       throw err;
     }
     // EXACT pin verification before the credential-bearing spawn (review
-    // P1-3): resolve the binary, verify the exact build, and run THAT path.
+    // P1-3 + round-2 #5): resolve the binary to an ABSOLUTE path, verify the
+    // exact build, and spawn THAT path — never a bare name whose PATH lookup
+    // can differ between the parent (pre-check) and the child cwd (spawn).
     // A missing/mismatched/garbage binary is a terminal error here — the
     // envelope reports the DETECTED version, not the configured pin.
     const pinDetected = detectOpenCode2(sh);
@@ -4744,12 +4829,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
     const engine2Version = pinDetected.version;
+    const engine2Path = pinDetected.path;
 
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
       model: modelUsed,
       agent,
-      sessionRealId: sessionRealIdArg,
+      sessionRealId: sessionRealIdArg2,
       cont: !!opts.continue,
     });
     const env2 = opencode2Engine.buildSpawnEnv({
@@ -4785,7 +4871,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         residualTermGraceMs: deps.residualTermGraceMs,
         residualKillWaitMs: deps.residualKillWaitMs,
         processGroupPollMs: deps.processGroupPollMs,
-        binary: opencode2Engine.binaryName,
+        binary: engine2Path,
         label: 'opencode2',
         createState: createOpenCode2EventFolder,
         foldLine: foldOpenCode2EventLine,
@@ -4793,14 +4879,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });
-      // Post-run exact-pin re-verification (review P1-3): the binary must
-      // still be the verified build after the run — a mid-run self-update or
-      // binary swap is a terminal compatibility failure.
+      // Post-run exact-pin re-verification (review P1-3 + round-2 #5): the
+      // SAME absolute path must still resolve to the verified build — a
+      // mid-run self-update, binary swap, or symlink retarget is a terminal
+      // compatibility failure.
       const postPin = detectOpenCode2(sh);
-      if (!postPin.found || !postPin.satisfiesPin || postPin.version !== engine2Version) {
+      if (
+        !postPin.found
+        || !postPin.satisfiesPin
+        || postPin.version !== engine2Version
+        || postPin.path !== engine2Path
+      ) {
         throw new Error(
-          `opencode2 binary changed during the run (before: v${engine2Version}, after: ` +
-            `${postPin.found ? `v${postPin.version}` : 'not found'}) — treat this run's compatibility as unverified.`,
+          `opencode2 binary changed during the run (before: v${engine2Version} @ ${engine2Path}, after: ` +
+            `${postPin.found ? `v${postPin.version} @ ${postPin.path}` : 'not found'}) — treat this run's compatibility as unverified.`,
         );
       }
       if (rateLimit2 && !result2.finalText) {
@@ -4964,7 +5056,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     prompt,
     agent,
     model: modelUsed,
-    sessionRealId: sessionRealIdArg,
+    sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
     pure: !!oneShotProvider,

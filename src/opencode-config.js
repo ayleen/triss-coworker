@@ -70,17 +70,36 @@ export function parseOpenCodeDocument(text, { path: sourcePath = null } = {}) {
       i += 2;
       continue;
     }
-    // Trailing commas (review P3-13): removed INSIDE the string-aware state
-    // machine — a regex over the whole document would also rewrite string
-    // contents (`{"pattern":"value,}"}` used to become `{"pattern":"value}"}`).
-    // When a comma is followed only by whitespace up to a closing } or ],
-    // drop it (and the whitespace) right here; inside strings we never land
-    // in this branch, so string commas are untouchable.
+    // Trailing commas (review P3-13 + round-2 #6): removed INSIDE the
+    // string-aware state machine — a regex over the whole document would
+    // also rewrite string contents (`{"pattern":"value,}"}` used to become
+    // `{"pattern":"value}"}`). When a comma is followed only by whitespace
+    // and/or COMMENTS up to a closing } or ], drop it; inside strings we
+    // never land in this branch, so string commas are untouchable. The
+    // comment case is real: `{"model":"x", /* why */ }` used to keep the
+    // comma (lookahead saw `/`), the comment was then stripped, and the
+    // leftover trailing comma broke JSON.parse.
     if (ch === ',') {
       let j = i + 1;
-      while (j < src.length && /\s/.test(src[j])) j += 1;
+      while (j < src.length) {
+        if (/\s/.test(src[j])) {
+          j += 1;
+          continue;
+        }
+        if (src[j] === '/' && src[j + 1] === '/') {
+          while (j < src.length && src[j] !== '\n') j += 1;
+          continue;
+        }
+        if (src[j] === '/' && src[j + 1] === '*') {
+          j += 2;
+          while (j < src.length && !(src[j] === '*' && src[j + 1] === '/')) j += 1;
+          j += 2;
+          continue;
+        }
+        break;
+      }
       if (src[j] === '}' || src[j] === ']') {
-        i = j; // skip the comma AND the whitespace before the closer
+        i = j; // skip the comma AND the skipped whitespace/comments
         continue;
       }
     }

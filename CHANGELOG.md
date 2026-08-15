@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (opencode2 engine beta — PR #46)
+
+- Fail-closed effective-configuration preflight for `coder run --engine
+  opencode2`: the managed provider projection (exact package, settings keys,
+  credential placeholder, and the worker `baseURL` compared against the
+  configured Triss worker endpoint), `provider.api` and model-level
+  `provider` transport overrides are rejected before any credential is
+  forwarded, and the permission gate now proves deny-first shell policy with
+  a real last-match-wins evaluator (V1 string shorthand, wildcard-action
+  rules, built-in agent baseline, and vetted allowlist semantics).
+- `opencode2` runs resolve the engine binary to an absolute path
+  (`which` + `realpath`) and spawn exactly that path, re-verifying the same
+  path and version after the run.
+- Session store reads fail closed on malformed namespaces (no silent data
+  loss on rewrite); the lookup happens inside the isolation cleanup guard so
+  a malformed store never leaks a worktree/branch.
+- XDG runtime roots reject symlinked path components anywhere in the chain
+  below the project root.
+- `opencode init --engine opencode2` owns its flow: credential prompt and
+  `--local`/`--global` scope are honored, an exact-pin mismatch is terminal
+  before any config mutation, and the post-setup audit is the full provider
+  + permission preflight (not just the plugin/agent scan).
+- The full run preflight parses config layers through the JSONC-aware
+  canonical parser (comments and trailing commas no longer abort the run),
+  and `parseOpenCodeDocument` drops trailing commas followed by comments.
+
 ## [0.35.0] — 2026-08-14
 
 ### Added

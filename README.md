@@ -280,7 +280,7 @@ The exposed tool set is **filtered by configured credentials**:
   `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
   (`opencode` V1 default; `--engine opencode2` beta — see
-  [opencode2.md](opencode2.md) — or `crush`); its timeout defaults to
+  [opencode2.md](docs/opencode2.md) — or `crush`); its timeout defaults to
   1500s (25 min) over MCP, above the CLI's 900s, since coding runs are
   expected to be long; override per call via the `timeout` arg. For
   runs that may exceed it, use `triss coder run` on the CLI instead.
