@@ -161,7 +161,12 @@ jobs:
       - name: add → dump-config proves the three routes
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
-          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v lifecycle)
+          # Match the VERSION SUFFIX (-lifecycle.N), not the substring
+          # "lifecycle": the pack directory /tmp/lifecycle/ itself contains
+          # it, so `grep -v lifecycle` filtered out BOTH tarballs and left
+          # V1 empty.
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
+          test -n "$V1"
           dsh plugin --profile headless add -w "$V1"
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-v1.yml
           for route in opencode opencode-go zai; do
@@ -173,6 +178,7 @@ jobs:
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
           V2=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*lifecycle*.tgz)
+          test -n "$V2"
           # dsh plugin add forwards to pnpm add, which is a no-op when the
           # package name is already installed. The supported Harness update
           # path is remove + add, verified live on dsh 0.1.0-rc.6: adding the
@@ -200,7 +206,7 @@ jobs:
       - name: reinstall → composition restored
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
-          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v lifecycle)
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
           dsh plugin --profile headless add -w "$V1"
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-reinstalled.yml
           for route in opencode opencode-go zai; do
@@ -209,7 +215,7 @@ jobs:
       - name: Repeat add+dump through an npx-style Harness anchor
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-npx-home"
-          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v lifecycle)
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
           npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless add -w "$V1"
           npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx.yml
           for route in opencode opencode-go zai; do
