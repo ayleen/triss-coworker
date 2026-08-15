@@ -131,7 +131,12 @@ jobs:
       - name: Pack the companion and a v2 fixture with a different effective patch
         run: |
           mkdir -p /tmp/lifecycle/pack /tmp/lifecycle/fixture
-          npm pack --ignore-scripts --pack-destination /tmp/lifecycle/pack packages/dsh-provider-bundle
+          # NOTE the ./ prefix: npm 11 parses a bare `packages/dsh-provider-bundle`
+          # argument as the owner/repo GitHub shorthand and tries
+          # `git ls-remote ssh://git@github.com/packages/dsh-provider-bundle.git`
+          # (exit 128 on runners without SSH keys). The explicit relative
+          # path forces local-directory packing.
+          npm pack --ignore-scripts --pack-destination /tmp/lifecycle/pack ./packages/dsh-provider-bundle
           cp -r packages/dsh-provider-bundle/* /tmp/lifecycle/fixture/
           node <<'EOF'
           const fs = require('fs');
