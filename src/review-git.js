@@ -18,6 +18,9 @@
  * shallow metadata accepted; every NONEMPTY shallow repository rejected).
  */
 
+import { join as joinPath } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+
 export const REVIEW_RENAME_CANDIDATE_LIMIT = 2000;
 
 const SANITIZED_ENV = Object.freeze({
@@ -28,7 +31,7 @@ const SANITIZED_ENV = Object.freeze({
   GIT_TERMINAL_PROMPT: '0',
 });
 
-const SHALLOW_MARKER = '.git/shallow';
+const SHALLOW_MARKER = 'shallow'; // resolved against `rev-parse --absolute-git-dir`
 
 function gitArgs(opts, args) {
   return ['--no-pager', '-c', 'core.quotepath=false', ...args];
@@ -58,16 +61,20 @@ export function resolveReviewComparison(sh, { cwd, base, head = 'HEAD', deadline
   }
 
   // Nonempty shallow repositories are rejected; complete/empty accepted.
+  // NOTE: worktrees keep their metadata in `<repo>/.git/worktrees/<name>/`,
+  // and bare repositories have no worktree at all — resolve the marker
+  // through `git rev-parse --git-dir` instead of assuming `.git`.
   const shallowOut = run(['rev-parse', '--is-shallow-repository']);
   if (shallowOut.status === 0 && shallowOut.stdout.trim() === 'true') {
-    const shallow = sh(gitArgs({}, ['rev-list', '--max-count=1', 'HEAD']), { cwd, encoding: 'utf8' });
-    const shallowPath = require('node:path').join(cwd, SHALLOW_MARKER);
-    const { existsSync, readFileSync } = require('node:fs');
-    const hasShallowFile = existsSync(shallowPath) && readFileSync(shallowPath, 'utf8').trim().length > 0;
-    if (hasShallowFile) {
-      return { ok: false, code: 'TRISS_REVIEW_SHALLOW_REJECTED', message: 'nonempty shallow repository rejected' };
+    const gitDirOut = run(['rev-parse', '--absolute-git-dir']);
+    const gitDir = gitDirOut.status === 0 ? gitDirOut.stdout.trim() : null;
+    if (gitDir) {
+      const shallowPath = joinPath(gitDir, SHALLOW_MARKER);
+      const hasShallowFile = existsSync(shallowPath) && readFileSync(shallowPath, 'utf8').trim().length > 0;
+      if (hasShallowFile) {
+        return { ok: false, code: 'TRISS_REVIEW_SHALLOW_REJECTED', message: 'nonempty shallow repository rejected' };
+      }
     }
-    void shallow;
   }
 
   const baseRev = base || 'HEAD';
@@ -119,7 +126,11 @@ export function acquireNameStatusInventory(sh, { cwd, baseOid, headOid, maxEntri
   const run = (args) =>
     sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'buffer', timeout: deadlineMs });
 
-  const out = run(['diff', '--name-status', '-z', '--no-renames', baseOid, headOid]);
+  // P1 fix: deterministic bounded rename detection. `--no-renames` made the
+  // R* parsing below unreachable for real Git (a rename would be emitted as
+  // separate A/D entries). Rename detection is explicitly ON with a bounded
+  // candidate limit so the cost stays capped.
+  const out = run(['diff', '--name-status', '-z', '--find-renames=' + '50%', baseOid, headOid]);
   if (out.status !== 0) {
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `name-status failed: ${String(out.stderr || '').slice(0, 200)}` };
   }

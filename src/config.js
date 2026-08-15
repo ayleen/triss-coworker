@@ -180,9 +180,33 @@ function parsePositiveInteger(raw, hardMax) {
 export function reviewLimitConfig(seams = {}) {
   const pick = seams.pick || ((key) => process.env[key]);
   const parsed = {};
+  // P1 fix: the fallback is ATOMIC — track any parse failure and return the
+  // COMPLETE default set with one warning. A per-field silent default that
+  // lets the remaining custom values survive contradicts the documented
+  // full-default fallback.
+  let anyParseFailure = false;
   for (const [key, envName] of Object.entries(REVIEW_LIMIT_ENV)) {
-    const value = parsePositiveInteger(pick(envName), REVIEW_LIMIT_HARD_MAXIMA[key]);
-    parsed[key] = value === null ? REVIEW_LIMIT_DEFAULTS[key] : value;
+    const raw = pick(envName);
+    if (raw === undefined || raw === null || raw === '') {
+      // Not configured at all — the default applies silently (this is NOT
+      // an invalid value).
+      parsed[key] = REVIEW_LIMIT_DEFAULTS[key];
+      continue;
+    }
+    const value = parsePositiveInteger(raw, REVIEW_LIMIT_HARD_MAXIMA[key]);
+    if (value === null) {
+      anyParseFailure = true;
+      parsed[key] = REVIEW_LIMIT_DEFAULTS[key];
+    } else {
+      parsed[key] = value;
+    }
+  }
+
+  if (anyParseFailure) {
+    return {
+      limits: { ...REVIEW_LIMIT_DEFAULTS },
+      warning: 'invalid review limit value(s) — falling back to the complete default set',
+    };
   }
 
   // Atomic relational validation. shard*max_shards exceeding total is legal

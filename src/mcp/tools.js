@@ -129,8 +129,8 @@ const CORE_TOOLS = [
     name: 'triss_review',
     description:
       'Code review via the worker model, GLM, or Kimi. Without `pr` reviews the current branch vs ' +
-      'auto-detected base; with `pr` uses GitHub CLI. Auto-detects Jira/' +
-      'Linear ticket keys in branch/PR title. Defaults to the pro preset.',
+      'auto-detected base; with `pr` uses GitHub CLI. Linked issues load ONLY from the explicit ' +
+      '`issue` argument (PR prose never triggers tracker access). Defaults to the pro preset.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -150,6 +150,23 @@ const CORE_TOOLS = [
           type: 'string',
           enum: ['text', 'evidence'],
           description: 'Response format (default: text)',
+        },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Literal path selectors: review ONLY these files (renames select both sides)',
+        },
+        issue: {
+          type: 'string',
+          description:
+            'Explicit linked-issue key (e.g. PROJ-123); the only path that loads tracker content',
+        },
+        payload_mode: {
+          type: 'string',
+          enum: ['single'],
+          description:
+            'Payload mode (default: single). Shard mode uses the dedicated triss_review_shard tool',
         },
       },
     },

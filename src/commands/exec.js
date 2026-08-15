@@ -30,6 +30,8 @@ const ROUTE_OPTION_SUPPORT = {
   stream: new Set(['ask', 'review', 'chat']),
   noStream: new Set(['ask', 'review', 'chat']),
   payloadMode: new Set(['review']),
+  files: new Set(['review']),
+  issue: new Set(['review']),
 };
 
 const OPTION_LABELS = {
@@ -190,6 +192,8 @@ function reviewOptions(input) {
     stream: input.stream,
     noStream: input.noStream,
     payloadMode: input.payloadMode,
+    files: input.files,
+    issue: input.issue,
   };
 }
 

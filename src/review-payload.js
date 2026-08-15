@@ -87,6 +87,56 @@ function splitSections(text) {
 }
 
 /**
+ * Parse the two path tokens out of a `diff --git a/old b/new` header line.
+ * Handles BOTH unquoted (`a/foo b/foo`) and Git C-quoted
+ * (`"a/foo bar.txt" "b/foo bar.txt"`) forms with an escape-aware scanner —
+ * a naive `(.*) (.*)` split breaks on spaces inside quoted tokens.
+ * Returns [oldToken, newToken] or null.
+ */
+function parseDiffGitHeaderPaths(header) {
+  const rest = String(header).slice('diff --git '.length);
+  const tokens = [];
+  let i = 0;
+  while (tokens.length < 2 && i < rest.length) {
+    // Skip separating whitespace before a token.
+    while (i < rest.length && /\s/.test(rest[i])) i += 1;
+    if (i >= rest.length) break;
+    if (rest[i] === '"') {
+      // Quoted token: consume escapes until the closing quote.
+      let token = '"';
+      i += 1;
+      let closed = false;
+      while (i < rest.length) {
+        const ch = rest[i];
+        if (ch === '\\') {
+          if (i + 1 >= rest.length) return null;
+          token += ch + rest[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          closed = true;
+          i += 1;
+          break;
+        }
+        token += ch;
+        i += 1;
+      }
+      if (!closed) return null;
+      tokens.push(token);
+    } else {
+      // Unquoted token: runs until the next whitespace.
+      let j = i;
+      while (j < rest.length && !/\s/.test(rest[j])) j += 1;
+      tokens.push(rest.slice(i, j));
+      i = j;
+    }
+  }
+  if (tokens.length !== 2) return null;
+  return tokens;
+}
+
+/**
  * Parse a unified diff into sections. Returns {sections, error}.
  *  - section: {header, raw, old_path, new_path, kind, binary, bytes}
  *  - kind: 'modified' | 'created' | 'deleted' | 'renamed' | 'binary'
@@ -97,13 +147,14 @@ export function parseUnifiedDiff(text) {
   if (text.length === 0) return { sections: [], error: null };
   const sections = splitSections(text).map((sec) => {
     const { header } = sec;
-    // `diff --git a/old b/new`
-    const m = /^diff --git (.*) (.*)$/.exec(header);
+    // `diff --git a/old b/new` — quoted and unquoted path forms both
+    // supported (see parseDiffGitHeaderPaths).
+    const tokens = parseDiffGitHeaderPaths(header);
     let oldPath = null;
     let newPath = null;
-    if (m) {
-      oldPath = decodeGitQuotedPath(m[1].replace(/^a\//, ''));
-      newPath = decodeGitQuotedPath(m[2].replace(/^b\//, ''));
+    if (tokens) {
+      oldPath = decodeGitQuotedPath(tokens[0].replace(/^a\//, ''));
+      newPath = decodeGitQuotedPath(tokens[1].replace(/^b\//, ''));
     }
     const body = sec.body;
     const isBinary =
@@ -201,7 +252,7 @@ export function planSingleReviewPayload({
   if (typeof metadata !== 'string') return { error: 'metadata must be a string' };
 
   const fixed = METADATA_OVERHEAD_BYTES + Buffer.byteLength(metadata, 'utf8') + Buffer.byteLength(question, 'utf8');
-  let selected = [];
+  const selected = [];
   let total = fixed;
 
   for (const sec of sections) {
@@ -209,10 +260,16 @@ export function planSingleReviewPayload({
     if (sec.bytes > limits.singleMaxBytes) {
       return { error: 'single_max_exceeded', path: sec.new_path || sec.old_path || '(unknown)' };
     }
-    if (total + sec.bytes <= limits.singleMaxBytes) {
-      selected.push(sec);
-      total += sec.bytes;
-    }
+    selected.push(sec);
+    total += sec.bytes;
+  }
+
+  // P0 fix: single mode NEVER silently truncates whole files. When every
+  // file is individually under the cap but their aggregate (plus fixed
+  // metadata) exceeds it, the plan fails closed — the caller must shard
+  // instead of issuing a clean verdict over a partial corpus.
+  if (total > limits.singleMaxBytes) {
+    return { error: 'single_max_exceeded', path: '(aggregate)' };
   }
 
   if (selected.length === 0 && sections.length > 0) {
@@ -264,7 +321,11 @@ export function planSequentialShards({ sections, question, metadata = '', limits
   const shards = [];
   let current = [];
   let currentBytes = fixed;
-  for (const path of [...byPath.keys()].sort()) {
+  // P2 fix: iterate files in FIRST-SEEN order (Map preserves insertion
+  // order) — the advertised source-ordered planner. Sorting alphabetically
+  // would move dependent changes into a different review sequence than the
+  // input diff.
+  for (const path of byPath.keys()) {
     const fileBytes = byPath.get(path).reduce((acc, s) => acc + s.bytes, 0);
     if (current.length > 0 && currentBytes + fileBytes > limits.shardMaxBytes) {
       shards.push({ sections: current, bytes: currentBytes });

@@ -23,6 +23,10 @@ export const REVIEW_EXIT_CODES = Object.freeze({
   provider: 1,
 });
 
+// Bounded metadata allowance for a single review request (matches the
+// planner's METADATA_OVERHEAD_BYTES accounting).
+const SINGLE_REVIEW_METADATA_OVERHEAD_BYTES = 4096;
+
 /**
  * Execute one buffered single review over an already-acquired diff:
  *  - the diff is parsed and bounded by the injected Package 13 limits;
@@ -55,10 +59,15 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
     requestedPaths: selectors.length > 0 ? selectors : null,
   });
 
-  // Single-request byte bound (Package 13 limits injected).
-  const payloadBytes = Buffer.byteLength(diff, 'utf8') + Buffer.byteLength(question, 'utf8');
-  if (payloadBytes > limits.totalMaxBytes) {
-    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `review payload exceeds ${limits.totalMaxBytes} bytes`, exit: REVIEW_EXIT_CODES.limit };
+  // Single-request byte bound (Package 13 limits injected). P1 fix: the
+  // bound is singleMaxBytes (the advertised single-request cap), NOT the
+  // looser totalMaxBytes; metadata overhead is accounted too.
+  const payloadBytes =
+    Buffer.byteLength(diff, 'utf8') +
+    Buffer.byteLength(question, 'utf8') +
+    SINGLE_REVIEW_METADATA_OVERHEAD_BYTES;
+  if (payloadBytes > limits.singleMaxBytes) {
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `review payload exceeds ${limits.singleMaxBytes} bytes`, exit: REVIEW_EXIT_CODES.limit };
   }
 
   try {
@@ -135,6 +144,14 @@ export async function executeReviewPlan(deps, { shards, question, metadata = '',
   const results = [];
   let attempts = 0;
 
+  // P1 fix: re-check the GLOBAL plan bounds at execution time too — a
+  // stale or directly supplied plan may exceed maxShards or the cumulative
+  // totalMaxBytes even when every individual shard passes its own bound.
+  if (shards.length > limits.maxShards) {
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `plan exceeds ${limits.maxShards} shards`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
+  }
+  let cumulativeBytes = 0;
+
   for (const shard of shards) {
     if (signal?.aborted) {
       return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled between shards', shards: results, attempts, exit: REVIEW_EXIT_CODES.cancelled };
@@ -144,8 +161,10 @@ export async function executeReviewPlan(deps, { shards, question, metadata = '',
       return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `shard exceeds ${limits.shardMaxBytes} bytes`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
     }
     const payloadBytes = shard.bytes;
-    if (payloadBytes > limits.totalMaxBytes) {
-      return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `shard payload exceeds ${limits.totalMaxBytes} bytes`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
+    // Cumulative total bound BEFORE the model call, not just per shard.
+    cumulativeBytes += payloadBytes;
+    if (cumulativeBytes > limits.totalMaxBytes) {
+      return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `cumulative shard payload exceeds ${limits.totalMaxBytes} bytes`, shards: results, attempts, exit: REVIEW_EXIT_CODES.limit };
     }
 
     attempts += 1;

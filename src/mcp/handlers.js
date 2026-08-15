@@ -137,6 +137,9 @@ export async function reviewHandler(
     model,
     max_tokens,
     response_format,
+    files = null,
+    issue = null,
+    payload_mode = null,
   },
   deps = {},
 ) {
@@ -144,6 +147,11 @@ export async function reviewHandler(
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
+  if (payload_mode === 'shard') {
+    // Shard mode requires an explicitly acquired diff; the MCP tool schema
+    // exposes it as diff_text for callers that already hold the payload.
+    throw new Error('payload_mode=shard requires the dedicated review_shard tool');
+  }
   return runReviewCore({
     pr,
     base,
@@ -155,6 +163,8 @@ export async function reviewHandler(
     responseFormat,
     callModel: deps.callModel || callModel,
     reviewBoundaryId: deps.reviewBoundaryId,
+    files,
+    issue,
   });
 }
 

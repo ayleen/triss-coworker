@@ -40,7 +40,9 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
-import { buildExecutionCapabilities } from '../coder-orchestration.js';
+import { buildExecutionCapabilities, allocateRunIdentity } from '../coder-orchestration.js';
+import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
+import { MOONSHOT_BASE_URL } from '../moonshot.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
@@ -1937,6 +1939,41 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
+// ─── credential proxy endpoint resolution (Release A / P0 fix) ────────────────
+//
+// The production run path must start the parent-owned loopback credential
+// proxy BEFORE spawning either engine and hand the child only the one-run
+// token + loopback base URL (never the raw credential). These helpers map
+// the resolved credential env key to the canonical upstream endpoint and
+// OpenAI-compatible path prefix the proxy pins.
+export function coderCredentialEndpoint(credEnv, modelUsed) {
+  switch (credEnv) {
+    case 'ZHIPU_API_KEY': {
+      // Coding-plan models go to the coding endpoint; everything else to PAYG.
+      // Both are OpenAI-compatible under their /api/.../v4 scope.
+      const coding = /^(zai-coding-plan|glm-coding)\//.test(String(modelUsed || ''));
+      return coding
+        ? { endpoint: ZAI_CODING_PLAN_BASE_URL, pathPrefix: '/api/coding/paas/v4' }
+        : { endpoint: ZAI_PAYG_BASE_URL, pathPrefix: '/api/paas/v4' };
+    }
+    case 'OPENCODE_API_KEY':
+      // Zen/Go models are served by opencode's own OpenAI-compatible router.
+      return { endpoint: 'https://opencode.ai/zen/v1', pathPrefix: '/v1' };
+    case 'MOONSHOT_API_KEY':
+      return { endpoint: MOONSHOT_BASE_URL, pathPrefix: '/v1' };
+    case 'KIMI_API_KEY':
+      // Kimi for Coding subscription endpoint (api.moonshot.ai compat scope).
+      return { endpoint: 'https://api.moonshot.ai/v1', pathPrefix: '/v1' };
+    case 'TRISS_WORKER_API_KEY': {
+      // The worker profile pins its own base URL (default DeepSeek).
+      const settings = readWorkerConfigSnapshot({ scope: 'effective' });
+      return { endpoint: settings.baseUrl, pathPrefix: new URL(settings.baseUrl).pathname.replace(/\/+$/, '') || '/' };
+    }
+    default:
+      return null;
+  }
+}
+
 function opencodeConfigTemplate(model, smallModel, providerInfo) {
   const config = {
     $schema: 'https://opencode.ai/config.json',
@@ -3095,13 +3132,22 @@ export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
 // only that key is forwarded, so a Zen run never carries the Z.AI key and vice
 // versa, even when both are configured. Included only when actually set — an
 // unconfigured credential never appears.
-function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
+function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent, proxyBaseUrl) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (process.env[key] != null) env[key] = process.env[key];
   }
   const value = credentialValue === undefined ? process.env[credEnv] : credentialValue;
   if (credEnv && value) env[credEnv] = value;
+  // Package 2A: when a credential proxy is active the child additionally
+  // learns the loopback base URL, so an OpenAI-compatible engine can be
+  // pointed at the proxy instead of the upstream provider host.
+  if (proxyBaseUrl) {
+    env.TRISS_CODER_PROXY_BASE_URL = proxyBaseUrl;
+    env.OPENCODE_BASE_URL = proxyBaseUrl;
+    env.ZAI_BASE_URL = proxyBaseUrl;
+    env.ZHIPU_BASEURL = proxyBaseUrl;
+  }
   if (opencodeConfigContent) env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent;
   return env;
 }
@@ -3984,6 +4030,7 @@ async function runCrushFlow({
   isolation,
   slug,
   timeoutSec,
+  credentialProxy = null,
 }) {
   const modelOverride = opts.model || null;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
@@ -4008,7 +4055,12 @@ async function runCrushFlow({
     maxTokens: opts.maxTokens,
     restrict,
   });
-  const env = crushEngine.buildSpawnEnv(undefined, deps.proxy || null);
+  const env = crushEngine.buildSpawnEnv(
+    undefined,
+    credentialProxy
+      ? { token: credentialProxy.token, baseUrl: credentialProxy.baseUrl }
+      : deps.proxy || null,
+  );
 
   // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
   // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow
@@ -4172,18 +4224,26 @@ async function runCrushFlow({
     parent_call_id: ctx?.parentCallId,
   });
 
+  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // facts — anonymous runs get anon-<32hex>; retention requires the full
+  // eligibility matrix (isolated + changed + enforced quota + reservation).
+  const runIdentity = allocateRunIdentity({
+    slug: session || null,
+    isolated: !!isolation,
+    changed: filesChanged.length > 0,
+  });
+
   const envelope = {
     engine: 'crush',
+    envelope_version: 2,
     engine_version: engineVersion,
     session_id: parsed.session_id || null,
     // Package 5E: every safe envelope carries the run identity + honest
     // execution capabilities (Section 6.3 / Reference surface 3).
-    session_slug: opts.session || null,
-    result_retention: 'none',
-    result_id: null,
+    ...runIdentity,
     execution_capabilities: buildExecutionCapabilities({
       engine: 'crush',
-      proxyAvailable: !!deps.proxyAvailable,
+      proxyAvailable: !!credentialProxy,
     }),
     exit_reason,
     final_text: parsed.final_text ?? null,
@@ -4515,22 +4575,64 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
+  // ─── Credential proxy (Release A P0): the production run path NEVER hands
+  // the raw provider credential to the engine. Start the parent-owned
+  // loopback proxy FIRST; the child receives only the one-run token and the
+  // loopback base URL. If the proxy cannot start (or no canonical endpoint
+  // is known for this credential), the run fails closed BEFORE spawn.
+  const proxyTarget = coderCredentialEndpoint(cred.env, modelUsed);
+  let credentialProxy = null;
+  if (!deps.disableCredentialProxy && proxyTarget) {
+    try {
+      credentialProxy = await startCoderCredentialProxy({
+        provider: cred.provider || cred.env,
+        model: modelUsed,
+        endpoint: proxyTarget.endpoint,
+        pathPrefix: proxyTarget.pathPrefix,
+        credential: credentialValue,
+        deadlineMs: (timeoutSec + 60) * 1000,
+        ...(deps.credentialProxyOptions || {}),
+      });
+    } catch (err) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `credential isolation unavailable: the coder run requires the parent-owned ` +
+          `credential proxy and it failed to start (${err?.message || 'unknown error'}); ` +
+          `refusing to spawn the engine with raw credential inheritance`,
+        { cause: err },
+      );
+    }
+  }
+  if (!credentialProxy) {
+    if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw new Error(
+      `credential isolation unavailable: no canonical provider endpoint is known for ` +
+        `${cred.env}; refusing to spawn the engine with raw credential inheritance`,
+    );
+  }
+
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
   if (engine === 'crush') {
-    return runCrushFlow({
-      opts,
-      deps,
-      sh,
-      spawnFn,
-      killProcess,
-      prompt,
-      isolate,
-      isolation,
-      slug,
-      timeoutSec,
-    });
+    try {
+      return await runCrushFlow({
+        opts,
+        deps,
+        sh,
+        spawnFn,
+        killProcess,
+        prompt,
+        isolate,
+        isolation,
+        slug,
+        timeoutSec,
+        credentialProxy,
+      });
+    } finally {
+      credentialProxy.revoke();
+      await credentialProxy.closed;
+    }
   }
 
   const sessionRealIdArg = opts.session ? readSessionsMap()[opts.session] || null : null;
@@ -4545,7 +4647,34 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     dir,
     pure: !!oneShotProvider,
   });
-  const env = buildEngineEnv(cred.env, credentialValue, oneShotConfigContent);
+  // Package 2A integration: the child env carries the one-run proxy token in
+  // the credential variable plus the loopback base URL — never the raw key.
+  // The OPENCODE_CONFIG_CONTENT overlay (one-shot mode) pins the model; for
+  // the triss-worker provider it additionally pins baseURL to the proxy.
+  let proxiedConfigContent = oneShotConfigContent;
+  if (oneShotProvider && cred.provider === 'worker') {
+    const overlay = oneShotConfigContent ? JSON.parse(oneShotConfigContent) : {};
+    proxiedConfigContent = JSON.stringify({
+      ...overlay,
+      provider: {
+        ...(overlay.provider || {}),
+        'triss-worker': {
+          ...(overlay.provider?.['triss-worker'] || {}),
+          options: {
+            ...(overlay.provider?.['triss-worker']?.options || {}),
+            baseURL: `${credentialProxy.baseUrl}${proxyTarget.pathPrefix}`,
+            apiKey: credentialProxy.token,
+          },
+        },
+      },
+    });
+  }
+  const env = buildEngineEnv(
+    cred.env,
+    credentialProxy.token,
+    proxiedConfigContent,
+    `${credentialProxy.baseUrl}${proxyTarget.pathPrefix}`,
+  );
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
   process.stderr.write(
@@ -4611,6 +4740,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       cleanupAbandonedIsolation(sh, isolation);
     }
     throw err;
+  } finally {
+    // Package 2A: the credential proxy is parent-owned and single-run —
+    // revoke it as soon as the engine exits (success, failure, or throw).
+    if (credentialProxy) {
+      credentialProxy.revoke();
+      await credentialProxy.closed;
+    }
   }
 
   // Rate limit that only hit AFTER the engine produced some text: keep the
@@ -4671,6 +4807,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     result.warnings.push('no usage data (no step_finish events) in the event stream');
   }
 
+  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // facts — anonymous runs get anon-<32hex>; retention requires the full
+  // eligibility matrix (isolated + changed + enforced quota + reservation).
+  const runIdentity = allocateRunIdentity({
+    slug: opts.session || slug || null,
+    isolated: !!isolation,
+    changed: filesChanged.length > 0,
+  });
+
   const { tokens, reported_total_usd, reported_total_source, usage_status, warnings: normalizeWarnings } =
     finalizeOpencodeUsage(result.usage);
   if (normalizeWarnings.length) result.warnings.push(...normalizeWarnings);
@@ -4711,16 +4856,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const envelope = {
     engine: 'opencode',
+    envelope_version: 2,
     engine_version: engineVersion,
     session_id: result.sessionRealId || null,
     // Package 5E: every safe envelope carries the run identity + honest
-    // execution capabilities (Section 6.3 / Reference surface 3).
-    session_slug: opts.session || null,
-    result_retention: 'none',
-    result_id: null,
+    // execution capabilities (Section 6.3 / Reference surface 3). The
+    // identity is allocated from the ACTUAL run facts — anonymous runs get
+    // anon-<32hex>, retention requires the full eligibility matrix.
+    ...(runIdentity || {}),
     execution_capabilities: buildExecutionCapabilities({
       engine: 'opencode',
-      proxyAvailable: !!deps.proxyAvailable,
+      proxyAvailable: !!credentialProxy,
     }),
     exit_reason,
     final_text: result.finalText,

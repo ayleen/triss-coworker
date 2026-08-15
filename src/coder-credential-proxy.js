@@ -63,6 +63,12 @@ export async function startCoderCredentialProxy(opts = {}) {
     endpoint,
     credential,
   } = opts;
+  // Path prefix the upstream serves the OpenAI-compatible scope under
+  // (default /v1). The engine's baseURL points at the loopback proxy with
+  // this same prefix, so requests arrive verbatim and no rewrite is needed.
+  const pathPrefix = typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')
+    ? opts.pathPrefix.replace(/\/+$/, '') || '/'
+    : '/v1';
   if (typeof provider !== 'string' || provider.length === 0) {
     throw new TypeError('startCoderCredentialProxy: provider is required');
   }
@@ -123,23 +129,25 @@ export async function startCoderCredentialProxy(opts = {}) {
     // Endpoint pinning: only a loopback listener exists, but reject any
     // absolute-URI request line (a general forward-proxy route) outright,
     // and never accept CONNECT.
-    if (req.method === 'CONNECT') {
-      res.writeHead(405, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'CONNECT is not supported' } }));
-      return;
-    }
-    if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'absolute-URI forward-proxy route denied' } }));
-      return;
-    }
-    // Provider/model pinning: only the OpenAI-compatible /v1 scope is
-    // forwarded; everything else is denied.
-    if (!req.url.startsWith('/v1/')) {
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'unknown proxy route' } }));
-      return;
-    }
+      if (req.method === 'CONNECT') {
+        res.writeHead(405, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'CONNECT is not supported' } }));
+        return;
+      }
+      if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'absolute-URI forward-proxy route denied' } }));
+        return;
+      }
+      // Provider/model pinning: only the OpenAI-compatible /v1 scope is
+      // forwarded; everything else is denied. When the canonical upstream
+      // lives on a different OpenAI-compatible prefix (e.g. Z.AI /v4), the
+      // caller pins `pathPrefix` and the request must carry it verbatim.
+      if (!req.url.startsWith(pathPrefix)) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'unknown proxy route' } }));
+        return;
+      }
 
     // Token check. The real credential is never accepted here — only the
     // single-run token.

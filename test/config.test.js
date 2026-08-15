@@ -67,8 +67,10 @@ test('REVIEW-LIMIT-04: values above the hard maxima fall back to defaults', () =
       TRISS_REVIEW_SINGLE_MAX_BYTES: '2097152', // 2 MiB > 1 MiB hard max
     }),
   });
-  assert.equal(limits.singleMaxBytes, REVIEW_LIMIT_DEFAULTS.singleMaxBytes);
-  assert.equal(warning, null); // per-value fallback, not a contradictory set
+  // P1 fix: the fallback is ATOMIC — one invalid value returns the
+  // COMPLETE default set with one warning (no per-value silent defaults).
+  assert.deepEqual(limits, REVIEW_LIMIT_DEFAULTS);
+  assert.match(warning, /falling back to the complete default set/);
 });
 
 test('REVIEW-LIMIT-05: zero, signs, decimals, exponents, and whitespace are rejected', () => {
@@ -76,7 +78,8 @@ test('REVIEW-LIMIT-05: zero, signs, decimals, exponents, and whitespace are reje
     const { limits } = reviewLimitConfig({
       pick: envPicker({ TRISS_REVIEW_SINGLE_MAX_BYTES: bad }),
     });
-    assert.equal(limits.singleMaxBytes, REVIEW_LIMIT_DEFAULTS.singleMaxBytes, `value: ${JSON.stringify(bad)}`);
+    // Atomic fallback: the whole default set replaces the invalid input.
+    assert.deepEqual(limits, REVIEW_LIMIT_DEFAULTS, `value: ${JSON.stringify(bad)}`);
   }
 });
 
@@ -84,7 +87,7 @@ test('REVIEW-LIMIT-06: max shards above the hard maximum falls back', () => {
   const { limits } = reviewLimitConfig({
     pick: envPicker({ TRISS_REVIEW_MAX_SHARDS: '256' }),
   });
-  assert.equal(limits.maxShards, REVIEW_LIMIT_DEFAULTS.maxShards);
+  assert.deepEqual(limits, REVIEW_LIMIT_DEFAULTS);
 });
 
 // ─── atomic relational validation ────────────────────────────────────────────
@@ -140,5 +143,5 @@ test('REVIEW-LIMIT-10: invalid env values produce no mutation of the defaults', 
     }),
   });
   assert.deepEqual(limits, REVIEW_LIMIT_DEFAULTS);
-  assert.equal(warning, null); // per-value fallbacks are not contradictory sets
+  assert.match(warning, /falling back to the complete default set/);
 });

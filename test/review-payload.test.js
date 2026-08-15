@@ -208,11 +208,13 @@ test('REVIEW-SHARD-PLAN-01: source-ordered whole-file shards never split a file'
   const { plan, error } = planSequentialShards({ sections, question: 'q', limits: SHARD_LIMITS });
   assert.equal(error, null);
   assert.ok(plan.shards.length >= 2, 'fits in multiple shards');
-  // Source-ordered: a.txt first, z.txt last.
+  // First-seen source order (P2 fix): z.txt appears first in the diff, so
+  // it must be in the FIRST shard; alphabetical sorting is a contract
+  // violation that reorders dependent changes.
   const firstPath = plan.shards[0].sections[0].new_path;
   const lastPath = plan.shards[plan.shards.length - 1].sections.at(-1).new_path;
-  assert.equal(firstPath, 'a.txt');
-  assert.equal(lastPath, 'z.txt');
+  assert.equal(firstPath, 'z.txt');
+  assert.equal(lastPath, 'm.txt');
   // A file is never split: each shard's sections belong to one path.
   for (const shard of plan.shards) {
     const paths = new Set(shard.sections.map((s) => s.new_path));
