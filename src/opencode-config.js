@@ -70,13 +70,23 @@ export function parseOpenCodeDocument(text, { path: sourcePath = null } = {}) {
       i += 2;
       continue;
     }
+    // Trailing commas (review P3-13): removed INSIDE the string-aware state
+    // machine — a regex over the whole document would also rewrite string
+    // contents (`{"pattern":"value,}"}` used to become `{"pattern":"value}"}`).
+    // When a comma is followed only by whitespace up to a closing } or ],
+    // drop it (and the whitespace) right here; inside strings we never land
+    // in this branch, so string commas are untouchable.
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j])) j += 1;
+      if (src[j] === '}' || src[j] === ']') {
+        i = j; // skip the comma AND the whitespace before the closer
+        continue;
+      }
+    }
     out += ch;
     i += 1;
   }
-  // Trailing commas: safe as a targeted regex because strings are the only
-  // remaining quoted regions and a comma directly before } or ] inside a
-  // string is not valid content in these documents.
-  out = out.replace(/,(\s*[}\]])/gu, '$1');
   try {
     return JSON.parse(out);
   } catch (err) {
@@ -149,6 +159,17 @@ function entryName(entry) {
 function parsedModelOf(path) {
   const doc = parseOpenCodeDocument(readTextFailClosed(path), { path });
   return typeof doc?.model === 'string' ? doc.model : undefined;
+}
+
+// Tolerant variant for model INSPECTION (coder models / status): a malformed
+// layer must not crash the whole inspection — the layer is marked with its
+// parse error instead, and role resolution reports it (P2-10 contract).
+function tolerantParsedModelOf(path) {
+  try {
+    return parsedModelOf(path);
+  } catch (err) {
+    return { __parseError: { path, message: err.message } };
+  }
 }
 
 // ─── layer walk ──────────────────────────────────────────────────────────────
@@ -286,7 +307,7 @@ function collectLevelAgentFiles(levelDir, layer, out) {
  *   { origin: 'configured'|'discovered', layer, dir, path, kind, exists }.
  *   agentSources: inline agent blocks + agent/mode dir files, same shape.
  */
-export function enumerateOpenCodeSources({ cwd, projectBoundary, home } = {}) {
+export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantParsing = false } = {}) {
   if (!cwd) throw new Error('enumerateOpenCodeSources: cwd is required');
   const homeDir = resolve(home || homedir());
   const boundary = projectBoundary
@@ -313,7 +334,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home } = {}) {
       // Top-level model declared in THIS layer (undefined when the layer is
       // absent or declares none). Model inspection reads exactly this.
       model: exists
-        ? parsedModelOf(path)
+        ? (tolerantParsing ? tolerantParsedModelOf(path) : parsedModelOf(path))
         : undefined,
     });
   };
@@ -338,28 +359,38 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home } = {}) {
     }
   }
 
-  // Parse every existing config (fail closed on unreadable/malformed) and
-  // collect configured plugin references + inline agent blocks.
+  // Parse every existing config and collect configured plugin references +
+  // inline agent blocks. Strict by default (fail closed on malformed — the
+  // V2 preflight contract); tolerantParsing skips plugin/agent collection
+  // for a malformed layer and lets the configs[] marker carry the error.
   for (const c of configs) {
     if (!c.exists) continue;
-    const doc = parseOpenCodeDocument(readTextFailClosed(c.path), { path: c.path });
+    let doc;
+    try {
+      doc = parseOpenCodeDocument(readTextFailClosed(c.path), { path: c.path });
+    } catch (err) {
+      if (tolerantParsing) continue; // error already surfaced via c.model.__parseError
+      throw err;
+    }
     collectConfiguredPlugins(doc, c.path, c.layer, plugins);
     collectConfiguredAgentBlocks(doc, c.path, c.layer, agentSources);
   }
 
-  // Discovered plugin dirs at every level: global, boundary..cwd direct,
-  // and each level's .opencode/.
+  // Discovered plugin dirs: global config root + each level's .opencode/
+  // ONLY (review P2-11). Bare `plugins/` inside a random project level is
+  // NOT an OpenCode source in the pinned build — the official migration
+  // docs enumerate `.opencode/plugin(s)` (and direct dirs only under the
+  // GLOBAL config root), so scanning bare project `plugins/` produced
+  // false-positive V2 blocks on ordinary app trees.
   collectDiscoveredPlugins(globalDir, 'global', plugins);
   for (const levelDir of levels) {
-    collectDiscoveredPlugins(levelDir, 'direct', plugins);
     collectDiscoveredPlugins(join(levelDir, '.opencode'), 'opencode-dir', plugins);
   }
 
-  // Agent/mode dir files at every level: global + boundary..cwd direct and
-  // their .opencode/ counterparts.
+  // Agent/mode dir files: global config root + each level's .opencode/ only
+  // (review P2-11 — same reasoning as plugins above).
   collectLevelAgentFiles(globalDir, 'global', agentSources);
   for (const levelDir of levels) {
-    collectLevelAgentFiles(levelDir, 'direct', agentSources);
     collectLevelAgentFiles(join(levelDir, '.opencode'), 'opencode-dir', agentSources);
   }
 

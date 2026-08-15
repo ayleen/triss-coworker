@@ -94,6 +94,10 @@ export function lockPathForBackend(backend, scope) {
 // TRISS_CODER_SMALL_MODEL through this path. Safe to import: secrets.js has no
 // module-eval side effects that reach back into this module.
 import { getEnvFilePath, parseEnvText, readEnvFile } from './secrets.js';
+// Canonical OpenCode config enumeration (P2-10): single source of config
+// paths + precedence for role resolution here — global → direct → .opencode,
+// JSONC-aware, nested levels included.
+import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-config.js';
 // Reuse the canonical provider-from-model parser so the prefix→credential
 // mapping stays in one place. Safe to import: coder.js has no module-eval
 // side effects, and we only call this pure helper (never its fetch paths).
@@ -421,32 +425,89 @@ function resolveCrushRoles() {
 // global has only small_model, resolving to config main from local, config
 // small from global with distinct source_paths.
 function resolveOpenCodeConfigRoles() {
-  const globalPath = opencodeConfigPath('global');
-  const localPath = opencodeConfigPath('local');
-
-  const globalLayer = readJsonConfigLayer(globalPath, 'global');
-  const localLayer = readJsonConfigLayer(localPath, 'local');
+  // CANONICAL ENUMERATOR (review P2-10): this used to read exactly two files
+  // (~/.config/opencode/opencode.json + <projectRoot>/opencode.json) with
+  // plain JSON.parse, ignoring JSONC, nested direct configs between the
+  // project boundary and cwd, and .opencode/ layers — so `coder models`
+  // could report a different model+source than the child process actually
+  // uses. The single source of config paths/precedence is the canonical
+  // enumerator (src/opencode-config.js): global first, then direct
+  // boundary→cwd, then .opencode/ layers — evaluated LAST-LAYER-WINS per
+  // field, matching how the engine merges.
+  const { configs } = enumerateOpenCodeSources({ cwd: projectRoot(), tolerantParsing: true });
+  const existing = configs.filter((c) => c.exists);
+  const parsed = [];
+  for (const c of existing) {
+    // tolerantParsing marks malformed layers with __parseError instead of
+    // throwing — inspection reports them per-layer (P2-10 contract).
+    if (c.model && typeof c.model === 'object' && c.model.__parseError) {
+      parsed.push({ path: c.path, layer: c.layer, doc: null, parseError: c.model.__parseError });
+      continue;
+    }
+    try {
+      const doc = parseOpenCodeDocument(readFileSync(c.path, 'utf8'), { path: c.path });
+      parsed.push({ path: c.path, layer: c.layer, doc });
+    } catch (err) {
+      const parseError = { path: c.path, message: `parse error: ${err.message}` };
+      parsed.push({ path: c.path, layer: c.layer, doc: null, parseError });
+    }
+  }
 
   const resolveRole = (field) => {
-    // Local config field wins if present.
-    if (localLayer.error) return parseErrorRole(localLayer);
-    if (localLayer.config && typeof localLayer.config[field] === 'string') {
+    // Later layers win (global → direct → .opencode; within a level json
+    // before jsonc, cwd layer last). A parse error in a layer that would
+    // otherwise decide the field surfaces as the role's parse error.
+    // Layer names map to the historical scopes: direct layers under the
+    // project boundary are 'local', .opencode/ layers keep their own
+    // 'opencode-local' marker, the global config root stays 'global'.
+    const scopeForLayer = (layer, path) => {
+      if (layer === 'global') return 'global';
+      if (layer === 'direct') {
+        return path === join(projectRoot(), 'opencode.json') ? 'local' : 'direct';
+      }
+      return layer; // 'opencode-dir' etc. — precise, self-describing
+    };
+    // The EFFECTIVE layer for a field is the last layer that would decide
+    // it: the last layer carrying the field, or — when none carries it —
+    // the last layer that FAILED to parse (a malformed local config must
+    // block global fallback and report its own path/scope, the historical
+    // contract pinned by coder-model-malformed-effective-config.test.js).
+    let winner = null;
+    let winnerError = null;
+    let winnerErrorLayer = null;
+    for (const entry of parsed) {
+      if (entry.parseError) {
+        // A malformed layer BLOCKS every earlier (lower-precedence) value:
+        // the effective layer is this broken one, exactly like the local
+        // malformed config must not fall through to the global file.
+        winner = null;
+        winnerError = entry.parseError;
+        winnerErrorLayer = entry.layer;
+        continue;
+      }
+      if (entry.doc && typeof entry.doc[field] === 'string') {
+        winner = { value: entry.doc[field], source_path: entry.path, scope: scopeForLayer(entry.layer, entry.path) };
+        winnerError = null;
+        winnerErrorLayer = null;
+      }
+    }
+    if (winner) return winner;
+    if (winnerError) {
       return {
-        value: localLayer.config[field],
-        source_path: localPath,
-        scope: 'local',
+        value: null,
+        source_path: winnerError.path,
+        scope: scopeForLayer(winnerErrorLayer, winnerError.path),
+        // Historical warning shape (pinned by malformed-config tests):
+        // structured code/severity so renderers can filter on it.
+        parse_error: {
+          code: 'config-parse-error',
+          severity: 'error',
+          scope: scopeForLayer(winnerErrorLayer, winnerError.path),
+          path: winnerError.path,
+          message: `Could not parse ${winnerError.path}: ${winnerError.message}. Fix or restore this file before using a lower-precedence config.`,
+        },
       };
     }
-    // Global config field wins if present.
-    if (globalLayer.error) return parseErrorRole(globalLayer);
-    if (globalLayer.config && typeof globalLayer.config[field] === 'string') {
-      return {
-        value: globalLayer.config[field],
-        source_path: globalPath,
-        scope: 'global',
-      };
-    }
-    // Default: null (unconfigured).
     return { value: null, source_path: null, scope: 'default' };
   };
 

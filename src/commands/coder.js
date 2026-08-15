@@ -89,10 +89,12 @@ import {
   installHintOpenCode2,
   opencode2DataRoot,
   opencode2StateRoot,
+  ensureOpenCode2RuntimeDirs,
   createOpenCode2EventFolder,
   foldOpenCode2EventLine,
   opencode2LogPath,
 } from '../coder-engines/opencode2.js';
+import { auditOpenCode2Run } from '../opencode2-preflight.js';
 // Canonical OpenCode source enumeration (Phase 4): one walker for every
 // opencode.json layer + plugin/agent discovery, shared by the V2 static
 // preflight and model inspection.
@@ -1485,17 +1487,23 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   }
   // 3. Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
   //    XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
-  const root = projectRoot();
-  for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      process.stderr.write(pc.dim(`  · created ${dir}\n`));
-    }
-  }
-  // 4. Shared surface: the SAME V1 flow (key + config + templates + gates).
-  //    Re-enter with an EXPLICIT engine:'opencode' — undefined would consult
-  //    TRISS_CODER_ENGINE, and an env-pinned 'opencode2' would loop forever.
-  return runCoderInit({ ...opts, engine: 'opencode' }, deps);
+  ensureOpenCode2RuntimeDirs(projectRoot(), { note: 'init' });
+  // 4. Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
+  //    runCoderInit path checks/installs the V1 `opencode` binary and then
+  //    scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
+  //    itself REJECTS, making a fresh V2 init deterministically poison the
+  //    next V2 run. V2 init therefore reuses only the shared key/config
+  //    setup (runCoderSetup with engine-aware template skipping) — the same
+  //    setupKey / opencode.json / model-pin flow — and re-runs the static
+  //    preflight against the FINAL filesystem state before printing Done.
+  const setup = await runCoderSetup(
+    { ...opts, engine: 'opencode2', skipAgentTemplates: true },
+    deps,
+  );
+  // 5. Post-setup preflight over the resulting tree: the shared setup must
+  //    not have created any source the V2 gate rejects.
+  staticOpenCode2Preflight(deps.cwd || process.cwd());
+  return setup;
 }
 
 function warnIfPinShadowed(scope, pinned, inherited) {
@@ -1584,7 +1592,7 @@ export async function runCoderSetup(input = {}, deps = {}) {
 }
 
 async function runCoderSetupUnlocked(
-  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified, workerShellEnv } = {},
+  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified, workerShellEnv, skipAgentTemplates } = {},
   deps = {},
 ) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
@@ -1761,7 +1769,13 @@ async function runCoderSetupUnlocked(
     );
   }
   persistCoderModels(resolvedScope, model, smallModel);
-  scaffoldAgentTemplates(resolvedScope);
+  // V2 init must NOT scaffold V1 agent templates: the static preflight
+  // rejects every agent source, so scaffolding would deterministically break
+  // the next V2 run on a clean tree (review P1-4). skipAgentTemplates is set
+  // by runOpenCode2Init; V1 init keeps its templates.
+  if (engine !== 'opencode2' && !skipAgentTemplates) {
+    scaffoldAgentTemplates(resolvedScope);
+  }
   // Missing-key gate runs HERE (not only in runCoderInit) so the wizard's
   // postSetup path — `config wizard coder` calls runCoderSetup directly, never
   // runCoderInit — is gated too: without the provider's key the setup isn't
@@ -3173,12 +3187,32 @@ function sessionsFilePath() {
 function readSessionsMap() {
   const path = sessionsFilePath();
   if (!existsSync(path)) return {};
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    // FAIL-CLOSED (review P1-8): malformed JSON must NOT degrade to an empty
+    // store — the next successful persist would overwrite and destroy it.
+    // Surface the corruption instead of silently rewriting the file.
+    throw new Error(
+      `Session store at ${path} is not valid JSON (${err.message}) — refusing to read or rewrite it ` +
+        '(fail-closed). Fix or remove the file manually.',
+      { cause: err },
+    );
   }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      `Session store at ${path} does not contain a JSON object — refusing to read or rewrite it ` +
+        '(fail-closed). Fix or remove the file manually.',
+    );
+  }
+  if (Array.isArray(parsed)) {
+    throw new Error(
+      `Session store at ${path} is a JSON array — not a recognized shape. ` +
+        'Refusing to read or rewrite it (fail-closed).',
+    );
+  }
+  return parsed;
 }
 
 // ─── versioned, engine-namespaced session store ─────────────────────────────
@@ -3196,22 +3230,49 @@ const SESSION_STORE_VERSION = 2;
 const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
 
 // Normalize any on-disk shape (legacy flat map OR versioned) into the
-// versioned in-memory shape. Pure: never mutates the argument, never throws.
+// versioned in-memory shape. Pure: never mutates the argument.
+//
+// FAIL-CLOSED (review P1-8): an unknown `version` (e.g. 3, written by a
+// future Triss) or a version-2 object with a malformed `engines` field is
+// NOT treated as a legacy flat map — treating {version:3, engines:{...}} as
+// legacy silently discards both fields and the next persist DESTROYS the
+// unknown data (data loss). Such a store throws; persistSessionMapping
+// propagates and the file is never rewritten. Only a genuinely legacy flat
+// object (no `version` key at all) migrates.
 function normalizeSessionStore(raw) {
   const store = { version: SESSION_STORE_VERSION, engines: { opencode: {}, opencode2: {} } };
-  if (!raw || typeof raw !== 'object') return store;
-  if (raw.version === 2 && raw.engines && typeof raw.engines === 'object') {
-    for (const engine of SESSION_STORE_ENGINES) {
-      const namespace = raw.engines[engine];
-      if (namespace && typeof namespace === 'object') {
-        for (const [slug, realId] of Object.entries(namespace)) {
-          if (typeof slug === 'string' && typeof realId === 'string') {
-            store.engines[engine][slug] = realId;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return store;
+  if ('version' in raw) {
+    if (raw.version === 2) {
+      if (!raw.engines || typeof raw.engines !== 'object' || Array.isArray(raw.engines)) {
+        throw new Error(
+          `Session store at ${sessionsFilePath()} has version 2 but a malformed "engines" field — ` +
+            'refusing to migrate or rewrite it (fail-closed). Fix or remove the file manually.',
+        );
+      }
+      for (const engine of SESSION_STORE_ENGINES) {
+        const namespace = raw.engines[engine];
+        if (namespace && typeof namespace === 'object') {
+          for (const [slug, realId] of Object.entries(namespace)) {
+            if (typeof slug === 'string' && typeof realId === 'string') {
+              store.engines[engine][slug] = realId;
+            }
           }
         }
       }
+      return store;
     }
-    return store;
+    throw new Error(
+      `Session store at ${sessionsFilePath()} has unknown version ${JSON.stringify(raw.version)} — ` +
+        'this Triss understands version 2 and legacy flat maps only. Refusing to read or rewrite it ' +
+        '(fail-closed); upgrade Triss or fix the file manually.',
+    );
+  }
+  if ('engines' in raw) {
+    throw new Error(
+      `Session store at ${sessionsFilePath()} has an "engines" field but no "version" — this is not a ` +
+        'recognized shape (legacy flat maps have neither). Refusing to read or rewrite it (fail-closed).',
+    );
   }
   // Legacy flat map: every entry belongs to the V1 engine (the only writer
   // that ever produced this shape).
@@ -4620,25 +4681,70 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // routes are fixture-gated: any route without a deterministic current-pin
   // translation fixture fails closed BEFORE a credential is forwarded.
   if (engine === 'opencode2') {
-    // Static preflight FIRST (plan §"Configuration and permission audit"):
-    // walk every config layer and reject any plugin/agent source BEFORE any
-    // opencode2 process or credential forwarding.
-    staticOpenCode2Preflight(deps.cwd || process.cwd());
+    // ─── OpenCode 2 fail-closed preflight (review P0-1/P0-2/P1-5/P1-6) ───
+    const root = projectRoot();
+    // The audit runs against the EXACT child runtime directory — the
+    // isolation worktree when --isolate, else the resolved --cwd, else
+    // process.cwd(). deps.cwd is a TEST seam only and must never select the
+    // audited tree in production (review P1-5).
+    const runtimeDir = isolation
+      ? isolation.wtPath
+      : opts.cwd
+        ? resolvePath(opts.cwd)
+        : process.cwd();
+    // session/--continue mutual exclusion BEFORE any isolation side effects
+    // are possible (validation order moved up; review P2-12). setupIsolation
+    // runs before runCoderRun's engine branches, so a freshly-created
+    // worktree MUST be cleaned up when this rejects.
     if (opts.session && opts.continue) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw new Error(
         '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
           'pass one or the other, never both.',
       );
     }
     if (oneShotProvider) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw new Error(
         `--provider/--small-model one-shot overlays are not implemented for the opencode2 engine yet — ` +
           'the six advertised provider routes each need a verified translation fixture first ' +
           '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
       );
     }
+    // Full effective-configuration audit BEFORE the credential is read:
+    // route fixture gate (final modelUsed prefix, however selected —
+    // P1-6), provider projection vs fixture (P0-1), deny-first permission
+    // proof incl. agents (P0-2), plus the existing plugin/agent source
+    // rejection. Any failure leaves NO worktree/branch behind (P2-12).
+    try {
+      auditOpenCode2Run({ cwd: runtimeDir, modelUsed, agentName: agent }, { enumerate: deps.enumerateOpenCodeSources });
+      staticOpenCode2Preflight(runtimeDir);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+    // Runtime roots 0700 before credential forwarding (review P1/P2-7).
+    try {
+      ensureOpenCode2RuntimeDirs(root);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+    // EXACT pin verification before the credential-bearing spawn (review
+    // P1-3): resolve the binary, verify the exact build, and run THAT path.
+    // A missing/mismatched/garbage binary is a terminal error here — the
+    // envelope reports the DETECTED version, not the configured pin.
+    const pinDetected = detectOpenCode2(sh);
+    if (!pinDetected.found || !pinDetected.satisfiesPin) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `opencode2 ${pinDetected.found ? `v${pinDetected.version}` : 'not found'} does not match the exact pin ` +
+          `v${opencode2VersionPin()} — managed V2 runs require the verified build (${installHintOpenCode2()}). ` +
+          'A version mismatch is a terminal compatibility failure, never a warning.',
+      );
+    }
+    const engine2Version = pinDetected.version;
 
-    const root = projectRoot();
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
       model: modelUsed,
@@ -4651,7 +4757,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       credentialEnv: cred.env,
       credentialValue,
     });
-    const engine2Version = opencode2VersionPin();
     const logPath2 = opencode2LogPath(root);
 
     process.stderr.write(
@@ -4688,6 +4793,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });
+      // Post-run exact-pin re-verification (review P1-3): the binary must
+      // still be the verified build after the run — a mid-run self-update or
+      // binary swap is a terminal compatibility failure.
+      const postPin = detectOpenCode2(sh);
+      if (!postPin.found || !postPin.satisfiesPin || postPin.version !== engine2Version) {
+        throw new Error(
+          `opencode2 binary changed during the run (before: v${engine2Version}, after: ` +
+            `${postPin.found ? `v${postPin.version}` : 'not found'}) — treat this run's compatibility as unverified.`,
+        );
+      }
       if (rateLimit2 && !result2.finalText) {
         const err = new Error(rateLimitMessage(rateLimit2));
         err.rateLimit = rateLimit2;
@@ -4763,7 +4878,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
 
-    const { tokens: tokens2, usage_status: usageStatus2, warnings: normalizeWarnings2 } =
+    const { tokens: tokens2, usage_status: usageStatus2, warnings: normalizeWarnings2,
+      reported_total_usd: reportedTotalUsd2, reported_total_source: reportedTotalSource2 } =
       finalizeOpencodeUsage(result2.usage);
     if (normalizeWarnings2.length) result2.warnings.push(...normalizeWarnings2);
 
@@ -4790,8 +4906,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         billing_model: modelUsed,
         billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
         tokens: tokens2,
-        reported_total_usd: result2.usage.reported_total_usd,
-        reported_total_source: result2.usage.reported_total_source,
+        // NORMALIZED reported cost (review P2-9): finalizeOpencodeUsage
+        // returns reported_total_usd=null when per-step cost coverage is
+        // INCOMPLETE — a partial sum must not leak into the envelope as an
+        // authoritative number, and reported_total_source must stay 'null'
+        // (not undefined → dropped in serialization) when unknown.
+        reported_total_usd: reportedTotalUsd2,
+        reported_total_source: reportedTotalSource2,
       });
     }
 

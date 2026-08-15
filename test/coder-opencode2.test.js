@@ -41,11 +41,17 @@ const readFixture = (name) => readFileSync(join(FIXTURES, name), 'utf8');
 function withEnv(vars, fn) {
   return async () => {
     const saved = {};
-    // Isolated HOME: the V2 run path runs staticOpenCode2Preflight, which
-    // enumerates REAL ~/.config/opencode sources — a developer machine's
-    // agents/plugins must never leak into test outcomes. A clean tmp HOME
-    // (no opencode dir at all) is the neutral tree every test starts from.
+    // Isolated HOME: the V2 run path runs the fail-closed effective-config
+    // audit, which enumerates REAL ~/.config/opencode sources — a developer
+    // machine's agents/plugins/permissions must never leak into test
+    // outcomes. The neutral tree seeds ONLY the deny-first global policy the
+    // permission gate requires (permission.bash {"*": "deny"}).
     const isolatedHome = mkdtempSync(join(tmpdir(), 'oc2env-'));
+    const cfgDir = join(isolatedHome, '.config', 'opencode');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, 'opencode.json'), JSON.stringify({
+      permission: { bash: { '*': 'deny' } },
+    }));
     const allVars = { HOME: isolatedHome, ...vars };
     for (const k of Object.keys(allVars)) saved[k] = process.env[k];
     Object.assign(process.env, allVars);
@@ -60,6 +66,16 @@ function withEnv(vars, fn) {
     }
   };
 }
+
+// spawnSync seam that satisfies the exact-pin gate: answers the opencode2
+// --version probe with the pinned build (no other command is expected
+// before the managed spawn on the V2 path).
+const pinSh = () => (_cmd, args) => {
+  if (args && args[0] === '--version') {
+    return { status: 0, stdout: `opencode2 v${OPENCODE2_PIN_DEFAULT}\n`, stderr: '' };
+  }
+  return { status: 1, stdout: '', stderr: '', error: null };
+};
 
 function stdoutCapture() {
   const chunks = [];
@@ -326,7 +342,7 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('x', { engine: 'opencode2' }, {
         spawn: rec.spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        spawnSync: pinSh(),
         stdoutWrite: capture.stdoutWrite,
       });
       const envelope = JSON.parse(capture.text().trim());
@@ -355,7 +371,7 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('x', { engine: 'opencode2' }, {
         spawn: rec.spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        spawnSync: pinSh(),
         stdoutWrite: capture.stdoutWrite,
       });
       const envelope = JSON.parse(capture.text().trim());
@@ -388,7 +404,7 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('x', { engine: 'opencode2' }, {
         spawn: rec.spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        spawnSync: pinSh(),
         stdoutWrite: capture.stdoutWrite,
       });
       const { cmd, argv, options } = rec.calls[0];
@@ -444,7 +460,7 @@ test(
         const cap = stdoutCapture();
         await runCoderRun('hello', { engine: 'opencode2', session: 'beta' }, {
           spawn: rec.spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: pinSh(),
           stdoutWrite: cap.stdoutWrite,
         });
         assert.equal(rec.calls[0].argv.includes('--session'), false);
@@ -456,7 +472,7 @@ test(
         const rec2 = recordingSpawn(stream);
         await runCoderRun('again', { engine: 'opencode2', session: 'beta' }, {
           spawn: rec2.spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: pinSh(),
           stdoutWrite: cap.stdoutWrite,
         });
         const idx = rec2.calls[0].argv.indexOf('--session');
@@ -492,7 +508,7 @@ test(
         const cap = stdoutCapture();
         await runCoderRun('x', { engine: 'opencode2', session: 'fresh' }, {
           spawn: rec.spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: pinSh(),
           stdoutWrite: cap.stdoutWrite,
         });
         const raw = JSON.parse(readFileSync(join(dir, '.triss', 'sessions.json'), 'utf8'));
@@ -527,7 +543,7 @@ test(
         const cap = stdoutCapture();
         const deps = (stream) => ({
           spawn: recordingSpawn(stream).spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: pinSh(),
           stdoutWrite: cap.stdoutWrite,
         });
         await runCoderRun('a', { session: 'same' }, deps(v1stream)); // V1 default engine
@@ -535,7 +551,7 @@ test(
         const rec3 = recordingSpawn(v2stream);
         await runCoderRun('c', { engine: 'opencode2', session: 'same' }, {
           spawn: rec3.spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: pinSh(),
           stdoutWrite: cap.stdoutWrite,
         });
         const idx = rec3.calls[0].argv.indexOf('--session');
@@ -563,7 +579,7 @@ test(
         spawn: () => {
           throw new Error('must not spawn');
         },
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        spawnSync: pinSh(),
       };
       await assert.rejects(
         () => runCoderRun('x', { engine: 'opencode2', session: 's', continue: true }, deps),
@@ -600,7 +616,7 @@ test(
             spawn: () => {
               throw new Error('must not spawn');
             },
-            spawnSync: () => ({ status: 1, stdout: '', error: null }),
+            spawnSync: pinSh(),
           },
         ),
         (err) => {
@@ -632,7 +648,7 @@ test(
         spawn: () => {
           throw new Error('must not spawn');
         },
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        spawnSync: pinSh(),
       };
       await assert.rejects(
         () => runCoderRun(

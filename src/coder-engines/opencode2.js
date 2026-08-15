@@ -28,6 +28,7 @@
 //     never collide with V1's ~/.local/share/opencode.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
@@ -51,10 +52,15 @@ export { OPENCODE2_PIN_DEFAULT };
 // not >=). NEVER throws; missing binary / spawn error / garbage output all
 // yield {found:false, version:null, satisfiesPin:false}. `sh` is injectable
 // for tests.
+// OPENCODE_DISABLE_AUTOUPDATE=1 is set for EVERY probe (review P1-3): a
+// version check must never trigger the updater, and the env is allowlisted
+// (PATH/HOME only) so no credential leaks into a probe either.
 export function detectOpenCode2(sh = nodeSpawnSync) {
   let r;
   try {
-    r = sh('opencode2', ['--version']);
+    r = sh('opencode2', ['--version'], {
+      env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), OPENCODE_DISABLE_AUTOUPDATE: '1' },
+    });
   } catch {
     return { found: false, version: null, satisfiesPin: false };
   }
@@ -111,6 +117,52 @@ export function opencode2DataRoot(projectRoot) {
 
 export function opencode2StateRoot(projectRoot) {
   return join(projectRoot, '.triss', 'opencode2', 'state');
+}
+
+// ensureOpenCode2RuntimeDirs: create/verify the Triss-owned XDG roots as
+// user-only (0700) directories BEFORE any credential is forwarded (review
+// P1/P2-7). An existing 0755 directory is CHMOD-corrected, not tolerated; a
+// symlink or non-directory at either root is a hard failure. Re-checks the
+// final mode after chmod so a umask/failure cannot silently leave it loose.
+// NOTE: this module is a PURE adapter — process.stderr writes live in the
+// caller; here we stay silent and just return what changed.
+export function ensureOpenCode2RuntimeDirs(root) {
+  const created = [];
+  for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
+    let st;
+    try {
+      st = lstatSync(dir);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') {
+        throw new Error(`Cannot inspect OpenCode 2 runtime root ${dir}: ${err.message}`, { cause: err });
+      }
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      created.push(dir);
+      st = lstatSync(dir);
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `OpenCode 2 runtime root ${dir} is a symlink — refusing to run with credential state behind a symlink. ` +
+          'Remove the symlink and let Triss recreate the directory.',
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`OpenCode 2 runtime root ${dir} is not a directory.`);
+    }
+    const mode = st.mode & 0o777;
+    if (mode !== 0o700) {
+      chmodSync(dir, 0o700);
+      const after = lstatSync(dir);
+      if ((after.mode & 0o777) !== 0o700) {
+        throw new Error(
+          `OpenCode 2 runtime root ${dir} mode could not be corrected to 0700 ` +
+            `(still ${((after.mode & 0o777) >>> 0).toString(8)}).`,
+        );
+      }
+      created.push(`${dir} (chmod 0700)`);
+    }
+  }
+  return created;
 }
 
 // buildOpenCode2SpawnEnv: allowlist env for the opencode2 subprocess.
