@@ -131,6 +131,8 @@ jobs:
           mkdir -p /tmp/dsh-lifecycle
           (cd packages/dsh-provider-bundle && npm pack --pack-destination /tmp/dsh-lifecycle)
       - name: add → dump-config (headless profile)
+        env:
+          NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK: true
         run: |
           export DSH_HOME=/tmp/dsh-lifecycle/home
           TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
@@ -153,6 +155,8 @@ jobs:
           fi
           echo "remove clean"
       - name: reinstall → dump-config again (cycle closes)
+        env:
+          NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK: true
         run: |
           export DSH_HOME=/tmp/dsh-lifecycle/home
           TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
