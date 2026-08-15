@@ -27,6 +27,7 @@ import {
   statSync,
   lstatSync,
   chmodSync,
+  realpathSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
@@ -1412,8 +1413,38 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────
-//
+// assertV2WorkerTransportProvenance (round-4 P0): the worker credential and
+// its transport must form ONE profile of consistent trust. Precedence is
+// shell > project .triss.env > global .env per FIELD, so a repository can
+// supply only TRISS_WORKER_BASE_URL while the key comes from the shell or
+// the global file — the effective "expected" endpoint in the provider audit
+// is then project-controlled, and the higher-trust key would be forwarded to
+// an attacker URL the repo also pinned into opencode.json. Rule: a
+// project-local transport (BASE_URL) may only ride with a project-local key.
+function assertV2WorkerTransportProvenance() {
+  const files = activeEnvFiles();
+  const localFile = files.find((f) => f.scope === 'local');
+  const vars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
+  const localUrl = vars.TRISS_WORKER_BASE_URL;
+  if (!localUrl) return;
+  const localKey = vars.TRISS_WORKER_API_KEY;
+  if (localKey) return; // whole profile is project-scoped — consistent trust
+  const shellKey = process.env.TRISS_WORKER_API_KEY !== undefined;
+  const globalFile = files.find((f) => f.scope === 'global');
+  const globalKey = globalFile && globalFile.exists
+    ? readEnvFile(globalFile.path).vars.TRISS_WORKER_API_KEY
+    : null;
+  if (shellKey || globalKey) {
+    throw new Error(
+      'OpenCode 2 preflight aborted: the project .triss.env overrides TRISS_WORKER_BASE_URL while the ' +
+        'TRISS_WORKER_API_KEY comes from a higher-trust source (shell export or global env file). The ' +
+        'worker endpoint the provider audit compares against would be repository-controlled, so the key ' +
+        'could be forwarded to an attacker URL. Move both the key and the endpoint into the same scope.',
+    );
+  }
+}
+
+// ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────//
 // Reuses the shared V1 surface (same env file, same key setup, same
 // runCoderSetup flow onto the shared opencode.json) and adds the V2 specifics:
 //   1. Static source/plugin/agent preflight via the canonical enumerator —
@@ -1498,6 +1529,7 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   //   5. Post-setup FULL audit (auditOpenCode2Run + static gate) over the
   //      final filesystem state — not just the plugin/agent scan.
   staticOpenCode2Preflight(deps.cwd || process.cwd());
+  assertV2WorkerTransportProvenance();
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
   const sh = deps.spawnSync || nodeSpawnSync;
   // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
@@ -1545,8 +1577,9 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   );
   // (5) Post-setup preflight over the resulting tree: the shared setup must
   // not have created any source the V2 gate rejects — and the FULL audit
-  // (provider + permission) must pass over the written config.
-  const postDir = deps.cwd || process.cwd();
+  // (provider + permission) must pass over the written config. The audit
+  // walks the CANONICAL (realpath) directory (round-4), same as the run path.
+  const postDir = realpathSync.native(deps.cwd || process.cwd());
   staticOpenCode2Preflight(postDir);
   const pinnedModel = process.env.TRISS_CODER_MODEL || readOpencodeModels(opencodeConfigPath(scope)).model;
   const postWorkerProfile = pinnedModel && pinnedModel.startsWith('triss-worker/')
@@ -4854,20 +4887,45 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     // the real last-match-wins evaluator (P0-2 round 2), plus the existing
     // plugin/agent source rejection. Any failure leaves NO worktree/branch
     // behind (P2-12).
+    //
+    // Round-4 P1 (P0 impact): the audit must walk the CANONICAL runtime
+    // directory. A symlinked --cwd makes the child chdir to the PHYSICAL
+    // target, so the engine's own config walk starts from a different parent
+    // chain than the lexical path the preflight enumerated — hostile sources
+    // in the physical tree's ancestors were invisible to the audit. Both the
+    // audit and the spawn use the same realpathSync.native value.
+    let runtimeDirCanonical;
+    try {
+      runtimeDirCanonical = realpathSync.native(runtimeDir);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `OpenCode 2 preflight aborted: cannot canonicalize the runtime directory ${runtimeDir} — ${err.message}`,
+        { cause: err },
+      );
+    }
+    // Round-4 P0: worker key + endpoint must be one profile of consistent
+    // provenance (a project-local BASE_URL cannot carry a shell/global key).
+    try {
+      assertV2WorkerTransportProvenance();
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
     const workerProfile = modelUsed.startsWith('triss-worker/')
       ? workerCoderProfile()
       : null;
     try {
       auditOpenCode2Run(
         {
-          cwd: runtimeDir,
+          cwd: runtimeDirCanonical,
           modelUsed,
           agentName: agent,
           expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
         },
         { enumerate: deps.enumerateOpenCodeSources },
       );
-      staticOpenCode2Preflight(runtimeDir);
+      staticOpenCode2Preflight(runtimeDirCanonical);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
@@ -4941,7 +4999,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         label: 'opencode2',
         createState: createOpenCode2EventFolder,
         foldLine: foldOpenCode2EventLine,
-        cwd: isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : process.cwd(),
+        cwd: runtimeDirCanonical,
       });
 
       rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });

@@ -449,8 +449,31 @@ const V2_EXECUTABLE_KEYS = Object.freeze({
   commands: 'command definitions execute arbitrary shell inside the OpenCode process',
 });
 
+// Legacy/native dual forms (round-4 P0): when a document carries BOTH the
+// V1 and the V2 name of a security-critical field, the pinned build prefers
+// the NATIVE value — while Triss's projection reads `provider ?? providers`
+// (legacy first) and concatenates permission rules from both. Until there is
+// an exact canonical merger, any dual form fails closed: three independent
+// bypasses hide behind it (empty legacy `provider` masking a native endpoint
+// override, empty legacy `plugin` masking executable native `plugins`, a
+// legacy shell deny masking a permissive native `permissions` policy).
+const V2_DUAL_FORM_PAIRS = Object.freeze([
+  ['provider', 'providers'],
+  ['plugin', 'plugins'],
+  ['permission', 'permissions'],
+]);
+
 export function assertV2DocumentShape(doc, layerPath) {
   if (doc == null || typeof doc !== 'object' || Array.isArray(doc)) return;
+  for (const [legacy, native] of V2_DUAL_FORM_PAIRS) {
+    if (legacy in doc && native in doc) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: ${layerPath} defines BOTH "${legacy}" (V1) and "${native}" (V2). ` +
+          `The pinned build prefers the native "${native}" value while Triss's audit models the legacy ` +
+          'one — the audited baseline would not be the running one. Keep exactly one form per document.',
+      );
+    }
+  }
   for (const key of Object.keys(doc)) {
     const executable = V2_EXECUTABLE_KEYS[key];
     if (executable) {

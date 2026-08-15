@@ -597,6 +597,32 @@ places; all of them gate before any credential is forwarded:
    entry cannot make the parent verify one file and the child execute
    another.
 
+#### Review round 4 — remaining credential-boundary blockers
+
+Three findings survived round 3 and are now part of the contract:
+
+1. **No dual legacy/native forms.** When a document carries BOTH the V1 and
+   the V2 name of a security-critical field (`provider`+`providers`,
+   `plugin`+`plugins`, `permission`+`permissions`), the pinned build prefers
+   the NATIVE value while a legacy-first projection audits the other one —
+   an empty legacy block can hide a native endpoint override, an executable
+   native plugin, or a permissive native permissions policy behind a legacy
+   shell deny. Until an exact canonical merger exists, any dual form fails
+   closed.
+2. **Worker key and endpoint are one profile.** Env precedence is resolved
+   per field (shell > project `.triss.env` > global `.env`), so a repository
+   could supply only `TRISS_WORKER_BASE_URL` while the key comes from the
+   shell or the global file — the provider audit's "expected" endpoint would
+   then be repository-controlled. A project-local transport may only ride
+   with a project-local key; shell/global key + project-local endpoint
+   rejects before the credential is forwarded.
+3. **The audit walks the canonical runtime directory.** A symlinked `--cwd`
+   makes the child chdir to the PHYSICAL target, so the engine's config walk
+   starts from a different parent chain than the lexical path the preflight
+   enumerated. Both the preflight and the spawn use one
+   `realpathSync.native()` value; a cwd that cannot be canonicalized fails
+   closed.
+
 ### Small-model contract
 
 The shared persisted V1 config retains `small_model` for OpenCode 1.
