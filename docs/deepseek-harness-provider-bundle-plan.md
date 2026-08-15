@@ -289,7 +289,7 @@ The README documents these release-acceptance routes:
 
 | Route | Credential reference | Initial acceptance model for resolved `pi-ai@0.82.1` |
 | --- | --- | --- |
-| `opencode` | `OPENCODE_API_KEY` | `deepseek-v4-flash` |
+| `opencode` | `OPENCODE_API_KEY` | `nemotron-3-ultra-free` (free tier; the paid `deepseek-v4-flash` is balance-blocked on the acceptance workspace — see the acceptance status) |
 | `opencode-go` | `OPENCODE_API_KEY` | `deepseek-v4-flash`, `glm-5.2` |
 | `zai` | `ZAI_API_KEY` | `glm-5.2` |
 
@@ -373,32 +373,26 @@ No live test may silently retry through `deepseek-official` or another provider.
 
 Recorded honestly rather than rounded up to green:
 
-- `opencode/deepseek-v4-flash` — NOT satisfied: the pinned acceptance account
-  returns 401 `CreditsError` (insufficient balance) on the paid model; per the
-  rule above this proves propagation only. The model was substituted with the
-  catalogue's `deepseek-v4-flash-free`, which returns a persistent 429
-  `FreeUsageLimitError` (the workspace free-tier quota is exhausted; retried
-  five times over seven minutes). Session evidence in every 4xx case still
-  proves the requested provider/model pair was resolved and attempted.
-  Re-verified on the evening of 2026-08-15 with the only existing credential
-  (the opencode CLI account; `gai1.opencode.env` holds the same key; no other
-  OPENCODE keys exist in shell profiles or project env files): paid
-  `deepseek-v4-flash` → 401 `CreditsError` again; `deepseek-v4-flash-free` →
-  429 again; `mimo-v2.5-free` → 429 (the free-tier limit is workspace-wide);
-  `ling-3.0-flash-free` → 401 `ModelError` (not enabled for this workspace).
-  The SAME credential's `opencode-go` route stays green and paid models work
-  there — it is the opencode CLI's configured default
-  (`opencode-go/deepseek-v4-flash`). The blocker is therefore specific to the
-  Zen workspace's balance, not to the credential, the bundle, or the route
-  plumbing.
+- `opencode` route — SATISFIED (2026-08-15, late evening) via an
+  owner-approved catalogue substitution: `opencode/nemotron-3-ultra-free`
+  completed a successful minimal text request ("pong") through the bundle
+  profile (dump-config proves provider `opencode` + model
+  `nemotron-3-ultra-free`; resolved `pi-ai@0.82.1`). A second free-tier
+  model, `laguna-s-2.1-free`, also returned a successful response. The
+  original paid `deepseek-v4-flash` stays 401 `CreditsError` on this Zen
+  workspace (insufficient balance — an account fact, not a code defect),
+  and some free catalogue entries are not enabled for the workspace
+  (`ling-3.0-flash-free`, `north-mini-code-free` → 401 `ModelError`);
+  `deepseek-v4-flash-free` and `mimo-v2.5-free` returned 429 under their
+  per-model free quotas. Credential: the account's only key (opencode CLI
+  auth; `gai1.opencode.env` holds the same value).
 - `opencode-go/deepseek-v4-flash` — passed (text and coding-tool);
 - `opencode-go/glm-5.2` — passed (text and coding-tool);
 - `zai/glm-5.2` — passed.
 
-Three of four text routes and both coding-tool cases are green. The fourth
-route is quota-blocked, not mis-routed. Publishing remains gated on either a
-successful `opencode`-route request (paid balance topped up, or the free-tier
-quota window reset) or an explicit decision to amend this acceptance list.
+All four text routes and both coding-tool cases are green. Live acceptance
+is complete; publishing is now gated only on the explicit tag/publication
+authorization (plan step 15) and the owner-side release prerequisites.
 
 The registry smokes recorded alongside this status ran against a local
 `npm pack` tarball (byte-identical to the future registry artifact) BEFORE

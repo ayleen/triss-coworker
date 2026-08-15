@@ -8,7 +8,7 @@ The bundle replaces the dormant `llm-pi-ai` composition row so these catalogue r
 
 | Route | Credential reference | Initial acceptance model for resolved `pi-ai@0.82.1` |
 | --- | --- | --- |
-| `opencode` | `OPENCODE_API_KEY` | `deepseek-v4-flash` |
+| `opencode` | `OPENCODE_API_KEY` | `nemotron-3-ultra-free` (free tier; paid `deepseek-v4-flash` blocked by the acceptance workspace's balance) |
 | `opencode-go` | `OPENCODE_API_KEY` | `deepseek-v4-flash`, `glm-5.2` |
 | `zai` | `ZAI_API_KEY` | `glm-5.2` |
 
