@@ -38,6 +38,12 @@ jobs:
       - run: npm run lint
       - run: npm test
 
+  # The same bundle matrix + real-Harness lifecycle checks as PR CI (review
+  # round 4, §3): previously they lived only in test.yml, whose branch filter
+  # never ran them for tag pushes.
+  bundle-checks:
+    uses: ./.github/workflows/bundle-checks.yml
+
   standalone-build:
     needs: test
     runs-on: ubuntu-latest
@@ -108,25 +114,28 @@ jobs:
           node scripts/release-gates.js smoke \
             --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz"
 
-  npm-publish:
-    needs: [standalone-smoke, test]
+  # Unprivileged release-gate job (review round 4, §1/§4): ALL tag-controlled
+  # verification — versions, tarball inspection, registry planning, and
+  # fresh-vs-retry tag authorization — runs here WITHOUT id-token access.
+  # The publish job below only receives its verdict and artifacts.
+  release-gates:
+    needs: [test, bundle-checks, standalone-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+    outputs:
+      publish_companion: ${{ steps.plan.outputs.publish_companion }}
+      publish_root: ${{ steps.plan.outputs.publish_root }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
-      - name: Pin npm used for dependency installation
+      - name: Pin npm used for packing
         run: |
           npm install --global "npm@${NPM_VERSION}"
           test "$(npm --version)" = "$NPM_VERSION"
-      - name: Show npm version
-        run: npm --version
       - name: Verify tag matches both package versions
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -139,42 +148,430 @@ jobs:
           node scripts/publish-gate.js verify-versions --tag "$GITHUB_REF_NAME"
       - name: Inspect both packed tarballs before publishing
         run: |
+          # The pipeline below starts node and tee concurrently; tee opens its
+          # output BEFORE node's internal mkdirSync() can run, so the
+          # directory must exist before the pipeline starts.
+          mkdir -p "$RUNNER_TEMP/publish-pack"
           node scripts/publish-gate.js pack-inspect --workdir "$RUNNER_TEMP/publish-pack" \
             | tee "$RUNNER_TEMP/publish-pack/local-manifest.json"
-      - name: Check already-published versions fail closed on mismatch
+      - name: Plan publication from live registry state (safe retry)
+        id: plan
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node scripts/publish-gate.js verify-registry --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))")
-      - name: Verify tag is the exact origin/main release
+          mkdir -p "$RUNNER_TEMP/publish-pack"
+          node scripts/publish-gate.js plan-publish \
+            --local-manifest "$RUNNER_TEMP/publish-pack/local-manifest.json" \
+            | tee "$RUNNER_TEMP/publish-pack/publish-plan.json"
+          node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const out = plan.actions || {};
+            const line = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+            line("publish_companion", String(out.publishCompanion === true));
+            line("publish_root", String(out.publishRoot === true));
+          ' "$RUNNER_TEMP/publish-pack/publish-plan.json"
+      - name: Authorize the tag against origin/main (fresh release or safe retry)
         run: |
           git fetch --no-tags origin \
             '+refs/heads/main:refs/remotes/origin/main'
           TAG_SHA=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
           MAIN_SHA=$(git rev-parse 'refs/remotes/origin/main^{commit}')
-          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
-            echo "Tag $GITHUB_REF_NAME points to $TAG_SHA, but origin/main is $MAIN_SHA"
-            exit 1
-          fi
+          EXACT=0
+          ANCESTOR=0
+          if [ "$TAG_SHA" = "$MAIN_SHA" ]; then EXACT=1; fi
+          if git merge-base --is-ancestor "$TAG_SHA" refs/remotes/origin/main; then ANCESTOR=1; fi
+          node scripts/publish-gate.js authorize-tag \
+            --plan "$RUNNER_TEMP/publish-pack/publish-plan.json" \
+            --exact-main "$EXACT" --ancestor-main "$ANCESTOR" \
+            | tee "$RUNNER_TEMP/publish-pack/authorization.json"
+          MODE=$(node -p "require('$RUNNER_TEMP/publish-pack/authorization.json').mode")
+          echo "release authorization mode: $MODE (exact=$EXACT ancestor=$ANCESTOR)"
+          # install.sh drift against a moved main is only meaningful when
+          # nothing has been published yet; in retry mode main has advanced
+          # past the tag by design.
+          if [ "$MODE" != "fresh" ]; then exit 0; fi
           git show "${GITHUB_REF_NAME}:install.sh" > "$RUNNER_TEMP/tag-install.sh"
           git show 'refs/remotes/origin/main:install.sh' > "$RUNNER_TEMP/main-install.sh"
           cmp -s "$RUNNER_TEMP/tag-install.sh" "$RUNNER_TEMP/main-install.sh" || {
             echo "Tagged install.sh does not match origin/main"
             exit 1
           }
-      - run: npm ci
-      - name: Publish companion package triss-dsh-provider-bundle (safe retry)
-        working-directory: packages/dsh-provider-bundle
-        run: npm publish --access public --provenance
-      - name: Publish root package triss-coworker
-        run: npm publish --access public --provenance
-      - name: Registry-verify the companion after publication
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-tarballs
+          path: |
+            ${{ runner.temp }}/publish-pack/local-manifest.json
+            ${{ runner.temp }}/publish-pack/publish-plan.json
+            ${{ runner.temp }}/publish-pack/*.tgz
+          if-no-files-found: error
+
+  # Minimal privileged publish job (review round 4, §4): the ONLY job with
+  # id-token: write, behind the npm-production environment. It runs no
+  # repository scripts — the byte check uses plain `npm pack
+  # --ignore-scripts` plus sha256sum, and publication itself skips lifecycle
+  # hooks — and it publishes the same bytes the release-gates job verified
+  # (deterministic repack comparison, review round 4, §7).
+  npm-publish:
+    needs: [release-gates]
+    runs-on: ubuntu-latest
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Pin npm used for publication
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))" > "$RUNNER_TEMP/companion-local.json"
-          node scripts/publish-gate.js verify-registry --local-manifest "$RUNNER_TEMP/companion-local.json"
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tarballs
+          path: publish-pack
+      - name: Repack and byte-verify both tarballs against the gates artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/verify-pack"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/verify-pack" ./packages/dsh-provider-bundle >/dev/null
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/verify-pack" . >/dev/null
+          for name in triss-dsh-provider-bundle triss-coworker; do
+            GATES=$(ls publish-pack/${name}-*.tgz)
+            VERIFY=$(ls "$RUNNER_TEMP/verify-pack/${name}-*.tgz")
+            GATES_SHA=$(sha256sum "$GATES" | cut -d' ' -f1)
+            VERIFY_SHA=$(sha256sum "$VERIFY" | cut -d' ' -f1)
+            if [ "$GATES_SHA" != "$VERIFY_SHA" ]; then
+              echo "refusing to publish $name: repacked sha256 $VERIFY_SHA != gates sha256 $GATES_SHA"
+              exit 1
+            fi
+            echo "$name bytes verified: $GATES_SHA"
+          done
+      - name: Publish companion package triss-dsh-provider-bundle (skipped when already published with identical bytes)
+        if: needs.release-gates.outputs.publish_companion == 'true'
+        working-directory: packages/dsh-provider-bundle
+        run: npm publish --access public --provenance --ignore-scripts
+      - name: Publish root package triss-coworker (skipped when already published with identical bytes)
+        if: needs.release-gates.outputs.publish_root == 'true'
+        run: npm publish --access public --provenance --ignore-scripts
+
+  registry-acceptance:
+    # Plan step 16, automatable half: install the REGISTRY package (not a
+    # local tarball) into fresh profiles, prove the plugin lifecycle with
+    # parsed route assertions, verify both published packages byte-for-byte,
+    # and record the compatibility + integrity evidence. Live provider-model
+    # smokes stay credential-bound acceptance evidence outside CI.
+    needs: npm-publish
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.19.0', '24']
+      fail-fast: false
+    name: registry acceptance (Node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Pin npm
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - name: Activate pinned pnpm on PATH
+        run: |
+          # The repo pins packageManager=npm, so corepack strict mode refuses
+          # to activate pnpm here ("This project is configured to use npm").
+          export COREPACK_ENABLE_STRICT=0
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
+          pnpm --version
+      - name: Install the pinned real Harness CLI
+        run: |
+          npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+          dsh --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tarballs
+          path: publish-pack
+      - name: Registry-verify BOTH published packages against the gates artifact
+        run: |
+          node scripts/publish-gate.js plan-publish \
+            --local-manifest publish-pack/local-manifest.json \
+            > "$RUNNER_TEMP/final-verify.json"
+          node -e '
+            const fs = require("fs");
+            const verify = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            for (const key of ["companion", "root"]) {
+              const entry = verify[key];
+              if (!entry || entry.published !== true || entry.integrityOk !== true) {
+                console.error(`post-publish verification failed for ${key}:`, entry);
+                process.exit(1);
+              }
+            }
+            console.log("post-publish registry verification passed for both packages");
+          ' "$RUNNER_TEMP/final-verify.json"
+      - name: Registry update path (runs whenever a previous version exists)
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          PREV=$(npm view triss-dsh-provider-bundle versions --json | node -e '
+            let data = "";
+            process.stdin.on("data", (c) => { data += c; });
+            process.stdin.on("end", () => {
+              const cmp = (a, b) => {
+                const pa = a.split(".").map(Number);
+                const pb = b.split(".").map(Number);
+                for (let i = 0; i < 3; i += 1) {
+                  if (pa[i] !== pb[i]) { process.stdout.write(""); return pa[i] < pb[i] ? -1 : 1; }
+                }
+                return 0;
+              };
+              const stable = JSON.parse(data).filter((v) => /^\d+\.\d+\.\d+$/.test(v) && cmp(v, process.argv[2]) < 0);
+              stable.sort(cmp);
+              process.stdout.write(stable[stable.length - 1] ?? "");
+            });' "$VERSION")
+          if [ -z "$PREV" ]; then
+            # First release of the companion: no previous registry version
+            # can exist. Update mechanics are guaranteed by the lifecycle
+            # job's in-place v1→v2 proof (contract amendment recorded in the
+            # plan document).
+            echo "no previous registry version — registry update deferred to the lifecycle job proof"
+            exit 0
+          fi
+          export DSH_HOME="$RUNNER_TEMP/dsh-home-update"
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${PREV}"
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-updated.yml"
+          node scripts/dsh-dump-assert.js present "$RUNNER_TEMP/dump-updated.yml"
+          node - "$DSH_HOME/profiles/headless/package.json" "$VERSION" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const [manifestPath, version] = process.argv.slice(2);
+          const installed = JSON.parse(fs.readFileSync(
+            path.join(path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json'),
+            'utf8',
+          ));
+          if (installed.version !== version) {
+            throw new Error(`registry update left ${installed.version} installed, expected ${version}`);
+          }
+          EOF
+      - name: add → registry install activates the three routes at the exact released version
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-added.yml"
+          node scripts/dsh-dump-assert.js present "$RUNNER_TEMP/dump-added.yml"
+          node - "$DSH_HOME/profiles/headless/package.json" "$VERSION" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const [manifestPath, version] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (typeof dep !== 'string' || dep.length === 0) {
+            throw new Error('profile manifest carries no companion dependency after registry add');
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('companion missing from dsh.profile.bundles after registry add');
+          }
+          const installed = JSON.parse(fs.readFileSync(
+            path.join(path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json'),
+            'utf8',
+          ));
+          if (installed.version !== version) {
+            throw new Error(`registry installed ${installed.version}, expected the exact released ${version}`);
+          }
+          EOF
+      - name: remove → registry package uninstalls cleanly, reinstall restores it
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          dsh plugin --profile headless remove triss-dsh-provider-bundle
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-removed.yml"
+          node scripts/dsh-dump-assert.js absent "$RUNNER_TEMP/dump-removed.yml"
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] !== undefined) {
+            throw new Error('dependency still present after registry remove');
+          }
+          if ((manifest.dsh?.profile?.bundles ?? []).includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles still lists the companion after registry remove');
+          }
+          EOF
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-reinstalled.yml"
+          node scripts/dsh-dump-assert.js present "$RUNNER_TEMP/dump-reinstalled.yml"
+      - name: Record acceptance evidence tuple and provenance (fail-closed)
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+          NODE_MAJOR: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          PROFILE="$DSH_HOME/profiles/headless"
+          # Profile dependency graph evidence: pnpm list output is saved and
+          # the companion must appear in it (the adapters resolve from the
+          # dsh installation, which is why their versions come from there —
+          # verified live; recorded in the plan document).
+          pnpm --dir "$PROFILE" list --depth Infinity --json > "$RUNNER_TEMP/pnpm-list.json"
+          cp "$PROFILE/pnpm-lock.yaml" "$RUNNER_TEMP/pnpm-lock.yaml"
+          node - "$PROFILE" > "$RUNNER_TEMP/registry-acceptance-node${NODE_MAJOR}.json" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const { execSync } = require('child_process');
+          const run = (cmd) => {
+            const value = execSync(cmd, { encoding: 'utf8' }).trim();
+            if (!value) throw new Error(`command produced no output: ${cmd}`);
+            return value;
+          };
+          const required = (label, value) => {
+            if (value === null || value === undefined || value === '') {
+              throw new Error(`compatibility tuple is incomplete: ${label} is missing`);
+            }
+            return value;
+          };
+          (async () => {
+            const [profileDir] = process.argv.slice(2);
+            const version = required('tag version', process.env.TAG_VERSION).replace(/^v/, '');
+            const temp = process.env.RUNNER_TEMP;
+
+            // Companion from the profile itself.
+            const installed = JSON.parse(fs.readFileSync(
+              path.join(profileDir, 'node_modules', 'triss-dsh-provider-bundle', 'package.json'), 'utf8',
+            ));
+            if (installed.version !== version) {
+              throw new Error(`profile holds companion ${installed.version}, expected ${version}`);
+            }
+            const pnpmList = JSON.parse(fs.readFileSync(path.join(temp, 'pnpm-list.json'), 'utf8'));
+            const listed = JSON.stringify(pnpmList);
+            if (!listed.includes('triss-dsh-provider-bundle')) {
+              throw new Error('companion missing from the profile pnpm list');
+            }
+
+            // Companion integrity from the profile lockfile.
+            const lock = fs.readFileSync(path.join(temp, 'pnpm-lock.yaml'), 'utf8');
+            const lockMatch = /triss-dsh-provider-bundle@[^\s'"]*:\s*\n\s*resolution:\s*\{[^}]*integrity:\s*(sha512-[A-Za-z0-9+/=]+)/.exec(lock);
+            const companionLockIntegrity = required(
+              'companion integrity in the profile lockfile',
+              lockMatch?.[1],
+            );
+
+            // Adapters resolve from the running dsh installation (verified
+            // live: the profile carries only the companion and the template
+            // bundles). Their versions are mandatory, not best-effort.
+            const globalRoot = run('npm root -g');
+            const globalVersion = (name) => {
+              try {
+                return JSON.parse(fs.readFileSync(path.join(globalRoot, name, 'package.json'), 'utf8')).version;
+              } catch {
+                return null;
+              }
+            };
+            const dshLlmPiAi = required('dsh-llm-pi-ai (dsh installation)', globalVersion('@deepseek-ai/dsh-llm-pi-ai'));
+            const piAiVersion = required('pi-ai (dsh installation)', globalVersion(path.join('@earendil-works', 'pi-ai')));
+            const piAiIntegrity = required(
+              'pi-ai registry integrity for the resolved version',
+              JSON.parse(run(`npm view @earendil-works/pi-ai@${piAiVersion} dist.integrity --json`)),
+            );
+
+            // Registry metadata: dist.integrity AND dist.attestations — npm
+            // stores attestations inside dist (pacote reads dist.attestations
+            // and verifies the bundles; review round 5, §2).
+            const response = await fetch('https://registry.npmjs.org/triss-dsh-provider-bundle');
+            const packument = await response.json();
+            const published = packument.versions?.[version];
+            if (!published) throw new Error(`registry packument carries no version ${version}`);
+            const distIntegrity = required('registry dist.integrity', published.dist?.integrity);
+            const attestations = published.dist?.attestations ?? null;
+            if (!attestations?.provenance || !attestations.url) {
+              throw new Error('published version carries no provenance attestation in dist.attestations — published without --provenance?');
+            }
+
+            const evidence = {
+              node: process.version,
+              npm: run('npm --version'),
+              pnpm: run('pnpm --version'),
+              dsh: run('dsh --version'),
+              dshLlmPiAi,
+              piAi: { version: piAiVersion, registryIntegrity: piAiIntegrity },
+              companion: {
+                version: installed.version,
+                profileLockIntegrity: companionLockIntegrity,
+                registryIntegrity: distIntegrity,
+              },
+              provenance: { url: attestations.url },
+              tag: process.env.TAG_VERSION,
+              sha: process.env.GITHUB_SHA,
+              workflow: process.env.GITHUB_WORKFLOW_REF,
+            };
+            process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          EOF
+          cat "$RUNNER_TEMP/registry-acceptance-node${NODE_MAJOR}.json"
+      - name: Verify signatures and provenance attestations with npm audit
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          mkdir -p "$RUNNER_TEMP/audit-project"
+          cd "$RUNNER_TEMP/audit-project"
+          npm init -y >/dev/null
+          # Saved (not --no-save): npm audit signatures works from the
+          # project's lockfile, so the dependency must be recorded there.
+          npm install --ignore-scripts --save-exact "triss-dsh-provider-bundle@${VERSION}" >/dev/null
+          npm audit signatures --json --include-attestations > "$RUNNER_TEMP/audit-signatures.json"
+          node - "$RUNNER_TEMP/audit-signatures.json" <<'EOF'
+          // npm audit signatures verifies registry signatures AND provenance
+          // attestations cryptographically (it fetches the attestation
+          // bundles and checks the signed subject). Require our package to
+          // be verified with nothing invalid or missing (review round 5, §2).
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const entry = report['triss-dsh-provider-bundle'];
+          if (!entry) throw new Error('companion missing from npm audit signatures output');
+          const statuses = [];
+          const walk = (value) => {
+            if (Array.isArray(value)) { value.forEach(walk); return; }
+            if (value && typeof value === 'object') {
+              if (typeof value.status === 'string') statuses.push(value.status);
+              Object.values(value).forEach(walk);
+            }
+          };
+          walk(entry);
+          if (statuses.length === 0) throw new Error('npm audit signatures reported no signature/attestation statuses');
+          for (const status of statuses) {
+            if (status === 'invalid' || status === 'missing') {
+              throw new Error(`signature/attestation status "${status}" for the published companion`);
+            }
+          }
+          if (!statuses.includes('verified')) {
+            throw new Error(`no verified signature/attestation for the published companion (statuses: ${statuses.join(', ')})`);
+          }
+          console.log('npm audit signatures: companion signatures and provenance attestations verified');
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: registry-acceptance-node-${{ matrix.node }}
+          path: |
+            ${{ runner.temp }}/registry-acceptance-node${{ matrix.node }}.json
+            ${{ runner.temp }}/pnpm-list.json
+            ${{ runner.temp }}/pnpm-lock.yaml
+            ${{ runner.temp }}/audit-signatures.json
+          if-no-files-found: error
 
   release:
-    needs: [standalone-smoke, npm-publish]
+    needs: [standalone-smoke, npm-publish, registry-acceptance]
     runs-on: ubuntu-latest
     permissions:
       contents: write

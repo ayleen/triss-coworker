@@ -34,42 +34,11 @@ jobs:
       - run: npm run lint
       - run: npm test
 
-  bundle-matrix:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: ['22.19.0', '24', '26']
-      fail-fast: false
-    name: bundle matrix (Node ${{ matrix.node }})
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - name: Pin npm used for dependency installation
-        run: |
-          npm install --global "npm@${NPM_VERSION}"
-          test "$(npm --version)" = "$NPM_VERSION"
-      - run: npm ci
-      - name: Bundle package, resolution, and settings matrices
-        run: |
-          node --test test/dsh-provider-bundle.test.js \
-            test/dsh-provider-bundle-resolution.test.js \
-            test/dsh-provider-bundle-settings.test.js \
-            test/dsh-publish-gate.test.js
-      - name: Companion engine range must match the manifest exactly
-        run: |
-          ENGINE=$(node -p "require('./packages/dsh-provider-bundle/package.json').engines.node")
-          if [ "$ENGINE" != "^22.19.0 || >=24.0.0" ]; then
-            echo "unexpected companion engines.node: $ENGINE"
-            exit 1
-          fi
-      - name: pnpm-missing diagnostics surface without pnpm on PATH
-        run: |
-          node --test --test-reporter=tap test/dsh-provider-bundle-resolution.test.js 2>&1 | tee /tmp/resolution.log
-          grep -q "# SKIP pnpm is not on PATH" /tmp/resolution.log
-          echo "pnpm-missing skip diagnostic confirmed without corepack pnpm activation"
+  # The bundle matrix and the real-Harness lifecycle job live in a reusable
+  # workflow so the tag publish flow gates on the SAME checks (review round
+  # 4, §3): a branches-only filter never ran them for tag pushes.
+  bundle-checks:
+    uses: ./.github/workflows/bundle-checks.yml
 
   pnpm-install:
     runs-on: ubuntu-latest
@@ -92,7 +61,7 @@ jobs:
       - name: Install tarball with pnpm in a fresh project
         run: |
           corepack enable
-          corepack prepare pnpm@9 --activate
+          corepack prepare pnpm@9.0.0 --activate
           mkdir /tmp/consumer
           cd /tmp/consumer
           pnpm init
