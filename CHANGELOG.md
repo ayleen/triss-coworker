@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dedicated CI bundle matrix covers Node `22.19.0`, `24`, and `26` plus
   `pnpm`-missing diagnostics.
 
+### Changed
+
+- `test/coder-init-credential-gate-blocker.test.js` pins
+  `TRISS_PROJECT_ROOT` to the temp HOME so credential-gate isolation no
+  longer depends on cwd lookups; no runtime code changed in this release
+  train (an earlier iteration of this PR touched `src/safety.js` and was
+  reverted for expanding the sandbox boundary).
+- The publish workflow plans publication from live registry state for BOTH
+  packages (`plan-publish`), skips a publish step when the registry already
+  holds the byte-identical tarball, and registry-verifies both packages again
+  after publication — a partial-failure rerun is now safe.
+- CI gains a required `dsh plugin lifecycle` job (real `@deepseek-ai/dsh`
+  0.1.0-rc.6 + pnpm 9): add → update (remove+add with a genuinely different
+  effective patch) → remove → reinstall → npx-style anchor.
+- `npm test` now runs `scripts/check-lockfile-gate.cjs`, which asserts the
+  workspace name/version/engines against the live manifests plus the
+  pinned `@deepseek-ai/dsh-app-boot`.
+
 ### Unchanged
 
 - Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`

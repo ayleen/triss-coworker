@@ -314,6 +314,32 @@ A successful final diff without route and tool-event evidence is a failed accept
 
 No live test may silently retry through `deepseek-official` or another provider.
 
+### Acceptance status (pre-release, 2026-08-15)
+
+Recorded honestly rather than rounded up to green:
+
+- `opencode/deepseek-v4-flash` — NOT satisfied: the pinned acceptance account
+  returns 401 `CreditsError` (insufficient balance) on the paid model; per the
+  rule above this proves propagation only. The model was substituted with the
+  catalogue's `deepseek-v4-flash-free`, which returns a persistent 429
+  `FreeUsageLimitError` (the workspace free-tier quota is exhausted; retried
+  five times over seven minutes). Session evidence in every 4xx case still
+  proves the requested provider/model pair was resolved and attempted.
+- `opencode-go/deepseek-v4-flash` — passed (text and coding-tool);
+- `opencode-go/glm-5.2` — passed (text and coding-tool);
+- `zai/glm-5.2` — passed.
+
+Three of four text routes and both coding-tool cases are green. The fourth
+route is quota-blocked, not mis-routed. Publishing remains gated on either a
+successful `opencode`-route request (paid balance topped up, or the free-tier
+quota window reset) or an explicit decision to amend this acceptance list.
+
+The registry smokes recorded alongside this status ran against a local
+`npm pack` tarball (byte-identical to the future registry artifact) BEFORE
+publication. They are pre-release evidence, not the post-publication
+registry install that a complete step 16 requires; the post-publish
+verification in the publish workflow covers that half.
+
 ## Community ecosystem proposal
 
 The bundle is published and documented as an independently maintained community plugin, not as a temporary copy awaiting an official package.

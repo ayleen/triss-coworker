@@ -24,14 +24,16 @@ export function projectRoot() {
   const fromEnv = process.env[PROJECT_ROOT_ENV];
   if (fromEnv && fromEnv.trim()) return resolve(fromEnv.trim());
   const cwd = resolve(process.cwd());
-  // When running inside a coding-agent worktree (.claude/worktrees/<id>/… or
-  // .codex/worktrees/<id>/…), step up to the real project root so .triss.env
-  // is found there.
-  const markers = [sep + '.claude' + sep + 'worktrees' + sep, sep + '.codex' + sep + 'worktrees' + sep];
-  for (const marker of markers) {
-    const idx = cwd.indexOf(marker);
-    if (idx !== -1) return cwd.slice(0, idx);
-  }
+  // When running inside a Claude coding-agent worktree (.claude/worktrees/<id>/…),
+  // step up to the real project root so .triss.env is found there.
+  // NOTE: deliberately NOT extended to other agents' worktree layouts — this
+  // value is also the MCP restricted-mode sandbox boundary, and stepping up
+  // from e.g. .codex/worktrees/<id> would widen the sandbox to sibling
+  // worktrees of the same checkout. Credential discovery from such layouts
+  // must go through an explicit TRISS_PROJECT_ROOT instead.
+  const marker = sep + '.claude' + sep + 'worktrees' + sep;
+  const idx = cwd.indexOf(marker);
+  if (idx !== -1) return cwd.slice(0, idx);
   return cwd;
 }
 

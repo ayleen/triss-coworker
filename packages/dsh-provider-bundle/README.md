@@ -26,7 +26,15 @@ Tested with: `@deepseek-ai/dsh` at commit `47f9438`, `@deepseek-ai/dsh-llm-pi-ai
 
 ## Install
 
-Prerequisites check, then install into a profile whose template boots a one-shot application. **Profile name selects the application template** in DeepSeek Harness: `headless` boots the one-shot CLI application; any other profile name boots the interactive web application, which waits for a browser client forever. If you smoke-test this bundle from a terminal, create or use a `headless` profile:
+Prerequisites check, then install into a profile whose template boots a one-shot application. **Profile name selects the application template** in DeepSeek Harness (`dsh` 0.1.0-rc.6 defines exactly two named templates):
+
+| Profile name | Template | What boots |
+| --- | --- | --- |
+| `headless` | `dsh-base` + `dsh-headless` | one-shot CLI application — exits when the run completes |
+| `web` | `dsh-base` + `dsh-web-app` | interactive web application — waits for a browser client forever |
+| any other name | `dsh-base` only | custom base-only profile — no app-specific bundles |
+
+Only `headless` terminates by itself; `web` blocks waiting for a client, and a custom profile carries no application template at all. If you smoke-test this bundle from a terminal, create or use a `headless` profile:
 
 ```bash
 pnpm --version

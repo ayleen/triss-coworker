@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -71,7 +71,13 @@ export function verifyVersions({ tag } = {}) {
 
 /** Pack both tarballs and verify their public contents against the allowlists. */
 export function packAndInspect({ workdir } = {}) {
+  // Own the destination: `npm pack --pack-destination` does NOT create the
+  // parent directory (verified on npm 11.6.2 — it writeFile()s the tarball
+  // straight into it and fails with ENOENT). The publish workflow passes an
+  // explicit --workdir that does not exist yet on a clean runner, so the
+  // gate must mkdir it itself instead of relying on the caller.
   const dir = workdir ?? mkdtempSync(join(tmpdir(), 'triss-publish-gate-'));
+  mkdirSync(dir, { recursive: true });
   const companion = npmPack(companionDir, dir);
   const root = npmPack(repoRoot, dir);
   const companionEntries = tarEntries(join(dir, companion.filename));
@@ -114,12 +120,13 @@ export function packAndInspect({ workdir } = {}) {
 }
 
 /**
- * Registry verification with safe-retry semantics: an already-published
- * companion version is acceptable only when the registry tarball's sha256
- * equals the locally verified artifact's; any mismatch fails closed.
+ * Registry verification with safe-retry semantics for EITHER release package
+ * (root `triss-coworker` or companion `triss-dsh-provider-bundle`): an
+ * already-published version is acceptable only when the registry tarball's
+ * sha256 equals the locally verified artifact's; any mismatch fails closed.
  * `fetchJson`/`fetchBytes` are injectable for tests.
  */
-export async function verifyRegistryCompanion(local, {
+export async function verifyRegistryPackage(local, {
   fetchJson, fetchBytes, registry = REGISTRY,
 } = {}) {
   const requestJson = fetchJson ?? (async (url) => {
@@ -131,13 +138,17 @@ export async function verifyRegistryCompanion(local, {
     return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()) };
   });
 
-  const url = `${registry}/${COMPANION_NAME}/${local.version}`;
+  const expectedNames = [ROOT_NAME, COMPANION_NAME];
+  if (!expectedNames.includes(local.name)) {
+    die(`verifyRegistryPackage expects name ${expectedNames.join(' or ')}, got ${local.name}`);
+  }
+  const url = `${registry}/${local.name}/${local.version}`;
   const manifestResponse = await requestJson(url);
   if (manifestResponse.status === 404) {
-    return { published: false, integrityOk: null };
+    return { name: local.name, published: false, integrityOk: null };
   }
   if (manifestResponse.status !== 200) {
-    die(`registry metadata for ${COMPANION_NAME}@${local.version} returned ${manifestResponse.status}`);
+    die(`registry metadata for ${local.name}@${local.version} returned ${manifestResponse.status}`);
   }
   const dist = manifestResponse.body?.dist;
   if (!dist?.tarball) die(`registry metadata for ${url} carries no dist.tarball`);
@@ -148,17 +159,56 @@ export async function verifyRegistryCompanion(local, {
   const registrySha = sha256(tarballResponse.bytes);
   if (registrySha !== local.sha256) {
     die([
-      `registry tarball for ${COMPANION_NAME}@${local.version} differs from the local artifact`,
+      `registry tarball for ${local.name}@${local.version} differs from the local artifact`,
       `(registry ${registrySha}, local ${local.sha256}) — fail closed, select a new version`,
     ].join(' '));
   }
-  if (dist.integrity && dist.integrity !== `sha512-${registrySha}` && !dist.integrity.startsWith('sha512-')) {
-    // npm uses sha512; our local hash is sha256 for gate comparison. A
-    // declared sha512 integrity must at least be present — byte equality
-    // above is the real check.
-    if (dist.integrity.length < 10) die(`registry integrity for ${url} is malformed`);
+  // The registry declares dist.integrity as an SRI sha512 of the tarball.
+  // Byte equality above is the authoritative check; the SRI value is
+  // additionally validated for shape and must match the very bytes we just
+  // downloaded — a malformed or mismatched declaration is a hard failure,
+  // never a warning (review §2).
+  const expectedSri = `sha512-${createHash('sha512').update(tarballResponse.bytes).digest('base64')}`;
+  if (dist.integrity) {
+    if (!/^sha512-[A-Za-z0-9+/]{86}={2}$/.test(dist.integrity)) {
+      die(`registry integrity for ${url} is malformed: ${dist.integrity}`);
+    }
+    if (dist.integrity !== expectedSri) {
+      die(`registry integrity for ${url} does not match the registry tarball bytes`);
+    }
   }
-  return { published: true, integrityOk: true, sha256: registrySha };
+  return { name: local.name, published: true, integrityOk: true, sha256: registrySha };
+}
+
+/** Back-compat alias: the original companion-only name. */
+export const verifyRegistryCompanion = verifyRegistryPackage;
+
+/**
+ * Safe-retry publication plan for the two-package release train (review §2):
+ * consult the live registry for BOTH packages and decide what still needs
+ * publishing. A package already published with byte-identical content is
+ * skipped; any byte mismatch fails closed (a re-publish of the same version
+ * is impossible on npm). Injectable fetchers for the retry-matrix tests.
+ */
+export async function planPublication(manifest, opts = {}) {
+  const companion = await verifyRegistryPackage({
+    name: COMPANION_NAME,
+    version: manifest.companion.version,
+    sha256: manifest.companion.sha256,
+  }, opts);
+  const root = await verifyRegistryPackage({
+    name: ROOT_NAME,
+    version: manifest.root.version,
+    sha256: manifest.root.sha256,
+  }, opts);
+  return {
+    companion,
+    root,
+    actions: {
+      publishCompanion: !companion.published,
+      publishRoot: !root.published,
+    },
+  };
 }
 
 async function main() {
@@ -186,8 +236,24 @@ async function main() {
   }
   if (command === 'verify-registry') {
     const local = JSON.parse(readFileSync(args['local-manifest'], 'utf8'));
-    const result = await verifyRegistryCompanion(local);
+    const result = await verifyRegistryPackage(local);
     process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
+    return;
+  }
+  if (command === 'plan-publish') {
+    // Decide, from the pack-inspect manifest + live registry state, which of
+    // the two packages still need publishing. Idempotent on retry: a package
+    // already published with identical bytes is skipped, so re-running the
+    // workflow after a partial failure never re-publishes an existing
+    // version (review §2).
+    const manifest = JSON.parse(readFileSync(args['local-manifest'], 'utf8'));
+    const plan = await planPublication(manifest);
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      companion: plan.companion,
+      root: plan.root,
+      actions: plan.actions,
+    }, null, 2)}\n`);
     return;
   }
   die(`unknown command ${command}`);

@@ -256,6 +256,18 @@ test('companion README documents prerequisites and the acceptance route table', 
   assert.match(readme, /deepseek-v4-flash/);
   assert.match(readme, /glm-5\.2/);
   assert.match(readme, /dsh plugin --profile headless add triss-dsh-provider-bundle@/);
+  // The install command must reference THIS package's version — the 0.34.0
+  // regression slipped through because only the command prefix was checked
+  // (review §7).
+  const manifest = JSON.parse(readFileSync(join(companionDir, 'package.json'), 'utf8'));
+  const installMatch = readme.match(/dsh plugin --profile headless add triss-dsh-provider-bundle@([0-9][^\s`.]*(?:\.[0-9][^\s`]*)*)/);
+  assert.ok(installMatch, 'README must show the versioned install command');
+  assert.equal(installMatch[1], manifest.version,
+    `README install command pins ${installMatch[1]} but the package version is ${manifest.version}`);
+  // Profile-template documentation must cover all three cases (review §6).
+  assert.match(readme, /headless/);
+  assert.match(readme, /dsh-web-app/);
+  assert.match(readme, /custom base-only profile/);
   // The Triss Z.AI secret may only be mentioned to explain it is NOT aliased here.
   for (const match of readme.matchAll(/ZHIPU_API_KEY/g)) {
     const context = readme.slice(Math.max(0, match.index - 80), match.index + 100);

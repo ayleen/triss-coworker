@@ -141,10 +141,20 @@ jobs:
         run: |
           node scripts/publish-gate.js pack-inspect --workdir "$RUNNER_TEMP/publish-pack" \
             | tee "$RUNNER_TEMP/publish-pack/local-manifest.json"
-      - name: Check already-published versions fail closed on mismatch
+      - name: Plan publication from live registry state (safe retry)
+        id: plan
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node scripts/publish-gate.js verify-registry --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))")
+          node scripts/publish-gate.js plan-publish \
+            --local-manifest "$RUNNER_TEMP/publish-pack/local-manifest.json" \
+            | tee "$RUNNER_TEMP/publish-pack/publish-plan.json"
+          node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const out = plan.actions || {};
+            const line = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+            line("publish_companion", String(out.publishCompanion === true));
+            line("publish_root", String(out.publishRoot === true));
+          ' "$RUNNER_TEMP/publish-pack/publish-plan.json"
       - name: Verify tag is the exact origin/main release
         run: |
           git fetch --no-tags origin \
@@ -162,16 +172,30 @@ jobs:
             exit 1
           }
       - run: npm ci
-      - name: Publish companion package triss-dsh-provider-bundle (safe retry)
+      - name: Publish companion package triss-dsh-provider-bundle (skipped when already published with identical bytes)
+        if: steps.plan.outputs.publish_companion == 'true'
         working-directory: packages/dsh-provider-bundle
         run: npm publish --access public --provenance
-      - name: Publish root package triss-coworker
+      - name: Publish root package triss-coworker (skipped when already published with identical bytes)
+        if: steps.plan.outputs.publish_root == 'true'
         run: npm publish --access public --provenance
-      - name: Registry-verify the companion after publication
+      - name: Registry-verify BOTH packages after publication
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))" > "$RUNNER_TEMP/companion-local.json"
-          node scripts/publish-gate.js verify-registry --local-manifest "$RUNNER_TEMP/companion-local.json"
+          node scripts/publish-gate.js plan-publish \
+            --local-manifest "$RUNNER_TEMP/publish-pack/local-manifest.json" \
+            > "$RUNNER_TEMP/publish-pack/final-verify.json"
+          node -e '
+            const fs = require("fs");
+            const verify = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            for (const key of ["companion", "root"]) {
+              const entry = verify[key];
+              if (!entry || entry.published !== true || entry.integrityOk !== true) {
+                console.error(`post-publish verification failed for ${key}:`, entry);
+                process.exit(1);
+              }
+            }
+            console.log("post-publish registry verification passed for both packages");
+          ' "$RUNNER_TEMP/publish-pack/final-verify.json"
 
   release:
     needs: [standalone-smoke, npm-publish]
