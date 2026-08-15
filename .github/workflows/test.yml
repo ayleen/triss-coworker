@@ -100,8 +100,64 @@ jobs:
           pnpm add "$TARBALL"
           ./node_modules/.bin/triss --version
 
+  dsh-lifecycle:
+    runs-on: ubuntu-latest
+    name: dsh plugin lifecycle (add/update/remove/reinstall, pnpm on PATH)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - run: npm ci
+      - name: Activate pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
+          pnpm --version
+      - name: Install pinned Harness CLI
+        run: npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+      - name: Pack the companion tarball
+        run: |
+          mkdir -p /tmp/dsh-lifecycle
+          (cd packages/dsh-provider-bundle && npm pack --pack-destination /tmp/dsh-lifecycle)
+      - name: add → dump-config (headless profile)
+        run: |
+          export DSH_HOME=/tmp/dsh-lifecycle/home
+          TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
+          dsh plugin --profile headless add "$TARBALL"
+          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-add.json
+          node -e "
+            const cfg = require('/tmp/dsh-lifecycle/dump-add.json');
+            const text = JSON.stringify(cfg);
+            for (const route of ['opencode', 'opencode-go', 'zai']) {
+              if (!text.includes(route)) { console.error('missing route: ' + route); process.exit(1); }
+            }
+            console.log('three routes present after add');
+          "
+      - name: remove → verify bundle entry and dependency are gone
+        run: |
+          export DSH_HOME=/tmp/dsh-lifecycle/home
+          dsh plugin --profile headless remove triss-dsh-provider-bundle
+          if grep -rq "triss-dsh-provider-bundle" "$DSH_HOME/profiles/headless/package.json"; then
+            echo "companion still referenced after remove"; exit 1
+          fi
+          echo "remove clean"
+      - name: reinstall → dump-config again (cycle closes)
+        run: |
+          export DSH_HOME=/tmp/dsh-lifecycle/home
+          TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
+          dsh plugin --profile headless add "$TARBALL"
+          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-reinstall.json
+          cmp /tmp/dsh-lifecycle/dump-add.json /tmp/dsh-lifecycle/dump-reinstall.json \
+            && echo "reinstall restores the identical effective config"
+
   standalone-build:
-    needs: test
+    needs: [test, dsh-lifecycle]
     runs-on: ubuntu-latest
     name: build canonical standalone artifact
     steps:

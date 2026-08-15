@@ -24,7 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`
   published-file allowlist; the root tarball contains no companion manifest
-  or patch.
+  or patch. (Correction, review finding: the follow-up fix commit DID touch
+  `src/safety.js` — `projectRoot()` was extended to `.codex/worktrees`,
+  widening the restricted-mode sandbox boundary to sibling worktrees. That
+  change is REVERTED in this corrective release; only the test-isolation
+  env pin from that commit remains.)
 
 ### Artifact integrity (0.35.0)
 

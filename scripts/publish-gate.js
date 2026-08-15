@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -71,7 +71,11 @@ export function verifyVersions({ tag } = {}) {
 
 /** Pack both tarballs and verify their public contents against the allowlists. */
 export function packAndInspect({ workdir } = {}) {
+  // npm pack never creates the pack destination; when the workflow passes an
+  // explicit --workdir (e.g. $RUNNER_TEMP/publish-pack, absent on a fresh
+  // runner) we must own its creation or the very first pack dies with ENOENT.
   const dir = workdir ?? mkdtempSync(join(tmpdir(), 'triss-publish-gate-'));
+  if (workdir) mkdirSync(dir, { recursive: true });
   const companion = npmPack(companionDir, dir);
   const root = npmPack(repoRoot, dir);
   const companionEntries = tarEntries(join(dir, companion.filename));
@@ -114,12 +118,13 @@ export function packAndInspect({ workdir } = {}) {
 }
 
 /**
- * Registry verification with safe-retry semantics: an already-published
- * companion version is acceptable only when the registry tarball's sha256
- * equals the locally verified artifact's; any mismatch fails closed.
+ * Registry verification with safe-retry semantics, for EITHER npm package:
+ * an already-published version is acceptable only when the registry tarball's
+ * sha256 equals the locally verified artifact's AND the registry's own
+ * sha512 integrity matches the tarball bytes; any mismatch fails closed.
  * `fetchJson`/`fetchBytes` are injectable for tests.
  */
-export async function verifyRegistryCompanion(local, {
+export async function verifyRegistryPackage(local, {
   fetchJson, fetchBytes, registry = REGISTRY,
 } = {}) {
   const requestJson = fetchJson ?? (async (url) => {
@@ -131,13 +136,14 @@ export async function verifyRegistryCompanion(local, {
     return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()) };
   });
 
-  const url = `${registry}/${COMPANION_NAME}/${local.version}`;
+  const name = local.name ?? COMPANION_NAME;
+  const url = `${registry}/${name}/${local.version}`;
   const manifestResponse = await requestJson(url);
   if (manifestResponse.status === 404) {
     return { published: false, integrityOk: null };
   }
   if (manifestResponse.status !== 200) {
-    die(`registry metadata for ${COMPANION_NAME}@${local.version} returned ${manifestResponse.status}`);
+    die(`registry metadata for ${name}@${local.version} returned ${manifestResponse.status}`);
   }
   const dist = manifestResponse.body?.dist;
   if (!dist?.tarball) die(`registry metadata for ${url} carries no dist.tarball`);
@@ -148,18 +154,24 @@ export async function verifyRegistryCompanion(local, {
   const registrySha = sha256(tarballResponse.bytes);
   if (registrySha !== local.sha256) {
     die([
-      `registry tarball for ${COMPANION_NAME}@${local.version} differs from the local artifact`,
+      `registry tarball for ${name}@${local.version} differs from the local artifact`,
       `(registry ${registrySha}, local ${local.sha256}) — fail closed, select a new version`,
     ].join(' '));
   }
-  if (dist.integrity && dist.integrity !== `sha512-${registrySha}` && !dist.integrity.startsWith('sha512-')) {
-    // npm uses sha512; our local hash is sha256 for gate comparison. A
-    // declared sha512 integrity must at least be present — byte equality
-    // above is the real check.
-    if (dist.integrity.length < 10) die(`registry integrity for ${url} is malformed`);
+  // npm publishes dist.integrity as sha512-<base64>. Verify it is genuinely
+  // derived from the served bytes — a stale/hijacked CDN edge or a proxy
+  // rewriting the metadata must not pass a hash we never computed.
+  if (typeof dist.integrity === 'string' && dist.integrity.length >= 10) {
+    const expected = `sha512-${createHash('sha512').update(tarballResponse.bytes).digest('base64')}`;
+    if (dist.integrity !== expected) {
+      die(`registry integrity for ${url} does not match the served tarball (metadata ${dist.integrity.slice(0, 24)}…, tarball ${expected.slice(0, 24)}…)`);
+    }
   }
   return { published: true, integrityOk: true, sha256: registrySha };
 }
+
+// Backwards-compatible alias: the companion was the first gated package.
+export const verifyRegistryCompanion = verifyRegistryPackage;
 
 async function main() {
   const [command, ...argv] = process.argv.slice(2);

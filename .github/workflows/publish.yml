@@ -143,8 +143,11 @@ jobs:
             | tee "$RUNNER_TEMP/publish-pack/local-manifest.json"
       - name: Check already-published versions fail closed on mismatch
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node scripts/publish-gate.js verify-registry --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))")
+          readLocalSha() {
+            node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8'))$1.sha256"
+          }
+          node scripts/publish-gate.js verify-registry --package triss-dsh-provider-bundle --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({name:'triss-dsh-provider-bundle',version:'${GITHUB_REF_NAME#v}',sha256:'$(readLocalSha .companion)'}))") | tee "$RUNNER_TEMP/gate-companion.json"
+          node scripts/publish-gate.js verify-registry --package triss-coworker --version "${GITHUB_REF_NAME#v}" --local-manifest <(node -e "process.stdout.write(JSON.stringify({name:'triss-coworker',version:'${GITHUB_REF_NAME#v}',sha256:'$(readLocalSha .root)'}))") | tee "$RUNNER_TEMP/gate-root.json"
       - name: Verify tag is the exact origin/main release
         run: |
           git fetch --no-tags origin \
@@ -162,16 +165,30 @@ jobs:
             exit 1
           }
       - run: npm ci
+      - name: Gate companion publish on its own registry state (safe retry)
+        id: gate-companion
+        run: |
+          ALREADY=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/gate-companion.json','utf8')).published")
+          echo "published=$ALREADY" >> "$GITHUB_OUTPUT"
       - name: Publish companion package triss-dsh-provider-bundle (safe retry)
+        if: steps.gate-companion.outputs.published == 'false'
         working-directory: packages/dsh-provider-bundle
         run: npm publish --access public --provenance
-      - name: Publish root package triss-coworker
-        run: npm publish --access public --provenance
-      - name: Registry-verify the companion after publication
+      - name: Gate root publish on its own registry state (safe retry)
+        id: gate-root
         run: |
-          COMPANION_SHA=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8')).companion.sha256")
-          node -e "process.stdout.write(JSON.stringify({version: '${GITHUB_REF_NAME#v}', sha256: '$COMPANION_SHA'}))" > "$RUNNER_TEMP/companion-local.json"
-          node scripts/publish-gate.js verify-registry --local-manifest "$RUNNER_TEMP/companion-local.json"
+          ALREADY=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/gate-root.json','utf8')).published")
+          echo "published=$ALREADY" >> "$GITHUB_OUTPUT"
+      - name: Publish root package triss-coworker
+        if: steps.gate-root.outputs.published == 'false'
+        run: npm publish --access public --provenance
+      - name: Registry-verify BOTH packages after publication
+        run: |
+          readLocalSha() {
+            node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/publish-pack/local-manifest.json','utf8'))$1.sha256"
+          }
+          node scripts/publish-gate.js verify-registry --package triss-dsh-provider-bundle --local-manifest <(node -e "process.stdout.write(JSON.stringify({name:'triss-dsh-provider-bundle',version:'${GITHUB_REF_NAME#v}',sha256:'$(readLocalSha .companion)'}))")
+          node scripts/publish-gate.js verify-registry --package triss-coworker --local-manifest <(node -e "process.stdout.write(JSON.stringify({name:'triss-coworker',version:'${GITHUB_REF_NAME#v}',sha256:'$(readLocalSha .root)'}))")
 
   release:
     needs: [standalone-smoke, npm-publish]

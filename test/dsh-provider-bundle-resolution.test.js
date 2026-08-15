@@ -193,17 +193,26 @@ test('matrix 6: companion update between two fixture versions changes the effect
   addToManifest(profileDir);
   const first = loadAndCompose(home, 'matrix6', installation.anchor);
   assert.deepEqual(Object.keys(baseRouteConfig(first.entries)).sort(), BUNDLE_ROUTES);
+  const firstEffective = JSON.stringify(first.entries);
 
-  // Update: different non-secret marker metadata (a README change) with a new version.
+  // Update: a GENUINELY different effective patch (review finding: the old
+  // test rebuilt an identical patchText and only checked a packageDir
+  // substring with `includes() !== undefined`, which passes for ANY path).
+  // The 0.35.0 marker moves apiKeyEnv for the zai route to a differently
+  // named env var — no secrets, visible in the composed config.
   const updated = companionFixtureDir(repoRoot, {
     version: '0.35.0',
-    patchText: '- id: llm-pi-ai\n  config:\n    providers:\n      opencode:\n        apiKeyEnv: OPENCODE_API_KEY\n      opencode-go:\n        apiKeyEnv: OPENCODE_API_KEY\n      zai:\n        apiKeyEnv: ZAI_API_KEY\n',
+    patchText: '- id: llm-pi-ai\n  config:\n    providers:\n      opencode:\n        apiKeyEnv: OPENCODE_API_KEY\n      opencode-go:\n        apiKeyEnv: OPENCODE_API_KEY\n      zai:\n        apiKeyEnv: ZAI_CODING_KEY\n',
   });
   installIntoProfile(profileDir, [{ name: COMPANION_NAME, dir: updated }]);
   const second = loadAndCompose(home, 'matrix6', installation.anchor);
-  assert.equal(second.companionLayer.packageDir.includes('0.35.0') !== undefined, true);
   const manifest = readJson(join(profileDir, 'node_modules', COMPANION_NAME, 'package.json'));
   assert.equal(manifest.version, '0.35.0');
+  // The effective patch must actually CHANGE between the two versions.
+  assert.notEqual(JSON.stringify(second.entries), firstEffective,
+    'effective config after update must differ from before (old test could not detect a no-op update)');
+  assert.equal(baseRouteConfig(second.entries).zai.apiKeyEnv, 'ZAI_CODING_KEY',
+    'the updated marker env var must be the one in effect');
 });
 
 test('matrix 7: companion removal deletes it from dsh.profile.bundles', () => {
