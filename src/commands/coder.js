@@ -95,7 +95,7 @@ import {
   foldOpenCode2EventLine,
   opencode2LogPath,
 } from '../coder-engines/opencode2.js';
-import { auditOpenCode2Run } from '../opencode2-preflight.js';
+import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes } from '../opencode2-preflight.js';
 // Canonical OpenCode source enumeration (Phase 4): one walker for every
 // opencode.json layer + plugin/agent discovery, shared by the V2 static
 // preflight and model inspection.
@@ -1413,35 +1413,39 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// assertV2WorkerTransportProvenance (round-4 P0): the worker credential and
-// its transport must form ONE profile of consistent trust. Precedence is
-// shell > project .triss.env > global .env per FIELD, so a repository can
-// supply only TRISS_WORKER_BASE_URL while the key comes from the shell or
-// the global file — the effective "expected" endpoint in the provider audit
-// is then project-controlled, and the higher-trust key would be forwarded to
-// an attacker URL the repo also pinned into opencode.json. Rule: a
-// project-local transport (BASE_URL) may only ride with a project-local key.
-function assertV2WorkerTransportProvenance() {
+// assertV2WorkerTransportProvenance (round-4 P0, cross-review fix): the
+// worker credential and its transport must form ONE profile of consistent
+// trust. Precedence is shell > project .triss.env > global .env PER FIELD,
+// so a repository can steer the effective transport while the key comes from
+// a higher-trust source — and a DECOY key in the project file does not make
+// the profile consistent (dotenv override:false can never displace a shell
+// export, so shell key + project URL is exactly what the engine would run
+// with). The check therefore resolves the EFFECTIVE source of each field —
+// using the pre-dotenv shell snapshot — and rejects when the endpoint is
+// project-local while the key is not.
+function assertV2WorkerTransportProvenance(workerShellEnv = captureWorkerShellSnapshot()) {
   const files = activeEnvFiles();
   const localFile = files.find((f) => f.scope === 'local');
-  const vars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
-  const localUrl = vars.TRISS_WORKER_BASE_URL;
-  if (!localUrl) return;
-  const localKey = vars.TRISS_WORKER_API_KEY;
-  if (localKey) return; // whole profile is project-scoped — consistent trust
-  const shellKey = process.env.TRISS_WORKER_API_KEY !== undefined;
+  const localVars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
   const globalFile = files.find((f) => f.scope === 'global');
-  const globalKey = globalFile && globalFile.exists
-    ? readEnvFile(globalFile.path).vars.TRISS_WORKER_API_KEY
-    : null;
-  if (shellKey || globalKey) {
-    throw new Error(
-      'OpenCode 2 preflight aborted: the project .triss.env overrides TRISS_WORKER_BASE_URL while the ' +
-        'TRISS_WORKER_API_KEY comes from a higher-trust source (shell export or global env file). The ' +
-        'worker endpoint the provider audit compares against would be repository-controlled, so the key ' +
-        'could be forwarded to an attacker URL. Move both the key and the endpoint into the same scope.',
-    );
-  }
+  const globalVars = globalFile && globalFile.exists ? readEnvFile(globalFile.path).vars : {};
+  const effectiveSource = (key) => {
+    if (workerShellEnv[key] != null) return 'shell';
+    if (localVars[key] != null) return 'local';
+    if (globalVars[key] != null) return 'global';
+    return null;
+  };
+  const urlSource = effectiveSource('TRISS_WORKER_BASE_URL');
+  if (urlSource !== 'local') return;
+  const keySource = effectiveSource('TRISS_WORKER_API_KEY');
+  if (keySource === 'local' || keySource == null) return;
+  throw new Error(
+    `OpenCode 2 preflight aborted: the effective TRISS_WORKER_BASE_URL comes from the project .triss.env while ` +
+      `the effective TRISS_WORKER_API_KEY comes from a higher-trust source (${keySource} — a key in the project ` +
+      'file cannot displace it). The worker endpoint the provider audit compares against would be ' +
+      'repository-controlled, so the key could be forwarded to an attacker URL. Move the key and the endpoint ' +
+      'into the same scope.',
+  );
 }
 
 // ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────//
@@ -1529,7 +1533,12 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   //   5. Post-setup FULL audit (auditOpenCode2Run + static gate) over the
   //      final filesystem state — not just the plugin/agent scan.
   staticOpenCode2Preflight(deps.cwd || process.cwd());
-  assertV2WorkerTransportProvenance();
+  // Cross-review fix 6: document-CONTENT gates (mcp, command-bearing and
+  // unknown top-level keys, dual legacy/native forms, malformed JSONC) used
+  // to run only in the POST-setup audit — after setupKey had written the
+  // credential to the env file. Run the document audit up front too, so a
+  // hostile tree rejects BEFORE any credential write.
+  auditOpenCode2Documents({ cwd: deps.cwd || process.cwd() }, { enumerate: deps.enumerateOpenCodeSources });
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
   const sh = deps.spawnSync || nodeSpawnSync;
   // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
@@ -1549,6 +1558,11 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   // run inside a project could silently satisfy the key check from the LOCAL
   // env file and leave the global scope unset.
   const workerShellEnv = captureWorkerShellSnapshot();
+  // Cross-review fix 1: provenance is resolved from the PRE-DOTENV snapshot —
+  // a decoy key in the project .triss.env cannot displace a shell export, so
+  // "project file defines both fields" is NOT a consistent profile when the
+  // real key is a shell/global one.
+  assertV2WorkerTransportProvenance(workerShellEnv);
   loadEnvFiles();
   const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
@@ -4904,10 +4918,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         { cause: err },
       );
     }
-    // Round-4 P0: worker key + endpoint must be one profile of consistent
-    // provenance (a project-local BASE_URL cannot carry a shell/global key).
+    // Round-4 P0 + cross-review fix 1: worker key + endpoint must be one
+    // profile of consistent EFFECTIVE provenance, resolved from the
+    // pre-dotenv snapshot (a decoy key in the project .triss.env cannot
+    // displace a shell export).
     try {
-      assertV2WorkerTransportProvenance();
+      assertV2WorkerTransportProvenance(workerShellEnv);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
@@ -4915,8 +4931,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const workerProfile = modelUsed.startsWith('triss-worker/')
       ? workerCoderProfile()
       : null;
+    let auditResult2;
     try {
-      auditOpenCode2Run(
+      auditResult2 = auditOpenCode2Run(
         {
           cwd: runtimeDirCanonical,
           modelUsed,
@@ -4976,6 +4993,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           '\n',
       ),
     );
+
+    // Cross-review fix 4 (TOCTOU): between the audit and this point sat the
+    // runtime-dir setup and the binary probes (several subprocesses) — a
+    // window in which the audited config tree can change. Re-hash every
+    // audited file and abort on any drift, immediately before the
+    // credential-bearing spawn.
+    try {
+      verifyOpenCode2ContentHashes(auditResult2?.contentHashes);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
 
     const spawnStartMs2 = Date.now();
     let result2;

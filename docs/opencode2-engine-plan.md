@@ -623,6 +623,49 @@ Three findings survived round 3 and are now part of the contract:
    `realpathSync.native()` value; a cwd that cannot be canonicalized fails
    closed.
 
+#### Maintainer cross-review (2026-08-15) — six follow-ups
+
+Two confirmed credential-boundary bypasses in the round-4 fixes themselves,
+both live-reproduced before fixing:
+
+1. **Provenance is per effective FIELD, not per file.** A decoy
+   `TRISS_WORKER_API_KEY` in the project `.triss.env` cannot displace a shell
+   export (dotenv `override:false`), so "the project file defines both
+   fields" did NOT mean a consistent profile — the engine would still run
+   with shell key + project endpoint. The gate now resolves each field's
+   effective source from the pre-dotenv snapshot (shell > project > global)
+   and rejects when the endpoint is project-local while the key is not.
+2. **Provider definitions are an executable surface.** A provider's
+   npm/package tells the engine to load code in-process; an UNRELATED
+   provider id used to pass the gate untouched (the gate only checked the
+   selected route's prefix). The beta now allows exactly one provider
+   definition — the managed `triss-worker` fixture — and nothing else.
+3. The audit's selected-agent lookup returned the defining DOCUMENT instead
+   of the agent BLOCK, so agent-level permissions were never evaluated; the
+   block (rules merge last, agents override config) is now what feeds the
+   policy gate.
+4. TOCTOU: every audited config file is hashed at audit time and re-hashed
+   immediately before the credential-bearing spawn (directory setup and
+   binary probes run in between); any drift aborts the run.
+5. The top-level key table is captured from the official published schema
+   (https://opencode.ai/config.json — the root sets
+   `additionalProperties:false`, confirming the fail-closed principle).
+   Benign keys (`autoupdate`, `instructions`, `share`, `username`, …) no
+   longer false-reject; object-form `lsp`/`formatter` (they name a local
+   process) and `experimental` reject. Caveat: the published schema may drift
+   from the exact pinned build — re-capture when a working `debug config`
+   oracle exists (a sandboxed XDG HOME cannot start the background service).
+6. V2 init runs the document audit (mcp / dual forms / unknown keys /
+   malformed JSONC) at the head, BEFORE the credential is written to the env
+   file.
+
+**Known residual (needs a live pin probe):** the built-in agents' own
+engine-internal rule sets are not modeled beyond the baseline wildcard-allow;
+if the pin merges built-in agent defaults AFTER config layers, a built-in
+allow could shadow the wildcard deny under `--agent <name>`. Verify with
+`opencode2 debug config` (with a service-capable sandbox) + `--agent` and a
+deny-only config before relaxing any agent restriction.
+
 ### Small-model contract
 
 The shared persisted V1 config retains `small_model` for OpenCode 1.

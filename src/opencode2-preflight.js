@@ -45,6 +45,7 @@
  * Pure module: no process spawning, no filesystem writes, no env reads.
  */
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-config.js';
 
@@ -417,36 +418,69 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
 
 // ─── document shape validation (round-3 P1-3 / P0-1) ────────────────────────
 
-// Top-level keys the pinned build's schema understands, with their documented
-// value types. Anything outside this table is rejected: Triss cannot prove
-// OpenCode's schema accepts a key it does not model, and a schema-invalid
-// document is dropped WHOLE by the engine — the preflight would verify one
-// baseline while the engine runs another.
+// Top-level keys with their allowed value types, captured from the official
+// published schema (https://opencode.ai/config.json, fetched 2026-08-15; the
+// root sets additionalProperties:false — unknown keys are schema-invalid,
+// which is exactly why they fail closed here). Cross-review fix 5: the
+// round-3 table was hand-picked and would false-reject legitimate user
+// configs carrying keys like autoupdate/instructions/share.
+// Pin-verification caveat: the published schema may drift from the exact
+// pinned beta build — re-capture against the pin when a working
+// `debug config` oracle is available (sandboxed XDG currently cannot start
+// the background service). Anything outside this table still rejects.
 const V2_TOP_LEVEL_TYPES = Object.freeze({
-  $schema: 'string',
-  model: 'string',
-  small_model: 'string',
-  provider: 'object',
-  providers: 'object',
-  permission: 'object',
-  permissions: 'array',
-  agent: 'object',
-  agents: 'object',
-  mode: 'object',
-  modes: 'object',
-  plugin: 'string-or-array',
-  plugins: 'string-or-array',
+  $schema: ['string'],
+  shell: ['string'],
+  logLevel: ['string'],
+  server: ['object'],
+  skills: ['object'],
+  references: ['object'],
+  reference: ['object'],
+  watcher: ['object'],
+  snapshot: ['boolean'],
+  plugin: ['string', 'array'],
+  plugins: ['string', 'array'],
+  share: ['string'],
+  autoshare: ['boolean'],
+  autoupdate: ['boolean', 'string'],
+  disabled_providers: ['array'],
+  enabled_providers: ['array'],
+  model: ['string'],
+  small_model: ['string'],
+  default_agent: ['string'],
+  subagent_depth: ['number'],
+  username: ['string'],
+  mode: ['object'],
+  modes: ['object'],
+  agent: ['object'],
+  agents: ['object'],
+  provider: ['object'],
+  providers: ['object'],
+  // lsp/formatter: the schema allows objects too, but an OBJECT form names a
+  // local process to run (language server / formatter binary) — an executable
+  // surface. The beta accepts only the boolean toggles.
+  lsp: ['boolean'],
+  formatter: ['boolean'],
+  instructions: ['array'],
+  layout: ['string'],
+  permission: ['object'],
+  permissions: ['array'],
+  attachment: ['object'],
+  enterprise: ['object'],
+  tool_output: ['object'],
+  compaction: ['object'],
 });
 
 // Command-bearing surfaces a config layer can smuggle in. Distinct errors so
 // the operator knows which gate fired (the static plugin/agent gates cover
 // the file-based forms of the same surfaces).
 const V2_EXECUTABLE_KEYS = Object.freeze({
-  mcp: 'local MCP servers are launched with the inherited process env (including the provider credential)',
+  mcp: 'local MCP servers are launched with the inherited process env (including the provider credential) and remote MCP headers can exfiltrate it',
   tool: 'custom tool definitions execute inside the OpenCode process',
   tools: 'custom tool definitions execute inside the OpenCode process',
   command: 'command definitions execute arbitrary shell inside the OpenCode process',
   commands: 'command definitions execute arbitrary shell inside the OpenCode process',
+  experimental: 'the "experimental" block can alter engine behavior in ways Triss has no fixture for',
 });
 
 // Legacy/native dual forms (round-4 P0): when a document carries BOTH the
@@ -482,24 +516,21 @@ export function assertV2DocumentShape(doc, layerPath) {
           'No local MCP/tool/command surface is verified for the beta; remove the block and re-run.',
       );
     }
-    const expected = V2_TOP_LEVEL_TYPES[key];
-    if (!expected) {
+    const allowed = V2_TOP_LEVEL_TYPES[key];
+    if (!allowed) {
       throw new Error(
-        `OpenCode 2 preflight aborted: ${layerPath} has an unknown top-level key "${key}". Triss cannot ` +
-          'prove the pinned build\'s schema accepts it — if the schema rejects the document, OpenCode drops ' +
-          'the whole layer and runs a different baseline than the one audited. Remove the key or verify it ' +
-          'against the pin first.',
+        `OpenCode 2 preflight aborted: ${layerPath} has an unknown top-level key "${key}". The official config ` +
+          'schema sets additionalProperties:false, so the engine drops the whole document — the audited ' +
+          'baseline would not be the running one. Remove the key or verify it against the pin first.',
       );
     }
     const value = doc[key];
-    const typeOk = expected === 'string-or-array'
-      ? (typeof value === 'string' || Array.isArray(value))
-      : (expected === 'array' ? Array.isArray(value) : typeof value === expected);
-    if (!typeOk) {
+    const valueType = Array.isArray(value) ? 'array' : typeof value;
+    if (!allowed.includes(valueType)) {
       throw new Error(
-        `OpenCode 2 preflight aborted: ${layerPath} key "${key}" must be ${expected.replace('-or-array', ' or array')} ` +
-          `(got ${Array.isArray(value) ? 'an array' : `a ${typeof value}`}). A schema-invalid document is dropped ` +
-          'whole by the engine — the audited baseline would not be the running one.',
+        `OpenCode 2 preflight aborted: ${layerPath} key "${key}" must be ${allowed.join(' or ')} ` +
+          `(got ${valueType}). A schema-invalid document is dropped whole by the engine — the audited ` +
+          'baseline would not be the running one.',
       );
     }
   }
@@ -524,11 +555,77 @@ export function assertV2DocumentShape(doc, layerPath) {
  * @returns {{ sources, projection, policy }} for envelope/logging use.
  * @throws on ANY gate failure, before a credential is forwarded.
  */
+/**
+ * Document-level audit shared by the run path and the V2 init head (cross-
+ * review fix 6): enumerate sources, parse every EXISTING config layer through
+ * the canonical JSONC parser, and run the shape gates (mcp / command-bearing
+ * and unknown top-level keys / dual legacy-native forms) — BEFORE any
+ * credential write or spawn. Also returns a SHA-256 per audited file so the
+ * caller can re-verify the tree right before the credential-bearing spawn
+ * and close the audit→spawn TOCTOU window (cross-review fix 4).
+ *
+ * @returns {{ sources, layerDocs, contentHashes: Array<{path, sha256}> }}
+ */
+export function auditOpenCode2Documents({ cwd }, deps = {}) {
+  if (!cwd) throw new Error('auditOpenCode2Documents: cwd is required');
+  const sources = (deps.enumerate || enumerateOpenCodeSources)({ cwd });
+  const layerDocs = [];
+  const contentHashes = [];
+  for (const c of sources.configs) {
+    if (!c.exists) continue;
+    let text;
+    let doc;
+    try {
+      text = readFileSync(c.path, 'utf8');
+      doc = parseOpenCodeDocument(text, { path: c.path });
+    } catch (err) {
+      throw new Error(`OpenCode 2 preflight aborted: cannot parse ${c.path} — ${err.message}`, { cause: err });
+    }
+    // Round-3 P1-3/P0-1: reject malformed/schema-suspicious documents and
+    // command-bearing surfaces (mcp, tool, command, unknown keys) BEFORE the
+    // provider/permission gates — a document the engine would drop whole
+    // invalidates everything computed from it.
+    assertV2DocumentShape(doc, c.path);
+    doc.__layerPath = c.path;
+    layerDocs.push(doc);
+    contentHashes.push({ path: c.path, sha256: createHash('sha256').update(text).digest('hex') });
+  }
+  return { sources, layerDocs, contentHashes };
+}
+
+/**
+ * Re-verify the audited config files still hash to the audit-time values.
+ * Called immediately before the credential-bearing spawn (cross-review fix 4)
+ * — between the audit and the spawn sit directory setup and binary probes
+ * (several subprocesses), a window in which the audited tree can change.
+ */
+export function verifyOpenCode2ContentHashes(contentHashes) {
+  for (const { path, sha256 } of contentHashes || []) {
+    let text;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (err) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: audited config ${path} disappeared before the spawn — aborting ` +
+          '(TOCTOU guard). Re-run the command.',
+        { cause: err },
+      );
+    }
+    const now = createHash('sha256').update(text).digest('hex');
+    if (now !== sha256) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: audited config ${path} changed between the audit and the spawn — ` +
+          'aborting (TOCTOU guard). Re-run the command.',
+      );
+    }
+  }
+}
+
 export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Run: cwd is required');
   if (!modelUsed) throw new Error('auditOpenCode2Run: modelUsed is required');
 
-  const sources = (deps.enumerate || enumerateOpenCodeSources)({ cwd });
+  const { sources, layerDocs, contentHashes } = auditOpenCode2Documents({ cwd }, deps);
 
   // 1. ROUTE GATE — final modelUsed prefix, however it was selected.
   const { prefix, fixture } = opencode2RouteFixture(modelUsed);
@@ -540,29 +637,23 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
     );
   }
 
-  // Parse every EXISTING config layer once through the CANONICAL JSONC-aware
-  // parser (round-2 fix: JSON.parse re-reading rejected valid .jsonc layers
-  // and never saw comments/trailing commas).
-  const layerDocs = [];
-  for (const c of sources.configs) {
-    if (!c.exists) continue;
-    let doc;
-    try {
-      doc = parseOpenCodeDocument(readFileSync(c.path, 'utf8'), { path: c.path });
-    } catch (err) {
-      throw new Error(`OpenCode 2 preflight aborted: cannot parse ${c.path} — ${err.message}`, { cause: err });
-    }
-    // Round-3 P1-3/P0-1: reject malformed/schema-suspicious documents and
-    // command-bearing surfaces (mcp, tool, command, unknown keys) BEFORE the
-    // provider/permission gates — a document the engine would drop whole
-    // invalidates everything computed from it.
-    assertV2DocumentShape(doc, c.path);
-    doc.__layerPath = c.path;
-    layerDocs.push(doc);
-  }
-
   // 2. PROVIDER GATE — effective projection vs the fixture.
   const { providers, sourceLayers } = projectEffectiveProviders({ layerDocs });
+  // Cross-review fix 2: a provider definition's npm/package field tells the
+  // engine to LOAD CODE inside the credential-bearing process — an unrelated
+  // provider id is as much an executable surface as a plugin. The beta gate
+  // allows exactly ONE provider definition: the managed triss-worker fixture
+  // (worker route) or none at all (built-in routes).
+  for (const id of Object.keys(providers)) {
+    if (id !== prefix) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: config layer ${sourceLayers[id]} defines provider "${id}", which the ` +
+          'selected model does not use. A provider definition is an executable surface (its npm/package is ' +
+          'loaded inside the OpenCode process with the credential in the environment) — unrelated provider ' +
+          'definitions are rejected for the beta. Remove the definition and retry.',
+      );
+    }
+  }
   if (fixture.managedProvider) {
     const translated = providers[prefix];
     if (!translated) {
@@ -580,27 +671,30 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
           're-run `triss coder init`. Triss refuses to forward TRISS_WORKER_API_KEY to a redirected endpoint.',
       );
     }
-  } else {
+  } else if (Object.prototype.hasOwnProperty.call(providers, prefix)) {
     // Built-in route: a config layer DEFINING the provider id is an override
     // of the engine's built-in transport — reject before credential forward.
-    if (Object.prototype.hasOwnProperty.call(providers, prefix)) {
-      throw new Error(
-        `OpenCode 2 preflight aborted: config layer ${sourceLayers[prefix]} overrides the built-in provider ` +
-          `"${prefix}" (endpoint/package/settings). Triss refuses to forward ${fixture.credentialEnv} to a ` +
-          'project-configured endpoint. Remove the provider definition and retry.',
-      );
-    }
+    throw new Error(
+      `OpenCode 2 preflight aborted: config layer ${sourceLayers[prefix]} overrides the built-in provider ` +
+        `"${prefix}" (endpoint/package/settings). Triss refuses to forward ${fixture.credentialEnv} to a ` +
+        'project-configured endpoint. Remove the provider definition and retry.',
+    );
   }
 
   // 3. PERMISSION GATE — final ordered policy, deny-first proof via the real
   //    last-match-wins evaluator (round 2).
-  const agentDoc = agentName
-    ? layerDocs.find((doc) => {
+  // Cross-review fix 3: the selected agent's BLOCK (agents override config —
+  // its rules merge LAST), not the defining document. find() used to return
+  // the whole doc, re-merging doc-level rules and never seeing the agent's
+  // own permissions. Later layers win for the block, mirroring the merge.
+  let agentBlock = null;
+  if (agentName) {
+    for (const doc of layerDocs) {
       const block = doc?.agent?.[agentName] ?? doc?.agents?.[agentName];
-      return block != null ? block : null;
-    }) ?? null
-    : null;
-  const policy = computeEffectivePermissionPolicy({ layerDocs, agentDoc });
+      if (block != null) agentBlock = block;
+    }
+  }
+  const policy = computeEffectivePermissionPolicy({ layerDocs, agentDoc: agentBlock });
   if (policy.unsafe) {
     const detail = policy.detail ? ` (${policy.detail})` : '';
     if (policy.reason === 'no-wildcard-deny') {
@@ -625,5 +719,6 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
     projection: { providers, sourceLayers },
     policy: { rules: policy.rules, shellRuleCount: policy.shellRuleCount },
     route: { prefix, credentialEnv: fixture.credentialEnv },
+    contentHashes,
   };
 }
