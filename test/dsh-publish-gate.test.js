@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  packAndInspect, planPublication, selectLocalPackage, verifyRegistryPackage, verifyVersions,
+  authorizeTagRelease, packAndInspect, planPublication, selectLocalPackage,
+  verifyRegistryPackage, verifyVersions,
 } from '../scripts/publish-gate.js';
 
 const COMPANION_NAME = 'triss-dsh-provider-bundle';
@@ -176,22 +177,43 @@ test('publish workflow gates both packages from one tag', () => {
   assert.match(workflow, /publish-gate\.js verify-versions/);
   assert.match(workflow, /publish-gate\.js pack-inspect/);
   // Safe retry: publication is PLANNED from live registry state for BOTH
-  // packages, publish steps are conditional on the plan, and BOTH packages
-  // are registry-verified again after publication (review §2).
+  // packages, publish steps are conditional on the gates job's plan outputs
+  // (review §2), and the fresh-vs-retry tag authorization runs in the
+  // UNPRIVILEGED release-gates job (review round 4, §1/§4).
   assert.match(workflow, /publish-gate\.js plan-publish/);
-  assert.match(workflow, /id: plan/);
-  assert.match(workflow, /if: steps\.plan\.outputs\.publish_companion == 'true'/);
-  assert.match(workflow, /if: steps\.plan\.outputs\.publish_root == 'true'/);
+  assert.match(workflow, /publish-gate\.js authorize-tag/);
+  assert.match(workflow, /merge-base --is-ancestor/);
+  assert.match(workflow, /if: needs\.release-gates\.outputs\.publish_companion == 'true'/);
+  assert.match(workflow, /if: needs\.release-gates\.outputs\.publish_root == 'true'/);
   const publishMatches = workflow.match(/npm publish[^\n]*/g) ?? [];
   assert.equal(publishMatches.length, 2, 'exactly two npm publish invocations');
   for (const invocation of publishMatches) {
     assert.match(invocation, /--provenance/);
+    assert.match(invocation, /--ignore-scripts/);
   }
   // The companion publish runs from its own package directory.
   assert.match(workflow, /working-directory: packages\/dsh-provider-bundle/);
-  // Registry verification runs after publication (safe retry).
-  assert.match(workflow, /publish-gate\.js plan-publish[\s\S]*final-verify\.json/);
-  assert.match(workflow, /post-publish registry verification passed for both packages/);
+  // The published bytes are the verified bytes: the publish job repacks with
+  // scripts disabled and byte-compares against the gates artifact (review
+  // round 4, §7).
+  assert.match(workflow, /Repack and byte-verify both tarballs against the gates artifact/);
+  assert.match(workflow, /sha256sum/);
+});
+
+test('id-token lives only in the minimal publish job behind npm-production', () => {
+  const workflow = readFileSyncWorkflow();
+  const jobBlocks = workflow.split(/\n {2}(?=[a-z][a-z0-9-]*:)/);
+  // Anchored to the actual permissions entry so prose comments about
+  // id-token do not count.
+  const withIdToken = jobBlocks.filter((block) => /^ {6}id-token: write$/m.test(block));
+  assert.equal(withIdToken.length, 1, 'exactly one job may hold id-token: write');
+  assert.match(withIdToken[0], /^npm-publish:/, 'the id-token job must be npm-publish');
+  assert.match(withIdToken[0], /environment: npm-production/,
+    'the publish job must run behind the npm-production environment');
+  assert.equal(/publish-gate\.js/.test(withIdToken[0]), false,
+    'the privileged job must not run repository scripts');
+  assert.match(withIdToken[0], /needs: \[release-gates\]/,
+    'the privileged job must depend on the unprivileged gates');
 });
 
 test('publish workflow creates the pack workdir before the pack-inspect | tee pipeline', () => {
@@ -228,6 +250,50 @@ test('publish workflow runs registry acceptance on the published package before 
       `release job must wait for ${needed}`,
     );
   }
+});
+
+test('registry verification fails closed when dist.integrity is absent', async () => {
+  const bytes = Buffer.from('tarball-bytes');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  await assert.rejects(
+    () => verifyRegistryPackage({ name: COMPANION_NAME, version: '0.35.0', sha256 }, {
+      fetchJson: async () => ({ status: 200, body: { dist: { tarball: 'https://x/t.tgz' } } }),
+      fetchBytes: async () => ({ status: 200, bytes }),
+    }),
+    /carries no dist\.integrity/,
+  );
+});
+
+test('tag authorization: fresh requires exact main, retry accepts an ancestor', () => {
+  const plan = (companion, root) => ({
+    companion: { published: companion }, root: { published: root },
+  });
+  // Fresh release: nothing published — only the exact origin/main tip authorizes.
+  assert.deepEqual(authorizeTagRelease(plan(false, false), { exactMain: true, ancestorMain: true }), { mode: 'fresh' });
+  assert.throws(
+    () => authorizeTagRelease(plan(false, false), { exactMain: false, ancestorMain: true }),
+    /fresh release authorization failed: neither package is published/,
+  );
+  // Review round 4 §1 scenario: companion published + root missing + main
+  // advanced past the tag — the retry MUST stay authorized.
+  assert.deepEqual(
+    authorizeTagRelease(plan(true, false), { exactMain: false, ancestorMain: true }),
+    { mode: 'retry' },
+  );
+  // Fully published train, main advanced — retry for release completion.
+  assert.deepEqual(
+    authorizeTagRelease(plan(true, true), { exactMain: false, ancestorMain: true }),
+    { mode: 'retry' },
+  );
+  // A tag that left main's history entirely authorizes nothing.
+  assert.throws(
+    () => authorizeTagRelease(plan(true, false), { exactMain: false, ancestorMain: false }),
+    /retry authorization failed/,
+  );
+  assert.throws(
+    () => authorizeTagRelease({ companion: {} }, { exactMain: true, ancestorMain: true }),
+    /'companion\.published' missing/,
+  );
 });
 
 test('verify-registry resolves the local package from either manifest shape', () => {

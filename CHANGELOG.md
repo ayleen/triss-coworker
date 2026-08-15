@@ -30,10 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The publish workflow plans publication from live registry state for BOTH
   packages (`plan-publish`), skips a publish step when the registry already
   holds the byte-identical tarball, and registry-verifies both packages again
-  after publication — a partial-failure rerun is now safe.
+  after publication — a partial-failure rerun is now safe, including after
+  `main` has moved past the tag (fresh releases require the exact
+  `origin/main` tip; retries only require the tag to remain an ancestor,
+  via `publish-gate.js authorize-tag`).
+- The tag workflow separates privileges: an unprivileged `release-gates`
+  job runs every repository-script verification (versions, tarball
+  inspection, registry planning, tag authorization) and only a minimal
+  `npm-publish` job behind the `npm-production` environment holds
+  `id-token: write`. The publish job repacks with `--ignore-scripts` and
+  byte-compares both tarballs against the gates artifact before publishing
+  the same bytes with `--provenance`.
 - CI gains a required `dsh plugin lifecycle` job (real `@deepseek-ai/dsh`
-  0.1.0-rc.6 + pnpm 9): add → update (remove+add with a genuinely different
-  effective patch) → remove → reinstall → npx-style anchor.
+  0.1.0-rc.6 + pnpm 9): add → real in-place update (add v2 over v1, no
+  remove) → remove → reinstall → npx-style anchor, asserting the dumped
+  `llm-pi-ai.config.providers` object (exact provider set and `apiKeyEnv`
+  mapping) plus the profile manifest at every phase. The job lives in a
+  reusable `bundle-checks` workflow included by both PR CI and the tag
+  publish flow, and a post-publish `registry-acceptance` job installs the
+  published package from the registry on Node `22.19.0` and `24`, exercises
+  add/update/remove/reinstall, and records the compatibility tuple with
+  registry integrity and provenance evidence.
 - `npm test` now runs `scripts/check-lockfile-gate.cjs`, which asserts the
   workspace name/version/engines against the live manifests plus the
   pinned `@deepseek-ai/dsh-app-boot`.

@@ -125,6 +125,55 @@ The release workflow must be safely retryable when one npm publication succeeds 
 
 An already-published target version is acceptable only when registry metadata and tarball integrity match the locally verified artifact; any mismatch fails closed and requires a new version.
 
+### Release authorization: fresh vs retry (review round 4, §1)
+
+Because an already-used `package@version` combination can never be published
+again, a partially published release train MUST remain completable even after
+`main` has moved past the tag. The publish workflow therefore authorizes a
+tag in one of two modes, decided from live registry state BEFORE any step
+needs `id-token` permissions:
+
+- **fresh** — neither package exists on the registry yet: the tag SHA must
+  equal the current `origin/main` SHA (a new release is only ever authorized
+  at the exact tip), and the tagged `install.sh` must match `origin/main`.
+- **retry** — at least one package is already published with byte-identical
+  content: the tag SHA must merely be an ancestor of current `origin/main`
+  (`git merge-base --is-ancestor`), so the remaining package can be
+  published and the release completed.
+
+`scripts/publish-gate.js authorize-tag` implements this decision as a pure,
+unit-tested function over the `plan-publish` result plus two booleans
+(`--exact-main`, `--ancestor-main`).
+
+### Verified-bytes publication (review round 4, §7)
+
+The workflow publishes exactly the bytes that were inspected by the gates:
+the unprivileged `release-gates` job packs and hashes both tarballs, and the
+publish job re-packs with `npm pack --ignore-scripts` (no lifecycle hooks,
+no repository scripts, no `npm ci`) and byte-compares the SHA-256 of both
+repacked tarballs against the gates artifact before `npm publish
+--ignore-scripts --provenance` runs from the checked-out directories.
+`npm pack` output is byte-deterministic, and `npm publish` packs through the
+same code path, so the published tarball equals the inspected artifact.
+Provenance requires publishing from a git checkout in CI, which is why the
+publish step uses verified directories rather than the pre-packed tarball
+files.
+
+### Environment and required gates (review round 4, §3–4)
+
+The tag publish workflow calls the same reusable bundle-checks workflow
+(bundle matrix + real Harness lifecycle) as PR CI, aggregates them in a
+`release-gates` job, and only the minimal `npm-publish` job — which runs no
+repository scripts — holds `id-token: write` and the `npm-production`
+environment. Owner-side settings (not expressible in this repository's
+code) are required before the first tag: make the aggregate checks required
+in the repository ruleset, add required reviewers to the `npm-production`
+environment, bind the npm trusted publisher to that environment, and
+protect `v*` tags. If the companion package does not yet exist on npm,
+trusted publishing cannot be configured for it: a one-time bootstrap
+publication of the exact verified tarball (followed by enabling the trusted
+publisher and disabling token publishing) must be authorized first.
+
 ## Compatibility evidence contract
 
 Every local tarball acceptance, CI run, and registry smoke records this tuple:
@@ -357,10 +406,19 @@ publication. They are pre-release evidence, not the post-publication
 registry install that a complete step 16 requires. The publish workflow's
 `registry-acceptance` job covers the automatable half of step 16 after
 publication: install the registry companion into fresh profiles on Node
-`22.19.0` and `24`, verify add/update/remove/reinstall through `dsh plugin`,
-and assert the three routes in the dumped configuration. Live provider-model
-smokes on the published package remain credential-bound recorded acceptance
-evidence and are not part of CI.
+`22.19.0` and `24`, verify add/remove/reinstall through `dsh plugin`, assert
+the three routes by PARSING the dumped `llm-pi-ai.config.providers` object
+(exact provider set and `apiKeyEnv` mapping — substring greps accepted
+partial configurations, review round 4 §2), byte-verify both published
+packages against the gates artifact, and record the full compatibility
+tuple plus registry integrity and provenance attestations as an evidence
+artifact. The registry UPDATE path runs whenever a previous registry version
+exists (install previous, then update in place to the exact released
+version); for the FIRST release of the companion no previous version can
+exist, and update mechanics are guaranteed by the real-Harness lifecycle
+job's in-place v1→v2 proof — an explicit amendment of this contract. Live
+provider-model smokes on the published package remain credential-bound
+recorded acceptance evidence and are not part of CI.
 
 ## Community ecosystem proposal
 

@@ -246,7 +246,15 @@ test('packed root tarball contains neither the companion manifest nor the patch'
 });
 
 test('lifecycle CI proves the real in-place update path and manifest-level removal', () => {
-  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'test.yml'), 'utf8');
+  // The lifecycle job lives in the reusable bundle-checks workflow so the
+  // tag publish flow gates on the same checks (review round 4, §3).
+  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'bundle-checks.yml'), 'utf8');
+  const caller = readFileSync(join(repoRoot, '.github', 'workflows', 'test.yml'), 'utf8');
+  assert.match(caller, /uses: \.\/\.github\/workflows\/bundle-checks\.yml/,
+    'PR CI must call the reusable bundle-checks workflow');
+  const publishFlow = readFileSync(join(repoRoot, '.github', 'workflows', 'publish.yml'), 'utf8');
+  assert.match(publishFlow, /uses: \.\/\.github\/workflows\/bundle-checks\.yml/,
+    'the tag publish workflow must gate on the same bundle checks');
   const step = (name) => workflow.match(
     new RegExp(`name: ${name}[^\\n]*\\n\\s+run: \\|\\n([\\s\\S]*?)(?=\\n\\s+- name:)`),
   )?.[1];
@@ -260,7 +268,10 @@ test('lifecycle CI proves the real in-place update path and manifest-level remov
     false,
     'the update step must not remove first — that tests reinstall, not update',
   );
-  assert.match(updateStep, /LIFECYCLE_MARKER_V2/);
+  // Route assertions parse the dump: the updated mode requires the three
+  // original routes PLUS the v2 marker (substring greps accepted updates
+  // that dropped a route — review round 4, §2).
+  assert.match(updateStep, /dsh-dump-assert\.js updated/);
   // Removal must verify the profile MANIFEST, not only dump-config output
   // (review §4: dependency gone from package.json, bundle gone from
   // dsh.profile.bundles, template bundles retained).
@@ -302,7 +313,7 @@ test('companion README documents prerequisites and the acceptance route table', 
     `README install command pins ${installMatch[1]} but the package version is ${manifest.version}`);
   // One verified pnpm tuple everywhere: every version the README quotes for
   // pnpm must equal the lifecycle CI pin (review §3: 9.15.9 vs 9.0.0 drift).
-  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'test.yml'), 'utf8');
+  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'bundle-checks.yml'), 'utf8');
   const lifecycleJob = workflow.slice(workflow.indexOf('dsh-plugin-lifecycle:'));
   const ciPin = lifecycleJob.match(/corepack prepare pnpm@(\d+(?:\.\d+){0,2}) --activate/)?.[1];
   assert.ok(ciPin, 'lifecycle CI job must pin its pnpm version');

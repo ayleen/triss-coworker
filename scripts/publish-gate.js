@@ -166,16 +166,18 @@ export async function verifyRegistryPackage(local, {
   // The registry declares dist.integrity as an SRI sha512 of the tarball.
   // Byte equality above is the authoritative check; the SRI value is
   // additionally validated for shape and must match the very bytes we just
-  // downloaded — a malformed or mismatched declaration is a hard failure,
-  // never a warning (review §2).
+  // downloaded. A MISSING declaration must also fail closed — returning
+  // integrityOk: true without checking anything broke the fail-closed
+  // contract (review round 4, §5).
+  if (!dist.integrity) {
+    die(`registry metadata for ${url} carries no dist.integrity`);
+  }
   const expectedSri = `sha512-${createHash('sha512').update(tarballResponse.bytes).digest('base64')}`;
-  if (dist.integrity) {
-    if (!/^sha512-[A-Za-z0-9+/]{86}={2}$/.test(dist.integrity)) {
-      die(`registry integrity for ${url} is malformed: ${dist.integrity}`);
-    }
-    if (dist.integrity !== expectedSri) {
-      die(`registry integrity for ${url} does not match the registry tarball bytes`);
-    }
+  if (!/^sha512-[A-Za-z0-9+/]{86}={2}$/.test(dist.integrity)) {
+    die(`registry integrity for ${url} is malformed: ${dist.integrity}`);
+  }
+  if (dist.integrity !== expectedSri) {
+    die(`registry integrity for ${url} does not match the registry tarball bytes`);
   }
   return { name: local.name, published: true, integrityOk: true, sha256: registrySha };
 }
@@ -201,6 +203,41 @@ export function selectLocalPackage(manifest, packageName) {
     die(`pack-inspect manifest needs --package companion or --package root, got ${String(packageName)}`);
   }
   return entry;
+}
+
+/**
+ * Release-train tag authorization (review round 4, §1). An npm
+ * package@version combination can never be published twice, so a partially
+ * published release must stay completable even after `main` moves past the
+ * tag. Mode selection is a pure function of the live-registry plan plus two
+ * git facts supplied by the caller:
+ *
+ * - fresh (neither package published): the tag SHA must equal origin/main.
+ * - retry (at least one package already published byte-identically): the
+ *   tag SHA must merely be an ancestor of origin/main.
+ */
+export function authorizeTagRelease(plan, { exactMain, ancestorMain } = {}) {
+  for (const key of ['companion', 'root']) {
+    if (typeof plan?.[key]?.published !== 'boolean') {
+      die(`authorize-tag expects a plan-publish result, '${key}.published' missing`);
+    }
+  }
+  const anyPublished = plan.companion.published || plan.root.published;
+  if (!anyPublished && exactMain !== true) {
+    die([
+      'fresh release authorization failed: neither package is published, so the tag',
+      'must be the exact origin/main tip (it is not). Move the tag to the new tip or',
+      'select a new version.',
+    ].join(' '));
+  }
+  if (anyPublished && ancestorMain !== true && exactMain !== true) {
+    die([
+      'retry authorization failed: at least one package is already published, but the',
+      'tag is not an ancestor of origin/main. A partially published version cannot be',
+      're-created; investigate manually before proceeding.',
+    ].join(' '));
+  }
+  return { mode: anyPublished ? 'retry' : 'fresh' };
 }
 
 /**
@@ -276,6 +313,19 @@ async function main() {
       root: plan.root,
       actions: plan.actions,
     }, null, 2)}\n`);
+    return;
+  }
+  if (command === 'authorize-tag') {
+    const flag = (name) => {
+      const raw = args[name];
+      return raw === true || raw === '1' || raw === 'true';
+    };
+    const plan = JSON.parse(readFileSync(args.plan, 'utf8'));
+    const result = authorizeTagRelease(plan, {
+      exactMain: flag('exact-main'),
+      ancestorMain: flag('ancestor-main'),
+    });
+    process.stdout.write(`${JSON.stringify({ ok: true, mode: result.mode })}\n`);
     return;
   }
   die(`unknown command ${command}`);
