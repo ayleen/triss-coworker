@@ -94,6 +94,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     duplicate categories collapsed);
   - MCP: `allowBestEffortCallerWorktree` (default false),
     `triss_coder_result_list`, `triss_coder_result_clean`.
+- `triss-dsh-provider-bundle`, a standalone npm package (workspace
+  `packages/dsh-provider-bundle`) that activates the DeepSeek Harness
+  `llm-pi-ai` adapter for `opencode`, `opencode-go`, and `zai` routes in a
+  `dsh` profile without changing the Harness default provider or model.
+- Release gates publish and registry-verify both packages from one
+  coordinated tag (`scripts/publish-gate.js`, updated `publish.yml`), and a
+  dedicated CI bundle matrix covers Node `22.19.0`, `24`, and `26` plus
+  `pnpm`-missing diagnostics.
+
+### Unchanged
+
+- Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`
+  published-file allowlist; the root tarball contains no companion manifest
+  or patch.
 
 ### Changed
 
@@ -115,7 +129,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clearing reads via path, keeping the fixed inode).
 - Quarantine `readdir` import; result-state deletion moved to an immutable
   tombstone sidecar.
-
 
 ## [0.34.0] — 2026-08-13
 

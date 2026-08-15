@@ -1,0 +1,37 @@
+{
+  "name": "triss-dsh-provider-bundle",
+  "version": "0.35.0",
+  "description": "Configuration-only DeepSeek Harness (dsh) provider bundle activating the pi-ai opencode, opencode-go, and zai catalogue routes.",
+  "type": "module",
+  "files": [
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "pi-ai",
+    "opencode",
+    "zai",
+    "glm",
+    "provider-bundle",
+    "plugin"
+  ],
+  "author": "ayleen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayleen/triss-coworker.git",
+    "directory": "packages/dsh-provider-bundle"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
