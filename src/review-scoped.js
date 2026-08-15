@@ -255,7 +255,9 @@ export async function acquireScopedReviewDiff(
   return {
     ok: true,
     diff: selected.diff,
-    base_ref: base || null,
+    // The RESOLVED base (default branch when --base was omitted) — callers
+    // put this into the change corpus verbatim.
+    base_ref: baseRef,
     head_ref: 'HEAD',
     changed_files: inventory.entries.map((e) => e.path),
     unmatched: expanded.unmatched,

@@ -358,6 +358,10 @@ export async function acquireReviewDiffForShard({
     err.code = 'TRISS_REVIEW_INVALID_INPUT';
     throw err;
   }
+  // An injected gitDiffFn is a test/embedder seam for the full-diff path.
+  if (gitDiffFn && selectors.length === 0) {
+    return { diff: gitDiffFn(base || 'HEAD', 'HEAD') };
+  }
   if (selectors.length > 0) {
     const scoped = await acquireScopedDiff({}, { pr, base, selectors });
     if (!scoped.ok) {
