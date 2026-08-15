@@ -116,6 +116,11 @@ jobs:
       - run: npm ci
       - name: Activate pinned pnpm on PATH
         run: |
+          # The repo pins packageManager=npm, so corepack strict mode refuses
+          # to activate pnpm here ("This project is configured to use npm").
+          # Non-strict activation is the supported workaround and only
+          # affects this job's PATH.
+          export COREPACK_ENABLE_STRICT=0
           corepack enable
           corepack prepare pnpm@9.0.0 --activate
           pnpm --version
