@@ -1460,6 +1460,22 @@ function staticOpenCode2Preflight(cwd) {
         'See docs/opencode2-engine-plan.md "Static preflight".',
     );
   }
+  // Round-3 P0-1: custom tool dirs (.opencode/{tool,tools}/** and the global
+  // config root) are top-level executable surfaces imported INSIDE the
+  // OpenCode process — with the provider credential in process.env — so the
+  // beta rejects them like plugins. mcp blocks are rejected by the document
+  // shape check in auditOpenCode2Run.
+  const toolOffender = (sources.toolSources || []).find(
+    (t) => t.origin === 'configured' || t.origin === 'discovered',
+  );
+  if (toolOffender) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: unsupported custom tool source "${toolOffender.path}" ` +
+        `(${toolOffender.origin}). Custom tools execute inside the OpenCode process with the ` +
+        'provider credential in the environment — none are verified for the beta. Remove the ' +
+        'tool directory and re-run. See docs/opencode2-engine-plan.md "Review round 3".',
+    );
+  }
   return sources;
 }
 
@@ -1494,12 +1510,17 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
     );
   }
   process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
-  // (3) Credential + scope — the V1 head flow.
+  // (3) Credential + scope — the V1 head flow. The worker-shell snapshot is
+  // taken BEFORE loadEnvFiles() (round-3 P1-7): snapshotting after the dotenv
+  // merge made a local .triss.env value indistinguishable from a genuine
+  // shell export, so `coder init --engine opencode2 --global --provider worker`
+  // run inside a project could silently satisfy the key check from the LOCAL
+  // env file and leave the global scope unset.
+  const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
   const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
-  const workerShellEnv = captureWorkerShellSnapshot();
   const envPath = ensureEnvFile(scope);
   const scopedWorker = provider === 'worker'
     ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
@@ -1704,7 +1725,14 @@ async function runCoderSetupUnlocked(
       ),
     );
   }
-  await ensureEngine(sh, deps.confirmInstall);
+  // Round-3 P1-8: the V1 binary check/install applies to the V1 engine only.
+  // runOpenCode2Init already verified the opencode2 exact pin terminally, so
+  // requiring `opencode` here would force a V1 install on machines that only
+  // run the V2 beta (engine is undefined on the legacy V1 init/wizard paths —
+  // those keep the check).
+  if (engine !== 'opencode2') {
+    await ensureEngine(sh, deps.confirmInstall);
+  }
   // Z.AI plan detection only applies to the zai kind: Zen models resolve via
   // opencode's built-in `opencode` provider, and the two Kimi kinds already
   // name their endpoint through the credential env — nothing to probe.
@@ -1760,6 +1788,7 @@ async function runCoderSetupUnlocked(
   let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
     providerAvailable,
+    engine,
   }).blocking;
   // Stale-Zen incident report (own scope). When the opencode.json being audited
   // is pinned to a Zen model the AUTHENTICATED live catalogue no longer offers,
@@ -2096,22 +2125,31 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
-function opencodeConfigTemplate(model, smallModel, providerInfo) {
+// Round-3 P0-2: the V1 template's bash allowlist (git status / ls / npm test
+// …) is UNSAFE for the opencode2 beta — the credential sits in the child env,
+// so any allowed command can disclose it (env expansion in an error message,
+// `npm test` running untrusted JS with the key in process.env). V2 init
+// writes a deny-everything bash block; the V2 run preflight rejects any live
+// allow/ask rule. V1 keeps its template unchanged.
+function opencodeConfigTemplate(model, smallModel, providerInfo, { engine } = {}) {
+  const bashPolicy = engine === 'opencode2'
+    ? { '*': 'deny' }
+    : {
+      '*': 'deny',
+      'git status': 'allow',
+      'git diff*': 'allow',
+      'git log*': 'allow',
+      'ls*': 'allow',
+      'node --test*': 'allow',
+      'npm test*': 'allow',
+      'npm run test*': 'allow',
+    };
   const config = {
     $schema: 'https://opencode.ai/config.json',
     model,
     small_model: smallModel,
     permission: {
-      bash: {
-        '*': 'deny',
-        'git status': 'allow',
-        'git diff*': 'allow',
-        'git log*': 'allow',
-        'ls*': 'allow',
-        'node --test*': 'allow',
-        'npm test*': 'allow',
-        'npm run test*': 'allow',
-      },
+      bash: bashPolicy,
       webfetch: 'deny',
       websearch: 'deny',
     },
@@ -2783,7 +2821,7 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     });
   }
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo), null, 2) + '\n');
+  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo, { engine: opts.engine }), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
   return { blocking: false };
 }
@@ -3275,10 +3313,22 @@ const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
 // unknown data (data loss). Such a store throws; persistSessionMapping
 // propagates and the file is never rewritten. Only a genuinely legacy flat
 // object (no `version` key at all) migrates.
+// Round-3 P2-9: namespaces are NULL-PROTOTYPE dictionaries. A plain `{}`+
+// `namespace[slug]` lookup resolves `constructor`/`toString` from
+// Object.prototype, an assignment under the `__proto__` slug mutates the
+// prototype instead of recording a mapping, and legacy flat slugs literally
+// named "version"/"engines" were misread as store metadata. Lookup is
+// own-property only, and version detection is STRUCTURAL (a versioned store
+// has a NUMBER 2 + an engines object; a string "version" value is a legacy
+// flat slug). Every legacy entry must be string -> string — malformed values
+// fail closed instead of being silently dropped (a later persist would
+// destroy them).
+const emptyNamespace = () => Object.create(null);
+
 function normalizeSessionStore(raw) {
-  const store = { version: SESSION_STORE_VERSION, engines: { opencode: {}, opencode2: {} } };
+  const store = { version: SESSION_STORE_VERSION, engines: { opencode: emptyNamespace(), opencode2: emptyNamespace() } };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return store;
-  if ('version' in raw) {
+  if ('version' in raw && typeof raw.version === 'number') {
     if (raw.version === 2) {
       if (!raw.engines || typeof raw.engines !== 'object' || Array.isArray(raw.engines)) {
         throw new Error(
@@ -3324,17 +3374,31 @@ function normalizeSessionStore(raw) {
     );
   }
   if ('engines' in raw) {
-    throw new Error(
-      `Session store at ${sessionsFilePath()} has an "engines" field but no "version" — this is not a ` +
-        'recognized shape (legacy flat maps have neither). Refusing to read or rewrite it (fail-closed).',
-    );
+    // Structural disambiguation (round-3 P2-9): a legacy flat map whose slugs
+    // literally include "version"/"engines" carries STRING session-id values
+    // — every value a string means legacy. Anything else with an `engines`
+    // key but no numeric version is an unrecognized shape: fail closed.
+    const allStringValues = Object.values(raw).every((v) => typeof v === 'string');
+    if (!allStringValues) {
+      throw new Error(
+        `Session store at ${sessionsFilePath()} has an "engines" field but no numeric "version" — this is ` +
+          'not a recognized shape (legacy flat maps carry only string session ids). Refusing to read or ' +
+          'rewrite it (fail-closed).',
+      );
+    }
   }
   // Legacy flat map: every entry belongs to the V1 engine (the only writer
-  // that ever produced this shape).
+  // that ever produced this shape). Malformed entries fail closed (round-3
+  // P2-9: silent drops lose data on the next rewrite).
   for (const [slug, realId] of Object.entries(raw)) {
-    if (typeof slug === 'string' && typeof realId === 'string') {
-      store.engines.opencode[slug] = realId;
+    if (typeof realId !== 'string') {
+      throw new Error(
+        `Session store at ${sessionsFilePath()} has a malformed legacy entry ` +
+          `(${JSON.stringify(slug)} -> ${typeof realId}) — refusing to read or rewrite it (fail-closed). ` +
+          'Fix or remove the file manually.',
+      );
     }
+    store.engines.opencode[slug] = realId;
   }
   return store;
 }
@@ -3346,10 +3410,12 @@ function readSessionStore() {
 // Look up a slug's real session id for ONE engine. Cross-engine lookups are
 // impossible by construction — an opencode2 run never sees opencode's ids
 // (equal slugs across engines never cross-resume).
-function lookupSessionRealId(engine, slug) {
+export function lookupSessionRealId(engine, slug) {
   const store = readSessionStore();
-  const namespace = store.engines[engine] || {};
-  return namespace[slug] || null;
+  const namespace = store.engines[engine] || emptyNamespace();
+  // Own-property only (round-3 P2-9): `constructor`/`toString` must never
+  // resolve from Object.prototype as a session id.
+  return Object.prototype.hasOwnProperty.call(namespace, slug) ? namespace[slug] : null;
 }
 
 // The session store's own mutation lock path. Keyed per project (TRISS_STATE_DIR
@@ -3375,7 +3441,7 @@ export function persistSessionMapping(sh, engine, slug, realId) {
   let store;
   try {
     store = readSessionStore();
-    if (!store.engines[engine]) store.engines[engine] = {};
+    if (!store.engines[engine]) store.engines[engine] = emptyNamespace();
     store.engines[engine][slug] = realId;
     atomicWriteJson(path, store);
   } finally {
@@ -3394,7 +3460,7 @@ export function persistSessionMapping(sh, engine, slug, realId) {
     });
     try {
       const retryStore = readSessionStore();
-      if (!retryStore.engines[engine]) retryStore.engines[engine] = {};
+      if (!retryStore.engines[engine]) retryStore.engines[engine] = emptyNamespace();
       retryStore.engines[engine][slug] = realId;
       atomicWriteJson(path, retryStore);
     } finally {

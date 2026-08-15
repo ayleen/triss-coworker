@@ -24,14 +24,14 @@
  *      precedence than options.baseURL) is tracked, and model-level
  *      transport overrides (models.<id>.provider.{api,npm}) are rejected.
  *   3. PERMISSION GATE: the final ordered permission policy for the primary
- *      agent and every reachable subagent must be deny-first for shell.
- *      Round 2: this is a REAL last-match-wins evaluator over the merged
+ *      agent and every reachable subagent must be deny-everything for shell.
+ *      Round 2 made this a REAL last-match-wins evaluator over the merged
  *      rule list with wildcard action/resource semantics (findLast over
- *      action/resource glob matches) — not a `some(allow)` scan. The Triss
- *      template's vetted allowlist (deny "*" + narrow allows) must PASS;
- *      a policy whose final word on an arbitrary command is allow/ask must
- *      FAIL, including V1 string shorthand, wildcard-action rules, and the
- *      built-in agents' default "*" allow.
+ *      action/resource glob matches) — not a `some(allow)` scan. Round 3
+ *      (P0-2) retired the vetted allowlist: while the credential is in the
+ *      child env ANY live allow/ask rule can disclose it, so a rule that is
+ *      not shadowed by a later wildcard deny fails the gate regardless of
+ *      how narrow it is. Only dead (shadowed) allows are tolerated.
  *
  * Translation semantics verified live against the pinned build
  * v0.0.0-next-17430 (2026-08-15, `opencode2 debug config`):
@@ -205,22 +205,15 @@ const PROBE_COMMANDS = [
   'bash',
 ];
 
-// The vetted allowlist exactly as `opencodeConfigTemplate` writes it: these
-// narrow allows are the ONLY shell permissions a Triss-authored config may
-// grant on top of the wildcard deny.
-export const VETTED_BASH_ALLOWLIST = Object.freeze([
-  'git status',
-  'git diff*',
-  'git log*',
-  'ls*',
-  'node --test*',
-  'npm test*',
-  'npm run test*',
-]);
-
-function isVettedAllowResource(resource) {
-  return VETTED_BASH_ALLOWLIST.includes(resource);
-}
+// The vetted allowlist concept is RETIRED (review round-3 P0-2): while the
+// provider credential sits in the child env, ANY allowed shell command can
+// disclose it — `ls -- "/x-$OPENCODE_API_KEY"` echoes the expanded secret in
+// an error, and `npm test` / `node --test` execute untrusted repo JavaScript
+// with the key in `process.env`. Until real credential isolation exists for
+// OpenCode 2, the beta contract is deny-everything: a live allow/ask rule of
+// ANY resource fails the gate. (A rule shadowed by a later wildcard deny is
+// dead and harmless.)
+export const VETTED_BASH_ALLOWLIST = Object.freeze([]);
 
 /**
  * Compute the effective permission policy and the deny-first proof.
@@ -298,23 +291,15 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
       .slice(k + 1)
       .some((r) => (r.action === 'shell' || r.action === '*') && r.resource === '*' && r.effect === 'deny');
     if (shadowedByLaterDeny) continue; // dead rule — grants nothing
-    if (rule.resource === '*') {
-      return {
-        rules: orderedRules,
-        unsafe: true,
-        reason: `live-wildcard-${rule.effect}`,
-        shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
-      };
-    }
-    if (!isVettedAllowResource(rule.resource)) {
-      return {
-        rules: orderedRules,
-        unsafe: true,
-        reason: `live-unvetted-${rule.effect}`,
-        detail: rule.resource,
-        shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
-      };
-    }
+    // Round-3 P0-2: no allow is vetted while the credential is in the child
+    // env — ANY live allow/ask rule (wildcard or narrow) fails the gate.
+    return {
+      rules: orderedRules,
+      unsafe: true,
+      reason: `live-${rule.resource === '*' ? 'wildcard-' : ''}${rule.effect}${rule.resource === '*' ? '' : `-rule`}`,
+      detail: rule.resource === '*' ? undefined : rule.resource,
+      shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+    };
   }
 
   // 4. Full-evaluation proof over probe commands: with a wildcard deny
@@ -410,18 +395,91 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
   if (expectedBaseURL != null && settings.baseURL !== expectedBaseURL) {
     return { ok: false, reason: 'baseurl-value', actual: settings.baseURL, expected: expectedBaseURL };
   }
-  // Model-level transport overrides: models.<id>.provider.{api,npm} redirect
-  // per-model traffic; the managed definition writes plain { name } entries.
+  // Model-level transport overrides (round-2 + round-3 P1-5): native V2
+  // `models.<id>.api` redirects per-model traffic exactly like
+  // provider.<id>.api (a late layer can leave the top-level provider intact
+  // and reroute ONE model). The managed definition writes plain { name }
+  // entries — ANY other key in ANY model entry is an override and rejects.
   if (translated.models != null) {
     if (typeof translated.models !== 'object' || Array.isArray(translated.models)) {
       return { ok: false, reason: 'models-shape' };
     }
     for (const [id, model] of Object.entries(translated.models)) {
       if (!model || typeof model !== 'object' || Array.isArray(model)) return { ok: false, reason: 'models-entry' };
-      if (model.provider != null) return { ok: false, reason: 'model-level-provider', detail: id };
+      const keys = Object.keys(model);
+      if (keys.length !== 1 || keys[0] !== 'name' || typeof model.name !== 'string') {
+        return { ok: false, reason: 'model-level-transport', detail: id };
+      }
     }
   }
   return { ok: true };
+}
+
+// ─── document shape validation (round-3 P1-3 / P0-1) ────────────────────────
+
+// Top-level keys the pinned build's schema understands, with their documented
+// value types. Anything outside this table is rejected: Triss cannot prove
+// OpenCode's schema accepts a key it does not model, and a schema-invalid
+// document is dropped WHOLE by the engine — the preflight would verify one
+// baseline while the engine runs another.
+const V2_TOP_LEVEL_TYPES = Object.freeze({
+  $schema: 'string',
+  model: 'string',
+  small_model: 'string',
+  provider: 'object',
+  providers: 'object',
+  permission: 'object',
+  permissions: 'array',
+  agent: 'object',
+  agents: 'object',
+  mode: 'object',
+  modes: 'object',
+  plugin: 'string-or-array',
+  plugins: 'string-or-array',
+});
+
+// Command-bearing surfaces a config layer can smuggle in. Distinct errors so
+// the operator knows which gate fired (the static plugin/agent gates cover
+// the file-based forms of the same surfaces).
+const V2_EXECUTABLE_KEYS = Object.freeze({
+  mcp: 'local MCP servers are launched with the inherited process env (including the provider credential)',
+  tool: 'custom tool definitions execute inside the OpenCode process',
+  tools: 'custom tool definitions execute inside the OpenCode process',
+  command: 'command definitions execute arbitrary shell inside the OpenCode process',
+  commands: 'command definitions execute arbitrary shell inside the OpenCode process',
+});
+
+export function assertV2DocumentShape(doc, layerPath) {
+  if (doc == null || typeof doc !== 'object' || Array.isArray(doc)) return;
+  for (const key of Object.keys(doc)) {
+    const executable = V2_EXECUTABLE_KEYS[key];
+    if (executable) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: ${layerPath} defines "${key}" — ${executable}. ` +
+          'No local MCP/tool/command surface is verified for the beta; remove the block and re-run.',
+      );
+    }
+    const expected = V2_TOP_LEVEL_TYPES[key];
+    if (!expected) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: ${layerPath} has an unknown top-level key "${key}". Triss cannot ` +
+          'prove the pinned build\'s schema accepts it — if the schema rejects the document, OpenCode drops ' +
+          'the whole layer and runs a different baseline than the one audited. Remove the key or verify it ' +
+          'against the pin first.',
+      );
+    }
+    const value = doc[key];
+    const typeOk = expected === 'string-or-array'
+      ? (typeof value === 'string' || Array.isArray(value))
+      : (expected === 'array' ? Array.isArray(value) : typeof value === expected);
+    if (!typeOk) {
+      throw new Error(
+        `OpenCode 2 preflight aborted: ${layerPath} key "${key}" must be ${expected.replace('-or-array', ' or array')} ` +
+          `(got ${Array.isArray(value) ? 'an array' : `a ${typeof value}`}). A schema-invalid document is dropped ` +
+          'whole by the engine — the audited baseline would not be the running one.',
+      );
+    }
+  }
 }
 
 // ─── full preflight ─────────────────────────────────────────────────────────
@@ -471,6 +529,11 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
     } catch (err) {
       throw new Error(`OpenCode 2 preflight aborted: cannot parse ${c.path} — ${err.message}`, { cause: err });
     }
+    // Round-3 P1-3/P0-1: reject malformed/schema-suspicious documents and
+    // command-bearing surfaces (mcp, tool, command, unknown keys) BEFORE the
+    // provider/permission gates — a document the engine would drop whole
+    // invalidates everything computed from it.
+    assertV2DocumentShape(doc, c.path);
     doc.__layerPath = c.path;
     layerDocs.push(doc);
   }
@@ -526,10 +589,11 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
       );
     }
     throw new Error(
-      'OpenCode 2 preflight aborted: the effective shell policy is not deny-first — ' +
-        `${policy.reason}${detail}. The built-in agents start from "*"=allow, so the ordered policy must ` +
-        'carry a wildcard deny that shadows every non-vetted command. Remove the allow/ask rule or add a ' +
-        'later wildcard deny.',
+      'OpenCode 2 preflight aborted: the effective shell policy is not deny-everything — ' +
+        `${policy.reason}${detail}. While the provider credential is in the child environment, ANY ` +
+        'allowed shell command can disclose it (env expansion, `npm test` running untrusted JS), so the ' +
+        'opencode2 beta allows NO live allow/ask rule — only a wildcard deny (rules shadowed by a later ' +
+        'wildcard deny are dead and fine). Remove the allow/ask rule or shadow it with a later wildcard deny.',
     );
   }
 

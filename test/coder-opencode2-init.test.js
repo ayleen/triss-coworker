@@ -19,6 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync,
+  chmodSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -59,22 +60,27 @@ const withHome = async (fn) => {
   }
 };
 
-// Answers the V2 binary RESOLUTION chain (which -> realpath -> --version on
-// the resolved absolute path, round-2 #5) plus the `opencode --version`
-// probe. Anything else fails closed like a missing binary.
-const FAKE_OC2_PATH = '/resolved/bin/opencode2';
+// Answers the V2 binary RESOLUTION chain (which -> Node realpathSync ->
+// --version on the resolved absolute path, round-3 #6) plus the `opencode
+// --version` probe. `which` points at a REAL temp executable (chmod 0755) so
+// the detector's realpathSync/statSync checks pass. Anything else fails
+// closed like a missing binary.
+const FAKE_OC2 = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc2-init-bin-'));
+  const p = join(dir, 'opencode2');
+  writeFileSync(p, '#!/bin/sh\nexit 0\n');
+  chmodSync(p, 0o755);
+  return p;
+})();
 const fakeSh = () => (cmd, args) => {
   if (cmd === 'which' && (args || [])[0] === 'opencode2') {
-    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
+    return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
-  if (cmd === 'realpath' && (args || [])[0] === FAKE_OC2_PATH) {
-    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
-  }
-  if ((cmd === 'opencode2' || cmd === FAKE_OC2_PATH) && (args || [])[0] === '--version') {
+  if (cmd !== 'opencode' && (args || [])[0] === '--version') {
     return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
   }
   if (cmd === 'opencode' && (args || [])[0] === '--version') {
-    return { status: 0, stdout: '1.18.7\n', stderr: '' };
+    return { status: 1, stdout: '', stderr: 'not found' };
   }
   return { status: 1, stdout: '', stderr: 'not found' };
 };
@@ -118,11 +124,13 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     const commands = await loadCommands();
     const cfg = join(home, '.config', 'opencode', 'opencode.json');
     mkdirSync(dirname(cfg), { recursive: true });
+    // Round-3 P1-3: an existing config with an unknown top-level key would
+    // now fail the post-setup V2 audit, so the no-clobber fixture sticks to
+    // known keys.
     const before = JSON.stringify({
       model: 'opencode-go/deepseek-v4-flash',
       small_model: 'opencode-go/deepseek-v4-flash',
       permission: { bash: { '*': 'deny' } },
-      custom: { keep: true },
     }, null, 2) + '\n';
     writeFileSync(cfg, before);
     await runInit(commands, home);

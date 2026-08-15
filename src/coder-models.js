@@ -2936,10 +2936,31 @@ export async function rollbackModelChange(input = {}, deps = {}) {
   const lockHandle = lock(backend, scope);
   try {
     // 3. TOCTOU guard: RE-READ the manifest under the lock, then dispatch.
+    // Round-3 P2-10: BOTH the engine and the NORMALIZED config_backend must
+    // be re-checked — the lock was keyed on the pre-lock backend, so a
+    // manifest mutated to a different backend between the read and the lock
+    // would otherwise restore the wrong engine's targets under the wrong
+    // lock (e.g. Crush targets restored while holding the opencode-v1 lock).
     const manifest = readRollbackManifest(manifestPath);
     if (manifest.engine !== engine) {
       throw new Error(
         `rollback: manifest engine changed after acquiring the lock (TOCTOU); aborting (record: ${from})`,
+      );
+    }
+    const manifestBackend = manifest && manifest.config_backend
+      ? manifest.config_backend
+      : (manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
+    if (manifestBackend !== backend) {
+      throw new Error(
+        `rollback: manifest config_backend changed after acquiring the lock (TOCTOU): expected ` +
+          `${JSON.stringify(backend)}, manifest now says ${JSON.stringify(manifestBackend)}; aborting ` +
+          `(record: ${from})`,
+      );
+    }
+    if (configBackendForEngine(manifest.engine) !== manifestBackend) {
+      throw new Error(
+        `rollback: manifest engine ${JSON.stringify(manifest.engine)} no longer pairs with ` +
+          `config backend ${JSON.stringify(manifestBackend)} (record: ${from})`,
       );
     }
     return rollbackModelChangeLocked({ from, scope, manifest, manifestPath });

@@ -66,7 +66,23 @@ export function parseOpenCodeDocument(text, { path: sourcePath = null } = {}) {
     }
     if (ch === '/' && next === '*') {
       i += 2;
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i += 1;
+      let closed = false;
+      while (i < src.length) {
+        if (src[i] === '*' && src[i + 1] === '/') {
+          closed = true;
+          break;
+        }
+        i += 1;
+      }
+      // Round-3 parse parity: an unterminated block comment is a parse error
+      // in the engine's jsonc-parser. Silently consuming it to EOF made a
+      // truncated document parse as its complete prefix — OpenCode would
+      // reject the layer and run a DIFFERENT baseline than the preflight
+      // verified. Fail closed instead.
+      if (!closed) {
+        const where = sourcePath ? ` ${sourcePath}` : '';
+        throw new Error(`Failed to parse OpenCode document${where}: unterminated block comment`);
+      }
       i += 2;
       continue;
     }
@@ -140,6 +156,7 @@ export function resolveOpenCodeProjectBoundary(cwd) {
 const CONFIG_BASENAMES = ['opencode.json', 'opencode.jsonc'];
 const PLUGIN_DIRNAMES = ['plugin', 'plugins'];
 const AGENT_DIRNAMES = ['agent', 'agents', 'mode', 'modes'];
+const TOOL_DIRNAMES = ['tool', 'tools'];
 
 // ─── safe fs helpers (fail closed, name the path, never the contents) ───────
 
@@ -284,20 +301,41 @@ function collectConfiguredAgentBlocks(doc, configPath, layer, out) {
   });
 }
 
-// File-defined agent sources: <level>/agent{,s}/mode{,s}/*.json and the
-// same under <level>/.opencode/.
-function collectAgentDirFiles(dir, layer, out) {
+// File-defined agent sources: <level>/agent{,s}/mode{,s}/** and the same
+// under <level>/.opencode/. RECURSIVE (review round-3 P1-4): OpenCode
+// discovers agents through the whole subtree, so a nested
+// .opencode/agents/nested/evil.md used to be invisible to the preflight while
+// still loadable by the engine. statSync (symlink-following) mirrors the
+// engine's glob: a symlinked file or dir is discovered just like its target.
+function collectAgentDirFiles(dir, layer, out, depth = 0, kind = 'agent-file') {
   const entries = listDirSafe(dir);
   if (!entries) return;
+  // Depth cap is a pathological-tree guard (symlink loops resolve through
+  // realpath'd dirs only up to here), not a discovery limit — real agent
+  // trees are 2–3 levels deep.
+  if (depth > 16) {
+    throw new Error(`Cannot enumerate OpenCode agent directory ${dir}: nested too deep (symlink loop?)`);
+  }
   for (const entry of entries) {
     const p = join(dir, entryName(entry));
-    if (!isFileSafe(p)) continue;
+    let st;
+    try {
+      st = statSync(p);
+    } catch (err) {
+      if (err?.code === 'ENOENT') continue; // broken symlink — unloadable
+      throw new Error(`Cannot stat OpenCode source ${p}: ${err.message}`, { cause: err });
+    }
+    if (st.isDirectory()) {
+      collectAgentDirFiles(p, layer, out, depth + 1, kind);
+      continue;
+    }
+    if (!st.isFile()) continue;
     out.push({
       origin: 'discovered',
       layer,
       dir,
       path: p,
-      kind: 'agent-file',
+      kind,
       exists: true,
     });
   }
@@ -306,6 +344,16 @@ function collectAgentDirFiles(dir, layer, out) {
 function collectLevelAgentFiles(levelDir, layer, out) {
   for (const name of AGENT_DIRNAMES) {
     collectAgentDirFiles(join(levelDir, name), layer, out);
+  }
+}
+
+// Custom tool sources (review round-3 P0-1): .opencode/{tool,tools}/** and
+// the global config root's tool{,s}/. Every regular file is a top-level
+// executable surface imported INSIDE the OpenCode process with the provider
+// credential in `process.env` — the beta preflight rejects them all.
+function collectToolDirFiles(levelDir, layer, out) {
+  for (const name of TOOL_DIRNAMES) {
+    collectAgentDirFiles(join(levelDir, name), layer, out, 0, 'tool-file');
   }
 }
 
@@ -319,12 +367,13 @@ function collectLevelAgentFiles(levelDir, layer, out) {
  * @param {string} [input.projectBoundary] — explicit boundary; derived from
  *   cwd via a .git walk when omitted
  * @param {string} [input.home] — home directory override (tests/isolation)
- * @returns {{ configs: Array<object>, plugins: Array<object>, agentSources: Array<object> }}
+ * @returns {{ configs: Array<object>, plugins: Array<object>, agentSources: Array<object>, toolSources: Array<object> }}
  *   configs: every candidate config layer in effective order, each with
  *   { path, kind: 'json'|'jsonc', precedence, exists, layer, dir }.
  *   plugins: configured references + discovered plugin files, each with
  *   { origin: 'configured'|'discovered', layer, dir, path, kind, exists }.
- *   agentSources: inline agent blocks + agent/mode dir files, same shape.
+ *   agentSources: inline agent blocks + agent/mode dir files (recursive),
+ *   same shape. toolSources: custom tool dir files (recursive), same shape.
  */
 export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantParsing = false } = {}) {
   if (!cwd) throw new Error('enumerateOpenCodeSources: cwd is required');
@@ -337,6 +386,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   const configs = [];
   const plugins = [];
   const agentSources = [];
+  const toolSources = [];
   const globalDir = join(homeDir, '.config', 'opencode');
 
   let precedence = 0;
@@ -413,7 +463,14 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
     collectLevelAgentFiles(join(levelDir, '.opencode'), 'opencode-dir', agentSources);
   }
 
-  return { configs, plugins, agentSources };
+  // Custom tool dirs (review round-3 P0-1): same discovery scopes as plugins —
+  // global config root + each level's .opencode/.
+  collectToolDirFiles(globalDir, 'global', toolSources);
+  for (const levelDir of levels) {
+    collectToolDirFiles(join(levelDir, '.opencode'), 'opencode-dir', toolSources);
+  }
+
+  return { configs, plugins, agentSources, toolSources };
 }
 
 // existsSync kept for callers that only need a cheap presence probe.

@@ -28,8 +28,8 @@
 //     never collide with V1's ~/.local/share/opencode.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { chmodSync, lstatSync, mkdirSync, realpathSync as nodeRealpathSync, statSync as nodeStatSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
 import { parseRateLimitReset } from '../commands/coder.js';
@@ -55,12 +55,21 @@ export { OPENCODE2_PIN_DEFAULT };
 //
 // Resolution: `which opencode2` via the allowlisted env (PATH/HOME only, plus
 // OPENCODE_DISABLE_AUTOUPDATE=1 — a version probe must never trigger the
-// updater, and no credential may leak into a probe). `realpath` is applied so
-// symlinked installs resolve to the real file. Returns
-// { found, path, version, satisfiesPin } — NEVER throws; missing binary /
-// spawn error / garbage output all yield { found:false, version:null,
-// satisfiesPin:false }. `sh` is injectable for tests.
-export function detectOpenCode2(sh = nodeSpawnSync) {
+// updater, and no credential may leak into a probe). Round 3 (#6): the
+// `which` output must be ABSOLUTE (a relative PATH entry resolves against
+// each process's own cwd — the parent could verify bin/opencode2 while the
+// child executes a different file), is canonicalized with Node's
+// realpathSync (an external `realpath` failure used to silently keep the
+// un-canonicalized path), and the canonical result must be a REGULAR
+// EXECUTABLE file. Any canonicalization/stat failure fails closed. Returns
+// { found, path, version, satisfiesPin } — NEVER throws. `sh` and the
+// `fs.realpathSync` / `fs.statSync` seams are injectable for tests.
+export function detectOpenCode2(
+  sh = nodeSpawnSync,
+  fs = {},
+) {
+  const realpathSync = fs.realpathSync || nodeRealpathSync;
+  const statSync = fs.statSync || nodeStatSync;
   const probeEnv = {
     ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
     ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
@@ -79,15 +88,30 @@ export function detectOpenCode2(sh = nodeSpawnSync) {
   if (!resolvedPath) {
     return { found: false, path: null, version: null, satisfiesPin: false };
   }
-  let realPath = resolvedPath;
+  if (!isAbsolute(resolvedPath)) {
+    // Relative `which` output means a relative PATH entry — the pre-check and
+    // the credential-bearing child (different cwd) could resolve it to
+    // different files. Fail closed rather than guess.
+    return { found: false, path: null, version: null, satisfiesPin: false };
+  }
+  let realPath;
   try {
-    const rp = sh('realpath', [resolvedPath], { env: probeEnv });
-    if (rp && !rp.error && rp.status === 0) {
-      const v = String(rp.stdout || '').trim();
-      if (v) realPath = v;
+    realPath = realpathSync(resolvedPath);
+  } catch {
+    // Un-canonicalizable (missing, permission, symlink loop): fail closed —
+    // never fall back to the pre-realpath path (round-3 #6).
+    return { found: false, path: null, version: null, satisfiesPin: false };
+  }
+  if (!isAbsolute(realPath)) {
+    return { found: false, path: null, version: null, satisfiesPin: false };
+  }
+  try {
+    const st = statSync(realPath);
+    if (!st.isFile() || (st.mode & 0o111) === 0) {
+      return { found: false, path: null, version: null, satisfiesPin: false };
     }
   } catch {
-    // keep the non-realpath path
+    return { found: false, path: null, version: null, satisfiesPin: false };
   }
   let r;
   try {

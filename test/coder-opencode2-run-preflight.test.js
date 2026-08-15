@@ -72,7 +72,7 @@ const makeSh = () => {
     if (cmd === 'realpath' && args[0] === FAKE_OC2_PATH) {
       return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
     }
-    if (args && args[0] === '--version' && (cmd === 'opencode2' || cmd === FAKE_OC2_PATH)) {
+    if (args && args[0] === '--version' && cmd === 'opencode2') {
       return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
     }
     if (cmd === 'opencode' && args[0] === '--version') {

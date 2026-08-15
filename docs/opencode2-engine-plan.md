@@ -562,6 +562,41 @@ For one-shot provider selection, generate a V1-compatible in-memory overlay
 containing `model` and only the provider definition required by the existing
 worker path. Do not add or validate a V2 `small_model` override.
 
+#### Review round 3 — beta hardening (blocking)
+
+The beta fail-closed contract is stricter than the round-2 wording in four
+places; all of them gate before any credential is forwarded:
+
+1. **No shell at all.** A vetted bash allowlist cannot be safe while the
+   credential sits in the child env: a permitted command can expand it
+   (`ls -- "/x-$OPENCODE_API_KEY"` echoes it back in an error) and
+   `npm test` / `node --test` run untrusted repo JS with the key in
+   `process.env`. Until real credential isolation exists, the V2 effective
+   shell policy must be deny-everything: a wildcard deny with NO live
+   allow/ask rule (a rule shadowed by a later wildcard deny is dead and
+   harmless). `triss coder init --engine opencode2` writes the shared
+   opencode.json with a deny-only bash block; a config carrying the V1
+   template's allowlist fails the V2 run preflight with guidance.
+2. **Every local executable config surface is rejected**: plugin
+   references/dirs, agent/mode sources (discovered RECURSIVELY — nested
+   `.opencode/agents/nested/evil.md` is found, symlinked entries are
+   followed), custom tool dirs (`.opencode/{tool,tools}/` and the global
+   config root), `mcp` blocks, and any command-bearing or unknown top-level
+   config key. Triss cannot prove OpenCode's schema accepts a document it
+   does not fully understand, so a parse/diagnostic mismatch means OpenCode
+   may drop the layer and run a different baseline — fail closed. Unterminated
+   block comments are a parse error, and every known top-level key must have
+   its documented type (`"$schema": 1` is rejected like the pin would).
+3. **Model-level transport overrides are transport overrides.** Native V2
+   `providers.<id>.models.<model>.api` (and any key other than `name` in a
+   managed model entry) redirects the credential exactly like `provider.<id>`
+   .api — the managed fixture accepts model entries of exactly `{name}`.
+4. **Binary canonicalization is Node's, not a PATH re-lookup.** `which` output
+   must be absolute, is canonicalized with `realpathSync` (any error fails
+   closed), and the result must be a regular executable file; a relative PATH
+   entry cannot make the parent verify one file and the child execute
+   another.
+
 ### Small-model contract
 
 The shared persisted V1 config retains `small_model` for OpenCode 1.

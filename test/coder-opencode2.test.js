@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,21 +67,23 @@ function withEnv(vars, fn) {
   };
 }
 
-// spawnSync seam that satisfies the exact-pin gate: answers the binary
-// RESOLUTION chain (which opencode2 -> /resolved/opencode2, realpath -> the
-// real file) and the --version probe with the pinned build. The detector
-// spawns the RESOLVED ABSOLUTE PATH (round-2 #5: bare-name PATH lookups can
-// differ between parent and child cwd), so the fake must answer version
-// probes for both the bare name and the resolved path.
-const FAKE_OC2_PATH = '/resolved/bin/opencode2';
+// spawnSync seam that satisfies the exact-pin gate. Round-3 #6: the detector
+// canonicalizes the `which` output with node realpathSync and requires a
+// regular executable file, so the fake binary is a REAL temp script (0755).
+// The --version probe is answered for any non-V1 command (realpathSync adds
+// the /private prefix on macOS, so exact-path matching would miss it).
+const FAKE_OC2 = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc2-pin-bin-'));
+  const p = join(dir, 'opencode2');
+  writeFileSync(p, '#!/bin/sh\nexit 0\n');
+  chmodSync(p, 0o755);
+  return p;
+})();
 const pinSh = () => (cmd, args) => {
   if (cmd === 'which' && args && args[0] === 'opencode2') {
-    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
+    return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
-  if (cmd === 'realpath' && args && args[0] === FAKE_OC2_PATH) {
-    return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
-  }
-  if (args && args[0] === '--version' && (cmd === 'opencode2' || cmd === FAKE_OC2_PATH)) {
+  if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
     return { status: 0, stdout: `opencode2 v${OPENCODE2_PIN_DEFAULT}\n`, stderr: '' };
   }
   return { status: 1, stdout: '', stderr: '', error: null };
@@ -151,20 +153,22 @@ test('OPENCODE2 pin is the exact verified 0.0.0-next-17430 with TRISS_CODER_OPEN
 
 test('detectOpenCode2 runs only the opencode2 binary with --version and parses the beta string', () => {
   // `opencode2 v0.0.0-next-17430` — non-semver beta string, exact-match pin.
-  // Round-2 #5: the detector first resolves the binary to an absolute path
-  // (which -> realpath), then probes THAT path.
+  // Round-3 #6: the detector requires an ABSOLUTE `which` output, canonicalizes
+  // with Node realpathSync, and verifies a regular executable file — the fs
+  // seams below keep the unit hermetic.
+  const fsOk = {
+    realpathSync: (p) => p,
+    statSync: () => ({ isFile: () => true, mode: 0o755 }),
+  };
   const shOk = (cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') {
-      return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    }
-    if (cmd === 'realpath' && argv[0] === '/resolved/bin/opencode2') {
       return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     }
     assert.equal(cmd, '/resolved/bin/opencode2');
     assert.deepEqual(argv, ['--version']);
     return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', error: null };
   };
-  const det = detectOpenCode2(shOk);
+  const det = detectOpenCode2(shOk, fsOk);
   assert.equal(det.found, true);
   assert.equal(det.version, '0.0.0-next-17430');
   assert.equal(det.satisfiesPin, true);
@@ -172,20 +176,64 @@ test('detectOpenCode2 runs only the opencode2 binary with --version and parses t
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    if (cmd === 'realpath') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     return { status: 0, stdout: 'opencode2 v0.0.0-next-17000\n', error: null };
-  });
+  }, fsOk);
   assert.equal(detOld.found, true);
   assert.equal(detOld.satisfiesPin, false);
   // missing binary / error -> found:false, never throws
   assert.deepEqual(
-    detectOpenCode2(() => ({ error: { code: 'ENOENT' } })),
+    detectOpenCode2(() => ({ error: { code: 'ENOENT' } }), fsOk),
     { found: false, path: null, version: null, satisfiesPin: false },
   );
   assert.deepEqual(
-    detectOpenCode2(() => { throw new Error('spawn failed'); }),
+    detectOpenCode2(() => { throw new Error('spawn failed'); }, fsOk),
     { found: false, path: null, version: null, satisfiesPin: false },
   );
+});
+
+test('detectOpenCode2 round-3 #6: relative which output, realpath failure, and non-executable files fail closed', () => {
+  const statFor = (st) => ({ realpathSync: (p) => p, statSync: () => st });
+  const whichReturns = (p) => () => ({
+    status: 0, stdout: `${p}\n`, error: null,
+  });
+  const versionOk = (cmd, argv) => (
+    argv && argv[0] === '--version'
+      ? { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', error: null }
+      : { status: 1, stdout: '', error: null }
+  );
+  // A relative PATH entry makes `which` print a relative path — the parent
+  // and the child (different cwd) could resolve it to different files.
+  assert.deepEqual(
+    detectOpenCode2(whichReturns('bin/opencode2'), statFor({ isFile: () => true, mode: 0o755 })),
+    { found: false, path: null, version: null, satisfiesPin: false },
+  );
+  // realpath failure (missing file / symlink loop) must fail closed, never
+  // fall back to the pre-canonicalization path.
+  assert.deepEqual(
+    detectOpenCode2(whichReturns('/resolved/bin/opencode2'), {
+      realpathSync: () => { throw new Error('ENOENT'); },
+      statSync: () => ({ isFile: () => true, mode: 0o755 }),
+    }),
+    { found: false, path: null, version: null, satisfiesPin: false },
+  );
+  // A regular but NON-executable file is not a runnable binary.
+  assert.deepEqual(
+    detectOpenCode2(whichReturns('/resolved/bin/opencode2'), statFor({ isFile: () => true, mode: 0o644 })),
+    { found: false, path: null, version: null, satisfiesPin: false },
+  );
+  // A directory at the resolved path is not a binary either.
+  assert.deepEqual(
+    detectOpenCode2(whichReturns('/resolved/bin/opencode2'), statFor({ isFile: () => false, mode: 0o755 })),
+    { found: false, path: null, version: null, satisfiesPin: false },
+  );
+  // Sanity: the executable regular file still resolves via the seam.
+  const det = detectOpenCode2(
+    (cmd, argv) => (cmd === 'which'
+      ? { status: 0, stdout: '/resolved/bin/opencode2\n', error: null }
+      : versionOk(cmd, argv)),
+    statFor({ isFile: () => true, mode: 0o755 }),
+  );
+  assert.equal(det.found, true);
 });
 
 test('installHintOpenCode2 names the exact @opencode-ai/cli pin', () => {
@@ -437,7 +485,7 @@ test(
         stdoutWrite: capture.stdoutWrite,
       });
       const { cmd, argv, options } = rec.calls[0];
-      assert.equal(cmd, '/resolved/bin/opencode2'); // resolved absolute path (round-2 #5)
+      assert.equal(cmd, realpathSync(FAKE_OC2)); // canonicalized absolute path (round-2 #5, round-3 #6)
       // Live-matrix finding (Phase 6): V2 does NOT auto-load the V1
       // `.opencode/agents` templates the way V1 does, so injecting the
       // default `--agent coder` made every run fail with "Agent not found"

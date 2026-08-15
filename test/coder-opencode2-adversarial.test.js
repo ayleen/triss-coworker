@@ -18,7 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync,
-  readdirSync, symlinkSync,
+  readdirSync, symlinkSync, chmodSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,21 +74,32 @@ const withHome = async (fn) => {
   }
 };
 
-// spawnSync seam: pin-satisfying for the RESOLUTION chain (which -> realpath
-// -> --version on the resolved absolute path, round-2 #5), and records ALL
-// calls so tests can assert ZERO managed spawns.
-const FAKE_OC2_PATH = '/resolved/bin/opencode2';
+// spawnSync seam: pin-satisfying for the RESOLUTION chain (which -> Node
+// realpathSync -> --version on the resolved absolute regular-executable
+// path, round-3 #6), and records ALL calls so tests can assert ZERO managed
+// spawns. `which` points at a REAL temp executable — the detector now
+// canonicalizes with node realpathSync + statSync, which cannot be faked via
+// the sh seam.
+const makeFakeBinary = (() => {
+  let cached = null;
+  return () => {
+    if (cached) return cached;
+    const dir = mkdtempSync(join(tmpdir(), 'oc2-bin-'));
+    const p = join(dir, 'opencode2');
+    writeFileSync(p, '#!/bin/sh\nexit 0\n');
+    chmodSync(p, 0o755);
+    cached = p;
+    return p;
+  };
+})();
 const makeSh = () => {
   const spawns = [];
   const sh = (cmd, args) => {
     spawns.push(`${cmd} ${(args || []).join(' ')}`);
     if (cmd === 'which' && args[0] === 'opencode2') {
-      return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
+      return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
-    if (cmd === 'realpath' && args[0] === FAKE_OC2_PATH) {
-      return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
-    }
-    if (args && args[0] === '--version' && (cmd === 'opencode2' || cmd === FAKE_OC2_PATH)) {
+    if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
       return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
     }
     // git plumbing for --isolate tests: report the repo root when probed,
@@ -239,11 +250,13 @@ test('P0-2 round-2: late wildcard deny SHADOWS an earlier unvetted allow (safe, 
   assert.match(chunks.join(''), /"ok"/, 'the safe shadowed-allow policy must pass the gate and run');
 }));
 
-test('P0-2 round-2: Triss template shape (deny "*" + vetted allows) passes the gate', () => withHome(async ({ proj }) => {
+test('P0-2 round-3: the V1 template allowlist (deny "*" + vetted allows) REJECTS on opencode2', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
-  // EXACTLY what opencodeConfigTemplate writes — the reviewer's functional
-  // blocker #3: a fresh `triss coder init --engine opencode2` followed by a
-  // run must NOT die on its own template.
+  // Round-3 P0-2: no allow is vetted while the credential is in the child
+  // env — `ls -- "/x-$OPENCODE_API_KEY"` expands the secret into an error and
+  // `npm test` runs untrusted repo JS with the key in process.env. The V1
+  // template's allowlist (still written for engine opencode) must fail the
+  // V2 gate; V2 init writes deny-only instead.
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
     permission: {
       bash: {
@@ -258,11 +271,17 @@ test('P0-2 round-2: Triss template shape (deny "*" + vetted allows) passes the g
       },
     },
   }));
-  const { sh } = makeSh();
+  const { sh, spawns } = makeSh();
   const spawnFake = makeSpawn();
-  const chunks = [];
-  await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh, spawn: spawnFake.spawnFn, stdoutWrite: (s) => chunks.push(s) });
-  assert.match(chunks.join(''), /"ok"/, 'the Triss template policy must pass the gate and run');
+  let threw = null;
+  try {
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh, spawn: spawnFake.spawnFn });
+  } catch (err) {
+    threw = err;
+  }
+  assert.ok(threw, 'the V1 template allowlist must reject on opencode2 (no vetted allows)');
+  assert.match(threw.message, /deny-everything|allow\/ask/iu);
+  assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
 test('P0-2 adversarial: clean tree with NO permission rules rejects (deny-first proof required)', () => withHome(async ({ proj }) => {
