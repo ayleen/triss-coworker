@@ -1558,13 +1558,24 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   // run inside a project could silently satisfy the key check from the LOCAL
   // env file and leave the global scope unset.
   const workerShellEnv = captureWorkerShellSnapshot();
-  // Cross-review fix 1: provenance is resolved from the PRE-DOTENV snapshot —
-  // a decoy key in the project .triss.env cannot displace a shell export, so
-  // "project file defines both fields" is NOT a consistent profile when the
-  // real key is a shell/global one.
-  assertV2WorkerTransportProvenance(workerShellEnv);
+  // Review round 5 #5: capture the shell-export model pins BEFORE
+  // loadEnvFiles() — exactly like the V1 runCoderInit head — so
+  // warnIfPinShadowed can see a shadowing export. V2 used to pass nothing,
+  // silently disabling the shell-export half of the pin-shadow check.
+  const inheritedModels = {
+    model: process.env.TRISS_CODER_MODEL,
+    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
+  };
+  // Cross-review fix 1 + review round 5 #4: provenance is resolved from the
+  // PRE-DOTENV snapshot (a decoy key in the project .triss.env cannot
+  // displace a shell export), and only when the worker credential is
+  // actually in play — a non-worker init must not fail on an unrelated
+  // project-local TRISS_WORKER_BASE_URL.
   loadEnvFiles();
   const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
+  if (provider === 'worker') {
+    assertV2WorkerTransportProvenance(workerShellEnv);
+  }
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const envPath = ensureEnvFile(scope);
@@ -1586,7 +1597,7 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   // setup (runCoderSetup with engine-aware template skipping) — the same
   // opencode.json / model-pin flow.
   const setup = await runCoderSetup(
-    { ...opts, engine: 'opencode2', scope, provider, skipAgentTemplates: true },
+    { ...opts, engine: 'opencode2', scope, provider, skipAgentTemplates: true, inheritedModels, workerShellEnv },
     deps,
   );
   // (5) Post-setup preflight over the resulting tree: the shared setup must
@@ -3383,6 +3394,19 @@ function normalizeSessionStore(raw) {
             'refusing to migrate or rewrite it (fail-closed). Fix or remove the file manually.',
         );
       }
+      // Review round 5 #7: an UNRECOGNIZED engines.* key is future/corrupted
+      // data — copying only the known namespaces made the next persist
+      // silently erase it. Same fail-closed contract as every other
+      // unrecognized store shape.
+      for (const key of Object.keys(raw.engines)) {
+        if (!SESSION_STORE_ENGINES.includes(key)) {
+          throw new Error(
+            `Session store at ${sessionsFilePath()} has an unknown engine namespace "engines.${key}" — this ` +
+              'Triss understands opencode and opencode2 only. Refusing to read or rewrite it (fail-closed); ' +
+              'upgrade Triss or fix the file manually.',
+          );
+        }
+      }
       for (const engine of SESSION_STORE_ENGINES) {
         const namespace = raw.engines[engine];
         if (namespace == null) continue; // absent is fine
@@ -3479,6 +3503,14 @@ export function sessionsLockPath() {
 // writer has returned success — the read-modify-write is fully serialized,
 // and dead-PID stale locks are reclaimed automatically).
 export function persistSessionMapping(sh, engine, slug, realId) {
+  // Review round 5 #7: without this guard a future/typo'd engine argument
+  // would CREATE an unrecognized engines.* namespace that the very next read
+  // (and rewrite) silently erased.
+  if (!SESSION_STORE_ENGINES.includes(engine)) {
+    throw new Error(
+      `persistSessionMapping: unknown engine ${JSON.stringify(engine)} — supported: ${SESSION_STORE_ENGINES.join(', ')}`,
+    );
+  }
   const path = sessionsFilePath();
   mkdirSync(dirname(path), { recursive: true });
 
@@ -4918,15 +4950,19 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         { cause: err },
       );
     }
-    // Round-4 P0 + cross-review fix 1: worker key + endpoint must be one
-    // profile of consistent EFFECTIVE provenance, resolved from the
-    // pre-dotenv snapshot (a decoy key in the project .triss.env cannot
-    // displace a shell export).
-    try {
-      assertV2WorkerTransportProvenance(workerShellEnv);
-    } catch (err) {
-      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-      throw err;
+    // Round-4 P0 + cross-review fix 1 + review round 5 #4: worker key +
+    // endpoint must be one profile of consistent EFFECTIVE provenance,
+    // resolved from the pre-dotenv snapshot (a decoy key in the project
+    // .triss.env cannot displace a shell export). Only relevant when the
+    // worker credential is actually forwarded — a zai/moonshot run must not
+    // fail on an unrelated project-local TRISS_WORKER_BASE_URL.
+    if (modelUsed.startsWith('triss-worker/')) {
+      try {
+        assertV2WorkerTransportProvenance(workerShellEnv);
+      } catch (err) {
+        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+        throw err;
+      }
     }
     const workerProfile = modelUsed.startsWith('triss-worker/')
       ? workerCoderProfile()
@@ -4994,12 +5030,25 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ),
     );
 
-    // Cross-review fix 4 (TOCTOU): between the audit and this point sat the
-    // runtime-dir setup and the binary probes (several subprocesses) — a
-    // window in which the audited config tree can change. Re-hash every
-    // audited file and abort on any drift, immediately before the
-    // credential-bearing spawn.
+    // Cross-review fix 4 + review round 5 #6 (TOCTOU): between the audit and
+    // this point sat the runtime-dir setup and the binary probes (several
+    // subprocesses) — a window in which the audited tree can change. Hash
+    // re-verification catches modified/removed layers but NOT sources CREATED
+    // in the window (a fresh .opencode/opencode.json, plugin, or agent file),
+    // so the FULL audit + static gate re-runs immediately before the
+    // credential-bearing spawn: new layers, new provider overrides, new
+    // executable sources — everything is re-enumerated from disk.
     try {
+      auditOpenCode2Run(
+        {
+          cwd: runtimeDirCanonical,
+          modelUsed,
+          agentName: agent,
+          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+        },
+        { enumerate: deps.enumerateOpenCodeSources },
+      );
+      staticOpenCode2Preflight(runtimeDirCanonical);
       verifyOpenCode2ContentHashes(auditResult2?.contentHashes);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);

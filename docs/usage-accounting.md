@@ -131,7 +131,7 @@ Rules:
 | Field | Purpose |
 | --- | --- |
 | `model` | the reporting/grouping key. `triss usage --by-model` groups strictly by this. |
-| `billing_model` | the **only** key used for price lookup. Keeps the endpoint/plan prefix (`zai/glm-5.2` vs `zai-coding-plan/glm-5.2`). |
+| `billing_model` | the **only** key used for price lookup. Keeps the endpoint/plan prefix (`zai/glm-5.2` vs `zai-coding-plan/glm-5.2`); the one exception is the `moonshotai/`/`moonshotai-cn/` prefix, which is stripped so one row covers the bare and prefixed Moonshot routes. `opencode-go/*` keeps its prefix and prices as null (unknown cost) — the Go reseller's tariffs are not modeled. |
 | `provider` | informational identity for diagnostics. Never selects a price. Never inferred from which API keys happen to be set. |
 | `usage_source` | which payload contract Triss parsed: `api`, `opencode`, `opencode2`, or `crush`. |
 | `engine` | `opencode`, `opencode2`, `crush`, or `null` for direct API calls. |

@@ -803,10 +803,12 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     seenParsePaths.add(parseError.path);
     warnings.push(parseError);
   }
-  // For OpenCode, warn about config_main and configuredSmall availability, not runtimeMain.
-  // runtimeMain may be a different provider (e.g. GLM shell override) and should not trigger
+  // For OpenCode (BOTH engines — review round 5: opencode2 used to fall into
+  // the Crush branch below), warn about config_main and configuredSmall
+  // availability, not runtimeMain. runtimeMain may be a different provider
+  // (e.g. GLM shell override) and should not trigger
   // "configured-model-unavailable" against the selected provider's catalogue.
-  if (cat.status === 'ok' && engine === 'opencode') {
+  if (cat.status === 'ok' && (engine === 'opencode' || engine === 'opencode2')) {
     if (configMain.value && configMain.value !== null && availability(configMain.value) === 'unavailable') {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'config_main', value: configMain.value, message: `Configured main model ${configMain.value} is not available in the provider's catalogue` });
     }

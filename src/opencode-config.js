@@ -432,6 +432,16 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   // inline agent blocks. Strict by default (fail closed on malformed — the
   // V2 preflight contract); tolerantParsing skips plugin/agent collection
   // for a malformed layer and lets the configs[] marker carry the error.
+  // Review round 5: tolerant mode also tolerates UNRELATED hostile shapes —
+  // a non-string plugin reference (`"plugin": 123`) or an unreadable plugin
+  // dir (EACCES) used to throw and crash model INSPECTION
+  // (resolveOpenCodeConfigRoles) and with it the post-commit audit of a
+  // successful `coder model set`. Inspection only reads configs[].model, so
+  // in tolerant mode the plugin/agent/tool collection phases are best-effort.
+  const collectLayerExtras = (c, doc) => {
+    collectConfiguredPlugins(doc, c.path, c.layer, plugins);
+    collectConfiguredAgentBlocks(doc, c.path, c.layer, agentSources);
+  };
   for (const c of configs) {
     if (!c.exists) continue;
     let doc;
@@ -441,9 +451,20 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
       if (tolerantParsing) continue; // error already surfaced via c.model.__parseError
       throw err;
     }
-    collectConfiguredPlugins(doc, c.path, c.layer, plugins);
-    collectConfiguredAgentBlocks(doc, c.path, c.layer, agentSources);
+    try {
+      collectLayerExtras(c, doc);
+    } catch (err) {
+      if (!tolerantParsing) throw err;
+    }
   }
+
+  const collectDiscoveredSources = (fn) => {
+    try {
+      fn();
+    } catch (err) {
+      if (!tolerantParsing) throw err;
+    }
+  };
 
   // Discovered plugin dirs: global config root + each level's .opencode/
   // ONLY (review P2-11). Bare `plugins/` inside a random project level is
@@ -451,24 +472,30 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   // docs enumerate `.opencode/plugin(s)` (and direct dirs only under the
   // GLOBAL config root), so scanning bare project `plugins/` produced
   // false-positive V2 blocks on ordinary app trees.
-  collectDiscoveredPlugins(globalDir, 'global', plugins);
-  for (const levelDir of levels) {
-    collectDiscoveredPlugins(join(levelDir, '.opencode'), 'opencode-dir', plugins);
-  }
+  collectDiscoveredSources(() => {
+    collectDiscoveredPlugins(globalDir, 'global', plugins);
+    for (const levelDir of levels) {
+      collectDiscoveredPlugins(join(levelDir, '.opencode'), 'opencode-dir', plugins);
+    }
+  });
 
   // Agent/mode dir files: global config root + each level's .opencode/ only
   // (review P2-11 — same reasoning as plugins above).
-  collectLevelAgentFiles(globalDir, 'global', agentSources);
-  for (const levelDir of levels) {
-    collectLevelAgentFiles(join(levelDir, '.opencode'), 'opencode-dir', agentSources);
-  }
+  collectDiscoveredSources(() => {
+    collectLevelAgentFiles(globalDir, 'global', agentSources);
+    for (const levelDir of levels) {
+      collectLevelAgentFiles(join(levelDir, '.opencode'), 'opencode-dir', agentSources);
+    }
+  });
 
   // Custom tool dirs (review round-3 P0-1): same discovery scopes as plugins —
   // global config root + each level's .opencode/.
-  collectToolDirFiles(globalDir, 'global', toolSources);
-  for (const levelDir of levels) {
-    collectToolDirFiles(join(levelDir, '.opencode'), 'opencode-dir', toolSources);
-  }
+  collectDiscoveredSources(() => {
+    collectToolDirFiles(globalDir, 'global', toolSources);
+    for (const levelDir of levels) {
+      collectToolDirFiles(join(levelDir, '.opencode'), 'opencode-dir', toolSources);
+    }
+  });
 
   return { configs, plugins, agentSources, toolSources };
 }

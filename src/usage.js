@@ -94,10 +94,18 @@ const DEFAULT_PRICES = {
 //
 // Strips the engine/provider prefixes of the OpenCode engine family so one
 // bare DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers
-// V1, V2 (opencode-go/), and Moonshot (moonshotai/, moonshotai-cn/) routes
-// for the same underlying model. Unknown prefixes are left intact (fail-closed
-// pricing: an unrecognized prefixed id prices as null, never as a guess).
-const OPENCODE_FAMILY_PREFIXES = /^(?:opencode-go|moonshotai(?:-cn)?)\//;
+// both routes. The model key is the uppercased id with non-alphanumerics → '_'.
+//
+// opencode-go/ is deliberately NOT stripped (review round 5): OpenCode Go is
+// a separate paid reseller route whose tariffs are not modeled anywhere in
+// this repo (resolveBillingMode reports it as 'unknown'), so pricing its
+// usage with the bare DeepSeek/Moonshot list prices would publish fabricated
+// totals — and silently repoint the documented
+// TRISS_PRICE_OPENCODE_GO_<MODEL> override key. A Go route prices as null
+// (unknown cost) unless the user sets the prefixed override explicitly.
+// Unknown prefixes are left intact (fail-closed pricing: an unrecognized
+// prefixed id prices as null, never as a guess).
+const OPENCODE_FAMILY_PREFIXES = /^(?:moonshotai(?:-cn)?)\//;
 function stripModelPrefix(billingModel) {
   return String(billingModel).replace(OPENCODE_FAMILY_PREFIXES, '');
 }

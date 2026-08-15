@@ -666,6 +666,37 @@ allow could shadow the wildcard deny under `--agent <name>`. Verify with
 `opencode2 debug config` (with a service-capable sandbox) + `--agent` and a
 deny-only config before relaxing any agent restriction.
 
+#### Review round 5 — inspection, gating, and TOCTOU follow-ups
+
+1. `opencode-go/` keeps its prefix in price lookup: the Go reseller's tariffs
+   are unmodeled (billing mode `unknown`), so a Go route prices as null —
+   never with the bare DeepSeek/Moonshot list prices. The prefixed
+   `TRISS_PRICE_OPENCODE_GO_<MODEL>` override is the documented way to price
+   it explicitly.
+2. `coder models` warnings for opencode2 use the OpenCode branch
+   (config_main/configured_small), not the Crush branch (runtimeMain) — a
+   shell-exported foreign-provider model no longer false-positives as
+   `configured-model-unavailable`.
+3. Model inspection (and the post-commit audit of `coder model set`) is
+   tolerant of unrelated hostile config shapes — a non-string plugin
+   reference or an unreadable plugin dir no longer crashes inspection; the
+   strict fail-closed behavior stays on the preflight path.
+4. The worker-transport provenance gate fires only when worker credentials
+   are actually in play: `triss-worker/` runs and `--provider worker` init,
+   never on a zai/moonshot run that merely shares the machine with a
+   project-local `TRISS_WORKER_BASE_URL`.
+5. V2 init captures the pre-dotenv model pins and passes them to
+   `warnIfPinShadowed` — a shadowing `TRISS_CODER_MODEL` shell export fails
+   init exactly like V1.
+6. The TOCTOU guard re-runs the FULL audit + static gate immediately before
+   the credential-bearing spawn (hash re-verification alone missed sources
+   CREATED in the audit→spawn window — a fresh permissive layer, plugin, or
+   agent file reached the child unaudited).
+7. An unrecognized `engines.*` namespace in the session store fails closed
+   (like every other unrecognized store shape) instead of being silently
+   erased by the next persist, and `persistSessionMapping` rejects unknown
+   engine arguments outright.
+
 ### Small-model contract
 
 The shared persisted V1 config retains `small_model` for OpenCode 1.
