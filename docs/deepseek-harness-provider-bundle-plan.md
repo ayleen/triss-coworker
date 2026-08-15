@@ -331,6 +331,17 @@ Recorded honestly rather than rounded up to green:
   `FreeUsageLimitError` (the workspace free-tier quota is exhausted; retried
   five times over seven minutes). Session evidence in every 4xx case still
   proves the requested provider/model pair was resolved and attempted.
+  Re-verified on the evening of 2026-08-15 with the only existing credential
+  (the opencode CLI account; `gai1.opencode.env` holds the same key; no other
+  OPENCODE keys exist in shell profiles or project env files): paid
+  `deepseek-v4-flash` → 401 `CreditsError` again; `deepseek-v4-flash-free` →
+  429 again; `mimo-v2.5-free` → 429 (the free-tier limit is workspace-wide);
+  `ling-3.0-flash-free` → 401 `ModelError` (not enabled for this workspace).
+  The SAME credential's `opencode-go` route stays green and paid models work
+  there — it is the opencode CLI's configured default
+  (`opencode-go/deepseek-v4-flash`). The blocker is therefore specific to the
+  Zen workspace's balance, not to the credential, the bundle, or the route
+  plumbing.
 - `opencode-go/deepseek-v4-flash` — passed (text and coding-tool);
 - `opencode-go/glm-5.2` — passed (text and coding-tool);
 - `zai/glm-5.2` — passed.
