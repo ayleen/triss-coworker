@@ -412,7 +412,21 @@ the three routes by PARSING the dumped `llm-pi-ai.config.providers` object
 partial configurations, review round 4 §2), byte-verify both published
 packages against the gates artifact, and record the full compatibility
 tuple plus registry integrity and provenance attestations as an evidence
-artifact. The registry UPDATE path runs whenever a previous registry version
+artifact. The evidence step is FAIL-CLOSED: every tuple field is required
+(the job dies on any missing value), the profile `pnpm list --depth
+Infinity --json` output and the profile `pnpm-lock.yaml` are uploaded as
+artifacts, and the companion's integrity is taken from that lockfile. The
+adapters (`dsh-llm-pi-ai`, resolved `pi-ai`) resolve from the running dsh
+INSTALLATION, not from profile dependencies (verified live: the profile
+carries only the companion and the template bundles) — their versions are
+recorded from the installation and the resolved `pi-ai`'s registry
+integrity for that exact version is recorded alongside. Provenance is
+verified rather than assumed: attestations are read from
+`dist.attestations` (where npm/pacote store them) and additionally checked
+cryptographically by installing the exact released version into a throwaway
+project and running `npm audit signatures --json --include-attestations`
+(the companion must show verified statuses with nothing invalid or
+missing). The registry UPDATE path runs whenever a previous registry version
 exists (install previous, then update in place to the exact released
 version); for the FIRST release of the companion no previous version can
 exist, and update mechanics are guaranteed by the real-Harness lifecycle

@@ -242,6 +242,17 @@ test('publish workflow runs registry acceptance on the published package before 
   assert.match(workflow, /registry-acceptance:/);
   assert.match(workflow, /dsh plugin --profile headless add -w "triss-dsh-provider-bundle@\$\{VERSION\}"/);
   assert.match(workflow, /dsh plugin --profile headless remove triss-dsh-provider-bundle/);
+  // Provenance is verified, not assumed: attestations are read from
+  // dist.attestations (where npm/pacote store them) AND checked
+  // cryptographically via npm audit signatures (review round 5, §2).
+  assert.match(workflow, /dist\?\.attestations/);
+  assert.match(workflow, /npm audit signatures --json --include-attestations/);
+  // The compatibility tuple is fail-closed and backed by artifacts: the
+  // profile pnpm list and lockfile are saved, and any missing field fails
+  // the job (review round 5, §3).
+  assert.match(workflow, /pnpm --dir "\$PROFILE" list --depth Infinity --json/);
+  assert.match(workflow, /compatibility tuple is incomplete/);
+  assert.match(workflow, /pnpm-list\.json[\s\S]*pnpm-lock\.yaml[\s\S]*audit-signatures\.json/);
   const releaseNeeds = workflow.match(/release:\n {4}needs: \[([^\]]+)\]/)?.[1];
   assert.ok(releaseNeeds, 'release job must declare its needs');
   for (const needed of ['standalone-smoke', 'npm-publish', 'registry-acceptance']) {

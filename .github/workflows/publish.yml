@@ -411,23 +411,64 @@ jobs:
           dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
           dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-reinstalled.yml"
           node scripts/dsh-dump-assert.js present "$RUNNER_TEMP/dump-reinstalled.yml"
-      - name: Record acceptance evidence tuple and provenance
+      - name: Record acceptance evidence tuple and provenance (fail-closed)
         env:
           TAG_VERSION: ${{ github.ref_name }}
+          NODE_MAJOR: ${{ matrix.node }}
         run: |
+          set -euo pipefail
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
-          node - "$DSH_HOME/profiles/headless/package.json" > "$RUNNER_TEMP/registry-acceptance-node${NODE_MAJOR}.json" <<'EOF'
+          PROFILE="$DSH_HOME/profiles/headless"
+          # Profile dependency graph evidence: pnpm list output is saved and
+          # the companion must appear in it (the adapters resolve from the
+          # dsh installation, which is why their versions come from there —
+          # verified live; recorded in the plan document).
+          pnpm --dir "$PROFILE" list --depth Infinity --json > "$RUNNER_TEMP/pnpm-list.json"
+          cp "$PROFILE/pnpm-lock.yaml" "$RUNNER_TEMP/pnpm-lock.yaml"
+          node - "$PROFILE" > "$RUNNER_TEMP/registry-acceptance-node${NODE_MAJOR}.json" <<'EOF'
           const fs = require('fs');
           const path = require('path');
           const { execSync } = require('child_process');
-          const run = (cmd) => execSync(cmd, { encoding: 'utf8' }).trim();
+          const run = (cmd) => {
+            const value = execSync(cmd, { encoding: 'utf8' }).trim();
+            if (!value) throw new Error(`command produced no output: ${cmd}`);
+            return value;
+          };
+          const required = (label, value) => {
+            if (value === null || value === undefined || value === '') {
+              throw new Error(`compatibility tuple is incomplete: ${label} is missing`);
+            }
+            return value;
+          };
           (async () => {
-            const [manifestPath] = process.argv.slice(2);
-            const version = process.env.TAG_VERSION.replace(/^v/, '');
-            const installedPath = path.join(
-              path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json',
+            const [profileDir] = process.argv.slice(2);
+            const version = required('tag version', process.env.TAG_VERSION).replace(/^v/, '');
+            const temp = process.env.RUNNER_TEMP;
+
+            // Companion from the profile itself.
+            const installed = JSON.parse(fs.readFileSync(
+              path.join(profileDir, 'node_modules', 'triss-dsh-provider-bundle', 'package.json'), 'utf8',
+            ));
+            if (installed.version !== version) {
+              throw new Error(`profile holds companion ${installed.version}, expected ${version}`);
+            }
+            const pnpmList = JSON.parse(fs.readFileSync(path.join(temp, 'pnpm-list.json'), 'utf8'));
+            const listed = JSON.stringify(pnpmList);
+            if (!listed.includes('triss-dsh-provider-bundle')) {
+              throw new Error('companion missing from the profile pnpm list');
+            }
+
+            // Companion integrity from the profile lockfile.
+            const lock = fs.readFileSync(path.join(temp, 'pnpm-lock.yaml'), 'utf8');
+            const lockMatch = /triss-dsh-provider-bundle@[^\s'"]*:\s*\n\s*resolution:\s*\{[^}]*integrity:\s*(sha512-[A-Za-z0-9+/=]+)/.exec(lock);
+            const companionLockIntegrity = required(
+              'companion integrity in the profile lockfile',
+              lockMatch?.[1],
             );
-            const installed = JSON.parse(fs.readFileSync(installedPath, 'utf8'));
+
+            // Adapters resolve from the running dsh installation (verified
+            // live: the profile carries only the companion and the template
+            // bundles). Their versions are mandatory, not best-effort.
             const globalRoot = run('npm root -g');
             const globalVersion = (name) => {
               try {
@@ -436,24 +477,38 @@ jobs:
                 return null;
               }
             };
-            const response = await fetch(`https://registry.npmjs.org/triss-dsh-provider-bundle`);
+            const dshLlmPiAi = required('dsh-llm-pi-ai (dsh installation)', globalVersion('@deepseek-ai/dsh-llm-pi-ai'));
+            const piAiVersion = required('pi-ai (dsh installation)', globalVersion(path.join('@earendil-works', 'pi-ai')));
+            const piAiIntegrity = required(
+              'pi-ai registry integrity for the resolved version',
+              JSON.parse(run(`npm view @earendil-works/pi-ai@${piAiVersion} dist.integrity --json`)),
+            );
+
+            // Registry metadata: dist.integrity AND dist.attestations — npm
+            // stores attestations inside dist (pacote reads dist.attestations
+            // and verifies the bundles; review round 5, §2).
+            const response = await fetch('https://registry.npmjs.org/triss-dsh-provider-bundle');
             const packument = await response.json();
             const published = packument.versions?.[version];
             if (!published) throw new Error(`registry packument carries no version ${version}`);
-            if (!published.dist?.integrity) throw new Error('published version carries no dist.integrity');
-            const attestations = published.attestations ?? null;
-            if (!attestations?.provenance) {
-              throw new Error('published version carries no provenance attestation — publish without --provenance?');
+            const distIntegrity = required('registry dist.integrity', published.dist?.integrity);
+            const attestations = published.dist?.attestations ?? null;
+            if (!attestations?.provenance || !attestations.url) {
+              throw new Error('published version carries no provenance attestation in dist.attestations — published without --provenance?');
             }
+
             const evidence = {
               node: process.version,
               npm: run('npm --version'),
               pnpm: run('pnpm --version'),
               dsh: run('dsh --version'),
-              dshLlmPiAi: globalVersion('@deepseek-ai/dsh-llm-pi-ai'),
-              piAi: globalVersion(path.join('@earendil-works', 'pi-ai')),
-              companionVersion: installed.version,
-              registryIntegrity: published.dist.integrity,
+              dshLlmPiAi,
+              piAi: { version: piAiVersion, registryIntegrity: piAiIntegrity },
+              companion: {
+                version: installed.version,
+                profileLockIntegrity: companionLockIntegrity,
+                registryIntegrity: distIntegrity,
+              },
               provenance: { url: attestations.url },
               tag: process.env.TAG_VERSION,
               sha: process.env.GITHUB_SHA,
@@ -463,12 +518,56 @@ jobs:
           })().catch((error) => { console.error(error.message); process.exit(1); });
           EOF
           cat "$RUNNER_TEMP/registry-acceptance-node${NODE_MAJOR}.json"
+      - name: Verify signatures and provenance attestations with npm audit
         env:
-          NODE_MAJOR: ${{ matrix.node }}
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          mkdir -p "$RUNNER_TEMP/audit-project"
+          cd "$RUNNER_TEMP/audit-project"
+          npm init -y >/dev/null
+          # Saved (not --no-save): npm audit signatures works from the
+          # project's lockfile, so the dependency must be recorded there.
+          npm install --ignore-scripts --save-exact "triss-dsh-provider-bundle@${VERSION}" >/dev/null
+          npm audit signatures --json --include-attestations > "$RUNNER_TEMP/audit-signatures.json"
+          node - "$RUNNER_TEMP/audit-signatures.json" <<'EOF'
+          // npm audit signatures verifies registry signatures AND provenance
+          // attestations cryptographically (it fetches the attestation
+          // bundles and checks the signed subject). Require our package to
+          // be verified with nothing invalid or missing (review round 5, §2).
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const entry = report['triss-dsh-provider-bundle'];
+          if (!entry) throw new Error('companion missing from npm audit signatures output');
+          const statuses = [];
+          const walk = (value) => {
+            if (Array.isArray(value)) { value.forEach(walk); return; }
+            if (value && typeof value === 'object') {
+              if (typeof value.status === 'string') statuses.push(value.status);
+              Object.values(value).forEach(walk);
+            }
+          };
+          walk(entry);
+          if (statuses.length === 0) throw new Error('npm audit signatures reported no signature/attestation statuses');
+          for (const status of statuses) {
+            if (status === 'invalid' || status === 'missing') {
+              throw new Error(`signature/attestation status "${status}" for the published companion`);
+            }
+          }
+          if (!statuses.includes('verified')) {
+            throw new Error(`no verified signature/attestation for the published companion (statuses: ${statuses.join(', ')})`);
+          }
+          console.log('npm audit signatures: companion signatures and provenance attestations verified');
+          EOF
       - uses: actions/upload-artifact@v4
         with:
           name: registry-acceptance-node-${{ matrix.node }}
-          path: ${{ runner.temp }}/registry-acceptance-node${{ matrix.node }}.json
+          path: |
+            ${{ runner.temp }}/registry-acceptance-node${{ matrix.node }}.json
+            ${{ runner.temp }}/pnpm-list.json
+            ${{ runner.temp }}/pnpm-lock.yaml
+            ${{ runner.temp }}/audit-signatures.json
           if-no-files-found: error
 
   release:
