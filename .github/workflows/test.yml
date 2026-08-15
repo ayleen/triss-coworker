@@ -137,15 +137,14 @@ jobs:
           export DSH_HOME=/tmp/dsh-lifecycle/home
           TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
           dsh plugin --profile headless add "$TARBALL"
-          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-add.json
-          node -e "
-            const cfg = require('/tmp/dsh-lifecycle/dump-add.json');
-            const text = JSON.stringify(cfg);
-            for (const route of ['opencode', 'opencode-go', 'zai']) {
-              if (!text.includes(route)) { console.error('missing route: ' + route); process.exit(1); }
-            }
-            console.log('three routes present after add');
-          "
+          # dump-config emits YAML (with '# ==' header comments), not JSON.
+          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-add.yaml
+          for route in opencode opencode-go zai; do
+            if ! grep -q "$route" /tmp/dsh-lifecycle/dump-add.yaml; then
+              echo "missing route: $route"; exit 1
+            fi
+          done
+          echo "three routes present after add"
       - name: remove → verify bundle entry and dependency are gone
         run: |
           export DSH_HOME=/tmp/dsh-lifecycle/home
@@ -161,8 +160,8 @@ jobs:
           export DSH_HOME=/tmp/dsh-lifecycle/home
           TARBALL=$(ls /tmp/dsh-lifecycle/triss-dsh-provider-bundle-*.tgz)
           dsh plugin --profile headless add "$TARBALL"
-          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-reinstall.json
-          cmp /tmp/dsh-lifecycle/dump-add.json /tmp/dsh-lifecycle/dump-reinstall.json \
+          dsh --profile headless --dump-config > /tmp/dsh-lifecycle/dump-reinstall.yaml
+          cmp /tmp/dsh-lifecycle/dump-add.yaml /tmp/dsh-lifecycle/dump-reinstall.yaml \
             && echo "reinstall restores the identical effective config"
 
   standalone-build:
