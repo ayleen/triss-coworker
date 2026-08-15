@@ -51,21 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Artifact integrity (0.35.0)
 
 - `triss-dsh-provider-bundle-0.35.0.tgz` — sha256
-  `5ff86a4842e14a76e411138960cb9a5ca573f6362c20afa51bd1509cd4a4d554`,
-  integrity `sha512-7JNBrVxJWV2a9c2qvbtZAlyl2eTNNkVHRLoATVW+2Fc4+nHfjy1cCKLEXv3VuHxf6SPgJIaAg4tkWeUQBXrVwg==`
+  `96fea8ad31a9ea36d8c9b2f0c50fc31ed5adcd4b7976a27b7eeb88e52cf27e41`,
+  integrity `sha512-5Qp9JpV1bH/F1knSQ3t7N6rstp9dVoULRtgyggBdKrHsL/11NNK8gyZ/S+9m18wKYrnqkrY/PihrhirARsDEyQ==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
 - Root `triss-coworker-0.35.0.tgz` sha256 is reproducible via
-  `npm pack` at tag `v0.35.0`; registry verification compares the packed
-  artifact against the published tarball byte-for-byte
-  (`scripts/publish-gate.js pack-inspect`).
-
-### Artifact integrity (0.35.0)
-
-- `triss-dsh-provider-bundle-0.35.0.tgz` — sha256
-  `5ff86a4842e14a76e411138960cb9a5ca573f6362c20afa51bd1509cd4a4d554`,
-  integrity `sha512-7JNBrVxJWV2a9c2qvbtZAlyl2eTNNkVHRLoATVW+2Fc4+nHfjy1cCKLEXv3VuHxf6SPgJIaAg4tkWeUQBXrVwg==`
-- Root `triss-coworker-0.35.0.tgz` sha256 is reproducible via
-  `npm pack` at tag `v0.35.0`; registry verification compares the packed
-  artifact against the published tarball byte-for-byte
+  `npm pack` at tag `v0.35.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
   (`scripts/publish-gate.js pack-inspect`).
 
 ## [0.34.0] — 2026-08-13

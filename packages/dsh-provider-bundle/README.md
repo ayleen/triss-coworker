@@ -22,10 +22,10 @@ The bundle declares only `id` + credential references. Endpoints, protocols, mod
 - `pnpm` installed and on `PATH` (the `dsh plugin` command forwards to `pnpm`)
 - pnpm 9 treats the Harness profile directory (which carries its own
   `pnpm-workspace.yaml` with `packages: [.]`) as a workspace root, so
-  `dsh plugin add` needs `NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK=true` in the
-  environment (or the `-w` flag the lifecycle CI job uses). Verified against
-  the compatibility tuple dsh `0.1.0-rc.6` × pnpm `9.15.9`; revisit when either
-  pin moves.
+  `dsh plugin add` needs the `-w` flag (the form the lifecycle CI job
+  verifies) or `NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK=true` in the
+  environment. Verified against the compatibility tuple dsh `0.1.0-rc.6` ×
+  pnpm `9.0.0`; revisit when either pin moves.
 - A Harness profile that already includes `@deepseek-ai/dsh-base` (this bundle does not own the runner or UI layer)
 
 Tested with: `@deepseek-ai/dsh` at commit `47f9438`, `@deepseek-ai/dsh-llm-pi-ai@0.1.0-rc.5`, resolved `@earendil-works/pi-ai@0.82.1`. This package installs only into Harness profiles; global installation is unsupported because it would recreate an installation-anchor ambiguity.
@@ -45,7 +45,7 @@ Only `headless` terminates by itself; `web` blocks waiting for a client, and a c
 ```bash
 pnpm --version
 node --version
-dsh plugin --profile headless add triss-dsh-provider-bundle@0.35.0
+dsh plugin --profile headless add -w triss-dsh-provider-bundle@0.35.0
 dsh --profile headless --dump-config
 ```
 

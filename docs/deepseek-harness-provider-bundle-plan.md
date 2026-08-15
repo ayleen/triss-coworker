@@ -224,9 +224,15 @@ Installation into an existing Harness profile is:
 ```bash
 pnpm --version
 node --version
-dsh plugin --profile headless add triss-dsh-provider-bundle@<version>
+dsh plugin --profile headless add -w triss-dsh-provider-bundle@<version>
 dsh --profile headless --dump-config
 ```
+
+`dsh plugin add` forwards to `pnpm add`, and pnpm 9 treats the Harness
+profile directory (its `pnpm-workspace.yaml` declares `packages: [.]`) as a
+workspace root, so the command needs `-w` — the form the lifecycle CI job
+verifies — or `NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK=true` in the
+environment. The verified tuple is dsh `0.1.0-rc.6` × pnpm `9.0.0`.
 
 The companion package can be installed into any profile that already includes `@deepseek-ai/dsh-base`; it does not own the runner or UI layer.
 
@@ -337,8 +343,13 @@ quota window reset) or an explicit decision to amend this acceptance list.
 The registry smokes recorded alongside this status ran against a local
 `npm pack` tarball (byte-identical to the future registry artifact) BEFORE
 publication. They are pre-release evidence, not the post-publication
-registry install that a complete step 16 requires; the post-publish
-verification in the publish workflow covers that half.
+registry install that a complete step 16 requires. The publish workflow's
+`registry-acceptance` job covers the automatable half of step 16 after
+publication: install the registry companion into fresh profiles on Node
+`22.19.0` and `24`, verify add/update/remove/reinstall through `dsh plugin`,
+and assert the three routes in the dumped configuration. Live provider-model
+smokes on the published package remain credential-bound recorded acceptance
+evidence and are not part of CI.
 
 ## Community ecosystem proposal
 

@@ -139,11 +139,16 @@ jobs:
           node scripts/publish-gate.js verify-versions --tag "$GITHUB_REF_NAME"
       - name: Inspect both packed tarballs before publishing
         run: |
+          # The pipeline below starts node and tee concurrently; tee opens its
+          # output BEFORE node's internal mkdirSync() can run, so the
+          # directory must exist before the pipeline starts.
+          mkdir -p "$RUNNER_TEMP/publish-pack"
           node scripts/publish-gate.js pack-inspect --workdir "$RUNNER_TEMP/publish-pack" \
             | tee "$RUNNER_TEMP/publish-pack/local-manifest.json"
       - name: Plan publication from live registry state (safe retry)
         id: plan
         run: |
+          mkdir -p "$RUNNER_TEMP/publish-pack"
           node scripts/publish-gate.js plan-publish \
             --local-manifest "$RUNNER_TEMP/publish-pack/local-manifest.json" \
             | tee "$RUNNER_TEMP/publish-pack/publish-plan.json"
@@ -197,8 +202,100 @@ jobs:
             console.log("post-publish registry verification passed for both packages");
           ' "$RUNNER_TEMP/publish-pack/final-verify.json"
 
+  registry-acceptance:
+    # Plan step 16, automatable half: install the REGISTRY package (not a
+    # local tarball) into fresh profiles and prove the plugin lifecycle.
+    # Live provider-model smokes stay credential-bound acceptance evidence
+    # outside CI (see the acceptance status in the plan document).
+    needs: npm-publish
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.19.0', '24']
+      fail-fast: false
+    name: registry acceptance (Node ${{ matrix.node }})
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Activate pinned pnpm on PATH
+        run: |
+          # The repo pins packageManager=npm, so corepack strict mode refuses
+          # to activate pnpm here ("This project is configured to use npm").
+          export COREPACK_ENABLE_STRICT=0
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
+          pnpm --version
+      - name: Install the pinned real Harness CLI
+        run: |
+          npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+          dsh --version
+      - name: add → registry install activates the three routes at the exact released version
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-added.yml"
+          for route in opencode opencode-go zai; do
+            grep -q "$route" "$RUNNER_TEMP/dump-added.yml" || { echo "route $route missing from registry install"; exit 1; }
+          done
+          grep -q "OPENCODE_API_KEY" "$RUNNER_TEMP/dump-added.yml"
+          grep -q "ZAI_API_KEY" "$RUNNER_TEMP/dump-added.yml"
+          node - "$DSH_HOME/profiles/headless/package.json" "$VERSION" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const [manifestPath, version] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (typeof dep !== 'string' || dep.length === 0) {
+            throw new Error('profile manifest carries no companion dependency after registry add');
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('companion missing from dsh.profile.bundles after registry add');
+          }
+          const installed = JSON.parse(fs.readFileSync(
+            path.join(path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json'),
+            'utf8',
+          ));
+          if (installed.version !== version) {
+            throw new Error(`registry installed ${installed.version}, expected the exact released ${version}`);
+          }
+          EOF
+      - name: remove → registry package uninstalls cleanly, reinstall restores it
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_VERSION#v}"
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          dsh plugin --profile headless remove triss-dsh-provider-bundle
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-removed.yml"
+          if grep -q "triss-dsh-provider-bundle" "$RUNNER_TEMP/dump-removed.yml"; then
+            echo "companion still referenced after registry remove"; exit 1
+          fi
+          if grep -q "apiKeyEnv: OPENCODE_API_KEY" "$RUNNER_TEMP/dump-removed.yml"; then
+            echo "routes still active after registry remove"; exit 1
+          fi
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] !== undefined) {
+            throw new Error('dependency still present after registry remove');
+          }
+          if ((manifest.dsh?.profile?.bundles ?? []).includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles still lists the companion after registry remove');
+          }
+          EOF
+          dsh plugin --profile headless add -w "triss-dsh-provider-bundle@${VERSION}"
+          dsh --profile headless --dump-config > "$RUNNER_TEMP/dump-reinstalled.yml"
+          for route in opencode opencode-go zai; do
+            grep -q "$route" "$RUNNER_TEMP/dump-reinstalled.yml" || { echo "route $route missing after registry reinstall"; exit 1; }
+          done
+
   release:
-    needs: [standalone-smoke, npm-publish]
+    needs: [standalone-smoke, npm-publish, registry-acceptance]
     runs-on: ubuntu-latest
     permissions:
       contents: write

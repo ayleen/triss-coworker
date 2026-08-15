@@ -194,6 +194,64 @@ test('publish workflow gates both packages from one tag', () => {
   assert.match(workflow, /post-publish registry verification passed for both packages/);
 });
 
+test('publish workflow creates the pack workdir before the pack-inspect | tee pipeline', () => {
+  const workflow = readFileSyncWorkflow();
+  // Both sides of a shell pipeline start concurrently: unless mkdir -p runs
+  // BEFORE the pipeline, tee opens local-manifest.json before Node gets to
+  // its own mkdirSync() and dies with ENOENT (review §1 — reproduced 20/20
+  // on the runner shell; pack-inspect's internal mkdir cannot help its own
+  // stdout consumer).
+  const step = workflow.match(
+    /name: Inspect both packed tarballs before publishing\n\s+run: \|\n([\s\S]*?)(?=\n\s+- name:)/,
+  )?.[1];
+  assert.ok(step, 'the pack-inspect step must exist in publish.yml');
+  const mkdirIndex = step.indexOf('mkdir -p "$RUNNER_TEMP/publish-pack"');
+  const pipelineIndex = step.indexOf('node scripts/publish-gate.js pack-inspect');
+  assert.ok(mkdirIndex !== -1, 'the pack-inspect step must mkdir -p the workdir itself');
+  assert.ok(pipelineIndex !== -1, 'the step must run pack-inspect');
+  assert.ok(mkdirIndex < pipelineIndex, 'mkdir -p must precede the pack-inspect | tee pipeline');
+});
+
+test('publish workflow runs registry acceptance on the published package before releasing', () => {
+  const workflow = readFileSyncWorkflow();
+  // Plan step 16 (automatable half): the published REGISTRY package must be
+  // installed into fresh profiles — not re-packed locally — before the GitHub
+  // release is created (review §5).
+  assert.match(workflow, /registry-acceptance:/);
+  assert.match(workflow, /dsh plugin --profile headless add -w "triss-dsh-provider-bundle@\$\{VERSION\}"/);
+  assert.match(workflow, /dsh plugin --profile headless remove triss-dsh-provider-bundle/);
+  const releaseNeeds = workflow.match(/release:\n {4}needs: \[([^\]]+)\]/)?.[1];
+  assert.ok(releaseNeeds, 'release job must declare its needs');
+  for (const needed of ['standalone-smoke', 'npm-publish', 'registry-acceptance']) {
+    assert.ok(
+      releaseNeeds.split(',').map((s) => s.trim()).includes(needed),
+      `release job must wait for ${needed}`,
+    );
+  }
+});
+
+test('CHANGELOG integrity section pins the exact companion tarball bytes', () => {
+  // `npm pack` output is byte-deterministic (tar entries carry the fixed npm
+  // epoch mtime; verified identical across repeated runs and across npm
+  // 10.9.8 and 11.6.2), so the recorded release evidence must match the
+  // packed artifact exactly. A README edit after recording the hash used to
+  // silently invalidate the evidence (review §2) — this test makes that a
+  // hard failure.
+  const result = packAndInspect();
+  const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8');
+  const headerPattern = `### Artifact integrity \\(${result.companion.version}\\)`;
+  const headers = changelog.match(new RegExp(headerPattern, 'g')) ?? [];
+  assert.equal(headers.length, 1,
+    `expected exactly one Artifact integrity section for ${result.companion.version}, found ${headers.length}`);
+  const section = changelog.match(new RegExp(`${headerPattern}[\\s\\S]*?(?=\\n### |\\n## )`))?.[0];
+  assert.ok(section, `Artifact integrity section for ${result.companion.version} must exist`);
+  assert.ok(section.includes(result.companion.sha256),
+    `recorded sha256 does not match the packed tarball (${result.companion.sha256})`);
+  const sri = `sha512-${createHash('sha512').update(readFileSync(result.companion.path)).digest('base64')}`;
+  assert.ok(section.includes(sri),
+    `recorded sha512 integrity does not match the packed tarball (${sri})`);
+});
+
 function readFileSyncWorkflow() {
   return readFileSync(join(repoRoot, '.github', 'workflows', 'publish.yml'), 'utf8');
 }

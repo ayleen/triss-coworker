@@ -5,7 +5,10 @@
 const path = require('node:path');
 const { readFileSync } = require('node:fs');
 
-const root = path.join(__dirname, '..');
+// --root=<dir> lets tests run the gate against fixture trees; the default is
+// this repository checkout.
+const rootArg = process.argv.slice(2).find((arg) => arg.startsWith('--root='));
+const root = rootArg ? rootArg.slice('--root='.length) : path.join(__dirname, '..');
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`);
@@ -28,6 +31,20 @@ if (ws.version !== companionManifest.version) {
 const rootManifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 if (rootManifest.version !== companionManifest.version) {
   fail(`root version ${rootManifest.version} != companion version ${companionManifest.version} — the release train publishes both from one tag`);
+}
+
+// --- generated root lockfile fields must track the release version (plan:
+// "update the top-level and root-package version fields in package-lock.json";
+// review §6 — a gate that ignored these stayed green on drifted releases) ---
+if (lock.version !== rootManifest.version) {
+  fail(`top-level lockfile version ${lock.version} != package.json ${rootManifest.version} — regenerate the lockfile with npm`);
+}
+const rootEntry = lock.packages[''];
+if (!rootEntry) {
+  fail('packages[""] root entry missing from package-lock.json — regenerate the lockfile with npm');
+}
+if (rootEntry.version !== rootManifest.version) {
+  fail(`packages[""].version ${rootEntry.version} != package.json ${rootManifest.version} — regenerate the lockfile with npm`);
 }
 const wsEngines = ws.engines?.node;
 const manifestEngines = companionManifest.engines?.node;

@@ -174,24 +174,55 @@ jobs:
           done
           grep -q "OPENCODE_API_KEY" /tmp/lifecycle/dump-v1.yml
           grep -q "ZAI_API_KEY" /tmp/lifecycle/dump-v1.yml
-      - name: update (remove + add v2) → effective patch actually changes
+          # Manifest-level proof (review §4): dump-config alone does not show
+          # the dependency or the dsh.profile.bundles registry.
+          node - "$DSH_HOME/profiles/headless/package.json" "$V1" <<'EOF'
+          const [manifestPath, tarball] = process.argv.slice(2);
+          const manifest = JSON.parse(require('fs').readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (dep !== `file:${tarball}`) {
+            throw new Error(`dependency entry is '${dep}', expected 'file:${tarball}'`);
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('companion missing from dsh.profile.bundles after add');
+          }
+          EOF
+      - name: update (in-place add v2) → dependency, installed copy, and patch change
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
           V2=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*lifecycle*.tgz)
           test -n "$V2"
-          # dsh plugin add forwards to pnpm add, which is a no-op when the
-          # package name is already installed. The supported Harness update
-          # path is remove + add, verified live on dsh 0.1.0-rc.6: adding the
-          # v2 tarball over v1 leaves the v1 patch active.
-          dsh plugin --profile headless remove triss-dsh-provider-bundle
+          # The REAL update path (review §4): add v2 over v1 without remove.
+          # Verified live on dsh 0.1.0-rc.6 × pnpm 9.0.0: `dsh plugin add`
+          # forwards to pnpm, which replaces the file: dependency, swaps
+          # node_modules, and the effective patch changes in place. (An
+          # earlier revision claimed pnpm add is a no-op here and fell back
+          # to remove+add — disproven by reproduction on 2026-08-15.)
           dsh plugin --profile headless add -w "$V2"
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-v2.yml
           grep -q "LIFECYCLE_MARKER_V2" /tmp/lifecycle/dump-v2.yml || {
-            echo "effective patch did not change after update"; exit 1;
+            echo "effective patch did not change after in-place update"; exit 1;
           }
           # The v2 patch REPLACES v1: the original three routes must still be
           # intact alongside the marker (composition, not accumulation).
           grep -q "ZAI_API_KEY" /tmp/lifecycle/dump-v2.yml
+          node - "$DSH_HOME/profiles/headless/package.json" "$V2" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const [manifestPath, tarball] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (dep !== `file:${tarball}`) {
+            throw new Error(`dependency entry is '${dep}', expected the v2 'file:${tarball}'`);
+          }
+          const installed = JSON.parse(fs.readFileSync(
+            path.join(path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json'),
+            'utf8',
+          ));
+          if (!installed.version.endsWith('-lifecycle.2')) {
+            throw new Error(`node_modules still holds ${installed.version} after in-place update`);
+          }
+          EOF
       - name: remove → dependency and bundle entry gone, dormant posture
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
@@ -203,6 +234,24 @@ jobs:
           if grep -q "apiKeyEnv: OPENCODE_API_KEY" /tmp/lifecycle/dump-removed.yml; then
             echo "routes still active after remove"; exit 1
           fi
+          # Manifest-level proof (review §4): the dependency must be gone and
+          # dsh.profile.bundles must drop the companion while keeping the
+          # profile template bundles.
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] !== undefined) {
+            throw new Error(`dependency still present after remove: ${manifest.dependencies['triss-dsh-provider-bundle']}`);
+          }
+          const bundles = manifest.dsh?.profile?.bundles ?? [];
+          if (bundles.includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles still lists the companion after remove');
+          }
+          for (const templateBundle of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless']) {
+            if (!bundles.includes(templateBundle)) {
+              throw new Error(`template bundle ${templateBundle} disappeared on remove`);
+            }
+          }
+          EOF
       - name: reinstall → composition restored
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
@@ -212,7 +261,16 @@ jobs:
           for route in opencode opencode-go zai; do
             grep -q "$route" /tmp/lifecycle/dump-reinstalled.yml || { echo "route $route missing after reinstall"; exit 1; }
           done
-      - name: Repeat add+dump through an npx-style Harness anchor
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] === undefined) {
+            throw new Error('dependency missing after reinstall');
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles missing the companion after reinstall');
+          }
+          EOF
+      - name: Full add/remove lifecycle through an npx-style Harness anchor
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-npx-home"
           V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
@@ -221,6 +279,14 @@ jobs:
           for route in opencode opencode-go zai; do
             grep -q "$route" /tmp/lifecycle/dump-npx.yml || { echo "route $route missing via npx anchor"; exit 1; }
           done
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless remove triss-dsh-provider-bundle
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx-removed.yml
+          if grep -q "triss-dsh-provider-bundle" /tmp/lifecycle/dump-npx-removed.yml; then
+            echo "companion still referenced after npx-anchor remove"; exit 1
+          fi
+          if grep -q "apiKeyEnv: OPENCODE_API_KEY" /tmp/lifecycle/dump-npx-removed.yml; then
+            echo "routes still active after npx-anchor remove"; exit 1
+          fi
 
   standalone-build:
     needs: test
