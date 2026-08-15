@@ -39,9 +39,22 @@ export function readBoundedReviewStdin({ stream, maxBytes = REVIEW_STDIN_MAX_BYT
       if (failed) return;
       failed = true;
       cleanup();
+      const buf = Buffer.concat(chunks);
+      // Strict UTF-8 validation (the legacy reader's fatalUtf8 semantics):
+      // toString('utf8') silently replaces malformed sequences with U+FFFD.
+      // A round-trip check catches that; replacement chars are rejected.
+      const text = buf.toString('utf8');
+      if (Buffer.byteLength(text, 'utf8') !== buf.length || text.includes('\uFFFD')) {
+        resolve({
+          ok: false,
+          code: 'TRISS_REVIEW_STDIN_UTF8',
+          message: 'stdin input is not valid UTF-8',
+        });
+        return;
+      }
       resolve({
         ok: true,
-        text: Buffer.concat(chunks).toString('utf8'),
+        text,
         bytes: total,
       });
     };

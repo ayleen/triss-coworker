@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -189,7 +189,7 @@ test('BLACKBOX-P0-2: review --stdin rejects cap-plus-one without partial output'
 // ─── 3. single-payload planner aggregate fail-closed ─────────────────────────
 
 test('BLACKBOX-P0-3: many small files whose SUM exceeds singleMaxBytes fail closed (no silent truncation)', async () => {
-  const { parseUnifiedDiff, planSingleReviewPayload } = await import('../src/review-payload.js');
+  const { planSingleReviewPayload } = await import('../src/review-payload.js');
   const { reviewLimitConfig } = await import('../src/config.js');
   const limits = reviewLimitConfig().limits;
   // Each section is small enough to fit individually; their SUM is not.

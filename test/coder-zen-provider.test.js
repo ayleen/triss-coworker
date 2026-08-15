@@ -221,7 +221,9 @@ test(
       },
     );
     assert.ok(capturedEnv, 'spawn received an env');
-    assert.equal(capturedEnv.OPENCODE_API_KEY, 'sk-zen-fake');
+    // Release A: proxy token, never the raw credential.
+    assert.match(capturedEnv.OPENCODE_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(capturedEnv.OPENCODE_API_KEY, 'sk-zen-fake');
     // Minimal-allowlist posture: a key that is not set never appears.
     assert.equal('ZHIPU_API_KEY' in capturedEnv, false);
     // Sanity: the base allowlist still flows through.
@@ -245,7 +247,9 @@ test(
       },
     );
     assert.ok(capturedEnv, 'spawn received an env');
-    assert.equal(capturedEnv.ZHIPU_API_KEY, 'zk-fake');
+    // Release A: proxy token, never the raw credential.
+    assert.match(capturedEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(capturedEnv.ZHIPU_API_KEY, 'zk-fake');
     // The Zen key is configured but this is a GLM run — it must NOT leak in.
     assert.equal('OPENCODE_API_KEY' in capturedEnv, false);
   }),

@@ -112,7 +112,7 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
     process.stdout.write = () => true;
     let diagnostic = '';
     process.stderr.write = (chunk) => { diagnostic += String(chunk); return true; };
-    await runReviewWithDeps('42', { provider: 'glm', model: 'pro', noStream: true }, {
+    await runReviewWithDeps('42', { provider: 'glm', model: 'pro', noStream: true, issue: 'PROJ-42' }, {
       resolveModelRequest: (input) => ({ provider: input.provider, model: 'glm-5.2' }),
       loadLinkedIssue: async (key) => {
         linkedIssue = key;

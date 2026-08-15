@@ -1965,9 +1965,13 @@ export function coderCredentialEndpoint(credEnv, modelUsed) {
       // Kimi for Coding subscription endpoint (api.moonshot.ai compat scope).
       return { endpoint: 'https://api.moonshot.ai/v1', pathPrefix: '/v1' };
     case 'TRISS_WORKER_API_KEY': {
-      // The worker profile pins its own base URL (default DeepSeek).
+      // The worker profile pins its own base URL (default DeepSeek). A test
+      // or partial environment without TRISS_WORKER_BASE_URL falls back to
+      // the same default the worker client itself uses.
       const settings = readWorkerConfigSnapshot({ scope: 'effective' });
-      return { endpoint: settings.baseUrl, pathPrefix: new URL(settings.baseUrl).pathname.replace(/\/+$/, '') || '/' };
+      const baseUrl = settings.baseUrl || 'https://api.deepseek.com/v1';
+      if (!/^https:\/\//.test(String(baseUrl))) return null;
+      return { endpoint: baseUrl, pathPrefix: new URL(baseUrl).pathname.replace(/\/+$/, '') || '/' };
     }
     default:
       return null;

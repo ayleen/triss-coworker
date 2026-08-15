@@ -72,17 +72,31 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       );
     }
     // Release B: bounded streaming stdin — cap-plus-one bytes, fail closed
-    // on overflow instead of buffering unbounded input.
-    const bounded = await (deps.readBoundedStdin || readBoundedReviewStdin)({
-      stream: deps.stdinStream || process.stdin,
-      maxBytes: REVIEW_STDIN_MAX_BYTES,
-    });
-    if (!bounded.ok) {
-      throw new Error(
-        `${bounded.message || 'bounded stdin read failed'}. Try: git diff | triss review --stdin`,
-      );
+    // on overflow instead of buffering unbounded input. The legacy
+    // deps.readStdin seam (tests, embedders) is honoured as a plain string
+    // source and cap-checked the same way; the production path always uses
+    // the bounded streaming reader.
+    const legacyReader = typeof deps.readStdin === 'function' ? deps.readStdin : null;
+    if (legacyReader) {
+      stdinDiff = await legacyReader({ trim: false, fatalUtf8: true });
+      const bytes = Buffer.byteLength(String(stdinDiff), 'utf8');
+      if (bytes > REVIEW_STDIN_MAX_BYTES) {
+        throw new Error(
+          `stdin input of ${bytes} bytes exceeds the ${REVIEW_STDIN_MAX_BYTES}-byte cap. Try: git diff -- <path> | triss review --stdin`,
+        );
+      }
+    } else {
+      const bounded = await (deps.readBoundedStdin || readBoundedReviewStdin)({
+        stream: deps.stdinStream || process.stdin,
+        maxBytes: REVIEW_STDIN_MAX_BYTES,
+      });
+      if (!bounded.ok) {
+        throw new Error(
+          `${bounded.message || 'bounded stdin read failed'}. Try: git diff | triss review --stdin`,
+        );
+      }
+      stdinDiff = bounded.text;
     }
-    stdinDiff = bounded.text;
     if (typeof stdinDiff !== 'string') {
       throw new Error(
         'stdin input must be UTF-8 text. Try: git diff | triss review --stdin',
