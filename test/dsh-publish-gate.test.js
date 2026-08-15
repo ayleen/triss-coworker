@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  packAndInspect, planPublication, verifyRegistryPackage, verifyVersions,
+  packAndInspect, planPublication, selectLocalPackage, verifyRegistryPackage, verifyVersions,
 } from '../scripts/publish-gate.js';
 
 const COMPANION_NAME = 'triss-dsh-provider-bundle';
@@ -228,6 +228,27 @@ test('publish workflow runs registry acceptance on the published package before 
       `release job must wait for ${needed}`,
     );
   }
+});
+
+test('verify-registry resolves the local package from either manifest shape', () => {
+  const direct = { name: ROOT_NAME, version: '0.35.0', sha256: 'a'.repeat(64) };
+  assert.equal(selectLocalPackage(direct), direct,
+    'a direct {name, version, sha256} object passes through untouched');
+  const packInspect = {
+    ok: true,
+    companion: { name: COMPANION_NAME, version: '0.35.0', sha256: 'b'.repeat(64) },
+    root: direct,
+  };
+  assert.equal(selectLocalPackage(packInspect, 'companion'), packInspect.companion,
+    '--package companion selects the companion entry of a pack-inspect manifest');
+  assert.equal(selectLocalPackage(packInspect, 'root'), packInspect.root,
+    '--package root selects the root entry');
+  // The old CLI died on the pack-inspect manifest with a confusing
+  // "expects name …, got undefined" — the selector must fail loud and helpful.
+  assert.throws(
+    () => selectLocalPackage(packInspect, undefined),
+    /--package companion or --package root/,
+  );
 });
 
 test('CHANGELOG integrity section pins the exact companion tarball bytes', () => {

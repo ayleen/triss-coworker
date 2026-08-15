@@ -184,6 +184,26 @@ export async function verifyRegistryPackage(local, {
 export const verifyRegistryCompanion = verifyRegistryPackage;
 
 /**
+ * Resolve the `local` package object for the verify-registry CLI from either
+ * shape it may receive: a direct `{name, version, sha256}` object, or the
+ * pack-inspect manifest the publish workflow actually writes
+ * (`{ok, companion, root}`), in which case --package selects the entry.
+ * Passing the pack-inspect manifest without a selector used to die with a
+ * confusing "expects name …, got undefined" (self-review finding).
+ */
+export function selectLocalPackage(manifest, packageName) {
+  const isPackInspectManifest = Boolean(manifest)
+    && typeof manifest === 'object'
+    && ('companion' in manifest || 'root' in manifest);
+  if (!isPackInspectManifest) return manifest;
+  const entry = manifest[packageName];
+  if (!entry || !entry.name) {
+    die(`pack-inspect manifest needs --package companion or --package root, got ${String(packageName)}`);
+  }
+  return entry;
+}
+
+/**
  * Safe-retry publication plan for the two-package release train (review §2):
  * consult the live registry for BOTH packages and decide what still needs
  * publishing. A package already published with byte-identical content is
@@ -235,7 +255,9 @@ async function main() {
     return;
   }
   if (command === 'verify-registry') {
-    const local = JSON.parse(readFileSync(args['local-manifest'], 'utf8'));
+    const manifest = JSON.parse(readFileSync(args['local-manifest'], 'utf8'));
+    const packageName = args.package === true ? undefined : args.package;
+    const local = selectLocalPackage(manifest, packageName);
     const result = await verifyRegistryPackage(local);
     process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
     return;

@@ -92,7 +92,7 @@ jobs:
       - name: Install tarball with pnpm in a fresh project
         run: |
           corepack enable
-          corepack prepare pnpm@9 --activate
+          corepack prepare pnpm@9.0.0 --activate
           mkdir /tmp/consumer
           cd /tmp/consumer
           pnpm init
