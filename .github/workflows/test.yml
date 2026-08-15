@@ -103,6 +103,11 @@ jobs:
   dsh-lifecycle:
     runs-on: ubuntu-latest
     name: dsh plugin lifecycle (add/update/remove/reinstall, pnpm on PATH)
+    env:
+      # The repo manifest pins packageManager=npm; corepack strict mode would
+      # refuse to run pnpm from inside the checkout. The lifecycle exercises
+      # pnpm as a *consumer* package manager, so opt out of the strict pin.
+      COREPACK_ENABLE_STRICT: 0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
