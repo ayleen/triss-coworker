@@ -34,7 +34,15 @@ export async function withDisposablePrRepository({ trissRootPath, quota, managed
   if (typeof callback !== 'function') throw new TypeError('callback is required');
   const run = await createPrRunDirectory({ trissRootPath, quota, managedRoot, parentHandle });
   try {
-    return await callback(run);
+    const value = await callback(run);
+    // P1 fix: complete the lifecycle — a finished run passes through
+    // release_pending into acknowledged BEFORE recovery/cleanup, so
+    // cleanPrRunDirectory (acknowledged-markers-only) actually removes the
+    // directory. Without this every run leaked until the 3-run cap blocked
+    // the fourth.
+    await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'release_pending' } });
+    await publishPrRunState({ runDir: run.runDir, runId: run.runId, record: { state: 'acknowledged' } });
+    return value;
   } finally {
     // Idempotent recovery + exact cleanup (acknowledged markers only).
     await recoverPrRunDirectories({ trissRootPath });

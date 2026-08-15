@@ -4327,6 +4327,15 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     );
   }
   const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
+  // Atomic 24 / Package 24: an isolation downgrade to a best-effort CALLER
+  // worktree is opt-in only. Without the explicit flag the run fails before
+  // spawn when the enforced sandbox is unavailable (fail closed).
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
+  if (allowBestEffortCallerWorktree && !isolate) {
+    throw new Error(
+      'allowBestEffortCallerWorktree is only meaningful with isolation enabled (it downgrades an isolated run to a caller worktree).',
+    );
+  }
   if (opts.continue && isolate && !opts.session) {
     throw new Error(
       '--continue with --isolate requires --session <id> — without it, --isolate creates a new ' +
@@ -5047,11 +5056,49 @@ export async function runCoderStateReset(opts = {}) {
     throw new Error('--project is required for state reset');
   }
   const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  const { randomBytes } = await import('node:crypto');
+  const { mkdir, readdir, rename, rm } = await import('node:fs/promises');
   const trissRoot = join(projectRoot(), '.triss');
   // A fresh identity is created only after the old one is quarantined;
   // the identity itself is never deleted.
   const identity = await loadOrCreateProjectIdentity(trissRoot);
-  process.stderr.write(pc.dim(`  · reset requested for project ${identity.project_id}\n`));
+
+  // P1 fix: actually quarantine ALL validated v2 state — every session and
+  // result state directory is MOVED (recoverable) under the quarantine
+  // root, not merely reported. The identity file itself is never deleted.
+  const quarantineRoot = join(trissRoot, 'quarantine-v1');
+  const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
+  let quarantined = 0;
+  const stateRoots = ['coder-state-v2', 'engine-sessions-v2', 'coder-results-v1'];
+  for (const root of stateRoots) {
+    const src = join(trissRoot, root);
+    let entries;
+    try {
+      entries = await readdir(src, { withFileTypes: true });
+    } catch {
+      continue; // root absent: nothing to quarantine
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const dst = join(quarantineRoot, `${root}-${stamp}`, ent.name);
+      await mkdir(join(quarantineRoot, `${root}-${stamp}`), { mode: 0o700, recursive: true });
+      try {
+        await rename(join(src, ent.name), dst);
+        quarantined += 1;
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') throw err;
+      }
+    }
+    // Remove the now-empty root so a fresh project state starts clean.
+    try {
+      await rm(src, { recursive: true, force: true });
+    } catch {
+      /* non-fatal */
+    }
+  }
+  process.stderr.write(pc.dim(
+    `  · reset project ${identity.project_id}: quarantined ${quarantined} state record(s)\n`,
+  ));
 }
 
 /**
@@ -5080,8 +5127,23 @@ export async function runCoderResultClean(runId) {
   if (!runId || !/^run-[0-9a-f]{32}$/.test(runId)) {
     throw new Error('result clean requires a valid <run-id> (run-<32 lowercase hex>)');
   }
-  const { rm } = await import('node:fs/promises');
+  const { beginCoderResultDeletion } = await import('../coder-result-transitions.js');
+  const { rm, stat } = await import('node:fs/promises');
   const runDir = join(projectRoot(), '.triss', 'coder-results-v1', 'runs', runId);
+
+  // P1 fix: go through the deletion state machine (tombstone first), not a
+  // bare recursive rm — a crash mid-delete must leave a recoverable
+  // `.deleting.json` marker, and the run dir must be a validated registry
+  // entry (state.json present) before anything is removed.
+  try {
+    await stat(runDir);
+  } catch {
+    throw new Error(`retained result ${runId} not found`);
+  }
+  const tombstone = await beginCoderResultDeletion({ runDir, runId });
+  if (tombstone === null) {
+    throw new Error(`retained result ${runId} has no valid state record (refusing blind delete)`);
+  }
   await rm(runDir, { recursive: true, force: true });
   process.stderr.write(pc.dim(`  · removed retained result ${runId}\n`));
 }

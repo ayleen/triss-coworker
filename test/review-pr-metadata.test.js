@@ -46,7 +46,7 @@ test('acquires and validates PR metadata from gh (pure Package 17 validation)', 
   assert.equal(sawArgs.opts.timeout, GH_METADATA_DEADLINE_MS);
 });
 
-test('a forked PR is reported with fork=true and its actual owner', () => {
+test('a forked PR is reported with fork=true and the pinned base owner', () => {
   const sh = () => ({
     status: 0,
     stdout: Buffer.from(
@@ -57,15 +57,16 @@ test('a forked PR is reported with fork=true and its actual owner', () => {
         baseRefName: 'main',
         headRefName: 'patch-1',
         isCrossRepository: true,
-        owner: { login: 'contributor' },
-        repo: { name: 'widgets' },
       }),
     ),
   });
   const r = acquirePrMetadata(sh, { owner: 'acme', repo: 'widgets', number: 7 });
   assert.equal(r.ok, true);
   assert.equal(r.meta.fork, true);
-  assert.equal(r.meta.owner, 'contributor');
+  // gh pr view has no owner/repo JSON fields; the base owner/repo are the
+  // caller's --repo arguments, not parsed from the payload.
+  assert.equal(r.meta.owner, 'acme');
+  assert.equal(r.meta.repo, 'widgets');
 });
 
 // ─── failure modes ───────────────────────────────────────────────────────────

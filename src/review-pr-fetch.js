@@ -106,9 +106,33 @@ export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, baseOid, hea
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fetched OIDs do not match the exact PR identity' };
   }
 
-  // Fetch complete: release the transient filesystem reservation.
-  quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
-  return { ok: true, base_oid: resolvedBase, head_oid: resolvedHead };
+  // P1 fix: measure the actual pack usage against the 120 MiB pack quota.
+  // The declared bound must be enforced by measurement, not assumption.
+  const { readdir, stat } = await import('node:fs/promises');
+  let packBytes = 0;
+  try {
+    const packDir = join(bareDir, 'objects', 'pack');
+    const entries = await readdir(packDir);
+    for (const name of entries) {
+      if (name.endsWith('.pack') || name.endsWith('.idx')) {
+        const st = await stat(join(packDir, name));
+        packBytes += st.size;
+      }
+    }
+  } catch {
+    /* no pack dir = nothing fetched locally (unexpected but not fatal) */
+  }
+  if (packBytes > PR_FETCH_PACK_QUOTA_BYTES) {
+    quota.accountRelease(PR_FETCH_FS_QUOTA_BYTES);
+    return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `PR fetch pack exceeds ${PR_FETCH_PACK_QUOTA_BYTES} bytes` };
+  }
+
+  // P1 fix: keep the filesystem reservation held while the bare repo is on
+  // disk. The caller (withDisposablePrRepository -> cleanPrRunDirectory)
+  // releases the 128 MiB reservation when the directory is actually
+  // removed — releasing here would let the quota admit more runs than the
+  // disk actually holds.
+  return { ok: true, base_oid: resolvedBase, head_oid: resolvedHead, fsReservationBytes: PR_FETCH_FS_QUOTA_BYTES };
 }
 
 export { join as pathJoin };

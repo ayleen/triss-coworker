@@ -88,21 +88,31 @@ function splitSections(text) {
 
 /**
  * Parse the two path tokens out of a `diff --git a/old b/new` header line.
- * Handles BOTH unquoted (`a/foo b/foo`) and Git C-quoted
- * (`"a/foo bar.txt" "b/foo bar.txt"`) forms with an escape-aware scanner —
- * a naive `(.*) (.*)` split breaks on spaces inside quoted tokens.
+ * Handles ALL THREE forms real Git emits:
+ *   1. unquoted without spaces:      `a/foo b/foo`
+ *   2. C-quoted (quotepath=true):    `"a/foo bar.txt" "b/foo bar.txt"`
+ *   3. UNQUOTED WITH SPACES (quotepath=false): `a/foo bar.txt b/foo bar.txt`
+ * Form 3 is ambiguous; resolved by the `a/...`/`b/...` prefix anchors: a
+ * new token only starts at a whitespace-preceded `b/` (the second path),
+ * and a trailing tab (git appends one when the path ends with a space) is
+ * stripped. A naive two-token split breaks forms 2 and 3.
  * Returns [oldToken, newToken] or null.
  */
 function parseDiffGitHeaderPaths(header) {
-  const rest = String(header).slice('diff --git '.length);
-  const tokens = [];
-  let i = 0;
-  while (tokens.length < 2 && i < rest.length) {
-    // Skip separating whitespace before a token.
-    while (i < rest.length && /\s/.test(rest[i])) i += 1;
-    if (i >= rest.length) break;
-    if (rest[i] === '"') {
-      // Quoted token: consume escapes until the closing quote.
+  const rest = String(header).slice('diff --git '.length).replace(/\t+$/, '');
+  // Fast path: exactly two whitespace-free tokens.
+  const fast = rest.split(/\s+/);
+  if (fast.length === 2 && !fast[0].startsWith('"') && !fast[1].startsWith('"')) {
+    return [fast[0], fast[1]];
+  }
+  // Quoted form: escape-aware scan of the two quoted tokens.
+  if (rest.startsWith('"')) {
+    const tokens = [];
+    let i = 0;
+    while (tokens.length < 2 && i < rest.length) {
+      while (i < rest.length && /\s/.test(rest[i])) i += 1;
+      if (i >= rest.length) break;
+      if (rest[i] !== '"') return null;
       let token = '"';
       i += 1;
       let closed = false;
@@ -124,16 +134,18 @@ function parseDiffGitHeaderPaths(header) {
       }
       if (!closed) return null;
       tokens.push(token);
-    } else {
-      // Unquoted token: runs until the next whitespace.
-      let j = i;
-      while (j < rest.length && !/\s/.test(rest[j])) j += 1;
-      tokens.push(rest.slice(i, j));
-      i = j;
     }
+    if (tokens.length === 2) return tokens;
+    return null;
   }
-  if (tokens.length !== 2) return null;
-  return tokens;
+  // Unquoted-with-spaces form: split at the LAST ` b/` anchor. The first
+  // token must start with `a/` and the second with `b/` for this to be a
+  // genuine two-path header.
+  const anchor = rest.lastIndexOf(' b/');
+  if (rest.startsWith('a/') && anchor > 2) {
+    return [rest.slice(0, anchor), rest.slice(anchor + 1)];
+  }
+  return null;
 }
 
 /**

@@ -243,9 +243,14 @@ const SEALED_ATTRIBUTES = Object.freeze([
  */
 export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors, deadlineMs = 30000, maxBytes = 16 * 1024 * 1024 }) {
   if (typeof sh !== 'function') throw new TypeError('sh is required');
-  if (!Array.isArray(selectors) || selectors.length === 0) {
-    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'selectors are required' };
+  if (!Array.isArray(selectors)) {
+    return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'selectors must be an array' };
   }
+  // P1 fix: an EMPTY selector list means FULL-PR scope — default to every
+  // inventoried path. (An explicit empty list cannot be distinguished from
+  // "no selectors given", and the inventory-derived full set is exactly the
+  // bounded pathspec the sealed diff needs.)
+  const effectiveSelectors = selectors.length > 0 ? selectors : [':/'];
   const run = (args) =>
     sh(gitArgs({}, args), { cwd, env: { ...process.env, ...SANITIZED_ENV }, encoding: 'buffer', timeout: deadlineMs });
 
@@ -254,7 +259,7 @@ export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors,
   const out = run([
     ...SEALED_ATTRIBUTES,
     'diff', '--no-ext-diff', '--text', '--no-color', '--unified=3',
-    baseOid, headOid, '--', ...selectors,
+    baseOid, headOid, '--', ...effectiveSelectors,
   ]);
   if (out.status !== 0) {
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `selected diff failed: ${String(out.stderr || '').slice(0, 200)}` };

@@ -49,7 +49,29 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
 
   let existing;
   try {
-    existing = await readFile(identityPath, 'utf8');
+    // P1 fix: enforce the documented no-follow + 4 KiB cap on read. A plain
+    // readFile follows symlinks and buffers the whole file first; here the
+    // lstat check rejects non-regular files and the read is capped by the
+    // stated identity bound.
+    const st = await lstat(identityPath);
+    if (!st.isFile()) {
+      const e = new Error('coder-state: project identity is not a regular file (no-follow, fail closed)');
+      e.code = 'IDENTITY_INVALID';
+      throw e;
+    }
+    if (st.size > STATE_LIMITS.identityMaxBytes) {
+      const e = new Error('coder-state: project identity exceeds 4 KiB cap (fail closed)');
+      e.code = 'IDENTITY_OVERSIZE';
+      throw e;
+    }
+    const handle = await open(identityPath, 'r');
+    try {
+      const buf = Buffer.alloc(STATE_LIMITS.identityMaxBytes + 1);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      existing = buf.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await handle.close();
+    }
   } catch (err) {
     if (err && err.code !== 'ENOENT') throw err;
   }

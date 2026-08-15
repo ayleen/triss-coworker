@@ -14,7 +14,11 @@ import { parseUnifiedDiff, planSequentialShards } from './review-payload.js';
 import { reviewLimitConfig } from './config.js';
 import { executeReviewPlan } from './review-executor.js';
 import { resolveModelRequest } from './models.js';
-import { chat, responseText, assertProviderText } from './client.js';
+// P1 fix: assertProviderText is exported from provider-errors.js, NOT
+// client.js — the previous import crashed module load the moment any
+// credential was present, masquerading as an environment block.
+import { chat, responseText } from './client.js';
+import { assertProviderText } from './provider-errors.js';
 
 export async function runLiveShardedReview() {
   const limits = reviewLimitConfig().limits;

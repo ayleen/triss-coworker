@@ -227,11 +227,22 @@ test('REVIEW-GIT-SELECTED-03: a missing selector yields an empty byte-identical 
   assert.equal(r.bytes, 0);
 });
 
-test('REVIEW-GIT-SELECTED-04: an empty selector list fails before any git access', () => {
-  const sh = fakeSh({});
+test('REVIEW-GIT-SELECTED-04: an empty selector list means full scope (P1 fix)', () => {
+  let called = false;
+  const sh = (args) => {
+    called = true;
+    const key = args.join(' ');
+    if (key.includes('diff') && args.includes('--')) {
+      // The full-scope pathspec `:/` must be used instead of failing.
+      assert.ok(args.includes(':/'), 'empty selectors must expand to the :/ full-scope pathspec');
+      return { status: 0, stdout: Buffer.from('full diff') };
+    }
+    return { status: 1, stdout: '', stderr: key };
+  };
   const r = acquireSelectedLocalDiff(sh, { cwd: CWD, baseOid: 'b'.repeat(40), headOid: 'a'.repeat(40), selectors: [] });
-  assert.equal(r.ok, false);
-  assert.equal(r.code, 'TRISS_REVIEW_INVALID_INPUT');
+  assert.equal(called, true);
+  assert.equal(r.ok, true);
+  assert.equal(r.diff, 'full diff');
 });
 
 test('REVIEW-GIT-SELECTED-05: selected content above the cap fails closed', () => {

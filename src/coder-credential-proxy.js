@@ -232,7 +232,7 @@ export async function startCoderCredentialProxy(opts = {}) {
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, LOOPBACK_HOST, resolve);
+    server.listen(opts.port ?? 0, opts.host || LOOPBACK_HOST, resolve);
   });
   // CONNECT never reaches the `request` handler in Node — it is emitted as a
   // separate `connect` event. Reject it explicitly so no tunnel can ever be

@@ -146,8 +146,13 @@ test('result clean validates the run-id grammar and never accepts a slug', async
   await assert.rejects(() => runCoderResultClean('task-a', {}), /run-<32 lowercase hex>/);
   await assert.rejects(() => runCoderResultClean('', {}), /run-<32 lowercase hex>/);
   await assert.rejects(() => runCoderResultClean(null, {}), /run-<32 lowercase hex>/);
-  // A valid run id passes the grammar gate (the artifact may be absent).
-  await assert.doesNotReject(() => runCoderResultClean('run-'.concat('a'.repeat(32)), {}));
+  // P1 fix: a valid run id whose artifact is ABSENT fails closed — clean is
+  // a state-machine delete over a validated registry entry, never a blind
+  // no-op rm.
+  await assert.rejects(
+    () => runCoderResultClean('run-'.concat('a'.repeat(32)), {}),
+    /not found/,
+  );
 });
 
 test('result-state records persist and list under the runs root', async () => {

@@ -17,9 +17,13 @@ import { validatePrMetadata } from './review-pr-identity.js';
 export const GH_METADATA_DEADLINE_MS = 30000;
 export const GH_METADATA_MAX_BYTES = 256 * 1024;
 
+// NOTE: `owner` and `repo` are NOT valid `gh pr view --json` fields (the
+// supported surface has headRepository/headRepositoryOwner instead); the
+// base owner/repo are already pinned by the `--repo` flag, so they come
+// from the caller's arguments rather than the JSON payload.
 const GH_METADATA_JSON_FIELDS = [
   'number', 'baseRefOid', 'headRefOid', 'baseRefName', 'headRefName',
-  'isCrossRepository', 'owner', 'repo',
+  'isCrossRepository',
 ].join(',');
 
 /**
@@ -82,8 +86,8 @@ export function acquirePrMetadata(sh, { owner, repo, number, deadlineMs = GH_MET
     base_ref: parsed.baseRefName,
     head_ref: parsed.headRefName,
     fork: Boolean(parsed.isCrossRepository),
-    owner: parsed.owner?.login ?? owner,
-    repo: parsed.repo?.name ?? repo,
+    owner,
+    repo,
   };
   const validated = validatePrMetadata(meta);
   if (!validated.ok) {

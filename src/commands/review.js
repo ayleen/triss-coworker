@@ -74,7 +74,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     // Release B: bounded streaming stdin — cap-plus-one bytes, fail closed
     // on overflow instead of buffering unbounded input.
     const bounded = await (deps.readBoundedStdin || readBoundedReviewStdin)({
-      stream: process.stdin,
+      stream: deps.stdinStream || process.stdin,
       maxBytes: REVIEW_STDIN_MAX_BYTES,
     });
     if (!bounded.ok) {
@@ -236,6 +236,18 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
 
     if (!result.ok) {
       process.stderr.write(pc.dim(`[triss/review] shard execution failed: ${result.message}\n`));
+      // Structured partial output: only the per-shard verdicts that COMPLETED
+      // before the failure are surfaced (never a raw diff, never a partial
+      // shard body).
+      if (Array.isArray(result.shards)) {
+        for (const shard of result.shards) {
+          if (shard && shard.verdict !== undefined) {
+            process.stdout.write(`--- shard ${shard.shard_index} (completed before failure) ---\n`);
+            process.stdout.write(`${shard.verdict}\n`);
+          }
+        }
+      }
+      process.stdout.write('global verdict: unavailable_for_sharded\n');
       process.exitCode = result.exit ?? REVIEW_EXIT_CODES.provider;
       return undefined;
     }

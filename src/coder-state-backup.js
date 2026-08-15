@@ -289,6 +289,39 @@ export async function validateCoderV2Backup(backupDir) {
     reasons.push('completion marker hash does not match manifest');
   }
 
+  // P1 fix: strict entry-schema re-validation BEFORE any path join. A
+  // manifest is untrusted input at validation time — entry.path values like
+  // `../../target` must be rejected instead of escaping the backup root,
+  // and each entry must be a well-formed {path, sha256, size} record.
+  if (!Array.isArray(manifest.entries)) {
+    return { valid: false, reasons: [...reasons, 'manifest entries must be an array'] };
+  }
+  if (manifest.entries.length > BACKUP_LIMITS.maxEntries) {
+    return { valid: false, reasons: [...reasons, `manifest entries exceed ${BACKUP_LIMITS.maxEntries} cap`] };
+  }
+  for (const entry of manifest.entries) {
+    if (!entry || typeof entry !== 'object') {
+      return { valid: false, reasons: [...reasons, 'manifest entry is not an object'] };
+    }
+    if (typeof entry.path !== 'string' || entry.path.length === 0) {
+      return { valid: false, reasons: [...reasons, 'manifest entry path must be a non-empty string'] };
+    }
+    if (Buffer.byteLength(entry.path, 'utf8') > BACKUP_LIMITS.maxPathBytes) {
+      return { valid: false, reasons: [...reasons, `manifest entry path exceeds ${BACKUP_LIMITS.maxPathBytes} bytes`] };
+    }
+    // Traversal containment: the resolved entry must stay under the backup
+    // root's state/ directory (no absolute paths, no .., no escaping).
+    if (entry.path.startsWith('/') || entry.path.includes('..')) {
+      return { valid: false, reasons: [...reasons, `manifest entry path escapes backup root: ${entry.path}`] };
+    }
+    if (typeof entry.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
+      return { valid: false, reasons: [...reasons, `manifest entry sha256 malformed: ${entry.path}`] };
+    }
+    if (!Number.isInteger(entry.size) || entry.size < 0 || entry.size > BACKUP_LIMITS.maxFileBytes) {
+      return { valid: false, reasons: [...reasons, `manifest entry size malformed: ${entry.path}`] };
+    }
+  }
+
   // Verify every backed-up entry exists and hashes match.
   for (const entry of manifest.entries) {
     const dst = join(backupDir, 'state', entry.path);

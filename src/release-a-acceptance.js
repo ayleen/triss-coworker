@@ -403,7 +403,9 @@ export async function runSyntheticReleaseC({ log = () => {} } = {}) {
       fail('sharding order', planned.error);
     } else {
       const shards = planned.plan.shards;
-      // Source-ordered: the first shard starts with a.txt, the last ends with z.txt.
+      // First-seen source order (P2 fix): z.txt appears FIRST in the diff,
+      // so the first shard starts with z.txt; the last shard ends with the
+      // last-seen file (m.txt). Alphabetical order is a contract violation.
       const first = shards[0].sections[0].new_path;
       const last = shards[shards.length - 1].sections.at(-1).new_path;
       // Whole-file separation: no file appears in more than one shard.
@@ -414,10 +416,10 @@ export async function runSyntheticReleaseC({ log = () => {} } = {}) {
         }
       }
       const noSplit = [...seen.values()].every((count) => count === 1);
-      if (first !== 'a.txt' || last !== 'z.txt' || !noSplit) {
+      if (first !== 'z.txt' || last !== 'm.txt' || !noSplit) {
         fail('sharding order', `first=${first} last=${last} noSplit=${noSplit}`);
       } else {
-        pass('sharding order: source-ordered whole-file shards, no file split across shards');
+        pass('sharding order: first-seen source-ordered whole-file shards, no file split across shards');
       }
     }
   } catch (err) {
@@ -582,8 +584,22 @@ export async function runLiveReleaseC({ log = console.log } = {}) {
     log('live Release C: 0 passed, 1 FAILED, 0 skipped');
     return { passed: 0, failed: 1, skipped: 0, blocked: 0, results };
   } catch (err) {
-    results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', String(err && err.message || err)));
-    log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
-    return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
+    // P1 fix: distinguish programming failures from environment blocks.
+    // An import error or a thrown TypeError is a FAILED acceptance (broken
+    // code), not an external blocker — classifying it as BLOCKED_ENVIRONMENT
+    // would let broken code look like a clean environment gate.
+    const message = String(err && err.message || err);
+    const isEnvironmentBlock =
+      err?.code === 'ENOENT' || // git not installed
+      err?.code === 'ENOTDIR' ||
+      /not a git repository|no local diff/i.test(message);
+    if (isEnvironmentBlock) {
+      results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', message));
+      log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
+      return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
+    }
+    results.push(record('live sharded review over a real diff', 'FAILED', message));
+    log('live Release C: 0 passed, 1 FAILED, 0 skipped');
+    return { passed: 0, failed: 1, skipped: 0, blocked: 0, results };
   }
 }

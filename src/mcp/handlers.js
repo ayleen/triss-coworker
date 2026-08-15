@@ -932,7 +932,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // calls always fall through to the real subprocess machinery inside
 // runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine } = {},
+  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortCallerWorktree } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -989,6 +989,7 @@ export async function coderRunHandler(
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
+      allowBestEffortCallerWorktree,
     },
     {
       spawn: deps.spawn,
@@ -1034,7 +1035,10 @@ export async function coderStatusHandler() {
 export async function coderResultListHandler() {
   const { runCoderResultList } = await import('../commands/coder.js');
   const capture = [];
-  await runCoderResultList({}, { stdoutWrite: (s) => capture.push(s) });
+  // P1 fix: stdoutWrite is a property of the SINGLE deps argument — the old
+  // two-argument call passed it as a second parameter the function never
+  // reads, so the handler always returned an empty string.
+  await runCoderResultList({ stdoutWrite: (s) => capture.push(s) });
   return capture.join('');
 }
 

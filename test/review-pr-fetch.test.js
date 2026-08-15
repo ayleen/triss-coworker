@@ -70,8 +70,11 @@ test('fetches base/head objects into a disposable bare repo and verifies exact O
     assert.equal(r.ok, true);
     assert.equal(r.base_oid, BASE);
     assert.equal(r.head_oid, HEAD);
-    // Filesystem quota released on success.
-    assert.equal(fx.quota.usedBytes(), 0);
+    // P1 fix: the filesystem reservation stays HELD while the bare repo is
+    // on disk — the caller releases it when the directory is actually
+    // removed. Releasing here would over-admit runs beyond the disk bound.
+    assert.equal(fx.quota.usedBytes(), 128 * 1024 * 1024);
+    assert.equal(r.fsReservationBytes, 128 * 1024 * 1024);
   } finally {
     await fx.cleanup();
   }
