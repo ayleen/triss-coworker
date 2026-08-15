@@ -42,7 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`
   published-file allowlist; the root tarball contains no companion manifest
-  or patch.
+  or patch. (Correction, review finding: the follow-up fix commit DID touch
+  `src/safety.js` — `projectRoot()` was extended to `.codex/worktrees`,
+  widening the restricted-mode sandbox boundary to sibling worktrees. That
+  change is REVERTED in this corrective release; only the test-isolation
+  env pin from that commit remains.)
+
+### Artifact integrity (0.35.0)
+
+- `triss-dsh-provider-bundle-0.35.0.tgz` — sha256
+  `5ff86a4842e14a76e411138960cb9a5ca573f6362c20afa51bd1509cd4a4d554`,
+  integrity `sha512-7JNBrVxJWV2a9c2qvbtZAlyl2eTNNkVHRLoATVW+2Fc4+nHfjy1cCKLEXv3VuHxf6SPgJIaAg4tkWeUQBXrVwg==`
+- Root `triss-coworker-0.35.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.35.0`; registry verification compares the packed
+  artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
 
 ### Artifact integrity (0.35.0)
 
