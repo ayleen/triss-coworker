@@ -592,7 +592,7 @@ async function snapshotForLatest(latest, fetchBounded) {
     const remote = await fetchBounded(
       `https://github.com/${OWNER}/${REPOSITORY}/releases/download/` +
       `${latest.tag_name}/update-manifest.json`,
-      { allowedHosts: DOWNLOAD_HOSTS, maxBytes: 64 * 1024 },
+      { headers: { 'User-Agent': 'triss-release-gates' }, allowedHosts: DOWNLOAD_HOSTS, maxBytes: 64 * 1024 },
     );
     if (!remote.response.ok) die('previous latest manifest is not publicly readable');
     manifestSha256 = hash(remote.bytes);
@@ -827,7 +827,10 @@ async function verifyAnonymousAttempt(options, latest, dependencies, expected) {
       ? `https://github.com/${OWNER}/${REPOSITORY}/releases/latest/download/${name}`
       : `https://github.com/${OWNER}/${REPOSITORY}/releases/download/${options.tag}/${name}`;
     const remote = await fetchBounded(assetUrl, {
-      headers: { Accept: 'application/octet-stream' },
+      // github.com asset downloads 302 to the CDN; every hop of the pinned
+      // transport sends only these headers, and a User-Agent-less request is
+      // rejected with 403 by the administrative rules.
+      headers: { Accept: 'application/octet-stream', 'User-Agent': 'triss-release-gates' },
       allowedHosts: DOWNLOAD_HOSTS,
       maxBytes: REMOTE_BODY_LIMIT,
     });
