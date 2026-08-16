@@ -238,25 +238,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/verify-pack"
           npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/verify-pack" ./packages/dsh-provider-bundle >/dev/null
           npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/verify-pack" . >/dev/null
-          # npm pack has been observed on Actions runners to exit before the
-          # written tarball is visible to the immediately following command:
-          # the first v0.35.0 attempt failed its `ls` right here while the
-          # very next step saw both files in place (reproduced
-          # deterministically in a diagnostic run). Poll for each artifact
-          # instead of racing the write.
+          # NOTE the unquoted glob below: a quoted "${name}-*.tgz" is passed
+          # to ls LITERALLY (no expansion) — the first two v0.35.0 attempts
+          # failed exactly here while `ls -la` in the same step showed both
+          # files. RUNNER_TEMP and the names carry no spaces, so the unquoted
+          # glob is safe.
           for name in triss-dsh-provider-bundle triss-coworker; do
             GATES=$(ls publish-pack/${name}-*.tgz)
-            VERIFY=""
-            for _ in $(seq 1 50); do
-              VERIFY=$(ls "$RUNNER_TEMP/verify-pack/${name}-*.tgz" 2>/dev/null || true)
-              if [ -n "$VERIFY" ]; then break; fi
-              sleep 0.2
-            done
-            if [ -z "$VERIFY" ]; then
-              echo "repacked tarball for $name never appeared in verify-pack:"
-              ls -la "$RUNNER_TEMP/verify-pack" || true
-              exit 1
-            fi
+            VERIFY=$(ls $RUNNER_TEMP/verify-pack/${name}-*.tgz)
             GATES_SHA=$(sha256sum "$GATES" | cut -d' ' -f1)
             VERIFY_SHA=$(sha256sum "$VERIFY" | cut -d' ' -f1)
             if [ "$GATES_SHA" != "$VERIFY_SHA" ]; then

@@ -1,5 +1,24 @@
 # MISTAKES.md
 
+## A quoted shell glob is not a glob — read the failing path in the error message
+
+**What happened:** The v0.35.0 publish job failed twice on
+`ls "$RUNNER_TEMP/verify-pack/${name}-*.tgz": No such file or directory`
+while the files existed — the error message showed the LITERAL `*`. I
+misdiagnosed it as a filesystem/npm-write race, burned a diagnostic
+workflow and a 10-second poll "fix", and even moved the release tag,
+before `ls -la` in the same failing step listed both tarballs and exposed
+the quoting: `"${name}-*.tgz"` suppresses bash glob expansion.
+
+**Root cause:** Quoting a pattern that must be globbed; and reading the
+error's path too fast — a literal `*` in an ls error means the glob never
+expanded.
+
+**Prevention:** When `ls/grep` reports "No such file" with a visible
+`*` in the path, check the quoting first. Smoke-test glob lines by
+running the exact command (not an `ls -la` of the directory) before
+shipping workflow steps.
+
 ## Test-suite verdicts must come from the runner's own summary, not a grep of its output
 
 **What happened:** After a large workflow refactor, the full `npm test` run
