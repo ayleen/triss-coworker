@@ -480,14 +480,18 @@ jobs:
 
             // Adapters resolve from the running dsh installation (verified
             // live: the profile carries only the companion and the template
-            // bundles). Their versions are mandatory, not best-effort.
+            // bundles). Their versions are mandatory, not best-effort. The
+            // packages may sit flat in the global root OR nested inside the
+            // dsh package (observed on Actions runners) — try both.
             const globalRoot = run('npm root -g');
+            const dshDir = path.join(globalRoot, '@deepseek-ai', 'dsh');
             const globalVersion = (name) => {
-              try {
-                return JSON.parse(fs.readFileSync(path.join(globalRoot, name, 'package.json'), 'utf8')).version;
-              } catch {
-                return null;
+              for (const base of [globalRoot, path.join(dshDir, 'node_modules')]) {
+                try {
+                  return JSON.parse(fs.readFileSync(path.join(base, name, 'package.json'), 'utf8')).version;
+                } catch { /* try the next base */ }
               }
+              return null;
             };
             const dshLlmPiAi = required('dsh-llm-pi-ai (dsh installation)', globalVersion('@deepseek-ai/dsh-llm-pi-ai'));
             const piAiVersion = required('pi-ai (dsh installation)', globalVersion(path.join('@earendil-works', 'pi-ai')));
@@ -545,32 +549,20 @@ jobs:
           npm audit signatures --json --include-attestations > "$RUNNER_TEMP/audit-signatures.json"
           node - "$RUNNER_TEMP/audit-signatures.json" <<'EOF'
           // npm audit signatures verifies registry signatures AND provenance
-          // attestations cryptographically (it fetches the attestation
-          // bundles and checks the signed subject). Require our package to
-          // be verified with nothing invalid or missing (review round 5, §2).
+          // attestations cryptographically and reports PROBLEMS: the JSON is
+          // {"invalid": [...], "missing": [...]} and the command exits
+          // non-zero when either is populated (shape verified against the
+          // real npm 11.6.2 output). Empty lists mean every signature and
+          // attestation in the lockfile verified.
           const fs = require('fs');
           const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const entry = report['triss-dsh-provider-bundle'];
-          if (!entry) throw new Error('companion missing from npm audit signatures output');
-          const statuses = [];
-          const walk = (value) => {
-            if (Array.isArray(value)) { value.forEach(walk); return; }
-            if (value && typeof value === 'object') {
-              if (typeof value.status === 'string') statuses.push(value.status);
-              Object.values(value).forEach(walk);
-            }
-          };
-          walk(entry);
-          if (statuses.length === 0) throw new Error('npm audit signatures reported no signature/attestation statuses');
-          for (const status of statuses) {
-            if (status === 'invalid' || status === 'missing') {
-              throw new Error(`signature/attestation status "${status}" for the published companion`);
-            }
+          if (!Array.isArray(report.invalid) || !Array.isArray(report.missing)) {
+            throw new Error(`unexpected npm audit signatures output shape: ${fs.readFileSync(process.argv[2], 'utf8').slice(0, 200)}`);
           }
-          if (!statuses.includes('verified')) {
-            throw new Error(`no verified signature/attestation for the published companion (statuses: ${statuses.join(', ')})`);
+          if (report.invalid.length > 0 || report.missing.length > 0) {
+            throw new Error(`signature/attestation problems: invalid=${JSON.stringify(report.invalid)} missing=${JSON.stringify(report.missing)}`);
           }
-          console.log('npm audit signatures: companion signatures and provenance attestations verified');
+          console.log('npm audit signatures: all signatures and provenance attestations verified');
           EOF
       - uses: actions/upload-artifact@v4
         with:
