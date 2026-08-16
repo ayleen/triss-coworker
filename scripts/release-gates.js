@@ -460,10 +460,11 @@ function verifyAssetSemantics(options, artifactBytes, checksumBytes, manifestByt
   }
 }
 
-async function verifyDraft(options) {
+async function verifyDraft(options, dependencies = {}) {
+  const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('draft verification requires GH_TOKEN or GITHUB_TOKEN');
-  const release = (await github(`/releases/tags/${encodeURIComponent(options.tag)}`, { token })).json();
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   if ((!options.resume && !release.draft) || release.prerelease || release.tag_name !== options.tag) {
     die('draft release state/tag mismatch');
   }
@@ -696,6 +697,33 @@ async function verifyOrUploadReleaseAssets(release, options, dependencies = {}) 
  * get-or-create: a retry after create/upload/publish can only fill missing
  * draft assets or verify existing bytes; it never overwrites an asset.
  */
+/**
+ * Draft releases are NOT addressable through /releases/tags/{tag} — the
+ * real GitHub API answers 404 for them (only published releases resolve by
+ * tag). Find the release by paging GET /releases instead; throw a
+ * distinguishable retryable error when no release carries the tag.
+ */
+async function releaseByTagFromList(tag, requestGitHub, token) {
+  for (let page = 1; page <= 10; page += 1) {
+    const list = releaseJson(await requestGitHub(`/releases?per_page=100&page=${page}`, { token }));
+    if (!Array.isArray(list)) die('GitHub API /releases did not return a list');
+    const hit = list.find((entry) => entry?.tag_name === tag);
+    if (hit) return hit;
+    if (list.length < 100) break;
+  }
+  throw retryableVerificationError(`release-by-tag list lookup found nothing for ${tag}`);
+}
+
+/** Release by tag in ANY state: tag endpoint first, list fallback for drafts. */
+async function releaseByTagAnyState(tag, requestGitHub, token) {
+  try {
+    return releaseJson(await requestGitHub(`/releases/tags/${encodeURIComponent(tag)}`, { token }));
+  } catch (error) {
+    if (!/\b404\b/.test(error?.message || '')) throw error;
+    return releaseByTagFromList(tag, requestGitHub, token);
+  }
+}
+
 export async function ensureRelease(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -714,11 +742,9 @@ export async function ensureRelease(options, dependencies = {}) {
   };
   let release;
   try {
-    release = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   } catch (error) {
-    if (!/\b404\b/.test(error?.message || '')) throw error;
+    if (!/list lookup found nothing/.test(error?.message || '')) throw error;
     try {
       release = releaseJson(await requestGitHub('/releases', {
         token, method: 'POST', body: expected,
@@ -727,9 +753,7 @@ export async function ensureRelease(options, dependencies = {}) {
       // Another rerun may have won the create race. Re-read and validate it;
       // otherwise preserve the original failure rather than guessing.
       try {
-        release = releaseJson(await requestGitHub(
-          `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-        ));
+        release = await releaseByTagAnyState(options.tag, requestGitHub, token);
       } catch {
         throw createError;
       }
@@ -740,9 +764,7 @@ export async function ensureRelease(options, dependencies = {}) {
     ...dependencies,
     uploadAsset: dependencies.uploadAsset || uploadGithubAsset,
   });
-  const refreshed = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const refreshed = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(refreshed, options);
   await verifyOrUploadReleaseAssets(refreshed, options, dependencies);
   return {
