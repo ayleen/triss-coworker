@@ -16,3 +16,4 @@ coverage/
 *.tgz
 .glm-ky
 .triss/
+.codex/
