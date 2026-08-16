@@ -335,7 +335,10 @@ jobs:
                 }
                 return 0;
               };
-              const stable = JSON.parse(data).filter((v) => /^\d+\.\d+\.\d+$/.test(v) && cmp(v, process.argv[2]) < 0);
+              // NB: with `node -e` the positional arg lands in argv[1];
+              // argv[2] is undefined here and crashed the first run.
+              const target = process.argv[process.argv.length - 1];
+              const stable = JSON.parse(data).filter((v) => /^\d+\.\d+\.\d+$/.test(v) && cmp(v, target) < 0);
               stable.sort(cmp);
               process.stdout.write(stable[stable.length - 1] ?? "");
             });' "$VERSION")
