@@ -353,7 +353,16 @@ async function boundedFetch(url, {
 }
 
 async function github(path, { token, method = 'GET', body, accept = 'application/vnd.github+json' } = {}) {
-  const headers = { Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
+  // The pinned-request transport (src/net.js requestPinned) sends raw
+  // https.request with ONLY these headers — global fetch would have added a
+  // User-Agent automatically, and the GitHub API answers headerless requests
+  // with 403 "Request forbidden by administrative rules" (reproduced in the
+  // v0.35.0 release run and with a bare node https.get).
+  const headers = {
+    Accept: accept,
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'triss-release-gates',
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body) headers['Content-Type'] = 'application/json';
   if (method === 'GET') {
