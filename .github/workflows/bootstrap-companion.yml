@@ -1,0 +1,70 @@
+name: Bootstrap companion package
+
+# One-time first publication of triss-dsh-provider-bundle (review blocker:
+# a trusted publisher cannot be linked to a package that does not exist
+# yet). Publishes EXACTLY the bytes pinned in CHANGELOG.md, from CI, with
+# provenance, behind the npm-production environment approval and the
+# NPM_BOOTSTRAP_TOKEN environment secret. After the bootstrap: link the
+# trusted publisher for the now-existing package and delete the token.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or SHA whose companion tree to publish'
+        required: true
+        default: 'v0.35.0'
+      expected_sha256:
+        description: 'Pinned companion tarball sha256 from CHANGELOG.md'
+        required: true
+        default: '25d9d80417c7955ac29d933cdb9c3c5e412e0a6a3ebc2f73de852985ce2a4900'
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Pin npm
+        run: |
+          npm install --global "npm@11.6.2"
+          test "$(npm --version)" = "11.6.2"
+      - name: Pack and verify the exact pinned bytes
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bootstrap-pack"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/bootstrap-pack" ./packages/dsh-provider-bundle >/dev/null
+          # Unquoted glob on purpose: quoting would pass the * literally.
+          TARBALL=$(ls $RUNNER_TEMP/bootstrap-pack/triss-dsh-provider-bundle-*.tgz)
+          SHA=$(sha256sum "$TARBALL" | cut -d' ' -f1)
+          if [ "$SHA" != "${{ inputs.expected_sha256 }}" ]; then
+            echo "refusing to bootstrap: packed sha256 $SHA != pinned ${{ inputs.expected_sha256 }}"
+            exit 1
+          fi
+          echo "bytes verified: $SHA"
+      - name: One-time publish with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        working-directory: packages/dsh-provider-bundle
+        run: npm publish --access public --provenance --ignore-scripts
+      - name: Verify the published registry artifact
+        run: |
+          set -euo pipefail
+          sleep 5
+          VERSION=$(node -p "require('./packages/dsh-provider-bundle/package.json').version")
+          PUBLISHED=$(npm view "triss-dsh-provider-bundle@$VERSION" dist.integrity --json)
+          echo "published dist.integrity: $PUBLISHED"
+          if [ "$PUBLISHED" = "null" ]; then
+            echo "registry metadata not visible yet"; exit 1
+          fi
