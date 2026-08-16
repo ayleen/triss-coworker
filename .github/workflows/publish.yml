@@ -423,6 +423,10 @@ jobs:
         env:
           TAG_VERSION: ${{ github.ref_name }}
           NODE_MAJOR: ${{ matrix.node }}
+          # The repo pins packageManager=npm; corepack strict mode would
+          # refuse the direct pnpm calls below ("This project is configured
+          # to use npm") exactly like it does in the lifecycle job.
+          COREPACK_ENABLE_STRICT: '0'
         run: |
           set -euo pipefail
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
