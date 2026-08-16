@@ -412,6 +412,7 @@ async function uploadGithubAsset(releaseId, name, bytes, token) {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/octet-stream',
+      'User-Agent': 'triss-release-gates',
       'X-GitHub-Api-Version': '2022-11-28',
     };
     await assertPublicUrl(url, { strict: true, signal: controller.signal });
@@ -486,6 +487,7 @@ async function verifyDraft(options, dependencies = {}) {
       headers: {
         Accept: 'application/octet-stream',
         Authorization: `Bearer ${token}`,
+        'User-Agent': 'triss-release-gates',
         'X-GitHub-Api-Version': '2022-11-28',
       },
       allowedHosts: API_HOSTS,
@@ -666,6 +668,7 @@ async function verifyOrUploadReleaseAssets(release, options, dependencies = {}) 
       headers: {
         Accept: 'application/octet-stream',
         Authorization: `Bearer ${token}`,
+        'User-Agent': 'triss-release-gates',
         'X-GitHub-Api-Version': '2022-11-28',
       },
       allowedHosts: API_HOSTS,
