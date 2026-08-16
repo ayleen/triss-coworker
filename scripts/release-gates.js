@@ -784,9 +784,7 @@ export async function releaseStatus(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('release status requires GH_TOKEN or GITHUB_TOKEN');
-  const release = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const latest = releaseJson(await requestGitHub('/releases/latest', { token }));
   const promotionState = parsePromotionStatePresence(release.body);
   return {
@@ -897,9 +895,7 @@ export async function releaseAction(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('release action requires GH_TOKEN or GITHUB_TOKEN');
-  const release = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(release, options);
   const action = options.action;
   if (action === 'publish-nonlatest' && !release.draft) return release;
@@ -957,9 +953,7 @@ export async function snapshotLatest(options, dependencies = {}) {
   if (!options.output) die('latest snapshot requires --output');
   let candidate = null;
   try {
-    candidate = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   } catch (error) {
     if (!/\b404\b/.test(error?.message || '')) throw error;
   }
@@ -1006,9 +1000,7 @@ export async function persistPromotionState(options, dependencies = {}) {
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('persist promotion state requires GH_TOKEN or GITHUB_TOKEN');
   const snapshot = validateLatestSnapshot(options.snapshot || JSON.parse(readFileSync(resolve(options.state), 'utf8')));
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(candidate, { ...options, tag: options.tag, target: undefined });
   const marker = promotionStateMarker(snapshot);
   const existing = String(candidate.body || '');
@@ -1036,14 +1028,10 @@ export async function markPromotionIncidentPending(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('promotion phase transition requires GH_TOKEN or GITHUB_TOKEN');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const before = extractPromotionState(candidate.body);
   if (before.phase === 'incident_pending') {
-    const reread = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    const reread = await releaseByTagAnyState(options.tag, requestGitHub, token);
     const verified = extractPromotionState(reread.body);
     if (promotionStateMarker(verified) !== promotionStateMarker(before)) {
       die('incident-pending promotion marker changed during verification');
@@ -1059,9 +1047,7 @@ export async function markPromotionIncidentPending(options, dependencies = {}) {
     method: 'PATCH',
     body: { body: replacePromotionStateMarker(candidate.body, oldMarker, newMarker) },
   });
-  const reread = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const reread = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const verified = extractPromotionState(reread.body);
   if (promotionStateMarker(verified) !== newMarker) {
     die('incident-pending promotion marker was not durably verified');
@@ -1074,9 +1060,7 @@ export async function loadPromotionState(options, dependencies = {}) {
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('load promotion state requires GH_TOKEN or GITHUB_TOKEN');
   if (!options.output) die('load promotion state requires --output');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const snapshot = extractPromotionState(candidate.body);
   writePromotionStateFile(options.output, snapshot);
   return snapshot;
@@ -1086,9 +1070,7 @@ export async function clearPromotionState(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('clear promotion state requires GH_TOKEN or GITHUB_TOKEN');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const body = String(candidate.body || '');
   const state = parsePromotionStatePresence(body);
   if (!state.present) return candidate;
