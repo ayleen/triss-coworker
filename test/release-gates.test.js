@@ -895,6 +895,70 @@ test('snapshot refuses to promote an older tag over a newer latest release', asy
   );
 });
 
+test('draft releases are invisible to /releases/tags and must be found via the list endpoint', async () => {
+  // The REAL GitHub API returns 404 from /releases/tags/{tag} for DRAFT
+  // releases — only published releases are addressable by tag. The v0.35.0
+  // run created its draft with all assets and then failed the very next
+  // tag lookup; the older test fake answered drafts on the tag endpoint and
+  // hid exactly this. Here the tag endpoint 404s unconditionally while the
+  // draft is discoverable through GET /releases.
+  const root = temp('release-draft-invisible');
+  const source = temp('release-draft-invisible-src');
+  mkdirSync(join(source, 'bin'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: 'triss-coworker', version: '0.32.0' }));
+  const sourceLauncher = join(source, 'bin', 'triss.js');
+  writeFileSync(sourceLauncher, '#!/usr/bin/env node\n');
+  chmodSync(sourceLauncher, 0o755);
+  const artifact = join(root, 'triss-coworker-0.32.0-standalone.ndjson.gz');
+  const build = buildStandalone({ sourceDir: source, outputPath: artifact, version: '0.32.0' });
+  writeFileSync(`${artifact}.metadata.json`, JSON.stringify(build.metadata));
+  const checksum = join(root, 'triss-coworker-0.32.0-standalone.sha256');
+  const manifest = join(root, 'update-manifest.json');
+  writeChecksum({ artifact, output: checksum });
+  writeManifest({ artifact, output: manifest, 'artifact-name': basename(artifact), tag: 'v0.32.0', version: '0.32.0' });
+  let release = null;
+  let creates = 0;
+  let uploads = 0;
+  const github = async (path, options = {}) => {
+    if (path === '/releases/tags/v0.32.0') {
+      // Real API behavior: drafts are NOT addressable by tag.
+      const error = new Error('release gate: GitHub API GET /releases/tags/v0.32.0 returned 404');
+      error.retryableAnonymousVerification = true;
+      throw error;
+    }
+    if (path.startsWith('/releases?')) {
+      return release ? [release] : [];
+    }
+    if (path === '/releases' && options.method === 'POST') {
+      creates++;
+      release = {
+        id: 32, tag_name: 'v0.32.0', target_commitish: 'release-sha',
+        draft: true, prerelease: false, body: 'notes', assets: [],
+      };
+      return release;
+    }
+    throw new Error(`unexpected github call ${path}`);
+  };
+  const uploadAsset = async (_id, name, bytes) => {
+    uploads++;
+    release.assets.push({ id: uploads, name, bytes: Buffer.from(bytes) });
+  };
+  const downloadAsset = async (asset) => asset.bytes;
+  const options = {
+    tag: 'v0.32.0', target: 'release-sha', artifact, checksum, manifest, token: 'test-token',
+  };
+  const first = await ensureRelease(options, { github, uploadAsset, downloadAsset });
+  assert.equal(first.draft, true);
+  assert.equal(creates, 1);
+  assert.equal(uploads, 3);
+  // Second invocation finds the existing draft through the list and neither
+  // creates nor re-uploads anything.
+  const second = await ensureRelease(options, { github, uploadAsset, downloadAsset });
+  assert.equal(second.draft, true);
+  assert.equal(creates, 1);
+  assert.equal(uploads, 3);
+});
+
 test('get-or-create release resumes draft uploads and then verifies a published release without overwriting assets', async () => {
   const root = temp('release-resume');
   const source = temp('release-resume-source');
@@ -917,6 +981,9 @@ test('get-or-create release resumes draft uploads and then verifies a published 
     if (path === '/releases/tags/v0.32.0') {
       if (!release) throw new Error('404');
       return release;
+    }
+    if (path.startsWith('/releases?')) {
+      return release ? [release] : [];
     }
     if (path === '/releases' && options.method === 'POST') {
       creates++;

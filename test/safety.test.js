@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, realpathSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertSafePath, pathsRestricted, setRestricted } from '../src/safety.js';
@@ -69,5 +69,36 @@ test('assertSafePath rejects ../ escape attempts when restricted', () => {
   } finally {
     process.chdir(orig);
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('MCP sandbox does not widen to sibling worktrees of a checkout', () => {
+  // Regression guard (PR #45 review §3): running inside a coding-agent
+  // worktree must NOT step the project root up to the shared checkout,
+  // because projectRoot() is the MCP restricted-mode boundary. If it did,
+  // a task started in /repo/.codex/worktrees/task-a could read files in
+  // sibling /repo/.codex/worktrees/task-b. Only the .claude layout steps
+  // up (historical behavior); any other layout keeps cwd as the root and
+  // must deny sibling access. Credential discovery from other layouts
+  // goes through an explicit TRISS_PROJECT_ROOT instead.
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'triss-sibling-')));
+  const layout = join(repo, '.codex', 'worktrees', 'task-a');
+  mkdirSync(layout, { recursive: true });
+  const sibling = join(repo, '.codex', 'worktrees', 'task-b');
+  mkdirSync(sibling, { recursive: true });
+  writeFileSync(join(sibling, 'secret.txt'), 'x');
+  const orig = process.cwd();
+  process.chdir(layout);
+  try {
+    withRestricted(true, () => {
+      assertSafePath(join(layout, 'own.txt'));
+      assert.throws(
+        () => assertSafePath(join(sibling, 'secret.txt'), { kind: 'read' }),
+        /outside the project root/,
+      );
+    });
+  } finally {
+    process.chdir(orig);
+    rmSync(repo, { recursive: true, force: true });
   }
 });

@@ -46,11 +46,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dedicated CI bundle matrix covers Node `22.19.0`, `24`, and `26` plus
   `pnpm`-missing diagnostics.
 
+### Changed
+
+- `test/coder-init-credential-gate-blocker.test.js` pins
+  `TRISS_PROJECT_ROOT` to the temp HOME so credential-gate isolation no
+  longer depends on cwd lookups; no runtime code changed in this release
+  train (an earlier iteration of this PR touched `src/safety.js` and was
+  reverted for expanding the sandbox boundary).
+- The publish workflow plans publication from live registry state for BOTH
+  packages (`plan-publish`), skips a publish step when the registry already
+  holds the byte-identical tarball, and registry-verifies both packages again
+  after publication — a partial-failure rerun is now safe, including after
+  `main` has moved past the tag (fresh releases require the exact
+  `origin/main` tip; retries only require the tag to remain an ancestor,
+  via `publish-gate.js authorize-tag`).
+- The tag workflow separates privileges: an unprivileged `release-gates`
+  job runs every repository-script verification (versions, tarball
+  inspection, registry planning, tag authorization) and only a minimal
+  `npm-publish` job behind the `npm-production` environment holds
+  `id-token: write`. The publish job repacks with `--ignore-scripts` and
+  byte-compares both tarballs against the gates artifact before publishing
+  the same bytes with `--provenance`.
+- CI gains a required `dsh plugin lifecycle` job (real `@deepseek-ai/dsh`
+  0.1.0-rc.6 + pnpm 9): add → real in-place update (add v2 over v1, no
+  remove) → remove → reinstall → npx-style anchor, asserting the dumped
+  `llm-pi-ai.config.providers` object (exact provider set and `apiKeyEnv`
+  mapping) plus the profile manifest at every phase. The job lives in a
+  reusable `bundle-checks` workflow included by both PR CI and the tag
+  publish flow, and a post-publish `registry-acceptance` job installs the
+  published package from the registry on Node `22.19.0` and `24`, exercises
+  add/update/remove/reinstall, and records the compatibility tuple with
+  registry integrity and provenance evidence.
+- `npm test` now runs `scripts/check-lockfile-gate.cjs`, which asserts the
+  workspace name/version/engines against the live manifests plus the
+  pinned `@deepseek-ai/dsh-app-boot`.
+
 ### Unchanged
 
 - Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`
   published-file allowlist; the root tarball contains no companion manifest
-  or patch.
+  or patch. (Correction, review finding: the follow-up fix commit DID touch
+  `src/safety.js` — `projectRoot()` was extended to `.codex/worktrees`,
+  widening the restricted-mode sandbox boundary to sibling worktrees. That
+  change is REVERTED in this corrective release; only the test-isolation
+  env pin from that commit remains.)
+
+### Artifact integrity (0.35.0)
+
+- `triss-dsh-provider-bundle-0.35.0.tgz` — sha256
+  `25d9d80417c7955ac29d933cdb9c3c5e412e0a6a3ebc2f73de852985ce2a4900`,
+  integrity `sha512-7NkUhHg+RruXEAJhMXr1nWlFv7g7N2iAh0z416oTS7yK/PPi4GnE8h8LqJOzFrGr86BUPHMhVmYinNe8cF6YZQ==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
+- Root `triss-coworker-0.35.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.35.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
 
 ## [0.34.0] — 2026-08-13
 
