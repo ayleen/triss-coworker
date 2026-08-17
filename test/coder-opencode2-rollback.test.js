@@ -93,6 +93,9 @@ test('rollback: opencode2 manifest restores through the shared OpenCode path', (
     { lock: () => ({ release() {} }) },
   );
   assert.equal(result.ok, true);
+  // Review round 6 #7: the report carries the manifest's engine, not a
+  // hardcoded 'opencode'.
+  assert.equal(result.engine, 'opencode2');
   const restored = JSON.parse(readFileSync(cfgPath, 'utf8'));
   assert.equal(restored.model, 'opencode-go/old-main', 'shared config restored from the V2 record');
   assert.equal(restored.small_model, 'opencode-go/old-small');

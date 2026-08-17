@@ -88,14 +88,12 @@ import {
   opencode2VersionPin,
   detectOpenCode2,
   installHintOpenCode2,
-  opencode2DataRoot,
-  opencode2StateRoot,
   ensureOpenCode2RuntimeDirs,
   createOpenCode2EventFolder,
   foldOpenCode2EventLine,
   opencode2LogPath,
 } from '../coder-engines/opencode2.js';
-import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes } from '../opencode2-preflight.js';
+import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes, computeEffectivePermissionPolicy } from '../opencode2-preflight.js';
 // Canonical OpenCode source enumeration (Phase 4): one walker for every
 // opencode.json layer + plugin/agent discovery, shared by the V2 static
 // preflight and model inspection.
@@ -1266,18 +1264,17 @@ commands — report findings as text only.
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
-  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4) ──────────────
-  // V2 shares the V1-compatible opencode.json surface: the SAME
-  // setupKey/runCoderSetup flow configures the shared config, then the V2
-  // specifics (XDG state roots + static plugin/agent preflight + binary pin
-  // report) run BEFORE any V2 process is spawned. Nothing here spawns a V2
-  // service: detectOpenCode2 only probes `opencode2 --version`.
-  if (resolveCoderEngine(opts) === 'opencode2') {
-    return runOpenCode2Init(opts, deps);
-  }
   // Capture model overrides that are in the environment BEFORE loadEnvFiles()
   // merges the .env files — i.e. genuine shell exports, which have higher
   // precedence than any .env file and so would shadow whatever init pins.
+  // Review round 6 #3: the pre-dotenv snapshots are taken FIRST and the env
+  // files are loaded BEFORE the engine dispatch — the dispatch used to read
+  // TRISS_CODER_ENGINE from the shell env only, so `TRISS_CODER_ENGINE=
+  // opencode2` in a .env file silently ran the whole V1 init path (V1 binary
+  // probe/install, V1 agent templates, the allowlist bash policy the V2
+  // preflight then rejects). The pre-dotenv snapshots are passed through to
+  // runOpenCode2Init so its own capture (which now runs AFTER this
+  // loadEnvFiles) is not polluted by dotenv values.
   const inheritedModels = {
     model: process.env.TRISS_CODER_MODEL,
     smallModel: process.env.TRISS_CODER_SMALL_MODEL,
@@ -1285,6 +1282,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
   const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4) ──────────────
+  // V2 shares the V1-compatible opencode.json surface: the SAME
+  // setupKey/runCoderSetup flow configures the shared config, then the V2
+  // specifics (XDG state roots + static plugin/agent preflight + binary pin
+  // report) run BEFORE any V2 process is spawned. Nothing here spawns a V2
+  // service: detectOpenCode2 only probes `opencode2 --version`.
+  if (engine === 'opencode2') {
+    return runOpenCode2Init(opts, deps, { inheritedModels, workerShellEnv });
+  }
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
   // The provider choice applies to the opencode engine only — crush speaks
   // Z.AI GLM exclusively (it bridges ZHIPU_API_KEY -> ZAI_API_KEY). A
@@ -1514,7 +1520,7 @@ function staticOpenCode2Preflight(cwd) {
   return sources;
 }
 
-async function runOpenCode2Init(opts = {}, deps = {}) {
+async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4; review
   // round-2 P1-4 full rewrite). The V2 init OWNS its whole flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
@@ -1538,7 +1544,29 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   // to run only in the POST-setup audit — after setupKey had written the
   // credential to the env file. Run the document audit up front too, so a
   // hostile tree rejects BEFORE any credential write.
-  auditOpenCode2Documents({ cwd: deps.cwd || process.cwd() }, { enumerate: deps.enumerateOpenCodeSources });
+  const headDocs = auditOpenCode2Documents({ cwd: deps.cwd || process.cwd() }, { enumerate: deps.enumerateOpenCodeSources });
+  // Review round 6 #4: the permission gate over EXISTING layers must fire
+  // HERE — before the credential write. Every existing V1 user's config
+  // carries the V1 template allowlist (git status, npm test, …), and the
+  // post-setup audit used to discover `live-allow-rule (git status)` only
+  // AFTER setupKey had written the key, .gitignore, and the model pins.
+  // A tree with NO existing layers skips the gate — the shared setup then
+  // writes the deny-everything template and the post-setup audit proves it.
+  if (headDocs.layerDocs.length > 0) {
+    const policy = computeEffectivePermissionPolicy({ layerDocs: headDocs.layerDocs });
+    if (policy.unsafe) {
+      const detail = policy.detail ? ` (${policy.detail})` : '';
+      throw new Error(
+        'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
+          `effective shell policy is not deny-everything (${policy.reason}${detail}). The most common cause ` +
+          'is the V1 template allowlist (git status / git diff / npm test …) — the opencode2 beta cannot ' +
+          'run while any live allow rule exists, because the credential sits in the child environment. ' +
+          'Remove the allow rules from opencode.json (V1 runs will lose them too), or keep using ' +
+          '`--engine opencode` until the V2 beta grows real credential isolation. ' +
+          'See docs/opencode2.md "Troubleshooting".',
+      );
+    }
+  }
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
   const sh = deps.spawnSync || nodeSpawnSync;
   // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
@@ -1557,12 +1585,16 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   // shell export, so `coder init --engine opencode2 --global --provider worker`
   // run inside a project could silently satisfy the key check from the LOCAL
   // env file and leave the global scope unset.
-  const workerShellEnv = captureWorkerShellSnapshot();
+  // Review round 6 #3: when dispatched from runCoderInit the env files are
+  // ALREADY loaded (the engine dispatch must see TRISS_CODER_ENGINE from
+  // .env), so the pre-dotenv snapshots come in via `precaptured` — the local
+  // captures below are the fallback for direct callers only.
+  const workerShellEnv = precaptured.workerShellEnv || captureWorkerShellSnapshot();
   // Review round 5 #5: capture the shell-export model pins BEFORE
   // loadEnvFiles() — exactly like the V1 runCoderInit head — so
   // warnIfPinShadowed can see a shadowing export. V2 used to pass nothing,
   // silently disabling the shell-export half of the pin-shadow check.
-  const inheritedModels = {
+  const inheritedModels = precaptured.inheritedModels || {
     model: process.env.TRISS_CODER_MODEL,
     smallModel: process.env.TRISS_CODER_SMALL_MODEL,
   };
@@ -1588,7 +1620,7 @@ async function runOpenCode2Init(opts = {}, deps = {}) {
   }
   // Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
   // XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
-  ensureOpenCode2RuntimeDirs(projectRoot(), { note: 'init' });
+  ensureOpenCode2RuntimeDirs(projectRoot());
   // (4) Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
   // runCoderInit path checks/installs the V1 `opencode` binary and then
   // scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
@@ -1843,11 +1875,28 @@ async function runCoderSetupUnlocked(
       );
     }
   }
-  let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
+  const writeResult = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
     providerAvailable,
     engine,
-  }).blocking;
+  });
+  let blocking = writeResult.blocking;
+  // Review round 6 #5: a FRESH V2-init write puts deny-everything bash into
+  // the SHARED opencode.json — the default engine is still opencode (V1), so
+  // plain `triss coder run` silently loses git status / git diff / npm test.
+  // Warn loudly instead; re-running plain `triss coder init` restores the
+  // V1 allowlist (and makes the tree V2-incompatible again — that tension is
+  // documented in docs/opencode2.md).
+  if (engine === 'opencode2' && writeResult.created) {
+    const v1Degradation = pc.yellow(
+      '  ⚠ opencode2 init wrote a deny-everything bash policy into the SHARED opencode.json — plain ' +
+        '`triss coder run` (engine opencode, the default) has LOST git status / git diff / npm test. ' +
+        'Export TRISS_CODER_ENGINE=opencode2 for V2 runs, or re-run `triss coder init` (V1) to restore ' +
+        'the allowlist — which makes this tree opencode2-incompatible again.\n',
+    );
+    process.stderr.write(v1Degradation);
+    if (Array.isArray(deps.outputs)) deps.outputs.push(v1Degradation);
+  }
   // Stale-Zen incident report (own scope). When the opencode.json being audited
   // is pinned to a Zen model the AUTHENTICATED live catalogue no longer offers,
   // name the stale id(s) + the current replacement(s) triss just resolved, and
@@ -2881,7 +2930,7 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo, { engine: opts.engine }), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
-  return { blocking: false };
+  return { blocking: false, created: true };
 }
 
 function agentsDir(scope) {
@@ -3498,11 +3547,39 @@ export function sessionsLockPath() {
 
 // Persist slug -> realId under the engine's namespace. Read-modify-write of
 // the VERSIONED shape (legacy content migrates here), atomic write-then-
-// rename, all under the engine-neutral session-store mutation lock
-// (Phase 4: concurrent V1/V2 writers cannot drop a mapping after another
-// writer has returned success — the read-modify-write is fully serialized,
-// and dead-PID stale locks are reclaimed automatically).
-export function persistSessionMapping(sh, engine, slug, realId) {
+// rename, serialized under the engine-neutral session-store mutation lock.
+//
+// Review round 6 #1: this runs AFTER the engine finished and BEFORE the
+// envelope is written — the model output is ready and the tokens are already
+// paid for. acquireCoderMutationLock throws LOCK_HELD IMMEDIATELY (no wait,
+// no retry), so two parallel `coder run --session a` / `--session b` in one
+// project made one of them DISCARD a finished run over a session-bookkeeping
+// file. The lock is therefore acquired with a bounded retry/backoff, and if
+// it is still held the mapping persists via the pre-lock lock-free protocol
+// (atomic write + post-commit verify + repair) with a stderr warning — a
+// possible lost UPDATE of a slug mapping must never cost a finished RUN.
+const SESSIONS_LOCK_RETRY_MS = [50, 100, 200, 400, 800, 1500, 2500];
+function acquireSessionsLock({ acquireLock, retryMs } = {}) {
+  const schedule = retryMs || SESSIONS_LOCK_RETRY_MS;
+  const acquire = acquireLock || (() => acquireCoderMutationLock('sessions', 'store', {
+    lockPath: sessionsLockPath(),
+  }));
+  for (let attempt = 0; attempt < schedule.length; attempt += 1) {
+    try {
+      return acquire();
+    } catch (err) {
+      if (err?.code !== 'LOCK_HELD') throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, schedule[attempt]);
+    }
+  }
+  try {
+    return acquire();
+  } catch (err) {
+    if (err?.code !== 'LOCK_HELD') throw err;
+    return null; // still held — degrade to the lock-free path
+  }
+}
+export function persistSessionMapping(sh, engine, slug, realId, deps = {}) {
   // Review round 5 #7: without this guard a future/typo'd engine argument
   // would CREATE an unrecognized engines.* namespace that the very next read
   // (and rewrite) silently erased.
@@ -3514,29 +3591,35 @@ export function persistSessionMapping(sh, engine, slug, realId) {
   const path = sessionsFilePath();
   mkdirSync(dirname(path), { recursive: true });
 
-  const lockHandle = acquireCoderMutationLock('sessions', 'store', {
-    lockPath: sessionsLockPath(),
-  });
-  let store;
-  try {
-    store = readSessionStore();
+  const lockHandle = acquireSessionsLock({ acquireLock: deps.acquireLock, retryMs: deps.lockRetryMs });
+  if (!lockHandle) {
+    process.stderr.write(
+      pc.yellow(
+        `⚠ session-store lock still held after ${
+          SESSIONS_LOCK_RETRY_MS.reduce((a, b) => a + b, 0)
+        }ms — persisting "${slug}" without the lock (rare concurrent mapping loss possible)\n`,
+      ),
+    );
+  }
+  const writeMapping = () => {
+    const store = readSessionStore();
     if (!store.engines[engine]) store.engines[engine] = emptyNamespace();
     store.engines[engine][slug] = realId;
     atomicWriteJson(path, store);
+  };
+  try {
+    writeMapping();
   } finally {
     if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
   }
 
-  // Post-commit verify under a FRESH lock acquisition: if another writer
-  // committed between release and verify, its write is also intact by
-  // construction (it held the lock) — only a genuinely lost update (crash
-  // between rename and lock release) can surface here, and re-persisting
-  // under the lock repairs it.
+  // Post-commit verify: under the lock this can only fire after a crash
+  // between rename and release; on the lock-free fallback path another
+  // writer may have committed in between — re-persisting repairs our slug
+  // (the other writer's slug is repaired by its own verify pass).
   const verify = readSessionStore();
   if (verify.engines[engine]?.[slug] !== realId) {
-    const retryHandle = acquireCoderMutationLock('sessions', 'store', {
-      lockPath: sessionsLockPath(),
-    });
+    const retryHandle = acquireSessionsLock({ acquireLock: deps.acquireLock });
     try {
       const retryStore = readSessionStore();
       if (!retryStore.engines[engine]) retryStore.engines[engine] = emptyNamespace();
@@ -3563,15 +3646,12 @@ function atomicWriteJson(path, obj) {
 // config.js's maybeAddGitignore guard) — a non-git cwd still gets the
 // mapping file written, just not a .gitignore entry for it.
 //
-// The persist path itself now lives in persistSessionMapping above (the
-// versioned engine-namespaced store); this comment block retains the V1
-// concurrency rationale: two concurrent `coder run` calls with different
-// slugs can each read the map before the other writes, then each write
-// back a version missing the other's fresh mapping — the loser's slug
-// silently vanishes from sessions.json, breaking its future --continue.
-// The atomic write only prevents torn reads; it doesn't close this
-// window. The re-read-and-retry below narrows it. This is a best-effort
-// mitigation, not a lock.
+// Review round 6 #1: the historical lock-free rationale ("two concurrent
+// runs can each drop the other's mapping; the atomic write only prevents
+// torn reads") is now the DEGRADED fallback of persistSessionMapping — used
+// only when the session lock stays held past the bounded retry, because
+// discarding a finished run (tokens already paid) over a mapping file was
+// strictly worse than a rare lost slug update.
 
 // ─── isolation (worktree) setup — Phase 3 helpers reused ───────────────────────
 
@@ -4873,8 +4953,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // unknown shapes, and the V2 branch must clean up a freshly-created
   // isolation worktree when it throws — previously this line ran BEFORE the
   // V2 try/catch existed, leaking .triss/wt/<slug> + the coder/<slug> branch.
+  // Review round 6 #2: the V1 lookup leaks the SAME way — it runs after
+  // setupIsolation but was never wrapped in the cleanup guard, so
+  // `coder run --isolate --session foo` with a corrupted sessions.json
+  // stranded a worktree+branch that blocked re-runs until `coder clean`.
   const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSessionRealId(engineName, opts.session) : null);
-  const sessionRealIdV1 = engine === 'opencode2' ? null : (opts.session ? lookupSessionRealId(engine, opts.session) : null);
+  let sessionRealIdV1 = null;
+  if (engine !== 'opencode2' && opts.session) {
+    try {
+      sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+  }
 
   // ─── OpenCode 2 (engine #3) ────────────────────────────────────────────────
   //
@@ -5024,7 +5116,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     process.stderr.write(
       pc.dim(
-        `[coder run] engine=opencode2 agent=${agent} model=${modelUsed}` +
+        `[coder run] engine=opencode2${agent ? ` agent=${agent}` : ' (built-in agent)'} model=${modelUsed}` +
           (isolation ? ` isolate=${isolation.wtPath}` : '') +
           '\n',
       ),

@@ -1,5 +1,29 @@
 # MISTAKES.md — triss
 
+## 2026-08-18 — A fail-closed lock on the post-run path turned a bookkeeping race into a lost paid run
+
+**What happened:** When adding the session-store mutation lock (PR #46
+Phase 4), I placed a throw-immediately `LOCK_HELD` lock around
+`persistSessionMapping` — which runs AFTER the engine finished and BEFORE
+the envelope is written. Two parallel `coder run --session` in one project
+made one of them discard a finished (already paid-for) result over a
+session-bookkeeping file. Review round 6 also caught the same class twice
+more: a corrupted `sessions.json` stranded a V1 `--isolate` worktree
+(the cleanup guard existed only in the V2 branch), and resolving the coder
+engine BEFORE `loadEnvFiles()` silently ran the whole V1 init when
+`TRISS_CODER_ENGINE=opencode2` came from a `.env` file.
+
+**Root cause:** I applied "fail closed" to a POST-RESULT write path where
+failure costs more than the inconsistency it prevents, and I kept adding
+engine-branch guards to only one of the two engine paths (V1/V2 asymmetry
+in nearly every finding: cleanup guards, warning branches, lookup paths).
+
+**Prevention:** For any failure that occurs after tokens are spent or after
+side effects exist, downgrade fail-closed to retry-then-degrade and always
+ask "what does the OTHER engine's path do here?" when adding a guard to
+one branch. Resolve configuration (engine/provider) only AFTER the env
+files load, and thread pre-dotenv snapshots explicitly to every consumer.
+
 ## 2026-08-15 — Test seams for `detectOpenCode2` broke after the realpathSync switch
 
 **What happened:** After replacing the external `realpath` spawn with Node

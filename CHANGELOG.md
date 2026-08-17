@@ -33,6 +33,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonical parser (comments and trailing commas no longer abort the run),
   and `parseOpenCodeDocument` drops trailing commas followed by comments.
 
+### Fixed (review rounds 4–6)
+
+- Dual legacy/native config forms (`provider`+`providers`,
+  `plugin`+`plugins`, `permission`+`permissions`) reject — the pinned build
+  prefers the native value while a legacy-first projection audits the other
+  one; the worker key/endpoint provenance gate resolves each field's
+  EFFECTIVE source from the pre-dotenv snapshot (a decoy key in the project
+  `.triss.env` cannot mask a shell key); unrelated provider definitions
+  (in-process npm code) reject; the audit walks the canonical
+  (`realpathSync.native`) runtime directory; audited sources are re-audited
+  immediately before the credential-bearing spawn (TOCTOU); the top-level
+  key table is captured from the official schema (benign keys no longer
+  false-reject; object `lsp`/`formatter` and `experimental` reject).
+- A held session-store lock no longer discards a finished run:
+  `persistSessionMapping` retries with backoff and degrades to the lock-free
+  protocol (mapping kept, warning emitted, foreign lock untouched).
+- A corrupted `sessions.json` on the V1 `--isolate` path no longer strands
+  the `.triss/wt/<slug>` worktree and `coder/<slug>` branch.
+- `TRISS_CODER_ENGINE=opencode2` from a `.env` file now routes `coder init`
+  to the V2 flow (the engine is resolved after the env files load); the
+  pre-dotenv snapshots are threaded through so the provenance and
+  pin-shadow checks stay exact.
+- `coder init --engine opencode2` on a tree carrying the V1 bash allowlist
+  rejects BEFORE any credential/config write with actionable guidance; a
+  fresh V2 init warns that the shared deny-everything policy removes the
+  allowlisted commands from plain V1 runs (documented in
+  docs/opencode2.md, including two new troubleshooting rows).
+- Model inspection tolerates unrelated hostile config shapes (a non-string
+  plugin reference, unreadable directories) — the post-commit audit of a
+  successful `coder model set` no longer rolls back over them; `coder
+  models` warnings use the OpenCode branch for `opencode2` (no false
+  `configured-model-unavailable` for a shell-exported foreign model);
+  rollback of an `opencode2` record reports engine `opencode2`.
+- `opencode-go/` routes price as unknown (the Go reseller's tariffs are
+  unmodeled); the prefixed `TRISS_PRICE_OPENCODE_GO_<MODEL>` override is
+  the documented way to price them.
+- Unknown `engines.*` namespaces in the session store fail closed;
+  `ensureOpenCode2RuntimeDirs` reports the directories it created;
+  `.env.example` documents `TRISS_CODER_OPENCODE2_VERSION`.
+
 ## [0.35.0] — 2026-08-14
 
 ### Added

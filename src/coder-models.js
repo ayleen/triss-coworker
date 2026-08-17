@@ -2813,7 +2813,9 @@ function rollbackOpenCodeModelChange(input) {
   //    retained (forensic evidence, may be re-run).
   return {
     ok: true,
-    engine: 'opencode',
+    // Review round 6 #7: report the manifest's engine — the shared
+    // opencode-v1 restore path serves BOTH opencode and opencode2 records.
+    engine: manifest.engine || 'opencode',
     scope,
     recordPath: resolve(from),
     restoredPaths,

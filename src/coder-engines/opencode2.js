@@ -196,7 +196,7 @@ export function opencode2StateRoot(projectRoot) {
 // must be a real directory (no symlinks), creating missing ones 0700.
 // NOTE: this module is a PURE adapter — process.stderr writes live in the
 // caller; here we stay silent and just return what changed.
-function assertNoSymlinkAncestors(root, dir) {
+function assertNoSymlinkAncestors(root, dir, created) {
   const rel = relative(root, dir);
   if (!rel || rel.startsWith('..')) {
     throw new Error(`OpenCode 2 runtime root ${dir} is not inside ${root}.`);
@@ -213,6 +213,7 @@ function assertNoSymlinkAncestors(root, dir) {
         throw new Error(`Cannot inspect OpenCode 2 runtime path component ${cur}: ${err.message}`, { cause: err });
       }
       mkdirSync(cur, { mode: 0o700 });
+      if (created) created.push(cur); // review round 6 #8: report what we created
       st = lstatSync(cur);
     }
     if (st.isSymbolicLink()) {
@@ -238,9 +239,12 @@ function assertNoSymlinkAncestors(root, dir) {
 }
 
 export function ensureOpenCode2RuntimeDirs(root) {
+  // Returns the list of directories THIS call created (review round 6 #8:
+  // the array used to be allocated and never filled, and the coder.js call
+  // site passed an options argument the one-parameter signature ignored).
   const created = [];
   for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
-    assertNoSymlinkAncestors(root, dir);
+    assertNoSymlinkAncestors(root, dir, created);
     const st = lstatSync(dir);
     if (st.isSymbolicLink()) {
       throw new Error(

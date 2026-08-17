@@ -227,7 +227,7 @@ test('opencode2 manifest rollback dispatches to the OpenCode restore through the
 
 // ─── locked session store ───────────────────────────────────────────────────
 
-test('session store: persistSessionMapping/sessionsLockPath are exported; a pre-held session lock blocks the persist (LOCK_HELD, nothing written)', withTmpHome(async ({ home }) => {
+test('session store: persistSessionMapping/sessionsLockPath are exported; a held session lock degrades to the lock-free persist (mapping kept, run never lost)', withTmpHome(async ({ home }) => {
   const commands = await loadCommands();
   assert.equal(typeof commands.persistSessionMapping, 'function');
   assert.equal(typeof commands.sessionsLockPath, 'function');
@@ -239,16 +239,24 @@ test('session store: persistSessionMapping/sessionsLockPath are exported; a pre-
   // non-repo project dir (tmp) — gitRepoRoot returns null, no .gitignore add.
   const sh = () => ({ error: true, status: 128, stdout: '' });
   // Pre-hold the session-store lock exactly the way a concurrent V1/V2
-  // writer would (O_EXCL create via the shared lock primitive).
+  // writer would (O_EXCL create via the shared lock primitive). Review
+  // round 6 #1: this persist runs AFTER a finished engine run — throwing
+  // away the mapping meant throwing away a paid run. The new contract
+  // retries, then degrades to the lock-free protocol: the mapping is
+  // written, a warning explains it, and the foreign lock is NOT stolen.
   const handle = acquireCoderMutationLock('sessions', 'store', { lockPath });
-  let threw = null;
+  const errWrites = [];
+  const snapErr = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (s) => { errWrites.push(String(s)); return true; };
   try {
-    commands.persistSessionMapping(sh, 'opencode', 'run-aaa', 'ses_aaa');
-  } catch (err) {
-    threw = err;
+    commands.persistSessionMapping(sh, 'opencode', 'run-aaa', 'ses_aaa', { lockRetryMs: [1, 1] });
+  } finally {
+    process.stderr.write = snapErr;
   }
-  assert.ok(threw && threw.code === 'LOCK_HELD', `persist under a held session lock must fail closed (got ${threw && threw.code})`);
-  assert.ok(!existsSync(join(home, '.triss', 'sessions.json')), 'nothing written while the lock is held');
+  const degraded = JSON.parse(readFileSync(join(home, '.triss', 'sessions.json'), 'utf8'));
+  assert.equal(degraded.engines.opencode['run-aaa'], 'ses_aaa', 'mapping written despite the held lock');
+  assert.match(errWrites.join(''), /without the lock/u, 'the degraded write is visible');
+  assert.ok(existsSync(lockPath), 'the foreign lock was not stolen');
   handle.release();
 
   // After release the same persist succeeds and both-engine persists merge.

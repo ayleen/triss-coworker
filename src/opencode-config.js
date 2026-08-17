@@ -378,10 +378,21 @@ function collectToolDirFiles(levelDir, layer, out) {
 export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantParsing = false } = {}) {
   if (!cwd) throw new Error('enumerateOpenCodeSources: cwd is required');
   const homeDir = resolve(home || homedir());
+  // Review round 6 #6: tolerantParsing must make the whole walk
+  // non-throwing, not just the doc parsing — a stat error on a config
+  // candidate (EACCES) or an ambiguous project boundary used to hard-crash
+  // `coder models` where it used to degrade. Strict (preflight) callers
+  // keep failing closed on both.
   const boundary = projectBoundary
     ? resolve(projectBoundary)
     : resolveOpenCodeProjectBoundary(cwd);
-  const levels = layerLevels(cwd, boundary);
+  let levels;
+  try {
+    levels = layerLevels(cwd, boundary);
+  } catch (err) {
+    if (!tolerantParsing) throw err;
+    levels = [resolve(cwd)];
+  }
 
   const configs = [];
   const plugins = [];
@@ -392,7 +403,15 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   let precedence = 0;
   const pushConfig = (path, layer, levelDir) => {
     const kind = path.endsWith('.jsonc') ? 'jsonc' : 'json';
-    const exists = isFileSafe(path);
+    // Tolerant stat (review round 6 #6): an unreadable candidate (EACCES)
+    // degrades to "absent" for inspection instead of crashing.
+    let exists;
+    try {
+      exists = isFileSafe(path);
+    } catch (err) {
+      if (!tolerantParsing) throw err;
+      exists = false;
+    }
     configs.push({
       path,
       kind,

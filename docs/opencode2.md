@@ -24,8 +24,16 @@ triss coder init --engine opencode2
 V2 **shares** the V1 `opencode.json` (global and/or project) and the same env
 pins — one config file, both engines. Consequences:
 
-- The deny-first `permission.bash["*"] = "deny"` policy is written once and
-  governs both engines.
+- The **shell policies of the two engines are NOT one policy**: the opencode2
+  beta requires deny-everything (`permission.bash = {"*":"deny"}`) because the
+  credential sits in the child environment, while V1 init writes its
+  allowlist (`git status`, `git diff`, `npm test`, …) into the same shared
+  file. A fresh `coder init --engine opencode2` writes the deny-everything
+  form (and warns that plain V1 `coder run` loses the allowlisted commands);
+  a tree initialized by V1 init is **rejected by V2** until the allow rules
+  are removed. Re-running plain `triss coder init` restores the V1 allowlist
+  — and makes the tree V2-incompatible again. This tension is inherent to
+  the shared-config beta and goes away only with real credential isolation.
 - `triss coder model set` / `triss coder models` show a shared-config notice
   when the resolved engine is `opencode2`.
 - Model transactions (`model set`, rollback) ride the same
@@ -47,8 +55,9 @@ Usage comes from per-step `step_finish` events (`usage_source: "opencode2"`).
 When a run emits no `step_finish`, the envelope reports `usage_status:
 "missing"` with **null** counters — never fabricated zeros. Cost estimation
 maps `opencode2` into the same engine family as `opencode` (explicit
-`OPENCODE_USAGE_FAMILY`), so `opencode-go/<model>` prices resolve identically
-on both engines.
+`OPENCODE_USAGE_FAMILY`). `opencode-go/<model>` prices as unknown on both
+engines — the Go reseller's tariffs are not modeled (a
+`TRISS_PRICE_OPENCODE_GO_<MODEL>` override prices it explicitly).
 
 ## Plugin and agent gates (fail closed)
 
@@ -88,6 +97,8 @@ To fully remove V2: `npm uninstall -g @opencode-ai/cli` and delete
 
 | Symptom | Cause / fix |
 |---|---|
+| `live-allow-rule (git status)` / `… not deny-everything` from `coder init --engine opencode2` | The existing (typically V1-authored) `opencode.json` carries live bash allow rules — the V2 beta cannot run while any exist. V2 init rejects **before writing anything**: remove the allow rules from `opencode.json` (V1 runs lose them too), or stay on `--engine opencode` until the V2 beta grows real credential isolation. |
+| V1 `coder run` lost `git status` / `npm test` after a V2 init | A fresh V2 init writes deny-everything into the SHARED `opencode.json` (init prints this warning). Export `TRISS_CODER_ENGINE=opencode2`, or re-run plain `triss coder init` to restore the V1 allowlist — which makes the tree V2-incompatible again. |
 | `unsupported plugin source "…"` / `unsupported agent source "…"` | The static preflight found an unverified source. Remove or disable it (see the path in the error). **Note:** the standard `~/.config/opencode/agents/` templates written by a V1 `triss coder init` also trip this gate — V2 beta requires a machine without V1 agent templates (or with them temporarily moved) until subagents are fixture-verified. |
 | `Agent not found: "coder"` on an older Triss build | Older builds injected `--agent coder` into V2 runs; current builds use the engine's built-in primary agent when `--agent` is not passed. Update Triss. |
 | `opencode2 not found` | Install the exact pin: `npm install -g @opencode-ai/cli@0.0.0-next-17430`. |
