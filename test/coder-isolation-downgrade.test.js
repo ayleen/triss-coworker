@@ -192,11 +192,10 @@ test("MCP handler forwards allowBestEffortCallerWorktree to runCoderRun", withIs
 }));
 
 test("CLI/MCP help registers the flag and exec forwards it", async () => {
-  const { execSync } = await import("node:child_process");
-  const coderHelp = execSync("node bin/triss.js coder run --help", { encoding: "utf8", cwd: "/Volumes/Orange/Projects/triss/.codex/worktrees/reliable-delegation-impl" });
-  assert.match(coderHelp, /allow-best-effort-caller-worktree/);
-  const execHelp = execSync("node bin/triss.js exec --help", { encoding: "utf8", cwd: "/Volumes/Orange/Projects/triss/.codex/worktrees/reliable-delegation-impl" });
-  assert.match(execHelp, /allow-best-effort-caller-worktree/);
+  const coderHelp = spawnSync(process.execPath, ["bin/triss.js", "coder", "run", "--help"], { encoding: "utf8" });
+  assert.match(`${coderHelp.stdout ?? ""}${coderHelp.stderr ?? ""}`, /allow-best-effort-caller-worktree/);
+  const execHelp = spawnSync(process.execPath, ["bin/triss.js", "exec", "--help"], { encoding: "utf8" });
+  assert.match(`${execHelp.stdout ?? ""}${execHelp.stderr ?? ""}`, /allow-best-effort-caller-worktree/);
   const tools = await listTools();
   const run = tools.find((t) => t.name === "triss_coder_run");
   assert.ok(run.inputSchema.properties.allowBestEffortCallerWorktree);
