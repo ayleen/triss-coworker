@@ -315,10 +315,11 @@ and writing**.
 | `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/opencode2.md](docs/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
 | `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/opencode2.md](docs/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
-| `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|opencode2|crush`) | Hand-patching the session store |
+| `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|crush`) | Hand-patching the session store |
 | `triss coder result` | Lists / cleans retained result artifacts (enforced result-store quota) | Finding result-store files by hand |
 | `triss coder state` | Section 15 rollback backup / validate for a project | Manual backups before model transactions |
-| `triss coder model(s)` | Lists the resolved engine/provider model catalogue; persists the main/small pair (`model set`) | Hand-editing `opencode.json` / `crush.json` |
+| `triss coder models` | Lists the resolved engine/provider model catalogue (`--json` for scripting) | Reading upstream model catalogues by hand |
+| `triss coder model` | Persists the main/small pair for the resolved engine (`set`) or restores a pinned version (`rollback`) | Hand-editing `opencode.json` / `crush.json` |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
 | `triss status`     | Shows current model + key + .env sources              | —                                   |
@@ -697,7 +698,7 @@ clients cannot keep locks or write files after completion. MCP cancellation is
 forwarded to the same cleanup path. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See
 `docs/glm-clients.md` for the full picture of how Triss talks to GLM
-(both engines, key/endpoint routing, models, and every usage mode),
+(all engines, key/endpoint routing, models, and every usage mode),
 `docs/configuration.md` for the coder env vars, and `docs/mcp.md` for the
 MCP tool equivalents.
 
@@ -715,8 +716,9 @@ flags: when you pass `--restrict` (or `TRISS_CODER_CRUSH_RESTRICT=1`), `triss
 coder run` emits `--restrict-run` plus `--allow-bash`/`--allow-tool` flags for
 each entry. Override per-run with `--restrict` / `--no-restrict` (resolution:
 CLI flag > env > crush.json `permissions.run.restrict` > default OFF). For
-Z.AI GLM, both engines share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads it
-natively; triss also forwards it as `ZAI_API_KEY` for older binaries; see
+Z.AI GLM, the opencode engines and crush all use the single `ZHIPU_API_KEY`
+(crush ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY`
+for older binaries; see
 **Providers** below for the opencode-only OpenCode alternatives). See
 `docs/crush-restrict-issues.md` for the live-verified bug facts.
 
@@ -1105,6 +1107,16 @@ served at a fraction of uncached input cost. The non-cached working set
 across two weeks of agentic coding was ~239M tokens. Recorded cost is what
 OpenCode stores (quota usage on subscriptions, not necessarily cash paid).
 
+> **How these numbers were computed.** Aggregated from the local OpenCode
+> SQLite database (`~/.local/share/opencode/opencode.db`) over
+> 2026-08-04 00:00 → 2026-08-18 23:59 local time, counting assistant
+> messages with non-zero usage. Input / output / reasoning / cache-read /
+> cache-write are additive token categories; `opencode-go` appears under
+> both rows because it is the provider channel, and each model family is
+> bucketed by the resolved model, not the channel. Reproduce with the
+> read-only report script in the `opencode-usage-report` skill
+> (`--days 14`).
+
 ### An earlier example week (the Triss worker)
 
 One full week of real usage on this codebase, captured from the DeepSeek
@@ -1181,12 +1193,13 @@ wizard · bash + zsh completions · `--stdin` · `triss review [PR]` ·
 `triss chat` · MCP server · Cost tracking · `triss commit-msg` · GitHub /
 Confluence / GitLab integrations · Streaming output for `ask`/`chat`/
 `review` · Codex `AGENTS.md` rules · Path-safety sandbox in MCP mode ·
-test suite · Reliable delegation for reviews (Release A/B/C: bounded
-corpus limits, exact merge-base diff identity, disposable PR bare repos,
-sequential whole-file sharding) · `triss exec` deterministic routing ·
+test suite · Reliable delegation, Release A — coder envelope v2,
+session/result stores, credential proxy, and Section 15 rollback ·
+Reliable delegation, Releases B/C — bounded review corpus limits, exact
+merge-base diff identity, disposable PR bare repos, and sequential
+whole-file review sharding · `triss exec` deterministic routing ·
 `triss coder` (opencode V1 default, opencode2 beta, crush) with worktree
-isolation, v2 session/result stores, and Section 15 rollback ·
-`--format evidence` · Kimi for Coding subscription ·
+isolation · `--format evidence` · Kimi for Coding subscription ·
 provider recipe blocks for Kimi, Ollama, and OpenRouter.
 
 **Planned**:
