@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-08-18
+
 ### Added
 
 - **Reliable delegation (Release C)** — sequential sharding per
@@ -54,6 +56,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TRISS_PROVIDER_EMPTY`, `TRISS_CANCELLED`) and scoped verdict
     framing; MCP single-review parity with root enforcement and
     structured coverage.
+
+### Fixed
+
+- `triss coder run --isolate` / `triss_coder_run` isolation downgrade
+    (`--allow-best-effort-caller-worktree` /
+    `allowBestEffortCallerWorktree`): exact opt-in semantics, stable
+    public codes `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` and
+    `TRISS_CODER_ISOLATION_DOWNGRADED` in message + `err.code` +
+    stderr + envelope warnings, and `effective_isolation:
+    best_effort_caller_worktree` (advisory-only); mechanism
+    unavailability downgrades while slug/branch conflicts
+    (`already exists`) fail closed even with the opt-in via stable
+    `err.code` dispatch (no message parsing).
+
+### Artifact integrity (0.37.0)
+
+- `triss-dsh-provider-bundle-0.37.0.tgz` — sha256
+  `6fd343622443b8e2b15a0d0365fa6a893054d7eb51a26fc1bca5db3c0e068b2d`,
+  integrity `sha512-lBTCSU8kRHm5YN9twwnw1F5wH0OXuU8iwkKyQjXSZVaVCq5ga7z20BirXCJo65rMfcMLVBrbsl1GMXYXCqzpyw==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
+- Root `triss-coworker-0.37.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.37.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
 
 ## [0.36.0] — 2026-08-18
 
@@ -150,7 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash cannot be recorded inside this file); registry verification compares
   the packed artifact against the published tarball byte-for-byte
   (`scripts/publish-gate.js pack-inspect`).
->>>>>>> origin/main
 
 ## [0.35.0] — 2026-08-14
 
