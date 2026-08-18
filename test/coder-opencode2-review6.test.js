@@ -237,6 +237,30 @@ test('R6-4: V2 init on a V1-allowlist config aborts before the credential write'
   assert.ok(!existsSync(join(home, '.config', 'triss', '.env')), 'no global env file was written');
 }));
 
+test('R6-4b (round 7): a config with NO permission block gets ADD-the-deny guidance, not remove-the-allows', () => withHome(async ({ home }) => {
+  const commands = await loadCommands();
+  // No permission block anywhere: the head gate fires with
+  // reason=no-wildcard-deny — the old message told this user to "remove the
+  // allow rules", which is the wrong direction for a missing deny.
+  writeFileSync(join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({
+    model: 'opencode-go/deepseek-v4-flash',
+  }));
+  const { sh } = makeSh();
+  let threw = null;
+  try {
+    await commands.runCoderInit(
+      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+      { spawnSync: sh, cwd: home, lock: async () => ({ release() {} }) },
+    );
+  } catch (err) {
+    threw = err;
+  }
+  assert.ok(threw, 'a config with no wildcard deny must reject V2 init');
+  assert.match(threw.message, /no-wildcard-deny/u);
+  assert.match(threw.message, /Add "permission": \{ "bash": \{ "\*": "deny" \} \}/u);
+  assert.doesNotMatch(threw.message, /Remove the allow rules/u, 'no remove-guidance for a MISSING deny');
+}));
+
 // ─── R6-5: fresh V2 init warns about the shared-policy V1 degradation ───────
 
 test('R6-5: a fresh V2 init warns that plain V1 runs lose the allowlisted commands', () => withHome(async ({ home }) => {

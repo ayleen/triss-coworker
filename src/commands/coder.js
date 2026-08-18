@@ -1556,14 +1556,21 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
     const policy = computeEffectivePermissionPolicy({ layerDocs: headDocs.layerDocs });
     if (policy.unsafe) {
       const detail = policy.detail ? ` (${policy.detail})` : '';
+      // Round-7 follow-up: the remediation differs by reason — a config with
+      // NO wildcard deny needs one ADDED, a live allow rule needs one
+      // REMOVED. Saying "remove the allow rules" to the first case sends the
+      // operator in the wrong direction.
+      const remediation = policy.reason === 'no-wildcard-deny'
+        ? 'Add "permission": { "bash": { "*": "deny" } } to opencode.json — without a wildcard ' +
+          'deny every command falls back to the built-in allow/ask baseline.'
+        : 'Remove the allow rules from opencode.json (V1 runs will lose them too) — the opencode2 ' +
+          'beta cannot run while any live allow rule exists, because the credential sits in the ' +
+          'child environment.';
       throw new Error(
         'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
-          `effective shell policy is not deny-everything (${policy.reason}${detail}). The most common cause ` +
-          'is the V1 template allowlist (git status / git diff / npm test …) — the opencode2 beta cannot ' +
-          'run while any live allow rule exists, because the credential sits in the child environment. ' +
-          'Remove the allow rules from opencode.json (V1 runs will lose them too), or keep using ' +
-          '`--engine opencode` until the V2 beta grows real credential isolation. ' +
-          'See docs/opencode2.md "Troubleshooting".',
+          `effective shell policy is not deny-everything (${policy.reason}${detail}). ${remediation} ` +
+          'Alternatively keep using `--engine opencode` until the V2 beta grows real credential ' +
+          'isolation. See docs/opencode2.md "Troubleshooting".',
       );
     }
   }
@@ -3569,6 +3576,12 @@ function acquireSessionsLock({ acquireLock, retryMs } = {}) {
       return acquire();
     } catch (err) {
       if (err?.code !== 'LOCK_HELD') throw err;
+      // DELIBERATE blocking sleep (round-7 follow-up: this is Atomics.wait,
+      // not an await) — persistSessionMapping is a synchronous CLI-final
+      // path (the engine is done, only the envelope write remains), so
+      // nothing else needs the event loop and a busy-wait-free sleep is the
+      // simplest correct pause. Worst case is the full schedule (~5.5s on
+      // the default).
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, schedule[attempt]);
     }
   }
@@ -3591,12 +3604,13 @@ export function persistSessionMapping(sh, engine, slug, realId, deps = {}) {
   const path = sessionsFilePath();
   mkdirSync(dirname(path), { recursive: true });
 
+  const lockSchedule = deps.lockRetryMs || SESSIONS_LOCK_RETRY_MS;
   const lockHandle = acquireSessionsLock({ acquireLock: deps.acquireLock, retryMs: deps.lockRetryMs });
   if (!lockHandle) {
     process.stderr.write(
       pc.yellow(
         `⚠ session-store lock still held after ${
-          SESSIONS_LOCK_RETRY_MS.reduce((a, b) => a + b, 0)
+          lockSchedule.reduce((a, b) => a + b, 0)
         }ms — persisting "${slug}" without the lock (rare concurrent mapping loss possible)\n`,
       ),
     );

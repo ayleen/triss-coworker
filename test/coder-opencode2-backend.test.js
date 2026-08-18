@@ -35,7 +35,7 @@ import {
   existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname } from 'node:path';
 import { lockPathFor, acquireCoderMutationLock } from '../src/coder-lock.js';
 
 // ─── module seam ────────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ test('legacy opencode manifest (no config_backend) maps to opencode-v1 for rollb
   rmSync(record, { recursive: true, force: true });
 }));
 
-test('opencode2 manifest rollback dispatches to the OpenCode restore through the backend field', withTmpHome(async ({ home }) => {
+test('opencode2 manifest rollback dispatches to the OpenCode restore through the backend field', withTmpHome(async () => {
   const svc = await loadService();
   const record = mkdtempSync(join(tmpdir(), 'oc2-v2-'));
   writeFileSync(

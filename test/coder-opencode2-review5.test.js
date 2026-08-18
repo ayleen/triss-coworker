@@ -136,7 +136,7 @@ const makeSpawn = () => {
 
 // ─── R5-2: opencode2 uses the config_main-based warning branch ─────────────
 
-test('R5-2: a shell-exported GLM model does not false-positive on opencode2 (config_main branch)', () => withHome(async ({ home }) => {
+test('R5-2: a shell-exported GLM model does not false-positive on opencode2 (config_main branch)', () => withHome(async () => {
   const models = await loadModels();
   // Shell export of a zai model; the selected provider is zen with an ok
   // catalogue that does NOT list GLM. runtimeMain IS the GLM export — under
