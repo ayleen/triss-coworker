@@ -7,16 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security (opencode2 engine beta — PR #46)
+## [0.36.0] — 2026-08-18
+
+### Added
+
+- **OpenCode 2 coder engine (beta)**: `triss coder run --engine opencode2`
+  and `triss coder init --engine opencode2`, pinned to the exact verified
+  build `@opencode-ai/cli@0.0.0-next-17430` (`TRISS_CODER_OPENCODE2_VERSION`
+  to override). The beta runs every managed invocation `--standalone` with
+  auto-update disabled, isolates V2 state under `<project>/.triss/opencode2/`
+  (0700), folds the V2 event stream into the shared usage envelope
+  (`usage_source: "opencode2"`, terminal-error precedence, no fabricated
+  zeros), namespaces sessions per engine, and rides the shared opencode-v1
+  configuration backend for `coder model set` / rollback. See
+  docs/opencode2.md and docs/opencode2-engine-plan.md.
+
+### Security (opencode2 engine beta)
 
 - Fail-closed effective-configuration preflight for `coder run --engine
   opencode2`: the managed provider projection (exact package, settings keys,
   credential placeholder, and the worker `baseURL` compared against the
   configured Triss worker endpoint), `provider.api` and model-level
-  `provider` transport overrides are rejected before any credential is
-  forwarded, and the permission gate now proves deny-first shell policy with
-  a real last-match-wins evaluator (V1 string shorthand, wildcard-action
-  rules, built-in agent baseline, and vetted allowlist semantics).
+  transport overrides are rejected before any credential is forwarded, and
+  the permission gate requires deny-everything shell policy (no live
+  allow/ask rule — the credential sits in the child environment), proven
+  with a real last-match-wins evaluator.
 - `opencode2` runs resolve the engine binary to an absolute path
   (`which` + `realpath`) and spawn exactly that path, re-verifying the same
   path and version after the run.
@@ -72,6 +87,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unknown `engines.*` namespaces in the session store fail closed;
   `ensureOpenCode2RuntimeDirs` reports the directories it created;
   `.env.example` documents `TRISS_CODER_OPENCODE2_VERSION`.
+
+### Artifact integrity (0.36.0)
+
+- `triss-dsh-provider-bundle-0.36.0.tgz` — sha256
+  `0e3100362fc02d242deac114ec6e0c4c966bbe5edde4f156a2ffdb76ef2eb329`,
+  integrity `sha512-P2QoA6Ahu/J9swIJhk9IkuP1OLR+bzn4zJdUKyuskutbis2GUSt5m3n+QmqP7B0rB1JAqi0WGIMkUrTBcmf9cQ==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
+- Root `triss-coworker-0.36.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.36.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
 
 ## [0.35.0] — 2026-08-14
 
