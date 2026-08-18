@@ -44,6 +44,7 @@ function readProviderEnvSnapshot({
   files = activeEnvFiles(),
   readFile = readFileSync,
   scope = 'effective',
+  keys = PROVIDER_ENV_KEYS,
 } = {}) {
   const fileValues = {};
   // activeEnvFiles is local-first. A global write must ignore project values;
@@ -55,7 +56,7 @@ function readProviderEnvSnapshot({
     if (!f.exists) continue;
     try {
       const parsed = dotenv.parse(readFile(f.path));
-      for (const key of PROVIDER_ENV_KEYS) {
+      for (const key of keys) {
         if (Object.prototype.hasOwnProperty.call(parsed, key)) fileValues[key] = parsed[key];
       }
     } catch {
@@ -178,7 +179,17 @@ function parsePositiveInteger(raw, hardMax) {
  * @returns {{limits: object, warning: string|null}}
  */
 export function reviewLimitConfig(seams = {}) {
-  const pick = seams.pick || ((key) => process.env[key]);
+  // Reloadable snapshot (P1 fix): a long-lived MCP server picks up edited or
+  // deleted review limits in .triss.env on every call instead of caching the
+  // process.env values captured at boot (loadEnvFiles only fills MISSING
+  // keys, so deletions/edits were invisible after the first read).
+  const pick = seams.pick || ((key) => {
+    const { pick: snapPick } = readProviderEnvSnapshot({
+      keys: Object.values(REVIEW_LIMIT_ENV),
+    });
+    const value = snapPick(key);
+    return value === '' ? undefined : value;
+  });
   const parsed = {};
   // P1 fix: the fallback is ATOMIC — track any parse failure and return the
   // COMPLETE default set with one warning. A per-field silent default that

@@ -41,7 +41,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
-import { buildExecutionCapabilities, allocateRunIdentity } from '../coder-orchestration.js';
+import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
@@ -4701,7 +4701,9 @@ async function runCrushFlow({
   slug,
   timeoutSec,
   credentialProxy = null,
+  sessionV2 = null,
 }) {
+  let crushSpawnStartMs;
   const modelOverride = opts.model || null;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
   // slug straight through (NO .triss/sessions.json map, unlike opencode).
@@ -4768,6 +4770,7 @@ async function runCrushFlow({
 
   let result;
   try {
+    crushSpawnStartMs = Date.now();
     result = await spawnCrush({
       argv,
       env,
@@ -4908,6 +4911,26 @@ async function runCrushFlow({
     changed: (filesChanged || []).length > 0,
   });
 
+  // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
+  // observed crush facts; crush exposes no per-event activity stream, so
+  // tool activity is derived from its tool_calls array.
+  const v2Lifecycle = deriveV2LifecycleFields({
+    timedOut: result.timedOut,
+    terminationCause: result.terminationCause,
+    signal: result.signal,
+    exitCode: result.code,
+    engineErrorObserved: Boolean(parsed.error),
+    rateLimited: exit_reason === 'error' && /rate/i.test(String(parsed.error || '')),
+    exitReason: exit_reason,
+    finalText: parsed.final_text,
+    toolActivityCount: Array.isArray(parsed.tool_calls)
+      ? parsed.tool_calls.filter((c) => c && (c.count ?? 1) > 0).length
+      : 0,
+    isolated: !!isolation,
+    sessionRequested: Boolean(session),
+  });
+  const finishedAtMs = Date.now();
+
   const envelope = {
     engine: 'crush',
     envelope_version: 2,
@@ -4920,9 +4943,24 @@ async function runCrushFlow({
       engine: 'crush',
       proxyAvailable: !!credentialProxy,
     }),
+    ...v2Lifecycle,
+    run_id: `run_${randomBytes(16).toString('hex')}`,
+    started_at: new Date(crushSpawnStartMs).toISOString(),
+    finished_at: new Date(finishedAtMs).toISOString(),
+    duration_ms: finishedAtMs - crushSpawnStartMs,
+    activity: {
+      events: 0,
+      tool_calls: Array.isArray(parsed.tool_calls) ? parsed.tool_calls.length : 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: exit_reason === 'end_turn',
+      first_event_at: null,
+      last_event_at: null,
+    },
     exit_reason,
     final_text: parsed.final_text ?? null,
     files_changed: filesChanged,
+    run_files_changed: filesChanged,
     diff_stat: diffStat,
     worktree: worktreeOut,
     usage: {
@@ -4945,6 +4983,7 @@ async function runCrushFlow({
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
+  await completeV2SessionRow(sessionV2);
 }
 
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
@@ -5087,6 +5126,80 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     oneShotSmallModel,
     timeoutSec,
   };
+}
+
+// ─── v2 session lifecycle wiring ──────────────────────────────────────────────
+// The production run reserves a v2 session row BEFORE spawn, marks it
+// running, and completes it to idle (or deletes it on failure), so the
+// `coder session list|clean` commands finally observe REAL runs instead of
+// only rows created by direct store tests. Store failures degrade to a dim
+// warning — the legacy .triss/sessions.json map stays authoritative for
+// continuation until persistent sessions become eligibility-enforced.
+
+async function reserveV2SessionRow({ engine, slug, isolated }) {
+  // Only REAL slugs are wired in v1 of this integration: the anonymous slug
+  // is allocated later in the flow, and reserving an unnamed row adds
+  // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
+  // without producing a continuable session anyway.
+  if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) {
+    return null;
+  }
+  try {
+    const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
+      await import('../coder-session-transitions.js');
+    const { mkdir } = await import('node:fs/promises');
+    const inventoryDir = sessionInventoryPath(projectRoot(), engine);
+    await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
+    const runId = `run_${randomBytes(16).toString('hex')}`;
+    await reserveCoderSession({
+      inventoryDir,
+      engine,
+      slug,
+      isolationMode: isolated ? 'isolated' : 'non_isolated',
+      lockSlot: 0,
+      runId,
+      pid: process.pid,
+      // Explicit nulls: undefined owner-tuple fields fail canonical validation.
+      processStartId: null,
+      bootId: null,
+      projectRootFingerprint: null,
+    });
+    await markCoderSessionRunning({
+      inventoryDir,
+      engine,
+      slug,
+      runId,
+      pid: process.pid,
+      processStartId: null,
+      bootId: null,
+    });
+    return { inventoryDir, engine, slug };
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
+    return null;
+  }
+}
+
+async function completeV2SessionRow(sessionV2) {
+  if (!sessionV2) return;
+  try {
+    const { markCoderSessionIdle } = await import('../coder-session-transitions.js');
+    await markCoderSessionIdle(sessionV2);
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session completion failed: ${err.message}\n`));
+  }
+}
+
+async function abandonV2SessionRow(sessionV2) {
+  if (!sessionV2) return;
+  try {
+    const { beginCoderSessionDelete, removeCoderSessionRow } =
+      await import('../coder-session-transitions.js');
+    await beginCoderSessionDelete(sessionV2);
+    await removeCoderSessionRow(sessionV2);
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session rollback failed: ${err.message}\n`));
+  }
 }
 
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
@@ -5360,6 +5473,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     );
   }
 
+  // v2 session lifecycle: reserve + running BEFORE the engine branch; the
+  // row completes to idle after the envelope is emitted and is deleted on
+  // any failure path.
+  const sessionV2 = await reserveV2SessionRow({
+    engine,
+    slug: opts.session || null,
+    isolated: !!isolation,
+  });
+
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
@@ -5377,7 +5499,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         slug,
         timeoutSec,
         credentialProxy,
+        sessionV2,
       });
+    } catch (err) {
+      await abandonV2SessionRow(sessionV2);
+      throw err;
     } finally {
       credentialProxy.revoke();
       await credentialProxy.closed;
@@ -5879,6 +6005,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
+    await abandonV2SessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
     if (isolation && isolation.freshlyCreated) {
@@ -6007,6 +6134,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     parent_call_id: ctx?.parentCallId,
   });
 
+  // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
+  // folded opencode event stream.
+  const v2Lifecycle = deriveV2LifecycleFields({
+    timedOut: result.timedOut,
+    terminationCause: result.terminationCause,
+    signal: result.signal,
+    exitCode: result.code,
+    engineErrorObserved: Boolean(result.engineErrorObserved),
+    rateLimited: Boolean(result.rateLimit),
+    exitReason: exit_reason,
+    finalText: result.finalText,
+    toolActivityCount: result.activity ? result.activity.tool_uses : 0,
+    isolated: !!isolation,
+    sessionRequested: Boolean(opts.session || sessionRealIdV1),
+  });
+  const finishedAtMs = Date.now();
+
   const envelope = {
     engine: 'opencode',
     envelope_version: 2,
@@ -6021,9 +6165,24 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       engine: 'opencode',
       proxyAvailable: !!credentialProxy,
     }),
+    ...v2Lifecycle,
+    run_id: `run_${randomBytes(16).toString('hex')}`,
+    started_at: new Date(spawnStartMs).toISOString(),
+    finished_at: new Date(finishedAtMs).toISOString(),
+    duration_ms: finishedAtMs - spawnStartMs,
+    activity: result.activity || {
+      events: 0,
+      tool_uses: 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: false,
+      first_event_at: null,
+      last_event_at: null,
+    },
     exit_reason,
     final_text: result.finalText,
     files_changed: filesChanged,
+    run_files_changed: filesChanged,
     diff_stat: diffStat,
     worktree: worktreeOut,
     usage: {
@@ -6044,6 +6203,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
+  await completeV2SessionRow(sessionV2);
 }
 
 // ─── coder clean (Phase 3) ──────────────────────────────────────────────────────

@@ -19,6 +19,9 @@
 
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+
+const { O_RDONLY, O_NOFOLLOW } = fsConstants;
 import { join } from 'node:path';
 
 export const BACKUP_MANIFEST_KEYS = [
@@ -103,12 +106,18 @@ function decodeCompletionMarker(text) {
 }
 
 async function hashFileNoFollow(filePath, state) {
-  const stats = await lstat(filePath);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
+  // Race-free no-follow (P1 fix): the lstat-then-open pair let a swap place
+  // a symlink at the path between the check and the open. The open itself is
+  // O_NOFOLLOW (a symlink fails with ELOOP), and the identity/regular-file
+  // check runs on the OPEN DESCRIPTOR (fstat), so the hashed bytes are
+  // exactly the pinned inode's bytes.
+  const fd = await open(filePath, O_RDONLY | O_NOFOLLOW);
+  const stats = await fd.stat();
+  if (!stats.isFile()) {
+    await fd.close().catch(() => {});
     throw new Error(`backup: special/non-regular file rejected (no-follow): ${filePath}`);
   }
   const hash = createHash('sha256');
-  const fd = await open(filePath, 'r');
   try {
     const chunk = Buffer.alloc(256 * 1024);
     while (true) {
@@ -218,7 +227,30 @@ export async function inventoryCoderV2State(projectRoot) {
  * @returns {Promise<{manifest: object, completion: object}>}
  */
 export async function backupCoderV2State({ projectRoot, backupDir, projectId, copyFile }) {
-  const doCopy = copyFile || ((src, dst) => import('node:fs/promises').then((fs) => fs.copyFile(src, dst)));
+  // Default copy: the SOURCE is opened O_NOFOLLOW and copied through the
+  // pinned descriptor (a path-based copyFile would independently re-resolve
+  // the source and could follow a swapped symlink). The verify hash below
+  // re-reads the pinned destination the same way.
+  const doCopy = copyFile || (async (src, dst) => {
+    const srcFd = await open(src, O_RDONLY | O_NOFOLLOW);
+    try {
+      const srcStats = await srcFd.stat();
+      if (!srcStats.isFile()) throw new Error(`backup: non-regular source rejected: ${src}`);
+      const dstFd = await open(dst, 'w', 0o600);
+      try {
+        const chunk = Buffer.alloc(256 * 1024);
+        while (true) {
+          const { bytesRead } = await srcFd.read(chunk, 0, chunk.length, null);
+          if (bytesRead === 0) break;
+          await dstFd.write(chunk.subarray(0, bytesRead));
+        }
+      } finally {
+        await dstFd.close();
+      }
+    } finally {
+      await srcFd.close();
+    }
+  });
   const inventory = await inventoryCoderV2State(projectRoot);
   const trissRoot = join(projectRoot, '.triss');
 
