@@ -533,7 +533,43 @@ git diff main...HEAD | triss review --stdin  # review this branch's merge-base d
 triss review --skip-issue    # don't try ticket lookup
 triss review --provider glm  # same review flow, one-shot GLM inference
 triss review --provider kimi # …or Kimi (pro preset = kimi-k3)
+triss review --files src/a.js test/b.test.js  # literal file selection (after --)
+triss review --issue ENG-42  # explicit tracker issue (never inferred from prose)
 ```
+
+### Reliable delegation — review safety (Release B)
+
+Review runs are bounded and fail closed (see
+[`docs/reliable-delegation-release-a.md`](docs/reliable-delegation-release-a.md)):
+
+- **Limits**: single request (256 KiB default / 1 MiB hard max), shard
+  (96 KiB / 256 KiB), total corpus (4 MiB / 16 MiB), shard count (64 /
+  256) — all reloadable via `TRISS_REVIEW_*_BYTES` / `TRISS_REVIEW_MAX_SHARDS`;
+  any contradiction falls back to the complete default set.
+- **Git**: exact merge-base-to-head identity, one unique merge base, a
+  sanitized environment (no external diff/textconv/config injection,
+  grafts and nonempty shallow repositories rejected).
+- **Selection**: literal `--files` selectors are expanded across renames
+  and only the selected content is acquired — a huge change with a small
+  selected file never buffers the full diff first.
+- **PRs**: canonical input only, exact OID re-verification, disposable
+  bare repository under a registry lock (3 concurrent runs, 120 MiB pack /
+  128 MiB filesystem quotas); the source directory is never mutated.
+- **Issues**: PR or branch prose NEVER triggers tracker access. Only an
+  explicit `--issue KEY` performs a bounded minimum-field lookup;
+  `--skip-issue` is deprecated.
+- **Empty responses** fail with `TRISS_PROVIDER_EMPTY` instead of
+  producing a clean verdict; usable non-empty text is never trimmed.
+
+### Sharding (Release C)
+
+`triss review --payload-mode shard` runs source-ordered whole-file shards
+sequentially. A file is never split across shards; the first failure or
+cancellation stops the sequence. **Completed sharded execution is not a
+global review**: there is no aggregation call, no cross-shard analysis, and
+no global approval — the CLI prints `global verdict: unavailable_for_sharded`.
+Partial errors carry completed shard verdicts only (never raw diff content).
+`evidence + shard` and `shard + --stream` are rejected before any model call.
 
 The three diff sources are mutually exclusive: local Git (`triss review` or
 `--base`), a GitHub PR (`triss review <PR>`), or UTF-8 text piped to
@@ -599,7 +635,36 @@ triss coder run "add input validation to /signup" --isolate
 triss coder run "..." --engine crush              # crush engine (isolates by default; restrict is opt-in)
 triss coder run "..." --engine crush --restrict   # crush + CLI allowlist on top of the worktree
 triss coder clean                                 # remove finished isolation worktrees
+triss coder session list                          # list v2 sessions (per engine)
+triss coder session clean <slug> --engine opencode # remove one inactive isolated session
+triss coder result list                           # list retained result artifacts
+triss coder state backup --project <path>         # Section 15 rollback backup
+triss coder state validate --project <path> --backup <dir>
 ```
+
+Every `triss coder run` envelope (and the matching MCP tool) carries the
+Release A contract fields: `session_slug` (explicit slug or an anonymous
+generated one — never an implicit persistent conversation), `result_retention`
+/ `result_id` (`retained` only for isolated changed runs with enforced
+result-store quota and a successful reservation), and `execution_capabilities`
+(eight honest `enforced|best_effort|unavailable` values plus
+`effective_isolation`). Non-isolated `files_changed` is `null`; the only
+changes-expectation evidence is `run_files_changed`. Process completion is not
+task satisfaction — use `--expect changes --isolate` and inspect `git status`
+yourself. Unavailable OS sandbox/cleanup/lock/quota does not block a
+non-isolated/best-effort run but provides none of those guarantees; explicit
+or default isolation needs `--allow-best-effort-caller-worktree` (default
+off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`
+(stable `err.code`; retry hint when the isolation mechanism is unavailable),
+and unavailable credential isolation always blocks before spawn. With the
+opt-in and only when the isolation mechanism itself is unavailable (no git
+repository or worktree creation failure — slug/branch conflicts like
+`already exists` still fail closed), the run downgrades to
+`best_effort_caller_worktree`: stderr and envelope `warnings` carry
+`TRISS_CODER_ISOLATION_DOWNGRADED` and `effective_isolation` becomes
+`best_effort_caller_worktree` (advisory-only, `files_changed` is `null`,
+edits may reach the caller worktree). Full details:
+`docs/reliable-delegation-release-a.md`.
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases

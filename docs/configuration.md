@@ -273,7 +273,20 @@ self-hosted endpoints).
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](./opencode2.md)), or `crush` |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-next-17430`  | Exact pin override for the `@opencode-ai/cli` npm install (opencode2 engine — exact match required) |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
-| `TRISS_CODER_CRUSH_RESTRICT`     | no       | unset (`0`)        | crush only — `1` opts INTO the CLI allowlist (`--restrict-run` + `--allow-bash`/`--allow-tool`, the only enforcement path that works today — crush 0.1.3 ignores the `permissions.run` config). Unset leaves crush unrestricted; crush then defaults to isolate-ON. CLI `--restrict`/`--no-restrict` overrides; crush.json `permissions.run.restrict` is the next fallback (forward-compat — currently inert) |
+| `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
+
+### Review limits (Release B)
+
+All four limits are reloadable at runtime; values are independently clamped
+to their hard maxima, and any contradiction (e.g. `shard_max > single_max`)
+falls back to the complete default set — never a partial application.
+
+| Variable                        | Default            | Hard max        | Notes                                     |
+| ------------------------------- | ------------------ | --------------- | ----------------------------------------- |
+| `TRISS_REVIEW_SINGLE_MAX_BYTES` | `262144` (256 KiB) | `1048576` (1 MiB) | Single-request payload bound (metadata + question + diff) |
+| `TRISS_REVIEW_SHARD_MAX_BYTES`  | `98304` (96 KiB)   | `262144` (256 KiB) | Per-shard payload bound (sharding not yet available) |
+| `TRISS_REVIEW_TOTAL_MAX_BYTES`  | `4194304` (4 MiB)  | `16777216` (16 MiB) | Total corpus bound; also the stdin acquisition cap |
+| `TRISS_REVIEW_MAX_SHARDS`       | `64`               | `256`            | Shard-count bound (sharding not yet available) |
 
 `triss coder init` auto-detects which Z.AI endpoint `ZHIPU_API_KEY`
 actually authenticates against — the `zai-coding-plan` (subscription)

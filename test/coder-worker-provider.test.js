@@ -591,7 +591,12 @@ test(
         stdoutWrite: () => true,
       },
     );
-    assert.equal(childEnv.TRISS_WORKER_API_KEY, 'sk-worker-fake');
+    // Release A: the child never receives the raw provider credential —
+    // only the one-run loopback proxy token (a fresh 32-hex value that is
+    // NOT the env value) plus the proxy base URL.
+    assert.match(childEnv.TRISS_WORKER_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(childEnv.TRISS_WORKER_API_KEY, '***');
+    assert.ok(childEnv.TRISS_WORKER_BASE_URL || /127\.0\.0\.1|localhost/.test(JSON.stringify(childEnv)), 'proxy base URL present');
     for (const key of ['ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
       assert.equal(key in childEnv, false);
     }
@@ -626,11 +631,15 @@ test(
       },
     );
 
-    assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
-      model: 'triss-worker/deepseek-v4-flash',
-      small_model: 'triss-worker/deepseek-v4-flash',
-    });
-    assert.equal(childEnv.TRISS_WORKER_API_KEY, 'sk-worker-fake');
+    // Release A: the worker provider definition is rewritten to point at the
+    // run-scoped loopback proxy — a one-run token and 127.0.0.1 baseURL —
+    // so the child config never carries the raw credential.
+    const workerCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
+    assert.equal(workerCfg.model, 'triss-worker/deepseek-v4-flash');
+    assert.equal(workerCfg.small_model, 'triss-worker/deepseek-v4-flash');
+    assert.match(workerCfg.provider['triss-worker'].options.apiKey, /^[0-9a-f]{32}$/);
+    assert.notEqual(workerCfg.provider['triss-worker'].options.apiKey, '***');
+    assert.match(workerCfg.provider['triss-worker'].options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\//);
     assert.equal('ZHIPU_API_KEY' in childEnv, false);
     assert.deepEqual(readFileSync(configPath), before);
   }),
@@ -661,11 +670,12 @@ test(
       },
     );
 
-    assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
-      model: 'zai-coding-plan/glm-5.2',
-      small_model: 'zai-coding-plan/glm-5-turbo',
-    });
-    assert.equal(childEnv.ZHIPU_API_KEY, 'sk-zai-fake');
+    const glmCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
+    assert.equal(glmCfg.model, 'zai-coding-plan/glm-5.2');
+    assert.equal(glmCfg.small_model, 'zai-coding-plan/glm-5-turbo');
+    // Release A: proxy token, never the raw credential.
+    assert.match(childEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(childEnv.ZHIPU_API_KEY, 'sk-zai-fake');
     assert.equal('TRISS_WORKER_API_KEY' in childEnv, false);
     assert.deepEqual(readFileSync(configPath), before);
   }),
@@ -691,6 +701,7 @@ test(
         model: 'moonshotai/kimi-k2.7-code',
         key: 'MOONSHOT_API_KEY',
         value: 'sk-moonshot-fake',
+        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
       {
         provider: 'opencode-go',
@@ -703,12 +714,13 @@ test(
         model: 'kimi-for-coding/k3',
         key: 'KIMI_API_KEY',
         value: 'sk-kimi-fake',
+        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
     ];
 
     for (const entry of cases) {
       let childEnv;
-      await runCoderRun(
+      const run = runCoderRun(
         'mechanical task',
         { provider: entry.provider, model: entry.model },
         {
@@ -719,12 +731,23 @@ test(
           stdoutWrite: () => true,
         },
       );
+      if (entry.rejected) {
+        // Honest fail-closed: the opencode built-ins with no documented
+        // base-URL override must refuse to spawn rather than hand the real
+        // upstream a one-run proxy token it would reject.
+        await assert.rejects(run, entry.rejected);
+        assert.equal(childEnv, undefined);
+        continue;
+      }
+      await run;
 
       assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
         model: entry.model,
         small_model: entry.model,
       });
-      assert.equal(childEnv[entry.key], entry.value);
+      // Release A: proxy token, never the raw credential.
+      assert.match(childEnv[entry.key], /^[0-9a-f]{32}$/);
+      assert.notEqual(childEnv[entry.key], entry.value);
       for (const key of [
         'TRISS_WORKER_API_KEY',
         'ZHIPU_API_KEY',

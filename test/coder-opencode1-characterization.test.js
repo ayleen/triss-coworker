@@ -35,13 +35,17 @@ import {
 
 function withEnv(vars, fn) {
   return async () => {
+    const fullVars = {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      ...vars,
+    };
     const saved = {};
-    for (const k of Object.keys(vars)) saved[k] = process.env[k];
-    Object.assign(process.env, vars);
+    for (const k of Object.keys(fullVars)) saved[k] = process.env[k];
+    Object.assign(process.env, fullVars);
     try {
       await fn();
     } finally {
-      for (const k of Object.keys(vars)) {
+      for (const k of Object.keys(fullVars)) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
@@ -141,6 +145,7 @@ test(
       const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
       const capture = stdoutCapture();
       await runCoderRun('do the thing', {}, {
+        disableCredentialProxy: true,
         spawn: rec.spawnFn,
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -190,6 +195,7 @@ test(
         'task',
         { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
         {
+          disableCredentialProxy: true,
           spawn: rec.spawnFn,
           // one-shot provider runs demand the exact V1 pin via
           // detectOpencodeVersion; the fake binary reports it. The effective
@@ -333,6 +339,7 @@ test(
       const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
       const capture = stdoutCapture();
       await runCoderRun('x', {}, {
+        disableCredentialProxy: true,
         spawn: rec.spawnFn,
         // version probe fails -> engineVersion falls back to the pin string
         spawnSync: () => ({ status: 1, stdout: '', error: null }),

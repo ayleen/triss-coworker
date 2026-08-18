@@ -1,341 +1,237 @@
 /**
- * coder-clean.test.js — Phase 3 (`triss coder clean` + status helpers)
+ * coder-clean.test.js — Package 4 (Atomic 13): focused cleanup lifecycle
+ * cases.
  *
- * Uses real, local git (spawnSync against temp repos) — no network, no
- * fake spawnSync needed since `git` is safe and fast to actually run here.
- * Covers: empty-diff worktree removed, dirty worktree kept, `--all`
- * removes both, non-git-repo / missing-.triss/wt no-throw, and
- * describeCoderStatus()'s worktree count.
+ * RED/GREEN: node --test test/coder-state.test.js test/coder-clean.test.js
+ *
+ * Covers the cleanup subset of Reference surface 3: successful removal,
+ * retained dirty/failed state, stale owned orphan removal, foreign/tampered
+ * retention, and rollback inventory.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtemp, mkdir, rm, writeFile, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runCoderClean, describeCoderStatus } from '../src/commands/coder.js';
-import { stripAnsi } from './_ansi.js';
+import { writeCoderState, loadCoderState, cleanOwnedCoderState } from '../src/coder-state.js';
 
-function git(cwd, args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (r.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${r.stderr || r.stdout}`);
-  }
-  return r.stdout;
-}
+const NOW = '2026-08-13T10:00:00.000Z';
 
-function initRepo() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-coder-clean-')));
-  git(dir, ['init', '-q']);
-  git(dir, ['config', 'user.email', 'test@example.com']);
-  git(dir, ['config', 'user.name', 'Test']);
-  git(dir, ['commit', '-q', '--allow-empty', '-m', 'init']);
-  git(dir, ['branch', '-M', 'main']);
-  return dir;
-}
-
-function addWorktree(repoRoot, slug) {
-  const wtPath = join(repoRoot, '.triss', 'wt', slug);
-  mkdirSync(join(repoRoot, '.triss', 'wt'), { recursive: true });
-  git(repoRoot, ['worktree', 'add', '-q', wtPath, '-b', `coder/${slug}`]);
-  return wtPath;
-}
-
-function makeDirty(wtPath) {
-  writeFileSync(join(wtPath, 'new-file.txt'), 'hello\n');
-  git(wtPath, ['add', 'new-file.txt']);
-  git(wtPath, ['commit', '-q', '-m', 'dirty change']);
-}
-
-// Simulates what `coder run` leaves behind: staged changes, no commit —
-// so the branch has NO diff vs base (worktreeHasDiff would say "clean")
-// even though there's very much in-progress work sitting in the index.
-function makeStagedNoCommit(wtPath) {
-  writeFileSync(join(wtPath, 'staged-only.txt'), 'work in progress\n');
-  git(wtPath, ['add', 'staged-only.txt']);
-}
-
-function withCapturedStderr(fn) {
-  return async () => {
-    const origWrite = process.stderr.write.bind(process.stderr);
-    const captured = [];
-    process.stderr.write = (chunk) => {
-      captured.push(chunk);
-      return true;
-    };
-    try {
-      await fn({ captured: () => stripAnsi(captured.join('')) });
-    } finally {
-      process.stderr.write = origWrite;
-    }
+async function fixture() {
+  const base = await mkdtemp(join(tmpdir(), 'triss-clean-'));
+  const trissRoot = join(base, '.triss');
+  await mkdir(join(trissRoot, 'coder-state-v2', 'opencode'), { mode: 0o700, recursive: true });
+  const { openManagedTrissRoot } = await import('../src/managed-root.js');
+  const root = await openManagedTrissRoot(base);
+  return {
+    base,
+    trissRoot,
+    root,
+    stateDir: join(trissRoot, 'coder-state-v2', 'opencode'),
+    async cleanup() {
+      await rm(base, { recursive: true, force: true });
+    },
   };
 }
 
-function withProjectRoot(root, fn) {
-  return async () => {
-    const origCwd = process.cwd();
-    const origRoot = process.env.TRISS_PROJECT_ROOT;
-    process.env.TRISS_PROJECT_ROOT = root;
-    try {
-      await fn();
-    } finally {
-      if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
-      else process.env.TRISS_PROJECT_ROOT = origRoot;
-      process.chdir(origCwd);
-    }
+function sessionRecord(slug, overrides = {}) {
+  return {
+    schema_version: 1,
+    engine: 'opencode',
+    session_slug: slug,
+    branch_ref: `refs/heads/coder-v2/<root>/opencode/${slug}`,
+    repository_object_format: 'sha1',
+    base_commit_oid: 'a'.repeat(40),
+    repository_fingerprint: `sha256:${'b'.repeat(64)}`,
+    worktree_parent_realpath: `/repo/.triss/wt-v2/opencode`,
+    worktree_basename: slug,
+    worktree_fingerprint: `sha256:${'c'.repeat(64)}`,
+    created_at: NOW,
+    base_snapshot_id: `sha256:${'d'.repeat(64)}`,
+    manifest: [],
+    ...overrides,
   };
 }
 
-// ─── lifecycle ────────────────────────────────────────────────────────────────
-
-// Matches the exact check the plan cares about: does the ref still exist.
-function branchExists(repoRoot, branch) {
-  const r = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`], {
-    encoding: 'utf8',
-  });
-  return r.status === 0;
-}
-
-test('runCoderClean removes an empty-diff worktree and keeps a dirty one', async () => {
-  const repoRoot = initRepo();
+test('cleanup removes all owned records for a slug across engines', async () => {
+  const fx = await fixture();
   try {
-    const clean = addWorktree(repoRoot, 'clean-me');
-    const dirty = addWorktree(repoRoot, 'dirty-me');
-    makeDirty(dirty);
-
-    await withProjectRoot(
-      repoRoot,
-      withCapturedStderr(async ({ captured }) => {
-        await runCoderClean({});
-        const out = captured();
-        assert.match(out, /removed clean-me/);
-        assert.match(out, /kept dirty-me/);
-      }),
-    )();
-
-    assert.equal(existsSync(clean), false, 'clean worktree dir should be gone');
-    assert.equal(existsSync(dirty), true, 'dirty worktree dir should remain');
-
-    assert.equal(
-      branchExists(repoRoot, 'coder/clean-me'),
-      false,
-      'refs/heads/coder/clean-me must be gone after cleaning a merged worktree',
-    );
-    assert.equal(
-      branchExists(repoRoot, 'coder/dirty-me'),
-      true,
-      'refs/heads/coder/dirty-me must remain — its worktree was kept',
-    );
+    await writeCoderState(fx.stateDir, 'task-a.json', sessionRecord('task-a'));
+    await writeCoderState(fx.stateDir, 'task-a.json', sessionRecord('task-a', { engine: 'opencode' }));
+    const result = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
+    assert.equal(result.action, 'removed');
+    assert.equal(await loadCoderState(fx.stateDir, 'task-a.json'), null);
   } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
+    await fx.cleanup();
   }
 });
 
-test(
-  'runCoderClean: a run-style worktree (staged uncommitted changes, no commit) is reported as KEPT, not a removal failure',
-  async () => {
-    const repoRoot = initRepo();
-    try {
-      const runStyle = addWorktree(repoRoot, 'run-style');
-      makeStagedNoCommit(runStyle);
+test('retained dirty/failed state is never auto-removed by clean (foreign slug kept)', async () => {
+  const fx = await fixture();
+  try {
+    // A dirty/failed run's state belongs to its slug; cleaning a DIFFERENT
+    // slug must keep it.
+    await writeCoderState(fx.stateDir, 'dirty-run.json', sessionRecord('dirty-run'));
+    const result = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'dirty-run.json', ownedSlug: 'task-a' });
+    assert.equal(result.action, 'kept_foreign');
+    assert.notEqual(await loadCoderState(fx.stateDir, 'dirty-run.json'), null);
+  } finally {
+    await fx.cleanup();
+  }
+});
 
-      await withProjectRoot(
-        repoRoot,
-        withCapturedStderr(async ({ captured }) => {
-          await runCoderClean({});
-          const out = captured();
-          assert.match(out, /kept run-style/);
-          assert.doesNotMatch(out, /failed to remove run-style/);
-          assert.doesNotMatch(out, /⚠/);
-        }),
-      )();
+test('stale owned orphan records are removed; foreign tampered files survive', async () => {
+  const fx = await fixture();
+  try {
+    // Stale owned record: same slug, clean removes it.
+    await writeCoderState(fx.stateDir, 'stale.json', sessionRecord('task-a'));
+    const stale = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'stale.json', ownedSlug: 'task-a' });
+    assert.equal(stale.action, 'removed');
 
-      assert.equal(existsSync(runStyle), true, 'the run-style worktree must still exist — it was kept, not removed');
-      assert.equal(branchExists(repoRoot, 'coder/run-style'), true);
+    // Foreign tampered file: not a state record at all.
+    await writeFile(join(fx.stateDir, 'junk.txt'), 'not a record', { mode: 0o600 });
+    const junk = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'junk.txt', ownedSlug: 'task-a' });
+    assert.equal(junk.action, 'kept_foreign');
+    const names = await readdir(fx.stateDir);
+    assert.ok(names.includes('junk.txt'));
+  } finally {
+    await fx.cleanup();
+  }
+});
 
-      // --all still removes it, per the unchanged --all contract.
-      await withProjectRoot(
-        repoRoot,
-        withCapturedStderr(async ({ captured }) => {
-          await runCoderClean({ all: true });
-          assert.match(captured(), /removed run-style/);
-        }),
-      )();
-      assert.equal(existsSync(runStyle), false, '--all must still remove a run-style worktree');
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+test('rollback inventory records what was removed so a crashed clean can be retried', async () => {
+  const fx = await fixture();
+  try {
+    await writeCoderState(fx.stateDir, 'task-a.json', sessionRecord('task-a'));
+    const first = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
+    assert.equal(first.action, 'removed');
+    assert.deepEqual(first.rollback, { filename: 'task-a.json', session_slug: 'task-a' });
+
+    // Retry after a crash is idempotent: the file is gone.
+    const second = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
+    assert.equal(second.action, 'absent');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+// ─── CODER-LEASE-* cleanup cases (Package 4A host gate) ──────────────────────
+
+test('CODER-LEASE-01: run/clean serializes via the fixed slot lease', async () => {
+  const fx = await fixture();
+  try {
+    const { withCoderSlotLease } = await import('../src/coder-lease.js');
+    const events = [];
+    const cycle = async (i) =>
+      withCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' }, async () => {
+        events.push(`run-${i}`);
+        await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: `task-a-${i}.json`, ownedSlug: `task-a-${i}` });
+        events.push(`clean-${i}`);
+      });
+    await Promise.all([cycle(1), cycle(2)]);
+    // Serialization, not acquisition order: each run/clean pair must be
+    // adjacent, but either cycle may win the race to acquire first.
+    assert.equal(events.length, 4, `both cycles ran: ${events.join(',')}`);
+    for (let i = 0; i < 4; i += 2) {
+      const runIdx = Number(events[i].replace(/^run-/, ''));
+      assert.ok(Number.isInteger(runIdx), `pair starts with run-N: ${events.join(',')}`);
+      assert.equal(events[i + 1], `clean-${runIdx}`, `cycle ${runIdx} ran exclusively: ${events.join(',')}`);
     }
-  },
-);
-
-test('runCoderClean --all removes the worktree but keeps an unmerged branch, with a dim note', async () => {
-  const repoRoot = initRepo();
-  try {
-    const dirty = addWorktree(repoRoot, 'dirty-me');
-    makeDirty(dirty);
-
-    await withProjectRoot(
-      repoRoot,
-      withCapturedStderr(async ({ captured }) => {
-        await runCoderClean({ all: true });
-        const out = captured();
-        assert.match(out, /removed dirty-me/);
-        assert.match(out, /kept branch coder\/dirty-me — not fully merged/);
-      }),
-    )();
-
-    assert.equal(existsSync(dirty), false, 'worktree dir must still be removed under --all');
-    assert.equal(
-      branchExists(repoRoot, 'coder/dirty-me'),
-      true,
-      'refs/heads/coder/dirty-me must survive a SAFE (-d) delete, even under --all',
-    );
   } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
+    await fx.cleanup();
   }
 });
 
-test('runCoderClean --all removes every worktree regardless of diff state', async () => {
-  const repoRoot = initRepo();
+test('CODER-LEASE-02: different-slug non-isolated targets serialize via the target lease', async () => {
+  const fx = await fixture();
   try {
-    const clean = addWorktree(repoRoot, 'clean-me');
-    const dirty = addWorktree(repoRoot, 'dirty-me');
-    makeDirty(dirty);
-
-    await withProjectRoot(repoRoot, withCapturedStderr(async () => {
-      await runCoderClean({ all: true });
-    }))();
-
-    assert.equal(existsSync(clean), false);
-    assert.equal(existsSync(dirty), false, '--all must remove dirty worktrees too');
-  } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test('runCoderClean is a no-op (no throw) outside a git repo', async () => {
-  const plainDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-coder-clean-nongit-')));
-  try {
-    await withProjectRoot(
-      plainDir,
-      withCapturedStderr(async ({ captured }) => {
-        await runCoderClean({});
-        assert.match(captured(), /not a git repository|nothing to clean/);
-      }),
-    )();
-  } finally {
-    rmSync(plainDir, { recursive: true, force: true });
-  }
-});
-
-test('runCoderClean is a no-op (no throw) when .triss/wt does not exist', async () => {
-  const repoRoot = initRepo();
-  try {
-    await withProjectRoot(
-      repoRoot,
-      withCapturedStderr(async ({ captured }) => {
-        await runCoderClean({});
-        assert.match(captured(), /nothing to clean/);
-      }),
-    )();
-  } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test('runCoderClean keeps both worktrees it fails to remove and reports them, without throwing', async () => {
-  // Simulate a removal failure via an injected fake spawnSync that always
-  // fails on `git worktree remove`, while everything else runs for real.
-  const repoRoot = initRepo();
-  try {
-    addWorktree(repoRoot, 'clean-me');
-
-    const realSpawnSync = spawnSync;
-    const flaky = (cmd, args, opts) => {
-      if (cmd === 'git' && args.includes('worktree') && args.includes('remove')) {
-        return { status: 1, stdout: '', stderr: 'simulated failure', error: null };
-      }
-      return realSpawnSync(cmd, args, { encoding: 'utf8', ...opts });
-    };
-
-    await withProjectRoot(
-      repoRoot,
-      withCapturedStderr(async ({ captured }) => {
-        await runCoderClean({}, { spawnSync: flaky });
-        assert.match(captured(), /failed to remove clean-me/);
-      }),
-    )();
-  } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test(
-  'runCoderClean: an unreadable `git status --porcelain` (non-zero exit) is treated as dirty, kept — not attempted for removal',
-  async () => {
-    // A worktree with a genuinely empty diff (worktreeHasDiff says
-    // "clean"), but the injected spawnSync makes `git status --porcelain`
-    // fail (status !== 0, e.g. corrupted index) — must be treated the
-    // same as "has uncommitted changes": kept, safe default.
-    const repoRoot = initRepo();
-    try {
-      addWorktree(repoRoot, 'unreadable-status');
-
-      const realSpawnSync = spawnSync;
-      const flaky = (cmd, args, opts) => {
-        if (cmd === 'git' && args.includes('status') && args.includes('--porcelain')) {
-          return { status: 128, stdout: '', stderr: 'fatal: unreadable index', error: null };
-        }
-        return realSpawnSync(cmd, args, { encoding: 'utf8', ...opts });
-      };
-
-      await withProjectRoot(
-        repoRoot,
-        withCapturedStderr(async ({ captured }) => {
-          await runCoderClean({}, { spawnSync: flaky });
-          assert.match(captured(), /kept unreadable-status/);
-          assert.doesNotMatch(captured(), /removed unreadable-status/);
-        }),
-      )();
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+    const { withCoderTargetLease } = await import('../src/coder-lease.js');
+    const events = [];
+    const work = async (slug) =>
+      withCoderTargetLease({ parentHandle: fx.root }, async () => {
+        events.push(`${slug}-start`);
+        await new Promise((r) => setTimeout(r, 5));
+        events.push(`${slug}-end`);
+      });
+    await Promise.all([work('slug-a'), work('slug-b')]);
+    // The lease guarantees SERIALIZATION (each holder's start/end pair runs
+    // exclusively), not acquisition order — either slug may win the race to
+    // acquire first, so asserting "slug-a ran first" is a scheduling
+    // assumption, not the contract.
+    assert.equal(events.length, 4, `both holders ran: ${events.join(',')}`);
+    for (let i = 0; i < 4; i += 2) {
+      const startSlug = events[i].replace(/-start$/, '');
+      assert.equal(events[i], `${startSlug}-start`);
+      assert.equal(events[i + 1], `${startSlug}-end`, `holder ${startSlug} ran exclusively: ${events.join(',')}`);
     }
-  },
-);
-
-// ─── status helper ──────────────────────────────────────────────────────────
-
-test('describeCoderStatus counts live worktrees under .triss/wt', async () => {
-  const repoRoot = initRepo();
-  try {
-    addWorktree(repoRoot, 'one');
-    addWorktree(repoRoot, 'two');
-
-    await withProjectRoot(repoRoot, async () => {
-      const status = describeCoderStatus();
-      assert.equal(status.worktreeCount, 2);
-      assert.equal(typeof status.pin, 'string');
-      assert.ok(Array.isArray(status.configs));
-      assert.deepEqual(
-        status.configs.map((c) => c.scope).sort(),
-        ['global', 'local'],
-      );
-    })();
+    assert.notEqual(events[0], events[2], 'the two holders serialized');
   } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
+    await fx.cleanup();
   }
 });
 
-test('describeCoderStatus never throws outside a git repo (worktreeCount 0)', async () => {
-  const plainDir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-coder-status-nongit-')));
+test('CODER-LEASE-03: release in finally even when the callback throws', async () => {
+  const fx = await fixture();
   try {
-    await withProjectRoot(plainDir, async () => {
-      const status = describeCoderStatus();
-      assert.equal(status.worktreeCount, 0);
+    const { withCoderSlotLease } = await import('../src/coder-lease.js');
+    await assert.rejects(
+      () =>
+        withCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' }, async () => {
+          throw new Error('boom');
+        }),
+      /boom/,
+    );
+    // The slot is free again after the failed callback.
+    const handle = await (async () => {
+      const { acquireCoderSlotLease } = await import('../src/coder-lease.js');
+      return acquireCoderSlotLease({ parentHandle: fx.root, lockSlot: 'task-a' });
     })();
+    await handle.release();
   } finally {
-    rmSync(plainDir, { recursive: true, force: true });
+    await fx.cleanup();
+  }
+});
+
+// ─── RUN-STATE-* clean cases (Package 5C host gate) ──────────────────────────
+
+test('RUN-STATE-01: clean with retained results blocked by Section 15 preflight', async () => {
+  const fx = await fixture();
+  try {
+    const { assertNoRetainedCoderResultsForRollback } = await import('../src/coder-run-state.js');
+    // No results root: clean may proceed.
+    const clean = await assertNoRetainedCoderResultsForRollback({
+      resultsRoot: join(fx.trissRoot, 'coder-results-v1'),
+    });
+    assert.equal(clean.ok, true);
+
+    // Non-empty results root: blocked with the stable code.
+    await mkdir(join(fx.trissRoot, 'coder-results-v1', 'runs'), { recursive: true });
+    const blocked = await assertNoRetainedCoderResultsForRollback({
+      resultsRoot: join(fx.trissRoot, 'coder-results-v1'),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, 'TRISS_CODER_ROLLBACK_RESULTS_PENDING');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('RUN-STATE-02: legacy/v2 clean separation — v2 state records are the only clean target', async () => {
+  const fx = await fixture();
+  try {
+    // v2 state under coder-state-v2 is cleanable; a legacy .triss/sessions.json
+    // map must never be touched by the v2 clean path.
+    await writeCoderState(fx.stateDir, 'task-a.json', sessionRecord('task-a'));
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(fx.trissRoot, 'sessions.json'), '{"legacy":true}', { mode: 0o600 });
+    const result = await cleanOwnedCoderState({ stateDir: fx.stateDir, filename: 'task-a.json', ownedSlug: 'task-a' });
+    assert.equal(result.action, 'removed');
+    // Legacy map survives untouched.
+    const legacy = await readFile(join(fx.trissRoot, 'sessions.json'), 'utf8');
+    assert.equal(legacy, '{"legacy":true}');
+  } finally {
+    await fx.cleanup();
   }
 });

@@ -44,6 +44,7 @@ function readProviderEnvSnapshot({
   files = activeEnvFiles(),
   readFile = readFileSync,
   scope = 'effective',
+  keys = PROVIDER_ENV_KEYS,
 } = {}) {
   const fileValues = {};
   // activeEnvFiles is local-first. A global write must ignore project values;
@@ -55,7 +56,7 @@ function readProviderEnvSnapshot({
     if (!f.exists) continue;
     try {
       const parsed = dotenv.parse(readFile(f.path));
-      for (const key of PROVIDER_ENV_KEYS) {
+      for (const key of keys) {
         if (Object.prototype.hasOwnProperty.call(parsed, key)) fileValues[key] = parsed[key];
       }
     } catch {
@@ -131,6 +132,107 @@ export function getConfig() {
       projectEnv: existsForScope('local'),
     },
   };
+}
+
+// ─── review limit configuration (Package 13 / Atomic 30) ────────────────────
+
+export const REVIEW_LIMIT_DEFAULTS = Object.freeze({
+  singleMaxBytes: 262144, // 256 KiB
+  shardMaxBytes: 98304, // 96 KiB
+  totalMaxBytes: 4194304, // 4 MiB
+  maxShards: 64,
+});
+
+export const REVIEW_LIMIT_HARD_MAXIMA = Object.freeze({
+  singleMaxBytes: 1024 * 1024, // 1 MiB
+  shardMaxBytes: 256 * 1024, // 256 KiB
+  totalMaxBytes: 16 * 1024 * 1024, // 16 MiB
+  maxShards: 128,
+});
+
+const REVIEW_LIMIT_ENV = {
+  singleMaxBytes: 'TRISS_REVIEW_SINGLE_MAX_BYTES',
+  shardMaxBytes: 'TRISS_REVIEW_SHARD_MAX_BYTES',
+  totalMaxBytes: 'TRISS_REVIEW_TOTAL_MAX_BYTES',
+  maxShards: 'TRISS_REVIEW_MAX_SHARDS',
+};
+
+// Positive base-10 integers only: reject zero, signs, decimals, exponents,
+// whitespace, Infinity, and anything above the hard maximum.
+function parsePositiveInteger(raw, hardMax) {
+  if (typeof raw !== 'string' || !/^[1-9]\d*$/.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > hardMax) return null;
+  return value;
+}
+
+/**
+ * Load the four reloadable review limits through the configuration snapshot.
+ * The set is validated atomically: shard_max <= single_max <= total_max
+ * (shard_max * max_shards MAY exceed total_max — the total bound is the final
+ * independent stop). Any invalid or contradictory set falls back to the
+ * complete default set with one bounded warning.
+ *
+ * @param {object} [seams]
+ * @param {Function} [seams.pick] env picker (defaults to the provider env
+ *   snapshot used by requestTimeoutMs)
+ * @returns {{limits: object, warning: string|null}}
+ */
+export function reviewLimitConfig(seams = {}) {
+  // Reloadable snapshot (P1 fix): a long-lived MCP server picks up edited or
+  // deleted review limits in .triss.env on every call instead of caching the
+  // process.env values captured at boot (loadEnvFiles only fills MISSING
+  // keys, so deletions/edits were invisible after the first read).
+  const pick = seams.pick || ((key) => {
+    const { pick: snapPick } = readProviderEnvSnapshot({
+      keys: Object.values(REVIEW_LIMIT_ENV),
+    });
+    const value = snapPick(key);
+    return value === '' ? undefined : value;
+  });
+  const parsed = {};
+  // P1 fix: the fallback is ATOMIC — track any parse failure and return the
+  // COMPLETE default set with one warning. A per-field silent default that
+  // lets the remaining custom values survive contradicts the documented
+  // full-default fallback.
+  let anyParseFailure = false;
+  for (const [key, envName] of Object.entries(REVIEW_LIMIT_ENV)) {
+    const raw = pick(envName);
+    if (raw === undefined || raw === null || raw === '') {
+      // Not configured at all — the default applies silently (this is NOT
+      // an invalid value).
+      parsed[key] = REVIEW_LIMIT_DEFAULTS[key];
+      continue;
+    }
+    const value = parsePositiveInteger(raw, REVIEW_LIMIT_HARD_MAXIMA[key]);
+    if (value === null) {
+      anyParseFailure = true;
+      parsed[key] = REVIEW_LIMIT_DEFAULTS[key];
+    } else {
+      parsed[key] = value;
+    }
+  }
+
+  if (anyParseFailure) {
+    return {
+      limits: { ...REVIEW_LIMIT_DEFAULTS },
+      warning: 'invalid review limit value(s) — falling back to the complete default set',
+    };
+  }
+
+  // Atomic relational validation. shard*max_shards exceeding total is legal
+  // (total is the independent final stop).
+  const valid =
+    parsed.shardMaxBytes <= parsed.singleMaxBytes &&
+    parsed.singleMaxBytes <= parsed.totalMaxBytes;
+
+  if (!valid) {
+    return {
+      limits: { ...REVIEW_LIMIT_DEFAULTS },
+      warning: 'invalid review limit set — falling back to defaults (shard_max <= single_max <= total_max)',
+    };
+  }
+  return { limits: parsed, warning: null };
 }
 
 function existsForScope(scope) {

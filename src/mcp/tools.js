@@ -11,11 +11,14 @@ import {
   chatHandler,
   fetchHandler,
   reviewHandler,
+  reviewShardHandler,
   statusHandler,
   commitMsgHandler,
   writeHandler,
   coderRunHandler,
   coderStatusHandler,
+  coderResultListHandler,
+  coderResultCleanHandler,
   jiraSearchHandler,
   jiraIssueHandler,
   jiraCreateHandler,
@@ -127,8 +130,8 @@ const CORE_TOOLS = [
     name: 'triss_review',
     description:
       'Code review via the worker model, GLM, or Kimi. Without `pr` reviews the current branch vs ' +
-      'auto-detected base; with `pr` uses GitHub CLI. Auto-detects Jira/' +
-      'Linear ticket keys in branch/PR title. Defaults to the pro preset.',
+      'auto-detected base; with `pr` uses GitHub CLI. Linked issues load ONLY from the explicit ' +
+      '`issue` argument (PR prose never triggers tracker access). Defaults to the pro preset.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,9 +152,56 @@ const CORE_TOOLS = [
           enum: ['text', 'evidence'],
           description: 'Response format (default: text)',
         },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Literal path selectors: review ONLY these files (renames select both sides)',
+        },
+        issue: {
+          type: 'string',
+          description:
+            'Explicit linked-issue key (e.g. PROJ-123); the only path that loads tracker content',
+        },
+        payload_mode: {
+          type: 'string',
+          enum: ['single'],
+          description:
+            'Payload mode (default: single). Shard mode uses the dedicated triss_review_shard tool',
+        },
       },
     },
     handler: reviewHandler,
+  },
+  {
+    name: 'triss_review_shard',
+    description:
+      'Sharded code review: sequential whole-file shards with per-shard verdicts ' +
+      'and NO global verdict (use triss_review for single-request reviews). ' +
+      'Literal `files` selectors acquire ONLY the selected content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr: { type: ['string', 'number'], description: 'GitHub PR number' },
+        base: { type: 'string', description: 'Base branch (default: auto-detect)' },
+        question: { type: 'string', description: 'Override the review question' },
+        provider: {
+          type: 'string',
+          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
+          description:
+            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
+        },
+        model: { type: 'string', description: 'Default: pro' },
+        max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Literal path selectors: review ONLY these files (renames select both sides)',
+        },
+      },
+    },
+    handler: reviewShardHandler,
   },
   {
     name: 'triss_status',
@@ -871,6 +921,7 @@ const CODER_TOOLS = [
         model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'Override the model for this run only, as <provider>/<id> — e.g. Triss worker (triss-worker/deepseek-v4-flash), Z.AI GLM (zai-coding-plan/glm-5.2), OpenCode Zen (opencode/deepseek-v4-flash-free), OpenCode Go (opencode-go/deepseek-v4-flash), Moonshot Kimi (moonshotai/kimi-k2.7-code), or Kimi for Coding (kimi-for-coding/k3)' },
         small_model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'With provider, override small_model for this run; defaults to model' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
+        allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },
@@ -888,6 +939,28 @@ const CODER_TOOLS = [
       'many isolation worktrees are currently live.',
     inputSchema: { type: 'object', properties: {} },
     handler: coderStatusHandler,
+  },
+  {
+    name: 'triss_coder_result_list',
+    description:
+      'List retained coder result artifacts (bounded projection: run_id, engine, ' +
+      'session_slug, published_at, state). Never lists persistent sessions.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: coderResultListHandler,
+  },
+  {
+    name: 'triss_coder_result_clean',
+    description:
+      'Remove ONLY a validated retained result artifact by its run-id ' +
+      '(run-<32 lowercase hex>). Never removes a persistent session selected by a slug.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'string', pattern: '^run-[0-9a-f]{32}$', description: 'run-id of the retained result to remove' },
+      },
+      required: ['run_id'],
+    },
+    handler: coderResultCleanHandler,
   },
 ];
 

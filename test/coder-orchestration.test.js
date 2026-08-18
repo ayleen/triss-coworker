@@ -1,0 +1,89 @@
+/**
+ * coder-orchestration.test.js — Package 5E (Atomic 21): OpenCode run and
+ * envelope orchestration helpers.
+ *
+ * RED/GREEN: node --test test/coder-orchestration.test.js
+ *
+ * Covers Reference surface 3 / Atomic 21 of
+ * docs/reliable-delegation-contract-plan.md: session_slug /
+ * result_retention / result_id / execution_capabilities derivations,
+ * retained-only eligibility (enforced result-store quota + successful
+ * reservation), and anonymous slug grammar.
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  EXECUTION_CAPABILITY_KEYS,
+  buildExecutionCapabilities,
+  allocateRunIdentity,
+  isAnonymousSlug,
+  isResultId,
+} from '../src/coder-orchestration.js';
+
+// ─── execution capabilities ─────────────────────────────────────────────────
+
+test('execution_capabilities carries the honest tuple for both engines', () => {
+  const withProxy = buildExecutionCapabilities({ engine: 'opencode', proxyAvailable: true });
+  assert.deepEqual(Object.keys(withProxy).sort(), [...EXECUTION_CAPABILITY_KEYS].sort());
+  assert.equal(withProxy.sandbox, 'unavailable'); // no Package 0 backend
+  assert.equal(withProxy.process_supervision, 'best_effort');
+  assert.equal(withProxy.locking, 'best_effort');
+  assert.equal(withProxy.credential_isolation, 'best_effort');
+
+  const withoutProxy = buildExecutionCapabilities({ engine: 'crush', proxyAvailable: false });
+  assert.equal(withoutProxy.credential_isolation, 'unavailable');
+
+  // No warnings leak into the envelope field.
+  assert.equal('warnings' in withProxy, false);
+});
+
+// ─── run identity ────────────────────────────────────────────────────────────
+
+test('unnamed runs get an anonymous slug; explicit slugs pass through', () => {
+  const anon = allocateRunIdentity({ slug: null, isolated: false, changed: false });
+  assert.equal(isAnonymousSlug(anon.session_slug), true);
+  assert.equal(anon.result_retention, 'none');
+  assert.equal(anon.result_id, null);
+  assert.equal(anon.anonymous, true);
+
+  const explicit = allocateRunIdentity({ slug: 'task-a', isolated: false, changed: false });
+  assert.equal(explicit.session_slug, 'task-a');
+  assert.equal(explicit.anonymous, false);
+});
+
+test('retention requires isolated + changed + enforced quota + successful reservation', () => {
+  // All conditions met: retained with a result id.
+  const retained = allocateRunIdentity({
+    slug: null,
+    isolated: true,
+    changed: true,
+    resultStoreEnforced: true,
+    reservationOk: true,
+  });
+  assert.equal(retained.result_retention, 'retained');
+  assert.equal(isResultId(retained.result_id), true);
+
+  // Each missing condition drops retention to none.
+  const cases = [
+    { isolated: false, changed: true, resultStoreEnforced: true, reservationOk: true },
+    { isolated: true, changed: false, resultStoreEnforced: true, reservationOk: true },
+    { isolated: true, changed: true, resultStoreEnforced: false, reservationOk: true },
+    { isolated: true, changed: true, resultStoreEnforced: true, reservationOk: false },
+  ];
+  for (const c of cases) {
+    const r = allocateRunIdentity({ slug: 'task-a', ...c });
+    assert.equal(r.result_retention, 'none', JSON.stringify(c));
+    assert.equal(r.result_id, null);
+  }
+});
+
+test('the anonymous and result-id grammars are exact', () => {
+  assert.equal(isAnonymousSlug('anon-'.concat('a'.repeat(32))), true);
+  assert.equal(isAnonymousSlug('anon-short'), false);
+  assert.equal(isAnonymousSlug('task-a'), false);
+  assert.equal(isResultId('run-'.concat('b'.repeat(32))), true);
+  assert.equal(isResultId('run-x'), false);
+  assert.equal(isResultId(null), false);
+});

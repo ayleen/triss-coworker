@@ -26,7 +26,7 @@ import {
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { canonicalJson, extractArtifact } from './artifact.js';

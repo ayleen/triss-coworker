@@ -1628,7 +1628,19 @@ proxy alone receives the real provider credential through a non-inherited
 in-memory value. Because the pinned engines accept credentials only through
 their ordinary environment/config channels, the engine receives a random
 single-run proxy token in the expected API-key variable plus a loopback base URL
-and provider/model routing facts. Tool subprocesses may observe this ephemeral
+and provider/model routing facts. The proxy's `endpoint` is always the upstream
+ORIGIN (`https://host[:port]`, no path); the engine's base URL is the loopback
+origin plus the pinned path prefix (`scopedBaseUrl`), and forwarding is a plain
+origin+path join, so the provider prefix can never be doubled. Anthropic-protocol
+upstreams (Kimi for Coding) authenticate with `x-api-key` plus
+`anthropic-version`, never a Bearer token, and their one-run token is likewise
+accepted from `x-api-key`. Every forwarded JSON body must name exactly the
+pinned model; the pinned prefix matches boundary-exactly (`/v1` never accepts
+`/v10`); upstream responses are relayed under a hard byte cap; revocation aborts
+every in-flight upstream fetch. Providers whose engine channel cannot be
+verifiably pinned to the proxy (no documented base-URL override) fail closed
+BEFORE spawn rather than handing the real upstream a one-run proxy token it
+would reject. Tool subprocesses may observe this ephemeral
 token; this is accepted in v1 because it cannot reveal the real provider key or
 reach any endpoint except the local run-scoped proxy. The token is accepted only
 for one run/model/provider, has request-count, byte, rate, and deadline caps no
@@ -1652,8 +1664,11 @@ memory/environment, and IPC to unrelated processes are absent or denied. This
 full filesystem/network/process denial is an enforced-sandbox claim only. In
 best-effort mode, the engine may access other same-user filesystem locations or
 network routes that the host cannot confine; the sole mandatory protection is
-the separately enforced credential-isolation launcher, which must deny raw
-provider stores and parent-process access before spawn.
+the separately required credential-isolation launcher (the loopback token
+proxy). Until an OS-enforced backend denies raw provider stores to the same-UID
+child, `execution_capabilities.credential_isolation` reports `best_effort` when
+the proxy is active and `unavailable` otherwise — never `enforced` — and the
+run-path preflight rejects any run without an active proxy.
 
 Compile an enforced-sandbox allowlist only from a host-owned toolchain manifest discovered and
 approved by Package 0, never by scanning `PATH` inside the sandbox. The
@@ -2270,10 +2285,15 @@ object, and `payload_mode`. Stdin rejects file selectors because the caller owns
 its acquisition boundary.
 
 Selectors are exact decoded repository-relative paths, never pathspecs or
-globs. Reject empty values, NUL, invalid UTF-8, absolute paths, and `.` or `..`
-components. Leading dashes, glob characters, and pathspec-magic-looking text
-remain literal filename bytes. Pass selected paths only after `--` as argument
-array entries `:(literal)<path>`; never interpolate them into a shell command.
+globs. Reject empty values, NUL, invalid UTF-8, absolute paths, `..`
+components, leading `:` pathspec magic, and glob/escape metacharacters
+(`*`, `?`, `[`, `\`) — a selector that Git could reinterpret as a pattern
+would silently change the reviewed scope. Pass selected paths only after `--`
+as argument array entries; never interpolate them into a shell command.
+A selector set that matches NOTHING fails closed with
+`TRISS_REVIEW_SCOPE_EMPTY` (exit 2) BEFORE any model call; a model verdict
+over an empty scope is never produced. Partial matches proceed with honest
+partial coverage surfaced to the caller.
 
 Selection is inventory-first:
 
@@ -2805,7 +2825,16 @@ completed calls, and `usage_status: missing` for failed calls.
 - Triss cannot override an upstream policy rejection;
 - generic lock files do not expose a universal health-check contract;
 - regex classification of `EPERM`, `EACCES`, or lock text is a diagnostic hint,
-  not proof of the root cause.
+  not proof of the root cause;
+- a loopback token proxy alone is NOT OS-enforced credential isolation: the
+  same-UID engine child can still read raw credential stores, so
+  `credential_isolation` must never be reported as `enforced` until a reviewed
+  platform backend actually denies those reads — and until then, a run is
+  REFUSED before spawn whenever a raw store (project/global `.triss.env`) is
+  readable, unless the operator explicitly acknowledges the best-effort scope
+  with `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`;
+- a scoped review whose selectors matched nothing is NOT a clean verdict: it is
+  `TRISS_REVIEW_SCOPE_EMPTY`, exit 2, before any provider call.
 
 Add only bounded categories to the envelope:
 

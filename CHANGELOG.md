@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Reliable delegation (Release C)** — sequential sharding per
+  `docs/reliable-delegation-contract-plan.md`:
+  - `--payload-mode shard` CLI + MCP shard parity: source-ordered
+    whole-file shards (a file is never split across shards);
+  - sequential executor with first-failure stop, cancellation
+    between/in-flight shards, fresh limit re-checks, and per-shard
+    attempt/usage facts;
+  - **no global verdict**: completed sharded execution prints
+    `global verdict: unavailable_for_sharded`; no aggregation call, no
+    cross-shard analysis, no global approval;
+  - structured partial errors carry completed shard verdicts only —
+    never completed prose or raw diff content;
+  - `evidence + shard` and `shard + --stream` rejected before any model
+    call;
+  - Release C synthetic acceptance (`--synthetic --release C`) and live
+    acceptance (`--live --release C`; PASS / SKIPPED_NO_CREDENTIALS /
+    BLOCKED_ENVIRONMENT recorded separately, never upgraded to success).
+
+- **Reliable delegation (Release B)** — bounded single review, exact PR
+  diff acquisition, and the issue trust boundary per
+  `docs/reliable-delegation-contract-plan.md`:
+  - reloadable review limits (`TRISS_REVIEW_SINGLE_MAX_BYTES`,
+    `TRISS_REVIEW_SHARD_MAX_BYTES`, `TRISS_REVIEW_TOTAL_MAX_BYTES`,
+    `TRISS_REVIEW_MAX_SHARDS`) with atomic validation and full-default
+    fallback on contradictions;
+  - pure diff parser with exact byte accounting and coverage model
+    (repository vs requested-scope axes);
+  - exact merge-base-to-head comparison identity with sanitized Git
+    execution (no external diff/textconv/config, grafts and nonempty
+    shallow repositories rejected) and sealed empty-attribute projection;
+  - inventory-first rename expansion (old-only/new-only selection keeps
+    both sides) and selected-content acquisition bounded by pathspec;
+  - bounded PR acquisition: canonical input, minimum-field `gh`
+    metadata, disposable bare repository under a registry lock (three
+    concurrent runs, 120 MiB pack / 128 MiB filesystem quotas), exact
+    OID re-verification, source-common-dir immutability;
+  - streaming bounded stdin with no partial buffering;
+  - issue trust boundary: PR prose never triggers tracker access;
+    explicit `--issue` uses minimum-field bounded queries; `--skip-issue`
+    deprecated;
+  - shared single-review executor with stable error codes
+    (`TRISS_REVIEW_LIMIT`, `TRISS_REVIEW_INVALID_INPUT`,
+    `TRISS_PROVIDER_EMPTY`, `TRISS_CANCELLED`) and scoped verdict
+    framing; MCP single-review parity with root enforcement and
+    structured coverage.
+
 ## [0.36.0] — 2026-08-18
 
 ### Added
@@ -102,11 +150,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash cannot be recorded inside this file); registry verification compares
   the packed artifact against the published tarball byte-for-byte
   (`scripts/publish-gate.js pack-inspect`).
+>>>>>>> origin/main
 
 ## [0.35.0] — 2026-08-14
 
 ### Added
 
+- **Reliable delegation (Release A)** — coder envelope v2 orchestration per
+  `docs/reliable-delegation-contract-plan.md`:
+  - envelope fields `session_slug`, `result_retention`, `result_id`, and
+    `execution_capabilities` (eight honest `enforced|best_effort|unavailable`
+    values + `effective_isolation`) on every safe envelope
+    (`docs/reliable-delegation-release-a.md`);
+  - v2 session CLI: `triss coder session list`, `triss coder session clean
+    <slug> --engine <opencode|crush>` (per-engine store only, legacy
+    `.triss/sessions.json` never touched);
+  - retained-result registry: `triss coder result list`, `triss coder result
+    clean <run-id>`, and the exact result-registry codec/transitions
+    (1 GiB reservation / 3 GiB payload budget + 1 GiB headroom,
+    `TRISS_CODER_RESULT_CAP`, `TRISS_CODER_RESULT_QUOTA_REQUIRED`);
+  - rollback contract: `triss coder state backup|validate|adopt|reset` with
+    bounded no-follow backup, completion marker, and
+    `TRISS_CODER_ROLLBACK_RESULTS_PENDING` guard;
+  - quarantine transaction and quarantine clean (`quarantine-v1`,
+    phase-aware manifest machine, completion-marker hashing);
+  - credential proxy (loopback one-run token) on both engines — the real
+    provider key never reaches the engine environment; every run requires
+    the proxy (Release A rejects runs when it is unavailable);
+  - pure provider error classifier with stable public codes
+    (`TRISS_PROVIDER_AUTH/POLICY/RATE/TIMEOUT/NOT_FOUND/CONNECTION/UNKNOWN/
+    CONFLICT/EMPTY`);
+  - bounded blocker diagnostics (`environment_permission`,
+    `execution_policy`, `lock_or_process_state`, `unknown`; ≤16 entries,
+    duplicate categories collapsed);
+  - MCP: `allowBestEffortCallerWorktree` (default false),
+    `triss_coder_result_list`, `triss_coder_result_clean`.
 - `triss-dsh-provider-bundle`, a standalone npm package (workspace
   `packages/dsh-provider-bundle`) that activates the DeepSeek Harness
   `llm-pi-ai` adapter for `opencode`, `opencode-go`, and `zai` routes in a
@@ -175,6 +253,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash cannot be recorded inside this file); registry verification compares
   the packed artifact against the published tarball byte-for-byte
   (`scripts/publish-gate.js pack-inspect`).
+
+### Changed
+
+- Non-isolated `files_changed` is now `null` rather than `[]`;
+  `run_files_changed` is the only changes-expectation evidence. Consumers
+  must branch on `envelope_version` and `change_detection.status`.
+- Bare `--continue` is rejected with migration guidance; v2 state is
+  selected only via `--session <slug>`.
+- `ask`/`review`/MCP fail empty responses with the stable
+  `TRISS_PROVIDER_EMPTY` code instead of a direct `process.exit`.
+- Capability-dependent Windows npm support wording: an unavailable OS
+  sandbox/cleanup/lock/quota never blocks a non-isolated/best-effort run but
+  provides none of those guarantees; unavailable credential isolation always
+  blocks before spawn.
+
+### Fixed
+
+- `fd.readFile` position semantics in fixed-kernel-lock release (marker
+  clearing reads via path, keeping the fixed inode).
+- Quarantine `readdir` import; result-state deletion moved to an immutable
+  tombstone sidecar.
 
 ## [0.34.0] — 2026-08-13
 

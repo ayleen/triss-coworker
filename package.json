@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node scripts/check-lockfile-gate.cjs && node --test test/*.test.js",
+    "test": "node scripts/check-lockfile-gate.cjs && TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1 node --test test/*.test.js",
     "start": "node bin/triss.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

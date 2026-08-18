@@ -52,7 +52,12 @@ function withEnv(vars, fn) {
     writeFileSync(join(cfgDir, 'opencode.json'), JSON.stringify({
       permission: { bash: { '*': 'deny' } },
     }));
-    const allVars = { HOME: isolatedHome, ...vars };
+    const allVars = {
+      HOME: isolatedHome,
+      TRISS_PROJECT_ROOT: isolatedHome,
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      ...vars,
+    };
     for (const k of Object.keys(allVars)) saved[k] = process.env[k];
     Object.assign(process.env, allVars);
     try {

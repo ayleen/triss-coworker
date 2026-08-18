@@ -40,8 +40,19 @@ import {
   runEdit,
   runUnset,
 } from '../src/commands/config.js';
-import { runCoderInit, runCoderRun, runCoderClean } from '../src/commands/coder.js';
+import {
+  runCoderInit,
+  runCoderRun,
+  runCoderClean,
+  runCoderSessionList,
+  runCoderSessionClean,
+  runCoderStateAdopt,
+  runCoderStateReset,
+  runCoderResultList,
+  runCoderResultClean,
+} from '../src/commands/coder.js';
 import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
+import { runCoderStateBackup, runCoderStateValidate } from '../src/commands/coder-state-backup.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
 import { positiveIntegerOption, positiveNumberOption } from '../src/option-validation.js';
@@ -191,6 +202,7 @@ program
   .option('--small-model <p/m>', 'forward coder small model')
   .option('--isolate', 'forward coder isolation')
   .option('--no-isolate', 'disable coder isolation')
+  .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')
@@ -214,6 +226,8 @@ program
   .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
   .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
   .option('--stdin', 'read an explicitly piped UTF-8 diff instead of Git or PR sources')
+  .option('--files <paths...>', 'literal path selectors: review ONLY these files (repeatable; renames select both sides)')
+  .option('--issue <key>', 'explicit linked-issue key (e.g. PROJ-123); PR prose never triggers tracker access')
   .option('-q, --question <text>', 'override the default review question')
   .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
   .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
@@ -221,6 +235,7 @@ program
   .option('--format <format>', 'response format: text (default) or evidence')
   .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
+  .option('--payload-mode <mode>', 'review payload mode: single (default) or shard (sequential whole-file shards; no global verdict)')
   .action((pr, opts) => wrap(runReview)(pr, opts));
 
 program
@@ -353,6 +368,7 @@ coder
   .option('--no-restrict', 'crush only: disable restrict (crush auto-approves every tool — the default)')
   .option('--cwd <path>', 'working directory (ignored with --isolate)')
   .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
+  .option('--allow-best-effort-caller-worktree', 'allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)')
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));
@@ -407,6 +423,72 @@ coderModel
   .option('-g, --global', 'restore to the global scope (~/.config/opencode/ or ~/.local/share/crush/)')
   .option('-l, --local', 'restore to the project scope (./opencode.json or ./.crush/crush.json)')
   .action((opts) => wrap(runCoderModelRollback)(opts.from, opts));
+
+// `coder state` is a command GROUP whose leaves are `backup` and `validate`
+// (Section 15 rollback contract).
+const coderState = coder
+  .command('state')
+  .description('Back up or validate the v2 coder state of a project (rollback contract)');
+
+coderState
+  .command('backup')
+  .description('Create a bounded rollback backup of the v2 coder state (both engine session stores + coder-state-v2)')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .option('--backup <path>', 'backup destination directory (default: <project>/.triss/backups/<timestamp>)')
+  .option('--json', 'print the stable machine-readable result (no secrets)')
+  .action((opts) => wrap(runCoderStateBackup)(opts));
+
+coderState
+  .command('validate')
+  .description('Validate a rollback backup: manifest schema, completion marker hash, per-entry verification')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .requiredOption('--backup <basename>', 'backup directory to validate')
+  .option('--json', 'print the stable machine-readable result (no secrets)')
+  .action((opts) => wrap(runCoderStateValidate)(opts));
+
+coderState
+  .command('adopt')
+  .description('Adopt owned v2 state under a NEW project id: quarantine the old id, rewrite validated owner records')
+  .requiredOption('--from-project-id <32hex>', 'the old project id (32 lowercase hex) to quarantine')
+  .action((opts) => wrap(runCoderStateAdopt)(opts));
+
+coderState
+  .command('reset')
+  .description('Quarantine all validated local v2 state and create an empty identity (never deletes it)')
+  .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
+  .action((opts) => wrap(runCoderStateReset)(opts));
+
+// `coder session` group (v2 session CLI contract, Atomic 23).
+const coderSession = coder
+  .command('session')
+  .description('List or clean v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)');
+
+coderSession
+  .command('list')
+  .description('Serialize the bounded v2 session inventory projection to stdout')
+  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .action((opts) => wrap(runCoderSessionList)(opts));
+
+coderSession
+  .command('clean <slug>')
+  .description('Remove a selected inactive v2 isolated session/workspace transaction')
+  .requiredOption('--engine <name>', 'coding engine: opencode or crush (MANDATORY)')
+  .action((slug, opts) => wrap(runCoderSessionClean)(slug, opts));
+
+// `coder result` group (retained-result CLI, Atomic 23).
+const coderResult = coder
+  .command('result')
+  .description('List or clean retained result artifacts (never persistent sessions)');
+
+coderResult
+  .command('list')
+  .description('Serialize the bounded retained-result projection to stdout')
+  .action((opts) => wrap(runCoderResultList)(opts));
+
+coderResult
+  .command('clean <run-id>')
+  .description('Remove only a validated retained result artifact (run-<32 lowercase hex>)')
+  .action((runId, opts) => wrap(runCoderResultClean)(runId, opts));
 
 function wrap(fn) {
   return async (...args) => {

@@ -1,21 +1,24 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
+import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
 import {
   createReviewBoundaryId,
   reviewSystemPromptForFormat,
   wrapReviewSection,
 } from '../review-prompt.js';
-import { readStdin } from '../secrets.js';
+import { readBoundedReviewStdin, REVIEW_STDIN_MAX_BYTES } from '../review-input.js';
+import { executeSingleReview, REVIEW_EXIT_CODES } from '../review-executor.js';
+import { parseUnifiedDiff, planSingleReviewPayload } from '../review-payload.js';
+import { acquireScopedReviewDiff, validateReviewSelectors } from '../review-scoped.js';
+import { reviewLimitConfig } from '../config.js';
 import { shouldStream } from './chat.js';
 import {
   currentBranch,
   defaultBranch,
-  gitDiff,
   gitChangedFiles,
   gh,
   hasCommand,
-  parseTicketKey,
 } from '../git.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
@@ -41,6 +44,17 @@ export function validateReviewOptions(prNumber, opts) {
       'Cannot combine --base with --stdin. Use: git diff | triss review --stdin',
     );
   }
+  // Atomic 45 / Package 24: evidence + shard is rejected in the CLI router.
+  if (opts.payloadMode === 'shard' && responseFormat === 'evidence') {
+    throw new Error('--payload-mode shard cannot be combined with --format evidence');
+  }
+  // Release B trust boundary: --files selectors and --issue are literal,
+  // explicit options; they cannot be derived from PR prose.
+  if (opts.files !== undefined && !Array.isArray(opts.files)) {
+    throw new Error('--files expects literal path selectors');
+  }
+  const selectorCheck = validateReviewSelectors(Array.isArray(opts.files) ? opts.files : []);
+  if (!selectorCheck.ok) throw new Error(selectorCheck.message);
   return { responseFormat, maxTokens };
 }
 
@@ -52,7 +66,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   const stdinMode = Boolean(opts.stdin);
 
   const isTTY = deps.isTTY ?? process.stdin.isTTY;
-  const readInput = deps.readStdin || readStdin;
   let stdinDiff;
   if (stdinMode) {
     if (isTTY) {
@@ -60,16 +73,31 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         '--stdin requires piped input. Try: git diff | triss review --stdin',
       );
     }
-    try {
-      stdinDiff = await readInput({ trim: false, fatalUtf8: true });
-    } catch (error) {
-      if (error?.code === 'TRISS_INVALID_UTF8') {
+    // Release B: bounded streaming stdin — cap-plus-one bytes, fail closed
+    // on overflow instead of buffering unbounded input. The legacy
+    // deps.readStdin seam (tests, embedders) is honoured as a plain string
+    // source and cap-checked the same way; the production path always uses
+    // the bounded streaming reader.
+    const legacyReader = typeof deps.readStdin === 'function' ? deps.readStdin : null;
+    if (legacyReader) {
+      stdinDiff = await legacyReader({ trim: false, fatalUtf8: true });
+      const bytes = Buffer.byteLength(String(stdinDiff), 'utf8');
+      if (bytes > REVIEW_STDIN_MAX_BYTES) {
         throw new Error(
-          `${error.message}. Try: git diff | triss review --stdin`,
-          { cause: error },
+          `stdin input of ${bytes} bytes exceeds the ${REVIEW_STDIN_MAX_BYTES}-byte cap. Try: git diff -- <path> | triss review --stdin`,
         );
       }
-      throw error;
+    } else {
+      const bounded = await (deps.readBoundedStdin || readBoundedReviewStdin)({
+        stream: deps.stdinStream || process.stdin,
+        maxBytes: REVIEW_STDIN_MAX_BYTES,
+      });
+      if (!bounded.ok) {
+        throw new Error(
+          `${bounded.message || 'bounded stdin read failed'}. Try: git diff | triss review --stdin`,
+        );
+      }
+      stdinDiff = bounded.text;
     }
     if (typeof stdinDiff !== 'string') {
       throw new Error(
@@ -83,18 +111,54 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     }
   }
 
-  const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
-
   let title;
   let description = '';
   let diff;
   let baseRef = opts.base;
   let headRef;
   let urlNote = '';
+  let changedFilesFromInventory = null;
 
+  // Release B: literal --files selectors validated up front; exact merge-base
+  // comparison under the sealed Git projection.
+  const scopedSelectors = Array.isArray(opts.files) ? opts.files : [];
   if (stdinMode) {
     title = 'stdin';
     diff = stdinDiff;
+  } else if (scopedSelectors.length > 0) {
+    const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+      deps.scopedDeps || {},
+      {
+        pr: prNumber,
+        base: baseRef,
+        selectors: scopedSelectors,
+      },
+    );
+    if (!scoped.ok) {
+      if (scoped.code === 'TRISS_REVIEW_SCOPE_EMPTY') {
+        process.stderr.write(pc.dim(`✗ ${scoped.message}\n`));
+        process.exitCode = REVIEW_EXIT_CODES.invalidInput;
+        return undefined;
+      }
+      throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'scoped acquisition failed'}`);
+    }
+    diff = scoped.diff;
+    baseRef = scoped.base_ref || baseRef;
+    headRef = scoped.head_ref || headRef;
+    title = prNumber ? `PR #${prNumber}` : headRef || 'scoped review';
+    const unmatched = scoped.unmatched || [];
+    if (unmatched.length > 0) {
+      process.stderr.write(pc.dim(
+        `[triss/review] scope: ${unmatched.length} requested file(s) not in the change: ` +
+          `${unmatched.join(', ')}\n`,
+      ));
+    }
+    if (!diff.trim()) {
+      process.stderr.write(pc.dim('✗ none of the requested files appear in the acquired diff\n'));
+      process.exitCode = REVIEW_EXIT_CODES.invalidInput;
+      return undefined;
+    }
+    changedFilesFromInventory = scoped.changed_files || [];
   } else if (prNumber) {
     if (!hasCommand('gh')) {
       throw new Error(
@@ -108,18 +172,44 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     baseRef = baseRef || pr.baseRefName;
     headRef = pr.headRefName;
     urlNote = pr.url;
-    diff = gh(['pr', 'diff', prNumber]);
+    if (deps.prDiff) {
+      diff = deps.prDiff(prNumber);
+    } else {
+      const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+        deps.scopedDeps || {},
+        { pr: prNumber, base: baseRef, selectors: [] },
+      );
+      if (!scoped.ok) {
+        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'PR acquisition failed'}`);
+      }
+      diff = scoped.diff;
+    }
   } else {
     headRef = currentBranch();
     baseRef = baseRef || defaultBranch();
     title = headRef;
-    diff = (deps.gitDiff || gitDiff)(baseRef, 'HEAD');
+    if (deps.gitDiff) {
+      diff = deps.gitDiff(baseRef, 'HEAD');
+    } else {
+      const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
+        deps.scopedDeps || {},
+        { base: baseRef, selectors: [] },
+      );
+      if (!scoped.ok) {
+        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'local diff acquisition failed'}`);
+      }
+      diff = scoped.diff;
+    }
   }
 
   if (!diff.trim()) {
     const empty = emptyReviewResponse(responseFormat);
-    process.stdout.write(responseFormat === 'evidence' ? `${empty}\n` : pc.dim(`${empty}\n`));
-    return responseFormat === 'evidence' ? empty : undefined;
+    if (responseFormat === 'text') {
+      process.stdout.write(pc.dim(`${empty}\n`));
+      return undefined;
+    }
+    process.stdout.write(`${empty}\n`);
+    return empty;
   }
 
   const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
@@ -131,12 +221,20 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   });
   const { provider, model } = request;
 
-  const ticketCorpus = stdinMode || opts.skipIssue
-    ? ''
-    : await loadLinkedIssue(parseTicketKey(title, headRef, description));
+  const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
+  let ticketCorpus = '';
+  if (!stdinMode && opts.issue) {
+    ticketCorpus = await loadLinkedIssue(String(opts.issue).trim());
+  } else if (!stdinMode && !opts.skipIssue && opts.payloadMode !== 'shard') {
+    if (!prNumber && headRef) {
+      ticketCorpus = await loadLinkedIssue(branchTicketKey(headRef));
+    }
+  }
 
   let changedFiles = [];
-  if (!prNumber && !stdinMode) {
+  if (changedFilesFromInventory) {
+    changedFiles = changedFilesFromInventory;
+  } else if (!prNumber && !stdinMode) {
     try {
       changedFiles = gitChangedFiles(baseRef);
     } catch {
@@ -155,49 +253,198 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         changedFiles.length ? `\nChanged files:\n${changedFiles.join('\n')}` : null,
         `</change>`,
       ].filter(Boolean).join('\n');
-  const sections = [
-    wrapReviewSection(boundaryId, 'change', changeCorpus),
-    ticketCorpus ? wrapReviewSection(boundaryId, 'ticket', ticketCorpus) : null,
-    wrapReviewSection(boundaryId, 'diff', `<diff>\n${diff}\n</diff>`),
-  ].filter(Boolean);
-  const corpus = sections.join('\n\n');
+
+  if (opts.payloadMode === 'shard') {
+    if (shouldStream(opts)) {
+      throw new Error('--payload-mode shard cannot be combined with --stream');
+    }
+    const { parseUnifiedDiff, planSequentialShards } = await import('../review-payload.js');
+    const { executeReviewPlan, REVIEW_EXIT_CODES } = await import('../review-executor.js');
+    const { reviewLimitConfig } = await import('../config.js');
+    const limits = reviewLimitConfig().limits;
+
+    const parsed = parseUnifiedDiff(diff);
+    if (parsed.error) {
+      process.stderr.write(pc.dim(`[triss/review] ${parsed.error}\n`));
+      process.exitCode = 2;
+      return undefined;
+    }
+    const fullMetadata = [
+      wrapReviewSection(boundaryId, 'change', changeCorpus),
+      ...(ticketCorpus ? [wrapReviewSection(boundaryId, 'ticket', ticketCorpus)] : []),
+    ].join('\n\n');
+
+    const planned = planSequentialShards({
+      sections: parsed.sections,
+      question: opts.question || DEFAULT_QUESTION,
+      metadata: fullMetadata,
+      limits,
+    });
+    if (planned.error) {
+      process.stderr.write(pc.dim(`[triss/review] ${planned.error}${planned.path ? `: ${planned.path}` : ''}\n`));
+      process.exitCode = 2;
+      return undefined;
+    }
+
+    const result = await executeReviewPlan(
+      {
+        callModel: async ({ shard, question, metadata }) => {
+          const shardCorpus = [
+            metadata,
+            wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((s) => s.raw).join('')}\n</diff>`),
+          ].join('\n\n');
+          const resp = await sendChat({
+            ...request,
+            maxTokens,
+            messages: [
+              { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
+              { role: 'user', content: shardCorpus },
+              { role: 'user', content: question },
+            ],
+            label: 'triss/review',
+          });
+          return assertProviderText(responseText(resp));
+        },
+        limits,
+      },
+      {
+        shards: planned.plan.shards,
+        question: opts.question || DEFAULT_QUESTION,
+        metadata: fullMetadata,
+        signal: undefined,
+      },
+    );
+
+    if (!result.ok) {
+      process.stderr.write(pc.dim(`[triss/review] shard execution failed: ${result.message}\n`));
+      // shard body).
+      if (Array.isArray(result.shards)) {
+        for (const shard of result.shards) {
+          if (shard && shard.verdict !== undefined) {
+            process.stdout.write(`--- shard ${shard.shard_index} (completed before failure) ---\n`);
+            process.stdout.write(`${shard.verdict}\n`);
+          }
+        }
+      }
+      process.stdout.write('global verdict: unavailable_for_sharded\n');
+      process.exitCode = result.exit ?? REVIEW_EXIT_CODES.provider;
+      return undefined;
+    }
+    // Separated execution/scope fields + no global verdict (per-shard only).
+    process.stderr.write(pc.dim(`[triss/review] shards=${result.attempts} bytes=${result.shards.reduce((a, s) => a + s.bytes, 0)}\n`));
+    for (const shard of result.shards) {
+      process.stdout.write(`--- shard ${shard.shard_index} ---\n`);
+      process.stdout.write(`${shard.verdict}\n`);
+    }
+    process.stdout.write('global verdict: unavailable_for_sharded\n');
+    return result.shards.map((s) => s.verdict).join('\n\n');
+  }
 
   const diagnostic = stdinMode
     ? `[triss/review] provider=${provider} model=${model} source=stdin ` +
-      `bytes=${Buffer.byteLength(diff, 'utf8')}\n`
+      `bytes=${Buffer.byteLength(diff, 'utf8')} limits=bounded-stdin\n`
     : `[triss/review] provider=${provider} model=${model} ` +
       `bytes=${Buffer.byteLength(diff, 'utf8')} ` +
       `base=${baseRef} head=${headRef}\n`;
   process.stderr.write(pc.dim(diagnostic));
 
-  const messages = [
-    {
-      role: 'system',
-      content: reviewSystemPromptForFormat(responseFormat, { boundaryId }),
-    },
-    { role: 'user', content: corpus },
-    { role: 'user', content: opts.question || DEFAULT_QUESTION },
-  ];
-  const useStream = shouldStream(opts);
-  const resp = useStream
-    ? await sendChatStream({
-        ...request,
-        maxTokens,
-        messages,
-        label: 'triss/review',
-        onChunk: (d) => process.stdout.write(d),
-      })
-    : await sendChat({ ...request, maxTokens, messages, label: 'triss/review' });
-
-  const out = responseText(resp);
-  if (!out) {
-    process.stderr.write(pc.red('[triss/review] empty response — try --max-tokens 16384\n'));
-    process.exit(1);
+  // Release B: bounded single-request payload planning (P0 fix — a payload
+  // that cannot fit singleMaxBytes fails closed with a shard hint instead
+  // of a silent clean verdict over truncated files).
+  const limits = reviewLimitConfig().limits;
+  const selectors = scopedSelectors;
+  const parsedSections = parseUnifiedDiff(diff);
+  if (parsedSections.error) {
+    throw new Error(`failed to parse diff: ${parsedSections.error}`);
   }
-  if (!useStream) process.stdout.write(out + '\n');
-  else process.stdout.write('\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review', { provider: request.provider }) + '\n'));
-  return out;
+  // Literal --files selection happens BEFORE planning (P0 fix): the planner
+  // sees only the requested sections, so an unrelated huge file in the same
+  // change can no longer fail a small scoped review with single_max_exceeded.
+  const selectedSections = selectors.length > 0
+    ? parsedSections.sections.filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
+    : parsedSections.sections;
+  // Byte-exactness: a selector-less review forwards the acquired diff
+  // VERBATIM (a section rebuild would drop pre-header bytes like a BOM
+  // line); only the scoped path uses the section-filtered rebuild.
+  const selectedDiff = selectors.length > 0
+    ? selectedSections.map((s) => s.raw).join('\n')
+    : diff;
+  // Coverage flows through executeSingleReview; requested-scope reporting
+  // is derived there from the literal selectors.
+  const plan = planSingleReviewPayload({
+    sections: selectedSections,
+    question: opts.question || DEFAULT_QUESTION,
+    metadata: changeCorpus,
+    limits,
+  });
+  if (plan.error) {
+    process.stderr.write(pc.dim(
+      `[triss/review] ${plan.error}${plan.path ? `: ${plan.path}` : ''} — ` +
+        `retry with --payload-mode shard\n`,
+    ));
+    process.exitCode = REVIEW_EXIT_CODES.limit;
+    return undefined;
+  }
+
+  const singleResult = await executeSingleReview(
+    {
+      callModel: async ({ diff: reviewDiff, question }) => {
+        const sections = [
+          ...(ticketCorpus ? [wrapReviewSection(boundaryId, 'ticket', ticketCorpus)] : []),
+          wrapReviewSection(boundaryId, 'change', changeCorpus),
+          wrapReviewSection(boundaryId, 'diff', `<diff>\n${reviewDiff}\n</diff>`),
+        ].join('\n\n');
+        const messages = [
+          {
+            role: 'system',
+            content: reviewSystemPromptForFormat(responseFormat, { boundaryId }),
+          },
+          { role: 'user', content: sections },
+          { role: 'user', content: question },
+        ];
+        const useStream = shouldStream(opts);
+        const resp = useStream
+          ? await sendChatStream({
+              ...request,
+              maxTokens,
+              messages,
+              label: 'triss/review',
+              onChunk: (d) => process.stdout.write(d),
+            })
+          : await sendChat({ ...request, maxTokens, messages, label: 'triss/review' });
+        process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review', { provider: request.provider }) + '\n'));
+        return assertProviderText(responseText(resp));
+      },
+      limits,
+    },
+    {
+      diff: selectedDiff,
+      question: opts.question || DEFAULT_QUESTION,
+      selectors,
+      metadataBytes:
+        Buffer.byteLength(changeCorpus, 'utf8') + Buffer.byteLength(ticketCorpus, 'utf8'),
+    },
+  );
+
+  if (!singleResult.ok) {
+    process.stderr.write(pc.dim(`✗ ${singleResult.message || singleResult.code}\n`));
+    process.exitCode = singleResult.exit ?? REVIEW_EXIT_CODES.provider;
+    return undefined;
+  }
+  // Scoped reviews surface their honest coverage on stderr (stdout stays the
+  // verdict only): a partial scope must never read as a full clean review.
+  if (singleResult.coverage?.requested) {
+    const req = singleResult.coverage.requested;
+    process.stderr.write(pc.dim(
+      `[triss/review] scope: ${req.coverage} — ${req.matched.length}/${req.matched.length + req.unmatched.length} requested file(s) reviewed\n`,
+    ));
+  }
+  // When streaming, the verdict was already printed chunk-by-chunk; printing
+  // it again would duplicate the full text on stdout.
+  if (!shouldStream(opts)) {
+    process.stdout.write(singleResult.verdict + '\n');
+  }
+  return singleResult.verdict;
 }
 
 async function tryLoadLinkedIssue(key) {
@@ -243,4 +490,13 @@ async function tryLoadLinkedIssue(key) {
     }
   }
   return '';
+}
+
+// Extract a ticket key from a LOCAL branch name only (Release B: PR prose
+// never triggers tracker access; the branch name is operator-chosen, not
+// attacker-controlled PR text).
+function branchTicketKey(headRef) {
+  if (typeof headRef !== 'string') return '';
+  const m = /([A-Z][A-Z0-9]+-\d+)/.exec(headRef);
+  return m ? m[1] : '';
 }

@@ -33,7 +33,6 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import readline from 'node:readline';
 import pc from 'picocolors';
 import {
   captureWorkerShellSnapshot,
@@ -41,6 +40,9 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
+import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE } from '../coder-result.js';
+import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
+import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 export { coderCredentialReady } from '../coder-providers.js';
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
@@ -70,10 +72,7 @@ import {
 } from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
-import {
-  ZAI_CODING_PLAN_BASE_URL,
-  ZAI_PAYG_BASE_URL,
-} from '../zai.js';
+import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
 import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
   isTransientOpenCodeReadError,
@@ -2239,6 +2238,72 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
+// ─── credential proxy endpoint resolution (Release A / P0 fix) ────────────────
+//
+// The production run path must start the parent-owned loopback credential
+// proxy BEFORE spawning either engine and hand the child only the one-run
+// token + loopback base URL (never the raw credential). These helpers map
+// the resolved credential env key to the canonical upstream ORIGIN (no API
+// path — the engine sends the prefix verbatim, so a path here would double
+// it), the OpenAI-compatible path prefix the proxy pins, and the upstream
+// auth style. `engineRedirect` names whether the spawned engine can be
+// verifiably pinned to the proxy; 'none' means the engine would present the
+// one-run token to the REAL upstream (guaranteed auth failure), so the run
+// fails closed before spawn instead.
+export function coderCredentialEndpoint(credEnv, modelUsed) {
+  switch (credEnv) {
+    case 'ZHIPU_API_KEY': {
+      // Coding-plan models go to the coding endpoint; everything else to PAYG.
+      // Both are OpenAI-compatible under their /api/.../v4 scope; the origin
+      // carries NO path (the prefix travels with the request).
+      const coding = /^(zai-coding-plan|glm-coding)\//.test(String(modelUsed || ''));
+      return coding
+        ? { endpoint: 'https://api.z.ai', pathPrefix: '/api/coding/paas/v4' }
+        : { endpoint: 'https://api.z.ai', pathPrefix: '/api/paas/v4' };
+    }
+    case 'OPENCODE_API_KEY':
+      // Zen/Go models are served by opencode's own OpenAI-compatible router.
+      return {
+        endpoint: 'https://opencode.ai',
+        pathPrefix: '/zen/v1',
+        engineRedirectEnv: 'OPENCODE_BASE_URL',
+      };
+    case 'MOONSHOT_API_KEY':
+      // PAYG Moonshot is OpenAI-compatible Bearer auth. The opencode built-in
+      // moonshot provider exposes no documented base-URL env override, so the
+      // engine cannot be pinned to the proxy — the run must fail closed.
+      return { endpoint: 'https://api.moonshot.ai', pathPrefix: '/v1', engineRedirect: 'none' };
+    case 'KIMI_API_KEY':
+      // Kimi for Coding is a SEPARATE service from PAYG Moonshot: it lives on
+      // api.kimi.com under /coding/v1 and speaks the ANTHROPIC protocol
+      // (x-api-key + anthropic-version; see src/moonshot.js). Routing it to
+      // the PAYG OpenAI endpoint with Bearer auth can never authenticate.
+      return {
+        endpoint: 'https://api.kimi.com',
+        pathPrefix: '/coding/v1',
+        authStyle: 'anthropic',
+        engineRedirect: 'none',
+      };
+    case 'TRISS_WORKER_API_KEY': {
+      // The worker profile pins its own base URL (default DeepSeek). A test
+      // or partial environment without TRISS_WORKER_BASE_URL falls back to
+      // the same default the worker client itself uses. The URL is split
+      // into origin + prefix so forwarding can never double the path.
+      const settings = readWorkerConfigSnapshot({ scope: 'effective' });
+      const baseUrl = settings.baseUrl || 'https://api.deepseek.com/v1';
+      if (!/^https:\/\//.test(String(baseUrl))) return null;
+      const parsed = new URL(baseUrl);
+      const prefix = parsed.pathname.replace(/\/+$/, '') || '/';
+      return {
+        endpoint: parsed.origin,
+        pathPrefix: prefix,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 // Round-3 P0-2: the V1 template's bash allowlist (git status / ls / npm test
 // …) is UNSAFE for the opencode2 beta — the credential sits in the child env,
 // so any allowed command can disclose it (env expansion in an error message,
@@ -3263,7 +3328,74 @@ export function createEventFolder() {
     sawStepFinish: false,
     warnings: [],
     rateLimit: null,
+    // Bounded activity facts (Section 6.4 of the approved plan): counts and
+    // tool-name aggregates only — never input/output/error/command bytes.
+    activity: {
+      events: 0,
+      tool_uses: 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: false,
+      first_event_at: null,
+      last_event_at: null,
+    },
+    // Malformed/omitted events increment this counter; the raw line is never
+    // copied into a warning (bounded categories only).
+    omittedCount: 0,
+    // A top-level `error` event is an internal engine-error observation even
+    // if a fake child later exits zero (Reference surface 2).
+    engineErrorObserved: false,
   };
+}
+
+// At most 16 distinct public warnings, each at most 256 UTF-8 bytes
+// (Section 6.4). Control bytes are stripped so raw diagnostics can never
+// smuggle terminal escapes or secrets into the envelope.
+const MAX_PUBLIC_WARNINGS = 16;
+const MAX_WARNING_BYTES = 256;
+
+// Replace control bytes (C0 controls + DEL) with '?' so raw diagnostics can
+// never smuggle terminal escapes or secrets into the envelope. Implemented
+// via charCodeAt because the no-control-regex lint rule forbids control
+// escapes inside a RegExp literal.
+function sanitizeControlBytes(text) {
+  let out = '';
+  for (const ch of String(text)) {
+    const code = ch.charCodeAt(0);
+    const isControl =
+      (code >= 0x00 && code <= 0x08) ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f;
+    out += isControl ? '?' : ch;
+  }
+  return out;
+}
+
+function pushWarning(state, text) {
+  if (state.warnings.length >= MAX_PUBLIC_WARNINGS) return;
+  const sanitized = sanitizeControlBytes(text).slice(0, MAX_WARNING_BYTES);
+  if (state.warnings.includes(sanitized)) return;
+  state.warnings.push(sanitized);
+}
+
+// Cap distinct tool names at 32, collecting the remainder under `other`
+// (Section 6.4). Missing or non-string tool names normalize to `unknown`.
+const MAX_DISTINCT_TOOLS = 32;
+
+function bumpToolActivity(activity, rawTool) {
+  const tool = typeof rawTool === 'string' && rawTool.length > 0 ? rawTool : 'unknown';
+  if (Object.prototype.hasOwnProperty.call(activity.by_tool, tool)) {
+    activity.by_tool[tool] += 1;
+    return;
+  }
+  const named = Object.keys(activity.by_tool).filter((k) => k !== 'other').length;
+  if (named >= MAX_DISTINCT_TOOLS) {
+    activity.by_tool.other = (activity.by_tool.other ?? 0) + 1;
+    return;
+  }
+  activity.by_tool[tool] = 1;
 }
 
 // Folds one raw ndjson line into `state` (mutated in place). Unknown
@@ -3272,7 +3404,7 @@ export function createEventFolder() {
 // events" rule. `onToolUse(evt)` is an optional side-effect hook (used by
 // the live spawn path to print a progress line; the fixture-replay tests
 // don't need it).
-export function foldEventLine(state, rawLine, { onToolUse } = {}) {
+export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
   const line = String(rawLine).trim();
   if (!line) return;
 
@@ -3280,16 +3412,29 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
   try {
     evt = JSON.parse(line);
   } catch {
-    state.warnings.push(`unparseable line: ${line.slice(0, 200)}`);
+    // Malformed NDJSON: bounded category warning + exact counter; the raw
+    // line is never copied into a warning (Reference surface 2).
+    state.omittedCount += 1;
+    pushWarning(state, 'unparseable line (omitted)');
     return;
   }
   state.parsedAnyEvent = true;
+  state.activity.events += 1;
+  // Host-observed arrival timestamps for the first and last parseable events
+  // (Section 6.4); engine-supplied clocks are never trusted or required.
+  if (arrivedAt !== undefined) {
+    if (state.activity.first_event_at === null) state.activity.first_event_at = arrivedAt;
+    state.activity.last_event_at = arrivedAt;
+  }
   if (!state.sessionRealId && evt.sessionID) state.sessionRealId = evt.sessionID;
 
   switch (evt.type) {
     case 'step_start':
       break;
     case 'tool_use':
+      state.activity.tool_uses += 1;
+      bumpToolActivity(state.activity, evt.part?.tool);
+      if (evt.part?.state?.status === 'error') state.activity.tool_errors += 1;
       if (onToolUse) onToolUse(evt);
       break;
     case 'step_finish': {
@@ -3304,6 +3449,9 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       const { tokens: folded } = finalizeOpencodeUsage(state.usage);
       state.usage.input_total = folded.input_total;
       state.usage.output_total = folded.output_total;
+      // Only a terminal `stop` marks terminal stop; intermediate
+      // `reason=tool-calls` does not (Section 6.4).
+      if (evt.part?.reason === 'stop') state.activity.saw_terminal_stop = true;
       break;
     }
     case 'text':
@@ -3312,8 +3460,11 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       if (evt.part?.text != null) state.finalText = evt.part.text;
       break;
     case 'error': {
+      // A top-level engine error is an internal engine-error observation even
+      // if a fake child later exits zero (Reference surface 2).
+      state.engineErrorObserved = true;
       const msg = evt.error?.data?.message || evt.error?.name || 'unknown engine error';
-      state.warnings.push(`engine error: ${msg}`);
+      pushWarning(state, `engine error: ${msg}`);
       // A terminal rate-limit error (rare on stdout — usually retried
       // silently and only logged) still gets recognised here so the live
       // path can kill early and report the reset time.
@@ -3322,7 +3473,7 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
       break;
     }
     default:
-      state.warnings.push(`unknown event type: ${evt.type}`);
+      pushWarning(state, `unknown event type: ${evt.type}`);
   }
 }
 
@@ -3334,13 +3485,22 @@ export function foldEventLine(state, rawLine, { onToolUse } = {}) {
 // only that key is forwarded, so a Zen run never carries the Z.AI key and vice
 // versa, even when both are configured. Included only when actually set — an
 // unconfigured credential never appears.
-function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
+function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent, proxyBaseUrl) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (process.env[key] != null) env[key] = process.env[key];
   }
   const value = credentialValue === undefined ? process.env[credEnv] : credentialValue;
   if (credEnv && value) env[credEnv] = value;
+  // Package 2A: when a credential proxy is active the child additionally
+  // learns the loopback base URL, so an OpenAI-compatible engine can be
+  // pointed at the proxy instead of the upstream provider host.
+  if (proxyBaseUrl) {
+    env.TRISS_CODER_PROXY_BASE_URL = proxyBaseUrl;
+    env.OPENCODE_BASE_URL = proxyBaseUrl;
+    env.ZAI_BASE_URL = proxyBaseUrl;
+    env.ZHIPU_BASEURL = proxyBaseUrl;
+  }
   if (opencodeConfigContent) env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent;
   return env;
 }
@@ -3672,9 +3832,11 @@ function atomicWriteJson(path, obj) {
 function setupIsolation(sh, slug) {
   const repoRoot = gitRepoRoot(sh, projectRoot());
   if (!repoRoot) {
-    throw new Error(
+    const err = new Error(
       '--isolate requires a git repository — no repo found at or above the current directory.',
     );
+    err.code = ISOLATION_UNAVAILABLE_CODE;
+    throw err;
   }
   // FIRST gitignore .triss/, THEN create the worktree — otherwise the
   // very first run's own .triss/ directory shows up as an untracked file
@@ -3688,10 +3850,12 @@ function setupIsolation(sh, slug) {
   if (existsSync(wtPath)) {
     const existingBranch = gitWorktreeBranch(sh, wtPath);
     if (existingBranch !== branch) {
-      throw new Error(
+      const err = new Error(
         `${TRISS_STATE_DIR}/wt/${slug} already exists on branch "${existingBranch}", expected "${branch}" — ` +
           'use a different --session slug, or remove the worktree manually (triss coder clean --all).',
       );
+      err.code = ISOLATION_CONFLICT_CODE;
+      throw err;
     }
   } else {
     // Detect "branch exists but its worktree dir doesn't" BEFORE calling
@@ -3704,12 +3868,14 @@ function setupIsolation(sh, slug) {
     // `git branch -D` is the way out.
     const branchExists = sh('git', ['-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`]);
     if (branchExists && !branchExists.error && branchExists.status === 0) {
-      throw new Error(
+      const err = new Error(
         `Branch "${branch}" already exists but ${TRISS_STATE_DIR}/wt/${slug} does not — likely left ` +
           "behind by a previous run whose worktree was removed while the branch survived (unmerged " +
           `commits). Remove it with \`git branch -D ${branch}\` (review its commits first) or ` +
           '`triss coder clean --all`, or pick a different --session slug.',
       );
+      err.code = ISOLATION_CONFLICT_CODE;
+      throw err;
     }
     const r = sh('git', ['-C', repoRoot, 'worktree', 'add', wtPath, '-b', branch]);
     if (!r || r.error || r.status !== 0) {
@@ -3723,13 +3889,17 @@ function setupIsolation(sh, slug) {
       const branchNowExists =
         branchExistsNow && !branchExistsNow.error && branchExistsNow.status === 0;
       if (existsSync(wtPath) || branchNowExists) {
-        throw new Error(
+        const err = new Error(
           `${TRISS_STATE_DIR}/wt/${slug} (branch "${branch}") already exists — another run may have ` +
             'created it concurrently; use a different --session slug or `triss coder clean`.',
         );
+        err.code = ISOLATION_CONFLICT_CODE;
+        throw err;
       }
       const msg = String((r && (r.stderr || r.stdout)) || 'unknown error').trim();
-      throw new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
+      const err2 = new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
+      err2.code = ISOLATION_UNAVAILABLE_CODE;
+      throw err2;
     }
     freshlyCreated = true;
   }
@@ -4008,7 +4178,23 @@ function spawnEngine({
     let pollTimer = null;
     let residualCleanupPromise = null;
     const state = createState();
-    const stderrChunks = [];
+    // First termination cause wins and is recorded BEFORE sending any signal
+    // (Section 6.1), so a child that exits zero still reports `killed` with
+    // the right cause. `none` means no termination was requested/observed.
+    let terminationCause = 'none';
+    // Private stderr retention is a bounded 64 KiB tail, never an unbounded
+    // array; its raw bytes never enter public results (Section 6.4).
+    const MAX_STDERR_TAIL_BYTES = 64 * 1024;
+    let stderrTail = '';
+    // Bounded engine-output accounting (Section 6.4): one NDJSON record and
+    // the public final_text are capped at 1 MiB UTF-8 each, cumulative
+    // processed stdout at 32 MiB; overflow terminates the tree and completes
+    // normal cleanup.
+    const MAX_RECORD_BYTES = 1024 * 1024;
+    const MAX_FINAL_TEXT_BYTES = 1024 * 1024;
+    const MAX_TOTAL_STDOUT_BYTES = 32 * 1024 * 1024;
+    let totalStdoutBytes = 0;
+    let outputLimitObserved = false;
 
     const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true });
 
@@ -4077,6 +4263,7 @@ function spawnEngine({
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (terminationCause === 'none') terminationCause = 'deadline';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
@@ -4100,6 +4287,7 @@ function spawnEngine({
         }
         if (info) {
           state.rateLimit = info;
+          if (terminationCause === 'none') terminationCause = 'provider_rate_limit';
           requestGroupSignal('SIGTERM');
           scheduleSigkill();
         }
@@ -4132,6 +4320,7 @@ function spawnEngine({
     process.on('SIGTERM', onHostSignal);
 
     const onAbort = () => {
+      if (terminationCause === 'none') terminationCause = 'caller_abort';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -4183,28 +4372,98 @@ function spawnEngine({
     });
 
     if (child.stdout) {
-      const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-      rl.on('line', (line) => {
+      // Bounded line scanner (P1 fix): readline buffers an entire line in
+      // memory BEFORE emitting it, so one huge unterminated record could
+      // exhaust memory before MAX_RECORD_BYTES ever fired. Here the pending
+      // bytes are capped as they arrive; an unterminated oversized record
+      // trips the same typed output-limit failure without being buffered.
+      const feedLine = (line) => {
+        // Bounded output accounting (Section 6.4): an oversized record or
+        // cumulative stdout overflow is a typed engine failure that
+        // terminates the sandbox-owned tree and completes normal cleanup.
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        totalStdoutBytes += lineBytes + 1;
+        if (!outputLimitObserved && (lineBytes > MAX_RECORD_BYTES || totalStdoutBytes > MAX_TOTAL_STDOUT_BYTES)) {
+          outputLimitObserved = true;
+          requestGroupSignal('SIGTERM');
+          scheduleSigkill();
+        }
         const hadRateLimit = state.rateLimit;
         foldLine(state, line, {
+          arrivedAt: Date.now(),
           onToolUse: (evt) => {
             const tool = evt.part?.tool || 'tool';
             const denied = evt.part?.state?.status === 'error';
             process.stderr.write(pc.dim(`  → ${tool}${denied ? ' (denied/error)' : ''}\n`));
           },
         });
+        // Oversized public final_text is also a typed engine failure.
+        if (
+          !outputLimitObserved &&
+          state.finalText != null &&
+          Buffer.byteLength(state.finalText, 'utf8') > MAX_FINAL_TEXT_BYTES
+        ) {
+          outputLimitObserved = true;
+          requestGroupSignal('SIGTERM');
+          scheduleSigkill();
+        }
         // A rate-limit error that DID reach stdout: kill early, same as the
         // log-poll path, so we don't wait out --timeout. Guard on `settled`
         // so a line buffered past 'close' can't signal a reaped/recycled pid.
         if (state.rateLimit && !hadRateLimit && !settled) {
+          if (terminationCause === 'none') terminationCause = 'provider_rate_limit';
           requestGroupSignal('SIGTERM');
           scheduleSigkill();
+        }
+      };
+      let pending = Buffer.alloc(0);
+      child.stdout.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        // Split on newlines WITHIN the chunk; a partial trailing line is the
+        // only part carried over (concatenated at most once per emitted
+        // line), so the scan is linear in total bytes — never a full
+        // re-concat of the pending buffer on every chunk.
+        let start = 0;
+        let newlineAt;
+        while ((newlineAt = buf.indexOf(0x0a, start)) !== -1) {
+          const lineBuf = pending.length
+            ? Buffer.concat([pending, buf.subarray(start, newlineAt)])
+            : buf.subarray(start, newlineAt);
+          pending = Buffer.alloc(0);
+          start = newlineAt + 1;
+          feedLine(lineBuf.toString('utf8'));
+        }
+        const tail = buf.subarray(start);
+        if (tail.length) {
+          pending = pending.length ? Buffer.concat([pending, tail]) : Buffer.from(tail);
+        }
+        // An unterminated record already above the cap is dropped without
+        // being buffered: the typed failure fires and the drain continues.
+        if (pending.length > MAX_RECORD_BYTES) {
+          if (!outputLimitObserved) {
+            outputLimitObserved = true;
+            requestGroupSignal('SIGTERM');
+            scheduleSigkill();
+          }
+          pending = Buffer.alloc(0);
+        }
+      });
+      child.stdout.on('end', () => {
+        if (pending.length && pending.length <= MAX_RECORD_BYTES) {
+          const line = pending.toString('utf8');
+          pending = Buffer.alloc(0);
+          feedLine(line);
         }
       });
     }
 
     if (child.stderr) {
-      child.stderr.on('data', (chunk) => stderrChunks.push(chunk.toString('utf8')));
+      child.stderr.on('data', (chunk) => {
+        stderrTail += chunk.toString('utf8');
+        if (Buffer.byteLength(stderrTail, 'utf8') > MAX_STDERR_TAIL_BYTES) {
+          stderrTail = stderrTail.slice(-MAX_STDERR_TAIL_BYTES);
+        }
+      });
     }
 
     child.on('close', (code, signal) => {
@@ -4213,7 +4472,9 @@ function spawnEngine({
           code,
           signal,
           timedOut,
-          stderrTail: stderrChunks.join(''),
+          terminationCause,
+          outputLimitObserved,
+          stderrTail,
           ...state,
         }),
       );
@@ -4264,7 +4525,20 @@ function spawnCrush({
     let graceTimer = null;
     let residualCleanupPromise = null;
     const stdoutChunks = [];
-    const stderrChunks = [];
+    // crush emits ONE JSON envelope at end of run, so stdout is buffered —
+    // but boundedly: past the cap the run is a typed engine failure (the
+    // envelope contract caps the output well below this), never unbounded
+    // memory growth.
+    const CRUSH_STDOUT_MAX_BYTES = 16 * 1024 * 1024;
+    let crushStdoutBytes = 0;
+    let crushStdoutOverflow = false;
+    // First termination cause wins and is recorded BEFORE sending any signal
+    // (Section 6.1), so a child that exits zero still reports `killed` with
+    // the right cause.
+    let terminationCause = 'none';
+    // Private stderr retention is a bounded 64 KiB tail (Section 6.4).
+    const MAX_STDERR_TAIL_BYTES = 64 * 1024;
+    let stderrTail = '';
 
     const killGroup = (sig) =>
       killProcessGroup(child.pid, sig, killProcess, { strict: true, label: 'Crush' });
@@ -4316,6 +4590,7 @@ function spawnCrush({
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (terminationCause === 'none') terminationCause = 'deadline';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     }, timeoutSec * 1000);
@@ -4325,6 +4600,7 @@ function spawnCrush({
     // long-lived MCP server). Removed on settle so a host handling many crush
     // runs doesn't accumulate one listener pair per call.
     const onHostSignal = () => {
+      if (terminationCause === 'none') terminationCause = 'host_signal';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -4332,6 +4608,7 @@ function spawnCrush({
     process.on('SIGTERM', onHostSignal);
 
     const onAbort = () => {
+      if (terminationCause === 'none') terminationCause = 'caller_abort';
       requestGroupSignal('SIGTERM');
       scheduleSigkill();
     };
@@ -4371,11 +4648,35 @@ function spawnCrush({
 
     // crush emits the whole envelope at end-of-run, so buffer stdout fully
     // (parseEnvelope takes the last non-empty line on close).
-    if (child.stdout) child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+        crushStdoutBytes += bytes;
+        if (crushStdoutBytes > CRUSH_STDOUT_MAX_BYTES) {
+          if (!crushStdoutOverflow) {
+            crushStdoutOverflow = true;
+            if (terminationCause === 'none') terminationCause = 'output_limit';
+            killGroup('SIGTERM');
+            scheduleSigkill();
+          }
+          return; // stop buffering past the cap
+        }
+        stdoutChunks.push(chunk);
+      });
+    }
     // stderr is captured for the error-tail on the throw path; NOT forwarded
     // live — crush's WARN noise + `▶ <tool>` heartbeats would interleave with
     // this module's own dim stderr logs (a later step can forward it dimmed).
-    if (child.stderr) child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+    // Retention is a bounded 64 KiB tail (Section 6.4), never an unbounded
+    // array.
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        stderrTail += chunk.toString('utf8');
+        if (Buffer.byteLength(stderrTail, 'utf8') > MAX_STDERR_TAIL_BYTES) {
+          stderrTail = stderrTail.slice(-MAX_STDERR_TAIL_BYTES);
+        }
+      });
+    }
 
     child.on('close', (code, signal) => {
       settle(() =>
@@ -4383,8 +4684,9 @@ function spawnCrush({
           code,
           signal,
           timedOut,
+          terminationCause,
           stdout: stdoutChunks.join(''),
-          stderrTail: stderrChunks.join(''),
+          stderrTail,
         }),
       );
     });
@@ -4408,8 +4710,13 @@ async function runCrushFlow({
   isolation,
   slug,
   timeoutSec,
+  credentialProxy = null,
+  sessionV2 = null,
 }) {
+  let crushSpawnStartMs;
   const modelOverride = opts.model || null;
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
+  const isolate = _isolate;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
   // slug straight through (NO .triss/sessions.json map, unlike opencode).
   const session = slug || opts.session || null;
@@ -4432,7 +4739,12 @@ async function runCrushFlow({
     maxTokens: opts.maxTokens,
     restrict,
   });
-  const env = crushEngine.buildSpawnEnv();
+  const env = crushEngine.buildSpawnEnv(
+    undefined,
+    credentialProxy
+      ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
+      : deps.proxy || null,
+  );
 
   // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
   // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow
@@ -4470,6 +4782,7 @@ async function runCrushFlow({
 
   let result;
   try {
+    crushSpawnStartMs = Date.now();
     result = await spawnCrush({
       argv,
       env,
@@ -4501,6 +4814,7 @@ async function runCrushFlow({
   }
 
   const warnings = [];
+  if (allowBestEffortCallerWorktree && !isolation && isolate) warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
   if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
 
   // crush reports a COMBINED delta_tokens, never split prompt/completion (unlike
@@ -4532,12 +4846,18 @@ async function runCrushFlow({
   // Isolation teardown — engine-agnostic, same helpers/logic as the opencode
   // path: stage everything, integrity-check seeded config, auto-remove a
   // zero-diff worktree + its branch.
-  let filesChanged = [];
+  // v2 contract: files_changed is [] ONLY for a successfully performed
+  // comparison that found nothing; a run with no comparison (non-isolated)
+  // reports null — never a fabricated empty list.
+  let filesChanged = null;
   let diffStat = null;
   let worktreeOut = null;
   if (isolation) {
     const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
     if (changes.warnings.length) warnings.push(...changes.warnings);
+    // The comparison was PERFORMED: [] is the honest result for a verified
+    // empty change (null stays reserved for no-comparison runs).
+    filesChanged = changes.filesChanged;
     if (changes.filesChanged.length === 0) {
       try {
         gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
@@ -4554,7 +4874,6 @@ async function runCrushFlow({
         warnings.push(`isolate cleanup failed: ${err.message}`);
       }
     } else {
-      filesChanged = changes.filesChanged;
       diffStat = changes.diffStat;
       worktreeOut = isolation.wtPath;
     }
@@ -4596,13 +4915,66 @@ async function runCrushFlow({
     parent_call_id: ctx?.parentCallId,
   });
 
+  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // facts — anonymous runs get anon-<32hex>; retention requires the full
+  // eligibility matrix (isolated + changed + enforced quota + reservation).
+  const runIdentity = allocateRunIdentity({
+    slug: session || null,
+    isolated: !!isolation,
+    changed: (filesChanged || []).length > 0,
+  });
+
+  // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
+  // observed crush facts; crush exposes no per-event activity stream, so
+  // tool activity is derived from its tool_calls array.
+  const v2Lifecycle = deriveV2LifecycleFields({
+    timedOut: result.timedOut,
+    terminationCause: result.terminationCause,
+    signal: result.signal,
+    exitCode: result.code,
+    engineErrorObserved: Boolean(parsed.error),
+    rateLimited: exit_reason === 'error' && /rate/i.test(String(parsed.error || '')),
+    exitReason: exit_reason,
+    finalText: parsed.final_text,
+    toolActivityCount: Array.isArray(parsed.tool_calls)
+      ? parsed.tool_calls.filter((c) => c && (c.count ?? 1) > 0).length
+      : 0,
+    isolated: !!isolation,
+    callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
+    sessionRequested: Boolean(session),
+  });
+  const finishedAtMs = Date.now();
+
   const envelope = {
     engine: 'crush',
+    envelope_version: 2,
     engine_version: engineVersion,
     session_id: parsed.session_id || null,
+    // Package 5E: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / Reference surface 3).
+    ...runIdentity,
+    execution_capabilities: buildExecutionCapabilities({
+      engine: 'crush',
+      proxyAvailable: !!credentialProxy,
+    }),
+    ...v2Lifecycle,
+    run_id: `run_${randomBytes(16).toString('hex')}`,
+    started_at: new Date(crushSpawnStartMs).toISOString(),
+    finished_at: new Date(finishedAtMs).toISOString(),
+    duration_ms: finishedAtMs - crushSpawnStartMs,
+    activity: {
+      events: 0,
+      tool_calls: Array.isArray(parsed.tool_calls) ? parsed.tool_calls.length : 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: exit_reason === 'end_turn',
+      first_event_at: null,
+      last_event_at: null,
+    },
     exit_reason,
     final_text: parsed.final_text ?? null,
     files_changed: filesChanged,
+    run_files_changed: filesChanged,
     diff_stat: diffStat,
     worktree: worktreeOut,
     usage: {
@@ -4625,6 +4997,7 @@ async function runCrushFlow({
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
+  await completeV2SessionRow(sessionV2);
 }
 
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
@@ -4682,6 +5055,15 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     );
   }
   const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
+  // Atomic 24 / Package 24: an isolation downgrade to a best-effort CALLER
+  // worktree is opt-in only. Without the explicit flag the run fails before
+  // spawn when the enforced sandbox is unavailable (fail closed).
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
+  if (allowBestEffortCallerWorktree && !isolate) {
+    throw new Error(
+      'allowBestEffortCallerWorktree is only meaningful with isolation enabled (it downgrades an isolated run to a caller worktree).',
+    );
+  }
   if (opts.continue && isolate && !opts.session) {
     throw new Error(
       '--continue with --isolate requires --session <id> — without it, --isolate creates a new ' +
@@ -4760,6 +5142,85 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   };
 }
 
+// ─── v2 session lifecycle wiring ──────────────────────────────────────────────
+// The production run reserves a v2 session row BEFORE spawn, marks it
+// running, and completes it to idle (or deletes it on failure), so the
+// `coder session list|clean` commands finally observe REAL runs instead of
+// only rows created by direct store tests. Store failures degrade to a dim
+// warning — the legacy .triss/sessions.json map stays authoritative for
+// continuation until persistent sessions become eligibility-enforced.
+
+async function reserveV2SessionRow({ engine, slug, isolated }) {
+  // Only REAL slugs are wired in v1 of this integration: the anonymous slug
+  // is allocated later in the flow, and reserving an unnamed row adds
+  // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
+  // without producing a continuable session anyway.
+  if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) {
+    return null;
+  }
+  try {
+    const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
+      await import('../coder-session-transitions.js');
+    const { loadOrCreateProjectIdentity, projectRootFingerprint } =
+      await import('../coder-state.js');
+    const { mkdir } = await import('node:fs/promises');
+    const trissRoot = join(projectRoot(), '.triss');
+    const inventoryDir = sessionInventoryPath(trissRoot, engine);
+    await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
+    const identity = await loadOrCreateProjectIdentity(trissRoot);
+    const fingerprint = projectRootFingerprint(identity.project_id);
+    const runId = `run_${randomBytes(16).toString('hex')}`;
+    await reserveCoderSession({
+      inventoryDir,
+      engine,
+      slug,
+      isolationMode: isolated ? 'isolated' : 'non_isolated',
+      lockSlot: 0,
+      runId,
+      pid: process.pid,
+      // Explicit nulls: undefined owner-tuple fields fail canonical validation.
+      processStartId: null,
+      bootId: null,
+      projectRootFingerprint: fingerprint,
+    });
+    await markCoderSessionRunning({
+      inventoryDir,
+      engine,
+      slug,
+      runId,
+      pid: process.pid,
+      processStartId: null,
+      bootId: null,
+    });
+    return { inventoryDir, engine, slug };
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
+    return null;
+  }
+}
+
+async function completeV2SessionRow(sessionV2) {
+  if (!sessionV2) return;
+  try {
+    const { markCoderSessionIdle } = await import('../coder-session-transitions.js');
+    await markCoderSessionIdle(sessionV2);
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session completion failed: ${err.message}\n`));
+  }
+}
+
+async function abandonV2SessionRow(sessionV2) {
+  if (!sessionV2) return;
+  try {
+    const { beginCoderSessionDelete, removeCoderSessionRow } =
+      await import('../coder-session-transitions.js');
+    await beginCoderSessionDelete(sessionV2);
+    await removeCoderSessionRow(sessionV2);
+  } catch (err) {
+    process.stderr.write(pc.dim(`  ⚠ v2 session rollback failed: ${err.message}\n`));
+  }
+}
+
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // The engine env allowlist (buildEngineEnv) and the timeout kill
   // (negative-PID process-group SIGTERM/SIGKILL in spawnEngine) are both
@@ -4793,6 +5254,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
@@ -4897,8 +5359,37 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const slug = resolveSlug(opts, isolate);
 
   let isolation = null;
+  let isolationDowngraded = false;
   if (isolate) {
-    isolation = setupIsolation(sh, slug);
+    try {
+      isolation = setupIsolation(sh, slug);
+    } catch (err) {
+      const msg = String(err.message || err);
+      // Only mechanism-unavailability is downgradeable; slug/branch conflicts
+      // carry ISOLATION_CONFLICT_CODE and must fail closed even with the
+      // opt-in so the user can pick a new slug/clean. Only UNAVAILABLE
+      // (no git repo / worktree creation failure) downgrades.
+      const isConflict = err.code === ISOLATION_CONFLICT_CODE;
+      const isMechanismUnavailable = !isConflict;
+      if (!allowBestEffortCallerWorktree || isConflict) {
+        if (!msg.includes(ISOLATION_ENFORCEMENT_REQUIRED_CODE)) {
+          if (isMechanismUnavailable) {
+            err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE} — retry with --allow-best-effort-caller-worktree to downgrade to caller worktree when isolation cannot be enforced)`;
+          } else {
+            err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE})`;
+          }
+        }
+        if (err.code === ISOLATION_CONFLICT_CODE || err.code === ISOLATION_UNAVAILABLE_CODE) {
+          const prev = err.code;
+          err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
+          err.cause = err.cause ?? { code: prev };
+        } else if (!err.code) err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
+        throw err;
+      }
+      isolation = null;
+      isolationDowngraded = true;
+      process.stderr.write(pc.yellow(`  ⚠ ${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — running in caller worktree (best-effort; edits may reach current Git worktree)\n`));
+    }
   }
 
   // Model identifiers are the only transient config values. Credentials stay
@@ -4943,22 +5434,138 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
+  // ─── Credential proxy (Release A P0): the production run path NEVER hands
+  // the raw provider credential to the engine. Start the parent-owned
+  // loopback proxy FIRST; the child receives only the one-run token and the
+  // loopback base URL. If the proxy cannot start (or no canonical endpoint
+  // is known for this credential), the run fails closed BEFORE spawn.
+  // ─── Credential-store isolation preflight (P0): the loopback token proxy
+  // removes the raw key from the child's env/argv/config, but a same-UID
+  // child can still READ the raw credential stores (project/global
+  // .triss.env) directly. Per the plan (Section 6.5), a best-effort run is
+  // only allowed when the boundary is actually absent: if any raw store is
+  // readable, the run fails closed BEFORE spawn unless the operator has
+  // explicitly acknowledged the best-effort scope via
+  // TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.
+  if (!deps.allowBestEffortIsolation && process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION !== '1') {
+    const readableStores = [];
+    for (const storePath of [
+      join(projectRoot(), '.triss.env'),
+      join(homedir(), '.triss.env'),
+      join(projectRoot(), '.triss.env.local'),
+    ]) {
+      try {
+        const { vars } = readEnvFile(storePath);
+        // Fail-closed policy: ANY non-empty variable assignment in a .triss.env
+        // store is treated as potential credential material that makes the
+        // raw store a leak channel for same-UID child processes.
+        // Empty stores (0-byte files, comments-only, blank values) contain no
+        // keys and are safely ignored.
+        const hasEntries = Object.entries(vars).some(([_, v]) => typeof v === 'string' && v.trim().length > 0);
+        if (hasEntries) {
+          readableStores.push(storePath);
+        }
+      } catch {
+        /* absent or unreadable: not a leak channel */
+      }
+    }
+    if (readableStores.length > 0) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `credential isolation unavailable: the raw credential store(s) ${readableStores.join(', ')} ` +
+          `are readable by the same-UID engine child, so the loopback token proxy alone cannot ` +
+          `contain the real key. Move the credentials into your shell environment, or ` +
+          `acknowledge the best-effort scope with TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`,
+      );
+    }
+  }
+
+  const proxyTarget = coderCredentialEndpoint(cred.env, modelUsed);
+  let credentialProxy = null;
+  if (
+    engine === 'opencode' &&
+    proxyTarget?.engineRedirect === 'none' &&
+    !deps.disableCredentialProxy
+  ) {
+    // Honest fail-closed: the opencode built-in provider for this credential
+    // exposes no documented base-URL override, so the engine would present
+    // the one-run PROXY token to the REAL upstream (a guaranteed auth
+    // failure, possibly with the token logged upstream). Refuse before spawn
+    // instead of handing over a credential that cannot work.
+    if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw new Error(
+      `credential isolation unavailable: ${cred.env} runs through opencode cannot be ` +
+        `pinned to the parent-owned credential proxy (no documented engine base-URL ` +
+        `override for this provider); refusing to spawn the engine with a one-run ` +
+        `proxy token the upstream would reject`,
+    );
+  }
+  if (!deps.disableCredentialProxy && proxyTarget) {
+    try {
+      credentialProxy = await startCoderCredentialProxy({
+        provider: cred.provider || cred.env,
+        model: modelUsed,
+        smallModel: oneShotSmallModel,
+        endpoint: proxyTarget.endpoint,
+        pathPrefix: proxyTarget.pathPrefix,
+        authStyle: proxyTarget.authStyle,
+        credential: credentialValue,
+        deadlineMs: (timeoutSec + 60) * 1000,
+        ...(deps.credentialProxyOptions || {}),
+      });
+    } catch (err) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `credential isolation unavailable: the coder run requires the parent-owned ` +
+          `credential proxy and it failed to start (${err?.message || 'unknown error'}); ` +
+          `refusing to spawn the engine with raw credential inheritance`,
+        { cause: err },
+      );
+    }
+  }
+  if (!credentialProxy && !deps.disableCredentialProxy) {
+    if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw new Error(
+      `credential isolation unavailable: no canonical provider endpoint is known for ` +
+        `${cred.env}; refusing to spawn the engine with raw credential inheritance`,
+    );
+  }
+
+  // v2 session lifecycle: reserve + running BEFORE the engine branch; the
+  // row completes to idle after the envelope is emitted and is deleted on
+  // any failure path.
+  const sessionV2 = await reserveV2SessionRow({
+    engine,
+    slug: opts.session || null,
+    isolated: !!isolation,
+  });
+
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
   if (engine === 'crush') {
-    return runCrushFlow({
-      opts,
-      deps,
-      sh,
-      spawnFn,
-      killProcess,
-      prompt,
-      isolate,
-      isolation,
-      slug,
-      timeoutSec,
-    });
+    try {
+      return await runCrushFlow({
+        opts,
+        deps,
+        sh,
+        spawnFn,
+        killProcess,
+        prompt,
+        isolate,
+        isolation,
+        slug,
+        timeoutSec,
+        credentialProxy,
+        sessionV2,
+      });
+    } catch (err) {
+      await abandonV2SessionRow(sessionV2);
+      throw err;
+    } finally {
+      credentialProxy.revoke();
+      await credentialProxy.closed;
+    }
   }
 
   // Engine-namespaced slug -> real-id lookup (versioned store): an opencode2
@@ -5224,6 +5831,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
 
     if (rateLimit2) result2.warnings.push(rateLimitMessage(rateLimit2));
+    if (isolationDowngraded) result2.warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
 
     // Terminal-error precedence: a V2 error event is terminal even when the
     // process exits 0 (verified live — see the adapter header). This BEATS
@@ -5239,12 +5847,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
     }
 
-    let filesChanged2 = [];
+    let filesChanged2 = null;
     let diffStat2 = null;
     let worktreeOut2 = null;
     if (isolation) {
       const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
       if (changes.warnings.length) result2.warnings.push(...changes.warnings);
+      filesChanged2 = changes.filesChanged;
       if (changes.filesChanged.length === 0) {
         try {
           gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
@@ -5369,7 +5978,34 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     dir,
     pure: !!oneShotProvider,
   });
-  const env = buildEngineEnv(cred.env, credentialValue, oneShotConfigContent);
+  // Package 2A integration: the child env carries the one-run proxy token in
+  // the credential variable plus the loopback base URL — never the raw key.
+  // The OPENCODE_CONFIG_CONTENT overlay (one-shot mode) pins the model; for
+  // the triss-worker provider it additionally pins baseURL to the proxy.
+  let proxiedConfigContent = oneShotConfigContent;
+  if (oneShotProvider && cred.provider === 'worker' && credentialProxy) {
+    const overlay = oneShotConfigContent ? JSON.parse(oneShotConfigContent) : {};
+    proxiedConfigContent = JSON.stringify({
+      ...overlay,
+      provider: {
+        ...(overlay.provider || {}),
+        'triss-worker': {
+          ...(overlay.provider?.['triss-worker'] || {}),
+          options: {
+            ...(overlay.provider?.['triss-worker']?.options || {}),
+            baseURL: credentialProxy.scopedBaseUrl,
+            apiKey: credentialProxy.token,
+          },
+        },
+      },
+    });
+  }
+  const env = buildEngineEnv(
+    cred.env,
+    credentialProxy ? credentialProxy.token : undefined,
+    proxiedConfigContent,
+    credentialProxy ? credentialProxy.scopedBaseUrl : undefined,
+  );
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
   process.stderr.write(
@@ -5429,21 +6065,39 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
+    await abandonV2SessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
     if (isolation && isolation.freshlyCreated) {
       cleanupAbandonedIsolation(sh, isolation);
     }
     throw err;
+  } finally {
+    // Package 2A: the credential proxy is parent-owned and single-run —
+    // revoke it as soon as the engine exits (success, failure, or throw).
+    if (credentialProxy) {
+      credentialProxy.revoke();
+      await credentialProxy.closed;
+    }
   }
 
   // Rate limit that only hit AFTER the engine produced some text: keep the
   // partial envelope but flag it so the caller knows the run was cut short.
   if (rateLimit) result.warnings.push(rateLimitMessage(rateLimit));
+  if (isolationDowngraded) result.warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
 
   let exit_reason;
   if (result.timedOut) exit_reason = 'timeout';
-  else if (result.signal) exit_reason = 'killed';
+  // A child that handles SIGTERM and exits with code=0/signal=null is still
+  // `killed` when Triss recorded a termination cause before signalling
+  // (Section 6.1); the cause is set BEFORE the signal is sent.
+  else if (result.outputLimitObserved) exit_reason = 'error';
+  else if (['caller_abort', 'host_signal', 'provider_rate_limit', 'output_limit', 'filesystem_quota', 'child_signal'].includes(result.terminationCause)) {
+    exit_reason = 'killed';
+  } else if (result.signal) exit_reason = 'killed';
+  // A parseable top-level engine error event is a typed engine failure even
+  // when the child exits zero (a fake-clean `end_turn` must never win).
+  else if (result.engineErrorObserved) exit_reason = 'error';
   else if (result.code === 0) exit_reason = 'end_turn';
   else exit_reason = 'error';
 
@@ -5451,12 +6105,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     persistSessionMapping(sh, engine, opts.session, result.sessionRealId);
   }
 
-  let filesChanged = [];
+  // v2 contract: files_changed is [] ONLY for a successfully performed
+  // comparison that found nothing; a run with no comparison (non-isolated)
+  // reports null — never a fabricated empty list.
+  let filesChanged = null;
   let diffStat = null;
   let worktreeOut = null;
   if (isolation) {
     const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
     if (changes.warnings.length) result.warnings.push(...changes.warnings);
+    // The comparison was PERFORMED: [] is the honest result for a verified
+    // empty change (null stays reserved for no-comparison runs).
+    filesChanged = changes.filesChanged;
     if (changes.filesChanged.length === 0) {
       try {
         // force: true — even with zero real changes, the seeded
@@ -5479,7 +6139,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         result.warnings.push(`isolate cleanup failed: ${err.message}`);
       }
     } else {
-      filesChanged = changes.filesChanged;
       diffStat = changes.diffStat;
       worktreeOut = isolation.wtPath;
     }
@@ -5488,6 +6147,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (!result.sawStepFinish) {
     result.warnings.push('no usage data (no step_finish events) in the event stream');
   }
+
+  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // facts — anonymous runs get anon-<32hex>; retention requires the full
+  // eligibility matrix (isolated + changed + enforced quota + reservation).
+  const runIdentity = allocateRunIdentity({
+    slug: opts.session || slug || null,
+    isolated: !!isolation,
+    changed: (filesChanged || []).length > 0,
+  });
 
   const { tokens, reported_total_usd, reported_total_source, usage_status, warnings: normalizeWarnings } =
     finalizeOpencodeUsage(result.usage);
@@ -5527,13 +6195,56 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     parent_call_id: ctx?.parentCallId,
   });
 
+  // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
+  // folded opencode event stream.
+  const v2Lifecycle = deriveV2LifecycleFields({
+    timedOut: result.timedOut,
+    terminationCause: result.terminationCause,
+    signal: result.signal,
+    exitCode: result.code,
+    engineErrorObserved: Boolean(result.engineErrorObserved),
+    rateLimited: Boolean(result.rateLimit),
+    exitReason: exit_reason,
+    finalText: result.finalText,
+    toolActivityCount: result.activity ? result.activity.tool_uses : 0,
+    isolated: !!isolation,
+    callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
+    sessionRequested: Boolean(opts.session || sessionRealIdV1),
+  });
+  const finishedAtMs = Date.now();
+
   const envelope = {
     engine: 'opencode',
+    envelope_version: 2,
     engine_version: engineVersion,
     session_id: result.sessionRealId || null,
+    // Package 5E: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / Reference surface 3). The
+    // identity is allocated from the ACTUAL run facts — anonymous runs get
+    // anon-<32hex>, retention requires the full eligibility matrix.
+    ...(runIdentity || {}),
+    execution_capabilities: buildExecutionCapabilities({
+      engine: 'opencode',
+      proxyAvailable: !!credentialProxy,
+    }),
+    ...v2Lifecycle,
+    run_id: `run_${randomBytes(16).toString('hex')}`,
+    started_at: new Date(spawnStartMs).toISOString(),
+    finished_at: new Date(finishedAtMs).toISOString(),
+    duration_ms: finishedAtMs - spawnStartMs,
+    activity: result.activity || {
+      events: 0,
+      tool_uses: 0,
+      tool_errors: 0,
+      by_tool: {},
+      saw_terminal_stop: false,
+      first_event_at: null,
+      last_event_at: null,
+    },
     exit_reason,
     final_text: result.finalText,
     files_changed: filesChanged,
+    run_files_changed: filesChanged,
     diff_stat: diffStat,
     worktree: worktreeOut,
     usage: {
@@ -5554,6 +6265,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
+  await completeV2SessionRow(sessionV2);
 }
 
 // ─── coder clean (Phase 3) ──────────────────────────────────────────────────────
@@ -5634,4 +6346,203 @@ export async function runCoderClean(opts = {}, deps = {}) {
   if (!removed.length && !kept.length && !failed.length) {
     process.stderr.write(pc.dim('  · nothing to clean\n'));
   }
+}
+
+// ─── v2 session CLI (Atomic 23 / Package 7) ──────────────────────────────────
+
+/**
+ * `triss coder session list [--engine <name>]`: serialize the bounded
+ * Package 4B1 inventory projection. Exits 0 only for a complete canonical
+ * projection; on error writes typed diagnostics to stderr and emits no
+ * partial JSON.
+ */
+export async function runCoderSessionList(opts = {}, deps = {}) {
+  const { listCoderSessions } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine || 'opencode');
+  const sessions = await listCoderSessions({ inventoryDir });
+  const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
+}
+
+/**
+ * `triss coder session clean <slug> --engine <opencode|crush>`: requires the
+ * engine flag; validates ownership and removes only the selected engine's
+ * inactive isolated session row.
+ */
+export async function runCoderSessionClean(slug, opts = {}) {
+  if (!opts.engine || !['opencode', 'crush'].includes(opts.engine)) {
+    throw new Error('--engine <opencode|crush> is required for session clean');
+  }
+  const { removeCoderSessionRow, listCoderSessions } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
+  const sessions = await listCoderSessions({ inventoryDir });
+  const row = sessions.find((s) => s.slug === slug);
+  if (!row) {
+    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
+    return;
+  }
+  if (row.state !== 'idle') {
+    throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
+  }
+  // The state machine requires reserved/running/idle -> deleting BEFORE a
+  // row can be removed; skipping the transition made every idle clean fail
+  // with 'row must be deleting before removal'.
+  const { beginCoderSessionDelete } = await import('../coder-session-transitions.js');
+  await beginCoderSessionDelete({ inventoryDir, engine: opts.engine, slug });
+  await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
+  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${opts.engine})\n`));
+}
+
+/**
+ * `triss coder state adopt --from-project-id <32hex>`: explicit operator
+ * action; moves old owned state to quarantine with a NEW project id.
+ */
+export async function runCoderStateAdopt(opts = {}) {
+  const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  const { adoptOrQuarantineCoderState } = await import('../coder-state.js');
+  if (!opts.fromProjectId || !/^[0-9a-f]{32}$/.test(opts.fromProjectId)) {
+    throw new Error('--from-project-id <32hex> is required for state adopt');
+  }
+  const trissRoot = join(projectRoot(), '.triss');
+  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  if (identity.project_id === opts.fromProjectId) {
+    throw new Error('adopt requires a DIFFERENT newly generated project id');
+  }
+  const result = await adoptOrQuarantineCoderState({
+    trissRootPath: trissRoot,
+    oldProjectId: opts.fromProjectId,
+    newProjectId: identity.project_id,
+  });
+  process.stderr.write(
+    pc.dim(`  · quarantined ${opts.fromProjectId} -> ${identity.project_id} at ${result.quarantine_dir}\n`),
+  );
+}
+
+/**
+ * `triss coder state reset --project`: quarantine all validated local v2
+ * state and create an empty identity (never deletes it).
+ */
+export async function runCoderStateReset(opts = {}) {
+  if (!opts.project) {
+    throw new Error('--project is required for state reset');
+  }
+  const { resolve: resolvePath } = await import('node:path');
+  const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  const { randomBytes } = await import('node:crypto');
+  const { mkdir, readdir, rename, rm } = await import('node:fs/promises');
+  // --project names the target tree: resetting repo-B from repo-A's cwd must
+  // never quarantine repo-A's state. Resolve the EXPLICIT path, not cwd.
+  const trissRoot = join(resolvePath(opts.project), '.triss');
+  // A fresh identity is created only after the old one is quarantined;
+  // the identity itself is never deleted.
+  const identity = await loadOrCreateProjectIdentity(trissRoot);
+
+  // P1 fix: actually quarantine ALL validated v2 state — every session and
+  // result state directory is MOVED (recoverable) under the quarantine
+  // root, not merely reported. The identity file itself is never deleted.
+  const quarantineRoot = join(trissRoot, 'quarantine-v1');
+  const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
+  let quarantined = 0;
+  const stateRoots = ['coder-state-v2', 'engine-sessions-v2', 'coder-results-v1'];
+  for (const root of stateRoots) {
+    const src = join(trissRoot, root);
+    let entries;
+    try {
+      entries = await readdir(src, { withFileTypes: true });
+    } catch {
+      continue; // root absent: nothing to quarantine
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const dst = join(quarantineRoot, `${root}-${stamp}`, ent.name);
+      await mkdir(join(quarantineRoot, `${root}-${stamp}`), { mode: 0o700, recursive: true });
+      try {
+        await rename(join(src, ent.name), dst);
+        quarantined += 1;
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') throw err;
+      }
+    }
+    // Remove the now-empty root so a fresh project state starts clean.
+    try {
+      await rm(src, { recursive: true, force: true });
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  // Quarantine the old project-identity-v1.json and create a fresh identity
+  const identityFile = join(trissRoot, 'project-identity-v1.json');
+  try {
+    await mkdir(join(quarantineRoot, `identity-${stamp}`), { mode: 0o700, recursive: true });
+    await rename(identityFile, join(quarantineRoot, `identity-${stamp}`, 'project-identity-v1.json'));
+    await loadOrCreateProjectIdentity(trissRoot);
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+
+  process.stderr.write(pc.dim(
+    `  · reset project ${identity.project_id}: quarantined ${quarantined} state record(s)\n`,
+  ));
+}
+
+/**
+ * `triss coder result list`: bounded retained-result projection.
+ */
+export async function runCoderResultList(deps = {}) {
+  const { listCoderRetainedResults } = await import('../coder-result-transitions.js');
+  const { readdir } = await import('node:fs/promises');
+  const resultsRoot = join(projectRoot(), '.triss', 'coder-results-v1', 'runs');
+  let runDirs = [];
+  try {
+    runDirs = (await readdir(resultsRoot)).map((name) => join(resultsRoot, name));
+  } catch {
+    // No results root: empty list.
+  }
+  const results = await listCoderRetainedResults({ runDirs });
+  const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  writeStdout(`${JSON.stringify({ schema_version: 1, results })}\n`);
+}
+
+/**
+ * `triss coder result clean <run-id>`: removes only a validated retained
+ * result artifact, never a persistent session selected by a slug.
+ */
+export async function runCoderResultClean(runId, _opts = {}, deps = {}) {
+  if (!runId || !/^run-[0-9a-f]{32}$/.test(runId)) {
+    throw new Error('result clean requires a valid <run-id> (run-<32 lowercase hex>)');
+  }
+  const { beginCoderResultDeletion } = await import('../coder-result-transitions.js');
+  const { rm, stat } = await import('node:fs/promises');
+  const runDir = join(projectRoot(), '.triss', 'coder-results-v1', 'runs', runId);
+
+  // P1 fix: go through the deletion state machine (tombstone first), not a
+  // bare recursive rm — a crash mid-delete must leave a recoverable
+  // `.deleting.json` marker, and the run dir must be a validated registry
+  // entry (state.json present) before anything is removed.
+  try {
+    await stat(runDir);
+  } catch {
+    throw new Error(`retained result ${runId} not found`);
+  }
+  const tombstone = await beginCoderResultDeletion({ runDir, runId });
+  if (tombstone === null) {
+    throw new Error(`retained result ${runId} has no valid state record (refusing blind delete)`);
+  }
+  // Durable phase breadcrumbs: every artifact class is confirmed gone before
+  // the terminal phase, so a crash mid-delete leaves a recoverable marker
+  // naming exactly what remains.
+  const { advanceCoderResultDeletionPhase, RESULT_DELETE_PHASE } = await import('../coder-result-transitions.js');
+  const runSub = (name) => join(runDir, name);
+  for (const [phase, artifact] of [
+    [RESULT_DELETE_PHASE[1], 'worktree'],
+    [RESULT_DELETE_PHASE[2], 'branch'],
+    [RESULT_DELETE_PHASE[3], 'state'],
+  ]) {
+    await rm(runSub(artifact), { recursive: true, force: true }).catch(() => {});
+    await advanceCoderResultDeletionPhase({ runDir, runId, phase });
+  }
+  await rm(runDir, { recursive: true, force: true });
+  const writeStderr = deps?.stderrWrite || ((s) => process.stderr.write(s));
+  writeStderr(pc.dim(`  · removed retained result ${runId}\n`));
 }

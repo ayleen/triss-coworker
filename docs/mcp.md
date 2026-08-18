@@ -348,11 +348,21 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   agent (default `opencode` engine; `engine: "crush"` selects the crush
   engine). Same options as `triss coder run` on the CLI (`engine`,
   `session`, `continue`, `agent`, `provider`, `model`, `small_model`,
-  `isolate`, `cwd`, `timeout`)
+  `isolate`, `cwd`, `timeout`) plus `allowBestEffortCallerWorktree`
+  (boolean, default FALSE — the only MCP consent to an isolation
+  downgrade when isolation was requested/effective but the enforced
+  sandbox is unavailable; without it such a run fails before spawn with
+  `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` — downgrade produces
+  `TRISS_CODER_ISOLATION_DOWNGRADED` in stderr and envelope `warnings`,
+  `effective_isolation: best_effort_caller_worktree`, advisory-only
+  `files_changed: null`/`worktree: null`, edits may reach the caller
+  worktree; user-remediable slug/branch conflicts containing
+  `already exists` still fail closed even with the opt-in)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
   tool argument). Returns the JSON envelope — `engine`, `engine_version`,
-  `session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
-  `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
+  `session_id`, `session_slug`, `result_retention`, `result_id`,
+  `execution_capabilities`, `exit_reason`, `final_text`, `files_changed`,
+  `diff_stat`, `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
   `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
   `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
   [opencode2.md](opencode2.md));
@@ -383,6 +393,12 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   (`TRISS_WORKER_API_KEY` / `ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
   `KIMI_API_KEY` — never the value), and how many isolation
   worktrees are live.
+- `triss_coder_result_list` — the bounded retained-result projection
+  (`run_id`, `engine`, `session_slug`, `published_at`, `state`). Never
+  lists persistent sessions.
+- `triss_coder_result_clean` — remove ONLY a validated retained result
+  artifact by `run_id` (`run-<32 lowercase hex>`, enforced in the schema
+  and the handler). Never removes a persistent session selected by a slug.
 
 If an MCP client cancels or times out `triss_coder_run`, its cancellation signal
 is forwarded to the detached engine process group. Normal completion also

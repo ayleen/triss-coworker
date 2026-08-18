@@ -175,10 +175,19 @@ export function buildCrushRunArgv({
 // fixed upstream in 0.1.1; the alias keeps <0.1.1 binaries working with a
 // single user-facing ZHIPU_API_KEY). NEVER log either value (use
 // maskValue() at the call site if anything is echoed).
-export function buildCrushSpawnEnv(baseEnv = process.env) {
+export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (baseEnv[key] != null) env[key] = baseEnv[key];
+  }
+  // Package 2A credential proxy: when a proxy plan exists, the engine
+  // receives the single-run proxy token in the API-key variables plus the
+  // loopback base URL — never the real provider credential.
+  if (proxy && proxy.token && proxy.baseUrl) {
+    env.ZHIPU_API_KEY = proxy.token;
+    env.ZAI_API_KEY = proxy.token;
+    env.ZAI_BASE_URL = proxy.baseUrl;
+    return env;
   }
   if (baseEnv.ZHIPU_API_KEY) {
     env.ZHIPU_API_KEY = baseEnv.ZHIPU_API_KEY;

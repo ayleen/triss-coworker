@@ -2,6 +2,7 @@
 // to stdout. Each handler keeps its scope small and is testable on its own.
 
 import { chat as workerChat, reportUsage, responseText } from '../client.js';
+import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
@@ -30,7 +31,9 @@ async function callModel({ provider, model, messages, maxTokens = 4096 }, deps =
     maxTokens,
   });
   const text = responseText(resp);
-  if (!text) throw new Error('Worker returned empty response — increase max_tokens');
+  // Reference surface 8: empty/whitespace-only responses fail with the
+  // stable TRISS_PROVIDER_EMPTY code (MCP transports it as an error result).
+  assertProviderText(text);
   // Content and the usage report are separate values; handlers compose them
   // at the response boundary, so writeHandler can drop the report entirely.
   // The provider is passed through so the line matches the persisted record.
@@ -134,6 +137,9 @@ export async function reviewHandler(
     model,
     max_tokens,
     response_format,
+    files = null,
+    issue = null,
+    payload_mode = null,
   },
   deps = {},
 ) {
@@ -141,6 +147,11 @@ export async function reviewHandler(
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
+  if (payload_mode === 'shard') {
+    // Shard mode requires an explicitly acquired diff; the MCP tool schema
+    // exposes it as diff_text for callers that already hold the payload.
+    throw new Error('payload_mode=shard requires the dedicated triss_review_shard tool');
+  }
   return runReviewCore({
     pr,
     base,
@@ -152,7 +163,64 @@ export async function reviewHandler(
     responseFormat,
     callModel: deps.callModel || callModel,
     reviewBoundaryId: deps.reviewBoundaryId,
+    files,
+    issue,
   });
+}
+
+export async function reviewShardHandler(
+  { pr, base, question, provider, model, max_tokens, files = null },
+  deps = {},
+) {
+  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
+  const { acquireReviewDiffForShard, runReviewCoreShard } = await import('./review-core.js');
+  const { createReviewBoundaryId, reviewSystemPromptForFormat, wrapReviewSection } =
+    await import('../review-prompt.js');
+  const { assertProviderText } = await import('../provider-errors.js');
+
+  const { diff } = await acquireReviewDiffForShard({
+    pr,
+    base,
+    files,
+    gitDiffFn: deps.gitDiff,
+    acquireScopedDiff: deps.acquireScopedDiff,
+  });
+  if (!diff.trim()) return '(no changes between branches — nothing to review)';
+
+  const boundaryId = deps.reviewBoundaryId || createReviewBoundaryId();
+  const metadata = `<change base="${base || 'auto'}">
+Sharded review: sequential whole-file shards, per-shard verdicts only.
+</change>`;
+  const result = await runReviewCoreShard({
+    diff,
+    question,
+    metadata,
+    callModel: async ({ shard, question: q }) => {
+      const sections = [
+        wrapReviewSection(boundaryId, 'change', metadata),
+        wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((sec) => sec.raw).join('\n')}\n</diff>`),
+      ].join('\n\n');
+      const response = await (deps.callModel || callModel)({
+        provider,
+        model: model || 'pro',
+        maxTokens,
+        messages: [
+          { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
+          { role: 'user', content: sections },
+          { role: 'user', content: q },
+        ],
+      });
+      return assertProviderText(response.content);
+    },
+  });
+  if (!result.ok) {
+    const err = new Error(result.message || result.code || 'shard review failed');
+    err.code = result.code;
+    throw err;
+  }
+  return result.shards
+    .map((shard) => `--- shard ${shard.shard_index} ---\n${shard.verdict}`)
+    .join('\n\n') + '\nglobal verdict: unavailable_for_sharded';
 }
 
 const WRITE_SYSTEM =
@@ -919,7 +987,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // calls always fall through to the real subprocess machinery inside
 // runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine } = {},
+  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -949,10 +1017,11 @@ export async function coderRunHandler(
   // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
   // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
+  const allowDowngrade = Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
   const resolvedEngine = resolveCoderEngine({ engine });
   const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
 
-  if (cwd && !effectiveIsolate) {
+  if (cwd && (!effectiveIsolate || allowDowngrade)) {
     const { resolve } = await import('node:path');
     assertSafePath(resolve(cwd), { kind: 'write' });
   }
@@ -976,6 +1045,7 @@ export async function coderRunHandler(
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
+      allowBestEffortCallerWorktree: allowBestEffortCamel ?? allowBestEffortSnake,
     },
     {
       spawn: deps.spawn,
@@ -1014,6 +1084,28 @@ export async function coderStatusHandler() {
     `Worktrees (.triss/wt): ${status.worktreeCount} live`,
   ];
   return lines.join('\n');
+}
+
+// ─── retained-result actions (Atomic 24 / Package 8) ─────────────────────────
+
+export async function coderResultListHandler() {
+  const { runCoderResultList } = await import('../commands/coder.js');
+  const capture = [];
+  // P1 fix: stdoutWrite is a property of the SINGLE deps argument — the old
+  // two-argument call passed it as a second parameter the function never
+  // reads, so the handler always returned an empty string.
+  await runCoderResultList({ stdoutWrite: (s) => capture.push(s) });
+  return capture.join('');
+}
+
+export async function coderResultCleanHandler({ run_id }) {
+  if (!run_id || !/^run-[0-9a-f]{32}$/.test(run_id)) {
+    throw new Error('result clean requires a valid run_id (run-<32 lowercase hex>)');
+  }
+  const { runCoderResultClean } = await import('../commands/coder.js');
+  const stderr = [];
+  await runCoderResultClean(run_id, {}, { stderrWrite: (chunk) => stderr.push(String(chunk)) });
+  return stderr.join('').trim();
 }
 
 // ─── commit-msg ─────────────────────────────────────────────────────────────

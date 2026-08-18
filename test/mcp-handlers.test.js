@@ -466,3 +466,240 @@ test('MCP-H-08: statusHandler reports GLM readiness, endpoint, and presets', asy
     restore();
   }
 });
+
+// ─── MCP-REVIEW-SINGLE-* cases (Package 20 / Atomic 41) ─────────────────────
+
+test('MCP-REVIEW-SINGLE-01: the shared single-review path returns verdict + structured coverage', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n',
+    question: 'review',
+    selectors: ['a.txt'],
+    callModel: async () => 'Verdict: approved',
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.verdict, 'Verdict: approved');
+  assert.equal(r.coverage.requested.coverage, 'complete');
+});
+
+test('MCP-REVIEW-SINGLE-02: an empty provider verdict projects the safe error', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n',
+    callModel: async () => '',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_PROVIDER_EMPTY');
+  assert.equal(r.verdict, undefined);
+});
+
+test('MCP-REVIEW-SINGLE-03: cancellation propagates without partial output', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const controller = new AbortController();
+  controller.abort();
+  const r = await runReviewCoreSingle({
+    diff: 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n',
+    signal: controller.signal,
+    callModel: async () => 'should not run',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_CANCELLED');
+  assert.equal(r.verdict, undefined);
+});
+
+test('MCP-REVIEW-SINGLE-04: an oversized payload fails with the stable limit code', async () => {
+  const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreSingle({
+    diff: 'x'.repeat(5 * 1024 * 1024), // > 4 MiB total cap
+    callModel: async () => 'x',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
+});
+
+// ─── MCP-REVIEW-SHARD-* cases (Package 25 / Atomic 46) ──────────────────────
+
+const SHARD_DIFF =
+  'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n' + '-x\n' + 'y'.repeat(60000) + '\n' +
+  'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n' + '-p\n' + 'q'.repeat(60000) + '\n';
+
+test('MCP-REVIEW-SHARD-01: shard mode returns per-shard verdicts with usage accounting and no global verdict', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    question: 'review',
+    callModel: async () => 'shard ok',
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.shards.length >= 1);
+  assert.ok(r.attempts >= 1);
+  assert.equal(r.verdict, undefined, 'no global verdict');
+  for (const s of r.shards) {
+    assert.ok(s.verdict, 'per-shard verdict present');
+    assert.ok(s.bytes > 0, 'usage accounting present');
+  }
+});
+
+test('MCP-REVIEW-SHARD-02: a second-shard failure stops the sequence with structured partial errors', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const calls = [];
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    callModel: async ({ shard }) => {
+      const path = shard.sections[0].new_path;
+      calls.push(path);
+      if (path === 'b.txt') {
+        const err = new Error('provider exploded');
+        err.code = 'TRISS_PROVIDER_AUTH';
+        throw err;
+      }
+      return 'ok';
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_PROVIDER_AUTH');
+  assert.deepEqual(calls, ['a.txt', 'b.txt'], 'no third shard');
+  assert.ok(Array.isArray(r.partial), 'structured partial errors present');
+  assert.equal(r.partial[0].shard_index, 1);
+  assert.equal(r.message.includes('diff --git'), false, 'no raw diff in errors');
+});
+
+test('MCP-REVIEW-SHARD-03: cancellation propagates with cancellation parity', async () => {
+  const { runReviewCoreShard } = await import('../src/mcp/review-core.js');
+  const controller = new AbortController();
+  controller.abort();
+  const r = await runReviewCoreShard({
+    diff: SHARD_DIFF,
+    signal: controller.signal,
+    callModel: async () => 'should not run',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TRISS_CANCELLED');
+});
+
+// ─── triss_review_shard (dedicated shard tool) ───────────────────────────────
+
+test('MCP-REVIEW-SHARD-01: the dedicated shard tool is registered', async () => {
+  const { listTools } = await import('../src/mcp/tools.js');
+  const tools = await listTools();
+  const shard = tools.find((t) => t.name === 'triss_review_shard');
+  assert.ok(shard, 'triss_review_shard must be registered');
+  assert.equal(shard.inputSchema.properties.files.type, 'array');
+});
+
+test('MCP-REVIEW-SHARD-02: the shard handler runs per-shard verdicts with no global verdict', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  const diff = [
+    'diff --git a/a.txt b/a.txt',
+    '--- a/a.txt',
+    '+++ b/a.txt',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const result = await reviewShardHandler(
+    { base: 'main' },
+    {
+      gitDiff: () => diff,
+      callModel: async () => ({ content: 'shard verdict text', usageReport: 'usage line' }),
+    },
+  );
+  assert.match(result, /--- shard 1 ---/);
+  assert.match(result, /global verdict: unavailable_for_sharded/);
+});
+
+test('MCP-REVIEW-SHARD-03: scoped files acquisition routes through the inventory-first seam', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  let scopedCalled = false;
+  const diff = [
+    'diff --git a/small.js b/small.js',
+    '--- a/small.js',
+    '+++ b/small.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const result = await reviewShardHandler(
+    { base: 'main', files: ['small.js'] },
+    {
+      acquireScopedDiff: async (_deps, opts) => {
+        scopedCalled = true;
+        assert.deepEqual(opts.selectors, ['small.js']);
+        return { ok: true, diff, base_ref: 'main', head_ref: 'HEAD', changed_files: ['small.js'] };
+      },
+      callModel: async () => ({ content: 'shard verdict text' }),
+    },
+  );
+  assert.equal(scopedCalled, true);
+  assert.match(result, /--- shard 1 ---/);
+});
+
+test('MCP-REVIEW-SHARD-04: a zero-match scoped shard review fails closed', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js');
+  await assert.rejects(
+    () =>
+      reviewShardHandler(
+        { base: 'main', files: ['missing.js'] },
+        {
+          acquireScopedDiff: async () => ({
+            ok: false,
+            code: 'TRISS_REVIEW_SCOPE_EMPTY',
+            message: 'none of the requested files (missing.js) appear in the change inventory',
+          }),
+          callModel: async () => {
+            throw new Error('model must not run');
+          },
+        },
+      ),
+    (err) => {
+      assert.equal(err.code, 'TRISS_REVIEW_SCOPE_EMPTY');
+      return true;
+    },
+  );
+});
+
+test('MCP-REVIEW-SCOPED-01: runReviewCore files selection is inventory-first and zero-match fails closed', async () => {
+  const { runReviewCore } = await import('../src/mcp/review-core.js');
+  let scopedCalled = false;
+  const verdict = await runReviewCore({
+    base: 'main',
+    files: ['small.js'],
+    acquireScopedDiff: async (_deps, opts) => {
+      scopedCalled = true;
+      assert.deepEqual(opts.selectors, ['small.js']);
+      return {
+        ok: true,
+        diff: ['diff --git a/small.js b/small.js', '--- a/small.js', '+++ b/small.js', '@@ -1 +1 @@', '-old', '+new'].join('\n'),
+        base_ref: 'main',
+        head_ref: 'HEAD',
+        changed_files: ['small.js'],
+      };
+    },
+    callModel: async ({ messages }) => {
+      assert.equal(String(messages[1].content).includes('unrelated'), false);
+      return { content: 'LGTM', usageReport: 'usage' };
+    },
+  });
+  assert.equal(scopedCalled, true);
+  assert.match(verdict, /LGTM/);
+
+  await assert.rejects(
+    () =>
+      runReviewCore({
+        base: 'main',
+        files: ['missing.js'],
+        acquireScopedDiff: async () => ({
+          ok: false,
+          code: 'TRISS_REVIEW_SCOPE_EMPTY',
+          message: 'none of the requested files (missing.js) appear in the change inventory',
+        }),
+        callModel: async () => {
+          throw new Error('model must not run');
+        },
+      }),
+    (err) => {
+      assert.equal(err.code, 'TRISS_REVIEW_SCOPE_EMPTY');
+      return true;
+    },
+  );
+});
