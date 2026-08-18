@@ -236,6 +236,8 @@ test("slug conflict still fails closed even with allowBestEffortCallerWorktree",
     assert.match(String(err.message), /already exists/);
     assert.match(String(err.message), new RegExp(ISOLATION_ENFORCEMENT_REQUIRED_CODE));
     assert.equal(err.code, ISOLATION_ENFORCEMENT_REQUIRED_CODE);
+    // Original conflict code is preserved for observability
+    assert.equal(err.cause?.code, "TRISS_CODER_ISOLATION_CONFLICT");
   }
   assert.equal(spawned, false);
   // cleanup branch

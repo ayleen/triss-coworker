@@ -40,7 +40,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
-import { ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE } from '../coder-result.js';
+import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE } from '../coder-result.js';
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
@@ -3832,9 +3832,11 @@ function atomicWriteJson(path, obj) {
 function setupIsolation(sh, slug) {
   const repoRoot = gitRepoRoot(sh, projectRoot());
   if (!repoRoot) {
-    throw new Error(
+    const err = new Error(
       '--isolate requires a git repository — no repo found at or above the current directory.',
     );
+    err.code = ISOLATION_UNAVAILABLE_CODE;
+    throw err;
   }
   // FIRST gitignore .triss/, THEN create the worktree — otherwise the
   // very first run's own .triss/ directory shows up as an untracked file
@@ -3848,10 +3850,12 @@ function setupIsolation(sh, slug) {
   if (existsSync(wtPath)) {
     const existingBranch = gitWorktreeBranch(sh, wtPath);
     if (existingBranch !== branch) {
-      throw new Error(
+      const err = new Error(
         `${TRISS_STATE_DIR}/wt/${slug} already exists on branch "${existingBranch}", expected "${branch}" — ` +
           'use a different --session slug, or remove the worktree manually (triss coder clean --all).',
       );
+      err.code = ISOLATION_CONFLICT_CODE;
+      throw err;
     }
   } else {
     // Detect "branch exists but its worktree dir doesn't" BEFORE calling
@@ -3864,12 +3868,14 @@ function setupIsolation(sh, slug) {
     // `git branch -D` is the way out.
     const branchExists = sh('git', ['-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`]);
     if (branchExists && !branchExists.error && branchExists.status === 0) {
-      throw new Error(
+      const err = new Error(
         `Branch "${branch}" already exists but ${TRISS_STATE_DIR}/wt/${slug} does not — likely left ` +
           "behind by a previous run whose worktree was removed while the branch survived (unmerged " +
           `commits). Remove it with \`git branch -D ${branch}\` (review its commits first) or ` +
           '`triss coder clean --all`, or pick a different --session slug.',
       );
+      err.code = ISOLATION_CONFLICT_CODE;
+      throw err;
     }
     const r = sh('git', ['-C', repoRoot, 'worktree', 'add', wtPath, '-b', branch]);
     if (!r || r.error || r.status !== 0) {
@@ -3883,13 +3889,17 @@ function setupIsolation(sh, slug) {
       const branchNowExists =
         branchExistsNow && !branchExistsNow.error && branchExistsNow.status === 0;
       if (existsSync(wtPath) || branchNowExists) {
-        throw new Error(
+        const err = new Error(
           `${TRISS_STATE_DIR}/wt/${slug} (branch "${branch}") already exists — another run may have ` +
             'created it concurrently; use a different --session slug or `triss coder clean`.',
         );
+        err.code = ISOLATION_CONFLICT_CODE;
+        throw err;
       }
       const msg = String((r && (r.stderr || r.stdout)) || 'unknown error').trim();
-      throw new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
+      const err2 = new Error(`git worktree add ${wtPath} -b ${branch} failed: ${msg}`);
+      err2.code = ISOLATION_UNAVAILABLE_CODE;
+      throw err2;
     }
     freshlyCreated = true;
   }
@@ -5355,11 +5365,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       isolation = setupIsolation(sh, slug);
     } catch (err) {
       const msg = String(err.message || err);
-      // Only mechanism-unavailability is downgradeable; slug/branch
-      // conflicts ("already exists") are user-remediable and must fail
-      // closed even with the opt-in so the user can pick a new slug/clean.
-      const isMechanismUnavailable = !msg.includes('already exists');
-      if (!allowBestEffortCallerWorktree || !isMechanismUnavailable) {
+      // Only mechanism-unavailability is downgradeable; slug/branch conflicts
+      // carry ISOLATION_CONFLICT_CODE and must fail closed even with the
+      // opt-in so the user can pick a new slug/clean. Only UNAVAILABLE
+      // (no git repo / worktree creation failure) downgrades.
+      const isConflict = err.code === ISOLATION_CONFLICT_CODE;
+      const isMechanismUnavailable = !isConflict;
+      if (!allowBestEffortCallerWorktree || isConflict) {
         if (!msg.includes(ISOLATION_ENFORCEMENT_REQUIRED_CODE)) {
           if (isMechanismUnavailable) {
             err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE} — retry with --allow-best-effort-caller-worktree to downgrade to caller worktree when isolation cannot be enforced)`;
@@ -5367,7 +5379,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
             err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE})`;
           }
         }
-        if (!err.code) err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
+        if (err.code === ISOLATION_CONFLICT_CODE || err.code === ISOLATION_UNAVAILABLE_CODE) {
+          const prev = err.code;
+          err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
+          err.cause = err.cause ?? { code: prev };
+        } else if (!err.code) err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
         throw err;
       }
       isolation = null;
