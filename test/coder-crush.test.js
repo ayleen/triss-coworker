@@ -496,10 +496,10 @@ test(
       () => resolveCoderEngine({ engine: 'claude' }),
       /Unknown coder engine "claude"/,
     );
-    // The message must surface BOTH valid names so the caller can self-correct.
+    // The message must surface ALL valid names so the caller can self-correct.
     assert.throws(
       () => resolveCoderEngine({ engine: 'claude' }),
-      /opencode, crush/,
+      /opencode, opencode2, crush/,
     );
   }),
 );

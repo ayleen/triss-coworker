@@ -92,12 +92,30 @@ const DEFAULT_PRICES = {
 // DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers both
 // routes. The model key is the uppercased id with non-alphanumerics → '_'.
 //
+// Strips the engine/provider prefixes of the OpenCode engine family so one
+// bare DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers
+// both routes. The model key is the uppercased id with non-alphanumerics → '_'.
+//
+// opencode-go/ is deliberately NOT stripped (review round 5): OpenCode Go is
+// a separate paid reseller route whose tariffs are not modeled anywhere in
+// this repo (resolveBillingMode reports it as 'unknown'), so pricing its
+// usage with the bare DeepSeek/Moonshot list prices would publish fabricated
+// totals — and silently repoint the documented
+// TRISS_PRICE_OPENCODE_GO_<MODEL> override key. A Go route prices as null
+// (unknown cost) unless the user sets the prefixed override explicitly.
+// Unknown prefixes are left intact (fail-closed pricing: an unrecognized
+// prefixed id prices as null, never as a guess).
+const OPENCODE_FAMILY_PREFIXES = /^(?:moonshotai(?:-cn)?)\//;
+function stripModelPrefix(billingModel) {
+  return String(billingModel).replace(OPENCODE_FAMILY_PREFIXES, '');
+}
+
 // Returns the parsed rates array (length 3 or 4) or null when the override is
 // absent or malformed. Any arity other than 3 or 4 — a blank/whitespace-only
 // component, or a non-numeric token — is rejected so the whole override is
 // ignored rather than half-applied.
 function priceOverride(billingModel) {
-  const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
+  const bare = stripModelPrefix(billingModel);
   const envKey = 'TRISS_PRICE_' + bare.toUpperCase().replace(/[^A-Z0-9]/g, '_');
   const raw = process.env[envKey];
   if (!raw) return null;
@@ -123,7 +141,7 @@ export function priceFor(billingModel) {
     }
     return { input_uncached: rates[0], cache_read: rates[1], cache_write: rates[2], output: rates[3] };
   }
-  const bare = String(billingModel).replace(/^moonshotai(?:-cn)?\//, '');
+  const bare = stripModelPrefix(billingModel);
   // Subscription use is metered by the plan, regardless of the particular
   // model id. Keep this after the override so a user can explicitly
   // account for a plan model if their contract changes elsewhere.
@@ -276,7 +294,7 @@ export function logUsage(input = {}) {
   //   - crush: prompt 0 and the combined delta carried as completion_tokens;
   //   - anything else (api/absent): the input_total / output_total pair.
   // cached_tokens keeps cache_read meaning on every path.
-  if (usage_source === 'opencode') {
+  if (isOpenCodeUsageSource(usage_source)) {
     // The deprecated aliases are the pre-v2 shape and must stay numeric for
     // null-averse consumers: when the canonical value is unknown (e.g. a run
     // with no step_finish) they fall back to the 0 the zero-initialized
@@ -555,7 +573,7 @@ export function summarize(records, { groupBy } = {}) {
           cached: record.cached_tokens || 0,
           completion: record.completion_tokens || 0,
         }
-        : record.usage_source === 'opencode'
+        : isOpenCodeUsageSource(record.usage_source)
           ? {
             prompt: tokens.input_uncached ?? 0,
             cached: tokens.cache_read ?? 0,
@@ -612,6 +630,13 @@ export function resolveProvider(model) {
   return null;
 }
 
+// The OpenCode engine family (docs/opencode2-engine-plan.md §"Event, error,
+// and usage contract"): V2 reuses OpenCode provider pricing and per-step
+// coverage rules ONLY through this explicit mapping — never by treating every
+// non-Crush source as V1.
+const OPENCODE_USAGE_FAMILY = new Set(['opencode', 'opencode2']);
+const isOpenCodeUsageSource = (source) => OPENCODE_USAGE_FAMILY.has(source);
+
 // Fail-closed billing-mode classification. 'free' is provable only from an
 // explicit freeModels set; a bare '-free' suffix or which env keys are set
 // never decides it, because a route may fall back from quota to a balance.
@@ -642,7 +667,7 @@ export function estimateCanonicalCost({
   const p = priceFor(billing_model);
   const isCrush = billing_model === 'crush' || usage_source === 'crush';
   const usageMeta = tokens && tokens.__usage_meta;
-  const isOpenCode = usage_source === 'opencode' || usageMeta?.source === 'opencode';
+  const isOpenCode = isOpenCodeUsageSource(usage_source) || isOpenCodeUsageSource(usageMeta?.source);
   const tokenWarnings = [];
   const canonicalTokens = normalizeCanonicalTokens(tokens, tokenWarnings);
 

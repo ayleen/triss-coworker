@@ -129,9 +129,11 @@ test(
       events.some((e) => e.kind === 'acquire'),
       'applyModelChange must call deps.lock(engine, scope) at the start of the critical section',
     );
-    // Acquire key must be (engine, scope).
+    // Acquire key must be (backend, scope) — the shared opencode-v1 backend,
+    // never the raw engine (docs/opencode2-engine-plan.md "Model management
+    // and rollback": opencode and opencode2 contend on the same lock).
     const acq = events.find((e) => e.kind === 'acquire');
-    assert.equal(acq.engine, 'opencode', 'lock must be keyed by the opencode engine');
+    assert.equal(acq.engine, 'opencode-v1', 'lock must be keyed by the shared opencode-v1 backend');
     assert.equal(acq.scope, 'global', 'lock must be keyed by the requested scope');
     // Exactly one acquire and one release, acquire before release.
     const kinds = events.map((e) => e.kind);

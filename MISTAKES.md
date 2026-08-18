@@ -1,4 +1,50 @@
-# MISTAKES.md
+# MISTAKES.md — triss
+
+## 2026-08-18 — A fail-closed lock on the post-run path turned a bookkeeping race into a lost paid run
+
+**What happened:** When adding the session-store mutation lock (PR #46
+Phase 4), I placed a throw-immediately `LOCK_HELD` lock around
+`persistSessionMapping` — which runs AFTER the engine finished and BEFORE
+the envelope is written. Two parallel `coder run --session` in one project
+made one of them discard a finished (already paid-for) result over a
+session-bookkeeping file. Review round 6 also caught the same class twice
+more: a corrupted `sessions.json` stranded a V1 `--isolate` worktree
+(the cleanup guard existed only in the V2 branch), and resolving the coder
+engine BEFORE `loadEnvFiles()` silently ran the whole V1 init when
+`TRISS_CODER_ENGINE=opencode2` came from a `.env` file.
+
+**Root cause:** I applied "fail closed" to a POST-RESULT write path where
+failure costs more than the inconsistency it prevents, and I kept adding
+engine-branch guards to only one of the two engine paths (V1/V2 asymmetry
+in nearly every finding: cleanup guards, warning branches, lookup paths).
+
+**Prevention:** For any failure that occurs after tokens are spent or after
+side effects exist, downgrade fail-closed to retry-then-degrade and always
+ask "what does the OTHER engine's path do here?" when adding a guard to
+one branch. Resolve configuration (engine/provider) only AFTER the env
+files load, and thread pre-dotenv snapshots explicitly to every consumer.
+
+## 2026-08-15 — Test seams for `detectOpenCode2` broke after the realpathSync switch
+
+**What happened:** After replacing the external `realpath` spawn with Node
+`realpathSync` (PR #46 review round 3), several opencode2 test harnesses
+kept answering the `--version` probe only for the exact pre-canonicalization
+path (`/resolved/bin/opencode2`). On macOS, `realpathSync` resolves tmp paths
+through `/private/var/...`, so the version probe missed and every
+detect-dependent test failed with "opencode2 not found".
+
+**Root cause:** The fake matched command strings against the un-canonicalized
+`which` output instead of the canonicalized spawn target; the seam was
+path-exact by design but the canonicalization step changed the path between
+seams.
+
+**Prevention:** When a function's contract includes canonicalization
+(realpath/normalization), never match downstream spawns by exact path against
+the input path. Either point test fakes at REAL files (so canonicalization is
+a no-op aside from symlink resolution) or match on argument shape
+(`args[0] === '--version'`), and assert canonical outputs with
+`realpathSync(...)` on both sides.
+
 
 ## Never blind-stage a shared checkout, and never echo secret values
 

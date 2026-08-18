@@ -335,9 +335,10 @@ test('rollbackModelChange fails closed when OpenCode env target.existed=false bu
       'Rollback should fail closed when existed:false env file disappeared'
     );
 
-    // Assert the injected lock received expected engine and local scope
+    // Assert the injected lock received the shared backend key and local scope
+    // (docs/opencode2-engine-plan.md: rollback locks are backend-derived).
     assert.ok(lockCall, 'lock should have been called');
-    assert.strictEqual(lockCall.engine, 'opencode', 'lock should receive opencode engine');
+    assert.strictEqual(lockCall.engine, 'opencode-v1', 'lock should receive the shared opencode-v1 backend key');
     assert.strictEqual(lockCall.scope, 'local', 'lock should receive local scope');
   } finally {
     // Cleanup only the exact mkdtemp root
@@ -361,8 +362,12 @@ test('bin/triss.js coder help description is provider-neutral', () => {
   const helpText = result.stdout;
   // This should FAIL RED: current description is "Run a GLM coding agent (opencode or crush engine)"
   assert.ok(!/Run a GLM coding agent/i.test(helpText), 'coder help should not say "Run a GLM coding agent"');
-  // Positive contract: must use provider-neutral wording
-  assert.ok(/Run a coding agent \(OpenCode or Crush engine\)/i.test(helpText), 'coder help should say "Run a coding agent (OpenCode or Crush engine)"');
+  // Positive contract: must use provider-neutral wording. Phase 5 widened the
+  // engine list to three: V1 default, the opencode2 V2 beta, and crush.
+  assert.ok(
+    /Run a coding agent \(OpenCode V1, OpenCode 2 beta, or Crush engine\)/i.test(helpText),
+    'coder help should say "Run a coding agent (OpenCode V1, OpenCode 2 beta, or Crush engine)"',
+  );
 });
 
 test('README.md coder models description resolves to one provider, not GLM+Zen aggregation', () => {

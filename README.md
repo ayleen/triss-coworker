@@ -279,7 +279,8 @@ The exposed tool set is **filtered by configured credentials**:
   `ZHIPU_API_KEY` (Z.AI GLM), `OPENCODE_API_KEY` (OpenCode Zen or Go),
   `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
-  (`opencode` default, or `crush`); its timeout defaults to
+  (`opencode` V1 default; `--engine opencode2` beta — see
+  [opencode2.md](docs/opencode2.md) — or `crush`); its timeout defaults to
   1500s (25 min) over MCP, above the CLI's 900s, since coding runs are
   expected to be long; override per call via the `timeout` arg. For
   runs that may exceed it, use `triss coder run` on the CLI instead.
@@ -311,8 +312,8 @@ and writing**.
 | `triss review`     | Code review on a branch, PR, or explicitly piped diff (linked ticket only for branch/PR) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a coding agent (default `opencode` engine; `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode\|crush`; `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/opencode2.md](docs/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/opencode2.md](docs/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
@@ -587,8 +588,9 @@ default timeout, configurable via `--timeout <ms>`.
 
 Delegates an implementation task to a cheap coding agent — the existing
 OpenAI-compatible Triss worker, GLM, Kimi,
-OpenCode Zen, or OpenCode Go models (the `opencode` engine by default; `crush` is an
-alternative — see **Engines** below) instead of the primary model writing
+OpenCode Zen, or OpenCode Go models (the `opencode` V1 engine by default;
+`opencode2` beta — see [docs/opencode2.md](docs/opencode2.md) — or `crush`; see
+**Engines** below) instead of the primary model writing
 the code itself.
 
 ```bash

@@ -276,7 +276,7 @@ config
   .option('-f, --force', 're-prompt for keys that are already set')
   .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
-  .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, or crush). `coder init` uses --engine')
+  .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, or crush). `coder init` uses --engine')
   .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
   .action(wrap(runWizard));
 
@@ -324,14 +324,14 @@ config
 
 const coder = program
   .command('coder')
-  .description('Run a coding agent (OpenCode or Crush engine)');
+  .description('Run a coding agent (OpenCode V1, OpenCode 2 beta, or Crush engine)');
 
 coder
   .command('init')
-  .description('Install/configure a coding engine (opencode default, or crush), provider key, permission policy, and agent templates')
+  .description('Install/configure a coding engine (opencode default, opencode2 beta, or crush), provider key, permission policy, and agent templates')
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
-  .option('--engine <name>', 'coding engine to configure: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/opencode2.md), or crush')
   .option('--provider <name>', 'opencode engine model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
@@ -339,11 +339,11 @@ coder
 
 coder
   .command('run [prompt]')
-  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default, or --engine crush) — and print a JSON envelope to stdout')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default; opencode2 beta or --engine crush) — and print a JSON envelope to stdout')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/opencode2.md), or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
-  .option('--agent <name>', 'opencode agent template to use', 'coder')
+  .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
   .option('--provider <name>', 'OpenCode only: select a provider for one run; requires --model and does not modify .env or opencode.json')
   .option('--model <p/m>', 'override the MAIN model for this one run only (does not change small_model or repair persistent config; use `triss coder model set` for that)')
   .option('--small-model <p/m>', 'with --provider, override small_model for one run (defaults to the one-shot main model)')
@@ -366,10 +366,10 @@ coder
 coder
   .command('models')
   .description('List current + live coder models, provider compatibility, and credential readiness (read-only)\n\n' +
-    'Configuration sources:\n' +
-    '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global)\n' +
+    'Configuration sources (layered; later sources win):\n' +
+    '  • opencode & opencode2: JSONC-aware layered config — global ~/.config/opencode/opencode.json, then every opencode.json/.opencode/opencode.json up from the project root to the Git boundary (project-local wins)\n' +
     '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--json', 'print the stable machine-readable state object (no secrets)')
   .action(wrap(runCoderModels));
@@ -391,7 +391,7 @@ coderModel
       '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)'
   )
   .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
   .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')

@@ -54,14 +54,50 @@ import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { projectRoot } from './safety.js';
 import { readWorkerConfigSnapshot } from './config.js';
-import { acquireCoderMutationLock } from './coder-lock.js';
+import { acquireCoderMutationLock, lockPathFor } from './coder-lock.js';
 export { lockPathFor } from './coder-lock.js';
+
+// ─── configuration backend mapping (docs/opencode2-engine-plan.md) ──────────
+//
+// Engine IDENTITY (which process adapter runs) and CONFIGURATION BACKEND
+// (which layered config graph is read/written) are distinct. Both OpenCode
+// engines read and write the same V1-compatible graph; crush has its own:
+//
+//   opencode   -> opencode-v1
+//   opencode2  -> opencode-v1   (shared — a model set through either engine
+//                                changes the intent BOTH engines see)
+//   crush      -> crush
+//
+// `configBackendForEngine` is the single source of truth for this mapping.
+// Unknown engines fail closed (null) — never a silent V1 degradation.
+export function configBackendForEngine(engine) {
+  if (engine === undefined || engine === null || engine === '') return 'opencode-v1';
+  if (engine === 'opencode' || engine === 'opencode2') return 'opencode-v1';
+  if (engine === 'crush') return 'crush';
+  return null;
+}
+
+// Map a configuration backend to its mutation-lock path. Both OpenCode
+// engines must contend on the SAME lock because they target the same files:
+// the key is the backend, not the engine. opencode-v1 deliberately keeps the
+// exact V1 lock path (pinned by coder-model-default-lock-blocker.test.js), so
+// an opencode2 mutation blocks on the identical file an opencode mutation
+// would. Unknown backends fail closed (null) — never a silent V1 degradation.
+export function lockPathForBackend(backend, scope) {
+  if (backend === 'opencode-v1') return lockPathFor('opencode', scope);
+  if (backend === 'crush') return lockPathFor('crush', scope);
+  return null;
+}
 // getEnvFilePath resolves the per-scope Triss env-pin file (global
 // ~/.config/triss/.env or local <projectRoot>/.triss.env). The transactional
 // applyModelChange snapshots and restores TRISS_CODER_MODEL /
 // TRISS_CODER_SMALL_MODEL through this path. Safe to import: secrets.js has no
 // module-eval side effects that reach back into this module.
 import { getEnvFilePath, parseEnvText, readEnvFile } from './secrets.js';
+// Canonical OpenCode config enumeration (P2-10): single source of config
+// paths + precedence for role resolution here — global → direct → .opencode,
+// JSONC-aware, nested levels included.
+import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-config.js';
 // Reuse the canonical provider-from-model parser so the prefix→credential
 // mapping stays in one place. Safe to import: coder.js has no module-eval
 // side effects, and we only call this pure helper (never its fetch paths).
@@ -389,32 +425,89 @@ function resolveCrushRoles() {
 // global has only small_model, resolving to config main from local, config
 // small from global with distinct source_paths.
 function resolveOpenCodeConfigRoles() {
-  const globalPath = opencodeConfigPath('global');
-  const localPath = opencodeConfigPath('local');
-
-  const globalLayer = readJsonConfigLayer(globalPath, 'global');
-  const localLayer = readJsonConfigLayer(localPath, 'local');
+  // CANONICAL ENUMERATOR (review P2-10): this used to read exactly two files
+  // (~/.config/opencode/opencode.json + <projectRoot>/opencode.json) with
+  // plain JSON.parse, ignoring JSONC, nested direct configs between the
+  // project boundary and cwd, and .opencode/ layers — so `coder models`
+  // could report a different model+source than the child process actually
+  // uses. The single source of config paths/precedence is the canonical
+  // enumerator (src/opencode-config.js): global first, then direct
+  // boundary→cwd, then .opencode/ layers — evaluated LAST-LAYER-WINS per
+  // field, matching how the engine merges.
+  const { configs } = enumerateOpenCodeSources({ cwd: projectRoot(), tolerantParsing: true });
+  const existing = configs.filter((c) => c.exists);
+  const parsed = [];
+  for (const c of existing) {
+    // tolerantParsing marks malformed layers with __parseError instead of
+    // throwing — inspection reports them per-layer (P2-10 contract).
+    if (c.model && typeof c.model === 'object' && c.model.__parseError) {
+      parsed.push({ path: c.path, layer: c.layer, doc: null, parseError: c.model.__parseError });
+      continue;
+    }
+    try {
+      const doc = parseOpenCodeDocument(readFileSync(c.path, 'utf8'), { path: c.path });
+      parsed.push({ path: c.path, layer: c.layer, doc });
+    } catch (err) {
+      const parseError = { path: c.path, message: `parse error: ${err.message}` };
+      parsed.push({ path: c.path, layer: c.layer, doc: null, parseError });
+    }
+  }
 
   const resolveRole = (field) => {
-    // Local config field wins if present.
-    if (localLayer.error) return parseErrorRole(localLayer);
-    if (localLayer.config && typeof localLayer.config[field] === 'string') {
+    // Later layers win (global → direct → .opencode; within a level json
+    // before jsonc, cwd layer last). A parse error in a layer that would
+    // otherwise decide the field surfaces as the role's parse error.
+    // Layer names map to the historical scopes: direct layers under the
+    // project boundary are 'local', .opencode/ layers keep their own
+    // 'opencode-local' marker, the global config root stays 'global'.
+    const scopeForLayer = (layer, path) => {
+      if (layer === 'global') return 'global';
+      if (layer === 'direct') {
+        return path === join(projectRoot(), 'opencode.json') ? 'local' : 'direct';
+      }
+      return layer; // 'opencode-dir' etc. — precise, self-describing
+    };
+    // The EFFECTIVE layer for a field is the last layer that would decide
+    // it: the last layer carrying the field, or — when none carries it —
+    // the last layer that FAILED to parse (a malformed local config must
+    // block global fallback and report its own path/scope, the historical
+    // contract pinned by coder-model-malformed-effective-config.test.js).
+    let winner = null;
+    let winnerError = null;
+    let winnerErrorLayer = null;
+    for (const entry of parsed) {
+      if (entry.parseError) {
+        // A malformed layer BLOCKS every earlier (lower-precedence) value:
+        // the effective layer is this broken one, exactly like the local
+        // malformed config must not fall through to the global file.
+        winner = null;
+        winnerError = entry.parseError;
+        winnerErrorLayer = entry.layer;
+        continue;
+      }
+      if (entry.doc && typeof entry.doc[field] === 'string') {
+        winner = { value: entry.doc[field], source_path: entry.path, scope: scopeForLayer(entry.layer, entry.path) };
+        winnerError = null;
+        winnerErrorLayer = null;
+      }
+    }
+    if (winner) return winner;
+    if (winnerError) {
       return {
-        value: localLayer.config[field],
-        source_path: localPath,
-        scope: 'local',
+        value: null,
+        source_path: winnerError.path,
+        scope: scopeForLayer(winnerErrorLayer, winnerError.path),
+        // Historical warning shape (pinned by malformed-config tests):
+        // structured code/severity so renderers can filter on it.
+        parse_error: {
+          code: 'config-parse-error',
+          severity: 'error',
+          scope: scopeForLayer(winnerErrorLayer, winnerError.path),
+          path: winnerError.path,
+          message: `Could not parse ${winnerError.path}: ${winnerError.message}. Fix or restore this file before using a lower-precedence config.`,
+        },
       };
     }
-    // Global config field wins if present.
-    if (globalLayer.error) return parseErrorRole(globalLayer);
-    if (globalLayer.config && typeof globalLayer.config[field] === 'string') {
-      return {
-        value: globalLayer.config[field],
-        source_path: globalPath,
-        scope: 'global',
-      };
-    }
-    // Default: null (unconfigured).
     return { value: null, source_path: null, scope: 'default' };
   };
 
@@ -710,10 +803,12 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     seenParsePaths.add(parseError.path);
     warnings.push(parseError);
   }
-  // For OpenCode, warn about config_main and configuredSmall availability, not runtimeMain.
-  // runtimeMain may be a different provider (e.g. GLM shell override) and should not trigger
+  // For OpenCode (BOTH engines — review round 5: opencode2 used to fall into
+  // the Crush branch below), warn about config_main and configuredSmall
+  // availability, not runtimeMain. runtimeMain may be a different provider
+  // (e.g. GLM shell override) and should not trigger
   // "configured-model-unavailable" against the selected provider's catalogue.
-  if (cat.status === 'ok' && engine === 'opencode') {
+  if (cat.status === 'ok' && (engine === 'opencode' || engine === 'opencode2')) {
     if (configMain.value && configMain.value !== null && availability(configMain.value) === 'unavailable') {
       warnings.push({ code: 'configured-model-unavailable', severity: 'warn', scope: 'model', role: 'config_main', value: configMain.value, message: `Configured main model ${configMain.value} is not available in the provider's catalogue` });
     }
@@ -1532,18 +1627,40 @@ export async function applyModelChange(plan = {}, deps = {}) {
   const configPath = opencodeConfigPath(scope);
   const envPath = getEnvFilePath(scope);
 
-  // Acquire the exclusive (engine, scope) interprocess lock BEFORE the body's
+  // Acquire the exclusive (backend, scope) interprocess lock BEFORE the body's
   // first pre-read/snapshot; hold it through both commits (config rename + env
   // rename) and any compensation/rollback so concurrent writers cannot mix
   // roles or overwrite newer state.
   //
+  // The lock key is the CONFIGURATION BACKEND, never the raw plan engine
+  // (docs/opencode2-engine-plan.md "Model management and rollback"):
+  // opencode and opencode2 mutate the same opencode.json + env pins, so they
+  // MUST contend on the same lock file — lockPathForBackend('opencode-v1')
+  // is byte-identical to the pinned V1 path. Unknown engines/backends fail
+  // closed before anything is read.
+  //
   // deps.lock is an OVERRIDE seam for deterministic unit tests. When deps.lock
-  // is a function the apply uses it. Otherwise (the real CLI passes {}) the
-  // apply uses the BUILT-IN shared filesystem lock (acquireCoderMutationLock) —
-  // absence of deps.lock MUST NEVER mean unlocked. A held/stale default lock
-  // surfaces a structured lock-held result naming the lock path + manual
-  // guidance; nothing is written.
-  const lockEngine = plan.engine || DEFAULT_CODER_ENGINE;
+  // is a function the apply uses it (observing the backend key). Otherwise
+  // (the real CLI passes {}) the apply uses the BUILT-IN shared filesystem
+  // lock (acquireCoderMutationLock) — absence of deps.lock MUST NEVER mean
+  // unlocked. A held/stale default lock surfaces a structured lock-held result
+  // naming the lock path + manual guidance; nothing is written.
+  const planEngine = plan.engine || DEFAULT_CODER_ENGINE;
+  const backend = configBackendForEngine(planEngine);
+  if (backend === null) {
+    return {
+      ok: false,
+      exitCode: 1,
+      reason: 'unsupported-engine',
+      scope,
+      engine: planEngine,
+      path: opencodeConfigPath(scope),
+      error:
+        `unknown coder engine ${JSON.stringify(planEngine)} — the model mutation lock key is ` +
+        'derived from the configuration backend, and only opencode, opencode2, and crush have one',
+    };
+  }
+  const lockEngine = backend;
   let lockHandle;
   if (typeof deps.lock === 'function') {
     try {
@@ -1561,7 +1678,12 @@ export async function applyModelChange(plan = {}, deps = {}) {
     }
   } else {
     try {
-      lockHandle = acquireCoderMutationLock(lockEngine, scope, { isPidAlive: deps.isLockPidAlive });
+      // Real lock file at the backend-derived path (identical to the pinned
+      // V1 path for both OpenCode engines).
+      lockHandle = acquireCoderMutationLock(lockEngine, scope, {
+        isPidAlive: deps.isLockPidAlive,
+        lockPath: lockPathForBackend(backend, scope),
+      });
     } catch (lockErr) {
       return {
         ok: false,
@@ -1576,7 +1698,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
     }
   }
   try {
-    return await applyModelChangeBody({ plan, deps, changes, scope, configPath, envPath });
+    return await applyModelChangeBody({ plan, deps, changes, scope, configPath, envPath, backend });
   } finally {
     if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
   }
@@ -1588,7 +1710,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
 // changes/scope/configPath/envPath. Invariants (no mutation on decline, byte-
 // identical malformed config, preserve foreign fields + policy + formatting,
 // atomic per-file rename, rollback on failure) are unchanged.
-async function applyModelChangeBody({ plan, deps, changes, scope, configPath, envPath }) {
+async function applyModelChangeBody({ plan, deps, changes, scope, configPath, envPath, backend }) {
   // Read + parse the existing config. Missing or malformed short-circuits
   // BEFORE any transaction state is created — nothing is on disk to roll back.
   let rawConfig;
@@ -1668,6 +1790,10 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
     createdAt: new Date().toISOString(),
     scope,
     engine: plan.engine,
+    // Backend the lock was derived from (docs/opencode2-engine-plan.md
+    // "Model management and rollback"). Legacy records have no field and map
+    // to opencode-v1 at read time; both OpenCode engines record opencode-v1.
+    config_backend: backend,
     provider: plan.provider,
     targets: [
       {
@@ -1941,6 +2067,10 @@ async function applyModelChangeBody({ plan, deps, changes, scope, configPath, en
   return {
     ok: true,
     scope,
+    // Engine identity from the plan (manifest already records it). The
+    // opencode2 engine targets the SAME shared config; callers use this to
+    // render the shared-config compatibility note.
+    engine: plan.engine,
     path: configPath,
     envPath,
     model: changes.model,
@@ -2683,7 +2813,9 @@ function rollbackOpenCodeModelChange(input) {
   //    retained (forensic evidence, may be re-run).
   return {
     ok: true,
-    engine: 'opencode',
+    // Review round 6 #7: report the manifest's engine — the shared
+    // opencode-v1 restore path serves BOTH opencode and opencode2 records.
+    engine: manifest.engine || 'opencode',
     scope,
     recordPath: resolve(from),
     restoredPaths,
@@ -2730,10 +2862,15 @@ function readRollbackManifest(manifestPath) {
 export async function rollbackModelChange(input = {}, deps = {}) {
   const from = input.from;
   const scope = input.scope;
-  const lock = deps.lock || ((engine, lockScope) => acquireCoderMutationLock(
-    engine,
+  // Default lock: keyed by CONFIGURATION BACKEND (both OpenCode engines share
+  // the pinned opencode-v1 path), with the same dead-PID reclaim semantics.
+  const lock = deps.lock || ((backendKey, lockScope) => acquireCoderMutationLock(
+    backendKey,
     lockScope,
-    { isPidAlive: deps.isLockPidAlive },
+    {
+      isPidAlive: deps.isLockPidAlive,
+      lockPath: lockPathForBackend(backendKey, lockScope),
+    },
   ));
 
   // 0. input.from: required, nonempty, absolute, and an existing directory.
@@ -2762,29 +2899,72 @@ export async function rollbackModelChange(input = {}, deps = {}) {
   }
 
   // 1. Read the manifest to learn the engine (PRE-LOCK — this is RECORD
-  //    metadata, not a target/snapshot read). The default (engine, scope) lock
+  //    metadata, not a target/snapshot read). The default (backend, scope) lock
   //    key is derived from it.
   const manifestPath = join(from, 'manifest.json');
   const firstManifest = readRollbackManifest(manifestPath);
   const engine = firstManifest && firstManifest.engine;
-  if (engine !== 'crush' && engine !== 'opencode') {
+  // Backend compatibility (docs/opencode2-engine-plan.md): a legacy manifest
+  // without config_backend maps to opencode-v1; opencode2 rollback dispatches
+  // to the existing OpenCode config/env restore through the backend field;
+  // unknown engines/backends fail closed.
+  const backend = firstManifest && firstManifest.config_backend
+    ? firstManifest.config_backend
+    : (engine === 'crush' ? 'crush' : 'opencode-v1');
+  if (engine !== 'crush' && engine !== 'opencode' && engine !== 'opencode2') {
     throw new Error(
       `rollback: unsupported rollback engine ${JSON.stringify(engine)} ` +
-        `— only crush and opencode are supported (record: ${from})`,
+        `— only opencode, opencode2, and crush are supported (record: ${from})`,
+    );
+  }
+  if (backend !== 'opencode-v1' && backend !== 'crush') {
+    throw new Error(
+      `rollback: unsupported rollback config backend ${JSON.stringify(backend)} ` +
+        `— only opencode-v1 and crush are supported (record: ${from})`,
+    );
+  }
+  // engine/backend pairing must be consistent: both OpenCode engines ride
+  // opencode-v1; crush rides crush. A mismatched pairing (e.g. engine=crush
+  // with config_backend=opencode-v1) is a corrupted record and fails closed.
+  if (configBackendForEngine(engine) !== backend) {
+    throw new Error(
+      `rollback: manifest engine ${JSON.stringify(engine)} does not pair with ` +
+        `config backend ${JSON.stringify(backend)} (record: ${from})`,
     );
   }
 
-  // 2. Acquire the default (engine, scope) filesystem lock BEFORE any
+  // 2. Acquire the default (backend, scope) filesystem lock BEFORE any
   //    target/snapshot read or restore. Held through restore and released in
   //    finally on every path. A held/stale lock throws LOCK_HELD (absolute
   //    lock path + manual guidance) which propagates to the CLI wrap.
-  const lockHandle = lock(engine, scope);
+  const lockHandle = lock(backend, scope);
   try {
     // 3. TOCTOU guard: RE-READ the manifest under the lock, then dispatch.
+    // Round-3 P2-10: BOTH the engine and the NORMALIZED config_backend must
+    // be re-checked — the lock was keyed on the pre-lock backend, so a
+    // manifest mutated to a different backend between the read and the lock
+    // would otherwise restore the wrong engine's targets under the wrong
+    // lock (e.g. Crush targets restored while holding the opencode-v1 lock).
     const manifest = readRollbackManifest(manifestPath);
     if (manifest.engine !== engine) {
       throw new Error(
         `rollback: manifest engine changed after acquiring the lock (TOCTOU); aborting (record: ${from})`,
+      );
+    }
+    const manifestBackend = manifest && manifest.config_backend
+      ? manifest.config_backend
+      : (manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
+    if (manifestBackend !== backend) {
+      throw new Error(
+        `rollback: manifest config_backend changed after acquiring the lock (TOCTOU): expected ` +
+          `${JSON.stringify(backend)}, manifest now says ${JSON.stringify(manifestBackend)}; aborting ` +
+          `(record: ${from})`,
+      );
+    }
+    if (configBackendForEngine(manifest.engine) !== manifestBackend) {
+      throw new Error(
+        `rollback: manifest engine ${JSON.stringify(manifest.engine)} no longer pairs with ` +
+          `config backend ${JSON.stringify(manifestBackend)} (record: ${from})`,
       );
     }
     return rollbackModelChangeLocked({ from, scope, manifest, manifestPath });
@@ -2808,7 +2988,14 @@ function rollbackModelChangeLocked({ from, scope, manifest, manifestPath }) {
     );
   }
 
-  if (manifest.engine === 'opencode') return rollbackOpenCodeModelChange({ from, scope, manifest, manifestPath });
+  // Dispatch through the CONFIGURATION BACKEND, not the raw engine
+  // (docs/opencode2-engine-plan.md "Model management and rollback"): both
+  // OpenCode engines restore the same opencode.json + env pins, so
+  // opencode2 records ride the identical OpenCode restore path.
+  const backend = manifest.config_backend
+    ? manifest.config_backend
+    : (manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
+  if (backend === 'opencode-v1') return rollbackOpenCodeModelChange({ from, scope, manifest, manifestPath });
 
   // 4. Exactly one target in the manifest — Crush records a single crush.json
   //    target. Any other count is a corrupted/wrong-engine manifest.
