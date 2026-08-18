@@ -16,11 +16,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { validateCoderRunOptions, runCoderRun, resolveCoderEngine } from "../src/commands/coder.js";
+import { validateCoderRunOptions, runCoderRun } from "../src/commands/coder.js";
 import { ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE } from "../src/coder-result.js";
 import { coderRunHandler } from "../src/mcp/handlers.js";
 import { listTools } from "../src/mcp/tools.js";
@@ -117,7 +117,6 @@ test("fail-closed: isolation setup failure without opt-in throws ENFORCEMENT_REQ
     await runCoderRun("do something", { isolate: true, session: "dg-fail-closed", allowBestEffortCallerWorktree: false }, {
       spawnSync: failingSpawnSync,
       spawn: () => { spawned = true; return fakeSpawnReplaying(FIXTURE)(); },
-      spawnSync: failingSpawnSync,
       stdoutWrite: () => true,
       disableCredentialProxy: true,
     });
@@ -127,8 +126,7 @@ test("fail-closed: isolation setup failure without opt-in throws ENFORCEMENT_REQ
     assert.equal(err.code, ISOLATION_ENFORCEMENT_REQUIRED_CODE);
   }
   assert.equal(spawned, false);
-  // eslint-disable-next-line no-empty -- cleanup
-  try { process.env.TRISS_PROJECT_ROOT = origRoot; } catch {}
+  try { process.env.TRISS_PROJECT_ROOT = origRoot; } catch (_){}
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT; else process.env.TRISS_PROJECT_ROOT = origRoot;
   rmSync(repoRoot, { recursive: true, force: true });
