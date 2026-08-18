@@ -191,7 +191,7 @@ test("MCP handler forwards allowBestEffortCallerWorktree to runCoderRun", withIs
   assert.equal(seen[0].allowBestEffortCallerWorktree, true);
 }));
 
-test("CLI/MCP help registers the flag and exec forwards it", async () => {
+test("CLI/MCP help registers the flag and exec forwards it", withIsolatedEnv({ ZHIPU_API_KEY: "zk-fake-test-key" }, async () => {
   const coderHelp = spawnSync(process.execPath, ["bin/triss.js", "coder", "run", "--help"], { encoding: "utf8" });
   assert.match(`${coderHelp.stdout ?? ""}${coderHelp.stderr ?? ""}`, /allow-best-effort-caller-worktree/);
   const execHelp = spawnSync(process.execPath, ["bin/triss.js", "exec", "--help"], { encoding: "utf8" });
@@ -199,7 +199,7 @@ test("CLI/MCP help registers the flag and exec forwards it", async () => {
   const tools = await listTools();
   const run = tools.find((t) => t.name === "triss_coder_run");
   assert.ok(run.inputSchema.properties.allowBestEffortCallerWorktree);
-});
+}));
 
 test("slug conflict still fails closed even with allowBestEffortCallerWorktree", withIsolatedEnv({ TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: "1" }, async () => {
   const repoRoot = initRepo();
