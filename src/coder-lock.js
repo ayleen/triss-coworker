@@ -60,7 +60,11 @@ function reclaimDeadLock(lockPath, isPidAlive) {
 }
 
 export function acquireCoderMutationLock(engine, scope, opts = {}) {
-  const lockPath = lockPathFor(engine, scope);
+  // opts.lockPath lets a caller place the lock file exactly where the
+  // backend-derived path requires (e.g. the shared opencode-v1 path, or a
+  // per-project session-store lock) while keeping the O_EXCL create, the
+  // dead-PID reclaim, and the token-checked release semantics identical.
+  const lockPath = opts.lockPath || lockPathFor(engine, scope);
   const lockDir = dirname(lockPath);
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   try { chmodSync(lockDir, 0o700); } catch { /* best effort */ }

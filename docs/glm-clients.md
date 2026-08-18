@@ -46,22 +46,23 @@ needs — `ZHIPU_API_KEY` for GLM, `OPENCODE_API_KEY` for OpenCode Zen or Go (§
 
 ---
 
-## 2. The two clients (engines)
+## 2. The engines
 
-| | **opencode** (engine #1, default) | **crush** (engine #2) |
-|---|---|---|
-| Select via | default, or `--engine opencode` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
-| npm package | `opencode-ai` (pinned `1.18.7`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
-| Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_CRUSH_VERSION` |
-| Key it reads | `TRISS_WORKER_API_KEY` for `triss-worker/…`; `ZHIPU_API_KEY` for GLM; shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
-| Providers | Triss worker (`triss-worker/…`, OpenAI-compatible), Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](opencode-go.md)), Moonshot Kimi, and Kimi for Coding | Z.AI GLM only |
-| Provider config | `opencode.json` with a provider-qualified model prefix. Triss writes `provider["triss-worker"]` with `@ai-sdk/openai-compatible`; Zen/Kimi models resolve via OpenCode's built-in providers | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
-| Output | ndjson stream that Triss folds into one envelope | ONE JSON object at end-of-run — trivial last-line parse |
-| Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | native get-or-create with the caller's arbitrary id — no map |
-| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
-| Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **ON** (the disposable worktree is crush's reliable safety layer — the config allowlist is inert and a denied bash deadlocks to timeout) |
-| Per-call cost | engine-**calculated** from its own model catalogue, so a `0` is equally consistent with "coding plan" and "no rate in the catalogue"; Triss keeps it as `reported_total_usd` and only trusts a zero for a proven subscription/free call | real `delta_cost_usd` reported — a per-call charge Triss trusts, including an explicit `0` |
-| Sub-agents | opencode agent templates | `--agents single` (Triss forces this) |
+| | **opencode** (engine #1, default) | **opencode2** (engine #2, beta) | **crush** (engine #3) |
+|---|---|---|---|
+| Select via | default, or `--engine opencode` | `--engine opencode2` / `TRISS_CODER_ENGINE=opencode2` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
+| Status | stable | beta — see [opencode2.md](./opencode2.md) | stable |
+| npm package | `opencode-ai` (pinned `1.18.7`) | `@opencode-ai/cli` (exact pin `0.0.0-next-17430`) | `@phpcraftdream/crush` (pinned `0.1.6`) |
+| Version pin env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_OPENCODE2_VERSION` (exact-match) | `TRISS_CODER_CRUSH_VERSION` |
+| Key it reads | `TRISS_WORKER_API_KEY` for `triss-worker/…`; `ZHIPU_API_KEY` for GLM; shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | same keys as opencode (shared config surface) | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
+| Providers | Triss worker (`triss-worker/…`, OpenAI-compatible), Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](opencode-go.md)), Moonshot Kimi, and Kimi for Coding | provider routing as resolved for V1 (fixture-gated per route; see [opencode2.md](./opencode2.md)) | Z.AI GLM only |
+| Provider config | `opencode.json` with a provider-qualified model prefix. Triss writes `provider["triss-worker"]` with `@ai-sdk/openai-compatible`; Zen/Kimi models resolve via OpenCode's built-in providers | shares `opencode.json` with V1 — one config, both engines | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
+| Output | ndjson stream that Triss folds into one envelope | ndjson event stream (V2 shape) folded by the same envelope contract | ONE JSON object at end-of-run — trivial last-line parse |
+| Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | versioned session map under `engines.opencode2` — V1/V2 slugs never cross-resume | native get-or-create with the caller's arbitrary id — no map |
+| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | deny-first policy shared from `opencode.json`, PLUS a static plugin/agent preflight that rejects any unverified source before spawn | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
+| Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **OFF** (same policy reasoning as V1) | **ON** (the disposable worktree is crush's reliable safety layer — the config allowlist is inert and a denied bash deadlocks to timeout) |
+| Per-call cost | engine-**calculated** from its own model catalogue, so a `0` is equally consistent with "coding plan" and "no rate in the catalogue"; Triss keeps it as `reported_total_usd` and only trusts a zero for a proven subscription/free call | same fold as V1 (`usage_source: opencode2`); per-step `step_finish` coverage — a run without it reports `usage_status: missing` with null counters, never zeros | real `delta_cost_usd` reported — a per-call charge Triss trusts, including an explicit `0` |
+| Sub-agents | opencode agent templates | none — the static agent gate rejects any agent source until subagents are fixture-verified (see [opencode2.md](./opencode2.md)) | `--agents single` (Triss forces this) |
 
 **Rule of thumb:** prefer **opencode** for the persistent bash-policy safety
 layer (it actually enforces); reach for **crush** when you want the simpler

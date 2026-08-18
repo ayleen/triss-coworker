@@ -194,16 +194,28 @@ test('matrix 6: companion update between two fixture versions changes the effect
   const first = loadAndCompose(home, 'matrix6', installation.anchor);
   assert.deepEqual(Object.keys(baseRouteConfig(first.entries)).sort(), BUNDLE_ROUTES);
 
-  // Update: different non-secret marker metadata (a README change) with a new version.
+  // Update: the v2 fixture carries a genuinely different effective patch —
+  // an extra provider key with its own env marker (review §4: identical
+  // patchText made this test vacuous; includes() !== undefined is a
+  // tautology that passes for ANY path).
   const updated = companionFixtureDir(repoRoot, {
     version: '0.35.0',
-    patchText: '- id: llm-pi-ai\n  config:\n    providers:\n      opencode:\n        apiKeyEnv: OPENCODE_API_KEY\n      opencode-go:\n        apiKeyEnv: OPENCODE_API_KEY\n      zai:\n        apiKeyEnv: ZAI_API_KEY\n',
+    patchText: '- id: llm-pi-ai\n  config:\n    providers:\n      opencode:\n        apiKeyEnv: OPENCODE_API_KEY\n      opencode-go:\n        apiKeyEnv: OPENCODE_API_KEY\n      zai:\n        apiKeyEnv: ZAI_API_KEY\n      lifecycle-marker-v2:\n        apiKeyEnv: LIFECYCLE_MARKER_V2\n',
   });
   installIntoProfile(profileDir, [{ name: COMPANION_NAME, dir: updated }]);
   const second = loadAndCompose(home, 'matrix6', installation.anchor);
-  assert.equal(second.companionLayer.packageDir.includes('0.35.0') !== undefined, true);
   const manifest = readJson(join(profileDir, 'node_modules', COMPANION_NAME, 'package.json'));
   assert.equal(manifest.version, '0.35.0');
+  // The effective configuration actually changed: the v2-only provider key
+  // must appear in the composed entries, proving the update replaced v1.
+  const updatedProviders = baseRouteConfig(second.entries);
+  assert.equal(updatedProviders['lifecycle-marker-v2']?.apiKeyEnv, 'LIFECYCLE_MARKER_V2',
+    'update must change the effective patch, not just the installed version');
+  // And the original three routes survive the replacement.
+  assert.deepEqual(
+    ['opencode', 'opencode-go', 'zai'].filter((r) => updatedProviders[r]).sort(),
+    BUNDLE_ROUTES,
+  );
 });
 
 test('matrix 7: companion removal deletes it from dsh.profile.bundles', () => {
@@ -271,7 +283,10 @@ test('matrix E2E: packed tarball installs through pnpm into an isolated profile'
   const packed = packFixture(join(repoRoot, 'packages', 'dsh-provider-bundle'), work);
   const profileDir = makeProfile(home, 'pnpm-e2e');
   const { execFileSync: run } = await import('node:child_process');
-  run('pnpm', ['add', packed.tarball, '--ignore-scripts'], {
+  // dsh profiles carry a pnpm-workspace.yaml, so pnpm add without -w fails
+  // with ERR_PNPM_ADDING_TO_ROOT — the same reason `dsh plugin add` forwards
+  // -w. This test only ever ran as a skip until pnpm appeared on PATH.
+  run('pnpm', ['add', '-w', packed.tarball, '--ignore-scripts'], {
     cwd: profileDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
   const installedManifest = readJson(join(profileDir, 'node_modules', COMPANION_NAME, 'package.json'));

@@ -1,0 +1,226 @@
+name: Bundle checks
+
+# Reusable bundle-verification block (review round 4, §3): the same
+# bundle matrix AND real-Harness lifecycle checks must gate PRs and the
+# tag publish workflow, so both callers include this workflow instead of
+# duplicating job definitions that only PR CI would run.
+on:
+  workflow_call:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NPM_VERSION: '11.6.2'
+
+permissions:
+  contents: read
+
+jobs:
+  bundle-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.19.0', '24', '26']
+      fail-fast: false
+    name: bundle matrix (Node ${{ matrix.node }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - run: npm ci
+      - name: Bundle package, resolution, and settings matrices
+        run: |
+          node --test test/dsh-provider-bundle.test.js \
+            test/dsh-provider-bundle-resolution.test.js \
+            test/dsh-provider-bundle-settings.test.js \
+            test/dsh-publish-gate.test.js \
+            test/dsh-dump-assert.test.js \
+            test/check-lockfile-gate.test.js
+      - name: Companion engine range must match the manifest exactly
+        run: |
+          ENGINE=$(node -p "require('./packages/dsh-provider-bundle/package.json').engines.node")
+          if [ "$ENGINE" != "^22.19.0 || >=24.0.0" ]; then
+            echo "unexpected companion engines.node: $ENGINE"
+            exit 1
+          fi
+      - name: pnpm-missing diagnostics surface without pnpm on PATH
+        run: |
+          node --test --test-reporter=tap test/dsh-provider-bundle-resolution.test.js 2>&1 | tee /tmp/resolution.log
+          grep -q "# SKIP pnpm is not on PATH" /tmp/resolution.log
+          echo "pnpm-missing skip diagnostic confirmed without corepack pnpm activation"
+
+  dsh-plugin-lifecycle:
+    runs-on: ubuntu-latest
+    name: dsh plugin lifecycle (real Harness + pnpm)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - run: npm ci
+      - name: Activate pinned pnpm on PATH
+        run: |
+          # The repo pins packageManager=npm, so corepack strict mode refuses
+          # to activate pnpm here ("This project is configured to use npm").
+          # Non-strict activation is the supported workaround and only
+          # affects this job's PATH.
+          export COREPACK_ENABLE_STRICT=0
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
+          pnpm --version
+      - name: Install the pinned real Harness CLI
+        run: |
+          npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+          dsh --version
+      - name: Pack the companion and a v2 fixture with a different effective patch
+        run: |
+          mkdir -p /tmp/lifecycle/pack /tmp/lifecycle/fixture
+          # NOTE the ./ prefix: npm 11 parses a bare `packages/dsh-provider-bundle`
+          # argument as the owner/repo GitHub shorthand and tries
+          # `git ls-remote ssh://git@github.com/packages/dsh-provider-bundle.git`
+          # (exit 128 on runners without SSH keys). The explicit relative
+          # path forces local-directory packing.
+          npm pack --ignore-scripts --pack-destination /tmp/lifecycle/pack ./packages/dsh-provider-bundle
+          cp -r packages/dsh-provider-bundle/* /tmp/lifecycle/fixture/
+          node <<'EOF'
+          const fs = require('fs');
+          const manifest = '/tmp/lifecycle/fixture/package.json';
+          const m = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+          m.version = `${m.version}-lifecycle.2`;
+          fs.writeFileSync(manifest, JSON.stringify(m, null, 2) + '\n');
+          const patch = '/tmp/lifecycle/fixture/cordis.patch.yml';
+          const yaml = fs.readFileSync(patch, 'utf8');
+          const anchor = '      zai:\n        apiKeyEnv: ZAI_API_KEY\n';
+          if (!yaml.includes(anchor)) throw new Error('zai provider anchor not found');
+          // The marker must be a real YAML node inside llm-pi-ai.config.providers:
+          // dump-config renders provider keys (verified live on dsh 0.1.0-rc.6)
+          // but drops YAML comments and unknown top-level entries.
+          fs.writeFileSync(patch, yaml.replace(
+            anchor,
+            `${anchor}      lifecycle-marker-v2:\n        apiKeyEnv: LIFECYCLE_MARKER_V2\n`,
+          ));
+          EOF
+          (cd /tmp/lifecycle/fixture && npm pack --ignore-scripts --pack-destination /tmp/lifecycle/pack)
+          ls /tmp/lifecycle/pack
+      - name: add → dump-config proves the three routes
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          # Match the VERSION SUFFIX (-lifecycle.N), not the substring
+          # "lifecycle": the pack directory /tmp/lifecycle/ itself contains
+          # it, so `grep -v lifecycle` filtered out BOTH tarballs and left
+          # V1 empty.
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
+          test -n "$V1"
+          dsh plugin --profile headless add -w "$V1"
+          dsh --profile headless --dump-config > /tmp/lifecycle/dump-v1.yml
+          node scripts/dsh-dump-assert.js present /tmp/lifecycle/dump-v1.yml
+          # Manifest-level proof (review §4): dump-config alone does not show
+          # the dependency or the dsh.profile.bundles registry.
+          node - "$DSH_HOME/profiles/headless/package.json" "$V1" <<'EOF'
+          const [manifestPath, tarball] = process.argv.slice(2);
+          const manifest = JSON.parse(require('fs').readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (dep !== `file:${tarball}`) {
+            throw new Error(`dependency entry is '${dep}', expected 'file:${tarball}'`);
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('companion missing from dsh.profile.bundles after add');
+          }
+          EOF
+      - name: update (in-place add v2) → dependency, installed copy, and patch change
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          V2=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*lifecycle*.tgz)
+          test -n "$V2"
+          # The REAL update path (review §4): add v2 over v1 without remove.
+          # Verified live on dsh 0.1.0-rc.6 × pnpm 9.0.0: `dsh plugin add`
+          # forwards to pnpm, which replaces the file: dependency, swaps
+          # node_modules, and the effective patch changes in place. (An
+          # earlier revision claimed pnpm add is a no-op here and fell back
+          # to remove+add — disproven by reproduction on 2026-08-15.)
+          dsh plugin --profile headless add -w "$V2"
+          dsh --profile headless --dump-config > /tmp/lifecycle/dump-v2.yml
+          # All three original routes must survive the replacement PLUS the
+          # v2 marker (review round 4, §2: substring greps let an update that
+          # dropped opencode pass as green).
+          node scripts/dsh-dump-assert.js updated /tmp/lifecycle/dump-v2.yml
+          node - "$DSH_HOME/profiles/headless/package.json" "$V2" <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const [manifestPath, tarball] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const dep = manifest.dependencies?.['triss-dsh-provider-bundle'];
+          if (dep !== `file:${tarball}`) {
+            throw new Error(`dependency entry is '${dep}', expected the v2 'file:${tarball}'`);
+          }
+          const installed = JSON.parse(fs.readFileSync(
+            path.join(path.dirname(manifestPath), 'node_modules', 'triss-dsh-provider-bundle', 'package.json'),
+            'utf8',
+          ));
+          if (!installed.version.endsWith('-lifecycle.2')) {
+            throw new Error(`node_modules still holds ${installed.version} after in-place update`);
+          }
+          EOF
+      - name: remove → dependency and bundle entry gone, dormant posture
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          dsh plugin --profile headless remove triss-dsh-provider-bundle
+          dsh --profile headless --dump-config > /tmp/lifecycle/dump-removed.yml
+          # No bundle route AND no bundle credential reference may remain
+          # (review round 4, §2: a surviving zai route escaped the old
+          # OPENCODE_API_KEY-only grep).
+          node scripts/dsh-dump-assert.js absent /tmp/lifecycle/dump-removed.yml
+          # Manifest-level proof (review §4): the dependency must be gone and
+          # dsh.profile.bundles must drop the companion while keeping the
+          # profile template bundles.
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] !== undefined) {
+            throw new Error(`dependency still present after remove: ${manifest.dependencies['triss-dsh-provider-bundle']}`);
+          }
+          const bundles = manifest.dsh?.profile?.bundles ?? [];
+          if (bundles.includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles still lists the companion after remove');
+          }
+          for (const templateBundle of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless']) {
+            if (!bundles.includes(templateBundle)) {
+              throw new Error(`template bundle ${templateBundle} disappeared on remove`);
+            }
+          }
+          EOF
+      - name: reinstall → composition restored
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
+          dsh plugin --profile headless add -w "$V1"
+          dsh --profile headless --dump-config > /tmp/lifecycle/dump-reinstalled.yml
+          node scripts/dsh-dump-assert.js present /tmp/lifecycle/dump-reinstalled.yml
+          node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'
+          const manifest = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (manifest.dependencies?.['triss-dsh-provider-bundle'] === undefined) {
+            throw new Error('dependency missing after reinstall');
+          }
+          if (!manifest.dsh?.profile?.bundles?.includes('triss-dsh-provider-bundle')) {
+            throw new Error('dsh.profile.bundles missing the companion after reinstall');
+          }
+          EOF
+      - name: Full add/remove lifecycle through an npx-style Harness anchor
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-npx-home"
+          V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless add -w "$V1"
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx.yml
+          node scripts/dsh-dump-assert.js present /tmp/lifecycle/dump-npx.yml
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless remove triss-dsh-provider-bundle
+          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx-removed.yml
+          node scripts/dsh-dump-assert.js absent /tmp/lifecycle/dump-npx-removed.yml

@@ -359,7 +359,10 @@ test(
     const engineProp = run.inputSchema.properties.engine;
     assert.ok(engineProp, 'engine property must exist on triss_coder_run');
     assert.equal(engineProp.type, 'string');
-    assert.deepEqual(engineProp.enum, ['opencode', 'crush']);
+    // Phase 5: the engine enum must list all three engines — opencode2 is
+    // the V2 beta (docs/opencode2.md); a client discovering the tool schema
+    // must never interpret plain `opencode` as V2.
+    assert.deepEqual(engineProp.enum, ['opencode', 'opencode2', 'crush']);
     // isolate stays OPTIONAL with NO schema default — the undefined tristate
     // must reach runCoderRun (opencode resolves undefined -> isolate OFF;
     // crush resolves undefined -> isolate ON, since crush 0.1.3's config

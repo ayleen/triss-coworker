@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.37.0] — 2026-08-15
-
 ### Added
 
 - **Reliable delegation (Release C)** — sequential sharding per
@@ -28,10 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Release C synthetic acceptance (`--synthetic --release C`) and live
     acceptance (`--live --release C`; PASS / SKIPPED_NO_CREDENTIALS /
     BLOCKED_ENVIRONMENT recorded separately, never upgraded to success).
-
-## [0.36.0] — 2026-08-15
-
-### Added
 
 - **Reliable delegation (Release B)** — bounded single review, exact PR
   diff acquisition, and the issue trust boundary per
@@ -60,6 +54,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TRISS_PROVIDER_EMPTY`, `TRISS_CANCELLED`) and scoped verdict
     framing; MCP single-review parity with root enforcement and
     structured coverage.
+
+## [0.36.0] — 2026-08-18
+
+### Added
+
+- **OpenCode 2 coder engine (beta)**: `triss coder run --engine opencode2`
+  and `triss coder init --engine opencode2`, pinned to the exact verified
+  build `@opencode-ai/cli@0.0.0-next-17430` (`TRISS_CODER_OPENCODE2_VERSION`
+  to override). The beta runs every managed invocation `--standalone` with
+  auto-update disabled, isolates V2 state under `<project>/.triss/opencode2/`
+  (0700), folds the V2 event stream into the shared usage envelope
+  (`usage_source: "opencode2"`, terminal-error precedence, no fabricated
+  zeros), namespaces sessions per engine, and rides the shared opencode-v1
+  configuration backend for `coder model set` / rollback. See
+  docs/opencode2.md and docs/opencode2-engine-plan.md.
+
+### Security (opencode2 engine beta)
+
+- Fail-closed effective-configuration preflight for `coder run --engine
+  opencode2`: the managed provider projection (exact package, settings keys,
+  credential placeholder, and the worker `baseURL` compared against the
+  configured Triss worker endpoint), `provider.api` and model-level
+  transport overrides are rejected before any credential is forwarded, and
+  the permission gate requires deny-everything shell policy (no live
+  allow/ask rule — the credential sits in the child environment), proven
+  with a real last-match-wins evaluator.
+- `opencode2` runs resolve the engine binary to an absolute path
+  (`which` + `realpath`) and spawn exactly that path, re-verifying the same
+  path and version after the run.
+- Session store reads fail closed on malformed namespaces (no silent data
+  loss on rewrite); the lookup happens inside the isolation cleanup guard so
+  a malformed store never leaks a worktree/branch.
+- XDG runtime roots reject symlinked path components anywhere in the chain
+  below the project root.
+- `opencode init --engine opencode2` owns its flow: credential prompt and
+  `--local`/`--global` scope are honored, an exact-pin mismatch is terminal
+  before any config mutation, and the post-setup audit is the full provider
+  + permission preflight (not just the plugin/agent scan).
+- The full run preflight parses config layers through the JSONC-aware
+  canonical parser (comments and trailing commas no longer abort the run),
+  and `parseOpenCodeDocument` drops trailing commas followed by comments.
+
+### Fixed (review rounds 4–6)
+
+- Dual legacy/native config forms (`provider`+`providers`,
+  `plugin`+`plugins`, `permission`+`permissions`) reject — the pinned build
+  prefers the native value while a legacy-first projection audits the other
+  one; the worker key/endpoint provenance gate resolves each field's
+  EFFECTIVE source from the pre-dotenv snapshot (a decoy key in the project
+  `.triss.env` cannot mask a shell key); unrelated provider definitions
+  (in-process npm code) reject; the audit walks the canonical
+  (`realpathSync.native`) runtime directory; audited sources are re-audited
+  immediately before the credential-bearing spawn (TOCTOU); the top-level
+  key table is captured from the official schema (benign keys no longer
+  false-reject; object `lsp`/`formatter` and `experimental` reject).
+- A held session-store lock no longer discards a finished run:
+  `persistSessionMapping` retries with backoff and degrades to the lock-free
+  protocol (mapping kept, warning emitted, foreign lock untouched).
+- A corrupted `sessions.json` on the V1 `--isolate` path no longer strands
+  the `.triss/wt/<slug>` worktree and `coder/<slug>` branch.
+- `TRISS_CODER_ENGINE=opencode2` from a `.env` file now routes `coder init`
+  to the V2 flow (the engine is resolved after the env files load); the
+  pre-dotenv snapshots are threaded through so the provenance and
+  pin-shadow checks stay exact.
+- `coder init --engine opencode2` on a tree carrying the V1 bash allowlist
+  rejects BEFORE any credential/config write with actionable guidance; a
+  fresh V2 init warns that the shared deny-everything policy removes the
+  allowlisted commands from plain V1 runs (documented in
+  docs/opencode2.md, including two new troubleshooting rows).
+- Model inspection tolerates unrelated hostile config shapes (a non-string
+  plugin reference, unreadable directories) — the post-commit audit of a
+  successful `coder model set` no longer rolls back over them; `coder
+  models` warnings use the OpenCode branch for `opencode2` (no false
+  `configured-model-unavailable` for a shell-exported foreign model);
+  rollback of an `opencode2` record reports engine `opencode2`.
+- `opencode-go/` routes price as unknown (the Go reseller's tariffs are
+  unmodeled); the prefixed `TRISS_PRICE_OPENCODE_GO_<MODEL>` override is
+  the documented way to price them.
+- Unknown `engines.*` namespaces in the session store fail closed;
+  `ensureOpenCode2RuntimeDirs` reports the directories it created;
+  `.env.example` documents `TRISS_CODER_OPENCODE2_VERSION`.
+
+### Artifact integrity (0.36.0)
+
+- `triss-dsh-provider-bundle-0.36.0.tgz` — sha256
+  `0e3100362fc02d242deac114ec6e0c4c966bbe5edde4f156a2ffdb76ef2eb329`,
+  integrity `sha512-P2QoA6Ahu/J9swIJhk9IkuP1OLR+bzn4zJdUKyuskutbis2GUSt5m3n+QmqP7B0rB1JAqi0WGIMkUrTBcmf9cQ==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
+- Root `triss-coworker-0.36.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.36.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
+>>>>>>> origin/main
 
 ## [0.35.0] — 2026-08-14
 
@@ -103,11 +194,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dedicated CI bundle matrix covers Node `22.19.0`, `24`, and `26` plus
   `pnpm`-missing diagnostics.
 
+### Changed
+
+- `test/coder-init-credential-gate-blocker.test.js` pins
+  `TRISS_PROJECT_ROOT` to the temp HOME so credential-gate isolation no
+  longer depends on cwd lookups; no runtime code changed in this release
+  train (an earlier iteration of this PR touched `src/safety.js` and was
+  reverted for expanding the sandbox boundary).
+- The publish workflow plans publication from live registry state for BOTH
+  packages (`plan-publish`), skips a publish step when the registry already
+  holds the byte-identical tarball, and registry-verifies both packages again
+  after publication — a partial-failure rerun is now safe, including after
+  `main` has moved past the tag (fresh releases require the exact
+  `origin/main` tip; retries only require the tag to remain an ancestor,
+  via `publish-gate.js authorize-tag`).
+- The tag workflow separates privileges: an unprivileged `release-gates`
+  job runs every repository-script verification (versions, tarball
+  inspection, registry planning, tag authorization) and only a minimal
+  `npm-publish` job behind the `npm-production` environment holds
+  `id-token: write`. The publish job repacks with `--ignore-scripts` and
+  byte-compares both tarballs against the gates artifact before publishing
+  the same bytes with `--provenance`.
+- CI gains a required `dsh plugin lifecycle` job (real `@deepseek-ai/dsh`
+  0.1.0-rc.6 + pnpm 9): add → real in-place update (add v2 over v1, no
+  remove) → remove → reinstall → npx-style anchor, asserting the dumped
+  `llm-pi-ai.config.providers` object (exact provider set and `apiKeyEnv`
+  mapping) plus the profile manifest at every phase. The job lives in a
+  reusable `bundle-checks` workflow included by both PR CI and the tag
+  publish flow, and a post-publish `registry-acceptance` job installs the
+  published package from the registry on Node `22.19.0` and `24`, exercises
+  add/update/remove/reinstall, and records the compatibility tuple with
+  registry integrity and provenance evidence.
+- `npm test` now runs `scripts/check-lockfile-gate.cjs`, which asserts the
+  workspace name/version/engines against the live manifests plus the
+  pinned `@deepseek-ai/dsh-app-boot`.
+
 ### Unchanged
 
 - Triss runtime code, CLI, MCP schemas, and the root `triss-coworker`
   published-file allowlist; the root tarball contains no companion manifest
-  or patch.
+  or patch. (Correction, review finding: the follow-up fix commit DID touch
+  `src/safety.js` — `projectRoot()` was extended to `.codex/worktrees`,
+  widening the restricted-mode sandbox boundary to sibling worktrees. That
+  change is REVERTED in this corrective release; only the test-isolation
+  env pin from that commit remains.)
+
+### Artifact integrity (0.35.0)
+
+- `triss-dsh-provider-bundle-0.35.0.tgz` — sha256
+  `25d9d80417c7955ac29d933cdb9c3c5e412e0a6a3ebc2f73de852985ce2a4900`,
+  integrity `sha512-7NkUhHg+RruXEAJhMXr1nWlFv7g7N2iAh0z416oTS7yK/PPi4GnE8h8LqJOzFrGr86BUPHMhVmYinNe8cF6YZQ==`
+  (computed with the pinned release npm 11.6.2 via
+  `scripts/publish-gate.js pack-inspect`; `npm pack` output is
+  byte-deterministic — tar entries carry the fixed npm epoch mtime — so a
+  test pins this value against every future pack of the same content).
+- Root `triss-coworker-0.35.0.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.35.0` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte
+  (`scripts/publish-gate.js pack-inspect`).
 
 ### Changed
 

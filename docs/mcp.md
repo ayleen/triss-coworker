@@ -357,7 +357,9 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `session_id`, `session_slug`, `result_retention`, `result_id`,
   `execution_capabilities`, `exit_reason`, `final_text`, `files_changed`,
   `diff_stat`, `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
-  `opencode`/`crush` enum (default `opencode`, or `TRISS_CODER_ENGINE`);
+  `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
+  `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
+  [opencode2.md](opencode2.md));
    `isolate` is unset by default in the schema — opencode resolves unset to
    isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
    `permissions.run` config is inert and denied bash deadlocks, so the

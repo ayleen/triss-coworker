@@ -353,7 +353,16 @@ async function boundedFetch(url, {
 }
 
 async function github(path, { token, method = 'GET', body, accept = 'application/vnd.github+json' } = {}) {
-  const headers = { Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
+  // The pinned-request transport (src/net.js requestPinned) sends raw
+  // https.request with ONLY these headers — global fetch would have added a
+  // User-Agent automatically, and the GitHub API answers headerless requests
+  // with 403 "Request forbidden by administrative rules" (reproduced in the
+  // v0.35.0 release run and with a bare node https.get).
+  const headers = {
+    Accept: accept,
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'triss-release-gates',
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body) headers['Content-Type'] = 'application/json';
   if (method === 'GET') {
@@ -403,6 +412,7 @@ async function uploadGithubAsset(releaseId, name, bytes, token) {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/octet-stream',
+      'User-Agent': 'triss-release-gates',
       'X-GitHub-Api-Version': '2022-11-28',
     };
     await assertPublicUrl(url, { strict: true, signal: controller.signal });
@@ -451,10 +461,11 @@ function verifyAssetSemantics(options, artifactBytes, checksumBytes, manifestByt
   }
 }
 
-async function verifyDraft(options) {
+async function verifyDraft(options, dependencies = {}) {
+  const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('draft verification requires GH_TOKEN or GITHUB_TOKEN');
-  const release = (await github(`/releases/tags/${encodeURIComponent(options.tag)}`, { token })).json();
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   if ((!options.resume && !release.draft) || release.prerelease || release.tag_name !== options.tag) {
     die('draft release state/tag mismatch');
   }
@@ -476,6 +487,7 @@ async function verifyDraft(options) {
       headers: {
         Accept: 'application/octet-stream',
         Authorization: `Bearer ${token}`,
+        'User-Agent': 'triss-release-gates',
         'X-GitHub-Api-Version': '2022-11-28',
       },
       allowedHosts: API_HOSTS,
@@ -580,7 +592,7 @@ async function snapshotForLatest(latest, fetchBounded) {
     const remote = await fetchBounded(
       `https://github.com/${OWNER}/${REPOSITORY}/releases/download/` +
       `${latest.tag_name}/update-manifest.json`,
-      { allowedHosts: DOWNLOAD_HOSTS, maxBytes: 64 * 1024 },
+      { headers: { 'User-Agent': 'triss-release-gates' }, allowedHosts: DOWNLOAD_HOSTS, maxBytes: 64 * 1024 },
     );
     if (!remote.response.ok) die('previous latest manifest is not publicly readable');
     manifestSha256 = hash(remote.bytes);
@@ -656,6 +668,7 @@ async function verifyOrUploadReleaseAssets(release, options, dependencies = {}) 
       headers: {
         Accept: 'application/octet-stream',
         Authorization: `Bearer ${token}`,
+        'User-Agent': 'triss-release-gates',
         'X-GitHub-Api-Version': '2022-11-28',
       },
       allowedHosts: API_HOSTS,
@@ -687,6 +700,33 @@ async function verifyOrUploadReleaseAssets(release, options, dependencies = {}) 
  * get-or-create: a retry after create/upload/publish can only fill missing
  * draft assets or verify existing bytes; it never overwrites an asset.
  */
+/**
+ * Draft releases are NOT addressable through /releases/tags/{tag} — the
+ * real GitHub API answers 404 for them (only published releases resolve by
+ * tag). Find the release by paging GET /releases instead; throw a
+ * distinguishable retryable error when no release carries the tag.
+ */
+async function releaseByTagFromList(tag, requestGitHub, token) {
+  for (let page = 1; page <= 10; page += 1) {
+    const list = releaseJson(await requestGitHub(`/releases?per_page=100&page=${page}`, { token }));
+    if (!Array.isArray(list)) die('GitHub API /releases did not return a list');
+    const hit = list.find((entry) => entry?.tag_name === tag);
+    if (hit) return hit;
+    if (list.length < 100) break;
+  }
+  throw retryableVerificationError(`release-by-tag list lookup found nothing for ${tag}`);
+}
+
+/** Release by tag in ANY state: tag endpoint first, list fallback for drafts. */
+async function releaseByTagAnyState(tag, requestGitHub, token) {
+  try {
+    return releaseJson(await requestGitHub(`/releases/tags/${encodeURIComponent(tag)}`, { token }));
+  } catch (error) {
+    if (!/\b404\b/.test(error?.message || '')) throw error;
+    return releaseByTagFromList(tag, requestGitHub, token);
+  }
+}
+
 export async function ensureRelease(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -705,11 +745,9 @@ export async function ensureRelease(options, dependencies = {}) {
   };
   let release;
   try {
-    release = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   } catch (error) {
-    if (!/\b404\b/.test(error?.message || '')) throw error;
+    if (!/list lookup found nothing/.test(error?.message || '')) throw error;
     try {
       release = releaseJson(await requestGitHub('/releases', {
         token, method: 'POST', body: expected,
@@ -718,9 +756,7 @@ export async function ensureRelease(options, dependencies = {}) {
       // Another rerun may have won the create race. Re-read and validate it;
       // otherwise preserve the original failure rather than guessing.
       try {
-        release = releaseJson(await requestGitHub(
-          `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-        ));
+        release = await releaseByTagAnyState(options.tag, requestGitHub, token);
       } catch {
         throw createError;
       }
@@ -731,9 +767,7 @@ export async function ensureRelease(options, dependencies = {}) {
     ...dependencies,
     uploadAsset: dependencies.uploadAsset || uploadGithubAsset,
   });
-  const refreshed = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const refreshed = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(refreshed, options);
   await verifyOrUploadReleaseAssets(refreshed, options, dependencies);
   return {
@@ -750,9 +784,7 @@ export async function releaseStatus(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('release status requires GH_TOKEN or GITHUB_TOKEN');
-  const release = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const latest = releaseJson(await requestGitHub('/releases/latest', { token }));
   const promotionState = parsePromotionStatePresence(release.body);
   return {
@@ -795,7 +827,10 @@ async function verifyAnonymousAttempt(options, latest, dependencies, expected) {
       ? `https://github.com/${OWNER}/${REPOSITORY}/releases/latest/download/${name}`
       : `https://github.com/${OWNER}/${REPOSITORY}/releases/download/${options.tag}/${name}`;
     const remote = await fetchBounded(assetUrl, {
-      headers: { Accept: 'application/octet-stream' },
+      // github.com asset downloads 302 to the CDN; every hop of the pinned
+      // transport sends only these headers, and a User-Agent-less request is
+      // rejected with 403 by the administrative rules.
+      headers: { Accept: 'application/octet-stream', 'User-Agent': 'triss-release-gates' },
       allowedHosts: DOWNLOAD_HOSTS,
       maxBytes: REMOTE_BODY_LIMIT,
     });
@@ -863,9 +898,7 @@ export async function releaseAction(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('release action requires GH_TOKEN or GITHUB_TOKEN');
-  const release = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const release = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(release, options);
   const action = options.action;
   if (action === 'publish-nonlatest' && !release.draft) return release;
@@ -923,9 +956,7 @@ export async function snapshotLatest(options, dependencies = {}) {
   if (!options.output) die('latest snapshot requires --output');
   let candidate = null;
   try {
-    candidate = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   } catch (error) {
     if (!/\b404\b/.test(error?.message || '')) throw error;
   }
@@ -972,9 +1003,7 @@ export async function persistPromotionState(options, dependencies = {}) {
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('persist promotion state requires GH_TOKEN or GITHUB_TOKEN');
   const snapshot = validateLatestSnapshot(options.snapshot || JSON.parse(readFileSync(resolve(options.state), 'utf8')));
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   assertReleaseIdentity(candidate, { ...options, tag: options.tag, target: undefined });
   const marker = promotionStateMarker(snapshot);
   const existing = String(candidate.body || '');
@@ -1002,14 +1031,10 @@ export async function markPromotionIncidentPending(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('promotion phase transition requires GH_TOKEN or GITHUB_TOKEN');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const before = extractPromotionState(candidate.body);
   if (before.phase === 'incident_pending') {
-    const reread = releaseJson(await requestGitHub(
-      `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-    ));
+    const reread = await releaseByTagAnyState(options.tag, requestGitHub, token);
     const verified = extractPromotionState(reread.body);
     if (promotionStateMarker(verified) !== promotionStateMarker(before)) {
       die('incident-pending promotion marker changed during verification');
@@ -1025,9 +1050,7 @@ export async function markPromotionIncidentPending(options, dependencies = {}) {
     method: 'PATCH',
     body: { body: replacePromotionStateMarker(candidate.body, oldMarker, newMarker) },
   });
-  const reread = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const reread = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const verified = extractPromotionState(reread.body);
   if (promotionStateMarker(verified) !== newMarker) {
     die('incident-pending promotion marker was not durably verified');
@@ -1040,9 +1063,7 @@ export async function loadPromotionState(options, dependencies = {}) {
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('load promotion state requires GH_TOKEN or GITHUB_TOKEN');
   if (!options.output) die('load promotion state requires --output');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const snapshot = extractPromotionState(candidate.body);
   writePromotionStateFile(options.output, snapshot);
   return snapshot;
@@ -1052,9 +1073,7 @@ export async function clearPromotionState(options, dependencies = {}) {
   const requestGitHub = dependencies.github || github;
   const token = options.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) die('clear promotion state requires GH_TOKEN or GITHUB_TOKEN');
-  const candidate = releaseJson(await requestGitHub(
-    `/releases/tags/${encodeURIComponent(options.tag)}`, { token },
-  ));
+  const candidate = await releaseByTagAnyState(options.tag, requestGitHub, token);
   const body = String(candidate.body || '');
   const state = parsePromotionStatePresence(body);
   if (!state.present) return candidate;

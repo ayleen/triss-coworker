@@ -27,6 +27,7 @@ import {
   statSync,
   lstatSync,
   chmodSync,
+  realpathSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
@@ -81,6 +82,21 @@ import {
 // orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
 // docs/coder-agent-plan.md and docs/crush-issues.md.
 import { crush as crushEngine } from '../coder-engines/crush.js';
+import {
+  opencode2 as opencode2Engine,
+  opencode2VersionPin,
+  detectOpenCode2,
+  installHintOpenCode2,
+  ensureOpenCode2RuntimeDirs,
+  createOpenCode2EventFolder,
+  foldOpenCode2EventLine,
+  opencode2LogPath,
+} from '../coder-engines/opencode2.js';
+import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes, computeEffectivePermissionPolicy } from '../opencode2-preflight.js';
+// Canonical OpenCode source enumeration (Phase 4): one walker for every
+// opencode.json layer + plugin/agent discovery, shared by the V2 static
+// preflight and model inspection.
+import { enumerateOpenCodeSources } from '../opencode-config.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
 // 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
@@ -100,7 +116,7 @@ const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // compensates by defaulting --isolate ON for crush and making restrict opt-in).
 // Override per-call via --engine or globally via TRISS_CODER_ENGINE.
 export const DEFAULT_CODER_ENGINE = 'opencode';
-const VALID_CODER_ENGINES = ['opencode', 'crush'];
+const VALID_CODER_ENGINES = ['opencode', 'opencode2', 'crush'];
 
 // Resolve + validate the engine selection. --engine beats TRISS_CODER_ENGINE
 // beats the default. An invalid name throws a clear Error listing valid values
@@ -1250,6 +1266,14 @@ export async function runCoderInit(opts = {}, deps = {}) {
   // Capture model overrides that are in the environment BEFORE loadEnvFiles()
   // merges the .env files — i.e. genuine shell exports, which have higher
   // precedence than any .env file and so would shadow whatever init pins.
+  // Review round 6 #3: the pre-dotenv snapshots are taken FIRST and the env
+  // files are loaded BEFORE the engine dispatch — the dispatch used to read
+  // TRISS_CODER_ENGINE from the shell env only, so `TRISS_CODER_ENGINE=
+  // opencode2` in a .env file silently ran the whole V1 init path (V1 binary
+  // probe/install, V1 agent templates, the allowlist bash policy the V2
+  // preflight then rejects). The pre-dotenv snapshots are passed through to
+  // runOpenCode2Init so its own capture (which now runs AFTER this
+  // loadEnvFiles) is not polluted by dotenv values.
   const inheritedModels = {
     model: process.env.TRISS_CODER_MODEL,
     smallModel: process.env.TRISS_CODER_SMALL_MODEL,
@@ -1257,6 +1281,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
   const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4) ──────────────
+  // V2 shares the V1-compatible opencode.json surface: the SAME
+  // setupKey/runCoderSetup flow configures the shared config, then the V2
+  // specifics (XDG state roots + static plugin/agent preflight + binary pin
+  // report) run BEFORE any V2 process is spawned. Nothing here spawns a V2
+  // service: detectOpenCode2 only probes `opencode2 --version`.
+  if (engine === 'opencode2') {
+    return runOpenCode2Init(opts, deps, { inheritedModels, workerShellEnv });
+  }
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
   // The provider choice applies to the opencode engine only — crush speaks
   // Z.AI GLM exclusively (it bridges ZHIPU_API_KEY -> ZAI_API_KEY). A
@@ -1385,12 +1418,247 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// Warn when the model just pinned by init will be overridden in a fresh process
-// by a higher-precedence source: a shell export (beats every .env file) or a
-// higher-precedence .env file (local `.triss.env` beats global). Silent here
-// means a green "Done." followed by `ZHIPU_API_KEY is not set` on the next run.
-// Returns true if it emitted any shadow warning (so the caller can withhold the
-// green "Done.").
+// assertV2WorkerTransportProvenance (round-4 P0, cross-review fix): the
+// worker credential and its transport must form ONE profile of consistent
+// trust. Precedence is shell > project .triss.env > global .env PER FIELD,
+// so a repository can steer the effective transport while the key comes from
+// a higher-trust source — and a DECOY key in the project file does not make
+// the profile consistent (dotenv override:false can never displace a shell
+// export, so shell key + project URL is exactly what the engine would run
+// with). The check therefore resolves the EFFECTIVE source of each field —
+// using the pre-dotenv shell snapshot — and rejects when the endpoint is
+// project-local while the key is not.
+function assertV2WorkerTransportProvenance(workerShellEnv = captureWorkerShellSnapshot()) {
+  const files = activeEnvFiles();
+  const localFile = files.find((f) => f.scope === 'local');
+  const localVars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
+  const globalFile = files.find((f) => f.scope === 'global');
+  const globalVars = globalFile && globalFile.exists ? readEnvFile(globalFile.path).vars : {};
+  const effectiveSource = (key) => {
+    if (workerShellEnv[key] != null) return 'shell';
+    if (localVars[key] != null) return 'local';
+    if (globalVars[key] != null) return 'global';
+    return null;
+  };
+  const urlSource = effectiveSource('TRISS_WORKER_BASE_URL');
+  if (urlSource !== 'local') return;
+  const keySource = effectiveSource('TRISS_WORKER_API_KEY');
+  if (keySource === 'local' || keySource == null) return;
+  throw new Error(
+    `OpenCode 2 preflight aborted: the effective TRISS_WORKER_BASE_URL comes from the project .triss.env while ` +
+      `the effective TRISS_WORKER_API_KEY comes from a higher-trust source (${keySource} — a key in the project ` +
+      'file cannot displace it). The worker endpoint the provider audit compares against would be ' +
+      'repository-controlled, so the key could be forwarded to an attacker URL. Move the key and the endpoint ' +
+      'into the same scope.',
+  );
+}
+
+// ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────//
+// Reuses the shared V1 surface (same env file, same key setup, same
+// runCoderSetup flow onto the shared opencode.json) and adds the V2 specifics:
+//   1. Static source/plugin/agent preflight via the canonical enumerator —
+//      REJECTS before any credential write and any V2 spawn (fail closed).
+//   2. Triss-owned V2 XDG data/state roots under <project>/.triss/opencode2
+//      (0o700) so V2 state never lands on V1 turf.
+//   3. Binary pin report via detectOpenCode2 (`opencode2 --version` only —
+//      never a service spawn).
+// Static source/plugin/agent preflight shared by `coder init` and `coder run`
+// for the opencode2 engine (docs/opencode2-engine-plan.md §"Configuration
+// and permission audit"). enumerateOpenCodeSources walks every config layer
+// and every plugin/agent source with the DOCUMENTED precedence (no
+// XDG_CONFIG_HOME override: the walker is anchored to ~ and cwd). No V2
+// plugin or subagent is fixture-verified to preserve the deny-first policy
+// yet, so ANY configured/discovered source fails closed — before any
+// credential write or child process. Errors name the source, never secrets.
+function staticOpenCode2Preflight(cwd) {
+  let sources;
+  try {
+    sources = enumerateOpenCodeSources({ cwd });
+  } catch (err) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: cannot enumerate configuration sources — ${err.message}`,
+      { cause: err },
+    );
+  }
+  const offender = sources.plugins.find((p) => p.origin === 'configured' || p.origin === 'discovered');
+  if (offender) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: unsupported plugin source "${offender.path}" ` +
+        `(${offender.origin}${offender.exists === false ? ', target missing' : ''}). ` +
+        'No OpenCode 2 plugin is verified compatible yet — remove or disable the plugin reference, ' +
+        'then re-run. See docs/opencode2-engine-plan.md "Plugin compatibility gate".',
+    );
+  }
+  const agentOffender = sources.agentSources.find(
+    (a) => a.origin === 'configured' || a.origin === 'discovered',
+  );
+  if (agentOffender) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: unsupported agent source "${agentOffender.path}" ` +
+        `(${agentOffender.origin}). No OpenCode 2 subagent is verified to retain ` +
+        'the deny-first shell policy — remove or disable the agent source, then re-run. ' +
+        'See docs/opencode2-engine-plan.md "Static preflight".',
+    );
+  }
+  // Round-3 P0-1: custom tool dirs (.opencode/{tool,tools}/** and the global
+  // config root) are top-level executable surfaces imported INSIDE the
+  // OpenCode process — with the provider credential in process.env — so the
+  // beta rejects them like plugins. mcp blocks are rejected by the document
+  // shape check in auditOpenCode2Run.
+  const toolOffender = (sources.toolSources || []).find(
+    (t) => t.origin === 'configured' || t.origin === 'discovered',
+  );
+  if (toolOffender) {
+    throw new Error(
+      `OpenCode 2 preflight aborted: unsupported custom tool source "${toolOffender.path}" ` +
+        `(${toolOffender.origin}). Custom tools execute inside the OpenCode process with the ` +
+        'provider credential in the environment — none are verified for the beta. Remove the ' +
+        'tool directory and re-run. See docs/opencode2-engine-plan.md "Review round 3".',
+    );
+  }
+  return sources;
+}
+
+async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4; review
+  // round-2 P1-4 full rewrite). The V2 init OWNS its whole flow:
+  //   1. STATIC PREFLIGHT before any credential write or child process
+  //      (plugin + agent gates, shared with the run path).
+  //   2. Exact-pin gate TERMINALLY — a missing/mismatched binary must not
+  //      mutate any configuration (beta contract).
+  //   3. Credential + scope handling mirroring the V1 runCoderInit head:
+  //      --local/--global resolution, .env file creation, setupKey prompt,
+  //      .gitignore for local .triss.env. (Round-2 fix: previously the V2
+  //      path jumped straight into runCoderSetup and skipped all of this,
+  //      so a missing key only failed at the late gate AFTER config/pins
+  //      were written, and --local was silently ignored.)
+  //   4. Shared config/model setup WITHOUT the V1-only steps: no V1 binary
+  //      check/install (ensureEngine), no agent templates the V2 preflight
+  //      itself rejects.
+  //   5. Post-setup FULL audit (auditOpenCode2Run + static gate) over the
+  //      final filesystem state — not just the plugin/agent scan.
+  staticOpenCode2Preflight(deps.cwd || process.cwd());
+  // Cross-review fix 6: document-CONTENT gates (mcp, command-bearing and
+  // unknown top-level keys, dual legacy/native forms, malformed JSONC) used
+  // to run only in the POST-setup audit — after setupKey had written the
+  // credential to the env file. Run the document audit up front too, so a
+  // hostile tree rejects BEFORE any credential write.
+  const headDocs = auditOpenCode2Documents({ cwd: deps.cwd || process.cwd() }, { enumerate: deps.enumerateOpenCodeSources });
+  // Review round 6 #4: the permission gate over EXISTING layers must fire
+  // HERE — before the credential write. Every existing V1 user's config
+  // carries the V1 template allowlist (git status, npm test, …), and the
+  // post-setup audit used to discover `live-allow-rule (git status)` only
+  // AFTER setupKey had written the key, .gitignore, and the model pins.
+  // A tree with NO existing layers skips the gate — the shared setup then
+  // writes the deny-everything template and the post-setup audit proves it.
+  if (headDocs.layerDocs.length > 0) {
+    const policy = computeEffectivePermissionPolicy({ layerDocs: headDocs.layerDocs });
+    if (policy.unsafe) {
+      const detail = policy.detail ? ` (${policy.detail})` : '';
+      // Round-7 follow-up: the remediation differs by reason — a config with
+      // NO wildcard deny needs one ADDED, a live allow rule needs one
+      // REMOVED. Saying "remove the allow rules" to the first case sends the
+      // operator in the wrong direction.
+      const remediation = policy.reason === 'no-wildcard-deny'
+        ? 'Add "permission": { "bash": { "*": "deny" } } to opencode.json — without a wildcard ' +
+          'deny every command falls back to the built-in allow/ask baseline.'
+        : 'Remove the allow rules from opencode.json (V1 runs will lose them too) — the opencode2 ' +
+          'beta cannot run while any live allow rule exists, because the credential sits in the ' +
+          'child environment.';
+      throw new Error(
+        'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
+          `effective shell policy is not deny-everything (${policy.reason}${detail}). ${remediation} ` +
+          'Alternatively keep using `--engine opencode` until the V2 beta grows real credential ' +
+          'isolation. See docs/opencode2.md "Troubleshooting".',
+      );
+    }
+  }
+  process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
+  const sh = deps.spawnSync || nodeSpawnSync;
+  // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
+  const det = detectOpenCode2(sh);
+  if (!det.found || !det.satisfiesPin) {
+    throw new Error(
+      `opencode2 ${det.found ? `v${det.version}` : 'not found'} does not match the exact pin ` +
+        `v${opencode2VersionPin()} — managed V2 setup requires the verified build first (${installHintOpenCode2()}). ` +
+        'A version mismatch is a terminal compatibility failure, never a warning; no configuration was changed.',
+    );
+  }
+  process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
+  // (3) Credential + scope — the V1 head flow. The worker-shell snapshot is
+  // taken BEFORE loadEnvFiles() (round-3 P1-7): snapshotting after the dotenv
+  // merge made a local .triss.env value indistinguishable from a genuine
+  // shell export, so `coder init --engine opencode2 --global --provider worker`
+  // run inside a project could silently satisfy the key check from the LOCAL
+  // env file and leave the global scope unset.
+  // Review round 6 #3: when dispatched from runCoderInit the env files are
+  // ALREADY loaded (the engine dispatch must see TRISS_CODER_ENGINE from
+  // .env), so the pre-dotenv snapshots come in via `precaptured` — the local
+  // captures below are the fallback for direct callers only.
+  const workerShellEnv = precaptured.workerShellEnv || captureWorkerShellSnapshot();
+  // Review round 5 #5: capture the shell-export model pins BEFORE
+  // loadEnvFiles() — exactly like the V1 runCoderInit head — so
+  // warnIfPinShadowed can see a shadowing export. V2 used to pass nothing,
+  // silently disabling the shell-export half of the pin-shadow check.
+  const inheritedModels = precaptured.inheritedModels || {
+    model: process.env.TRISS_CODER_MODEL,
+    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
+  };
+  // Cross-review fix 1 + review round 5 #4: provenance is resolved from the
+  // PRE-DOTENV snapshot (a decoy key in the project .triss.env cannot
+  // displace a shell export), and only when the worker credential is
+  // actually in play — a non-worker init must not fail on an unrelated
+  // project-local TRISS_WORKER_BASE_URL.
+  loadEnvFiles();
+  const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
+  if (provider === 'worker') {
+    assertV2WorkerTransportProvenance(workerShellEnv);
+  }
+  let scope = resolveScope(opts);
+  if (!scope) scope = await chooseScope('Where to save the coder key and config?');
+  const envPath = ensureEnvFile(scope);
+  const scopedWorker = provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
+    : null;
+  await setupKey(envPath, provider, provider === 'worker' ? { existing: scopedWorker?.apiKey } : {});
+  if (scope === 'local' && addToGitignore('.triss.env')) {
+    process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
+  }
+  // Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
+  // XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
+  ensureOpenCode2RuntimeDirs(projectRoot());
+  // (4) Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
+  // runCoderInit path checks/installs the V1 `opencode` binary and then
+  // scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
+  // itself REJECTS, making a fresh V2 init deterministically poison the
+  // next V2 run. V2 init therefore reuses only the shared key/config
+  // setup (runCoderSetup with engine-aware template skipping) — the same
+  // opencode.json / model-pin flow.
+  const setup = await runCoderSetup(
+    { ...opts, engine: 'opencode2', scope, provider, skipAgentTemplates: true, inheritedModels, workerShellEnv },
+    deps,
+  );
+  // (5) Post-setup preflight over the resulting tree: the shared setup must
+  // not have created any source the V2 gate rejects — and the FULL audit
+  // (provider + permission) must pass over the written config. The audit
+  // walks the CANONICAL (realpath) directory (round-4), same as the run path.
+  const postDir = realpathSync.native(deps.cwd || process.cwd());
+  staticOpenCode2Preflight(postDir);
+  const pinnedModel = process.env.TRISS_CODER_MODEL || readOpencodeModels(opencodeConfigPath(scope)).model;
+  const postWorkerProfile = pinnedModel && pinnedModel.startsWith('triss-worker/')
+    ? workerCoderProfile()
+    : null;
+  auditOpenCode2Run(
+    {
+      cwd: postDir,
+      modelUsed: pinnedModel,
+      expectedWorkerBaseURL: postWorkerProfile ? postWorkerProfile.baseUrl : null,
+    },
+    { enumerate: deps.enumerateOpenCodeSources },
+  );
+  return setup;
+}
+
 function warnIfPinShadowed(scope, pinned, inherited) {
   let shadowed = false;
   const warn = (m) => {
@@ -1458,6 +1726,10 @@ export async function runCoderSetup(input = {}, deps = {}) {
   if (input.engine === 'crush') {
     return runCoderSetupUnlocked({ ...input, scope: resolvedScope, provider: resolvedProvider }, deps);
   }
+  // Both OpenCode engines share the opencode-v1 configuration backend: the
+  // lock key below (config backend 'opencode') and the config surface are
+  // identical for engine 'opencode' and 'opencode2', so the wizard's
+  // postSetup path with engine 'opencode2' flows into this same locked setup.
 
   const lockHandle = typeof deps.lock === 'function'
     ? deps.lock('opencode', resolvedScope)
@@ -1473,7 +1745,7 @@ export async function runCoderSetup(input = {}, deps = {}) {
 }
 
 async function runCoderSetupUnlocked(
-  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified, workerShellEnv } = {},
+  { scope, provider, engine, inheritedModels, allowUnsafeBash, allowUnverified, workerShellEnv, skipAgentTemplates } = {},
   deps = {},
 ) {
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
@@ -1549,7 +1821,14 @@ async function runCoderSetupUnlocked(
       ),
     );
   }
-  await ensureEngine(sh, deps.confirmInstall);
+  // Round-3 P1-8: the V1 binary check/install applies to the V1 engine only.
+  // runOpenCode2Init already verified the opencode2 exact pin terminally, so
+  // requiring `opencode` here would force a V1 install on machines that only
+  // run the V2 beta (engine is undefined on the legacy V1 init/wizard paths —
+  // those keep the check).
+  if (engine !== 'opencode2') {
+    await ensureEngine(sh, deps.confirmInstall);
+  }
   // Z.AI plan detection only applies to the zai kind: Zen models resolve via
   // opencode's built-in `opencode` provider, and the two Kimi kinds already
   // name their endpoint through the credential env — nothing to probe.
@@ -1602,10 +1881,28 @@ async function runCoderSetupUnlocked(
       );
     }
   }
-  let blocking = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
+  const writeResult = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     allowUnsafeBash,
     providerAvailable,
-  }).blocking;
+    engine,
+  });
+  let blocking = writeResult.blocking;
+  // Review round 6 #5: a FRESH V2-init write puts deny-everything bash into
+  // the SHARED opencode.json — the default engine is still opencode (V1), so
+  // plain `triss coder run` silently loses git status / git diff / npm test.
+  // Warn loudly instead; re-running plain `triss coder init` restores the
+  // V1 allowlist (and makes the tree V2-incompatible again — that tension is
+  // documented in docs/opencode2.md).
+  if (engine === 'opencode2' && writeResult.created) {
+    const v1Degradation = pc.yellow(
+      '  ⚠ opencode2 init wrote a deny-everything bash policy into the SHARED opencode.json — plain ' +
+        '`triss coder run` (engine opencode, the default) has LOST git status / git diff / npm test. ' +
+        'Export TRISS_CODER_ENGINE=opencode2 for V2 runs, or re-run `triss coder init` (V1) to restore ' +
+        'the allowlist — which makes this tree opencode2-incompatible again.\n',
+    );
+    process.stderr.write(v1Degradation);
+    if (Array.isArray(deps.outputs)) deps.outputs.push(v1Degradation);
+  }
   // Stale-Zen incident report (own scope). When the opencode.json being audited
   // is pinned to a Zen model the AUTHENTICATED live catalogue no longer offers,
   // name the stale id(s) + the current replacement(s) triss just resolved, and
@@ -1650,7 +1947,13 @@ async function runCoderSetupUnlocked(
     );
   }
   persistCoderModels(resolvedScope, model, smallModel);
-  scaffoldAgentTemplates(resolvedScope);
+  // V2 init must NOT scaffold V1 agent templates: the static preflight
+  // rejects every agent source, so scaffolding would deterministically break
+  // the next V2 run on a clean tree (review P1-4). skipAgentTemplates is set
+  // by runOpenCode2Init; V1 init keeps its templates.
+  if (engine !== 'opencode2' && !skipAgentTemplates) {
+    scaffoldAgentTemplates(resolvedScope);
+  }
   // Missing-key gate runs HERE (not only in runCoderInit) so the wizard's
   // postSetup path — `config wizard coder` calls runCoderSetup directly, never
   // runCoderInit — is gated too: without the provider's key the setup isn't
@@ -2001,22 +2304,31 @@ export function coderCredentialEndpoint(credEnv, modelUsed) {
   }
 }
 
-function opencodeConfigTemplate(model, smallModel, providerInfo) {
+// Round-3 P0-2: the V1 template's bash allowlist (git status / ls / npm test
+// …) is UNSAFE for the opencode2 beta — the credential sits in the child env,
+// so any allowed command can disclose it (env expansion in an error message,
+// `npm test` running untrusted JS with the key in process.env). V2 init
+// writes a deny-everything bash block; the V2 run preflight rejects any live
+// allow/ask rule. V1 keeps its template unchanged.
+function opencodeConfigTemplate(model, smallModel, providerInfo, { engine } = {}) {
+  const bashPolicy = engine === 'opencode2'
+    ? { '*': 'deny' }
+    : {
+      '*': 'deny',
+      'git status': 'allow',
+      'git diff*': 'allow',
+      'git log*': 'allow',
+      'ls*': 'allow',
+      'node --test*': 'allow',
+      'npm test*': 'allow',
+      'npm run test*': 'allow',
+    };
   const config = {
     $schema: 'https://opencode.ai/config.json',
     model,
     small_model: smallModel,
     permission: {
-      bash: {
-        '*': 'deny',
-        'git status': 'allow',
-        'git diff*': 'allow',
-        'git log*': 'allow',
-        'ls*': 'allow',
-        'node --test*': 'allow',
-        'npm test*': 'allow',
-        'npm run test*': 'allow',
-      },
+      bash: bashPolicy,
       webfetch: 'deny',
       websearch: 'deny',
     },
@@ -2688,9 +3000,9 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     });
   }
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo), null, 2) + '\n');
+  writeFileSync(path, JSON.stringify(opencodeConfigTemplate(model, smallModel, providerInfo, { engine: opts.engine }), null, 2) + '\n');
   process.stderr.write(pc.green(`  ✓ wrote ${path} (model=${model}, small_model=${smallModel})\n`));
-  return { blocking: false };
+  return { blocking: false, created: true };
 }
 
 function agentsDir(scope) {
@@ -2824,6 +3136,14 @@ export function describeCoderStatus(deps = {}) {
     const path = crushConfigPath(scope);
     return { scope, path, exists: existsSync(path) };
   });
+  // opencode2 engine #3 — same detect shape as crush, but the pin is an
+  // EXACT match (non-semver beta builds: any other number is a different,
+  // unverified build). `opencode2 --version` is a one-shot read-only probe:
+  // it leaves no service behind (verified live), unlike debug config /
+  // serve. V2 shares V1's opencode.json (Triss never writes V2-native
+  // config), so there are no separate config rows — the shared files above
+  // already describe them.
+  const oc2Detect = detectOpenCode2(sh);
   // What a bare `triss coder run` (no --engine) resolves to right now.
   const defaultEngine = resolveCoderEngine({});
   // The model a bare `triss coder run` on the opencode engine would use — i.e.
@@ -2842,6 +3162,12 @@ export function describeCoderStatus(deps = {}) {
       satisfiesPin: crushDetect.satisfiesPin,
       pin: crushEngine.CRUSH_PIN,
       configs: crushConfigs,
+    },
+    opencode2: {
+      found: oc2Detect.found,
+      version: oc2Detect.version,
+      satisfiesPin: oc2Detect.satisfiesPin,
+      pin: opencode2VersionPin(),
     },
     defaultEngine,
     defaultModel,
@@ -3209,12 +3535,276 @@ function sessionsFilePath() {
 function readSessionsMap() {
   const path = sessionsFilePath();
   if (!existsSync(path)) return {};
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    // FAIL-CLOSED (review P1-8): malformed JSON must NOT degrade to an empty
+    // store — the next successful persist would overwrite and destroy it.
+    // Surface the corruption instead of silently rewriting the file.
+    throw new Error(
+      `Session store at ${path} is not valid JSON (${err.message}) — refusing to read or rewrite it ` +
+        '(fail-closed). Fix or remove the file manually.',
+      { cause: err },
+    );
   }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      `Session store at ${path} does not contain a JSON object — refusing to read or rewrite it ` +
+        '(fail-closed). Fix or remove the file manually.',
+    );
+  }
+  if (Array.isArray(parsed)) {
+    throw new Error(
+      `Session store at ${path} is a JSON array — not a recognized shape. ` +
+        'Refusing to read or rewrite it (fail-closed).',
+    );
+  }
+  return parsed;
+}
+
+// ─── versioned, engine-namespaced session store ─────────────────────────────
+//
+// Shape v2 (docs/opencode2-engine-plan.md "Session contract"):
+//   { "version": 2, "engines": { "opencode": {slug: realId}, "opencode2": {...} } }
+// A legacy flat file {slug: realId} is all-V1 (the only engine that existed)
+// and migrates atomically on first write. Migration is read-time lazy: the
+// accessors below normalize BOTH shapes in memory so readers never see the
+// flat form, while the on-disk file is only rewritten when a mapping is
+// actually persisted (an existing safe V1 file is not rewritten merely by a
+// V2 read — Phase 4 acceptance).
+
+const SESSION_STORE_VERSION = 2;
+const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
+
+// Normalize any on-disk shape (legacy flat map OR versioned) into the
+// versioned in-memory shape. Pure: never mutates the argument.
+//
+// FAIL-CLOSED (review P1-8): an unknown `version` (e.g. 3, written by a
+// future Triss) or a version-2 object with a malformed `engines` field is
+// NOT treated as a legacy flat map — treating {version:3, engines:{...}} as
+// legacy silently discards both fields and the next persist DESTROYS the
+// unknown data (data loss). Such a store throws; persistSessionMapping
+// propagates and the file is never rewritten. Only a genuinely legacy flat
+// object (no `version` key at all) migrates.
+// Round-3 P2-9: namespaces are NULL-PROTOTYPE dictionaries. A plain `{}`+
+// `namespace[slug]` lookup resolves `constructor`/`toString` from
+// Object.prototype, an assignment under the `__proto__` slug mutates the
+// prototype instead of recording a mapping, and legacy flat slugs literally
+// named "version"/"engines" were misread as store metadata. Lookup is
+// own-property only, and version detection is STRUCTURAL (a versioned store
+// has a NUMBER 2 + an engines object; a string "version" value is a legacy
+// flat slug). Every legacy entry must be string -> string — malformed values
+// fail closed instead of being silently dropped (a later persist would
+// destroy them).
+const emptyNamespace = () => Object.create(null);
+
+function normalizeSessionStore(raw) {
+  const store = { version: SESSION_STORE_VERSION, engines: { opencode: emptyNamespace(), opencode2: emptyNamespace() } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return store;
+  if ('version' in raw && typeof raw.version === 'number') {
+    if (raw.version === 2) {
+      if (!raw.engines || typeof raw.engines !== 'object' || Array.isArray(raw.engines)) {
+        throw new Error(
+          `Session store at ${sessionsFilePath()} has version 2 but a malformed "engines" field — ` +
+            'refusing to migrate or rewrite it (fail-closed). Fix or remove the file manually.',
+        );
+      }
+      // Review round 5 #7: an UNRECOGNIZED engines.* key is future/corrupted
+      // data — copying only the known namespaces made the next persist
+      // silently erase it. Same fail-closed contract as every other
+      // unrecognized store shape.
+      for (const key of Object.keys(raw.engines)) {
+        if (!SESSION_STORE_ENGINES.includes(key)) {
+          throw new Error(
+            `Session store at ${sessionsFilePath()} has an unknown engine namespace "engines.${key}" — this ` +
+              'Triss understands opencode and opencode2 only. Refusing to read or rewrite it (fail-closed); ' +
+              'upgrade Triss or fix the file manually.',
+          );
+        }
+      }
+      for (const engine of SESSION_STORE_ENGINES) {
+        const namespace = raw.engines[engine];
+        if (namespace == null) continue; // absent is fine
+        if (typeof namespace !== 'object' || Array.isArray(namespace)) {
+          // Round-2 7.2: a string/array namespace (corrupted or future
+          // shape) used to be silently skipped; the next persist then
+          // REWROTE the store without that data. Fail closed instead —
+          // the file is never rewritten when its shape is not understood.
+          throw new Error(
+            `Session store at ${sessionsFilePath()} has a malformed "${engine}" namespace ` +
+              `(expected an object of slug -> session id, got ${Array.isArray(namespace) ? 'an array' : `a ${typeof namespace}`}) — ` +
+              'refusing to read or rewrite it (fail-closed). Fix or remove the file manually.',
+          );
+        }
+        for (const [slug, realId] of Object.entries(namespace)) {
+          if (typeof slug === 'string' && typeof realId === 'string') {
+            store.engines[engine][slug] = realId;
+          } else {
+            // Non-string slug/value entries are corruption too — same
+            // fail-closed contract (round-2 7.2: silent drops lose data
+            // on the next rewrite).
+            throw new Error(
+              `Session store at ${sessionsFilePath()} has a malformed entry in "engines.${engine}" ` +
+                `(${JSON.stringify(String(slug))} -> ${typeof realId}) — refusing to read or rewrite it ` +
+                '(fail-closed). Fix or remove the file manually.',
+            );
+          }
+        }
+      }
+      return store;
+    }
+    throw new Error(
+      `Session store at ${sessionsFilePath()} has unknown version ${JSON.stringify(raw.version)} — ` +
+        'this Triss understands version 2 and legacy flat maps only. Refusing to read or rewrite it ' +
+        '(fail-closed); upgrade Triss or fix the file manually.',
+    );
+  }
+  if ('engines' in raw) {
+    // Structural disambiguation (round-3 P2-9): a legacy flat map whose slugs
+    // literally include "version"/"engines" carries STRING session-id values
+    // — every value a string means legacy. Anything else with an `engines`
+    // key but no numeric version is an unrecognized shape: fail closed.
+    const allStringValues = Object.values(raw).every((v) => typeof v === 'string');
+    if (!allStringValues) {
+      throw new Error(
+        `Session store at ${sessionsFilePath()} has an "engines" field but no numeric "version" — this is ` +
+          'not a recognized shape (legacy flat maps carry only string session ids). Refusing to read or ' +
+          'rewrite it (fail-closed).',
+      );
+    }
+  }
+  // Legacy flat map: every entry belongs to the V1 engine (the only writer
+  // that ever produced this shape). Malformed entries fail closed (round-3
+  // P2-9: silent drops lose data on the next rewrite).
+  for (const [slug, realId] of Object.entries(raw)) {
+    if (typeof realId !== 'string') {
+      throw new Error(
+        `Session store at ${sessionsFilePath()} has a malformed legacy entry ` +
+          `(${JSON.stringify(slug)} -> ${typeof realId}) — refusing to read or rewrite it (fail-closed). ` +
+          'Fix or remove the file manually.',
+      );
+    }
+    store.engines.opencode[slug] = realId;
+  }
+  return store;
+}
+
+function readSessionStore() {
+  return normalizeSessionStore(readSessionsMap());
+}
+
+// Look up a slug's real session id for ONE engine. Cross-engine lookups are
+// impossible by construction — an opencode2 run never sees opencode's ids
+// (equal slugs across engines never cross-resume).
+export function lookupSessionRealId(engine, slug) {
+  const store = readSessionStore();
+  const namespace = store.engines[engine] || emptyNamespace();
+  // Own-property only (round-3 P2-9): `constructor`/`toString` must never
+  // resolve from Object.prototype as a session id.
+  return Object.prototype.hasOwnProperty.call(namespace, slug) ? namespace[slug] : null;
+}
+
+// The session store's own mutation lock path. Keyed per project (TRISS_STATE_DIR
+// lives under projectRoot) so two projects never contend on one lock, while
+// every engine's writer within THIS project serializes on the same file.
+export function sessionsLockPath() {
+  return join(projectRoot(), TRISS_STATE_DIR, 'sessions.lock');
+}
+
+// Persist slug -> realId under the engine's namespace. Read-modify-write of
+// the VERSIONED shape (legacy content migrates here), atomic write-then-
+// rename, serialized under the engine-neutral session-store mutation lock.
+//
+// Review round 6 #1: this runs AFTER the engine finished and BEFORE the
+// envelope is written — the model output is ready and the tokens are already
+// paid for. acquireCoderMutationLock throws LOCK_HELD IMMEDIATELY (no wait,
+// no retry), so two parallel `coder run --session a` / `--session b` in one
+// project made one of them DISCARD a finished run over a session-bookkeeping
+// file. The lock is therefore acquired with a bounded retry/backoff, and if
+// it is still held the mapping persists via the pre-lock lock-free protocol
+// (atomic write + post-commit verify + repair) with a stderr warning — a
+// possible lost UPDATE of a slug mapping must never cost a finished RUN.
+const SESSIONS_LOCK_RETRY_MS = [50, 100, 200, 400, 800, 1500, 2500];
+function acquireSessionsLock({ acquireLock, retryMs } = {}) {
+  const schedule = retryMs || SESSIONS_LOCK_RETRY_MS;
+  const acquire = acquireLock || (() => acquireCoderMutationLock('sessions', 'store', {
+    lockPath: sessionsLockPath(),
+  }));
+  for (let attempt = 0; attempt < schedule.length; attempt += 1) {
+    try {
+      return acquire();
+    } catch (err) {
+      if (err?.code !== 'LOCK_HELD') throw err;
+      // DELIBERATE blocking sleep (round-7 follow-up: this is Atomics.wait,
+      // not an await) — persistSessionMapping is a synchronous CLI-final
+      // path (the engine is done, only the envelope write remains), so
+      // nothing else needs the event loop and a busy-wait-free sleep is the
+      // simplest correct pause. Worst case is the full schedule (~5.5s on
+      // the default).
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, schedule[attempt]);
+    }
+  }
+  try {
+    return acquire();
+  } catch (err) {
+    if (err?.code !== 'LOCK_HELD') throw err;
+    return null; // still held — degrade to the lock-free path
+  }
+}
+export function persistSessionMapping(sh, engine, slug, realId, deps = {}) {
+  // Review round 5 #7: without this guard a future/typo'd engine argument
+  // would CREATE an unrecognized engines.* namespace that the very next read
+  // (and rewrite) silently erased.
+  if (!SESSION_STORE_ENGINES.includes(engine)) {
+    throw new Error(
+      `persistSessionMapping: unknown engine ${JSON.stringify(engine)} — supported: ${SESSION_STORE_ENGINES.join(', ')}`,
+    );
+  }
+  const path = sessionsFilePath();
+  mkdirSync(dirname(path), { recursive: true });
+
+  const lockSchedule = deps.lockRetryMs || SESSIONS_LOCK_RETRY_MS;
+  const lockHandle = acquireSessionsLock({ acquireLock: deps.acquireLock, retryMs: deps.lockRetryMs });
+  if (!lockHandle) {
+    process.stderr.write(
+      pc.yellow(
+        `⚠ session-store lock still held after ${
+          lockSchedule.reduce((a, b) => a + b, 0)
+        }ms — persisting "${slug}" without the lock (rare concurrent mapping loss possible)\n`,
+      ),
+    );
+  }
+  const writeMapping = () => {
+    const store = readSessionStore();
+    if (!store.engines[engine]) store.engines[engine] = emptyNamespace();
+    store.engines[engine][slug] = realId;
+    atomicWriteJson(path, store);
+  };
+  try {
+    writeMapping();
+  } finally {
+    if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
+  }
+
+  // Post-commit verify: under the lock this can only fire after a crash
+  // between rename and release; on the lock-free fallback path another
+  // writer may have committed in between — re-persisting repairs our slug
+  // (the other writer's slug is repaired by its own verify pass).
+  const verify = readSessionStore();
+  if (verify.engines[engine]?.[slug] !== realId) {
+    const retryHandle = acquireSessionsLock({ acquireLock: deps.acquireLock });
+    try {
+      const retryStore = readSessionStore();
+      if (!retryStore.engines[engine]) retryStore.engines[engine] = emptyNamespace();
+      retryStore.engines[engine][slug] = realId;
+      atomicWriteJson(path, retryStore);
+    } finally {
+      if (retryHandle && typeof retryHandle.release === 'function') retryHandle.release();
+    }
+  }
+
+  if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
 }
 
 // Write-then-rename so a reader never observes a partially-written file.
@@ -3230,34 +3820,12 @@ function atomicWriteJson(path, obj) {
 // config.js's maybeAddGitignore guard) — a non-git cwd still gets the
 // mapping file written, just not a .gitignore entry for it.
 //
-// Read-modify-write race: two concurrent `coder run` calls with different
-// slugs can each read the map before the other writes, then each write
-// back a version missing the other's fresh mapping — the loser's slug
-// silently vanishes from sessions.json, breaking its future --continue.
-// The atomic write above only prevents torn reads; it doesn't close this
-// window. Narrow it further by re-reading immediately after our write and,
-// if our own slug's value was clobbered by a concurrent writer, redo the
-// merge once. This is a best-effort mitigation, not a lock: two processes
-// racing on the SAME slug is still inherently last-write-wins (there is
-// no source of truth for "which write is correct" in that case, and it's
-// not the scenario this guards against).
-function persistSessionMapping(sh, slug, realId) {
-  const path = sessionsFilePath();
-  mkdirSync(dirname(path), { recursive: true });
-
-  const map = readSessionsMap();
-  map[slug] = realId;
-  atomicWriteJson(path, map);
-
-  const verify = readSessionsMap();
-  if (verify[slug] !== realId) {
-    const retryMap = readSessionsMap();
-    retryMap[slug] = realId;
-    atomicWriteJson(path, retryMap);
-  }
-
-  if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
-}
+// Review round 6 #1: the historical lock-free rationale ("two concurrent
+// runs can each drop the other's mapping; the atomic write only prevents
+// torn reads") is now the DEGRADED fallback of persistSessionMapping — used
+// only when the session lock stays held past the bounded retry, because
+// discarding a finished run (tokens already paid) over a mapping file was
+// strictly worse than a rare lost slug update.
 
 // ─── isolation (worktree) setup — Phase 3 helpers reused ───────────────────────
 
@@ -3563,24 +4131,34 @@ function spawnEngine({
   residualTermGraceMs = RESIDUAL_GROUP_TERM_GRACE_MS,
   residualKillWaitMs = RESIDUAL_GROUP_KILL_WAIT_MS,
   processGroupPollMs = PROCESS_GROUP_POLL_MS,
+  // ── engine seam (OpenCode 2, engine #3) ──
+  // The V1 path is unchanged when these are omitted: binary 'opencode',
+  // V1 event fold, V1 diagnostics labels (tests pin the exact messages).
+  // V2 passes its adapter's members.
+  binary = 'opencode',
+  label = 'opencode',
+  createState = createEventFolder,
+  foldLine = foldEventLine,
+  cwd,
 }) {
   // pollMs === 0 disables the watchdog entirely; null/undefined uses the
   // default cadence. Tests set a small value to exercise the poll path.
   const resolvedPollMs = pollMs == null ? RATE_LIMIT_POLL_MS : pollMs;
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
-      reject(new Error('OpenCode run was cancelled before the engine started.'));
+      reject(new Error(`${label} run was cancelled before the engine started.`));
       return;
     }
     let child;
     try {
-      child = spawnFn('opencode', argv, {
+      child = spawnFn(binary, argv, {
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env,
+        ...(cwd !== undefined ? { cwd } : {}),
       });
     } catch (err) {
-      reject(new Error(`Failed to spawn opencode: ${err.message}`));
+      reject(new Error(`Failed to spawn ${label}: ${err.message}`));
       return;
     }
 
@@ -3632,7 +4210,7 @@ function spawnEngine({
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
         throw new Error(
-          `OpenCode process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
+          `${label} process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
     };
@@ -3780,7 +4358,7 @@ function spawnEngine({
       // A ChildProcess error means the engine did not spawn successfully; do
       // not replace that exact diagnostic with a speculative group-cleanup
       // failure for a pid that may never have become a process leader.
-      settle(() => reject(new Error(`Failed to spawn opencode: ${err.message}`)), { cleanup: false });
+      settle(() => reject(new Error(`Failed to spawn ${label}: ${err.message}`)), { cleanup: false });
     });
 
     if (child.stdout) {
@@ -4449,8 +5027,15 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   let oneShotProvider = null;
   let oneShotSmallModel = null;
   if (opts.provider) {
-    if (engine !== 'opencode') {
+    if (engine === 'crush') {
       throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
+    }
+    if (engine === 'opencode2') {
+      throw new Error(
+        '--provider/--small-model one-shot runs are unsupported on the opencode2 engine for now: ' +
+          'every advertised provider route needs a verified translation fixture on the pinned build first ' +
+          '(docs/opencode2-engine-plan.md). Use --engine opencode for one-shot provider runs.',
+      );
     }
     if (!modelOverride) {
       throw new Error(
@@ -4554,7 +5139,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // opts.isolate is `undefined` when neither flag is passed, `true` under
   // --isolate, `false` under --no-isolate. (Do NOT add a default to either
   // option — the undefined tristate is load-bearing here.)
-  const agent = opts.agent || 'coder';
+  // V1 resolves the agent default here; V2 must NOT inject a default agent:
+  // the V2 binary does not auto-load the V1 `.opencode/agents` templates, so
+  // `--agent coder` failed live with "Agent not found" unless agent files
+  // were hand-installed — and the static agent-source preflight rejects
+  // those. A beta V2 run without an explicit --agent uses the engine's
+  // BUILT-IN primary agent instead (live-matrix finding, Phase 6).
+  const agent = opts.agent || (engine === 'opencode2' ? null : 'coder');
 
   const modelUsed = modelOverride || coderModel();
 
@@ -4793,14 +5384,410 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
-  const sessionRealIdArg = opts.session ? readSessionsMap()[opts.session] || null : null;
+  // Engine-namespaced slug -> real-id lookup (versioned store): an opencode2
+  // run never sees opencode's ids even for the same slug. Deferred into the
+  // engine branches (round-2 7.1): the store read FAILS CLOSED on malformed/
+  // unknown shapes, and the V2 branch must clean up a freshly-created
+  // isolation worktree when it throws — previously this line ran BEFORE the
+  // V2 try/catch existed, leaking .triss/wt/<slug> + the coder/<slug> branch.
+  // Review round 6 #2: the V1 lookup leaks the SAME way — it runs after
+  // setupIsolation but was never wrapped in the cleanup guard, so
+  // `coder run --isolate --session foo` with a corrupted sessions.json
+  // stranded a worktree+branch that blocked re-runs until `coder clean`.
+  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSessionRealId(engineName, opts.session) : null);
+  let sessionRealIdV1 = null;
+  if (engine !== 'opencode2' && opts.session) {
+    try {
+      sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+  }
+
+  // ─── OpenCode 2 (engine #3) ────────────────────────────────────────────────
+  //
+  // Shares spawnEngine's process management through the engine seam (binary/
+  // label/createState/foldLine/cwd) but diverges from V1 on: XDG-isolated
+  // runtime state, ALWAYS --standalone (resident-service guard), no --pure/
+  // --dir/--small-model surface, error.message precedence, terminal error
+  // classification, and the never-zero missing-usage rule. The six provider
+  // routes are fixture-gated: any route without a deterministic current-pin
+  // translation fixture fails closed BEFORE a credential is forwarded.
+  if (engine === 'opencode2') {
+    // ─── OpenCode 2 fail-closed preflight (review P0-1/P0-2/P1-5/P1-6) ───
+    const root = projectRoot();
+    // The audit runs against the EXACT child runtime directory — the
+    // isolation worktree when --isolate, else the resolved --cwd, else
+    // process.cwd(). deps.cwd is a TEST seam only and must never select the
+    // audited tree in production (review P1-5).
+    const runtimeDir = isolation
+      ? isolation.wtPath
+      : opts.cwd
+        ? resolvePath(opts.cwd)
+        : process.cwd();
+    // session/--continue mutual exclusion BEFORE any isolation side effects
+    // are possible (validation order moved up; review P2-12). setupIsolation
+    // runs before runCoderRun's engine branches, so a freshly-created
+    // worktree MUST be cleaned up when this rejects.
+    if (opts.session && opts.continue) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
+          'pass one or the other, never both.',
+      );
+    }
+    if (oneShotProvider) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `--provider/--small-model one-shot overlays are not implemented for the opencode2 engine yet — ` +
+          'the six advertised provider routes each need a verified translation fixture first ' +
+          '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
+      );
+    }
+    // Session lookup INSIDE the guarded zone (round-2 7.1): the store read
+    // fails closed on malformed/unknown shapes and must not leak a
+    // freshly-created isolation worktree.
+    let sessionRealIdArg2;
+    try {
+      sessionRealIdArg2 = sessionRealIdArgFor('opencode2');
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+    // Full effective-configuration audit BEFORE the credential is read:
+    // route fixture gate (final modelUsed prefix, however selected —
+    // P1-6), provider projection vs fixture with the EXACT worker profile
+    // baseURL (P0-1 round 2), deny-first permission proof incl. agents via
+    // the real last-match-wins evaluator (P0-2 round 2), plus the existing
+    // plugin/agent source rejection. Any failure leaves NO worktree/branch
+    // behind (P2-12).
+    //
+    // Round-4 P1 (P0 impact): the audit must walk the CANONICAL runtime
+    // directory. A symlinked --cwd makes the child chdir to the PHYSICAL
+    // target, so the engine's own config walk starts from a different parent
+    // chain than the lexical path the preflight enumerated — hostile sources
+    // in the physical tree's ancestors were invisible to the audit. Both the
+    // audit and the spawn use the same realpathSync.native value.
+    let runtimeDirCanonical;
+    try {
+      runtimeDirCanonical = realpathSync.native(runtimeDir);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `OpenCode 2 preflight aborted: cannot canonicalize the runtime directory ${runtimeDir} — ${err.message}`,
+        { cause: err },
+      );
+    }
+    // Round-4 P0 + cross-review fix 1 + review round 5 #4: worker key +
+    // endpoint must be one profile of consistent EFFECTIVE provenance,
+    // resolved from the pre-dotenv snapshot (a decoy key in the project
+    // .triss.env cannot displace a shell export). Only relevant when the
+    // worker credential is actually forwarded — a zai/moonshot run must not
+    // fail on an unrelated project-local TRISS_WORKER_BASE_URL.
+    if (modelUsed.startsWith('triss-worker/')) {
+      try {
+        assertV2WorkerTransportProvenance(workerShellEnv);
+      } catch (err) {
+        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+        throw err;
+      }
+    }
+    const workerProfile = modelUsed.startsWith('triss-worker/')
+      ? workerCoderProfile()
+      : null;
+    let auditResult2;
+    try {
+      auditResult2 = auditOpenCode2Run(
+        {
+          cwd: runtimeDirCanonical,
+          modelUsed,
+          agentName: agent,
+          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+        },
+        { enumerate: deps.enumerateOpenCodeSources },
+      );
+      staticOpenCode2Preflight(runtimeDirCanonical);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+    // Runtime roots 0700 before credential forwarding (review P1/P2-7).
+    try {
+      ensureOpenCode2RuntimeDirs(root);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+    // EXACT pin verification before the credential-bearing spawn (review
+    // P1-3 + round-2 #5): resolve the binary to an ABSOLUTE path, verify the
+    // exact build, and spawn THAT path — never a bare name whose PATH lookup
+    // can differ between the parent (pre-check) and the child cwd (spawn).
+    // A missing/mismatched/garbage binary is a terminal error here — the
+    // envelope reports the DETECTED version, not the configured pin.
+    const pinDetected = detectOpenCode2(sh);
+    if (!pinDetected.found || !pinDetected.satisfiesPin) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw new Error(
+        `opencode2 ${pinDetected.found ? `v${pinDetected.version}` : 'not found'} does not match the exact pin ` +
+          `v${opencode2VersionPin()} — managed V2 runs require the verified build (${installHintOpenCode2()}). ` +
+          'A version mismatch is a terminal compatibility failure, never a warning.',
+      );
+    }
+    const engine2Version = pinDetected.version;
+    const engine2Path = pinDetected.path;
+
+    const argv2 = opencode2Engine.buildRunArgv({
+      prompt,
+      model: modelUsed,
+      agent,
+      sessionRealId: sessionRealIdArg2,
+      cont: !!opts.continue,
+    });
+    const env2 = opencode2Engine.buildSpawnEnv({
+      projectRoot: root,
+      credentialEnv: cred.env,
+      credentialValue,
+    });
+    const logPath2 = opencode2LogPath(root);
+
+    process.stderr.write(
+      pc.dim(
+        `[coder run] engine=opencode2${agent ? ` agent=${agent}` : ' (built-in agent)'} model=${modelUsed}` +
+          (isolation ? ` isolate=${isolation.wtPath}` : '') +
+          '\n',
+      ),
+    );
+
+    // Cross-review fix 4 + review round 5 #6 (TOCTOU): between the audit and
+    // this point sat the runtime-dir setup and the binary probes (several
+    // subprocesses) — a window in which the audited tree can change. Hash
+    // re-verification catches modified/removed layers but NOT sources CREATED
+    // in the window (a fresh .opencode/opencode.json, plugin, or agent file),
+    // so the FULL audit + static gate re-runs immediately before the
+    // credential-bearing spawn: new layers, new provider overrides, new
+    // executable sources — everything is re-enumerated from disk.
+    try {
+      auditOpenCode2Run(
+        {
+          cwd: runtimeDirCanonical,
+          modelUsed,
+          agentName: agent,
+          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+        },
+        { enumerate: deps.enumerateOpenCodeSources },
+      );
+      staticOpenCode2Preflight(runtimeDirCanonical);
+      verifyOpenCode2ContentHashes(auditResult2?.contentHashes);
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+
+    const spawnStartMs2 = Date.now();
+    let result2;
+    let rateLimit2;
+    try {
+      result2 = await spawnEngine({
+        argv: argv2,
+        env: env2,
+        timeoutSec,
+        spawnFn,
+        sinceMs: spawnStartMs2,
+        scanRateLimit: deps.scanRateLimit,
+        logPath: deps.logPath || logPath2,
+        pollMs: deps.pollMs,
+        abortSignal: deps.abortSignal,
+        killProcess,
+        residualTermGraceMs: deps.residualTermGraceMs,
+        residualKillWaitMs: deps.residualKillWaitMs,
+        processGroupPollMs: deps.processGroupPollMs,
+        binary: engine2Path,
+        label: 'opencode2',
+        createState: createOpenCode2EventFolder,
+        foldLine: foldOpenCode2EventLine,
+        cwd: runtimeDirCanonical,
+      });
+
+      rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });
+      // Post-run exact-pin re-verification (review P1-3 + round-2 #5): the
+      // SAME absolute path must still resolve to the verified build — a
+      // mid-run self-update, binary swap, or symlink retarget is a terminal
+      // compatibility failure.
+      const postPin = detectOpenCode2(sh);
+      if (
+        !postPin.found
+        || !postPin.satisfiesPin
+        || postPin.version !== engine2Version
+        || postPin.path !== engine2Path
+      ) {
+        throw new Error(
+          `opencode2 binary changed during the run (before: v${engine2Version} @ ${engine2Path}, after: ` +
+            `${postPin.found ? `v${postPin.version} @ ${postPin.path}` : 'not found'}) — treat this run's compatibility as unverified.`,
+        );
+      }
+      if (rateLimit2 && !result2.finalText) {
+        const err = new Error(rateLimitMessage(rateLimit2));
+        err.rateLimit = rateLimit2;
+        throw err;
+      }
+      if (!result2.parsedAnyEvent) {
+        const tailLines = result2.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+        const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+        throw new Error(
+          `opencode2 produced no parseable output (exit ${result2.code ?? 'null'}` +
+            `${result2.signal ? `, signal ${result2.signal}` : ''}).${detail}`,
+        );
+      }
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) {
+        cleanupAbandonedIsolation(sh, isolation);
+      }
+      throw err;
+    }
+
+    if (rateLimit2) result2.warnings.push(rateLimitMessage(rateLimit2));
+
+    // Terminal-error precedence: a V2 error event is terminal even when the
+    // process exits 0 (verified live — see the adapter header). This BEATS
+    // every exit-code/signal-based classification.
+    let exit_reason2;
+    if (result2.terminalError) exit_reason2 = 'error';
+    else if (result2.timedOut) exit_reason2 = 'timeout';
+    else if (result2.signal) exit_reason2 = 'killed';
+    else if (result2.code === 0) exit_reason2 = 'end_turn';
+    else exit_reason2 = 'error';
+
+    if (opts.session && result2.sessionRealId) {
+      persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
+    }
+
+    let filesChanged2 = [];
+    let diffStat2 = null;
+    let worktreeOut2 = null;
+    if (isolation) {
+      const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
+      if (changes.warnings.length) result2.warnings.push(...changes.warnings);
+      if (changes.filesChanged.length === 0) {
+        try {
+          gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+          if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
+            const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
+            if (!branchDeleted) {
+              result2.warnings.push(
+                `branch ${isolation.branch} kept — not fully merged; a future --isolate --session ` +
+                  `<slug> reusing this slug will fail until it's removed (see \`triss coder clean --all\`)`,
+              );
+            }
+          }
+        } catch (err) {
+          result2.warnings.push(`isolate cleanup failed: ${err.message}`);
+        }
+      } else {
+        filesChanged2 = changes.filesChanged;
+        diffStat2 = changes.diffStat;
+        worktreeOut2 = isolation.wtPath;
+      }
+    }
+
+    // Never-zero missing usage: exit 0 without step_finish is NOT zero usage —
+    // usage_status "missing", null canonical counters, null cost, explicit
+    // warning. (estimateCanonicalCost would return plan-$0 for a subscription
+    // model even with no counters; V2 must not claim that.)
+    if (!result2.sawStepFinish) {
+      result2.warnings.push(
+        'OpenCode 2 emitted no step_finish event — usage counters unknown (usage_status "missing"); ' +
+          'never reported as zero.',
+      );
+    }
+
+    const { tokens: tokens2, usage_status: usageStatus2, warnings: normalizeWarnings2,
+      reported_total_usd: reportedTotalUsd2, reported_total_source: reportedTotalSource2 } =
+      finalizeOpencodeUsage(result2.usage);
+    if (normalizeWarnings2.length) result2.warnings.push(...normalizeWarnings2);
+
+    // Missing usage -> null cost object with explicit unknowns (the plan's
+    // "never reported as zero" rule); reported usage -> normal canonical cost.
+    let cost2;
+    if (usageStatus2 === 'missing' || !result2.sawStepFinish) {
+      cost2 = {
+        input_uncached_usd: null,
+        cache_read_usd: null,
+        cache_write_usd: null,
+        output_visible_usd: null,
+        reasoning_usd: null,
+        output_total_usd: null,
+        reported_total_usd: null,
+        reported_total_source: null,
+        total_usd: null,
+        source: 'unknown',
+        complete: false,
+        unknown_components: ['no_step_finish'],
+      };
+    } else {
+      cost2 = estimateCanonicalCost({
+        billing_model: modelUsed,
+        billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
+        tokens: tokens2,
+        // NORMALIZED reported cost (review P2-9): finalizeOpencodeUsage
+        // returns reported_total_usd=null when per-step cost coverage is
+        // INCOMPLETE — a partial sum must not leak into the envelope as an
+        // authoritative number, and reported_total_source must stay 'null'
+        // (not undefined → dropped in serialization) when unknown.
+        reported_total_usd: reportedTotalUsd2,
+        reported_total_source: reportedTotalSource2,
+      });
+    }
+
+    const promptTokens2 = tokens2.input_uncached ?? 0;
+    const completionTokens2 = tokens2.output_visible ?? 0;
+    const ctx2 = currentCall();
+    logUsage({
+      model: modelUsed,
+      billing_model: modelUsed,
+      billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
+      usage_source: 'opencode2',
+      engine: 'opencode2',
+      usage_status: usageStatus2,
+      tokens: tokens2,
+      cost: cost2,
+      label: 'coder',
+      call_id: ctx2?.callId,
+      parent_call_id: ctx2?.parentCallId,
+    });
+
+    const envelope2 = {
+      engine: 'opencode2',
+      engine_version: engine2Version,
+      session_id: result2.sessionRealId || null,
+      exit_reason: exit_reason2,
+      final_text: result2.finalText,
+      files_changed: filesChanged2,
+      diff_stat: diffStat2,
+      worktree: worktreeOut2,
+      usage: {
+        schema_version: 2,
+        usage_status: usageStatus2,
+        tokens: tokens2,
+        cost: cost2,
+        prompt_tokens: promptTokens2,
+        completion_tokens: completionTokens2,
+      },
+      warnings: result2.warnings,
+    };
+
+    const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
+    writeStdout2(JSON.stringify(envelope2) + '\n');
+    return;
+  }
+
   const dir = isolation ? isolation.wtPath : opts.cwd ? resolvePath(opts.cwd) : null;
 
   const argv = buildOpencodeArgv({
     prompt,
     agent,
     model: modelUsed,
-    sessionRealId: sessionRealIdArg,
+    sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
     pure: !!oneShotProvider,
@@ -4927,7 +5914,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   else exit_reason = 'error';
 
   if (opts.session && result.sessionRealId) {
-    persistSessionMapping(sh, opts.session, result.sessionRealId);
+    persistSessionMapping(sh, engine, opts.session, result.sessionRealId);
   }
 
   // v2 contract: files_changed is [] ONLY for a successfully performed

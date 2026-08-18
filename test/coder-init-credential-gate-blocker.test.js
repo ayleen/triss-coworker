@@ -41,8 +41,11 @@ function makeHome() {
 
 function runInit(home, env) {
   // stdio piped + no TTY → non-interactive. input '' so any prompt reads empty.
+  // TRISS_PROJECT_ROOT pins the local-.triss.env lookup to the temp HOME so a
+  // developer checkout containing a real .triss.env cannot leak credentials
+  // into this ZERO/MULTIPLE-credential test.
   return spawnSync(process.execPath, [BIN, 'coder', 'init'], {
-    env: { PATH: EMPTY_PATH, HOME: home, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', ...env },
+    env: { PATH: EMPTY_PATH, HOME: home, TRISS_PROJECT_ROOT: home, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', ...env },
     encoding: 'utf8',
     input: '',
     stdio: ['pipe', 'pipe', 'pipe'],

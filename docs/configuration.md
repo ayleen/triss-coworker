@@ -263,14 +263,15 @@ self-hosted endpoints).
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
-| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engine only). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md). |
+| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engines). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md). |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
-| `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engine only) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
+| `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engines) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
-| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default) or `crush` |
+| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](./opencode2.md)), or `crush` |
+| `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-next-17430`  | Exact pin override for the `@opencode-ai/cli` npm install (opencode2 engine — exact match required) |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 

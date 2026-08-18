@@ -1,6 +1,6 @@
 {
   "name": "triss-coworker",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "Give your AI coding agent a cheap DeepSeek coworker. Delegate bulk reads, boilerplate, and doc updates to save 60-70% of your token budget.",
   "type": "module",
   "bin": {
@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1 node --test test/*.test.js",
+    "test": "node scripts/check-lockfile-gate.cjs && TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1 node --test test/*.test.js",
     "start": "node bin/triss.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
