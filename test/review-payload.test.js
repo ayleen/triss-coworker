@@ -226,7 +226,7 @@ test('manifest contains no diff contents', () => {
 
 // ─── sequential shard planning (Atomic 44 / Package 23) ─────────────────────
 
-const SHARD_LIMITS = { singleMaxBytes: 262144, shardMaxBytes: 5000, totalMaxBytes: 65536, maxShards: 8 };
+const SHARD_LIMITS = { singleMaxBytes: 262144, shardMaxBytes: 6000, totalMaxBytes: 65536, maxShards: 8 };
 
 function smallSection(path, size) {
   const body = ['@@ -1 +1 @@', '-old', '+new'];
@@ -261,6 +261,18 @@ test('REVIEW-SHARD-PLAN-02: a single oversized file fails with its path', () => 
   const { error, path } = planSequentialShards({ sections, question: 'q', limits: SHARD_LIMITS });
   assert.equal(error, 'shard_max_exceeded');
   assert.equal(path, 'huge.txt');
+
+  // File alone fits shardMaxBytes (1800 <= 5000), but file + fixed overhead (1800 + 4097 = 5897 > 5000) exceeds it
+  const borderline = [smallSection('borderline.txt', 1800)];
+  const resBorderline = planSequentialShards({ sections: borderline, question: 'q', limits: { ...SHARD_LIMITS, shardMaxBytes: 5000 } });
+  assert.equal(resBorderline.error, 'shard_max_exceeded');
+  assert.equal(resBorderline.path, 'borderline.txt');
+
+  // Exact user check: sections with 96067 bytes and shardMaxBytes 98304
+  const userBorderline = [smallSection('user.txt', 96067)];
+  const resUser = planSequentialShards({ sections: userBorderline, question: 'q', limits: { ...SHARD_LIMITS, shardMaxBytes: 98304 } });
+  assert.equal(resUser.error, 'shard_max_exceeded');
+  assert.equal(resUser.path, 'user.txt');
 });
 
 test('REVIEW-SHARD-PLAN-03: shard-count and total-bound overflows fail closed', () => {
@@ -269,9 +281,9 @@ test('REVIEW-SHARD-PLAN-03: shard-count and total-bound overflows fail closed', 
   assert.equal(countFail.error, 'shard_count_exceeded');
 
   const big = Array.from({ length: 10 }, (_, i) => smallSection(`g${i}.txt`, 1000));
-  // All files fit in one shard (each 1000 < 2048, sum 10000) but the total
-  // exceeds totalMaxBytes 3000.
-  const totalFail = planSequentialShards({ sections: big, question: 'q', limits: { ...SHARD_LIMITS, totalMaxBytes: 3000, maxShards: 64 } });
+  // All files fit in shards (each 4097 + 1000 = 5097 <= 6000, 10 shards) but the total
+  // exceeds totalMaxBytes 30000.
+  const totalFail = planSequentialShards({ sections: big, question: 'q', limits: { ...SHARD_LIMITS, totalMaxBytes: 30000, maxShards: 64 } });
   assert.equal(totalFail.error, 'total_max_exceeded');
 });
 

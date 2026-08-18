@@ -31,7 +31,6 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
-import { accessSync, constants as fsConstants } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import pc from 'picocolors';
@@ -5415,8 +5414,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       join(projectRoot(), '.triss.env.local'),
     ]) {
       try {
-        accessSync(storePath, fsConstants.R_OK);
-        readableStores.push(storePath);
+        const { vars } = readEnvFile(storePath);
+        const hasSecrets = Object.entries(vars).some(([k, v]) => {
+          if (!v || !String(v).trim()) return false;
+          return /_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_AUTH$/i.test(k) ||
+            k === 'ZHIPU_API_KEY' || k === 'OPENCODE_API_KEY' || k === 'TRISS_WORKER_API_KEY' ||
+            k === 'MOONSHOT_API_KEY' || k === 'DEEPSEEK_API_KEY' || k === 'OPENAI_API_KEY' ||
+            k === 'ANTHROPIC_API_KEY' || k === 'KIMI_API_KEY';
+        });
+        if (hasSecrets) {
+          readableStores.push(storePath);
+        }
       } catch {
         /* absent or unreadable: not a leak channel */
       }

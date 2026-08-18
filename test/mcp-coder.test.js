@@ -59,16 +59,20 @@ function fakeSpawnReplayingFixture() {
 // from this repo's own configured key in .triss.env.
 function withIsolatedEnv(vars, fn) {
   return async () => {
+    const fullVars = {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      ...vars,
+    };
     const saved = {};
-    for (const k of Object.keys(vars)) saved[k] = process.env[k];
-    for (const [k, v] of Object.entries(vars)) {
+    for (const k of Object.keys(fullVars)) saved[k] = process.env[k];
+    for (const [k, v] of Object.entries(fullVars)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
     try {
       await fn();
     } finally {
-      for (const k of Object.keys(vars)) {
+      for (const k of Object.keys(fullVars)) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }

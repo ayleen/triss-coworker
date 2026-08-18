@@ -43,10 +43,12 @@ const withHome = async (fn) => {
     KEY: process.env.OPENCODE_API_KEY,
     WORKER_KEY: process.env.TRISS_WORKER_API_KEY,
     WORKER_URL: process.env.TRISS_WORKER_BASE_URL,
+    ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
   };
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   delete process.env.TRISS_CODER_ENGINE;
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -77,6 +79,8 @@ const withHome = async (fn) => {
     else process.env.TRISS_WORKER_API_KEY = snap.WORKER_KEY;
     if (snap.WORKER_URL === undefined) delete process.env.TRISS_WORKER_BASE_URL;
     else process.env.TRISS_WORKER_BASE_URL = snap.WORKER_URL;
+    if (snap.ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.ISOLATION;
     process.env.OPENCODE_API_KEY = snap.KEY;
     rmSync(home, { recursive: true, force: true });
   }

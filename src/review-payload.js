@@ -355,7 +355,7 @@ export function planSequentialShards({ sections, question, metadata = '', limits
   // input diff.
   for (const path of byPath.keys()) {
     const fileBytes = byPath.get(path).reduce((acc, s) => acc + s.bytes, 0);
-    if (fileBytes > limits.shardMaxBytes) {
+    if (fixed + fileBytes > limits.shardMaxBytes) {
       return { error: 'shard_max_exceeded', path };
     }
     if (current.length > 0 && currentBytes + fileBytes > limits.shardMaxBytes) {
