@@ -202,6 +202,7 @@ program
   .option('--small-model <p/m>', 'forward coder small model')
   .option('--isolate', 'forward coder isolation')
   .option('--no-isolate', 'disable coder isolation')
+  .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')
@@ -367,6 +368,7 @@ coder
   .option('--no-restrict', 'crush only: disable restrict (crush auto-approves every tool — the default)')
   .option('--cwd <path>', 'working directory (ignored with --isolate)')
   .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
+  .option('--allow-best-effort-caller-worktree', 'allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)')
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));

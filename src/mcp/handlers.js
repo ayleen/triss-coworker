@@ -1017,10 +1017,11 @@ export async function coderRunHandler(
   // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
   // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
+  const allowDowngrade = Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
   const resolvedEngine = resolveCoderEngine({ engine });
   const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
 
-  if (cwd && !effectiveIsolate) {
+  if (cwd && (!effectiveIsolate || allowDowngrade)) {
     const { resolve } = await import('node:path');
     assertSafePath(resolve(cwd), { kind: 'write' });
   }

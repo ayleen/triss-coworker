@@ -921,7 +921,7 @@ const CODER_TOOLS = [
         model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'Override the model for this run only, as <provider>/<id> — e.g. Triss worker (triss-worker/deepseek-v4-flash), Z.AI GLM (zai-coding-plan/glm-5.2), OpenCode Zen (opencode/deepseek-v4-flash-free), OpenCode Go (opencode-go/deepseek-v4-flash), Moonshot Kimi (moonshotai/kimi-k2.7-code), or Kimi for Coding (kimi-for-coding/k3)' },
         small_model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'With provider, override small_model for this run; defaults to model' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
-        allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established; note that worktree isolation setup currently fails closed before spawn if unavailable.' },
+        allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },

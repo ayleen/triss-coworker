@@ -129,6 +129,7 @@ export const CAPABILITY_WARNING_CODES = Object.freeze([
 ]);
 
 export const ISOLATION_DOWNGRADED_CODE = 'TRISS_CODER_ISOLATION_DOWNGRADED';
+export const ISOLATION_ENFORCEMENT_REQUIRED_CODE = 'TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED';
 
 // Ordered execution_capabilities object keys (Section 6.1). `unavailable`
 // uses the same warning code as `best_effort` because the machine-readable

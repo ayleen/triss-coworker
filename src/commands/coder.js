@@ -40,6 +40,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
+import { ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE } from '../coder-result.js';
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
@@ -4803,6 +4804,7 @@ async function runCrushFlow({
   }
 
   const warnings = [];
+  if (allowBestEffortCallerWorktree && !isolation && isolate) warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
   if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
 
   // crush reports a COMBINED delta_tokens, never split prompt/completion (unlike
@@ -5347,8 +5349,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const slug = resolveSlug(opts, isolate);
 
   let isolation = null;
+  let isolationDowngraded = false;
   if (isolate) {
-    isolation = setupIsolation(sh, slug);
+    try {
+      isolation = setupIsolation(sh, slug);
+    } catch (err) {
+      if (!allowBestEffortCallerWorktree) {
+        const msg = String(err.message || err);
+        if (!msg.includes(ISOLATION_ENFORCEMENT_REQUIRED_CODE)) {
+          err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE} — retry with --allow-best-effort-caller-worktree to downgrade to caller worktree)`;
+        }
+        if (!err.code) err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
+        throw err;
+      }
+      isolation = null;
+      isolationDowngraded = true;
+      process.stderr.write(pc.yellow(`  ⚠ ${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — running in caller worktree (best-effort; edits may reach current Git worktree)\n`));
+    }
   }
 
   // Model identifiers are the only transient config values. Credentials stay
@@ -5790,6 +5807,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
 
     if (rateLimit2) result2.warnings.push(rateLimitMessage(rateLimit2));
+    if (isolationDowngraded) result2.warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
 
     // Terminal-error precedence: a V2 error event is terminal even when the
     // process exits 0 (verified live — see the adapter header). This BEATS
@@ -6042,6 +6060,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Rate limit that only hit AFTER the engine produced some text: keep the
   // partial envelope but flag it so the caller knows the run was cut short.
   if (rateLimit) result.warnings.push(rateLimitMessage(rateLimit));
+  if (isolationDowngraded) result.warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
 
   let exit_reason;
   if (result.timedOut) exit_reason = 'timeout';
