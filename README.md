@@ -654,8 +654,17 @@ task satisfaction — use `--expect changes --isolate` and inspect `git status`
 yourself. Unavailable OS sandbox/cleanup/lock/quota does not block a
 non-isolated/best-effort run but provides none of those guarantees; explicit
 or default isolation needs `--allow-best-effort-caller-worktree` (default
-off) or fails before spawn, and unavailable credential isolation always
-blocks before spawn. Full details: `docs/reliable-delegation-release-a.md`.
+off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`
+(stable `err.code`; retry hint when the isolation mechanism is unavailable),
+and unavailable credential isolation always blocks before spawn. With the
+opt-in and only when the isolation mechanism itself is unavailable (no git
+repository or worktree creation failure — slug/branch conflicts like
+`already exists` still fail closed), the run downgrades to
+`best_effort_caller_worktree`: stderr and envelope `warnings` carry
+`TRISS_CODER_ISOLATION_DOWNGRADED` and `effective_isolation` becomes
+`best_effort_caller_worktree` (advisory-only, `files_changed` is `null`,
+edits may reach the caller worktree). Full details:
+`docs/reliable-delegation-release-a.md`.
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases

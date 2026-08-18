@@ -351,7 +351,13 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `isolate`, `cwd`, `timeout`) plus `allowBestEffortCallerWorktree`
   (boolean, default FALSE — the only MCP consent to an isolation
   downgrade when isolation was requested/effective but the enforced
-  sandbox is unavailable; without it such a run fails before spawn)
+  sandbox is unavailable; without it such a run fails before spawn with
+  `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` — downgrade produces
+  `TRISS_CODER_ISOLATION_DOWNGRADED` in stderr and envelope `warnings`,
+  `effective_isolation: best_effort_caller_worktree`, advisory-only
+  `files_changed: null`/`worktree: null`, edits may reach the caller
+  worktree; user-remediable slug/branch conflicts containing
+  `already exists` still fail closed even with the opt-in)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
   tool argument). Returns the JSON envelope — `engine`, `engine_version`,
   `session_id`, `session_slug`, `result_retention`, `result_id`,

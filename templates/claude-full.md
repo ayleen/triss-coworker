@@ -254,7 +254,17 @@ not the whole bill. For crush, every split field is `null` and the count is in
 With `--isolate`, the agent runs in `.triss/wt/<slug>` on its own branch —
 review the diff before merging; irreversible actions (deploy, push, DB
 migrations) stay with you, not the coder agent. Without `--isolate`, it
-edits directly in `--cwd` (default: current directory).
+edits directly in `--cwd` (default: current directory). When isolation is
+requested (explicit `--isolate` or crush's default-ON) but the mechanism
+cannot be enforced (no git repository or worktree creation failure), the run
+fails closed with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` (stable
+`err.code`) unless retried with `--allow-best-effort-caller-worktree`
+(MCP `allowBestEffortCallerWorktree: true`); with the opt-in it downgrades
+to `effective_isolation: best_effort_caller_worktree` with
+`TRISS_CODER_ISOLATION_DOWNGRADED` in stderr and envelope `warnings`
+(advisory-only: `files_changed` and `worktree` are `null`, edits may reach
+the caller worktree). Slug/branch conflicts containing `already exists`
+always fail closed even with the opt-in — clean or pick a new slug.
 
 **Engines.** `opencode` (default) enforces a deny-first bash allowlist via
 `opencode.json` (curated safe commands only) that actually works — prefer it

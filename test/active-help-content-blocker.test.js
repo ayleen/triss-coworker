@@ -49,13 +49,14 @@ test('Blocker-10a `triss coder init --help` option text must not advertise hy3/h
 
 test('coder run help makes one-shot cross-provider selection and persistence explicit', () => {
   const out = help(['coder', 'run']);
-  assert.match(out, /--provider <name>/);
-  const providerOption = out.match(/--provider <name>[\s\S]*?(?=\n {2}--model <p\/m>)/)?.[0] || '';
+  const norm = out.replace(/\s+/g, ' ');
+  assert.match(norm, /--provider <name>/);
+  const providerOption = norm.match(/--provider <name>[\s\S]*?(?=\s--model <p\/m>)/)?.[0] || norm.match(/--provider <name>[\s\S]*--model <p\/m>/)?.[0] || '';
   assert.match(providerOption, /requires\s+--model/i);
-  assert.match(out, /--model <p\/m>[\s\S]*?one run only/i);
-  assert.match(out, /--small-model <p\/m>/);
-  assert.match(out, /defaults to the one-shot main model/i);
-  assert.match(out, /does not modify[\s\S]*opencode\.json/i);
+  assert.match(norm, /--model <p\/m>[\s\S]*?one run only/i);
+  assert.match(norm, /--small-model <p\/m>/);
+  assert.match(norm, /defaults to the one-shot main model/i);
+  assert.match(norm, /does not modify[\s\S]*opencode\.json/i);
 });
 
 test('Blocker-10a README coder/init prose must not present hy3 as a current OpenCode Zen model', () => {

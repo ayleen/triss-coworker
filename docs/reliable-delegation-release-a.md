@@ -86,7 +86,15 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
 - Explicit or default isolation needs the separate opt-in
   (`--allow-best-effort-caller-worktree` CLI /
   `allowBestEffortCallerWorktree: true` MCP, default FALSE) or fails before
-  spawn with the isolation-enforcement preflight.
+  spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED` (stable `err.code`
+  plus the retry hint when the mechanism is unavailable). With the opt-in the
+  run downgrades only when the isolation mechanism itself is unavailable (no
+  git repository or worktree creation failure); slug/branch conflicts
+  containing `already exists` still fail closed. A downgraded run prints
+  `TRISS_CODER_ISOLATION_DOWNGRADED` to stderr and envelope `warnings`, sets
+  `effective_isolation: "best_effort_caller_worktree"`, and is advisory-only
+  (`files_changed: null`, `worktree: null`, edits may reach the caller
+  worktree).
 - Unavailable credential isolation ALWAYS blocks before spawn to protect the
   real provider key. Release A intentionally rejects every coder run when the
   credential proxy is unavailable.

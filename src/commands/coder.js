@@ -5354,10 +5354,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     try {
       isolation = setupIsolation(sh, slug);
     } catch (err) {
-      if (!allowBestEffortCallerWorktree) {
-        const msg = String(err.message || err);
+      const msg = String(err.message || err);
+      // Only mechanism-unavailability is downgradeable; slug/branch
+      // conflicts ("already exists") are user-remediable and must fail
+      // closed even with the opt-in so the user can pick a new slug/clean.
+      const isMechanismUnavailable = !msg.includes('already exists');
+      if (!allowBestEffortCallerWorktree || !isMechanismUnavailable) {
         if (!msg.includes(ISOLATION_ENFORCEMENT_REQUIRED_CODE)) {
-          err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE} — retry with --allow-best-effort-caller-worktree to downgrade to caller worktree)`;
+          if (isMechanismUnavailable) {
+            err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE} — retry with --allow-best-effort-caller-worktree to downgrade to caller worktree when isolation cannot be enforced)`;
+          } else {
+            err.message = `${msg} (${ISOLATION_ENFORCEMENT_REQUIRED_CODE})`;
+          }
         }
         if (!err.code) err.code = ISOLATION_ENFORCEMENT_REQUIRED_CODE;
         throw err;

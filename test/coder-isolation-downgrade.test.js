@@ -203,3 +203,44 @@ test("CLI/MCP help registers the flag and exec forwards it", async () => {
   const run = tools.find((t) => t.name === "triss_coder_run");
   assert.ok(run.inputSchema.properties.allowBestEffortCallerWorktree);
 });
+
+test("slug conflict still fails closed even with allowBestEffortCallerWorktree", withIsolatedEnv({ TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: "1" }, async () => {
+  const repoRoot = initRepo();
+  const origRoot = process.env.TRISS_PROJECT_ROOT;
+  const origHome = process.env.HOME;
+  process.env.TRISS_PROJECT_ROOT = repoRoot;
+  process.env.HOME = repoRoot;
+  let spawned = false;
+  // Make setupIsolation fail via the "already exists" slug conflict path.
+  const conflictSpawnSync = (cmd, args) => {
+    // Let rev-parse succeed so repoRoot is found, but make worktree/branch checks hit the conflict.
+    // Simplest: return success for generic git, but fail the isolation step by injecting the error
+    // via mocking spawnSync behavior: we fake that a conflicting state exists by returning the
+    // already-exists marker through the helper's sh path. Easiest: intercept mkdir/branch checks
+    // at the engine level by directly provoking the slug conflict: pre-create the conflicting branch.
+    return spawnSync(cmd, args, { encoding: "utf8" });
+  };
+  // Pre-create the conflicting branch for the downgraded slug
+  const conflictSlug = "dg-conflict";
+  spawnSync("git", ["rev-parse", "--verify", "refs/heads/coder/dg-conflict"], { cwd: repoRoot });
+  spawnSync("git", ["branch", "coder/dg-conflict"], { cwd: repoRoot, encoding: "utf8" });
+  try {
+    await runCoderRun("conflict test", { isolate: true, session: conflictSlug, allowBestEffortCallerWorktree: true }, {
+      spawnSync: conflictSpawnSync,
+      spawn: () => { spawned = true; return fakeSpawnReplaying(FIXTURE)(); },
+      stdoutWrite: () => true,
+      disableCredentialProxy: true,
+    });
+    assert.fail("slug conflict must still fail closed even with downgrade opt-in");
+  } catch (err) {
+    assert.match(String(err.message), /already exists/);
+    assert.match(String(err.message), new RegExp(ISOLATION_ENFORCEMENT_REQUIRED_CODE));
+    assert.equal(err.code, ISOLATION_ENFORCEMENT_REQUIRED_CODE);
+  }
+  assert.equal(spawned, false);
+  // cleanup branch
+  spawnSync("git", ["branch", "-D", "coder/dg-conflict"], { cwd: repoRoot, encoding: "utf8" });
+  if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+  if (origRoot === undefined) delete process.env.TRISS_PROJECT_ROOT; else process.env.TRISS_PROJECT_ROOT = origRoot;
+  rmSync(repoRoot, { recursive: true, force: true });
+}));
