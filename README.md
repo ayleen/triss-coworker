@@ -315,6 +315,10 @@ and writing**.
 | `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/opencode2.md](docs/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
 | `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/opencode2.md](docs/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
+| `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|opencode2|crush`) | Hand-patching the session store |
+| `triss coder result` | Lists / cleans retained result artifacts (enforced result-store quota) | Finding result-store files by hand |
+| `triss coder state` | Section 15 rollback backup / validate for a project | Manual backups before model transactions |
+| `triss coder model(s)` | Lists the resolved engine/provider model catalogue; persists the main/small pair (`model set`) | Hand-editing `opencode.json` / `crush.json` |
 | `triss init`       | Drops a tiny (~15 line) delegation block into `CLAUDE.md` / `AGENTS.md` | Hand-writing routing rules         |
 | `triss agent-help` | Prints the full delegation cookbook on demand (the nano block points here) | A 200-line CLAUDE.md that always loads |
 | `triss status`     | Shows current model + key + .env sources              | —                                   |
@@ -835,9 +839,9 @@ limit.
 **Model management — engine vs provider.** Two independent axes; most
 confusion is conflating them:
 
-- **Engine** = *how* the agent is launched: `opencode` (default) or
-  `crush`. Set at `triss coder init --engine …` or per run with
-  `triss coder run --engine …`.
+- **Engine** = *how* the agent is launched: `opencode` (default),
+  `opencode2` (beta), or `crush`. Set at `triss coder init --engine …`
+  or per run with `triss coder run --engine …`.
 - **Provider** = *which* API serves the model: Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go,
   Moonshot Kimi, Kimi for Coding. Register/set the persistent default with
   `triss coder init --provider …`, or select a complete one-shot pair with
@@ -848,6 +852,7 @@ Not every engine speaks every provider:
 | Engine     | Providers served                                  |
 | ---------- | ------------------------------------------------- |
 | `opencode` | Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
+| `opencode2` | Same provider routing as V1 (shares `opencode.json`; one-shot `--provider` / `--small-model` overlays rejected — see [docs/opencode2.md](docs/opencode2.md)) |
 | `crush`    | Z.AI GLM (coding-plan only)                       |
 
 `triss coder init` drives setup in that order — **engine, then provider,
@@ -1084,6 +1089,24 @@ for recipes (per-project Jira, CI, switching providers).
 
 ## Cost in practice
 
+### Two weeks of opencode engine usage (Aug 4–18, 2026)
+
+The headline numbers first — what **`triss coder`** actually burned across
+the last **14 days**, aggregated from the local OpenCode database:
+
+| Model family | Requests | All tokens | Excluding cache reads | Recorded cost |
+|---|---:|---:|---:|---:|
+| DeepSeek (`opencode` + `opencode-go`) | 43,357 | 4.23B | 217.7M | $24.06 |
+| GLM (`zai-coding-plan` + `opencode-go`) | 4,716 | 278.4M | 21.0M | $5.90 |
+| **Total** | **48,073** | **4.51B** | **238.6M** | **$29.96** |
+
+~95% of the 4.51B tokens are **cache reads** (4.27B) — repeated context
+served at a fraction of uncached input cost. The non-cached working set
+across two weeks of agentic coding was ~239M tokens. Recorded cost is what
+OpenCode stores (quota usage on subscriptions, not necessarily cash paid).
+
+### An earlier example week (the Triss worker)
+
 One full week of real usage on this codebase, captured from the DeepSeek
 dashboard (May 6–13, 2026, all at list price — DeepSeek's off-peak window
 would add another ~75% discount we did not use):
@@ -1158,12 +1181,20 @@ wizard · bash + zsh completions · `--stdin` · `triss review [PR]` ·
 `triss chat` · MCP server · Cost tracking · `triss commit-msg` · GitHub /
 Confluence / GitLab integrations · Streaming output for `ask`/`chat`/
 `review` · Codex `AGENTS.md` rules · Path-safety sandbox in MCP mode ·
-test suite.
+test suite · Reliable delegation for reviews (Release A/B/C: bounded
+corpus limits, exact merge-base diff identity, disposable PR bare repos,
+sequential whole-file sharding) · `triss exec` deterministic routing ·
+`triss coder` (opencode V1 default, opencode2 beta, crush) with worktree
+isolation, v2 session/result stores, and Section 15 rollback ·
+`--format evidence` · Kimi for Coding subscription ·
+provider recipe blocks for Kimi, Ollama, and OpenRouter.
 
 **Planned**:
 
-- [ ] More provider recipe blocks in the docs (Kimi, Ollama,
-      OpenRouter — examples already present, but with terse setup steps)
+- [ ] Crush upstream `permissions.run` enforcement (currently inert —
+      the working allowlist is the CLI `--restrict` flags).
+- [ ] opencode2 beta graduation: real credential isolation and
+      fixture-verified subagent support (see [docs/opencode2.md](docs/opencode2.md)).
 
 ## Contributing and security
 

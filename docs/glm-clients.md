@@ -7,7 +7,8 @@ selected, and the full catalogue of usage variants (CLI vs MCP, sessions,
 isolation, roles, restrict, model override, health-check, …).
 
 > **Scope.** "GLM client" here means the `triss coder` subsystem, which
-> spawns a local coding-agent CLI (opencode or crush) that in turn calls the
+> spawns a local coding-agent CLI (opencode, the opencode2 beta, or
+> crush) that in turn calls the
 > Z.AI GLM endpoint. This is **separate** from the cheap DeepSeek worker
 > behind `triss ask` / `chat` / `review` / `fetch` — that path never touches
 > GLM. See [What is NOT GLM](#what-is-not-glm) at the end.
@@ -150,7 +151,7 @@ GLM models verified: **`glm-5.2`** (recommended large/main), **`glm-5-turbo`**
 ### Discovery and states
 
 ```bash
-triss coder models [--engine <opencode|crush>] [--provider <name>] [--json]
+triss coder models [--engine <opencode|opencode2|crush>] [--provider <name>] [--json]
 ```
 
 Reports the current main + small models, the winning source for each role
@@ -366,9 +367,10 @@ consumed by reasoning before a verdict is emitted, especially for large diffs.
 When reviewing a focused remediation, narrow `--base` to that commit as well.
 
 ### 5.2 Engine choice
-`--engine opencode|crush` (per call) or `TRISS_CODER_ENGINE=<name>` (default
-for the shell/CI). `--engine` beats the env beats the built-in default
-(`opencode`). An unknown name fails fast with the valid list.
+`--engine opencode|opencode2|crush` (per call) or
+`TRISS_CODER_ENGINE=<name>` (default for the shell/CI). `--engine` beats
+the env beats the built-in default (`opencode`). An unknown name fails
+fast with the valid list.
 
 ### 5.3 Sessions & continuation
 - `--session <slug>` (pattern `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) continues
@@ -460,7 +462,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | Var | Required | Purpose |
 |---|---|---|
 | `ZHIPU_API_KEY` | **yes** | Z.AI key for GLM (both engines). Bridged to `ZAI_API_KEY` for crush. |
-| `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default) or `crush`. |
+| `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](./opencode2.md)), or `crush`. |
 | `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
 | `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.18.7`). |
