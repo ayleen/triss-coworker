@@ -226,7 +226,7 @@ closed.
   "session_id": "ses_0d7b5c721ffeouI80ItCOxAJ3g",
   "exit_reason": "end_turn | error | timeout | killed",
   "final_text": "...",
-  "files_changed": ["src/a.js"],
+  "files_changed": ["src/a.js"] /* or null for non-isolated runs */,
   "diff_stat": " 2 files changed, 40 insertions(+)",
   "worktree": "/path/.triss/wt/<slug> | null",
   "usage": {

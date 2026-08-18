@@ -743,24 +743,26 @@ test('CODER-EVENT-14: activity first/last timestamps are host-observed and never
 // ─── Package 5E envelope fields (Atomic 21) ──────────────────────────────────
 
 test('CODER-EVENT-15: every safe envelope carries session_slug, result_retention, result_id, execution_capabilities', () => {
-  const child = new EventEmitter();
-  child.pid = 777015;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  setImmediate(() => {
-    child.stdout.end(
-      JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
-      JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n',
-    );
-    setImmediate(() => child.emit('close', 0, null));
-  });
   return withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
     const capture = stdoutCapture();
     await runCoderRun(
       'do something',
       { session: 'explicit-slug-1' },
       {
-        spawn: () => child,
+        spawn: () => {
+          const child = new EventEmitter();
+          child.pid = 777015;
+          child.stdout = new PassThrough();
+          child.stderr = new PassThrough();
+          setImmediate(() => {
+            child.stdout.end(
+              JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
+              JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n',
+            );
+            setImmediate(() => child.emit('close', 0, null));
+          });
+          return child;
+        },
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
         killProcess: (_pid, sig) => {

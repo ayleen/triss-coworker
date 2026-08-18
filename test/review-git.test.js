@@ -175,7 +175,7 @@ test('REVIEW-GIT-INVENTORY-10: the rename candidate limit constant is 2,000', ()
 // ─── selected local content acquisition (Atomic 33 / Package 16) ────────────
 
 const SEL_DIFF_KEY =
-  '--no-pager -c core.quotepath=false -c core.attributesFile=/dev/null -c core.quotepath=false diff --no-ext-diff --text --no-color --unified=3 ' +
+  '--no-pager -c core.quotepath=false -c core.attributesFile=/dev/null -c core.quotepath=false diff --no-ext-diff --no-color --unified=3 ' +
   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --';
 
 test('REVIEW-GIT-SELECTED-01: literal selectors acquire only the selected content (huge full change, small selected file)', () => {

@@ -49,7 +49,7 @@ export function buildExecutionCapabilities({ engine = 'opencode', proxyAvailable
 
 // ─── v2 lifecycle fields (Section 6.1/6.2 derivations) ───────────────────────
 
-const V2_ENUMS = Object.freeze({
+export const V2_ENUMS = Object.freeze({
   process_status: ['not_started', 'completed', 'error', 'timeout', 'killed'],
   termination_cause: [
     'none', 'deadline', 'caller_abort', 'host_signal', 'provider_rate_limit',

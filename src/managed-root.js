@@ -38,6 +38,7 @@ const TRISS_DIRNAME = '.triss';
 
 function isSameUid(stats) {
   // Same-UID check: the entry must belong to the current effective user.
+  if (typeof process.getuid !== 'function') return true;
   return typeof stats.uid === 'number' && stats.uid === process.getuid();
 }
 

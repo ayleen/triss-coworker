@@ -16,7 +16,6 @@ import { shouldStream } from './chat.js';
 import {
   currentBranch,
   defaultBranch,
-  gitDiff,
   gitChangedFiles,
   gh,
   hasCommand,
@@ -118,23 +117,22 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   let baseRef = opts.base;
   let headRef;
   let urlNote = '';
-
-  const scopedSelectors = Array.isArray(opts.files) ? opts.files : [];
   let changedFilesFromInventory = null;
 
+  // Release B: literal --files selectors validated up front; exact merge-base
+  // comparison under the sealed Git projection.
+  const scopedSelectors = Array.isArray(opts.files) ? opts.files : [];
   if (stdinMode) {
     title = 'stdin';
     diff = stdinDiff;
   } else if (scopedSelectors.length > 0) {
-    // Inventory-first scoped acquisition (P0 fix): with literal --files
-    // selectors the full diff is NEVER buffered — only the selected content
-    // is acquired, against exact comparison OIDs, through the sealed Git
-    // projection / disposable PR repository. The planner later sees ONLY
-    // these sections, so an unrelated huge file can no longer fail a small
-    // scoped review.
     const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
       deps.scopedDeps || {},
-      { pr: prNumber, base: opts.base, selectors: scopedSelectors },
+      {
+        pr: prNumber,
+        base: baseRef,
+        selectors: scopedSelectors,
+      },
     );
     if (!scoped.ok) {
       if (scoped.code === 'TRISS_REVIEW_SCOPE_EMPTY') {
@@ -156,8 +154,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       ));
     }
     if (!diff.trim()) {
-      // Zero-match scoped selections fail closed; an empty acquired diff at
-      // this point means the same thing for the PR path.
       process.stderr.write(pc.dim('✗ none of the requested files appear in the acquired diff\n'));
       process.exitCode = REVIEW_EXIT_CODES.invalidInput;
       return undefined;
@@ -177,13 +173,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     headRef = pr.headRefName;
     urlNote = pr.url;
     if (deps.prDiff) {
-      // Dedicated PR seam (tests/embedders): deps.gitDiff is a LOCAL-diff
-      // seam and must never gate the PR path.
       diff = deps.prDiff(prNumber);
     } else {
-      // P1 fix: the default PR path also acquires through the exact
-      // inventory-first machinery (exact OIDs, disposable repo, fork-aware
-      // fetch, bounded output) instead of legacy unbounded `gh pr diff`.
       const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
         deps.scopedDeps || {},
         { pr: prNumber, base: baseRef, selectors: [] },
@@ -200,14 +191,12 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     if (deps.gitDiff) {
       diff = deps.gitDiff(baseRef, 'HEAD');
     } else {
-      // P1 fix: exact merge-base comparison under the sealed Git projection
-      // with bounded output — never a 50 MiB buffered legacy diff.
       const scoped = await (deps.acquireScopedDiff || acquireScopedReviewDiff)(
         deps.scopedDeps || {},
         { base: baseRef, selectors: [] },
       );
       if (!scoped.ok) {
-        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'acquisition failed'}`);
+        throw new Error(`${scoped.code || 'TRISS_REVIEW_LIMIT'}: ${scoped.message || 'local diff acquisition failed'}`);
       }
       diff = scoped.diff;
     }
@@ -215,8 +204,12 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
 
   if (!diff.trim()) {
     const empty = emptyReviewResponse(responseFormat);
-    process.stdout.write(responseFormat === 'evidence' ? `${empty}\n` : pc.dim(`${empty}\n`));
-    return responseFormat === 'evidence' ? empty : undefined;
+    if (responseFormat === 'text') {
+      process.stdout.write(pc.dim(`${empty}\n`));
+      return undefined;
+    }
+    process.stdout.write(`${empty}\n`);
+    return empty;
   }
 
   const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
@@ -228,10 +221,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   });
   const { provider, model } = request;
 
-  // Release B trust boundary: the linked issue is ONLY loaded from the
-  // explicit --issue option (or, as a legacy convenience, from the LOCAL
-  // branch name when no PR is involved). PR prose (title/body) can never
-  // trigger tracker access — parseTicketKey auto-extraction was removed.
   const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
   let ticketCorpus = '';
   if (!stdinMode && opts.issue) {
@@ -265,8 +254,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         `</change>`,
       ].filter(Boolean).join('\n');
 
-  // Atomic 45 / Package 24: CLI shard mode — sequential whole-file shards,
-  // separated execution/scope/coverage/context fields, no global verdict.
   if (opts.payloadMode === 'shard') {
     if (shouldStream(opts)) {
       throw new Error('--payload-mode shard cannot be combined with --stream');
@@ -282,10 +269,15 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       process.exitCode = 2;
       return undefined;
     }
+    const fullMetadata = [
+      wrapReviewSection(boundaryId, 'change', changeCorpus),
+      ...(ticketCorpus ? [wrapReviewSection(boundaryId, 'ticket', ticketCorpus)] : []),
+    ].join('\n\n');
+
     const planned = planSequentialShards({
       sections: parsed.sections,
       question: opts.question || DEFAULT_QUESTION,
-      metadata: changeCorpus,
+      metadata: fullMetadata,
       limits,
     });
     if (planned.error) {
@@ -298,8 +290,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       {
         callModel: async ({ shard, question, metadata }) => {
           const shardCorpus = [
-            wrapReviewSection(boundaryId, 'change', metadata),
-            wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((s) => s.raw).join('\n')}\n</diff>`),
+            metadata,
+            wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((s) => s.raw).join('')}\n</diff>`),
           ].join('\n\n');
           const resp = await sendChat({
             ...request,
@@ -318,15 +310,13 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       {
         shards: planned.plan.shards,
         question: opts.question || DEFAULT_QUESTION,
-        metadata: changeCorpus,
+        metadata: fullMetadata,
         signal: undefined,
       },
     );
 
     if (!result.ok) {
       process.stderr.write(pc.dim(`[triss/review] shard execution failed: ${result.message}\n`));
-      // Structured partial output: only the per-shard verdicts that COMPLETED
-      // before the failure are surfaced (never a raw diff, never a partial
       // shard body).
       if (Array.isArray(result.shards)) {
         for (const shard of result.shards) {

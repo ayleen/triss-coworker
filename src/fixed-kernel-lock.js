@@ -125,7 +125,7 @@ async function pinLockFileFd(fd, lockPath) {
   if (!stats.isFile()) {
     throw new Error(`fixed-kernel-lock: not a regular file: ${lockPath}`);
   }
-  if (typeof stats.uid === 'number' && stats.uid !== process.getuid()) {
+  if (typeof stats.uid === 'number' && typeof process.getuid === 'function' && stats.uid !== process.getuid()) {
     throw new Error(`fixed-kernel-lock: foreign ownership: ${lockPath}`);
   }
   if ((stats.mode & 0o022) !== 0) {

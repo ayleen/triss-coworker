@@ -4167,7 +4167,7 @@ function spawnEngine({
     let graceTimer = null;
     let pollTimer = null;
     let residualCleanupPromise = null;
-    const state = createEventFolder();
+    const state = createState();
     // First termination cause wins and is recorded BEFORE sending any signal
     // (Section 6.1), so a child that exits zero still reports `killed` with
     // the right cause. `none` means no termination was requested/observed.
@@ -4379,7 +4379,7 @@ function spawnEngine({
           scheduleSigkill();
         }
         const hadRateLimit = state.rateLimit;
-        foldEventLine(state, line, {
+        foldLine(state, line, {
           arrivedAt: Date.now(),
           onToolUse: (evt) => {
             const tool = evt.part?.tool || 'tool';
@@ -4705,6 +4705,8 @@ async function runCrushFlow({
 }) {
   let crushSpawnStartMs;
   const modelOverride = opts.model || null;
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
+  const isolate = _isolate;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
   // slug straight through (NO .triss/sessions.json map, unlike opencode).
   const session = slug || opts.session || null;
@@ -4927,6 +4929,7 @@ async function runCrushFlow({
       ? parsed.tool_calls.filter((c) => c && (c.count ?? 1) > 0).length
       : 0,
     isolated: !!isolation,
+    callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(session),
   });
   const finishedAtMs = Date.now();
@@ -5147,9 +5150,14 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
   try {
     const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
       await import('../coder-session-transitions.js');
+    const { loadOrCreateProjectIdentity, projectRootFingerprint } =
+      await import('../coder-state.js');
     const { mkdir } = await import('node:fs/promises');
-    const inventoryDir = sessionInventoryPath(projectRoot(), engine);
+    const trissRoot = join(projectRoot(), '.triss');
+    const inventoryDir = sessionInventoryPath(trissRoot, engine);
     await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
+    const identity = await loadOrCreateProjectIdentity(trissRoot);
+    const fingerprint = projectRootFingerprint(identity.project_id);
     const runId = `run_${randomBytes(16).toString('hex')}`;
     await reserveCoderSession({
       inventoryDir,
@@ -5162,7 +5170,7 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
       // Explicit nulls: undefined owner-tuple fields fail canonical validation.
       processStartId: null,
       bootId: null,
-      projectRootFingerprint: null,
+      projectRootFingerprint: fingerprint,
     });
     await markCoderSessionRunning({
       inventoryDir,
@@ -5235,6 +5243,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
+  const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
@@ -5448,6 +5457,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       credentialProxy = await startCoderCredentialProxy({
         provider: cred.provider || cred.env,
         model: modelUsed,
+        smallModel: oneShotSmallModel,
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,
         authStyle: proxyTarget.authStyle,
@@ -5465,7 +5475,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   }
-  if (!credentialProxy) {
+  if (!credentialProxy && !deps.disableCredentialProxy) {
     if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw new Error(
       `credential isolation unavailable: no canonical provider endpoint is known for ` +
@@ -5788,12 +5798,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
     }
 
-    let filesChanged2 = [];
+    let filesChanged2 = null;
     let diffStat2 = null;
     let worktreeOut2 = null;
     if (isolation) {
       const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
       if (changes.warnings.length) result2.warnings.push(...changes.warnings);
+      filesChanged2 = changes.filesChanged;
       if (changes.filesChanged.length === 0) {
         try {
           gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
@@ -5923,7 +5934,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // The OPENCODE_CONFIG_CONTENT overlay (one-shot mode) pins the model; for
   // the triss-worker provider it additionally pins baseURL to the proxy.
   let proxiedConfigContent = oneShotConfigContent;
-  if (oneShotProvider && cred.provider === 'worker') {
+  if (oneShotProvider && cred.provider === 'worker' && credentialProxy) {
     const overlay = oneShotConfigContent ? JSON.parse(oneShotConfigContent) : {};
     proxiedConfigContent = JSON.stringify({
       ...overlay,
@@ -5942,9 +5953,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
   const env = buildEngineEnv(
     cred.env,
-    credentialProxy.token,
+    credentialProxy ? credentialProxy.token : undefined,
     proxiedConfigContent,
-    credentialProxy.scopedBaseUrl,
+    credentialProxy ? credentialProxy.scopedBaseUrl : undefined,
   );
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
 
@@ -6147,6 +6158,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     finalText: result.finalText,
     toolActivityCount: result.activity ? result.activity.tool_uses : 0,
     isolated: !!isolation,
+    callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(opts.session || sessionRealIdV1),
   });
   const finishedAtMs = Date.now();
@@ -6408,6 +6420,17 @@ export async function runCoderStateReset(opts = {}) {
       /* non-fatal */
     }
   }
+
+  // Quarantine the old project-identity-v1.json and create a fresh identity
+  const identityFile = join(trissRoot, 'project-identity-v1.json');
+  try {
+    await mkdir(join(quarantineRoot, `identity-${stamp}`), { mode: 0o700, recursive: true });
+    await rename(identityFile, join(quarantineRoot, `identity-${stamp}`, 'project-identity-v1.json'));
+    await loadOrCreateProjectIdentity(trissRoot);
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+
   process.stderr.write(pc.dim(
     `  · reset project ${identity.project_id}: quarantined ${quarantined} state record(s)\n`,
   ));
@@ -6435,7 +6458,7 @@ export async function runCoderResultList(deps = {}) {
  * `triss coder result clean <run-id>`: removes only a validated retained
  * result artifact, never a persistent session selected by a slug.
  */
-export async function runCoderResultClean(runId) {
+export async function runCoderResultClean(runId, _opts = {}, deps = {}) {
   if (!runId || !/^run-[0-9a-f]{32}$/.test(runId)) {
     throw new Error('result clean requires a valid <run-id> (run-<32 lowercase hex>)');
   }
@@ -6470,5 +6493,6 @@ export async function runCoderResultClean(runId) {
     await advanceCoderResultDeletionPhase({ runDir, runId, phase });
   }
   await rm(runDir, { recursive: true, force: true });
-  process.stderr.write(pc.dim(`  · removed retained result ${runId}\n`));
+  const writeStderr = deps?.stderrWrite || ((s) => process.stderr.write(s));
+  writeStderr(pc.dim(`  · removed retained result ${runId}\n`));
 }

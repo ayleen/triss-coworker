@@ -21,6 +21,15 @@ function printResult(obj, json) {
   }
 }
 
+function resolveBackupDirectory(projectRoot, backupArg) {
+  if (!backupArg) return null;
+  const raw = String(backupArg);
+  if (!raw.includes('/') && !raw.includes('\\')) {
+    return join(projectRoot, '.triss', 'backups', raw);
+  }
+  return resolve(raw);
+}
+
 /**
  * `triss coder state backup --project <path>`.
  */
@@ -29,7 +38,7 @@ export async function runCoderStateBackup({ project, backup, json }) {
   const trissRoot = join(projectRoot, '.triss');
   const identity = await loadOrCreateProjectIdentity(trissRoot);
   const backupDir = backup
-    ? resolve(String(backup))
+    ? resolveBackupDirectory(projectRoot, backup)
     : join(trissRoot, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
   const { manifest, completion } = await backupCoderV2State({
     projectRoot,
@@ -53,11 +62,7 @@ export async function runCoderStateBackup({ project, backup, json }) {
  */
 export async function runCoderStateValidate({ project, backup, json }) {
   const projectRoot = resolve(String(project));
-  const backupDir = resolve(String(backup));
-  // The backup dir may be given as a basename under .triss/backups.
-  const resolvedBackupDir = backupDir.startsWith(projectRoot)
-    ? backupDir
-    : join(projectRoot, '.triss', 'backups', backupDir);
+  const resolvedBackupDir = resolveBackupDirectory(projectRoot, backup);
   const validation = await validateCoderV2Backup(resolvedBackupDir);
   printResult(
     {

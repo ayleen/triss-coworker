@@ -1103,16 +1103,7 @@ export async function coderResultCleanHandler({ run_id }) {
   }
   const { runCoderResultClean } = await import('../commands/coder.js');
   const stderr = [];
-  const originalWrite = process.stderr.write;
-  process.stderr.write = (chunk) => {
-    stderr.push(String(chunk));
-    return true;
-  };
-  try {
-    await runCoderResultClean(run_id);
-  } finally {
-    process.stderr.write = originalWrite;
-  }
+  await runCoderResultClean(run_id, {}, { stderrWrite: (chunk) => stderr.push(String(chunk)) });
   return stderr.join('').trim();
 }
 

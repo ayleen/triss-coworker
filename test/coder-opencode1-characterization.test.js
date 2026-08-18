@@ -141,6 +141,7 @@ test(
       const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
       const capture = stdoutCapture();
       await runCoderRun('do the thing', {}, {
+        disableCredentialProxy: true,
         spawn: rec.spawnFn,
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -190,6 +191,7 @@ test(
         'task',
         { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
         {
+          disableCredentialProxy: true,
           spawn: rec.spawnFn,
           // one-shot provider runs demand the exact V1 pin via
           // detectOpencodeVersion; the fake binary reports it. The effective
@@ -333,6 +335,7 @@ test(
       const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
       const capture = stdoutCapture();
       await runCoderRun('x', {}, {
+        disableCredentialProxy: true,
         spawn: rec.spawnFn,
         // version probe fails -> engineVersion falls back to the pin string
         spawnSync: () => ({ status: 1, stdout: '', error: null }),

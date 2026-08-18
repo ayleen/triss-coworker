@@ -302,7 +302,7 @@ export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors,
   // diff/textconv, no config injection; sealed empty-attribute projection.
   const out = run([
     ...SEALED_ATTRIBUTES,
-    'diff', '--no-ext-diff', '--text', '--no-color', '--unified=3',
+    'diff', '--no-ext-diff', '--no-color', '--unified=3',
     baseOid, headOid, '--', ...effectiveSelectors,
   ]);
   if (out.status !== 0) {

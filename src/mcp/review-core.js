@@ -6,7 +6,6 @@
 import {
   currentBranch,
   defaultBranch,
-  gitDiff,
   gitChangedFiles,
   gh,
   hasCommand,
@@ -36,9 +35,11 @@ export async function runReviewCore({
   callModel,
   reviewBoundaryId,
   gitDiffFn = null,
+  prDiffFn = null,
   files = null,
   issue = null,
   acquireScopedDiff = acquireScopedReviewDiff,
+  acquireFullDiff = defaultAcquireFullDiff,
 }) {
   const responseFormat = validateResponseFormat(responseFormatInput);
   const validatedMaxTokens = positiveIntegerOption(maxTokens, 'max_tokens', 8192);
@@ -89,8 +90,8 @@ export async function runReviewCore({
     baseRef = baseRef || meta.baseRefName;
     headRef = meta.headRefName;
     urlNote = meta.url;
-    diff = gitDiffFn
-      ? gitDiffFn(baseRef, 'HEAD')
+    diff = prDiffFn
+      ? prDiffFn(pr)
       : await acquireFullDiff({ pr, base: baseRef });
   } else {
     headRef = currentBranch();
@@ -328,7 +329,7 @@ export async function runReviewCoreShard({ diff, question, metadata = '', callMo
 // P1 parity: without an injected test seam, the full diff also comes from
 // the exact inventory-first machinery (merge-base OIDs, sealed projection,
 // bounded output, fork-aware PR fetch) — never an unbounded legacy diff.
-async function acquireFullDiff({ pr, base }) {
+async function defaultAcquireFullDiff({ pr, base }) {
   const scoped = await acquireScopedReviewDiff({}, { pr, base, selectors: [] });
   if (!scoped.ok) {
     const err = new Error(scoped.message || scoped.code || 'acquisition failed');
@@ -349,6 +350,7 @@ export async function acquireReviewDiffForShard({
   base,
   files = null,
   gitDiffFn = null,
+  prDiffFn = null,
   acquireScopedDiff = acquireScopedReviewDiff,
 }) {
   const selectors = Array.isArray(files) ? files : [];
@@ -358,9 +360,12 @@ export async function acquireReviewDiffForShard({
     err.code = 'TRISS_REVIEW_INVALID_INPUT';
     throw err;
   }
-  // An injected gitDiffFn is a test/embedder seam for the full-diff path.
-  if (gitDiffFn && selectors.length === 0) {
+  // An injected gitDiffFn or prDiffFn is a test/embedder seam for the full-diff path.
+  if (!pr && gitDiffFn && selectors.length === 0) {
     return { diff: gitDiffFn(base || 'HEAD', 'HEAD') };
+  }
+  if (pr && prDiffFn && selectors.length === 0) {
+    return { diff: prDiffFn(pr) };
   }
   if (selectors.length > 0) {
     const scoped = await acquireScopedDiff({}, { pr, base, selectors });

@@ -67,7 +67,7 @@ export function validateResultState(record) {
   if (record.schema_version !== 1) return null;
   if (record.kind !== 'result') return null;
   if (typeof record.run_id !== 'string' || record.run_id.length === 0 || record.run_id.length > 128) return null;
-  if (!['opencode', 'crush'].includes(record.engine)) return null;
+  if (!['opencode', 'crush', 'opencode2'].includes(record.engine)) return null;
   if (typeof record.session_slug !== 'string' || record.session_slug.length === 0) return null;
   if (typeof record.project_root_fingerprint !== 'string' || !FINGERPRINT_RE.test(record.project_root_fingerprint)) {
     return null;

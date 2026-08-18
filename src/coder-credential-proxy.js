@@ -122,6 +122,17 @@ export async function startCoderCredentialProxy(opts = {}) {
     throw new TypeError('startCoderCredentialProxy: credential is required');
   }
 
+  const allowedModels = new Set();
+  const rawModelList = Array.isArray(opts.models)
+    ? opts.models
+    : [model, opts.smallModel].filter((m) => typeof m === 'string' && m.length > 0);
+  for (const m of rawModelList) {
+    allowedModels.add(m);
+    if (m.includes('/')) {
+      allowedModels.add(m.slice(m.indexOf('/') + 1));
+    }
+  }
+
   const token = typeof opts.token === 'string' && opts.token.length > 0
     ? opts.token
     : generateToken();
@@ -262,8 +273,8 @@ export async function startCoderCredentialProxy(opts = {}) {
     req.on('end', async () => {
       if (bodyOverflow) return; // 413 already sent from the data handler
       // Model pinning: every forwarded body must be JSON naming the pinned
-      // model. A body naming any other model is a routing escape attempt —
-      // refused before any upstream call.
+      // model (or its bare ID). A body naming any other model is a routing
+      // escape attempt — refused before any upstream call.
       let parsedBody;
       try {
         parsedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -272,7 +283,7 @@ export async function startCoderCredentialProxy(opts = {}) {
       }
       if (
         !parsedBody || typeof parsedBody !== 'object' ||
-        typeof parsedBody.model !== 'string' || parsedBody.model !== model
+        typeof parsedBody.model !== 'string' || !allowedModels.has(parsedBody.model)
       ) {
         res.writeHead(403, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'model is not pinned for this proxy run' } }));
@@ -373,7 +384,10 @@ export async function startCoderCredentialProxy(opts = {}) {
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(opts.port ?? 0, opts.host || LOOPBACK_HOST, resolve);
+    server.listen(opts.port ?? 0, opts.host || LOOPBACK_HOST, () => {
+      server.unref();
+      resolve();
+    });
   });
   // CONNECT never reaches the `request` handler in Node — it is emitted as a
   // separate `connect` event. Reject it explicitly so no tunnel can ever be

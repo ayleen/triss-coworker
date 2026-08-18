@@ -63,25 +63,31 @@ export function decodeGitQuotedPath(raw) {
 }
 
 function splitSections(text) {
-  if (typeof text !== 'string') return [];
-  // Preserve CRLF input: sections keep their original bytes; splitting only
-  // looks at the `diff --git ` header line start.
-  const lines = text.split(/(?:\r\n|\n)/);
+  if (typeof text !== 'string' || text.length === 0) return [];
+  // Preserve original line endings and byte exactness using lookbehind split.
+  const lines = text.split(/(?<=\r?\n)/);
   const sections = [];
   let current = null;
-  const lineEnding = text.includes('\r\n') ? '\r\n' : '\n';
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
-      if (current) sections.push(current);
-      current = { header: line, body: [], lineEnding, rawBytes: 0 };
+      if (current) {
+        current.raw = current.lines.join('');
+        current.rawBytes = Buffer.byteLength(current.raw, 'utf8');
+        current.header = current.lines[0].replace(/\r?\n$/, '');
+        current.body = current.lines.slice(1).map((l) => l.replace(/\r?\n$/, ''));
+        sections.push(current);
+      }
+      current = { lines: [line] };
     } else if (current) {
-      current.body.push(line);
+      current.lines.push(line);
     }
   }
-  if (current) sections.push(current);
-  for (const s of sections) {
-    s.raw = s.header + s.lineEnding + s.body.join(s.lineEnding) + s.lineEnding;
-    s.rawBytes = Buffer.byteLength(s.raw, 'utf8');
+  if (current) {
+    current.raw = current.lines.join('');
+    current.rawBytes = Buffer.byteLength(current.raw, 'utf8');
+    current.header = current.lines[0].replace(/\r?\n$/, '');
+    current.body = current.lines.slice(1).map((l) => l.replace(/\r?\n$/, ''));
+    sections.push(current);
   }
   return sections;
 }
@@ -175,9 +181,9 @@ export function parseUnifiedDiff(text) {
       newPath = decodeGitQuotedPath(tokens[1].replace(/^("?)b\//, '$1'));
     }
     const body = sec.body;
-    const isBinary =
-      body.some((l) => /^GIT binary patch$/.test(l) || /^Binary files .* differ$/.test(l)) ||
-      body.some((l) => l.startsWith('index ') && /\.\./.test(l) && !l.includes('100'));
+    const isBinary = body.some(
+      (l) => /^GIT binary patch$/.test(l) || /^Binary files .* differ$/.test(l),
+    );
     const oldIsNull = body.some((l) => l.startsWith('--- /dev/null'));
     const newIsNull = body.some((l) => l.startsWith('+++ /dev/null'));
     const rename = body.some((l) => l.startsWith('rename from ') || l.startsWith('rename to '));
@@ -335,9 +341,6 @@ export function planSequentialShards({ sections, question, metadata = '', limits
   // file across shards (a single oversized file fails with its path).
   const byPath = new Map();
   for (const sec of sections) {
-    if (sec.bytes > limits.shardMaxBytes) {
-      return { error: 'shard_max_exceeded', path: sec.new_path || sec.old_path || '(unknown)' };
-    }
     const path = sec.new_path || sec.old_path || '(unknown)';
     if (!byPath.has(path)) byPath.set(path, []);
     byPath.get(path).push(sec);
@@ -352,6 +355,9 @@ export function planSequentialShards({ sections, question, metadata = '', limits
   // input diff.
   for (const path of byPath.keys()) {
     const fileBytes = byPath.get(path).reduce((acc, s) => acc + s.bytes, 0);
+    if (fileBytes > limits.shardMaxBytes) {
+      return { error: 'shard_max_exceeded', path };
+    }
     if (current.length > 0 && currentBytes + fileBytes > limits.shardMaxBytes) {
       shards.push({ sections: current, bytes: currentBytes });
       current = [];
