@@ -4,23 +4,21 @@
  * same-UID engine child, unless the operator explicitly acknowledged the
  * best-effort scope.
  *
- * The gate reads the PROJECT's `.triss.env` (present in this repository's
- * working tree), so the refuse path is exercised against a real store; the
- * acknowledged path uses deps.allowBestEffortIsolation like an embedder.
+ * All tests are hermetic and run against isolated temporary environments.
+ * Verifies both the fail-closed rejection on non-empty stores (including
+ * non-standard variable names) and the pass-through for empty/comment stores
+ * or explicit operator acknowledgments.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { runCoderRun } from '../src/commands/coder.js';
-
-const REPO_ROOT = join(fileURLToPath(import.meta.url), '..', '..');
-const PROJECT_STORE = join(REPO_ROOT, '.triss.env');
 
 function fakeSpawnReplaying(streamText, { code = 0 } = {}) {
   return () => {
@@ -37,15 +35,40 @@ function fakeSpawnReplaying(streamText, { code = 0 } = {}) {
   };
 }
 
-test('ISOLATION-GATE-01: a readable raw credential store refuses the run before spawn', async () => {
-  if (!existsSync(PROJECT_STORE)) {
-    // The gate's refuse path needs a real readable store; this repository's
-    // working tree carries one. Skip defensively in environments without it.
-    test.skip('no project .triss.env in the working tree');
-    return;
+async function withIsolatedStore(envContent, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-iso-gate-'));
+  if (envContent !== null && envContent !== undefined) {
+    writeFileSync(join(dir, '.triss.env'), envContent, 'utf8');
   }
-  const saved = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  const snap = {
+    HOME: process.env.HOME,
+    TRISS_PROJECT_ROOT: process.env.TRISS_PROJECT_ROOT,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    ZHIPU_API_KEY: process.env.ZHIPU_API_KEY,
+  };
+  process.env.HOME = dir;
+  process.env.TRISS_PROJECT_ROOT = dir;
+  process.env.XDG_CONFIG_HOME = join(dir, '.config');
   delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
+  try {
+    await fn({ dir });
+  } finally {
+    process.env.HOME = snap.HOME;
+    if (snap.TRISS_PROJECT_ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = snap.TRISS_PROJECT_ROOT;
+    if (snap.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = snap.XDG_CONFIG_HOME;
+    if (snap.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    if (snap.ZHIPU_API_KEY === undefined) delete process.env.ZHIPU_API_KEY;
+    else process.env.ZHIPU_API_KEY = snap.ZHIPU_API_KEY;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('ISOLATION-GATE-01: a readable raw credential store refuses the run before spawn', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
@@ -60,15 +83,11 @@ test('ISOLATION-GATE-01: a readable raw credential store refuses the run before 
   } catch (err) {
     assert.match(err.message, /raw credential store/);
     assert.match(err.message, /TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION/);
-  } finally {
-    if (saved !== undefined) process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved;
   }
   assert.equal(spawned, false, 'the engine must never spawn');
-});
+}));
 
-test('ISOLATION-GATE-02: the operator ack (deps.allowBestEffortIsolation) allows the run', async () => {
-  const saved = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+test('ISOLATION-GATE-02: the operator ack (deps.allowBestEffortIsolation) allows the run', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
@@ -81,21 +100,12 @@ test('ISOLATION-GATE-02: the operator ack (deps.allowBestEffortIsolation) allows
       stdoutWrite: () => true,
     });
   } catch (err) {
-    // A post-gate failure (fake environment quirks) is fine; the gate itself
-    // must NOT be what threw.
     assert.doesNotMatch(err.message, /raw credential store/);
-  } finally {
-    if (saved !== undefined) process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved;
   }
   assert.equal(spawned, true, 'the engine spawns under the acknowledged best-effort scope');
-});
+}));
 
-test('ISOLATION-GATE-03: the env ack also allows the run', async () => {
-  if (!existsSync(PROJECT_STORE)) {
-    test.skip('no project .triss.env in the working tree');
-    return;
-  }
-  const saved = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+test('ISOLATION-GATE-03: the env ack (TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1) allows the run', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
   process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   let spawned = false;
   try {
@@ -109,14 +119,42 @@ test('ISOLATION-GATE-03: the env ack also allows the run', async () => {
     });
   } catch (err) {
     assert.doesNotMatch(err.message, /raw credential store/);
-  } finally {
-    if (saved === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved;
   }
-  assert.equal(spawned, true);
-});
+  assert.equal(spawned, true, 'the engine spawns under env-acknowledged best-effort scope');
+}));
 
-// Keep the import honest even when both skip paths fire.
-test('ISOLATION-GATE-04: the store probe target is the documented project path', () => {
-  assert.equal(typeof readFileSync, 'function');
-});
+test('ISOLATION-GATE-04: an empty (0-byte) or comment-only .triss.env does not refuse the run', () => withIsolatedStore('# comment only\n\n', async () => {
+  let spawned = false;
+  try {
+    await runCoderRun('do something', {}, {
+      spawn: () => {
+        spawned = true;
+        return fakeSpawnReplaying('')();
+      },
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: () => true,
+    });
+  } catch (err) {
+    assert.doesNotMatch(err.message, /raw credential store/);
+  }
+  assert.equal(spawned, true, 'empty store does not block execution');
+}));
+
+test('ISOLATION-GATE-05: fail-closed policy — any non-empty variable in .triss.env refuses before spawn', () => withIsolatedStore('GLM_CUSTOM_CREDENTIAL=secret-token\n', async () => {
+  let spawned = false;
+  try {
+    await runCoderRun('do something', {}, {
+      spawn: () => {
+        spawned = true;
+        return fakeSpawnReplaying('')();
+      },
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: () => true,
+    });
+    assert.fail('the run must refuse');
+  } catch (err) {
+    assert.match(err.message, /raw credential store/);
+    assert.match(err.message, /TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION/);
+  }
+  assert.equal(spawned, false, 'arbitrary non-empty key refuses fail-closed');
+}));

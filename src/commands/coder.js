@@ -5415,14 +5415,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     ]) {
       try {
         const { vars } = readEnvFile(storePath);
-        const hasSecrets = Object.entries(vars).some(([k, v]) => {
-          if (!v || !String(v).trim()) return false;
-          return /_KEY$|_TOKEN$|_SECRET$|_PASSWORD$|_AUTH$/i.test(k) ||
-            k === 'ZHIPU_API_KEY' || k === 'OPENCODE_API_KEY' || k === 'TRISS_WORKER_API_KEY' ||
-            k === 'MOONSHOT_API_KEY' || k === 'DEEPSEEK_API_KEY' || k === 'OPENAI_API_KEY' ||
-            k === 'ANTHROPIC_API_KEY' || k === 'KIMI_API_KEY';
-        });
-        if (hasSecrets) {
+        // Fail-closed policy: ANY non-empty variable assignment in a .triss.env
+        // store is treated as potential credential material that makes the
+        // raw store a leak channel for same-UID child processes.
+        // Empty stores (0-byte files, comments-only, blank values) contain no
+        // keys and are safely ignored.
+        const hasEntries = Object.entries(vars).some(([_, v]) => typeof v === 'string' && v.trim().length > 0);
+        if (hasEntries) {
           readableStores.push(storePath);
         }
       } catch {
