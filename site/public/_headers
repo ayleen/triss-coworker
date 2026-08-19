@@ -1,0 +1,12 @@
+# Security headers for Cloudflare Pages (https://developers.cloudflare.com/pages/configuration/headers/)
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+
+# Preview deployments get X-Robots-Tag: noindex automatically from Cloudflare.
+# After custom domain is canonical, add host-specific rules here to keep *.pages.dev out of index
+# while leaving the custom domain indexable.

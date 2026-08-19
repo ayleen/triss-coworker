@@ -1,0 +1,67 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Base title="Integrations — Triss" description="Your tickets, without the chatter. Jira, Confluence, Linear, GitHub, GitLab — reads get summarised, writes stay literal.">
+  <Header current="integrations" />
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 44px; border-bottom: 1px solid var(--color-border);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">integrations</div>
+    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">Your tickets, without the chatter.</h1>
+    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">A ticket thread is forty comments of context your agent does not need to read in full. Triss talks to the tracker, summarises what matters, and hands back a paragraph.</p>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 80px var(--layout-gutter) 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">01 — two design rules</div>
+    <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Reads get summarised. Writes stay literal.</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 34px;">
+      <div style="background: var(--color-bg-raised); padding: 24px;">
+        <div style="font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">read --question</div>
+        <div style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">The model reads the API response, not your agent</div>
+        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Every read command accepts --question. Instead of dumping raw JSON, Triss runs it through the worker and returns a focused answer.</p>
+      </div>
+      <div style="background: var(--color-bg-raised); padding: 24px;">
+        <div style="font-family: var(--font-mono); font-size: 12.5px; color: #e0a458;">create · update · post · apply</div>
+        <div style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">No model anywhere near a mutation</div>
+        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Write commands make the HTTP call directly. The model is never asked to invent a request body.</p>
+      </div>
+    </div>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 80px var(--layout-gutter);">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <button data-int="jira" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-accent); border: 1px solid var(--color-border-strong);">Jira</button>
+      <button data-int="confluence" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Confluence</button>
+      <button data-int="linear" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Linear</button>
+      <button data-int="github" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitHub</button>
+      <button data-int="gitlab" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitLab</button>
+    </div>
+    <div id="int-panel" style="margin-top: 20px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
+  </section>
+
+  <Footer />
+
+  <script>
+    const INTS = {
+      jira: { cmd: 'triss jira', body: 'Search with JQL, read an issue with its comment history, then create, update, comment, or transition it.', env: 'ATLASSIAN_* (site, email, API token)', ops: 'search, issue, create, update, comments, transitions', lines: '$ triss jira search "project = ENG AND status = Open" \n    --question "what is blocked on us?"\n\n→ 3 of 24 issues wait on our review\n→ ENG-118 blocks the release' },
+      confluence: { cmd: 'triss confluence', body: 'CQL search across spaces, read a page as text, and create or update pages. Useful when the spec is a wiki page.', env: 'ATLASSIAN_* (shared with Jira)', ops: 'search, page, create, update, spaces', lines: '$ triss confluence search \'space = ARCH AND title ~ "rate limit"\' \n    --question "what is the agreed policy?"\n\n→ 60 req/min per key, burst 100 (ARCH/412)' },
+      linear: { cmd: 'triss linear', body: 'The widest surface of the five: issues, projects, initiatives, milestones, labels, states, attachments, and bulk updates.', env: 'LINEAR_API_KEY', ops: 'search, issue, create, update, comments, states, attachments, projects', lines: '$ triss linear search --project "Q3 platform" \n    --question "which issues have no owner?"\n\n→ 6 unassigned, 2 on the milestone' },
+      github: { cmd: 'triss github', body: 'Search, read, create, update, and comment on issues. Pairs naturally with triss review <PR>.', env: 'GITHUB_TOKEN — or gh CLI', ops: 'search, issue, create, update, comments', lines: '$ triss github issue 812 \n    --question "has anyone reproduced this?"\n\n→ yes: two reports on Node 22, none on 24' },
+      gitlab: { cmd: 'triss gitlab', body: 'The same five operations against a GitLab instance, self-hosted included.', env: 'GITLAB_TOKEN', ops: 'search, issue, create, update, comments', lines: '$ triss gitlab search --label incident \n    --question "anything still open?"\n\n→ 1 open: #204, waiting on infra' },
+    };
+    let active = 'jira';
+    function renderInt() {
+      const d = INTS[active];
+      document.getElementById('int-panel').innerHTML = "<div style='font-family:var(--font-mono); font-size:13px; color:var(--color-accent);'>" + d.cmd + "</div><p style='margin:10px 0 0; font-size:13.5px; line-height:1.6; color:var(--color-text-secondary);'>" + d.body + "</p><div style='margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;'><span style='font-family:var(--font-mono); font-size:11.5px; background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:6px 10px; color:var(--color-text-muted);'>" + d.env + "</span><span style='font-family:var(--font-mono); font-size:11.5px; background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:6px 10px; color:var(--color-text-muted);'>" + d.ops + "</span></div><pre style='margin-top:16px; background:#08090b; border:1px solid var(--color-border-subtle); padding:16px; font-family:var(--font-mono); font-size:12.5px; white-space:pre-wrap; color:var(--color-text-code);'>" + d.lines + "</pre>";
+      document.querySelectorAll('.int-btn').forEach(b => {
+        const on = b.getAttribute('data-int')===active;
+        b.style.background = on ? 'var(--color-bg-raised)' : 'transparent';
+        b.style.color = on ? 'var(--color-accent)' : 'var(--color-text-muted)';
+      });
+    }
+    document.querySelectorAll('.int-btn').forEach(b => b.addEventListener('click', () => { active = b.getAttribute('data-int'); renderInt(); }));
+    renderInt();
+  </script>
+</Base>

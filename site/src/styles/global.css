@@ -1,0 +1,15 @@
+@import "./tokens.css";
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--color-accent); text-decoration: none; }
+a:hover { color: var(--color-accent-link-hover); }
+::selection { background: var(--color-accent-selection); color: #fff; }
+code, pre, kbd { font-family: var(--font-mono); }

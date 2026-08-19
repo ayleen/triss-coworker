@@ -63,13 +63,26 @@ and the website CI workflow replace the preview-deployment step. The first
 Cloudflare preview becomes a mandatory launch gate after the separately
 approved GitHub integration is installed.
 
+## Decisions
+
+- **Visual identity — decided 2026-08-19:** adopt the prototype design from
+  `/Volumes/Orange/tmp/triss-site-draft.zip` (7 `*.dc.html` pages,
+  `uploads/index.css` Tailwind v4 tokens, `uploads/Untitled-2.fig`).
+  Production palette is the prototype palette (`#0b0d10` background,
+  `#5fb464` accent) with `IBM Plex Sans` / `IBM Plex Mono` (fallbacks
+  `Outfit` / `Source Code Pro` from the Tailwind build). The copper/cyan
+  palette in `brand-direction.md` v2 remains the character/mascot
+  direction but is not the website palette.
+- **Logos and marks — decided 2026-08-19:** regenerate all production
+  logos, marks, and favicons with `agy` (do not copy
+  `brand-concepts/*.png` into `site/public` unchanged). See
+  `brand-direction.md` for the agy brief and export checklist.
+
 ## Decisions still required
 
 These decisions do not block local implementation:
 
 - final custom domain and canonical hostname;
-- final visual identity, including logo treatment, typefaces, and color
-  palette;
 - whether a later phase needs event-level product analytics in addition to
   Cloudflare Web Analytics;
 - whether the public documentation should eventually become a complete

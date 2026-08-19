@@ -18,6 +18,32 @@ The version 2 concepts were generated through the Antigravity CLI with Gemini
 All concept files remain raster references under
 `docs/website/brand-concepts/`. They are not production-ready website assets.
 
+### Adopted website design — 2026-08-19
+
+For the website implementation the prototype in
+`/Volumes/Orange/tmp/triss-site-draft.zip` is adopted as the visual source
+of truth. It defines the production website palette, typography, and layout
+tokens (see prototype audit below). The v2 copper/cyan palette and the
+mage-character traits remain the direction for mascot/illustration work but
+are **not** the website chrome palette.
+
+Prototype design tokens (extracted from `Triss Landing.dc.html` and
+`uploads/index.css`):
+
+| Token | Value | Usage |
+| --- | --- | --- |
+| Page background | `#0b0d10` | body, header, sections |
+| Raised surface | `#0f1114` / `#08090b` | cards, code blocks |
+| Border | `#1a1d23` / `#252830` / `#1e2128` | section dividers, inputs |
+| Primary accent | `#5fb464` | CTA, links, highlights, slider thumb |
+| Accent hover | `#74c479` / `#9ad39e` | button hover, link hover |
+| Primary text | `#fbfcfd` / `#f4f6f8` / `#e2e8f0` | headings, body |
+| Secondary text | `#a3adbc` / `#8b95a5` | descriptions |
+| Muted text | `#78828f` / `#5f6874` | labels, captions |
+| Danger / strikethrough | `#f87171` | old cost comparison |
+| Typography | `IBM Plex Sans` 400/500/600/700 + `IBM Plex Mono` 400/500/600 | Tailwind fallback `Outfit` / `Source Code Pro` |
+| Layout | `max-width: 1140px`, 32px gutter, 60px sticky header | all pages |
+
 ## Brand idea
 
 Triss is an adult red-haired female mage and a calm, capable developer-tool
@@ -101,7 +127,9 @@ superseded.
 
 ## Productionization requirements
 
-Do not copy the concept files into `site/public/` unchanged.
+Do not copy the concept files into `site/public/` unchanged. Generate
+production assets with `agy` (the project image-generation CLI) — do not
+use `triss` in this worktree.
 
 Before website integration:
 
@@ -117,7 +145,7 @@ Before website integration:
 7. Verify contrast, small-size legibility, and browser-tab appearance.
 8. Perform a basic visual and trademark collision search before final adoption.
 
-## Antigravity generation brief
+## Generation brief (for `agy`)
 
 Create a coherent identity for Triss as an adult red-haired female mage:
 long curly copper-red hair, an intelligent composed expression, teal or emerald

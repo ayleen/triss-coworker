@@ -1,0 +1,176 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Base title="Cost & savings — Triss" description="Every number is either a published list price or a measurement from one real week on the Triss codebase. 209 calls, 5.84M in, $2.22.">
+  <Header current="cost" />
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 40px;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">cost & savings</div>
+    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">The arithmetic, with the awkward parts left in.</h1>
+    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">
+      Every number on this page is either a published list price or a measurement from one real week on the Triss codebase. Where Triss does not pay off, that is on the page too.
+    </p>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 88px;">
+    <div style="border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 22px; border-bottom: 1px solid var(--color-border-subtle); flex-wrap: wrap;">
+        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">estimate your own bill</span>
+        <span style="font-family: var(--font-mono); font-size: 11.5px; color: var(--color-text-label);" id="profile-label">token profile: 28K in / 4.7K out per request</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0;">
+        <div style="padding: 28px; display: flex; flex-direction: column; gap: 26px; border-right: 1px solid var(--color-border-subtle);">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
+              <span style="font-size: 14px; color: var(--color-text-secondary);">Agent requests per day</span>
+              <span id="c-reqs" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">40</span>
+            </div>
+            <input id="c-reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" />
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
+              <span style="font-size: 14px; color: var(--color-text-secondary);">Share delegated to Triss</span>
+              <span id="c-share" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">65%</span>
+            </div>
+            <input id="c-share-slider" type="range" min="0" max="90" step="5" value="65" style="width: 100%;" />
+            <div style="font-size: 12.5px; color: var(--color-text-label); margin-top: 9px;">Measured week ran at roughly two thirds — bulk reads, reviews, fetches, commit messages.</div>
+          </div>
+          <div>
+            <div style="font-size: 14px; color: var(--color-text-secondary); margin-bottom: 11px;">Primary model</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <button id="c-mid" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-accent); color: var(--color-accent);">$3 / $15 per 1M</button>
+              <button id="c-top" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">$15 / $75 per 1M</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 14px; color: var(--color-text-secondary); margin-bottom: 11px;">Worker</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <button id="c-flash" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-accent); color: var(--color-accent);">flash</button>
+              <button id="c-pro" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">pro</button>
+            </div>
+            <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; color: var(--color-text-muted); cursor: pointer;">
+              <input id="c-offpeak" type="checkbox" /> off-peak 75% off (flash only, 01:30–07:30 UTC)
+            </label>
+          </div>
+        </div>
+        <div style="padding: 28px; background: #08090b; display: flex; flex-direction: column; gap: 18px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 13px; color: var(--color-text-faint);">Agent alone</span>
+            <span id="c-without" style="font-family: var(--font-mono); font-size: 18px; color: var(--color-danger); text-decoration: line-through; text-decoration-color: var(--color-danger-strike);">$487.20</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 13px; color: var(--color-text-code);">Agent + Triss</span>
+            <span id="c-with" style="font-family: var(--font-mono); font-size: 32px; font-weight: 600; color: var(--color-accent); letter-spacing: -0.02em;">$178.45</span>
+          </div>
+          <div id="c-saved" style="background: var(--color-accent-selection-bg); border: 1px solid var(--color-accent-selection-border); padding: 11px 13px; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">saves $308.75 / month · 63% less</div>
+          <div style="font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label);">annual <span id="c-annual" style="color: var(--color-accent);">$3705</span> saved</div>
+          <div id="c-breakdown" style="border-top: 1px solid var(--color-border-subtle); padding-top: 16px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Measured week -->
+    <div style="margin-top: 48px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;">
+      <h3 style="margin: 0; font-size: 18px; color: var(--color-text-heading);">One measured week — not a projection</h3>
+      <p style="margin: 8px 0 0; color: var(--color-text-secondary); font-size: 13.5px;">209 calls on the Triss codebase itself. Flash for bulk reads, pro for reviews.</p>
+      <div style="display: grid; grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 18px; font-family: var(--font-mono); font-size: 12.5px;">
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label);">metric</div>
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">pro</div>
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">flash</div>
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">total</div>
+        <div style="background: #0f1114; padding: 10px; color: var(--color-text);">Requests</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">143</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">66</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">209</div>
+        <div style="background: #0f1114; padding: 10px; color: var(--color-text);">Input tokens</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">3.74M</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">2.10M</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">5.84M</div>
+        <div style="background: var(--color-bg-raised); padding: 10px; color: var(--color-text-heading); font-weight: 600;">Cost (USD)</div>
+        <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-text-heading);">$1.88</div>
+        <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-text-heading);">$0.34</div>
+        <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-accent);">$2.22</div>
+      </div>
+      <div style="margin-top: 16px; display: flex; gap: 12px; font-size: 12.5px;">
+        <span style="background: var(--color-accent); color: #0b0d10; padding: 6px 10px; font-family: var(--font-mono);">Worker, off-peak $0.010</span>
+        <span style="background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 6px 10px; font-family: var(--font-mono);">list $0.040</span>
+        <span style="background: transparent; border: 1px solid var(--color-danger); padding: 6px 10px; font-family: var(--font-mono); color: var(--color-danger);">top-tier ≈$0.45</span>
+      </div>
+    </div>
+
+    <!-- Where not worth -->
+    <div style="margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);">
+      <div style="background: var(--color-bg-raised); padding: 20px;">
+        <div style="font-size: 14px; font-weight: 600; color: var(--color-text-heading);">Tiny lookups</div>
+        <p style="margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary);">A two-file read roughly breaks even: the round trip plus the summary costs about what doing it directly would.</p>
+      </div>
+      <div style="background: var(--color-bg-raised); padding: 20px;">
+        <div style="font-size: 14px; font-weight: 600; color: var(--color-text-heading);">Judgement calls</div>
+        <p style="margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary);">Architecture decisions, ambiguous requirements — being wrong is expensive. Cheap models are for volume, not verdicts.</p>
+      </div>
+    </div>
+  </section>
+
+  <Footer />
+
+  <style>
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 4px; background: #252830; border-radius: 2px; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); cursor: pointer; border: 3px solid #0b0d10; box-shadow: 0 0 0 1px var(--color-accent); }
+  </style>
+
+  <script>
+    const IN_TOK = 28, OUT_TOK = 4.7, SUM_IN = 1.5, SUM_OUT = 0.3;
+    const PRIMARY = { mid: { inP: 3, outP: 15 }, top: { inP: 15, outP: 75 } };
+    const WORKER = { flash: 0.0052, pro: 0.0131 };
+    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", offpeak: false };
+    function money(v) {
+      if (v >= 1000) return "$" + Math.round(v).toLocaleString("en-US");
+      if (v >= 100) return "$" + v.toFixed(0);
+      return "$" + v.toFixed(2);
+    }
+    function render() {
+      const p = PRIMARY[s.primary];
+      const wPer = WORKER[s.worker] * (s.offpeak ? 0.25 : 1);
+      const primaryPer = (IN_TOK * p.inP + OUT_TOK * p.outP) / 1000;
+      const summaryPer = (SUM_IN * p.inP + SUM_OUT * p.outP) / 1000;
+      const monthly = s.reqs * 30;
+      const delegated = monthly * (s.share / 100);
+      const kept = monthly - delegated;
+      const without = monthly * primaryPer;
+      const withT = kept * primaryPer + delegated * (wPer + summaryPer);
+      const saved = without - withT;
+      document.getElementById("c-reqs").textContent = String(s.reqs);
+      document.getElementById("c-share").textContent = s.share + "%";
+      document.getElementById("c-without").textContent = money(without);
+      document.getElementById("c-with").textContent = money(withT);
+      document.getElementById("c-saved").textContent = "saves " + money(saved) + " / month \u00b7 " + Math.round((saved/without)*100) + "% less";
+      document.getElementById("c-annual").textContent = money(saved*12);
+      const bd = document.getElementById("c-breakdown");
+      if (bd) bd.innerHTML = [
+        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Requests / month</span><span style='font-family:var(--font-mono);'>"+monthly.toLocaleString()+"</span></div>",
+        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Kept on primary</span><span style='font-family:var(--font-mono);'>"+Math.round(kept).toLocaleString()+" \u00b7 "+money(kept*primaryPer)+"</span></div>",
+        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Run by worker</span><span style='font-family:var(--font-mono);'>"+Math.round(delegated).toLocaleString()+" \u00b7 "+money(delegated*wPer)+"</span></div>",
+        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Summaries read back</span><span style='font-family:var(--font-mono);'>"+money(delegated*summaryPer)+"</span></div>",
+      ].join("");
+      document.getElementById("c-mid").style.borderColor = s.primary==="mid" ? "var(--color-accent)" : "var(--color-border-strong)";
+      document.getElementById("c-mid").style.color = s.primary==="mid" ? "var(--color-accent)" : "var(--color-text-muted)";
+      document.getElementById("c-top").style.borderColor = s.primary==="top" ? "var(--color-accent)" : "var(--color-border-strong)";
+      document.getElementById("c-top").style.color = s.primary==="top" ? "var(--color-accent)" : "var(--color-text-muted)";
+      document.getElementById("c-flash").style.borderColor = s.worker==="flash" ? "var(--color-accent)" : "var(--color-border-strong)";
+      document.getElementById("c-flash").style.color = s.worker==="flash" ? "var(--color-accent)" : "var(--color-text-muted)";
+      document.getElementById("c-pro").style.borderColor = s.worker==="pro" ? "var(--color-accent)" : "var(--color-border-strong)";
+      document.getElementById("c-pro").style.color = s.worker==="pro" ? "var(--color-accent)" : "var(--color-text-muted)";
+    }
+    document.getElementById("c-reqs-slider").addEventListener("input", e => { s.reqs = parseInt(e.target.value,10); render(); });
+    document.getElementById("c-share-slider").addEventListener("input", e => { s.share = parseInt(e.target.value,10); render(); });
+    document.getElementById("c-mid").addEventListener("click", () => { s.primary="mid"; render(); });
+    document.getElementById("c-top").addEventListener("click", () => { s.primary="top"; render(); });
+    document.getElementById("c-flash").addEventListener("click", () => { s.worker="flash"; render(); });
+    document.getElementById("c-pro").addEventListener("click", () => { s.worker="pro"; render(); });
+    document.getElementById("c-offpeak").addEventListener("change", e => { s.offpeak = e.target.checked; render(); });
+    render();
+  </script>
+</Base>

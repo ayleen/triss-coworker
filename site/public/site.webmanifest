@@ -1,0 +1,25 @@
+{
+  "name": "Triss — Cheap DeepSeek Coworker",
+  "short_name": "Triss",
+  "description": "Delegate token-heavy work to a cheap DeepSeek worker",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "theme_color": "#0b0d10",
+  "background_color": "#0b0d10",
+  "display": "standalone"
+}

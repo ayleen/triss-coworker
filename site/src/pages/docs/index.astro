@@ -1,0 +1,21 @@
+---
+import Base from "../../layouts/Base.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+---
+<Base title="Documentation — Triss" description="Triss documentation index.">
+  <Header current="quickstart" />
+  <main style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter);">
+    <h1 style="font-size: 40px; color: var(--color-text-strong);">Documentation</h1>
+    <p style="color: var(--color-text-secondary);">Placeholder for Phase 2 — will group Quickstart, Commands, Coder, Integrations, Cost, Security.</p>
+    <ul style="line-height: 2;">
+      <li><a href="/docs/getting-started">Getting started</a></li>
+      <li><a href="/commands">Commands</a></li>
+      <li><a href="/coder">Coder</a></li>
+      <li><a href="/integrations">Integrations</a></li>
+      <li><a href="/cost">Cost</a></li>
+      <li><a href="/security">Security</a></li>
+    </ul>
+  </main>
+  <Footer />
+</Base>

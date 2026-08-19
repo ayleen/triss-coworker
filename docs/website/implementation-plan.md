@@ -8,6 +8,26 @@ Cloudflare Pages.
 Astro is an implementation dependency of the website only. The CLI package and
 its release dependencies must remain isolated from website dependencies.
 
+## Prototype source and porting strategy — adopted 2026-08-19
+
+The prototype in `/Volumes/Orange/tmp/triss-site-draft.zip` is **not** Astro.
+It is 7 `*.dc.html` pages (`Triss Landing`, `Quickstart`, `Commands`, `Coder`,
+`Cost`, `Security`, `Integrations`) rendered by `support.js` (dc-runtime on
+`window.React`) with a Tailwind v4 build in `uploads/index.css` and a Figma
+source `uploads/Untitled-2.fig` / `uploads/Figma Make App.png`.
+
+Decision: keep the prototype's visual design as the production design (see
+`brand-direction.md` for tokens) and port it to Astro:
+
+- extract design tokens (`#0b0d10` bg, `#5fb464` accent, `#1a1d23` borders,
+  `IBM Plex Sans/Mono`) into `site/src/styles/tokens.css`;
+- recreate the header, hero, bill calculator, copy buttons, tabs, and
+  command search as Astro components + minimal `client:load` islands;
+- generate all logos/marks/favicons with `agy` (do not copy
+  `brand-concepts/*.png` into `site/public`);
+- port strictly from the `*.dc.html` content to avoid re-specifying the
+  information architecture.
+
 ## Repository layout
 
 Create the website as a nested, independently installed package:
@@ -75,8 +95,9 @@ engine in `site/package.json`, and add a `site/.node-version` file containing
 - Do not read arbitrary repository Markdown during the Cloudflare build in the
   first release. Explicitly migrated website content avoids accidental
   publication of internal planning documents.
-- Use system fonts or self-hosted, redistribution-safe font assets. Do not make
-  page rendering depend on a third-party font service.
+- Use `IBM Plex Sans` / `IBM Plex Mono` as in the prototype (loaded via
+  `link` with self-host fallback). Do not make page rendering depend on a
+  third-party font service at runtime; pin or self-host the font assets.
 
 ## Content synchronization
 
@@ -238,13 +259,19 @@ Website-only changes must not weaken or bypass the existing repository checks.
 Exit condition: a clean install builds a minimal accessible site and all new
 CI checks pass.
 
-### Phase 2: Initial content
+### Phase 2: Initial content — port the 7 prototype pages
 
-- Implement the home page.
-- Implement the documentation index and getting-started page.
+- Port `Triss Landing.dc.html` → `src/pages/index.astro` (home, per
+  `product-requirements.md` home section).
+- Port `Triss Quickstart.dc.html` → `src/pages/docs/getting-started.astro`
+  and `Triss Commands.dc.html` / `Coder` / `Integrations` / `Cost` /
+  `Security` → corresponding `src/pages/*.astro` routes.
+- Keep `src/pages/docs/index.astro` as the documentation index that groups
+  the above by task (as required by `product-requirements.md`).
 - Add the 404 page, sitemap, generated robots directives, security headers,
   and social metadata.
-- Add critical-content consistency checks.
+- Add critical-content consistency checks (package name, Node ≥22,
+  `npm install -g triss-coworker`, repo/npm URLs).
 
 Exit condition: all requirements for the initial routes are satisfied locally.
 

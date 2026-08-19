@@ -1,0 +1,82 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Base title="Commands reference — Triss" description="All Triss commands: ask, review, write, fetch, commit-msg, coder, extract, mcp, usage — with flags and examples.">
+  <Header current="commands" />
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 36px; border-bottom: 1px solid var(--color-border);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">commands</div>
+    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong);">Nine commands, one handbook.</h1>
+    <p style="margin: 18px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">Grouped by what they do: delegate to the worker, work locally, or set things up. The agent decides when — you just need to know they exist.</p>
+    <div style="margin-top: 28px; max-width: 520px; position: relative;">
+      <input id="cmd-search" type="text" placeholder="filter commands… (ask, review, --question)" style="width: 100%; background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 12px 14px; font-family: var(--font-mono); font-size: 13.5px; color: var(--color-text); outline: none;" />
+    </div>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 40px var(--layout-gutter);">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px;">
+      <button data-filter="all" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">all (9)</button>
+      <button data-filter="delegate" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">delegate (4)</button>
+      <button data-filter="core" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">core (3)</button>
+      <button data-filter="setup" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">setup (2)</button>
+    </div>
+    <div id="cmd-grid" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);"></div>
+  </section>
+
+  <Footer />
+
+  <script>
+    const CMDS = [
+      { name: "ask", tier: "flash", group: "delegate", body: "Reads files, URLs, and/or piped stdin and returns a focused answer with cited paths — not a raw file dump.", flags: ["--paths <glob…>", "--urls <url…>", "--stdin", "--question <text>", "--model flash|pro", "--provider glm|kimi"], example: "$ triss ask --paths \"src/**/*.ts\" --question \"find SQL injection risks\"" },
+      { name: "review", tier: "pro", group: "delegate", body: "Code review on a branch, PR, or piped diff. Concrete issues with file:line citations.", flags: ["--base <ref>", "--stdin", "--files <path…>", "--issue <KEY>", "--max-tokens 16384"], example: "$ triss review 123\n$ triss review --base develop" },
+      { name: "write", tier: "pro", group: "delegate", body: "Generates code or docs from a spec plus a reference file. Boilerplate the primary model should never type.", flags: ["--spec <text>", "--context <file>", "--target <out>"], example: "$ triss write --spec \"pytest for auth.py\" --context tests/test_main.py --target tests/test_auth.py" },
+      { name: "fetch", tier: "flash", group: "delegate", body: "Fetches URLs and returns clean markdown. SSRF-guarded, 30s timeout.", flags: ["--question <text>", "--timeout <ms>"], example: "$ triss fetch https://api-docs.example.com/ --question \"auth header format?\"" },
+      { name: "commit-msg", tier: "flash", group: "core", body: "Reads git diff --staged and prints a Conventional Commits message.", flags: ["--apply", "--type / --scope"], example: "$ git add src/foo.js && triss commit-msg" },
+      { name: "extract", tier: "local", group: "core", body: "Pulls a readable transcript out of JSONL session logs. No model call.", flags: ["-o <out>"], example: "$ triss extract ~/.claude/projects/api/s.jsonl -o /tmp/chat.txt" },
+      { name: "usage", tier: "local", group: "core", body: "Cumulative cost and tokens, per project or per model. Unknown is never 0.", flags: ["--since 7d", "--by-project", "--reset"], example: "$ triss usage --since 7d --by-label" },
+      { name: "mcp", tier: "setup", group: "setup", body: "Registers Triss as an MCP server in Claude Code or Codex.", flags: ["--target claude|codex|both"], example: "$ triss mcp install --target both" },
+      { name: "coder", tier: "agent", group: "setup", body: "Delegates an implementation task to a cheap coding agent with worktree isolation.", flags: ["--isolate", "--provider worker|zai", "--model <id>"], example: "$ triss coder run \"add /signup validation\" --isolate" },
+    ];
+    let filter = "all";
+    let query = "";
+    function render() {
+      const grid = document.getElementById("cmd-grid");
+      if (!grid) return;
+      grid.innerHTML = "";
+      const filtered = CMDS.filter(c => {
+        if (filter !== "all" && c.group !== filter) return false;
+        if (query) {
+          const q = query.toLowerCase();
+          if (!c.name.includes(q) && !c.body.toLowerCase().includes(q) && !c.flags.join(" ").toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
+      filtered.forEach(c => {
+        const d = document.createElement("div");
+        d.style.cssText = "background: var(--color-bg-raised); padding: 22px;";
+        d.innerHTML = "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'><span style='font-family:var(--font-mono); font-size:15px; font-weight:600; color:var(--color-text-heading);'>triss " + c.name + "</span><span style='font-family:var(--font-mono); font-size:11px; padding:4px 8px; border:1px solid var(--color-border-strong); color:" + (c.tier==="pro" ? "#e0a458" : c.tier==="flash" ? "var(--color-accent)" : "var(--color-text-muted)") + ";'>" + c.tier + "</span><span style='font-family:var(--font-mono); font-size:11px; color:var(--color-text-label);'>" + c.group + "</span></div>" +
+          "<p style='margin:10px 0 0; font-size:13.5px; line-height:1.6; color:var(--color-text-secondary);'>" + c.body + "</p>" +
+          "<div style='margin-top:12px; display:flex; gap:6px; flex-wrap:wrap;'>" + c.flags.map(f => "<span style='font-family:var(--font-mono); font-size:11.5px; background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:4px 8px; color:var(--color-text-muted);'>"+f+"</span>").join("") + "</div>" +
+          "<pre style='margin:12px 0 0; background:#08090b; border:1px solid var(--color-border-subtle); padding:12px; font-family:var(--font-mono); font-size:12px; white-space:pre-wrap; color:var(--color-accent);'>" + c.example + "</pre>";
+        grid.appendChild(d);
+      });
+      if (filtered.length === 0) grid.innerHTML = "<div style='background:var(--color-bg-raised); padding:32px; text-align:center; color:var(--color-text-muted);'>No commands match “" + query + "”</div>";
+    }
+    document.querySelectorAll(".filter-btn").forEach(b => b.addEventListener("click", () => {
+      filter = b.getAttribute("data-filter");
+      document.querySelectorAll(".filter-btn").forEach(x => {
+        const on = x.getAttribute("data-filter")===filter;
+        x.style.background = on ? "var(--color-accent)" : "transparent";
+        x.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
+        x.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+      });
+      render();
+    }));
+    const search = document.getElementById("cmd-search");
+    if (search) search.addEventListener("input", e => { query = e.target.value; render(); });
+    render();
+  </script>
+</Base>

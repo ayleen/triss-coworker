@@ -1,0 +1,344 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Base
+  title="Triss — Your agent is a brilliant engineer. A very expensive proofreader."
+  description="Triss is a Node CLI that delegates token-heavy work to a cheap DeepSeek worker. Your primary agent gets a 1–2K summary instead of a 5.8M-token firehose. Save 60–70% of token budget."
+>
+  <Header />
+
+  <!-- Hero -->
+  <section
+    id="top"
+    style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter) 72px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: start;"
+  >
+    <div>
+      <div
+        style="display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 28px;"
+      >
+        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">MIT</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">Node ≥ 22</span>
+        <span
+          style="border: 1px solid rgba(95,180,100,0.4); color: var(--color-accent); padding: 5px 9px; text-transform: none; letter-spacing: 0;"
+          >npm i -g triss-coworker</span
+        >
+      </div>
+      <h1
+        style="margin: 0; font-size: 62px; line-height: 1.02; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); text-wrap: balance;"
+      >
+        Your agent is a brilliant engineer.<br /><span style="color: var(--color-accent);">A very expensive proofreader.</span>
+      </h1>
+      <p style="margin: 26px 0 0; max-width: 30em; font-size: 17.5px; line-height: 1.6; color: var(--color-text-secondary);">
+        Triss is a Node CLI that intercepts the token-heavy half of the job — bulk file reads, URL fetches, diff reviews,
+        tracker chatter, whole implementation tasks — and hands it to a cheap DeepSeek worker. Your primary agent gets a
+        1–2K-token summary instead of a 5.8M-token firehose.
+      </p>
+      <div style="display: flex; gap: 12px; margin-top: 34px; flex-wrap: wrap;">
+        <button
+          id="copy-install-btn"
+          style="display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: #0b0d10; background: var(--color-accent); border: none; padding: 14px 20px; cursor: pointer;"
+        >
+          <span>npm install -g triss-coworker</span>
+          <span id="copy-label" style="opacity: 0.55; font-size: 12px;">copy</span>
+        </button>
+        <a
+          href="/docs/getting-started"
+          style="display: flex; align-items: center; font-family: var(--font-mono); font-size: 14px; color: var(--color-text-code); border: 1px solid #2d323c; padding: 14px 20px;"
+          >Quickstart →</a
+        >
+      </div>
+      <div
+        style="display: grid; grid-template-columns: repeat(3, auto); gap: 36px; margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--color-border); justify-content: start;"
+      >
+        <div>
+          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-accent);">60–70%</div>
+          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">token budget saved</div>
+        </div>
+        <div>
+          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-text);">≈1¢</div>
+          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">per delegated request</div>
+        </div>
+        <div>
+          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-text);">$2.22</div>
+          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">one real week, 209 calls</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bill calculator -->
+    <div style="border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);">
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--color-border-subtle);"
+      >
+        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">your monthly bill</span>
+        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--color-accent);">live</span>
+      </div>
+      <div style="padding: 22px 18px 26px; display: flex; flex-direction: column; gap: 22px;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+            <span style="font-size: 13px; color: var(--color-text-secondary);">Agent requests per day</span>
+            <span id="reqs-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">40</span>
+          </div>
+          <input id="reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" />
+        </div>
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+            <span style="font-size: 13px; color: var(--color-text-secondary);">Share you delegate to Triss</span>
+            <span id="share-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">65%</span>
+          </div>
+          <input id="share-slider" type="range" min="20" max="90" step="5" value="65" style="width: 100%;" />
+        </div>
+        <div>
+          <div style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: 10px;">Primary model</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <button
+              id="btn-sonnet"
+              style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);"
+              >Sonnet 4.6</button
+            >
+            <button
+              id="btn-opus"
+              style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);"
+              >Opus 4.7</button
+            >
+          </div>
+        </div>
+        <div style="border-top: 1px solid var(--color-border-subtle); padding-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 13px; color: var(--color-text-faint);">Agent alone</span>
+            <span
+              id="cost-without"
+              style="font-family: var(--font-mono); font-size: 16px; color: var(--color-danger); text-decoration: line-through; text-decoration-color: var(--color-danger-strike);">$183.60</span
+            >
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 13px; color: var(--color-text-code);">Agent + Triss</span>
+            <span
+              id="cost-with"
+              style="font-family: var(--font-mono); font-size: 30px; font-weight: 600; color: var(--color-accent); letter-spacing: -0.02em;">$70.07</span
+            >
+          </div>
+          <div
+            id="saved-line"
+            style="background: var(--color-accent-selection-bg); border: 1px solid var(--color-accent-selection-border); padding: 11px 13px; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">saves $113.53 / month · 62% less</div
+          >
+          <p style="margin: 2px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--color-text-label);">
+            Baselines from published list prices and one measured week of real Triss usage (209 calls, 5.84M in, $2.22).
+            Your mileage depends on what you delegate.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Not a Claude-only trick -->
+  <section style="border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); background: #0d0f13;">
+    <div
+      style="max-width: var(--layout-max); margin: 0 auto; padding: 34px var(--layout-gutter); display: flex; align-items: center; gap: 40px; flex-wrap: wrap; justify-content: space-between;"
+    >
+      <div style="font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: var(--color-text-heading);">Not a Claude-only trick.</div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 12.5px;">
+        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">Claude Code</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">Codex</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">MCP hosts</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">AGENTS.md readers</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-faint);">any shell</span>
+      </div>
+      <p style="margin: 0; max-width: 34em; font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted);">
+        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss init</code> writes CLAUDE.md and AGENTS.md rules;
+        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss mcp install</code> registers the same tools over MCP.
+      </p>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section id="how" style="max-width: var(--layout-max); margin: 0 auto; padding: 96px var(--layout-gutter);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">01 — how it works</div>
+    <h2 style="margin: 0; font-size: 40px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong); max-width: 20em;">
+      Fewer portals. Substantially more <code style="font-family: var(--font-mono); color: var(--color-accent); font-size: 36px;">git diff</code>.
+    </h2>
+    <p style="margin: 18px 0 0; max-width: 44em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
+      One hop sits between your expensive agent and the raw context. Triss reads, fetches, and summarises — then returns only what matters.
+    </p>
+    <div style="display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 0; align-items: stretch; margin-top: 52px;">
+      <div style="border: 1px solid var(--color-border-strong); padding: 24px; background: var(--color-bg-raised);">
+        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">primary agent</div>
+        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">Claude Code / Codex</div>
+        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted); margin-top: 10px;">Decides what to do. Keeps its context for reasoning and edits.</div>
+        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-danger); margin-top: 18px; border-top: 1px solid var(--color-border-subtle); padding-top: 14px;">$3–$15 / 1M in</div>
+      </div>
+      <div style="display: flex; align-items: center; padding: 0 18px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label); white-space: nowrap;">— task →</div>
+      <div style="border: 1px solid rgba(95,180,100,0.45); padding: 24px; background: rgba(95,180,100,0.05);">
+        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent);">the hop</div>
+        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">triss</div>
+        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); margin-top: 10px;">Reads 47 files, strips the HTML, shards the diff, routes to the cheapest model that can do it.</div>
+        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); margin-top: 18px; border-top: 1px solid rgba(95,180,100,0.25); padding-top: 14px;">local · no telemetry</div>
+      </div>
+      <div style="display: flex; align-items: center; padding: 0 18px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label); white-space: nowrap;">→ corpus →</div>
+      <div style="border: 1px solid var(--color-border-strong); padding: 24px; background: var(--color-bg-raised);">
+        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">worker</div>
+        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">DeepSeek, GLM, Kimi, Ollama</div>
+        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted); margin-top: 10px;">Any OpenAI-compatible endpoint. Returns a focused summary with cited paths.</div>
+        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); margin-top: 18px; border-top: 1px solid var(--color-border-subtle); padding-top: 14px;">≈$0.01 / call</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Commands preview -->
+  <section id="commands" style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 96px;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">02 — commands</div>
+    <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Nine commands. The agent decides when to call them.</h2>
+    <div style="display: grid; grid-template-columns: 220px 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 36px;">
+      <div id="cmd-list" style="background: var(--color-bg); display: flex; flex-direction: column;"></div>
+      <div style="background: var(--color-bg-code); padding: 22px; min-width: 0;">
+        <div id="cmd-title" style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.02em;"></div>
+        <div id="cmd-note" style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); margin-top: 8px;"></div>
+        <pre id="cmd-code" style="margin: 18px 0 0; background: #08090b; border: 1px solid var(--color-border-subtle); padding: 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; overflow-x: auto; white-space: pre-wrap;"></pre>
+      </div>
+    </div>
+    <p style="text-align: center; margin-top: 18px;"><a href="/commands" style="font-family: var(--font-mono); font-size: 13px;">Full commands reference →</a></p>
+  </section>
+
+  <!-- Install -->
+  <section id="install" style="border-top: 1px solid var(--color-border); background: #0d0f13; padding: 80px var(--layout-gutter);">
+    <div style="max-width: var(--layout-max); margin: 0 auto;">
+      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">03 — install</div>
+      <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Three ways in. The wizard does the rest.</h2>
+      <div style="display: flex; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 36px;">
+        <button data-tab="npm" class="tab-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: #08090b; color: var(--color-accent); border: none;">npm</button>
+        <button data-tab="curl" class="tab-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-text-muted); border: none;">curl</button>
+        <button data-tab="source" class="tab-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-text-muted); border: none;">source</button>
+      </div>
+      <pre id="install-code" style="margin: 0; background: #08090b; border: 1px solid var(--color-border); border-top: none; padding: 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.9; white-space: pre-wrap;"></pre>
+    </div>
+  </section>
+
+  <Footer />
+
+  <style>
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: #252830;
+      border-radius: 2px;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      cursor: pointer;
+      border: 3px solid #0b0d10;
+      box-shadow: 0 0 0 1px var(--color-accent);
+    }
+  </style>
+
+  <script>
+    const PER_REQ = { sonnet: 0.153, opus: 0.766, triss: 0.0106 };
+    function money(v) {
+      if (v >= 100) return "$" + Math.round(v).toLocaleString("en-US");
+      return "$" + v.toFixed(2);
+    }
+    let state = { reqs: 40, share: 65, model: "sonnet" };
+    const els = {
+      reqs: document.getElementById("reqs-display"),
+      share: document.getElementById("share-display"),
+      without: document.getElementById("cost-without"),
+      with: document.getElementById("cost-with"),
+      saved: document.getElementById("saved-line"),
+      sonnet: document.getElementById("btn-sonnet"),
+      opus: document.getElementById("btn-opus"),
+      reqsSlider: document.getElementById("reqs-slider"),
+      shareSlider: document.getElementById("share-slider"),
+    };
+    function render() {
+      const monthly = state.reqs * 30;
+      const per = PER_REQ[state.model];
+      const without = monthly * per;
+      const withT = monthly * (1 - state.share / 100) * per + monthly * (state.share / 100) * PER_REQ.triss;
+      const saved = without - withT;
+      if (els.reqs) els.reqs.textContent = String(state.reqs);
+      if (els.share) els.share.textContent = state.share + "%";
+      if (els.without) els.without.textContent = money(without);
+      if (els.with) els.with.textContent = money(withT);
+      if (els.saved) els.saved.textContent = "saves " + money(saved) + " / month \u00b7 " + Math.round((saved / without) * 100) + "% less";
+      if (els.sonnet && els.opus) {
+        const on = state.model === "sonnet";
+        els.sonnet.style.background = on ? "var(--color-accent)" : "transparent";
+        els.sonnet.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
+        els.sonnet.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+        els.opus.style.background = !on ? "var(--color-accent)" : "transparent";
+        els.opus.style.color = !on ? "#0b0d10" : "var(--color-text-muted)";
+        els.opus.style.borderColor = !on ? "var(--color-accent)" : "var(--color-border-strong)";
+      }
+    }
+    if (els.reqsSlider) els.reqsSlider.addEventListener("input", (e) => { state.reqs = parseInt(e.target.value, 10); render(); });
+    if (els.shareSlider) els.shareSlider.addEventListener("input", (e) => { state.share = parseInt(e.target.value, 10); render(); });
+    if (els.sonnet) els.sonnet.addEventListener("click", () => { state.model = "sonnet"; render(); });
+    if (els.opus) els.opus.addEventListener("click", () => { state.model = "opus"; render(); });
+    const copyBtn = document.getElementById("copy-install-btn");
+    const copyLabel = document.getElementById("copy-label");
+    if (copyBtn) copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText("npm install -g triss-coworker").then(() => {
+        if (copyLabel) copyLabel.textContent = "copied";
+        setTimeout(() => { if (copyLabel) copyLabel.textContent = "copy"; }, 1500);
+      });
+    });
+    render();
+
+    // Commands preview
+    const CMDS = [
+      { name: "ask", tier: "flash", short: "Reads files, URLs, or stdin — returns a focused summary.", note: "The whole trick: the primary agent gets the useful bits, not a firehose.", lines: "$ triss ask --paths \"src/**/*.ts\" \\\n    --question \"where do we read the API key?\"\n\n→ 47 files read \u00b7 18.3K in / 2.4K out\n→ src/config.js:31, src/mcp/server.js:88\ncost: $0.010" },
+      { name: "review", tier: "pro", short: "Code review on a branch, a PR, or a piped diff.", note: "Concrete issues with file:line citations — not a diff summary.", lines: "$ triss review 123\n\nFindings\n- src/auth.js:42 accepts an expired token\n- test/auth.test.js:88 covers only happy path\nResidual risk: refresh path untested" },
+      { name: "write", tier: "pro", short: "Generates code or docs from a spec plus a reference file.", note: "Boilerplate the primary model should never type.", lines: "$ triss write --spec \"pytest for auth.py\" \\\n    --context tests/test_main.py \\\n    --target tests/test_auth.py\n\n→ wrote tests/test_auth.py (128 lines)" },
+      { name: "fetch", tier: "flash", short: "Fetches URLs and returns clean markdown.", note: "SSRF-guarded, 30s timeout, strips chrome.", lines: "$ triss fetch https://api-docs.example.com/ \\\n    --question \"auth header format?\"\n\n→ 214KB HTML → 3.1K markdown\n→ Bearer <token>, no refresh" },
+      { name: "coder", tier: "agent", short: "Delegates an implementation task to a cheap coding agent.", note: "--isolate runs in a disposable git worktree.", lines: "$ triss coder run \"add /signup validation\" \\\n    --isolate --expect changes\n\n→ 3 files changed in .triss/wt/signup" },
+    ];
+    let cmdIdx = 0;
+    const cmdList = document.getElementById("cmd-list");
+    const cmdTitle = document.getElementById("cmd-title");
+    const cmdNote = document.getElementById("cmd-note");
+    const cmdCode = document.getElementById("cmd-code");
+    function renderCmd() {
+      if (!cmdList) return;
+      cmdList.innerHTML = "";
+      CMDS.forEach((c, i) => {
+        const b = document.createElement("button");
+        b.textContent = "triss " + c.name + "  · " + c.tier;
+        b.style.cssText = "text-align:left; padding:12px 16px; font-family:var(--font-mono); font-size:12.5px; cursor:pointer; border:none; border-bottom:1px solid var(--color-border-subtle); background:" + (i===cmdIdx ? "#151920" : "var(--color-bg-raised)") + "; color:" + (i===cmdIdx ? "var(--color-accent)" : "var(--color-text-code)");
+        b.addEventListener("click", () => { cmdIdx = i; renderCmd(); });
+        cmdList.appendChild(b);
+      });
+      const a = CMDS[cmdIdx];
+      if (cmdTitle) cmdTitle.textContent = "triss " + a.name + " — " + a.short;
+      if (cmdNote) cmdNote.textContent = a.note;
+      if (cmdCode) cmdCode.textContent = a.lines;
+    }
+    renderCmd();
+
+    // Install tabs
+    const TABS = {
+      npm: "$ npm install -g triss-coworker\n  # or: pnpm add -g / yarn global add\n\n$ triss config wizard\n  Standard or Advanced? [S] \n\u2713 key saved \u00b7 MCP + rules installed",
+      curl: "$ curl -fsSL https://raw.githubusercontent.com/\\n    ayleen/triss-coworker/main/install.sh | bash\n\n→ ~/.local/share/triss (receipt-backed)\n→ linked ~/.local/bin/triss",
+      source: "$ git clone https://github.com/ayleen/triss-coworker.git\n$ cd triss-coworker && npm install && npm link\n\n$ triss --version && triss status\n\u2713 worker: deepseek-v4-flash / -pro",
+    };
+    let tab = "npm";
+    const installCode = document.getElementById("install-code");
+    function renderTab() {
+      if (installCode) installCode.textContent = TABS[tab];
+      document.querySelectorAll(".tab-btn").forEach((b) => {
+        const on = b.getAttribute("data-tab") === tab;
+        b.style.background = on ? "#08090b" : "var(--color-bg-raised)";
+        b.style.color = on ? "var(--color-accent)" : "var(--color-text-muted)";
+      });
+    }
+    document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => { tab = b.getAttribute("data-tab"); renderTab(); }));
+    renderTab();
+  </script>
+</Base>

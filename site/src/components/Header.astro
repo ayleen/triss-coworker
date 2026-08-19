@@ -1,0 +1,35 @@
+---
+interface Props { current?: string; }
+const { current } = Astro.props;
+const linkStyle = (active: boolean) =>
+  active ? "color: var(--color-accent); font-weight: 500;" : "color: var(--color-text-muted);";
+---
+<header
+  style="position: sticky; top: 0; z-index: 50; background: var(--color-bg-header); backdrop-filter: blur(12px); border-bottom: 1px solid var(--color-border);"
+>
+  <div
+    style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter); height: var(--header-height); display: flex; align-items: center; justify-content: space-between; gap: 24px;"
+  >
+    <a
+      href="/"
+      style="display: flex; align-items: center; gap: 10px; color: var(--color-text-heading); font-family: var(--font-mono); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none;"
+    >
+      <img src="/triss-mark.svg" alt="Triss mark" width="24" height="24" style="display: block;" />
+      <span>triss</span>
+    </a>
+    <nav style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
+      <a href="/#how" style={linkStyle(current === "how")}>How it works</a>
+      <a href="/coder" style={linkStyle(current === "coder")}>Coder</a>
+      <a href="/integrations" style={linkStyle(current === "integrations")}>Integrations</a>
+      <a href="/docs/getting-started" style={linkStyle(current === "quickstart")}>Quickstart</a>
+      <a href="/commands" style={linkStyle(current === "commands")}>Commands</a>
+      <a href="/cost" style={linkStyle(current === "cost")}>Cost</a>
+      <a href="/security" style={linkStyle(current === "security")}>Security</a>
+    </nav>
+    <a
+      href="https://github.com/ayleen/triss-coworker"
+      style="font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); border: 1px solid var(--color-border-strong); padding: 6px 12px;"
+      >GitHub ↗</a
+    >
+  </div>
+</header>
