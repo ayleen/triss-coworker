@@ -55,6 +55,14 @@ import Footer from "../components/Footer.astro";
               <input id="c-offpeak" type="checkbox" /> off-peak 75% off (flash only, 01:30–07:30 UTC)
             </label>
           </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
+              <span style="font-size: 14px; color: var(--color-text-secondary);">Cache hit rate</span>
+              <span id="c-cache" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">18%</span>
+            </div>
+            <input id="c-cache-slider" type="range" min="0" max="50" step="1" value="18" style="width: 100%;" />
+            <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">Measured week: 18.5% overall (28.9% on pro). Cache read is 50–120× cheaper than uncached.</div>
+          </div>
         </div>
         <div style="padding: 28px; background: #08090b; display: flex; flex-direction: column; gap: 18px;">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
@@ -89,10 +97,39 @@ import Footer from "../components/Footer.astro";
         <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">3.74M</div>
         <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">2.10M</div>
         <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">5.84M</div>
+        <div style="background: #0f1114; padding: 10px; color: var(--color-text-muted);">↳ cache read</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-accent);">1.08M</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text-faint);">256</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-accent);">1.08M</div>
+        <div style="background: #0f1114; padding: 10px; color: var(--color-text-muted);">↳ cache write</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text-faint);">—</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text-faint);">—</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text-faint);">—</div>
+        <div style="background: #0f1114; padding: 10px; color: var(--color-text);">Output tokens</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">833K</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">156K</div>
+        <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">990K</div>
         <div style="background: var(--color-bg-raised); padding: 10px; color: var(--color-text-heading); font-weight: 600;">Cost (USD)</div>
         <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-text-heading);">$1.88</div>
         <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-text-heading);">$0.34</div>
         <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-accent);">$2.22</div>
+      </div>
+      <p style="margin: 14px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">
+        <span style="color: var(--color-accent); font-weight: 600;">Cache read 1.08M</span> — 18.5% всех входных токенов прочитано из кэша (почти всё на pro). Без кэша неделя стоила бы ≈$3.10 вместо $2.22, а off-peak кэш снижает цену flash-запросов в 4 раза. Кэш — главный рычаг экономии после делегирования.
+      </p>
+
+      <div style="margin-top: 32px; border: 1px solid var(--color-border); background: var(--color-bg); padding: 20px;">
+        <h4 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-heading); font-family: var(--font-mono);">Current DeepSeek list prices — 2026-07-03, USD per 1M tokens</h4>
+        <p style="margin: 6px 0 0; font-size: 12px; color: var(--color-text-label);">Source: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">src/usage.js DEFAULT_PRICES</code> — override via <code style="font-family: var(--font-mono); color: var(--color-text-muted);">TRISS_PRICE_&lt;MODEL&gt;</code>. Off-peak 01:30–07:30 UTC is 50% off input for flash (calculator uses 75% off as in prototype).</p>
+        <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 14px; font-family: var(--font-mono); font-size: 12px;">
+          <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-text-label);">metric</div>
+          <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-accent); text-align: right;">flash — $0.14 / $0.0028 / $0.28</div>
+          <div style="background: var(--color-bg-raised); padding: 8px; color: #e0a458; text-align: right;">pro — $0.435 / $0.0036 / $0.87</div>
+          <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">input uncached / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.14</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.435</div>
+          <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">cache read / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right; color: var(--color-accent);">$0.0028</div><div style="background: var(--color-bg); padding: 8px; text-align: right; color: var(--color-accent);">$0.0036</div>
+          <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">output / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.28</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.87</div>
+        </div>
+        <p style="margin: 10px 0 0; font-size: 11.5px; color: var(--color-text-label);">Калькулятор ниже считает честно: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">workerCost = IN* (1-hit)*inputPrice + IN*hit*cachePrice + OUT*outputPrice</code> — раньше кэш игнорировался и бралась средняя $0.0052/$0.0131.</p>
       </div>
       <div style="margin-top: 16px; display: flex; gap: 12px; font-size: 12.5px;">
         <span style="background: var(--color-accent); color: #0b0d10; padding: 6px 10px; font-family: var(--font-mono);">Worker, off-peak $0.010</span>
@@ -124,16 +161,29 @@ import Footer from "../components/Footer.astro";
   <script>
     const IN_TOK = 28, OUT_TOK = 4.7, SUM_IN = 1.5, SUM_OUT = 0.3;
     const PRIMARY = { mid: { inP: 3, outP: 15 }, top: { inP: 15, outP: 75 } };
-    const WORKER = { flash: 0.0052, pro: 0.0131 };
-    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", offpeak: false };
+    // DeepSeek list prices 2026-07-03, USD per 1M tokens (src/usage.js)
+    const DEEPSEEK = {
+      flash: { input: 0.14, cache: 0.0028, output: 0.28 },
+      pro: { input: 0.435, cache: 0.003625, output: 0.87 }
+    };
+    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", offpeak: false, cacheHit: 18 };
     function money(v) {
       if (v >= 1000) return "$" + Math.round(v).toLocaleString("en-US");
       if (v >= 100) return "$" + v.toFixed(0);
       return "$" + v.toFixed(2);
     }
+    function workerPer(worker, hit, offpeak) {
+      const d = DEEPSEEK[worker];
+      const inputCost = IN_TOK * (1 - hit/100) * d.input / 1000;
+      const cacheCost = IN_TOK * (hit/100) * d.cache / 1000;
+      const outCost = OUT_TOK * d.output / 1000;
+      let total = inputCost + cacheCost + outCost;
+      if (offpeak && worker === 'flash') total *= 0.25;
+      return total;
+    }
     function render() {
       const p = PRIMARY[s.primary];
-      const wPer = WORKER[s.worker] * (s.offpeak ? 0.25 : 1);
+      const wPer = workerPer(s.worker, s.cacheHit, s.offpeak);
       const primaryPer = (IN_TOK * p.inP + OUT_TOK * p.outP) / 1000;
       const summaryPer = (SUM_IN * p.inP + SUM_OUT * p.outP) / 1000;
       const monthly = s.reqs * 30;
@@ -149,12 +199,18 @@ import Footer from "../components/Footer.astro";
       document.getElementById("c-saved").textContent = "saves " + money(saved) + " / month \u00b7 " + Math.round((saved/without)*100) + "% less";
       document.getElementById("c-annual").textContent = money(saved*12);
       const bd = document.getElementById("c-breakdown");
-      if (bd) bd.innerHTML = [
-        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Requests / month</span><span style='font-family:var(--font-mono);'>"+monthly.toLocaleString()+"</span></div>",
-        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Kept on primary</span><span style='font-family:var(--font-mono);'>"+Math.round(kept).toLocaleString()+" \u00b7 "+money(kept*primaryPer)+"</span></div>",
-        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Run by worker</span><span style='font-family:var(--font-mono);'>"+Math.round(delegated).toLocaleString()+" \u00b7 "+money(delegated*wPer)+"</span></div>",
-        "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Summaries read back</span><span style='font-family:var(--font-mono);'>"+money(delegated*summaryPer)+"</span></div>",
-      ].join("");
+      if (bd) {
+        const d = DEEPSEEK[s.worker];
+        const inUncached = (IN_TOK * (1 - s.cacheHit/100) * d.input / 1000).toFixed(4);
+        const inCache = (IN_TOK * (s.cacheHit/100) * d.cache / 1000).toFixed(5);
+        bd.innerHTML = [
+          "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Requests / month</span><span style='font-family:var(--font-mono);'>"+monthly.toLocaleString()+"</span></div>",
+          "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Kept on primary</span><span style='font-family:var(--font-mono);'>"+Math.round(kept).toLocaleString()+" \u00b7 "+money(kept*primaryPer)+"</span></div>",
+          "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Run by worker</span><span style='font-family:var(--font-mono);'>"+Math.round(delegated).toLocaleString()+" \u00b7 "+money(delegated*wPer)+"</span></div>",
+          "<div style='display:flex;justify-content:space-between; padding-left:12px;'><span style='color:var(--color-text-label); font-size:11.5px;'>↳ input "+(100-s.cacheHit)+"% @ $"+d.input+" + cache "+s.cacheHit+"% @ $"+d.cache+"</span><span style='font-family:var(--font-mono); font-size:11.5px;'>$"+inUncached+" + $"+inCache+"</span></div>",
+          "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Summaries read back</span><span style='font-family:var(--font-mono);'>"+money(delegated*summaryPer)+"</span></div>",
+        ].join("");
+      }
       document.getElementById("c-mid").style.borderColor = s.primary==="mid" ? "var(--color-accent)" : "var(--color-border-strong)";
       document.getElementById("c-mid").style.color = s.primary==="mid" ? "var(--color-accent)" : "var(--color-text-muted)";
       document.getElementById("c-top").style.borderColor = s.primary==="top" ? "var(--color-accent)" : "var(--color-border-strong)";
@@ -166,6 +222,8 @@ import Footer from "../components/Footer.astro";
     }
     document.getElementById("c-reqs-slider").addEventListener("input", e => { s.reqs = parseInt(e.target.value,10); render(); });
     document.getElementById("c-share-slider").addEventListener("input", e => { s.share = parseInt(e.target.value,10); render(); });
+    const cacheSlider = document.getElementById("c-cache-slider");
+    if (cacheSlider) cacheSlider.addEventListener("input", e => { s.cacheHit = parseInt(e.target.value,10); const el=document.getElementById("c-cache"); if(el) el.textContent=s.cacheHit+"%"; render(); });
     document.getElementById("c-mid").addEventListener("click", () => { s.primary="mid"; render(); });
     document.getElementById("c-top").addEventListener("click", () => { s.primary="top"; render(); });
     document.getElementById("c-flash").addEventListener("click", () => { s.worker="flash"; render(); });
