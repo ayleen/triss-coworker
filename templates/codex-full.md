@@ -170,10 +170,12 @@ The heredoc is a shell example; over MCP, pass the same packet as the tool's
 
 ### Context and sessions
 
-Default to a **fresh anonymous run** with the complete packet. Use
-`--session <slug>` only when continuation is intentional and the previous
-task context remains relevant; do not use `--continue` as a general
-default. A new anonymous run never inherits this conversation implicitly.
+Default to a **fresh non-persistent run** with the complete packet: an
+unnamed run gets a newly generated per-run session id and is not a
+resumable conversation, so it never inherits this conversation implicitly.
+Use `--session <slug>` only when continuation is intentional and the
+previous task context remains relevant; do not use `--continue` as a
+general default.
 
 ### Final acceptance checklist
 
@@ -181,8 +183,21 @@ Before treating a coder result as done:
 
 - read the envelope's `exit_reason`, `files_changed` / `run_files_changed`,
   `diff_stat`, and `worktree`;
-- for isolated runs, inspect the retained worktree: `git status` and
-  `git diff` against the default branch;
+- for isolated runs, inspect the retained worktree directly. Triss stages
+  the deliverable changes (`git add`) before returning the envelope, so
+  check BOTH the staged and the unstaged state (set `$worktree` to the
+  envelope's `worktree` path):
+
+```bash
+git -C "$worktree" status --short
+git -C "$worktree" diff --cached --stat
+git -C "$worktree" diff --cached
+git -C "$worktree" diff
+```
+
+  Isolation worktrees start from the HEAD that was checked out when the run
+  started, not necessarily the repository's default branch — do not assume
+  `main` is the diff base;
 - verify the checks the coder claims actually ran — a model sentence is not
   a test result;
 - check for unrelated or accidental edits in the diff;

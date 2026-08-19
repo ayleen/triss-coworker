@@ -338,19 +338,52 @@ verifier -> reviewer chain — use `triss ask` / `triss fetch` for
 research-only work and `triss review` only when complexity, security
 sensitivity, or regression risk materially improves confidence. Split work
 across coders only when the streams are independently executable with
-explicit merge or handoff boundaries. Prefer a fresh anonymous run with the
-complete task packet over `--session` / `--continue` reuse.
+explicit merge or handoff boundaries. Prefer a fresh non-persistent run with
+the complete task packet over `--session` / `--continue` reuse.
 
 Pass the whole plan as one task packet — Goal, Plan, Constraints, Relevant
 context, Success criteria, Validation, Return — via `triss coder run --stdin`
-for long prompts or as the MCP `prompt` string. `triss agent-help` prints
-the generated host-agent cookbook with the copy-pasteable CLI example and
-the final acceptance checklist.
+for long prompts or as the MCP `prompt` string:
+
+```bash
+triss coder run --stdin --isolate <<'TASK'
+Goal
+- Add the requested behavior.
+
+Plan
+- Follow the host-approved implementation steps.
+
+Constraints
+- Preserve existing public behavior outside the requested scope.
+- Do not commit, push, deploy, or modify files outside this checkout.
+
+Success criteria
+- Focused regression tests pass.
+- The final diff contains only the requested change.
+
+Validation
+- Run the relevant repository-native focused tests.
+
+Return
+- Outcome, files changed, checks, and unresolved blockers.
+TASK
+```
+
+`triss agent-help` prints the generated host-agent cookbook and the final
+acceptance checklist.
 
 Existing `triss coder init` installations keep their generated agent files
-(`init` never overwrites them). To adopt the stronger coder/researcher
-roles, re-scaffold in a fresh checkout or update
-`.opencode/agents/coder.md` / `.opencode/agents/researcher.md` manually.
+(`init` never overwrites them, so re-running it alone will not refresh
+them). To adopt the stronger coder/researcher roles:
+
+- local scope: merge or replace `./.opencode/agents/coder.md` /
+  `./.opencode/agents/researcher.md`;
+- global scope (the `triss coder init` default): merge or replace
+  `~/.config/opencode/agents/coder.md` /
+  `~/.config/opencode/agents/researcher.md`;
+- to regenerate them, back up or remove the generated files first, then
+  re-run `triss coder init` with the matching explicit `--local` / `--global`
+  scope.
 
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |

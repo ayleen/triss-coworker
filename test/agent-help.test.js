@@ -200,7 +200,7 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       `${target} full cookbook must allow parallelism only for independent workstreams with explicit boundaries`,
     );
     assert.ok(
-      out.includes('task packet') && out.includes('fresh anonymous run'),
+      out.includes('task packet') && out.includes('fresh non-persistent run'),
       `${target} full cookbook must prefer fresh explicit task packets`,
     );
     assert.ok(
@@ -208,9 +208,12 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       `${target} full cookbook must reserve final acceptance to the host after inspecting the actual diff`,
     );
     assert.ok(
+      out.includes('git -C "$worktree" status --short') && out.includes('diff --cached'),
+      `${target} full cookbook must inspect staged and unstaged state in the retained worktree`,
+    );
+    assert.ok(
       out.includes('not browser automation'),
       `${target} full cookbook must not claim browser automation for triss fetch`,
     );
   }
 });
-

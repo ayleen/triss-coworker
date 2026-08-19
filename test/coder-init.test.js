@@ -1957,4 +1957,3 @@ test(
     assert.match(readFileSync(coderAgentPath, 'utf8'), /my own coder agent/);
   }),
 );
-
