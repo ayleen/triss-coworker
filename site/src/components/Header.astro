@@ -12,10 +12,19 @@ const linkStyle = (active: boolean) =>
   >
     <a
       href="/"
-      style="display: flex; align-items: center; gap: 10px; color: var(--color-text-heading); font-family: var(--font-mono); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none;"
+      style="display: flex; align-items: center; gap: 12px; color: var(--color-text-heading); font-family: var(--font-mono); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none;"
     >
-      <img src="/triss-mark.svg" alt="Triss mark" width="24" height="24" style="display: block;" />
-      <span>triss</span>
+      <img
+        src="/triss-avatar.png"
+        alt="Triss mascot"
+        width="36"
+        height="36"
+        style="display: block; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);"
+      />
+      <span style="display: flex; flex-direction: column; line-height: 1;">
+        <span style="font-size: 15px; letter-spacing: -0.02em;">triss</span>
+        <span style="font-size: 9px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint); margin-top: 1px;">coworker</span>
+      </span>
     </a>
     <nav style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
       <a href="/#how" style={linkStyle(current === "how")}>How it works</a>
