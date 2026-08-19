@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.1] — 2026-08-19
+
+### Fixed
+
+- Propagate cancellation through the main MCP review path and fail closed
+  before invoking the provider when the request is already aborted.
+
+### Documentation
+
+- Align GLM review documentation and templates with model-sized automatic
+  token budgets and the explicit `max_tokens >= 16384` guidance.
+
+### Artifact integrity (0.37.1)
+
+- `triss-dsh-provider-bundle-0.37.1.tgz` — sha256
+  `2fc3ff982bf94982552a820da395c98c2b37638bd84ed298eafe2638e74f3683`,
+  integrity `sha512-f0CDbccY9yjxZ0b3qq2XFxaSzcrMb8vLHxRGavIIk0jp+t2m9tN3R6V9v9QVZtxfExHCW5zUeFU24mzQsA4Cig==`
+  (computed with the pinned release npm 11.6.2 via
+  `npm pack`; `npm pack` output is byte-deterministic).
+- Root `triss-coworker-0.37.1.tgz` sha256 is reproducible via
+  `npm pack` at tag `v0.37.1` (the root tarball ships `CHANGELOG.md`, so its
+  hash cannot be recorded inside this file); registry verification compares
+  the packed artifact against the published tarball byte-for-byte.
+
 ## [0.37.0] — 2026-08-18
 
 ### Added
@@ -1353,7 +1377,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...HEAD
+[0.37.1]: https://github.com/ayleen/triss-coworker/compare/v0.37.0...v0.37.1
 [0.34.0]: https://github.com/ayleen/triss-coworker/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/ayleen/triss-coworker/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/ayleen/triss-coworker/compare/v0.31.1...v0.32.0
