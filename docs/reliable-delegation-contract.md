@@ -20,8 +20,10 @@ codes, and the execution-capability model.
   `--session <slug>` or a generated per-run slug. A generated slug is
   correlation evidence, never an implicit continuation of your
   conversation; its anonymity status depends on the engine and isolation:
-  an unnamed *non-isolated* run (any engine) gets an `anon-<32 lowercase hex>`
-  id (`anonymous: true`); an unnamed *isolated* opencode run reuses its
+  an unnamed *non-isolated* run on the `opencode` or `crush` engine gets an
+  `anon-<32 lowercase hex>` id (`anonymous: true`); the `opencode2` beta
+  envelope reports neither `session_slug` nor `expectation`; an unnamed
+  *isolated* opencode run reuses its
   per-run worktree slug `run-<6 lowercase hex>` as the session id
   (`anonymous: false`, correlation only, not resumable); an unnamed
   *isolated* crush run gets the same `run-<6 lowercase hex>` slug and also

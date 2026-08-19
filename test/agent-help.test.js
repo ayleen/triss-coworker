@@ -224,6 +224,10 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       `${target} full cookbook checklist must treat a null worktree plus empty run_files_changed as no retained deliverable`,
     );
     assert.ok(
+      out.includes('files_changed` on the `opencode2` beta'),
+      `${target} full cookbook checklist must also accept the opencode2 no-deliverable form (files_changed)`,
+    );
+    assert.ok(
       out.includes('older envelope'),
       `${target} full cookbook must note the opencode2 beta returns the older envelope without Release A fields`,
     );

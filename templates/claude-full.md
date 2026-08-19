@@ -446,8 +446,9 @@ Before treating a coder result as done:
   `run_files_changed`; the `opencode2` beta returns the older envelope
   without it);
 - for isolated runs, inspect the retained worktree only when the envelope
-  returns one: if `worktree` is null and `run_files_changed` is empty, the
-  run produced **no retained deliverable** (Triss removed the disposable
+  returns one: if `worktree` is null and `run_files_changed` — or
+  `files_changed` on the `opencode2` beta — is empty, the run produced
+  **no retained deliverable** (Triss removed the disposable
   worktree) — skip the git inspection. Otherwise Triss stages the
   deliverable changes (`git add`) before returning the envelope, so check
   BOTH the staged and the unstaged state (set `$worktree` to the

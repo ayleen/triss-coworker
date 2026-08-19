@@ -754,8 +754,9 @@ envelope shape (`session_id`, `exit_reason`, `final_text`, `files_changed`,
 changes-expectation evidence is `run_files_changed`. Process completion and a
 non-empty final text are not task satisfaction — use `--isolate`, check
 `run_files_changed` in the envelope, and verify the retained worktree/diff
-directly when the envelope returns one (a run with `run_files_changed: []`
-and `worktree: null` produced no retained deliverable): `git status --short`,
+directly when the envelope returns one (a run with `worktree: null` and an
+empty `run_files_changed` — or empty `files_changed` on the `opencode2` beta
+— produced no retained deliverable): `git status --short`,
 then review the staged patch with `git diff --cached` and any unstaged
 changes with `git diff` (Triss stages the deliverable changes before
 returning the envelope). Unavailable OS sandbox/cleanup/lock/quota does not block a
