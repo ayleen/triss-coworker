@@ -65,7 +65,6 @@ reference. Do **not** delegate:
 - edits that need exact line numbers (use direct read/edit instead),
 - tasks under ~2000 tokens (delegation overhead costs more).
 
-
 ## Recommended host-agent workflow
 
 ### Core workflow
@@ -153,6 +152,10 @@ Constraints
 - Preserve existing public behavior outside the requested scope.
 - Do not commit, push, deploy, or modify files outside this checkout.
 
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
+
 Success criteria
 - Focused regression tests pass.
 - The final diff contains only the requested change.
@@ -188,12 +191,12 @@ Before treating a coder result as done:
   check BOTH the staged and the unstaged state (set `$worktree` to the
   envelope's `worktree` path):
 
-```bash
-git -C "$worktree" status --short
-git -C "$worktree" diff --cached --stat
-git -C "$worktree" diff --cached
-git -C "$worktree" diff
-```
+  ```bash
+  git -C "$worktree" status --short
+  git -C "$worktree" diff --cached --stat
+  git -C "$worktree" diff --cached
+  git -C "$worktree" diff
+  ```
 
   Isolation worktrees start from the HEAD that was checked out when the run
   started, not necessarily the repository's default branch — do not assume

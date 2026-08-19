@@ -471,9 +471,12 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   worktree; user-remediable slug/branch conflicts containing
   `already exists` still fail closed even with the opt-in)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
-  tool argument). There is intentionally no `expectation` field: the strict
-  expectation gate is still a designed contract and is not exposed until a
-  capability gate is met (see docs/reliable-delegation-release-a.md).
+  tool argument). There is intentionally no `expectation` *input* field:
+  the strict expectation gate is still a designed contract and is not
+  exposed as a caller input until a capability gate is met (see
+  docs/reliable-delegation-release-a.md). Note the returned envelope still
+  reports a constant `expectation: "either"` output field — that is
+  informational, not an accepted caller control.
   Returns the JSON envelope — `engine`, `engine_version`,
   `session_id`, `session_slug`, `result_retention`, `result_id`,
   `execution_capabilities`, `exit_reason`, `final_text`, `files_changed`,

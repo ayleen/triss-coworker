@@ -111,7 +111,7 @@ The coder must run checks, debug failures, inspect its own result, and report ev
 
 ### D5. Prefer fresh explicit context
 
-Normal tasks use a fresh anonymous coder run. The host passes a complete task packet explicitly, preferably via MCP structured input or `triss coder run --stdin` for long prompts.
+Normal tasks use a fresh non-persistent coder run. The host passes a complete task packet explicitly, preferably via MCP structured input or `triss coder run --stdin` for long prompts.
 
 Use `--session` only when continuation is intentional and the previous task context remains relevant. Do not use `--continue` as a general default.
 
@@ -177,6 +177,10 @@ Plan
 Constraints
 - Preserve existing public behavior outside the requested scope.
 - Do not commit, push, deploy, or modify files outside this checkout.
+
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
 
 Success criteria
 - Focused regression tests pass.
@@ -253,7 +257,7 @@ Add, in this order:
 1. `Core workflow` with the normal host -> one coder -> host path.
 2. A routing decision table for ask/fetch, coder, review, and host browser tools.
 3. The reusable task packet.
-4. Context/session policy: fresh anonymous run by default, explicit session reuse only when needed.
+4. Context/session policy: fresh non-persistent run by default (an unnamed run gets a generated per-run session id and is reported `anonymous: false`), explicit session reuse only when needed.
 5. Final acceptance checklist based on the actual envelope, worktree, `git status`, and `git diff`.
 6. A short section on independent parallel workstreams and explicit handoff boundaries.
 

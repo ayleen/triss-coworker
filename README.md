@@ -357,6 +357,10 @@ Constraints
 - Preserve existing public behavior outside the requested scope.
 - Do not commit, push, deploy, or modify files outside this checkout.
 
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
+
 Success criteria
 - Focused regression tests pass.
 - The final diff contains only the requested change.
@@ -745,7 +749,9 @@ result-store quota and a successful reservation), and `execution_capabilities`
 changes-expectation evidence is `run_files_changed`. Process completion and a
 non-empty final text are not task satisfaction — use `--isolate`, check
 `run_files_changed` in the envelope, and verify the retained worktree/diff
-(`git status`, `git diff`) directly. Unavailable OS sandbox/cleanup/lock/quota does not block a
+directly: `git status --short`, then review the staged patch with
+`git diff --cached` and any unstaged changes with `git diff` (Triss stages
+the deliverable changes before returning the envelope). Unavailable OS sandbox/cleanup/lock/quota does not block a
 non-isolated/best-effort run but provides none of those guarantees; explicit
 or default isolation needs `--allow-best-effort-caller-worktree` (default
 off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`

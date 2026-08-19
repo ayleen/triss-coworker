@@ -19,10 +19,13 @@ wording.
 
 - `session_id` is the engine's real session identifier (e.g. an OpenCode
   session id), when the engine reports one.
-- `session_slug` is the triss-side v2 slug. An explicit `--session <slug>`
-  selects the per-engine v2 store for that slug; an unnamed run receives an
-  anonymous generated slug `anon-<32 lowercase hex>` which is correlation
-  evidence, NOT an implicit persistent conversation.
+- `session_slug` is the triss-side v2 slug, either the explicit
+  `--session <slug>` or a generated per-run slug. A generated slug is
+  correlation evidence, NOT an implicit persistent conversation: an unnamed
+  *crush* run (isolated or not) and an unnamed *non-isolated* opencode run
+  receive an anonymous `anon-<32 lowercase hex>` id (`anonymous: true`),
+  while an unnamed *isolated* opencode run reuses its per-run worktree slug
+  `run-<6 lowercase hex>` as the session id and is reported `anonymous: false`.
 - Legacy `.triss/sessions.json` (the shared map) and direct real engine ids
   can neither select nor clean a v2 session.
 
@@ -43,8 +46,8 @@ wording.
 - Non-isolated `files_changed` is `null` (NOT `[]`) — a Release A
   compatibility change. Consumers that require an array must branch on
   `envelope_version` and `change_detection.status`.
-- `change_summary` carries the bounded human-readable summary; `diff_stat`
-  falls back truthfully to `null` when the diff source is unavailable.
+- `diff_stat` carries the bounded diff summary and falls back truthfully to
+  `null` when the diff source is unavailable.
 - Null/empty semantics are exact: an unreported class is `null`, never `0`.
 
 ### Expectation exit codes
@@ -57,7 +60,14 @@ wording.
 > (`cleanup_status: "verified"`, `change_detection.status: "verified"`)
 > without weakening the result matrix. Today: use `--isolate`, check
 > `run_files_changed` in the envelope, and inspect the retained
-> worktree/diff (`git status`, `git diff`) directly.
+> worktree/diff directly: `git status --short`, the staged patch with
+> `git diff --cached` (Triss stages the deliverables before returning the
+> envelope), and any unstaged changes with `git diff`.
+>
+> This note is about the *input* gate (`--expect` / the MCP `expectation`
+> argument): the returned envelope still reports a constant
+> `expectation: "either"` output field, which is informational, not a caller
+> control.
 
 `--expect changes|analysis` selects the deterministic expectation gate.
 Process completion is NOT task satisfaction: a finished run whose expectation

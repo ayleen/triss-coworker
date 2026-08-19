@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -216,4 +216,39 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       `${target} full cookbook must not claim browser automation for triss fetch`,
     );
   }
+});
+
+test('AGENT-HELP-08: task packets are complete and acceptance fences stay in the list item', () => {
+  const repoRoot = resolve(dirname(TRISS_BIN), '..');
+  const read = (file) => readFileSync(join(repoRoot, file), 'utf8');
+  const packetFiles = ['README.md', 'templates/claude-full.md', 'templates/codex-full.md'];
+  for (const file of packetFiles) {
+    const content = read(file);
+    const packet = content.match(/triss coder run --stdin --isolate <<'TASK'\n([\s\S]*?)\nTASK\n```/);
+    assert.ok(packet, `${file} must include the copy-paste task-packet heredoc`);
+    assert.match(
+      packet[1],
+      /Relevant context\n- Known entry points, related files, prior findings, errors, or reference behavior\.\n- Include only context needed for this task; let the coder inspect the repository for the rest\.\n\nSuccess criteria/,
+      `${file} task packet must include Relevant context before Success criteria`,
+    );
+  }
+  const acceptanceFences = ['templates/claude-full.md', 'templates/codex-full.md'].map((file) => {
+    const content = read(file);
+    const checklist = content.slice(content.indexOf('### Final acceptance checklist'));
+    const fence = checklist.match(/\n {2}```bash\n([\s\S]*?)\n {2}```\n\n {2}Isolation worktrees/);
+
+    assert.ok(fence, `${file} must indent the acceptance fence and following base note inside the list item`);
+    assert.doesNotMatch(
+      checklist,
+      /\n```bash\n(?:git -C "\$worktree" [^\n]*\n){4}/,
+      `${file} must not split the list item with a column-0 fence`,
+    );
+    return fence[0];
+  });
+
+  assert.equal(
+    acceptanceFences[0],
+    acceptanceFences[1],
+    'Claude and Codex acceptance checklist fences must remain semantically identical',
+  );
 });
