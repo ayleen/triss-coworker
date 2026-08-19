@@ -36,27 +36,45 @@ jobs:
         run: npm ci
       - name: Astro check
         working-directory: site
-        run: npm run check --if-present || npx astro check
+        run: npx astro check
       - name: Lint
         working-directory: site
-        run: npm run lint --if-present || echo "no lint"
+        run: npm run lint
       - name: Build
         working-directory: site
         run: npm run build
       - name: Link check
         working-directory: site
         run: |
-          npx --yes link-checker --help 2>&1 | head || echo "link check placeholder"
-          # Simple internal link check: fail if any href="/" points to missing dist file
           node -e "
           import fs from 'node:fs';
+          import path from 'node:path';
           const dist='dist';
-          const files=[...fs.readdirSync(dist,{recursive:true})].filter(f=>f.endsWith('.html'));
-          console.log('built',files.length,'pages');
+          const htmlFiles=[...fs.readdirSync(dist,{recursive:true})].filter(f=>f.endsWith('.html'));
+          console.log('built',htmlFiles.length,'pages');
           if(!fs.existsSync(dist+'/sitemap-index.xml')){console.error('missing sitemap');process.exit(1)}
           if(!fs.existsSync(dist+'/robots.txt')){console.error('missing robots');process.exit(1)}
+          // Check internal hrefs point to existing files
+          let broken=0;
+          for(const f of htmlFiles){
+            const html=fs.readFileSync(path.join(dist,f),'utf8');
+            const hrefs=[...html.matchAll(/href=\"(\\/[^\"#?]*)/g)].map(m=>m[1]);
+            for(const href of hrefs){
+              if(href.startsWith('/_astro')||href.startsWith('/favicon')||href.startsWith('/triss')||href.startsWith('/apple')||href.startsWith('/icon')||href.startsWith('/og-image')||href.startsWith('/site.webmanifest')) continue;
+              const target=href==='/'?'index.html':href.replace(/^\\//,'')+'/index.html';
+              const alt=href.replace(/^\\//,'');
+              if(!fs.existsSync(path.join(dist,target)) && !fs.existsSync(path.join(dist,alt)) && !fs.existsSync(path.join(dist,href.replace(/^\\//,''))))){
+                console.error('broken link',href,'in',f);
+                broken++;
+              }
+            }
+          }
+          if(broken>0){console.error(broken,'broken links');process.exit(1)}
           console.log('link check passed');
           "
+      - name: Tests
+        working-directory: site
+        run: npm test
       - name: Upload dist
         if: failure()
         uses: actions/upload-artifact@v4

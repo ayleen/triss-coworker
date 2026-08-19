@@ -25,17 +25,17 @@ import Footer from "../components/Footer.astro";
         <div style="padding: 28px; display: flex; flex-direction: column; gap: 26px; border-right: 1px solid var(--color-border-subtle);">
           <div>
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
-              <span style="font-size: 14px; color: var(--color-text-secondary);">Agent requests per day</span>
+              <label for="c-reqs-slider" style="font-size: 14px; color: var(--color-text-secondary);">Agent requests per day</label>
               <span id="c-reqs" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">40</span>
             </div>
-            <input id="c-reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" />
+            <input id="c-reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" aria-label="Agent requests per day" />
           </div>
           <div>
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
-              <span style="font-size: 14px; color: var(--color-text-secondary);">Share delegated to Triss</span>
+              <label for="c-share-slider" style="font-size: 14px; color: var(--color-text-secondary);">Share delegated to Triss</label>
               <span id="c-share" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">65%</span>
             </div>
-            <input id="c-share-slider" type="range" min="0" max="90" step="5" value="65" style="width: 100%;" />
+            <input id="c-share-slider" type="range" min="0" max="90" step="5" value="65" style="width: 100%;" aria-label="Share delegated to Triss" />
             <div style="font-size: 12.5px; color: var(--color-text-label); margin-top: 9px;">Measured week ran at roughly two thirds — bulk reads, reviews, fetches, commit messages.</div>
           </div>
           <div>
@@ -55,10 +55,10 @@ import Footer from "../components/Footer.astro";
           </div>
           <div>
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
-              <span style="font-size: 14px; color: var(--color-text-secondary);">Cache hit rate</span>
+              <label for="c-cache-slider" style="font-size: 14px; color: var(--color-text-secondary);">Cache hit rate</label>
               <span id="c-cache" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">77%</span>
             </div>
-            <input id="c-cache-slider" type="range" min="0" max="99" step="1" value="77" style="width: 100%;" />
+            <input id="c-cache-slider" type="range" min="0" max="99" step="1" value="77" style="width: 100%;" aria-label="Cache hit rate" />
             <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">average 90–95% now, week 18.5% overall (28.9% on pro)</div>
           </div>
         </div>
@@ -113,7 +113,7 @@ import Footer from "../components/Footer.astro";
         <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-accent);">$2.22</div>
       </div>
       <p style="margin: 14px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">
-        <span style="color: var(--color-accent); font-weight: 600;">Cache read 1.08M</span> — 18.5% всех входных токенов прочитано из кэша (почти всё на pro). Без кэша неделя стоила бы ≈$3.10 вместо $2.22, а off-peak кэш снижает цену flash-запросов в 4 раза. Кэш — главный рычаг экономии после делегирования.
+        <span style="color: var(--color-accent); font-weight: 600;">Cache read 1.08M</span> — 18.5% of input tokens were cache hits (mostly on pro). Without cache the week would have cost ≈$3.10 instead of $2.22. Cache is the main lever after delegation.
       </p>
 
       <div style="margin-top: 32px; border: 1px solid var(--color-border); background: var(--color-bg); padding: 20px;">
