@@ -23,7 +23,7 @@ import Footer from "../components/Footer.astro";
         <div style="height: 24px;"></div>
         <div style="white-space: pre-wrap; color: var(--color-text-code);">$ triss coder run \</div>
         <div style="white-space: pre-wrap; color: var(--color-text-code);">    "add input validation to /signup" \</div>
-        <div style="white-space: pre-wrap; color: var(--color-text-code);">    --isolate --expect changes</div>
+        <div style="white-space: pre-wrap; color: var(--color-text-code);">    --isolate</div>
         <div style="height: 24px;"></div>
         <div style="white-space: pre-wrap; color: var(--color-accent);">→ 3 files changed in .triss/wt/signup</div>
         <div style="white-space: pre-wrap; color: var(--color-text-secondary);">→ your working tree: untouched</div>
@@ -83,7 +83,7 @@ import Footer from "../components/Footer.astro";
 
     const FIELDS = [
       { key: "session_slug", title: "Never an implicit conversation", body: "Either the slug you passed or a generated anonymous one. A run never silently continues a previous session.", hint: "triss coder session list" },
-      { key: "files_changed", title: "Null unless isolated", body: "Only an isolated run can honestly count changed files. Otherwise this is null.", hint: "--isolate --expect changes" },
+      { key: "files_changed", title: "Null unless isolated", body: "Only an isolated run can honestly count changed files. Otherwise this is null.", hint: "--isolate" },
       { key: "worktree", title: "A disposable checkout", body: "The isolated run happens here, never in your working tree. Triss waits for residual processes.", hint: ".triss/wt/<slug>" },
       { key: "effective_isolation", title: "Enforced, or honestly downgraded", body: "Fails before spawn unless you opted into best-effort. Advisory only when downgraded.", hint: "--allow-best-effort-caller-worktree" },
       { key: "execution_capabilities", title: "Eight honest verdicts", body: "Each capability reports enforced, best_effort, or unavailable — verified for the run.", hint: "docs/reliable-delegation-release-a.md" },

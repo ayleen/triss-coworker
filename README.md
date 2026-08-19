@@ -148,9 +148,9 @@ triss config wizard
 
 The wizard first asks **Standard** vs **Advanced**:
 
-- **Standard** — for most users. Just two prompts: API key + worker model
-  name. Triss writes the model into both `flash` and `pro` presets so
-  `--model pro` works the same as `--model flash`. No questions about
+- **Standard** — for most users. Two prompts for API key + worker model
+  (writes the model into both `flash` and `pro` so `--model pro` works), then
+  asks which agent to wire up: **Claude / Codex / Both**. No questions about
   Jira/Linear/base URL/etc. *Recommended starting point.*
 - **Advanced** — full control: separate `flash`/`pro` presets, custom
   base URL, integrations (Jira, Linear, …), default-preset choice.
@@ -206,7 +206,7 @@ top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
 
 | Mode in `triss config wizard` | What it does about your agent |
 | ----------------------------- | ------------------------------ |
-| **Standard** (default)        | Installs **both** paths automatically — MCP server *and* global agent rules. No question asked. |
+| **Standard** (default)        | After the two prompts, asks **Claude / Codex / Both** and installs MCP + global rules accordingly. |
 | **Advanced** (`--advanced`)   | Asks at the end: Both / MCP only / rules only / Skip. Default = Both. |
 
 The two paths cooperate: MCP is primary, `CLAUDE.md` / `AGENTS.md` rules are
