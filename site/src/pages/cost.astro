@@ -58,10 +58,10 @@ import Footer from "../components/Footer.astro";
           <div>
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 11px;">
               <span style="font-size: 14px; color: var(--color-text-secondary);">Cache hit rate</span>
-              <span id="c-cache" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">18%</span>
+              <span id="c-cache" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">77%</span>
             </div>
-            <input id="c-cache-slider" type="range" min="0" max="50" step="1" value="18" style="width: 100%;" />
-            <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">Measured week: 18.5% overall (28.9% on pro). Cache read is 50–120× cheaper than uncached.</div>
+            <input id="c-cache-slider" type="range" min="0" max="95" step="1" value="77" style="width: 100%;" />
+            <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">Обычно 50–95% (сейчас 77% — неделя 18.5% overall / 28.9% на pro). Cache read в 50–120× дешевле uncached.</div>
           </div>
         </div>
         <div style="padding: 28px; background: #08090b; display: flex; flex-direction: column; gap: 18px;">
@@ -166,7 +166,7 @@ import Footer from "../components/Footer.astro";
       flash: { input: 0.14, cache: 0.0028, output: 0.28 },
       pro: { input: 0.435, cache: 0.003625, output: 0.87 }
     };
-    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", offpeak: false, cacheHit: 18 };
+    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", offpeak: false, cacheHit: 77 };
     function money(v) {
       if (v >= 1000) return "$" + Math.round(v).toLocaleString("en-US");
       if (v >= 100) return "$" + v.toFixed(0);
