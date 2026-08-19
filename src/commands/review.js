@@ -1,6 +1,7 @@
 import pc from 'picocolors';
 import { chat, chatStream, reportUsage, responseText } from '../client.js';
 import { assertProviderText } from '../provider-errors.js';
+import { requestTimeoutMs } from '../config.js';
 import { resolveModelRequest } from '../models.js';
 import {
   createReviewBoundaryId,
@@ -23,6 +24,7 @@ import {
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
 import { positiveIntegerOption } from '../option-validation.js';
+import { emptyReviewResponseMessage, GLM_REVIEW_TIMEOUT_MS, GLM_REVIEW_MAX_TOKENS_CAP, GLM_REVIEW_SHARD_MAX_TOKENS, glmReviewMaxTokens } from '../review-defaults.js';
 
 const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
@@ -220,6 +222,13 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     model: opts.model || 'pro',
   });
   const { provider, model } = request;
+  // GLM reviews get the model-sized budget, thinking enabled, and a long
+  // timeout — but only when the user did not pass --max-tokens themselves.
+  const isGlm = provider === 'glm';
+  const explicitMaxTokens = opts.maxTokens !== undefined;
+  const reviewMaxTokens = isGlm && !explicitMaxTokens ? Math.min(glmReviewMaxTokens(model), GLM_REVIEW_MAX_TOKENS_CAP) : maxTokens;
+  const readRequestTimeout = deps.requestTimeoutMs || requestTimeoutMs;
+  const reviewTimeoutMs = isGlm ? readRequestTimeout() ?? GLM_REVIEW_TIMEOUT_MS : undefined;
 
   const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
   let ticketCorpus = '';
@@ -286,6 +295,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       return undefined;
     }
 
+    const shardMaxTokens = isGlm && !explicitMaxTokens ? Math.min(glmReviewMaxTokens(model), GLM_REVIEW_SHARD_MAX_TOKENS) : maxTokens;
+    const shardRequestBase = isGlm ? { thinking: true, timeoutMs: reviewTimeoutMs } : {};
     const result = await executeReviewPlan(
       {
         callModel: async ({ shard, question, metadata }) => {
@@ -295,15 +306,22 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
           ].join('\n\n');
           const resp = await sendChat({
             ...request,
-            maxTokens,
+            maxTokens: shardMaxTokens,
             messages: [
               { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
               { role: 'user', content: shardCorpus },
               { role: 'user', content: question },
             ],
             label: 'triss/review',
+            ...shardRequestBase,
           });
-          return assertProviderText(responseText(resp));
+          const text = responseText(resp);
+          if (!text || !text.trim()) {
+            const err = new Error(emptyReviewResponseMessage({ finishReason: resp?.choices?.[0]?.finish_reason, explicitMaxTokens, labeled: true }));
+            err.code = 'TRISS_PROVIDER_EMPTY';
+            throw err;
+          }
+          return assertProviderText(text);
         },
         limits,
       },
@@ -403,17 +421,98 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
           { role: 'user', content: question },
         ];
         const useStream = shouldStream(opts);
-        const resp = useStream
-          ? await sendChatStream({
-              ...request,
-              maxTokens,
-              messages,
-              label: 'triss/review',
-              onChunk: (d) => process.stdout.write(d),
-            })
-          : await sendChat({ ...request, maxTokens, messages, label: 'triss/review' });
-        process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/review', { provider: request.provider }) + '\n'));
-        return assertProviderText(responseText(resp));
+        // Reasoning stays on stderr and the verdict on stdout. Combined
+        // terminal output needs a visible boundary between them: the first
+        // reasoning chunk opens a "[triss/review thinking]" line, chunks
+        // concatenate on it (no per-chunk newlines), and exactly one newline
+        // is written before the verdict — or before the no-verdict failure —
+        // so the final content never joins the reasoning line. Streaming can
+        // interleave reasoning and content, so a reasoning chunk that arrives
+        // AFTER content has started is buffered instead of reopening the
+        // marker in the middle of the verdict, and is emitted only once the
+        // verdict line is complete. A partial streamed verdict line is
+        // terminated so the error never joins it; usage reporting on the
+        // final chunk preserves the same line invariants.
+        let contentStarted = false;
+        let reasoningOpen = false;
+        let pendingReasoning = '';
+        let stdoutLineOpen = false;
+        const closeReasoning = () => {
+          if (!reasoningOpen) return;
+          process.stderr.write('\n');
+          reasoningOpen = false;
+        };
+        const onReasoning = (d) => {
+          if (contentStarted) { pendingReasoning += d; return; }
+          if (!reasoningOpen) {
+            process.stderr.write(pc.dim('[triss/review thinking]\n'));
+            reasoningOpen = true;
+          }
+          process.stderr.write(pc.dim(d));
+        };
+        const flushPendingReasoning = () => {
+          if (!pendingReasoning) return;
+          process.stderr.write(pc.dim('[triss/review thinking]\n'));
+          process.stderr.write(pc.dim(pendingReasoning) + '\n');
+          pendingReasoning = '';
+        };
+        const terminatePartialStdout = () => {
+          if (!stdoutLineOpen) return;
+          process.stdout.write('\n');
+          stdoutLineOpen = false;
+        };
+        const reviewRequest = {
+          ...request,
+          maxTokens: reviewMaxTokens,
+          messages,
+          label: 'triss/review',
+          onChunk: (d) => {
+            if (!contentStarted) { contentStarted = true; closeReasoning(); }
+            process.stdout.write(d);
+            stdoutLineOpen = !String(d).endsWith('\n');
+          },
+          ...(isGlm ? { thinking: true, timeoutMs: reviewTimeoutMs, onReasoning } : {}),
+        };
+        let resp;
+        try {
+          resp = useStream
+            ? await sendChatStream(reviewRequest)
+            : await sendChat(reviewRequest);
+        } catch (error) {
+          closeReasoning();
+          terminatePartialStdout();
+          flushPendingReasoning();
+          throw error;
+        }
+        const out = responseText(resp);
+        if (!out || !out.trim()) {
+          closeReasoning();
+          terminatePartialStdout();
+          flushPendingReasoning();
+          const err = new Error(
+            emptyReviewResponseMessage({
+              finishReason: resp?.choices?.[0]?.finish_reason,
+              explicitMaxTokens,
+              labeled: true,
+            }),
+          );
+          err.code = 'TRISS_PROVIDER_EMPTY';
+          throw err;
+        }
+        if (useStream) {
+          terminatePartialStdout();
+          flushPendingReasoning();
+          // Verdict already streamed; usage line handled below
+          const usage = reportUsage(resp, 'triss/review', { provider: request.provider });
+          if (usage) process.stderr.write(pc.dim('\n' + usage + '\n'));
+          return out;
+        }
+        // Non-streaming path: usage is emitted here; the verdict itself is
+        // printed exactly once by the runReviewWithDeps tail (shouldStream check).
+        closeReasoning();
+        const usage = reportUsage(resp, 'triss/review', { provider: request.provider });
+        if (usage) process.stderr.write(pc.dim('\n' + usage + '\n'));
+        return out;
       },
       limits,
     },
@@ -427,6 +526,47 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   );
 
   if (!singleResult.ok) {
+    // Provider/empty failures are typed rejections so programmatic callers
+    // (and the PR's REV-GLM-THINK-* tests) can classify and retry on the
+    // stable code. Limit/scope/parse failures remain a structured return
+    // with an exit code so the CLI can print and exit without throwing.
+    const providerFailure =
+      singleResult.code === 'TRISS_PROVIDER_EMPTY' ||
+      singleResult.code === 'TRISS_PROVIDER_UNKNOWN' ||
+      (typeof singleResult.code === 'string' && singleResult.code.startsWith('TRISS_PROVIDER_')) ||
+      singleResult.code === 'TRISS_CANCELLED';
+    if (providerFailure) {
+      // Preserve the original provider error (sentinel) when available so
+      // terminal-invariant tests (REV-GLM-THINK-12..17) see `error === sentinel`.
+      // Fall through to a synthetic typed error only when no cause survived
+      // the executor (e.g. a bare emptyResponseMessage).
+      const cause = singleResult.cause;
+      if (cause && cause instanceof Error) {
+        // Do not mutate a frozen/sealed cause — attaching properties would throw
+        // TypeError and obscure the provider failure. Try to attach safely;
+        // if the object is not extensible, wrap it instead.
+        let attached = true;
+        if (!Object.isExtensible(cause)) attached = false;
+        else {
+          try {
+            if (!cause.code && singleResult.code) cause.code = singleResult.code;
+          } catch { attached = false; }
+          try {
+            if (cause.exit === undefined && singleResult.exit !== undefined) cause.exit = singleResult.exit;
+          } catch { attached = false; }
+        }
+        if (attached) throw cause;
+        const wrapped = new Error(cause.message || singleResult.message || singleResult.code);
+        wrapped.code = singleResult.code;
+        if (singleResult.exit !== undefined) wrapped.exit = singleResult.exit;
+        wrapped.cause = cause;
+        throw wrapped;
+      }
+      const err = new Error(singleResult.message || singleResult.code);
+      err.code = singleResult.code;
+      if (singleResult.exit !== undefined) err.exit = singleResult.exit;
+      throw err;
+    }
     process.stderr.write(pc.dim(`✗ ${singleResult.message || singleResult.code}\n`));
     process.exitCode = singleResult.exit ?? REVIEW_EXIT_CODES.provider;
     return undefined;

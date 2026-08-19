@@ -4,11 +4,13 @@
 import { chat as workerChat, reportUsage, responseText } from '../client.js';
 import { assertProviderText } from '../provider-errors.js';
 import { resolveModelRequest } from '../models.js';
+import { requestTimeoutMs } from '../config.js';
+import { glmReviewMaxTokens, GLM_REVIEW_MAX_TOKENS_CAP, GLM_REVIEW_SHARD_MAX_TOKENS, GLM_REVIEW_TIMEOUT_MS, emptyReviewResponseMessage } from '../review-defaults.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
 import { validateResponseFormat, withEvidenceInstructions } from '../response-format.js';
-import { positiveIntegerOption } from '../option-validation.js';
+import { positiveIntegerOption, timerMsOption } from '../option-validation.js';
 import { PACKAGE_VERSION, compareStableVersions } from '../version.js';
 
 const ASK_SYSTEM =
@@ -21,19 +23,77 @@ const SUMMARY_SYSTEM =
   'agent. Be concise and faithful. Use bullets, preserve IDs/keys/URLs ' +
   'verbatim, and omit fluff.';
 
-async function callModel({ provider, model, messages, maxTokens = 4096 }, deps = {}) {
+// Exported so focused tests can drive the review-default and transport
+// pass-through logic without a git checkout or network.
+export async function callModel(
+  {
+    provider,
+    model,
+    messages,
+    maxTokens,
+    timeoutMs,
+    thinking,
+    purpose,
+    explicitMaxTokens,
+  },
+  deps = {},
+) {
   const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
   const sendChat = deps.chat || workerChat;
+  // Resolve the provider/model exactly once so a prefixed GLM id (zai/glm-5.2)
+  // routes to its endpoint first, and the review defaults below see the bare
+  // resolved model id rather than the raw input.
   const request = resolveRequest({ provider, model });
+  // Non-review callers keep the historical implicit 4096 budget; review
+  // callers leave an absent maxTokens absent so the provider-specific review
+  // default is applied below (GLM models get a model-sized budget, non-GLM
+  // reviews get 8192).
+  let resolvedMaxTokens = maxTokens ?? 4096;
+  let resolvedTimeoutMs = timeoutMs;
+  let resolvedThinking = thinking;
+  if (purpose === 'review') {
+    if (request.provider === 'glm') {
+      // GLM review: model-sized output budget, long timeout, thinking on.
+      // Timeout precedence: explicit timeout_ms, then configured
+      // TRISS_REQUEST_TIMEOUT_MS, then the 30-minute GLM default.
+      resolvedMaxTokens = maxTokens ?? Math.min(glmReviewMaxTokens(request.model), GLM_REVIEW_MAX_TOKENS_CAP);
+      resolvedTimeoutMs =
+        timeoutMs ?? (deps.requestTimeoutMs || requestTimeoutMs)() ?? GLM_REVIEW_TIMEOUT_MS;
+      resolvedThinking = true;
+    } else {
+      // Non-GLM reviews keep the legacy budget and their existing timeout
+      // behavior (an explicit timeout_ms still wins for any provider).
+      resolvedMaxTokens = maxTokens ?? 8192;
+    }
+  }
   const resp = await sendChat({
     ...request,
     messages,
-    maxTokens,
+    maxTokens: resolvedMaxTokens,
+    ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
+    ...(resolvedThinking ? { thinking: resolvedThinking } : {}),
+    ...(deps.signal ? { signal: deps.signal } : {}),
+    ...(deps.onReasoning ? { onReasoning: deps.onReasoning } : {}),
   });
   const text = responseText(resp);
-  // Reference surface 8: empty/whitespace-only responses fail with the
-  // stable TRISS_PROVIDER_EMPTY code (MCP transports it as an error result).
-  assertProviderText(text);
+  // Empty responses fail with the stable TRISS_PROVIDER_EMPTY code
+  // (Reference surface 8): GLM reviews get the shared actionable guidance
+  // (never "disable thinking") with err.code TRISS_PROVIDER_EMPTY; every
+  // other empty response goes through assertProviderText (same stable code).
+  if (!text || !String(text).trim()) {
+    if (purpose === 'review' && request.provider === 'glm') {
+      const err = new Error(
+        emptyReviewResponseMessage({
+          finishReason: resp?.choices?.[0]?.finish_reason,
+          explicitMaxTokens: explicitMaxTokens ?? (maxTokens !== undefined),
+          labeled: false,
+        }),
+      );
+      err.code = 'TRISS_PROVIDER_EMPTY';
+      throw err;
+    }
+    assertProviderText(text);
+  }
   // Content and the usage report are separate values; handlers compose them
   // at the response boundary, so writeHandler can drop the report entirely.
   // The provider is passed through so the line matches the persisted record.
@@ -62,11 +122,12 @@ export async function chatHandler({ prompt, system, model, max_tokens }) {
 }
 
 export async function askHandler(
-  { paths, urls, question, provider, model, max_tokens, system, response_format },
+  { paths, urls, question, provider, model, max_tokens, timeout_ms, system, response_format },
   deps = {},
 ) {
   const responseFormat = validateResponseFormat(response_format);
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
+  const timeoutMs = timerMsOption(timeout_ms, 'timeout_ms');
   if (!question) throw new Error('question is required');
   if (!paths?.length && !urls?.length) {
     throw new Error('Pass at least one of paths or urls');
@@ -89,6 +150,7 @@ export async function askHandler(
       provider,
       model,
       maxTokens,
+      timeoutMs,
       messages: [
         { role: 'system', content: withEvidenceInstructions(system || ASK_SYSTEM, responseFormat) },
         { role: 'user', content: `<corpus>\n${corpus}\n</corpus>` },
@@ -136,6 +198,7 @@ export async function reviewHandler(
     provider,
     model,
     max_tokens,
+    timeout_ms,
     response_format,
     files = null,
     issue = null,
@@ -144,7 +207,11 @@ export async function reviewHandler(
   deps = {},
 ) {
   const responseFormat = validateResponseFormat(response_format);
-  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
+  // Only explicit token budgets are validated here. An absent budget is left
+  // absent so callModel can apply the review default after it resolves the
+  // provider (GLM models get a model-sized budget; non-GLM keeps 8192).
+  const maxTokens = max_tokens === undefined ? undefined : positiveIntegerOption(max_tokens, 'max_tokens');
+  const timeoutMs = timerMsOption(timeout_ms, 'timeout_ms');
   // Lazy-import to avoid loading git/gh helpers when MCP is just listing tools.
   const { runReviewCore } = await import('./review-core.js');
   if (payload_mode === 'shard') {
@@ -160,23 +227,31 @@ export async function reviewHandler(
     provider,
     model: model || 'pro',
     maxTokens,
+    timeoutMs,
     responseFormat,
-    callModel: deps.callModel || callModel,
+    // Bind the handler deps (signal, onReasoning, requestTimeoutMs, injected
+    // chat/resolveModelRequest) onto the model-call seam so the internal
+    // callModel receives them exactly like askHandler's direct call does.
+    callModel: (input) => (deps.callModel || callModel)(input, deps),
     reviewBoundaryId: deps.reviewBoundaryId,
     files,
     issue,
+    signal: deps.signal,
   });
 }
 
 export async function reviewShardHandler(
-  { pr, base, question, provider, model, max_tokens, files = null },
+  { pr, base, question, provider, model, max_tokens, timeout_ms, files = null },
   deps = {},
 ) {
-  const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 8192);
+  // Absent max_tokens stays absent so the handler can decide the budget:
+  // single reviews cap at GLM_REVIEW_MAX_TOKENS_CAP (64K) inside callModel's
+  // purpose='review' branch; shards cap at GLM_REVIEW_SHARD_MAX_TOKENS (32K)
+  // here in the handler itself (callModel has no shard concept).
+  const maxTokens = max_tokens === undefined ? undefined : positiveIntegerOption(max_tokens, 'max_tokens');
   const { acquireReviewDiffForShard, runReviewCoreShard } = await import('./review-core.js');
   const { createReviewBoundaryId, reviewSystemPromptForFormat, wrapReviewSection } =
     await import('../review-prompt.js');
-  const { assertProviderText } = await import('../provider-errors.js');
 
   const { diff } = await acquireReviewDiffForShard({
     pr,
@@ -191,26 +266,41 @@ export async function reviewShardHandler(
   const metadata = `<change base="${base || 'auto'}">
 Sharded review: sequential whole-file shards, per-shard verdicts only.
 </change>`;
+  const timeoutMs = timeout_ms !== undefined ? timerMsOption(timeout_ms, 'timeout_ms') : undefined;
+  // Resolve provider/model once, like the CLI does (src/commands/review.js:220-224).
+  // Using the raw 'model' string (e.g. 'pro') would miss the preset mapping
+  // (pro -> glm-5.2) and glmReviewMaxTokens('pro') falls back to 16K, halving
+  // the shard budget.
+  const resolved = (deps.resolveModelRequest || resolveModelRequest)({ provider, model: model || 'pro' });
+  const shardMaxTokens = maxTokens ?? (resolved.provider === 'glm' ? Math.min(glmReviewMaxTokens(resolved.model), GLM_REVIEW_SHARD_MAX_TOKENS) : undefined);
   const result = await runReviewCoreShard({
     diff,
     question,
     metadata,
+    signal: deps.signal,
     callModel: async ({ shard, question: q }) => {
       const sections = [
         wrapReviewSection(boundaryId, 'change', metadata),
         wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((sec) => sec.raw).join('\n')}\n</diff>`),
       ].join('\n\n');
       const response = await (deps.callModel || callModel)({
-        provider,
-        model: model || 'pro',
-        maxTokens,
+        provider: resolved.provider,
+        model: resolved.model,
+        maxTokens: shardMaxTokens,
+        timeoutMs,
+        purpose: 'review',
+        explicitMaxTokens: maxTokens !== undefined,
         messages: [
           { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
           { role: 'user', content: sections },
           { role: 'user', content: q },
         ],
-      });
-      return assertProviderText(response.content);
+      }, deps);
+      // callModel already rejects empty responses with TRISS_PROVIDER_EMPTY
+      // and the shared actionable message (finishReason + explicitMaxTokens);
+      // no second empty check is needed here — it would only replace that
+      // guidance with a weaker generic message.
+      return response.content;
     },
   });
   if (!result.ok) {

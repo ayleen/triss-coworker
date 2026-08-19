@@ -16,7 +16,12 @@ import {
   ZAI_PAYG_BASE_URL,
 } from '../src/zai.js';
 import { MOONSHOT_BASE_URL, normalizeKimiBaseUrl } from '../src/moonshot.js';
-import { providerRequestError } from '../src/client.js';
+import {
+  buildChatCompletionsBody,
+  buildRequestOptions,
+  providerRequestError,
+  responseText,
+} from '../src/client.js';
 
 function withEnv(values, fn) {
   const before = {};
@@ -319,4 +324,74 @@ test('Kimi provider errors carry the MOONSHOT_API_KEY hint on auth failures and 
   const limited = providerRequestError(Object.assign(new Error('too many requests'), { status: 429 }), request);
   assert.match(limited.message, /rate limited or its balance\/quota is exhausted/);
   assert.doesNotMatch(String(limited.message), /MOONSHOT_API_KEY/);
+});
+
+// ── per-request body construction (GLM thinking, timeout, signal) ────────────
+
+const bodyBase = {
+  provider: 'glm',
+  model: 'glm-5.2',
+  messages: [{ role: 'user', content: 'hi' }],
+  maxTokens: 4096,
+};
+
+test('chat request bodies send thinking:{type:"enabled"} only for GLM thinking requests', () => {
+  assert.deepEqual(
+    buildChatCompletionsBody({ ...bodyBase, thinking: true }).thinking,
+    { type: 'enabled' },
+  );
+  // Omitted or false thinking must not add a thinking key at all.
+  for (const thinking of [undefined, false]) {
+    const body = buildChatCompletionsBody({ ...bodyBase, thinking });
+    assert.ok(!('thinking' in body), `thinking=${thinking} must not appear in the body`);
+  }
+  // Other providers never receive the GLM thinking field.
+  for (const provider of ['worker', 'kimi']) {
+    const body = buildChatCompletionsBody({ ...bodyBase, provider, thinking: true });
+    assert.ok(!('thinking' in body), `${provider} must not receive a thinking field`);
+  }
+});
+
+test('chat request bodies are API-body only; timeout and signal travel as request options', () => {
+  // create() takes two arguments. Argument 1 (the JSON body) must never
+  // serialize transport fields — even when the caller provided them.
+  const signal = new AbortController().signal;
+  const body = buildChatCompletionsBody({ ...bodyBase, timeoutMs: 5000, signal, thinking: true });
+  assert.ok(!('timeout' in body));
+  assert.ok(!('signal' in body));
+  assert.deepEqual(body.thinking, { type: 'enabled' });
+  // The default temperature is preserved when the caller omits it.
+  assert.equal(body.temperature, 0.2);
+
+  // Argument 2 (the SDK request options) carries exactly the transport fields.
+  assert.deepEqual(buildRequestOptions({ timeoutMs: 5000, signal }), { timeout: 5000, signal });
+  assert.deepEqual(buildRequestOptions({ timeoutMs: 1234 }), { timeout: 1234 });
+  // Absent fields stay absent so the SDK's own per-request defaults survive.
+  assert.deepEqual(buildRequestOptions({}), {});
+});
+
+test('chat request bodies keep the streaming shape only when stream is requested', () => {
+  const streamed = buildChatCompletionsBody({ ...bodyBase, stream: true });
+  assert.equal(streamed.stream, true);
+  assert.deepEqual(streamed.stream_options, { include_usage: true });
+
+  const buffered = buildChatCompletionsBody(bodyBase);
+  assert.ok(!('stream' in buffered));
+  assert.ok(!('stream_options' in buffered));
+});
+
+test('responseText never promotes reasoning_content into the review verdict', () => {
+  // A thinking-only response has no verdict: content must stay empty even
+  // though reasoning_content is populated.
+  assert.equal(
+    responseText({ choices: [{ message: { content: '', reasoning_content: 'thought it over' } }] }),
+    '',
+  );
+  assert.equal(
+    responseText({ choices: [{ message: { content: 'Verdict', reasoning_content: 'thought it over' } }] }),
+    'Verdict',
+  );
+  // Buffered responses keep reasoning_content separate from content.
+  const resp = { choices: [{ message: { content: 'Verdict', reasoning_content: 'thought it over' } }] };
+  assert.equal(resp.choices[0].message.reasoning_content, 'thought it over');
 });

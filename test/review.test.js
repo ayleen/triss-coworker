@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createReviewBoundaryId } from '../src/review-prompt.js';
+import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -551,6 +552,160 @@ test('REV-09: MCP review evidence prompt drops the one-line clean rule and requi
     assert.match(systemPrompt, /clean verdict/i);
     assert.match(systemPrompt, /explicit none/i);
     assert.match(systemPrompt, /trusted boundary ID[^\n]*test-boundary-evidence/i);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-11: runReviewCore keeps absent maxTokens absent, marks purpose review, and forwards explicit timeoutMs', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  const requests = [];
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/review-core-purpose']);
+    addChange(dir, 'purpose.js', 'export const reviewed = true;\n');
+    process.chdir(dir);
+
+    const { runReviewCore } = await import('../src/mcp/review-core.js');
+    await runReviewCore({
+      base: 'main',
+      skipIssue: true,
+      provider: 'glm',
+      model: 'zai/glm-5.2',
+      maxTokens: 1234,
+      timeoutMs: 5000,
+      callModel: async (request) => {
+        requests.push(request);
+        return { content: 'reviewed', usageReport: '' };
+      },
+    });
+    assert.equal(requests[0].purpose, 'review');
+    assert.equal(requests[0].maxTokens, 1234, 'explicit maxTokens passes through untouched');
+    assert.equal(requests[0].timeoutMs, 5000, 'explicit timeoutMs passes through');
+
+    await runReviewCore({
+      base: 'main',
+      skipIssue: true,
+      callModel: async (request) => {
+        requests.push(request);
+        return { content: 'reviewed', usageReport: '' };
+      },
+    });
+    assert.equal(
+      requests[1].maxTokens,
+      undefined,
+      'absent maxTokens must stay absent so callModel can resolve the provider',
+    );
+    assert.equal(requests[1].purpose, 'review');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-11b: runReviewCore validates only explicit max_tokens before git work', async () => {
+  const { runReviewCore } = await import('../src/mcp/review-core.js');
+  await assert.rejects(
+    () =>
+      runReviewCore({
+        base: 'main',
+        maxTokens: 'abc',
+        callModel: async () => ({ content: '', usageReport: '' }),
+      }),
+    /max_tokens must be a positive integer/,
+  );
+});
+
+test('REV-12: MCP review applies GLM defaults through the internal callModel after resolution', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  let chatInput;
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/review-core-glm-defaults']);
+    addChange(dir, 'glm-defaults.js', 'export const reviewed = true;\n');
+    process.chdir(dir);
+
+    const { reviewHandler } = await import('../src/mcp/handlers.js');
+    const controller = new AbortController();
+    const result = await reviewHandler(
+      { base: 'main', skip_issue: true, provider: 'glm', model: 'zai/glm-5.2' },
+      {
+        reviewBoundaryId: 'test-boundary',
+        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL }),
+        requestTimeoutMs: () => undefined,
+        signal: controller.signal,
+        onReasoning: () => {},
+        chat: async (input) => {
+          chatInput = input;
+          return { choices: [{ message: { content: 'reviewed', finish_reason: 'stop' } }], usage: {} };
+        },
+      },
+    );
+    assert.equal(result, 'reviewed');
+    assert.equal(chatInput.provider, 'glm');
+    assert.equal(chatInput.model, 'glm-5.2');
+    assert.equal(chatInput.maxTokens, 65536, 'resolved GLM model drives the review budget (capped at 64K for context window)');
+    assert.equal(chatInput.timeoutMs, 1800000, 'GLM review timeout default applies');
+    assert.equal(chatInput.thinking, true);
+    assert.equal(typeof chatInput.onReasoning, 'function', 'handler deps reach the internal callModel');
+    assert.equal(chatInput.signal, controller.signal, 'caller cancellation signal reaches chat');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REV-12b: MCP review fails closed when the request is already cancelled', async () => {
+  const dir = makeTmpDir();
+  const originalCwd = process.cwd();
+  const controller = new AbortController();
+  controller.abort();
+  let modelCalls = 0;
+  try {
+    initGitRepo(dir, 'main');
+    const g = (args) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+    g(['switch', '-c', 'feat/review-cancelled']);
+    addChange(dir, 'cancelled.js', 'export const reviewed = true;\n');
+    process.chdir(dir);
+
+    const { reviewHandler } = await import('../src/mcp/handlers.js');
+    await assert.rejects(
+      () => reviewHandler(
+        { base: 'main', skip_issue: true },
+        {
+          signal: controller.signal,
+          callModel: async () => {
+            modelCalls += 1;
+            return { content: 'must not run', usageReport: '' };
+          },
+        },
+      ),
+      (err) => {
+        assert.equal(err.code, 'TRISS_CANCELLED');
+        return true;
+      },
+    );
+    assert.equal(modelCalls, 0, 'cancelled review must not invoke the provider');
   } finally {
     process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });

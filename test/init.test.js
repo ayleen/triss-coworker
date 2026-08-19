@@ -92,8 +92,8 @@ test('INIT-01: creates CLAUDE.md with triss marker block when file does not exis
     assert.ok(content.includes(END_MARKER), 'should contain <!-- triss:end -->');
     assert.ok(content.includes('triss'), 'should contain triss content');
     assert.ok(
-      content.includes('triss review --provider glm --model pro --max-tokens 16384'),
-      'CLAUDE.md should recommend the minimum GLM 5.2 review budget',
+      content.includes('with no explicit `--max-tokens` (GLM auto-sizes the budget)'),
+      'CLAUDE.md should describe the auto-sized GLM budget guidance',
     );
   });
 
@@ -152,8 +152,8 @@ test('INIT-CODEX-01: creates AGENTS.md with triss marker block', async () => {
       'AGENTS.md must point at codex-flavored agent-help so Codex agents do not get the Claude cookbook',
     );
     assert.ok(
-      content.includes('triss review --provider glm --model pro --max-tokens 16384'),
-      'AGENTS.md should recommend the minimum GLM 5.2 review budget',
+      content.includes('with no explicit `--max-tokens` (GLM auto-sizes the budget)'),
+      'AGENTS.md should describe the auto-sized GLM budget guidance',
     );
     assert.ok(!content.includes('experimental'), 'Codex target should not be marked experimental');
   });

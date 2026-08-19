@@ -121,16 +121,65 @@ servers, top-level keys, comments) is preserved byte-for-byte:
 command = "triss"
 args = ["mcp", "serve"]
 startup_timeout_sec = 30
-tool_timeout_sec = 120
+tool_timeout_sec = 5460
 ```
 
-The two timeouts give `--model pro` calls enough headroom out of the box.
+The outer tool timeout (5460s) covers the OpenAI SDK's default of 2 retries
+plus the first attempt (3 attempts total) of Triss's default 30-minute
+GLM-review timeout: a thinking GLM review that retries inside triss runs up
+to 30 minutes per attempt, and the SDK keeps its retries enabled, so the
+host-side cap must exceed 3 × the selected per-attempt timeout plus headroom
+(3 × 1800s + 60s = 5460s). The 5460s default only covers the default
+1800s-per-attempt GLM review — if you raise the per-attempt timeout above
+1800000 ms (via `TRISS_REQUEST_TIMEOUT_MS` or the MCP `timeout_ms` argument),
+you must also raise `tool_timeout_sec` to at least 3 × your new per-attempt
+timeout plus headroom, or the host kills a long call before the model
+finishes. The startup timeout stays at 30s — it only bounds process launch.
 Codex has no project-local config — the block above is the canonical
 shape. The `[mcp_servers.triss.env]` sub-table is only emitted when there
 are custom env keys to render (none by default; `TRISS_PROJECT_ROOT` is
 intentionally not set, see "Scope and the path sandbox" above).
 
-Restart the Codex CLI session and verify with `codex mcp list`.
+Restart the Codex CLI session and verify with `codex mcp list`. New
+installs always write `tool_timeout_sec = 5460`; existing configs that
+still carry the historical `120` are migrated automatically on the first
+updated MCP server start (see "Migrating from older versions" below) —
+values other than that exact `120` are never overwritten.
+
+Because TOML quoting never changes which table a dotted key names, the
+installer also recognizes a two-component quoted or mixed root —
+`["mcp_servers"."triss"]` or `["mcp_servers".triss]` — and its
+sub-tables (e.g. `["mcp_servers"."triss"."env"]`) as the same Triss
+table: install replaces it in place (never appending a duplicate),
+`triss mcp status` reports it, and uninstall removes it. The
+single-component `["mcp_servers.triss"]` (one key whose literal name
+contains a dot) is a completely different table and is left alone.
+A lexically malformed `config.toml` makes install/status/uninstall fail
+with a clear error and leaves the file byte-for-byte untouched — Triss
+never rewrites or appends to a config it cannot parse. A config that
+declares the Triss root table **more than once** (any mix of the bare,
+quoted, mixed, or escape-decoded equivalent spellings — TOML forbids
+redefining a table) is equally refused: install, status, and uninstall
+fail closed instead of choosing one of the roots, and every byte is
+preserved. A semantic **array-of-tables** header — `[[mcp_servers.triss]]`
+or a quoted/mixed/escaped two-component spelling of it — declares an
+*array* of tables at the same path and is refused the same way (alone or
+next to a regular root), so Triss never appends, reports, or removes a
+regular table next to an array of tables; the single-component
+`[["mcp_servers.triss"]]` array is a different key and is left alone.
+
+Install and uninstall also write **atomically and race-safe**: the
+existing config is read from a single validated snapshot (resolved
+symlink target, inode, mode, and content captured together), and the
+same snapshot is the compare-and-swap precondition of the atomic
+same-directory temp-file + rename commit. If the config changes — its
+content, its symlink target or path, its inode, or its mode — between
+the read and the write, the operation fails closed and the concurrent
+change survives, so a user edit is never clobbered and a reader never
+sees a torn or partial file. A **missing** config is created through the
+same atomic path with no-clobber semantics: a file that appears
+concurrently is never overwritten. Symlinks are preserved (the real
+target is rewritten in place) and the file's mode is kept.
 
 ### Migrating from older versions
 
@@ -143,6 +192,46 @@ session's actual project. Re-run `triss mcp install --global` once with
 the new version: the installer detects the stale pin, drops it, and
 prints a `⚠ dropped stale TRISS_PROJECT_ROOT=<old-path>` line so you
 know it happened.
+
+**Codex users upgrading past the longer tool timeout are migrated
+automatically.** New installs write `tool_timeout_sec = 5460`; existing
+configs that still carry the historical `tool_timeout_sec = 120` (written
+before the outer cap covered the SDK's retries) are upgraded on the first
+`triss mcp serve` startup after updating Triss — through any distribution
+path (npm/pnpm/yarn/source/standalone) — with no manual re-install needed.
+That startup rewrites only the single stale value in
+`~/.codex/config.toml`, preserving the rest of the file byte-for-byte,
+and prints a notice. Only a **direct key of the root `[mcp_servers.triss]`
+table** is migrated — and only when that root is the exact bare form
+triss generated. The migration is deliberately narrow: a single quoted
+root such as `["mcp_servers"."triss"]` names the same table but is left
+untouched (run `triss mcp install --global --target codex` to have the
+installer rewrite it). It never rewrites an array-of-tables config
+(`[[mcp_servers.triss]]`) either. The migration also stops at the next
+section header, so a `tool_timeout_sec` under `[mcp_servers.triss.env]`
+(an environment variable, not the host timeout) is never counted or
+rewritten. A `tool_timeout_sec` value **other than exactly `120`**,
+ambiguous duplicates, a config that declares **more than one** semantic
+two-component Triss root (any mix of the bare, quoted, mixed, or
+escape-decoded equivalent spellings — TOML forbids redefining a table, so
+no block is chosen over the others), a config where an array-of-tables
+root coexists with a regular root (the same redefinition conflict),
+configs without a Triss block, and missing files are never touched. An
+exact root-level `120` is *always* treated as the historical
+value, because it is indistinguishable from a deliberately custom `120` —
+there is no opt-out or exception: the requirement is that every legacy
+exact-120 install is migrated automatically. The rewrite is atomic
+(same-directory temp file + rename, original permissions preserved); if
+another process edits the config between the migration's read and write,
+the migration skips that startup and leaves the file untouched. The
+migration is best-effort and never blocks or breaks the MCP server.
+Because the host reads the config at launch, a Codex host already running
+when the migration ran still holds the old 120s cap — **restart any
+currently running Codex sessions once** after the first updated startup, or
+a long thinking review (with its SDK retries) can be killed by the stale
+host-side cap. Re-running
+`triss mcp install --global --target codex` remains available as an
+optional repair route if you ever want to rewrite the block by hand.
 
 ## Uninstall
 
@@ -259,6 +348,29 @@ a preset, so `zai/flash` is valid. When neither the request nor
 `401`/`403`/`429`, the server retries once on the other endpoint and reuses
 whichever one works for the rest of the process (re-probed if the key
 changes). A pinned endpoint is never second-guessed.
+
+`triss_ask`, `triss_review`, and `triss_review_shard` also accept an optional `timeout_ms` — the
+per-call timeout in milliseconds, valid `1..2147483647`. For a GLM review the
+effective timeout is the first of: explicit `timeout_ms`, then
+`TRISS_REQUEST_TIMEOUT_MS`, then the internal 30-minute review default
+(1800000 ms — a private constant, not an environment variable; `timeout_ms`
+and `TRISS_REQUEST_TIMEOUT_MS` are the configurable controls). Because the
+OpenAI SDK keeps its retries enabled (2 retries, 3 attempts total), the MCP
+host/client's outer tool timeout must exceed **3 × the selected per-attempt
+timeout plus headroom** — not merely the per-attempt value. The default Codex
+`tool_timeout_sec = 5460` covers only the default 1800s-per-attempt GLM
+review (3 × 1800s + 60s); if you raise the per-attempt timeout above
+1800000 ms via `TRISS_REQUEST_TIMEOUT_MS` or `timeout_ms`, raise the host's
+`tool_timeout_sec` to at least 3 × your new value plus headroom, or the host
+kills the call before Triss's own timeout (or the model) can finish it. On
+success the final verdict is always
+`content[0].text`; both tools declare an exact MCP `outputSchema` of
+`{content: string, reasoning_content?: string}` (with
+`additionalProperties: false`), so every successful result also carries
+`structuredContent` matching it — any GLM reasoning lands in
+`structuredContent.reasoning_content` (with `structuredContent.content`
+mirroring the final text). Reasoning is never promoted to the verdict, so a
+reasoning-only response is an error, not a successful review.
 
 For `provider: "kimi"`, `MOONSHOT_API_KEY` is required instead. `pro` selects
 `kimi-k3` (the flagship) and `flash` selects `kimi-k2.6` (the cheapest

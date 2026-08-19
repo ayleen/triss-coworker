@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { dirname, basename, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { START_MARKER, END_MARKER } from './agent-rules.js';
+import { START_MARKER, END_MARKER } from './agent-rule-markers.js';
 
 function asBuffer(value) {
   return Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8');
@@ -60,7 +60,7 @@ function sameIdentity(a, b) {
 // destination itself (or one of its final directories) does not exist yet.
 // realpathSync alone cannot canonicalize that create case, so walk upward to
 // the nearest existing ancestor and append the missing suffix again.
-function canonicalTargetPath(path) {
+export function canonicalTargetPath(path) {
   // `resolve()` applies lexical `..` semantics before realpath can follow an
   // earlier symlink. That can select a different destination than filesystem
   // lookup (for example, `link/../file`). Fail closed instead of planning and

@@ -40,8 +40,8 @@ test('AGENT-HELP-01: prints full cookbook by default (CLI examples present)', as
   assert.ok(out.includes('triss exec'), 'full cookbook should describe `triss exec`');
   assert.ok(out.includes('--format evidence'), 'full cookbook should describe evidence mode');
   assert.ok(
-    out.includes('--max-tokens 16384'),
-    'full cookbook should recommend the minimum GLM 5.2 review budget',
+    out.includes('omit `--max-tokens`') && out.includes('at least 16384'),
+    'full cookbook should recommend GLM auto-budget and the explicit minimum',
   );
   assert.ok(out.includes('When NOT to delegate'), 'full cookbook should include policy section');
 });
@@ -56,8 +56,8 @@ test('AGENT-HELP-02: --target codex switches headings to AGENTS.md style', async
   assert.ok(out.includes('triss exec'), 'codex cookbook should describe `triss exec`');
   assert.ok(out.includes('--format evidence'), 'codex cookbook should describe evidence mode');
   assert.ok(
-    out.includes('--max-tokens 16384'),
-    'codex cookbook should recommend the minimum GLM 5.2 review budget',
+    out.includes('omit `--max-tokens`') && out.includes('at least 16384'),
+    'codex cookbook should recommend GLM auto-budget and the explicit minimum',
   );
 });
 

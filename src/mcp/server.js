@@ -29,18 +29,57 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     };
   }
   try {
-    const text = await withCall(() => tool.handler(args, { signal: extra.signal }));
-    return { content: [{ type: 'text', text: String(text) }] };
+    // Reasoning/thinking from the model is collected separately and never
+    // merged into the verdict: content[0].text stays the plain final result.
+    // Only tools that declare an outputSchema for it (triss_ask,
+    // triss_review) surface reasoning — as structuredContent metadata — and
+    // for those tools structuredContent is ALWAYS present on success, with or
+    // without reasoning. Every other tool keeps its old plain result shape.
+    const toolHasOutputSchema = Boolean(tool.outputSchema);
+    const reasoningChunks = [];
+    const text = await withCall(() =>
+      tool.handler(args, {
+        signal: extra.signal,
+        ...(toolHasOutputSchema
+          ? { onReasoning: (chunk) => reasoningChunks.push(chunk) }
+          : {}),
+      }),
+    );
+    const finalText = String(text);
+    const content = [{ type: 'text', text: finalText }];
+    if (toolHasOutputSchema) {
+      const structuredContent = { content: finalText };
+      if (reasoningChunks.length) structuredContent.reasoning_content = reasoningChunks.join('');
+      return { content, structuredContent };
+    }
+    return { content };
   } catch (err) {
-    return {
+    const message = String(err?.message || String(err)).slice(0, 2048);
+    const result = {
       isError: true,
       content: [
         {
           type: 'text',
-          text: `triss/${toolName} failed: ${err?.message || String(err)}`,
+          text: `triss/${toolName} failed: ${message}`,
         },
       ],
     };
+    const code = err?.code;
+    const allowlisted =
+      typeof code === 'string' &&
+      /^TRISS_[A-Z0-9_]+$/.test(code) &&
+      code.length <= 64 &&
+      (code.startsWith('TRISS_PROVIDER_') ||
+        code === 'TRISS_CANCELLED' ||
+        code.startsWith('TRISS_REVIEW_'));
+    if (allowlisted) {
+      // Schema-compatible error projection: {content, code} satisfies
+      // TEXT_WITH_REASONING_OUTPUT_SCHEMA (required content, optional code).
+      // Even isError results are validated by the installed MCP Client, so we
+      // cannot use {code, message} which fails required-content/additionalProperties checks (-32602).
+      result.structuredContent = { content: message, code };
+    }
+    return result;
   }
 }
 

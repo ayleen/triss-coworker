@@ -108,9 +108,17 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
     };
   } catch (err) {
     if (err?.name === 'AbortError' || signal?.aborted) {
-      return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled during model call', exit: REVIEW_EXIT_CODES.cancelled };
+      return { ok: false, code: 'TRISS_CANCELLED', message: 'cancelled during model call', exit: REVIEW_EXIT_CODES.cancelled, cause: err };
     }
-    return { ok: false, code: err?.code || 'TRISS_REVIEW_INVALID_INPUT', message: err?.message || String(err), exit: REVIEW_EXIT_CODES.provider };
+    // Preserve a typed provider code (e.g. TRISS_PROVIDER_EMPTY) when
+    // present. A provider failure without its own code is an unknown
+    // provider error, not an input error — callers must not re-label a
+    // connection/timeout failure as "invalid input". Preserve the original
+    // error as cause so callers that expect the exact sentinel (buffered /
+    // streaming rejection parity, REV-GLM-THINK-12..17) can rethrow it
+    // unchanged.
+    const fallbackCode = err?.code ? err.code : 'TRISS_PROVIDER_UNKNOWN';
+    return { ok: false, code: fallbackCode, message: err?.message || String(err), exit: REVIEW_EXIT_CODES.provider, cause: err };
   }
 }
 
@@ -200,15 +208,16 @@ export async function executeReviewPlan(deps, { shards, question, metadata = '',
       results.push({ shard_index: attempts, verdict, bytes: payloadBytes, attempt: attempts });
     } catch (err) {
       if (err?.name === 'AbortError' || signal?.aborted) {
-        return { ok: false, code: 'TRISS_CANCELLED', message: `cancelled during shard ${attempts}`, shards: results, attempts, exit: REVIEW_EXIT_CODES.cancelled };
+        return { ok: false, code: 'TRISS_CANCELLED', message: `cancelled during shard ${attempts}`, shards: results, attempts, exit: REVIEW_EXIT_CODES.cancelled, cause: err };
       }
       return {
         ok: false,
-        code: err?.code || 'TRISS_REVIEW_INVALID_INPUT',
+        code: err?.code || 'TRISS_PROVIDER_UNKNOWN',
         message: err?.message || String(err),
         shards: results,
         attempts,
         exit: REVIEW_EXIT_CODES.provider,
+        cause: err,
       };
     }
   }

@@ -1,6 +1,11 @@
 import pc from 'picocolors';
 import { runServer } from '../mcp/server.js';
-import { installEntry, uninstallEntry, showStatus } from '../mcp/install.js';
+import {
+  installEntry,
+  uninstallEntry,
+  showStatus,
+  migrateCodexToolTimeout,
+} from '../mcp/install.js';
 import { promptChoice } from '../secrets.js';
 
 const SUPPORTED_TARGETS = ['claude', 'codex', 'both'];
@@ -73,8 +78,48 @@ function expandTargets(target) {
   return target === 'both' ? ['claude', 'codex'] : [target];
 }
 
-export async function runMcpServe() {
-  await runServer();
+export async function runMcpServe(deps = {}) {
+  const warn =
+    deps.warn ||
+    ((msg) => (deps.stderr || process.stderr).write(`${msg}\n`));
+  const migrate = deps.migrateCodexToolTimeout || migrateCodexToolTimeout;
+  const serve = deps.runServer || runServer;
+
+  // Existing-user migration, best effort: after any distribution-path update,
+  // upgrade a stale Triss-owned Codex tool_timeout_sec (120) to the current
+  // default (5460) on the first startup. This must never block the MCP server
+  // from starting, must never touch values other than the exact historical 120
+  // (an exact 120 is indistinguishable from a deliberately custom one and is
+  // always treated as legacy), and must never create the Codex config —
+  // failure, a concurrent-edit conflict, or "nothing to do" just falls
+  // through. Only an actual "updated" result tells the user to restart; a
+  // conflict means we deliberately did not write, so a restart claim would be
+  // wrong. The migration distinguishes two races: a change detected by its
+  // optimistic pre-write re-read returns the early `status: 'conflict'` result
+  // (never a warning), while a change that lands later — during the atomic
+  // temp write — surfaces as a thrown CAS precondition error, which is caught
+  // here and warned as best-effort. Both leave the user's edit untouched.
+  try {
+    const migrationPath = deps.codexConfigPath;
+    const result = await migrate(migrationPath ? { path: migrationPath } : {});
+    if (result?.status === 'updated') {
+      // Derive the message from the result so it always reflects what was
+      // actually migrated (from/to come from the migration's own constants or
+      // injected test seams, never hardcoded here).
+      warn(
+        `triss mcp: upgraded Codex tool_timeout_sec ${result.from} → ${result.to} in ` +
+          `${result.path}. The running host already loaded the old ${result.from}s cap — ` +
+          'restart any currently running Codex sessions once to pick up the new timeout.',
+      );
+    }
+  } catch (err) {
+    warn(
+      `triss mcp: could not upgrade the Codex tool timeout (best effort): ` +
+        `${err?.message || err}`,
+    );
+  }
+
+  await serve();
 }
 
 export async function runMcpInstall(opts) {
@@ -159,7 +204,16 @@ export async function runMcpStatus(opts) {
 
   for (const t of targets) {
     if (scope === 'local' && t === 'codex') continue;
-    const status = showStatus(scope, { target: t });
+    let status;
+    try {
+      status = showStatus(scope, { target: t });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      process.stdout.write(pc.bold(`── ${t} ──`) + '\n');
+      process.stdout.write(`Path: (unknown)\n`);
+      process.stderr.write(pc.dim(`[triss/mcp] could not read ${t} config: ${msg}\n`));
+      continue;
+    }
     process.stdout.write(pc.bold(`── ${t} ──`) + '\n');
     process.stdout.write(`Path: ${status.path}\n`);
     if (!status.present) {

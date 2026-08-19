@@ -31,6 +31,7 @@ export async function runReviewCore({
   provider,
   model,
   maxTokens,
+  timeoutMs,
   responseFormat: responseFormatInput = 'text',
   callModel,
   reviewBoundaryId,
@@ -38,11 +39,23 @@ export async function runReviewCore({
   prDiffFn = null,
   files = null,
   issue = null,
+  signal,
   acquireScopedDiff = acquireScopedReviewDiff,
   acquireFullDiff = defaultAcquireFullDiff,
 }) {
+  if (signal?.aborted) {
+    const err = new Error('cancelled');
+    err.code = 'TRISS_CANCELLED';
+    err.exit = REVIEW_EXIT_CODES.cancelled;
+    throw err;
+  }
   const responseFormat = validateResponseFormat(responseFormatInput);
-  const validatedMaxTokens = positiveIntegerOption(maxTokens, 'max_tokens', 8192);
+  // Only explicit token budgets are validated here. An absent budget is left
+  // absent so callModel can apply the review default after it resolves the
+  // provider (GLM models get a model-sized budget; non-GLM keeps 8192).
+  const validatedMaxTokens = maxTokens === undefined
+    ? undefined
+    : positiveIntegerOption(maxTokens, 'max_tokens');
   let title;
   let description = '';
   let diff;
@@ -173,16 +186,20 @@ export async function runReviewCore({
 
   const result = await executeSingleReview(
     {
-      callModel: async ({ diff: reviewDiff, question: q }) => {
+      callModel: async ({ diff: reviewDiff, question: q, signal: requestSignal }) => {
         const sections = [
           ...(ticketCorpus ? [wrapReviewSection(boundaryId, 'ticket', ticketCorpus)] : []),
           wrapReviewSection(boundaryId, 'change', changeCorpus),
           wrapReviewSection(boundaryId, 'diff', `<diff>\n${reviewDiff}\n</diff>`),
         ];
+        // Mark as a review call so callModel applies the GLM review defaults
+        // (model-sized budget, thinking, long timeout) exactly as the CLI does.
         const response = await callModel({
           provider,
           model,
           maxTokens: validatedMaxTokens,
+          timeoutMs,
+          purpose: 'review',
           messages: [
             {
               role: 'system',
@@ -194,6 +211,7 @@ export async function runReviewCore({
             { role: 'user', content: sections.join('\n\n') },
             { role: 'user', content: q },
           ],
+          signal: requestSignal,
         });
         // callModel returns { content, usageReport }. Evidence mode returns the
         // model-authored contract verbatim; text mode appends the usage report.
@@ -216,6 +234,7 @@ export async function runReviewCore({
       question: question || 'Review this change. List concrete issues; do not summarise the diff.',
       selectors,
       metadataBytes: Buffer.byteLength(changeCorpus, 'utf8') + Buffer.byteLength(ticketCorpus, 'utf8'),
+      signal,
     },
   );
   if (!result.ok) {
