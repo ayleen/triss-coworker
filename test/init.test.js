@@ -681,7 +681,7 @@ test('INIT-08: nano CLAUDE.md teaches the compact one-coder workflow rule', asyn
       'nano should assign repository investigation, implementation, tests, and debugging to the coder',
     );
     assert.ok(content.includes('chain researcher'), 'nano should discourage automatic researcher/coder/reviewer chains');
-    assert.ok(content.includes('fresh non-persistent run'), 'nano should prefer fresh explicit task packets');
+    assert.ok(content.includes('fresh run without intentional session reuse'), 'nano should prefer fresh runs without session reuse');
     assert.ok(content.includes('final decision'), 'nano should reserve final decisions to the host');
     assert.ok(
       content.includes('triss agent-help'),
@@ -713,7 +713,7 @@ test('INIT-CODEX-05: nano AGENTS.md teaches the compact one-coder workflow rule'
       'nano should assign repository investigation, implementation, tests, and debugging to the coder',
     );
     assert.ok(content.includes('chain researcher'), 'nano should discourage automatic researcher/coder/reviewer chains');
-    assert.ok(content.includes('fresh non-persistent run'), 'nano should prefer fresh explicit task packets');
+    assert.ok(content.includes('fresh run without intentional session reuse'), 'nano should prefer fresh runs without session reuse');
     assert.ok(content.includes('final decision'), 'nano should reserve final decisions to the host');
     assert.ok(
       content.includes('triss agent-help'),

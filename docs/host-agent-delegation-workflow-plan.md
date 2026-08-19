@@ -109,7 +109,7 @@ The coder must run checks, debug failures, inspect its own result, and report ev
 
 ### D5. Prefer fresh explicit context
 
-Normal tasks use a fresh non-persistent coder run. The host passes a complete task packet explicitly, preferably via MCP structured input or `triss coder run --stdin` for long prompts.
+Normal tasks use a fresh run without intentional session reuse. The host passes a complete task packet explicitly, preferably via MCP structured input or `triss coder run --stdin` for long prompts.
 
 Use `--session` only when continuation is intentional and the previous task context remains relevant. Do not use `--continue` as a general default.
 
@@ -255,7 +255,7 @@ Add, in this order:
 1. `Core workflow` with the normal host -> one coder -> host path.
 2. A routing decision table for ask/fetch, coder, review, and host browser tools.
 3. The reusable task packet.
-4. Context/session policy: fresh non-persistent run by default (an unnamed run gets an engine/isolation-specific generated per-run session id and anonymity status; see the Release A matrix), explicit session reuse only when needed.
+4. Context/session policy: fresh run without intentional session reuse by default (an unnamed run gets an engine/isolation-specific generated per-run session id and anonymity status; see the contract matrix), explicit session reuse only when needed.
 5. Final acceptance checklist based on the actual envelope, worktree, `git status`, and `git diff`.
 6. A short section on independent parallel workstreams and explicit handoff boundaries.
 
@@ -306,7 +306,7 @@ Include:
 Until Phase 5 passes its capability gate:
 
 - replace the unsupported `--expect changes --isolate` recommendation in `README.md` with instructions to use `--isolate`, inspect `run_files_changed`, and verify the retained worktree/diff directly;
-- add a current-version note to `docs/reliable-delegation-release-a.md` distinguishing the designed expectation contract from the v0.37.1 public CLI/MCP surface;
+- add a current-version note to `docs/reliable-delegation-contract.md` distinguishing the designed expectation contract from the v0.37.1 public CLI/MCP surface;
 - ensure `docs/mcp.md` does not imply that `triss_coder_run` accepts an expectation field;
 - do not silently rewrite the historical plan as if the missing adapter had never been specified.
 
@@ -424,7 +424,7 @@ Empty, truncated, or reasoning-only provider output is unavailable validation, n
 | `templates/claude-full.md` | Same full workflow for Claude hosts |
 | `src/commands/coder.js` | Stronger new coder/researcher templates; later expectation input/result wiring |
 | `README.md` | Recommended workflow and truthful current expectation guidance |
-| `docs/reliable-delegation-release-a.md` | Version note separating designed and currently exposed expectation surfaces |
+| `docs/reliable-delegation-contract.md` | Version note separating designed and currently exposed expectation surfaces |
 | `docs/mcp.md` | Match actual MCP schema and later document expectation when shipped |
 | `bin/triss.js` | Phase 5 CLI expectation option only after capability gate |
 | `src/mcp/tools.js` | Phase 5 MCP expectation schema |

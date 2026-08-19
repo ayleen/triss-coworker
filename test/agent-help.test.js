@@ -200,7 +200,7 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       `${target} full cookbook must allow parallelism only for independent workstreams with explicit boundaries`,
     );
     assert.ok(
-      out.includes('task packet') && out.includes('fresh non-persistent run'),
+      out.includes('task packet') && out.includes('fresh run without intentional session reuse'),
       `${target} full cookbook must prefer fresh explicit task packets`,
     );
     assert.ok(

@@ -427,14 +427,15 @@ The heredoc is a shell example; over MCP, pass the same packet as the tool's
 
 ### Context and sessions
 
-Default to a **fresh non-persistent run** with the complete packet: an
-unnamed run gets a newly generated per-run session id and never inherits
-this conversation implicitly. It is not a resumable conversation on the
-`opencode` engine; on `crush` an isolated run also registers that id as a
-native crush session, so resume it only deliberately (`--session <id>` /
-`--continue`). Use `--session <slug>` only when continuation is
-intentional and the previous task context remains relevant; do not use
-`--continue` as a general default.
+Default to a **fresh run without intentional session reuse** with the
+complete packet: an unnamed run gets a newly generated per-run session id
+and never inherits this conversation implicitly. It is not a resumable
+conversation on the `opencode` engine; on `crush` an isolated run also
+registers that id as a native crush session, so resume it only deliberately
+with `--session <id>` (optionally `--continue`) — note `--continue` alone
+is rejected for isolated runs. Use `--session <slug>` only when
+continuation is intentional and the previous task context remains relevant;
+do not use `--continue` as a general default.
 
 ### Final acceptance checklist
 

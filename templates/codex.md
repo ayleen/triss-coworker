@@ -19,9 +19,9 @@ coder owns repository investigation, implementation, tests, debugging, and
 self-verification. Do not automatically chain researcher, coder, and
 reviewer — use researchers, reviewers, or parallel workstreams only when
 the work is genuinely independent or risky enough to justify the extra
-cost. Prefer a fresh non-persistent run with the full task packet over
-resuming an old session, and always inspect the actual diff before
-accepting a result.
+cost. Prefer a fresh run without intentional session reuse: pass the
+full task packet and always inspect the actual diff before accepting a
+result.
 
 **`triss coder run "<task>"`** hands an implementation subtask to a
 separate GLM coding agent instead of writing it yourself (setup once via

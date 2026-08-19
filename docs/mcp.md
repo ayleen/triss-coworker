@@ -474,13 +474,18 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   tool argument). There is intentionally no `expectation` *input* field:
   the strict expectation gate is still a designed contract and is not
   exposed as a caller input until a capability gate is met (see
-  docs/reliable-delegation-release-a.md). Note the returned envelope still
+  docs/reliable-delegation-contract.md). Note the returned envelope still
   reports a constant `expectation: "either"` output field — that is
   informational, not an accepted caller control.
-  Returns the JSON envelope — `engine`, `engine_version`,
-  `session_id`, `session_slug`, `result_retention`, `result_id`,
-  `execution_capabilities`, `exit_reason`, `final_text`, `files_changed`,
-  `diff_stat`, `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
+  Returns one JSON envelope as the tool result. On the `opencode` and
+  `crush` engines it carries the session acceptance contract fields —
+  `engine`, `engine_version`, `session_id`, `session_slug`,
+  `result_retention`, `result_id`, `execution_capabilities`, `exit_reason`,
+  `final_text`, `files_changed`, `diff_stat`, `worktree`, `usage`,
+  `warnings`. The `opencode2` beta engine returns the older envelope
+  (`session_id`, `exit_reason`, `final_text`, `files_changed`, `diff_stat`,
+  `worktree`, `usage`, `warnings`) without those fields — use its
+  `files_changed` / `diff_stat` / `worktree` as evidence there. `engine` is the
   `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
   `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
   [opencode2.md](engines/opencode2.md));

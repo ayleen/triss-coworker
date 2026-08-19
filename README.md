@@ -338,8 +338,9 @@ verifier -> reviewer chain — use `triss ask` / `triss fetch` for
 research-only work and `triss review` only when complexity, security
 sensitivity, or regression risk materially improves confidence. Split work
 across coders only when the streams are independently executable with
-explicit merge or handoff boundaries. Prefer a fresh non-persistent run with
-the complete task packet over `--session` / `--continue` reuse.
+explicit merge or handoff boundaries. Prefer a fresh run without intentional
+session reuse: pass the complete task packet to every run and rely on
+`--session` / `--continue` only for deliberate continuation.
 
 Pass the whole plan as one task packet — Goal, Plan, Constraints, Relevant
 context, Success criteria, Validation, Return — via `triss coder run --stdin`
