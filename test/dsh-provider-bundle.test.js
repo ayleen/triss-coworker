@@ -122,6 +122,7 @@ test('workspace declares the companion without entangling the root package', () 
     'docs/troubleshooting.md',
     'docs/integrations/',
     'docs/engines/',
+    '!docs/website/',
     'README.md',
     'CHANGELOG.md',
     'LICENSE',
