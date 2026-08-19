@@ -14,19 +14,22 @@ const linkStyle = (active: boolean) =>
       href="/"
       style="display: flex; align-items: center; gap: 12px; color: var(--color-text-heading); font-family: var(--font-mono); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none;"
     >
-      <img
-        src="/triss-avatar.png"
-        alt="Triss mascot"
-        width="36"
-        height="36"
-        style="display: block; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);"
-      />
+      <picture>
+        <source srcset="/triss-avatar.webp" type="image/webp" />
+        <img
+          src="/triss-avatar.png"
+          alt="Triss mascot"
+          width="36"
+          height="36"
+          style="display: block; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);"
+        />
+      </picture>
       <span style="display: flex; flex-direction: column; line-height: 1;">
         <span style="font-size: 15px; letter-spacing: -0.02em;">triss</span>
         <span style="font-size: 9px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint); margin-top: 1px;">coworker</span>
       </span>
     </a>
-    <nav style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
+    <nav id="main-nav" style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
       <a href="/#how" style={linkStyle(current === "how")}>How it works</a>
       <a href="/coder" style={linkStyle(current === "coder")}>Coder</a>
       <a href="/integrations" style={linkStyle(current === "integrations")}>Integrations</a>
@@ -35,10 +38,43 @@ const linkStyle = (active: boolean) =>
       <a href="/cost" style={linkStyle(current === "cost")}>Cost</a>
       <a href="/security" style={linkStyle(current === "security")}>Security</a>
     </nav>
-    <a
-      href="https://github.com/ayleen/triss-coworker"
-      style="font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); border: 1px solid var(--color-border-strong); padding: 6px 12px;"
-      >GitHub ↗</a
-    >
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <a
+        href="https://github.com/ayleen/triss-coworker"
+        style="font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); border: 1px solid var(--color-border-strong); padding: 6px 12px;"
+        >GitHub ↗</a
+      >
+      <button id="mobile-menu-btn" aria-label="Toggle menu" aria-expanded="false" style="display: none; background: transparent; border: 1px solid var(--color-border-strong); padding: 8px 10px; cursor: pointer; color: var(--color-text); font-family: var(--font-mono); font-size: 12px;">☰</button>
+    </div>
   </div>
+  <nav id="mobile-nav" style="display: none; flex-direction: column; gap: 0; background: var(--color-bg); border-top: 1px solid var(--color-border); padding: 12px var(--layout-gutter);">
+    <a href="/#how" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">How it works</a>
+    <a href="/coder" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Coder</a>
+    <a href="/integrations" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Integrations</a>
+    <a href="/docs/getting-started" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Quickstart</a>
+    <a href="/commands" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Commands</a>
+    <a href="/cost" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Cost</a>
+    <a href="/security" style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Security</a>
+  </nav>
 </header>
+<style>
+  @media (max-width: 900px) {
+    #main-nav { display: none !important; }
+    #mobile-menu-btn { display: block !important; }
+  }
+  @media (max-width: 640px) {
+    header div[style*="max-width"] { padding: 0 16px !important; }
+  }
+</style>
+<script>
+  const btn = document.getElementById('mobile-menu-btn');
+  const nav = document.getElementById('mobile-nav');
+  if (btn && nav) {
+    btn.addEventListener('click', () => {
+      const open = nav.style.display === 'flex';
+      nav.style.display = open ? 'none' : 'flex';
+      btn.setAttribute('aria-expanded', String(!open));
+      btn.textContent = open ? '☰' : '✕';
+    });
+  }
+</script>

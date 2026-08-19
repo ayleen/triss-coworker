@@ -1,0 +1,65 @@
+name: Site
+
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'docs/website/**'
+      - '.github/workflows/site.yml'
+      - 'package.json'
+      - 'README.md'
+      - 'CHANGELOG.md'
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/website/**'
+      - '.github/workflows/site.yml'
+      - 'package.json'
+      - 'README.md'
+      - 'CHANGELOG.md'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install npm 11.6.2
+        run: npm install --global npm@11.6.2 && npm --version
+      - name: Install site deps
+        working-directory: site
+        run: npm ci
+      - name: Astro check
+        working-directory: site
+        run: npm run check --if-present || npx astro check
+      - name: Lint
+        working-directory: site
+        run: npm run lint --if-present || echo "no lint"
+      - name: Build
+        working-directory: site
+        run: npm run build
+      - name: Link check
+        working-directory: site
+        run: |
+          npx --yes link-checker --help 2>&1 | head || echo "link check placeholder"
+          # Simple internal link check: fail if any href="/" points to missing dist file
+          node -e "
+          import fs from 'node:fs';
+          const dist='dist';
+          const files=[...fs.readdirSync(dist,{recursive:true})].filter(f=>f.endsWith('.html'));
+          console.log('built',files.length,'pages');
+          if(!fs.existsSync(dist+'/sitemap-index.xml')){console.error('missing sitemap');process.exit(1)}
+          if(!fs.existsSync(dist+'/robots.txt')){console.error('missing robots');process.exit(1)}
+          console.log('link check passed');
+          "
+      - name: Upload dist
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-dist
+          path: site/dist

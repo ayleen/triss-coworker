@@ -16,9 +16,13 @@
     "lint": "eslint .",
     "test": "node --test test/*.test.js"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@astrojs/sitemap": "^3.7.3",
     "astro": "^5.13.0",
-    "typescript": "^5.5.0"
+    "png-to-ico": "^3.0.2",
+    "typescript": "^5.5.0",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "globals": "^17.0.0"
   }
 }
