@@ -1,9 +1,9 @@
 /**
- * coder-write-quota.js — Package 2E (Atomic 11): aggregate writable quota
+ * coder-write-quota.js — aggregate writable quota
  * adapter (best-effort).
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md)
- * and Atomic 11. Package 0 has selected no kernel filesystem-quota backend,
+ * and transition. component has selected no kernel filesystem-quota backend,
  * so this module implements the documented best-effort scope: bounded
  * in-process block accounting with authenticated synchronous first-rejection
  * notification, duplicate-event immunity, and honest
@@ -33,7 +33,7 @@ export const RESULT_RESERVATION_BYTES = 1024 * 1024 * 1024;
 export const RESULT_CLEANUP_HEADROOM_BYTES = 1024 * 1024 * 1024;
 
 export function coderQuotaCapability() {
-  // No Package 0 filesystem proof: write quotas are honestly unavailable at
+  // No component filesystem proof: write quotas are honestly unavailable at
   // the kernel level; in-process accounting is best-effort only.
   return { writable_quota: 'unavailable', result_store_quota: 'unavailable' };
 }

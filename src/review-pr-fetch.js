@@ -1,5 +1,5 @@
 /**
- * review-pr-fetch.js — Package 17C (Atomic 37): bounded disposable PR fetch.
+ * review-pr-fetch.js — bounded disposable PR fetch.
  *
  * Section 9.4 bare-repository/resource contract of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Reuses Packages 2D/2E/2F
@@ -41,7 +41,7 @@ const BARE_CONFIG = Object.freeze({
  * @param {string} opts.sourceUrl origin fetch URL
  * @param {string} opts.baseOid
  * @param {string} opts.headOid
- * @param {object} opts.quota Package 2E-style handle (accountWrite/Release)
+ * @param {object} opts.quota component-style handle (accountWrite/Release)
  * @param {number} [opts.deadlineMs=30000]
  * @param {AbortSignal} [opts.signal]
  * @returns {{ok: boolean, code?: string, base_oid?: string, head_oid?: string,
@@ -126,7 +126,7 @@ export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, headSourceUr
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'fetched OIDs do not match the exact PR identity' };
   }
 
-  // P1 fix: measure the actual pack usage against the 120 MiB pack quota.
+  // Invariant: measure the actual pack usage against the 120 MiB pack quota.
   // The declared bound must be enforced by measurement, not assumption.
   const { readdir, stat } = await import('node:fs/promises');
   let packBytes = 0;
@@ -147,7 +147,7 @@ export async function fetchExactPrObjects(sh, { bareDir, sourceUrl, headSourceUr
     return { ok: false, code: 'TRISS_REVIEW_LIMIT', message: `PR fetch pack exceeds ${PR_FETCH_PACK_QUOTA_BYTES} bytes` };
   }
 
-  // P1 fix: keep the filesystem reservation held while the bare repo is on
+  // Invariant: keep the filesystem reservation held while the bare repo is on
   // disk. The caller (withDisposablePrRepository -> cleanPrRunDirectory)
   // releases the 128 MiB reservation when the directory is actually
   // removed — releasing here would let the quota admit more runs than the

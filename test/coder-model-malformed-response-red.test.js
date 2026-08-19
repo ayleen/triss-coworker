@@ -1,4 +1,5 @@
-// TDD Block 2B: malformed OpenCode Zen 200 response, warning schema, rollback missing-file validation, help/docs assertions
+// RED coverage: malformed OpenCode Zen responses, warning schema,
+// rollback missing-file validation, and help/docs assertions.
 // Tests added RED first to demonstrate required fixes; minimal GREEN changes will follow.
 
 import { test } from 'node:test';

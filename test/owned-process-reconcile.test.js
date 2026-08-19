@@ -1,11 +1,11 @@
 /**
- * owned-process-reconcile.test.js — Package 2D2 (Atomic 10): owned-process
+ * owned-process-reconcile.test.js — owned-process
  * owner reconciliation.
  *
  * RED/GREEN: node --test test/owned-process-reconcile.test.js
  *
  * Covers Section 6.5 of docs/reliable-delegation-contract-plan.md and
- * Atomic 10: reserving -> live -> verified_empty -> release_pending ->
+ * transition: reserving -> live -> verified_empty -> release_pending ->
  * acknowledged transitions, the TRISS_PROCESS_SET_CAP at 32, durable
  * recovery requiring a matching owner adapter (ephemeral accepts null),
  * begin/reference-remove/ack/prune crash rows, adapter mismatch, and the

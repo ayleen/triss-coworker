@@ -134,7 +134,7 @@ export function getConfig() {
   };
 }
 
-// ─── review limit configuration (Package 13 / Atomic 30) ────────────────────
+// ─── review limit configuration (shared contract) ────────────────────
 
 export const REVIEW_LIMIT_DEFAULTS = Object.freeze({
   singleMaxBytes: 262144, // 256 KiB
@@ -179,7 +179,7 @@ function parsePositiveInteger(raw, hardMax) {
  * @returns {{limits: object, warning: string|null}}
  */
 export function reviewLimitConfig(seams = {}) {
-  // Reloadable snapshot (P1 fix): a long-lived MCP server picks up edited or
+  // Reloadable snapshot (Invariant): a long-lived MCP server picks up edited or
   // deleted review limits in .triss.env on every call instead of caching the
   // process.env values captured at boot (loadEnvFiles only fills MISSING
   // keys, so deletions/edits were invisible after the first read).
@@ -191,7 +191,7 @@ export function reviewLimitConfig(seams = {}) {
     return value === '' ? undefined : value;
   });
   const parsed = {};
-  // P1 fix: the fallback is ATOMIC — track any parse failure and return the
+  // Invariant: the fallback is ATOMIC — track any parse failure and return the
   // COMPLETE default set with one warning. A per-field silent default that
   // lets the remaining custom values survive contradicts the documented
   // full-default fallback.

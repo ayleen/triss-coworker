@@ -2,11 +2,12 @@ import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import { IntegrationError } from './integrations/_contract.js';
 import { fetchWithRedirects } from './net.js';
+import { DEFAULT_FETCH_MAX_BYTES } from './config-defaults.js';
 
 const DEFAULT_UA =
   'triss-coworker/0.5 (+https://github.com/ayleen/triss-coworker)';
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const DEFAULT_MAX_BYTES = DEFAULT_FETCH_MAX_BYTES;
 const MAX_REDIRECTS = 5;
 
 function maxBytes() {

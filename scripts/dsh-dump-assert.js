@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Route assertions for `dsh --dump-config` output (review round 4, §2).
+ * Route assertions for structured `dsh --dump-config` output.
  *
  * The lifecycle and registry-acceptance CI jobs used to grep the dump for
  * substrings, which accepted partial or residual configurations: the string

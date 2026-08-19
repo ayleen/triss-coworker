@@ -1,8 +1,8 @@
 /**
- * provider-errors.js — Package 9 (Atomic 25): pure provider classifier and
+ * provider-errors.js — pure provider classifier and
  * fallback policy.
  *
- * Reference surface 7 classifier/fallback subset of the approved plan
+ * documented contract classifier/fallback subset of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Pure functions only: no
  * network, no retries.
  *
@@ -239,7 +239,7 @@ export const PROVIDER_EMPTY_CODE = 'TRISS_PROVIDER_EMPTY';
 
 /**
  * Fail an empty/whitespace-only provider response with the stable
- * TRISS_PROVIDER_EMPTY code (Reference surface 8). Non-empty original text
+ * TRISS_PROVIDER_EMPTY code (documented contract). Non-empty original text
  * is returned UNTRIMMED (usable output is never trimmed on the way out).
  *
  * @param {string} text

@@ -94,7 +94,7 @@ export function lockPathForBackend(backend, scope) {
 // TRISS_CODER_SMALL_MODEL through this path. Safe to import: secrets.js has no
 // module-eval side effects that reach back into this module.
 import { getEnvFilePath, parseEnvText, readEnvFile } from './secrets.js';
-// Canonical OpenCode config enumeration (P2-10): single source of config
+// Canonical OpenCode config enumeration: one source of truth for config
 // paths + precedence for role resolution here — global → direct → .opencode,
 // JSONC-aware, nested levels included.
 import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-config.js';
@@ -425,7 +425,7 @@ function resolveCrushRoles() {
 // global has only small_model, resolving to config main from local, config
 // small from global with distinct source_paths.
 function resolveOpenCodeConfigRoles() {
-  // CANONICAL ENUMERATOR (review P2-10): this used to read exactly two files
+  // The canonical enumerator replaces the former two-file assumption
   // (~/.config/opencode/opencode.json + <projectRoot>/opencode.json) with
   // plain JSON.parse, ignoring JSONC, nested direct configs between the
   // project boundary and cwd, and .opencode/ layers — so `coder models`
@@ -439,7 +439,7 @@ function resolveOpenCodeConfigRoles() {
   const parsed = [];
   for (const c of existing) {
     // tolerantParsing marks malformed layers with __parseError instead of
-    // throwing — inspection reports them per-layer (P2-10 contract).
+    // throwing; inspection reports them per layer so callers can fail closed.
     if (c.model && typeof c.model === 'object' && c.model.__parseError) {
       parsed.push({ path: c.path, layer: c.layer, doc: null, parseError: c.model.__parseError });
       continue;
@@ -803,8 +803,8 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     seenParsePaths.add(parseError.path);
     warnings.push(parseError);
   }
-  // For OpenCode (BOTH engines — review round 5: opencode2 used to fall into
-  // the Crush branch below), warn about config_main and configuredSmall
+  // Both OpenCode engines share the same configuration roles. Warn about
+  // config_main and configuredSmall
   // availability, not runtimeMain. runtimeMain may be a different provider
   // (e.g. GLM shell override) and should not trigger
   // "configured-model-unavailable" against the selected provider's catalogue.
@@ -2813,7 +2813,7 @@ function rollbackOpenCodeModelChange(input) {
   //    retained (forensic evidence, may be re-run).
   return {
     ok: true,
-    // Review round 6 #7: report the manifest's engine — the shared
+    // Invariant: report the manifest's engine — the shared
     // opencode-v1 restore path serves BOTH opencode and opencode2 records.
     engine: manifest.engine || 'opencode',
     scope,
@@ -2940,7 +2940,7 @@ export async function rollbackModelChange(input = {}, deps = {}) {
   const lockHandle = lock(backend, scope);
   try {
     // 3. TOCTOU guard: RE-READ the manifest under the lock, then dispatch.
-    // Round-3 P2-10: BOTH the engine and the NORMALIZED config_backend must
+    // Rollback must re-check both the engine and normalized config_backend under
     // be re-checked — the lock was keyed on the pre-lock backend, so a
     // manifest mutated to a different backend between the read and the lock
     // would otherwise restore the wrong engine's targets under the wrong

@@ -1,10 +1,10 @@
 /**
- * coder-session-store.js — Package 4C (Atomic 18): bounded per-session
+ * coder-session-store.js — bounded per-session
  * generation store.
  *
  * Section 6.3 per-session generation contract of the approved plan
- * (docs/reliable-delegation-contract-plan.md). Reuses Package 4B1
- * transitions and the Package 4B2 phase/transition interface.
+ * (docs/reliable-delegation-contract-plan.md). Reuses the shared inventory
+ * transitions and owner phase interface.
  *
  * The mapping schema is exact and isolated-only: a non-isolated persistence
  * request is rejected with no store touch. Publication stages a new
@@ -183,7 +183,7 @@ export async function scanStagedHome(stageDir, { rejectSecrets = [/sk-[A-Za-z0-9
 // ─── store adapter ───────────────────────────────────────────────────────────
 
 /**
- * Create the real store adapter implementing the Package 4B2 phase/transition
+ * Create the real store adapter implementing the owner phase-transition
  * interface, bound to an injected filesystem implementation so tests can
  * crash at every fsync/rename point.
  *

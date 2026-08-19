@@ -180,7 +180,7 @@ export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (baseEnv[key] != null) env[key] = baseEnv[key];
   }
-  // Package 2A credential proxy: when a proxy plan exists, the engine
+  // Credential proxy: when a proxy plan exists, the engine
   // receives the single-run proxy token in the API-key variables plus the
   // loopback base URL — never the real provider credential.
   if (proxy && proxy.token && proxy.baseUrl) {

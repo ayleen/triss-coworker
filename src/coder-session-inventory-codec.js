@@ -1,5 +1,5 @@
 /**
- * coder-session-inventory-codec.js — Package 4B (Atomic 15): project-worktree
+ * coder-session-inventory-codec.js — project-worktree
  * session inventory codec.
  *
  * Section 6.3 exact inventory schema of the approved plan

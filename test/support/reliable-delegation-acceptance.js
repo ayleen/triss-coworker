@@ -1,9 +1,8 @@
 /**
- * release-a-acceptance.js — Package 11 (Atomic 28): Release A synthetic
- * acceptance harness (script-safe core).
+ * Reliable-delegation synthetic and live acceptance support.
  *
- * Reference surface 17 / Atomic 28 of the approved plan
- * (docs/reliable-delegation-contract-plan.md). The synthetic Release A
+ * documented contract / transition of the approved plan
+ * (docs/reliable-delegation-contract-plan.md). The synthetic session acceptance
  * cases cover, with NO credentials and a local fake provider:
  *  - persistent admission: sessions 1-4 admitted, the fifth fails BEFORE
  *    spawn with TRISS_CODER_SESSION_CAP, four bounded rows list, one exact
@@ -22,7 +21,7 @@ import { mkdtemp, mkdir, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { INVENTORY_MAX_ENTRIES } from './coder-session-inventory-codec.js';
+import { INVENTORY_MAX_ENTRIES } from '../../src/coder-session-inventory-codec.js';
 import {
   reserveCoderSession,
   markCoderSessionRunning,
@@ -31,15 +30,15 @@ import {
   listCoderSessions,
   removeCoderSessionRow,
   sessionInventoryPath,
-} from './coder-session-transitions.js';
-import { allocateRunIdentity, isAnonymousSlug } from './coder-orchestration.js';
+} from '../../src/coder-session-transitions.js';
+import { allocateRunIdentity, isAnonymousSlug } from '../../src/coder-orchestration.js';
 
 export const SESSION_CAP_CODE = 'TRISS_CODER_SESSION_CAP';
 
 const FP = 'f'.repeat(64);
 
 /**
- * Run the synthetic Release A acceptance suite against injected inventory
+ * Run the synthetic session acceptance suite against injected inventory
  * roots. Returns the aggregated pass/fail report (never throws for a
  * failed case — the script decides the exit code).
  *
@@ -48,7 +47,7 @@ const FP = 'f'.repeat(64);
  * @param {(slug: string) => void} [deps.log] progress line
  * @returns {Promise<{passed: string[], failed: Array<{case: string, error: string}>}>}
  */
-export async function runSyntheticReleaseA({ trissRoot, log = () => {} } = {}) {
+export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} } = {}) {
   const passed = [];
   const failed = [];
   const fail = (name, error) => failed.push({ case: name, error: String(error && error.message || error) });
@@ -140,7 +139,7 @@ export async function runSyntheticReleaseA({ trissRoot, log = () => {} } = {}) {
       bootId: 'boot-1',
     });
     await markCoderSessionIdle({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'sess-1' });
-    const { beginCoderSessionDelete } = await import('./coder-session-transitions.js');
+    const { beginCoderSessionDelete } = await import('../../src/coder-session-transitions.js');
     await beginCoderSessionDelete({
       inventoryDir: opencodeDir,
       engine: 'opencode',
@@ -212,26 +211,26 @@ export async function runSyntheticReleaseA({ trissRoot, log = () => {} } = {}) {
     fail('no secret leakage', err);
   }
 
-  log(`synthetic Release A: ${passed.length} passed, ${failed.length} failed`);
+  log(`synthetic session acceptance: ${passed.length} passed, ${failed.length} failed`);
   return { passed, failed };
 }
 
 /**
- * Release B synthetic cases: full and selected local reviews, rename
+ * review acceptance synthetic cases: full and selected local reviews, rename
  * selection, large-PR/small-selection acquisition, stdin scope, issue trust,
  * and malicious external diff/textconv/config environment rejection.
  */
-export async function runSyntheticReleaseB({ log = () => {} } = {}) {
+export async function runSyntheticReviewAcceptance({ log = () => {} } = {}) {
   const passed = [];
   const failed = [];
   const fail = (name, error) => failed.push({ case: name, error: String(error && error.message || error) });
   const pass = (name) => passed.push(name);
 
-  const { parseUnifiedDiff, deriveReviewCoverage, planSingleReviewPayload } = await import('./review-payload.js');
-  const { reviewLimitConfig } = await import('./config.js');
-  const { expandRenameSelection } = await import('./review-git.js');
-  const { resolveExplicitReviewIssue } = await import('./review-input.js');
-  const { executeSingleReview } = await import('./review-executor.js');
+  const { parseUnifiedDiff, deriveReviewCoverage, planSingleReviewPayload } = await import('../../src/review-payload.js');
+  const { reviewLimitConfig } = await import('../../src/config.js');
+  const { expandRenameSelection } = await import('../../src/review-git.js');
+  const { resolveExplicitReviewIssue } = await import('../../src/review-input.js');
+  const { executeSingleReview } = await import('../../src/review-executor.js');
 
   const limits = reviewLimitConfig().limits;
 
@@ -317,7 +316,7 @@ export async function runSyntheticReleaseB({ log = () => {} } = {}) {
 
   // 5. Malicious external diff/textconv/config environment is rejected.
   try {
-    const { resolveReviewComparison } = await import('./review-git.js');
+    const { resolveReviewComparison } = await import('../../src/review-git.js');
     const seenEnv = [];
     const sh = (args, opts) => {
       if (args[0] === '--no-pager') seenEnv.push(opts.env);
@@ -360,34 +359,34 @@ export async function runSyntheticReleaseB({ log = () => {} } = {}) {
     fail('empty response', err);
   }
 
-  log(`synthetic Release B: ${passed.length} passed, ${failed.length} failed`);
+  log(`synthetic review acceptance: ${passed.length} passed, ${failed.length} failed`);
   return { passed, failed };
 }
 
-/** Run both synthetic suites in a fresh tmp root (script entry). */
-export async function runSyntheticReleaseAInTmp({ log = console.log } = {}) {
-  const trissRoot = await mkdtemp(join(tmpdir(), 'triss-release-a-'));
+/** Run the synthetic session suite in a fresh temporary root. */
+export async function runSyntheticSessionAcceptanceInTmp({ log = console.log } = {}) {
+  const trissRoot = await mkdtemp(join(tmpdir(), 'triss-session-acceptance-'));
   try {
-    return await runSyntheticReleaseA({ trissRoot, log });
+    return await runSyntheticSessionAcceptance({ trissRoot, log });
   } finally {
     await rm(trissRoot, { recursive: true, force: true });
   }
 }
 
 /**
- * Release C synthetic cases: sharding order, cross-file separation,
+ * sharding acceptance synthetic cases: sharding order, cross-file separation,
  * no-global-verdict, second-shard failure/cancellation with no third call,
  * output limits, and the CLI/MCP partial-output policy.
  */
-export async function runSyntheticReleaseC({ log = () => {} } = {}) {
+export async function runSyntheticShardingAcceptance({ log = () => {} } = {}) {
   const passed = [];
   const failed = [];
   const fail = (name, error) => failed.push({ case: name, error: String(error && error.message || error) });
   const pass = (name) => passed.push(name);
 
-  const { parseUnifiedDiff, planSequentialShards } = await import('./review-payload.js');
-  const { reviewLimitConfig } = await import('./config.js');
-  const { executeReviewPlan } = await import('./review-executor.js');
+  const { parseUnifiedDiff, planSequentialShards } = await import('../../src/review-payload.js');
+  const { reviewLimitConfig } = await import('../../src/config.js');
+  const { executeReviewPlan } = await import('../../src/review-executor.js');
   const limits = reviewLimitConfig().limits;
 
   // 1. Sharding order + cross-file separation: source-ordered whole-file
@@ -403,7 +402,7 @@ export async function runSyntheticReleaseC({ log = () => {} } = {}) {
       fail('sharding order', planned.error);
     } else {
       const shards = planned.plan.shards;
-      // First-seen source order (P2 fix): z.txt appears FIRST in the diff,
+      // First-seen source order (Invariant): z.txt appears FIRST in the diff,
       // so the first shard starts with z.txt; the last shard ends with the
       // last-seen file (m.txt). Alphabetical order is a contract violation.
       const first = shards[0].sections[0].new_path;
@@ -521,7 +520,7 @@ export async function runSyntheticReleaseC({ log = () => {} } = {}) {
   // 6. CLI/MCP partial policy: structured partial errors carry completed
   //    shard verdicts only, never raw diff content.
   try {
-    const { runReviewCoreShard } = await import('./mcp/review-core.js');
+    const { runReviewCoreShard } = await import('../../src/mcp/review-core.js');
     const calls = [];
     const r = await runReviewCoreShard({
       diff: 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n' + '-x\n' + 'y'.repeat(60000) + '\n' +
@@ -541,15 +540,15 @@ export async function runSyntheticReleaseC({ log = () => {} } = {}) {
     fail('CLI/MCP partial policy', err);
   }
 
-  log(`synthetic Release C: ${passed.length} passed, ${failed.length} failed`);
+  log(`synthetic sharding acceptance: ${passed.length} passed, ${failed.length} failed`);
   return { passed, failed };
 }
 
 /**
- * Release C live acceptance: records PASS, SKIPPED_NO_CREDENTIALS, or
+ * Live sharding acceptance records PASS, SKIPPED_NO_CREDENTIALS, or
  * BLOCKED_ENVIRONMENT separately and never upgrades a skip/block to success.
  */
-export async function runLiveReleaseC({ log = console.log } = {}) {
+export async function runLiveShardingAcceptance({ log = console.log } = {}) {
   const record = (name, status, note = '') => {
     log(`  · ${name}: ${status}${note ? ` (${note})` : ''}`);
     return { name, status, note };
@@ -560,7 +559,7 @@ export async function runLiveReleaseC({ log = console.log } = {}) {
   const key = process.env.TRISS_WORKER_API_KEY || process.env.ZHIPU_API_KEY || process.env.OPENCODE_API_KEY || process.env.MOONSHOT_API_KEY;
   if (!key) {
     results.push(record('live sharded review over a real diff', 'SKIPPED_NO_CREDENTIALS', 'no provider key'));
-    log('live Release C: 0 passed, 0 failed, 1 SKIPPED_NO_CREDENTIALS');
+    log('live sharding acceptance: 0 passed, 0 failed, 1 SKIPPED_NO_CREDENTIALS');
     return { passed: 0, failed: 0, skipped: 1, blocked: 0, results };
   }
 
@@ -568,23 +567,23 @@ export async function runLiveReleaseC({ log = console.log } = {}) {
     // A real local diff requires a git repository.
     const { execFileSync } = await import('node:child_process');
     execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' });
-    const { runLiveShardedReview } = await import('./review-live.js');
+    const { runLiveShardedReview } = await import('../../src/review-live.js');
     const outcome = await runLiveShardedReview();
     if (outcome.status === 'PASS') {
       results.push(record('live sharded review over a real diff', 'PASS'));
-      log('live Release C: 1 passed, 0 failed, 0 skipped');
+      log('live sharding acceptance: 1 passed, 0 failed, 0 skipped');
       return { passed: 1, failed: 0, skipped: 0, blocked: 0, results };
     }
     if (outcome.status === 'BLOCKED_ENVIRONMENT') {
       results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', outcome.reason));
-      log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
+      log('live sharding acceptance: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
       return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
     }
     results.push(record('live sharded review over a real diff', 'FAILED', outcome.reason));
-    log('live Release C: 0 passed, 1 FAILED, 0 skipped');
+    log('live sharding acceptance: 0 passed, 1 FAILED, 0 skipped');
     return { passed: 0, failed: 1, skipped: 0, blocked: 0, results };
   } catch (err) {
-    // P1 fix: distinguish programming failures from environment blocks.
+    // Invariant: distinguish programming failures from environment blocks.
     // An import error or a thrown TypeError is a FAILED acceptance (broken
     // code), not an external blocker — classifying it as BLOCKED_ENVIRONMENT
     // would let broken code look like a clean environment gate.
@@ -595,11 +594,11 @@ export async function runLiveReleaseC({ log = console.log } = {}) {
       /not a git repository|no local diff/i.test(message);
     if (isEnvironmentBlock) {
       results.push(record('live sharded review over a real diff', 'BLOCKED_ENVIRONMENT', message));
-      log('live Release C: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
+      log('live sharding acceptance: 0 passed, 0 failed, 0 skipped, 1 BLOCKED_ENVIRONMENT');
       return { passed: 0, failed: 0, skipped: 0, blocked: 1, results };
     }
     results.push(record('live sharded review over a real diff', 'FAILED', message));
-    log('live Release C: 0 passed, 1 FAILED, 0 skipped');
+    log('live sharding acceptance: 0 passed, 1 FAILED, 0 skipped');
     return { passed: 0, failed: 1, skipped: 0, blocked: 0, results };
   }
 }

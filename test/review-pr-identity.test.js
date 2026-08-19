@@ -1,10 +1,10 @@
 /**
- * review-pr-identity.test.js — Package 17 (Atomic 34): pure PR identity
+ * review-pr-identity.test.js — pure PR identity
  * parser.
  *
  * RED/GREEN: node --test test/review-pr-identity.test.js
  *
- * Covers Reference surface 10 PR acquisition identity bullets of
+ * Covers documented contract PR acquisition identity bullets of
  * docs/reliable-delegation-contract-plan.md: canonical input (number,
  * owner/repo#number, github.com URL), configured-origin matching, --base
  * rejection, and the exact bounded metadata schema with fork/base/head

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage questions
+    url: https://github.com/ayleen/triss-coworker/discussions
+    about: Ask setup and usage questions in Discussions.
+  - name: Security vulnerability
+    url: https://github.com/ayleen/triss-coworker/security/advisories/new
+    about: Report vulnerabilities privately.

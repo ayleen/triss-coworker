@@ -15,11 +15,14 @@ promotional. `opencode/hy3-free` (Hunyuan 3, a 295B MoE) was the first free id
 and **may already be gone from the catalogue** — the authenticated
 `GET https://opencode.ai/zen/v1/models` list is authoritative. GLM itself is
 unaffected by any Zen free-model churn and stays reachable through either
-engine (see [glm-clients.md](glm-clients.md)).
+engine (see the
+[GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md)).
 
 > The `crush` engine speaks Z.AI GLM only. Everything below is the `opencode`
-> engine. See [glm-clients.md](glm-clients.md) for the two‑engine overview and
-> [configuration.md](configuration.md#coder-glm-coding-agent) for the full
+> engine. See the
+> [GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md)
+> for the two-engine overview and
+> [configuration.md](../configuration.md#coder-glm-coding-agent) for the full
 > coder env‑var table.
 
 ## TL;DR
@@ -95,7 +98,7 @@ MoE) was the first free id and **may already be absent from the live catalogue**
 (the 2026-08-03 incident on record is exactly this case). When a free model is
 retired it simply drops out of the list; your `OPENCODE_API_KEY` and GLM
 configuration are untouched, and GLM stays reachable through either engine (see
-[glm-clients.md](glm-clients.md)).
+[GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md)).
 
 ### init, recovery, and the offline fallback
 
@@ -328,7 +331,7 @@ provider credential is set — `ZHIPU_API_KEY`, `OPENCODE_API_KEY`,
 `MOONSHOT_API_KEY`, or `KIMI_API_KEY` (`coderCredentialReady()`).
 Pass `model: "opencode/<id>"` to `triss_coder_run`, or set
 `TRISS_CODER_MODEL` so a bare call defaults to it. See
-[mcp.md](mcp.md#what-tools-are-exposed).
+[mcp.md](../mcp.md#what-tools-are-exposed).
 
 ## Verifying it works
 

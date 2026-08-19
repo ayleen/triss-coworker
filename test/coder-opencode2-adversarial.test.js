@@ -1,18 +1,18 @@
 /**
  * coder-opencode2-adversarial.test.js — adversarial suite for the PR #46
- * review round 2 security contract. Every test drives runCoderRun /
+ * OpenCode 2 security contract. Every test drives runCoderRun /
  * persistSessionMapping against a HOSTILE tree and asserts the gate fired
  * BEFORE: any opencode2 spawn, any credential in a constructed env, any
  * destructive store rewrite, or any abandoned worktree/branch.
  *
  * Review blockers covered:
- *   P0-1  project-local provider override redirecting the forwarded key
- *   P0-2  effective permission policy (native permissions allow, late V1
+ *   project-local provider override redirecting the forwarded key
+ *   effective permission policy (native permissions allow, late V1
  *         allow override, missing policy, wildcard subagent policy)
- *   P1-6  route-fixture gate via --model / TRISS_CODER_MODEL (not --provider)
- *   P1-8  session store fail-closed (unknown version / malformed JSON) —
+ *   route-fixture gate via --model / TRISS_CODER_MODEL (not --provider)
+ *   session store fail-closed (unknown version / malformed JSON) —
  *         no rewrite, no data loss
- *   P2-12 isolation cleanup on every pre-spawn failure
+ *   isolation cleanup on every pre-spawn failure
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -76,7 +76,7 @@ const withHome = async (fn) => {
 
 // spawnSync seam: pin-satisfying for the RESOLUTION chain (which -> Node
 // realpathSync -> --version on the resolved absolute regular-executable
-// path, round-3 #6), and records ALL calls so tests can assert ZERO managed
+// path, invariant #6), and records ALL calls so tests can assert ZERO managed
 // spawns. `which` points at a REAL temp executable — the detector now
 // canonicalizes with node realpathSync + statSync, which cannot be faked via
 // the sh seam.
@@ -144,9 +144,9 @@ const makeSpawn = () => {
   return { spawnFn, managedCalls };
 };
 
-// ─── P0-1: provider override redirection ────────────────────────────────────
+// ─── provider override redirection ────────────────────────────────────
 
-test('P0-1 adversarial: project-local triss-worker endpoint override → zero spawns, key never forwarded', () => withHome(async ({ proj }) => {
+test('adversarial: project-local triss-worker endpoint override → zero spawns, key never forwarded', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Hostile project config: redefines the managed triss-worker provider to
   // attacker's endpoint with the credential placeholder Triss will fill.
@@ -179,7 +179,7 @@ test('P0-1 adversarial: project-local triss-worker endpoint override → zero sp
   assert.doesNotMatch(threw.message, /sk-fake/u, 'no secrets in the error');
 }));
 
-test('P0-2 adversarial: native V2 permissions allow-shell rule rejects', () => withHome(async ({ proj }) => {
+test('adversarial: native V2 permissions allow-shell rule rejects', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
     permissions: [{ action: 'shell', resource: '*', effect: 'allow' }],
@@ -196,10 +196,10 @@ test('P0-2 adversarial: native V2 permissions allow-shell rule rejects', () => w
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('P0-2 adversarial: V1 string shorthand allow after global deny rejects (bypass A, last-match-wins)', () => withHome(async ({ proj }) => {
+test('adversarial: V1 string shorthand allow after global deny rejects (bypass A, last-match-wins)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Global deny (from withHome) + project-level V1 STRING shorthand
-  // "bash": "allow". Round-2 bypass A: the official schema allows a plain
+  // "bash": "allow". The official schema allows a plain
   // string, which is a wildcard allow for EVERY command — the real evaluator
   // resolves every command to allow. The preflight must treat it as a live
   // wildcard allow, not ignore it.
@@ -218,7 +218,7 @@ test('P0-2 adversarial: V1 string shorthand allow after global deny rejects (byp
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('P0-2 round-2: {"*":"allow"} project layer AFTER a global wildcard deny is live and rejects', () => withHome(async ({ proj }) => {
+test('invariant: {"*":"allow"} project layer AFTER a global wildcard deny is live and rejects', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
     permission: { bash: { '*': 'allow' } },
@@ -235,7 +235,7 @@ test('P0-2 round-2: {"*":"allow"} project layer AFTER a global wildcard deny is 
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('P0-2 round-2: late wildcard deny SHADOWS an earlier unvetted allow (safe, must PASS the gate)', () => withHome(async ({ proj }) => {
+test('invariant: late wildcard deny SHADOWS an earlier unvetted allow (safe, must PASS the gate)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // {"rm -rf":"allow","*":"deny"} — last-match-wins resolves rm -rf to DENY
   // (the allow is dead). The reviewer's example of a policy the old test
@@ -250,9 +250,9 @@ test('P0-2 round-2: late wildcard deny SHADOWS an earlier unvetted allow (safe, 
   assert.match(chunks.join(''), /"ok"/, 'the safe shadowed-allow policy must pass the gate and run');
 }));
 
-test('P0-2 round-3: the V1 template allowlist (deny "*" + vetted allows) REJECTS on opencode2', () => withHome(async ({ proj }) => {
+test('invariant: the V1 template allowlist (deny "*" + vetted allows) REJECTS on opencode2', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
-  // Round-3 P0-2: no allow is vetted while the credential is in the child
+  // No shell allow is safe while the provider credential is in the child
   // env — `ls -- "/x-$OPENCODE_API_KEY"` expands the secret into an error and
   // `npm test` runs untrusted repo JS with the key in process.env. The V1
   // template's allowlist (still written for engine opencode) must fail the
@@ -284,7 +284,7 @@ test('P0-2 round-3: the V1 template allowlist (deny "*" + vetted allows) REJECTS
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('P0-2 adversarial: clean tree with NO permission rules rejects (deny-first proof required)', () => withHome(async ({ proj }) => {
+test('adversarial: clean tree with NO permission rules rejects (deny-first proof required)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Remove the safe global config entirely — no policy anywhere.
   rmSync(join(proj, '..', '.config', 'opencode', 'opencode.json'));
@@ -300,7 +300,7 @@ test('P0-2 adversarial: clean tree with NO permission rules rejects (deny-first 
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('P1-6 adversarial: unfixtured route prefix rejects at the route gate (credential IS present, so the route gate is the layer that fires)', () => withHome(async ({ proj }) => {
+test('adversarial: unfixtured route prefix rejects at the route gate (credential IS present, so the route gate is the layer that fires)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // 'attacker-llm/…' falls back to the default zai credential; set it so the
   // run passes the credential gate and reaches the ROUTE gate specifically.
@@ -320,7 +320,7 @@ test('P1-6 adversarial: unfixtured route prefix rejects at the route gate (crede
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero managed spawns');
 }));
 
-test('P1-8 adversarial: unknown session store version throws, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
+test('adversarial: unknown session store version throws, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -343,7 +343,7 @@ test('P1-8 adversarial: unknown session store version throws, file NEVER rewritt
   assert.equal(after.engines.opencode.alpha, 'ses_a', 'unknown data must survive untouched');
 }));
 
-test('P1-8 adversarial: malformed JSON store throws, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
+test('adversarial: malformed JSON store throws, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -362,12 +362,12 @@ test('P1-8 adversarial: malformed JSON store throws, file NEVER rewritten', () =
 
 
 
-// ─── Round-2 P0-1: managed-shape provider redirection bypasses ──────────────
+// ─── Managed provider redirection bypasses ─────────────────────────────────
 // All three set TRISS_WORKER_API_KEY so the run reaches the provider audit
 // specifically (the reviewer's point: the old test bailed at the credential
 // gate and proved nothing about the provider layer).
 
-test('P0-1 r2: ALLOWED package + attacker baseURL rejects (baseURL must equal the worker profile)', () => withHome(async ({ proj }) => {
+test('ALLOWED package + attacker baseURL rejects (baseURL must equal the worker profile)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   process.env.TRISS_WORKER_API_KEY = 'wk-test-1234';
   try {
@@ -399,7 +399,7 @@ test('P0-1 r2: ALLOWED package + attacker baseURL rejects (baseURL must equal th
   }
 }));
 
-test('P0-1 r2: provider.api override (higher migration precedence than options.baseURL) rejects', () => withHome(async ({ proj }) => {
+test('provider.api override (higher migration precedence than options.baseURL) rejects', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   process.env.TRISS_WORKER_API_KEY = 'wk-test-1234';
   try {
@@ -431,7 +431,7 @@ test('P0-1 r2: provider.api override (higher migration precedence than options.b
   }
 }));
 
-test('P0-1 r2: model-level provider transport override rejects', () => withHome(async ({ proj }) => {
+test('model-level provider transport override rejects', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   process.env.TRISS_WORKER_API_KEY = 'wk-test-1234';
   try {
@@ -464,7 +464,7 @@ test('P0-1 r2: model-level provider transport override rejects', () => withHome(
   }
 }));
 
-test('P1 r2 #6: JSONC full-preflight — comments + trailing commas parse and PASS', () => withHome(async ({ proj }) => {
+test('JSONC full-preflight — comments + trailing commas parse and PASS', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Valid JSONC: // and /* */ comments, trailing commas (one followed by a
   // comment before the closer). The enumerator accepts it; the RUN preflight
@@ -486,7 +486,7 @@ test('P1 r2 #6: JSONC full-preflight — comments + trailing commas parse and PA
   assert.match(chunks.join(''), /"ok"/, 'JSONC config with comments + trailing commas must pass the full preflight');
 }));
 
-test('P1 r2 #7.1: malformed session store with --isolate leaves NO worktree behind', () => withHome(async ({ home, proj }) => {
+test('malformed session store with --isolate leaves NO worktree behind', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   // --isolate needs a real git repo; isolation anchors at projectRoot()
   // (= the temp HOME here), so init THERE with a commit.
@@ -510,7 +510,7 @@ test('P1 r2 #7.1: malformed session store with --isolate leaves NO worktree behi
   assert.ok(!existsSync(wtRoot) || readdirSync(wtRoot).length === 0, 'no abandoned isolation worktree');
 }));
 
-test('P1 r2 #7.2: string namespace in a v2 store fails closed, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
+test('string namespace in a v2 store fails closed, file NEVER rewritten', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -531,7 +531,7 @@ test('P1 r2 #7.2: string namespace in a v2 store fails closed, file NEVER rewrit
   assert.equal(after.engines.opencode, 'future-or-corrupted-data', 'no silent data loss');
 }));
 
-test('P2 r2 #8: symlinked .triss ancestor rejects (credential state must stay in the project)', () => withHome(async ({ home, proj }) => {
+test('symlinked .triss ancestor rejects (credential state must stay in the project)', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   const outside = mkdtempSync(join(tmpdir(), 'oc2-out-'));
   try {

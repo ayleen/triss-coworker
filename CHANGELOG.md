@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Reliable delegation (Release C)** — sequential sharding per
+- **Reliable delegation (sharding acceptance)** — sequential sharding per
   `docs/reliable-delegation-contract-plan.md`:
   - `--payload-mode shard` CLI + MCP shard parity: source-ordered
     whole-file shards (a file is never split across shards);
@@ -49,11 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     never completed prose or raw diff content;
   - `evidence + shard` and `shard + --stream` rejected before any model
     call;
-  - Release C synthetic acceptance (`--synthetic --release C`) and live
-    acceptance (`--live --release C`; PASS / SKIPPED_NO_CREDENTIALS /
+  - sharding synthetic acceptance (`--synthetic --suite sharding`) and live
+    acceptance (`--live --suite sharding`; PASS / SKIPPED_NO_CREDENTIALS /
     BLOCKED_ENVIRONMENT recorded separately, never upgraded to success).
 
-- **Reliable delegation (Release B)** — bounded single review, exact PR
+- **Reliable delegation (review acceptance)** — bounded single review, exact PR
   diff acquisition, and the issue trust boundary per
   `docs/reliable-delegation-contract-plan.md`:
   - reloadable review limits (`TRISS_REVIEW_SINGLE_MAX_BYTES`,
@@ -122,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`usage_source: "opencode2"`, terminal-error precedence, no fabricated
   zeros), namespaces sessions per engine, and rides the shared opencode-v1
   configuration backend for `coder model set` / rollback. See
-  docs/opencode2.md and docs/opencode2-engine-plan.md.
+  docs/engines/opencode2.md and docs/opencode2-engine-plan.md.
 
 ### Security (opencode2 engine beta)
 
@@ -150,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonical parser (comments and trailing commas no longer abort the run),
   and `parseOpenCodeDocument` drops trailing commas followed by comments.
 
-### Fixed (review rounds 4–6)
+### Fixed
 
 - Dual legacy/native config forms (`provider`+`providers`,
   `plugin`+`plugins`, `permission`+`permissions`) reject — the pinned build
@@ -176,7 +176,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects BEFORE any credential/config write with actionable guidance; a
   fresh V2 init warns that the shared deny-everything policy removes the
   allowlisted commands from plain V1 runs (documented in
-  docs/opencode2.md, including two new troubleshooting rows).
+  docs/engines/opencode2.md, including two new troubleshooting rows).
 - Model inspection tolerates unrelated hostile config shapes (a non-string
   plugin reference, unreadable directories) — the post-commit audit of a
   successful `coder model set` no longer rolls back over them; `coder
@@ -209,12 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Reliable delegation (Release A)** — coder envelope v2 orchestration per
+- **Reliable delegation (session acceptance)** — coder envelope v2 orchestration per
   `docs/reliable-delegation-contract-plan.md`:
   - envelope fields `session_slug`, `result_retention`, `result_id`, and
     `execution_capabilities` (eight honest `enforced|best_effort|unavailable`
     values + `effective_isolation`) on every safe envelope
-    (`docs/reliable-delegation-release-a.md`);
+    (`docs/reliable-delegation-contract.md`);
   - v2 session CLI: `triss coder session list`, `triss coder session clean
     <slug> --engine <opencode|crush>` (per-engine store only, legacy
     `.triss/sessions.json` never touched);
@@ -229,7 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     phase-aware manifest machine, completion-marker hashing);
   - credential proxy (loopback one-run token) on both engines — the real
     provider key never reaches the engine environment; every run requires
-    the proxy (Release A rejects runs when it is unavailable);
+    the proxy (session acceptance rejects runs when it is unavailable);
   - pure provider error classifier with stable public codes
     (`TRISS_PROVIDER_AUTH/POLICY/RATE/TIMEOUT/NOT_FOUND/CONNECTION/UNKNOWN/
     CONFLICT/EMPTY`);
@@ -762,7 +762,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tools (which now light up on `ZHIPU_API_KEY` **or** `OPENCODE_API_KEY`). (#12)
 - `--allow-unsafe-bash` on `triss coder init` — explicit opt-in to proceed when
   an existing `opencode.json` has no deny-first bash policy. (#12)
-- New `docs/opencode-zen.md` deep-dive (auth, live catalogue, precedence, setup
+- New `docs/engines/opencode-zen.md` deep-dive (auth, live catalogue, precedence, setup
   gates, privacy, MCP, verification). (#12)
 
 ### Changed
@@ -1118,7 +1118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TRISS_PROJECT_ROOT=<install-time-cwd>` baked in. Because that config
   is shared by every Claude Code / Codex session, every install from a
   new project would overwrite the pin and silently sandbox unrelated
-  sessions to the wrong root — yielding `outside project root /Users/.../X`
+  sessions to the wrong root — yielding `outside project root $HOME/.../X`
   errors when working in project Y. Global installs now omit
   `TRISS_PROJECT_ROOT`; the sandbox follows the per-session cwd. Local
   `./.mcp.json` installs continue to pin the path (the config travels
@@ -1226,7 +1226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Documentation-audit fixes (P0 + P1 from `triss` self-audit).
+- Documentation-audit security and correctness fixes from a `triss` self-audit.
 
 ## [0.12.0] — 2026-05-07
 

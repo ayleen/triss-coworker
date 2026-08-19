@@ -96,7 +96,7 @@ test('coder run --engine opencode2: a configured plugin rejects BEFORE any spawn
   let threw = null;
   try {
     // opts.cwd (the USER flag) selects the runtime directory the audit
-    // walks; deps.cwd is a spawn-seam only since the P1-5 fix.
+    // walks; deps.cwd is a spawn seam only and must not select the audited tree.
     await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: home }, { spawnSync: sh });
   } catch (err) {
     threw = err;

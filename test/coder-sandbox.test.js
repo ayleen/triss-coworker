@@ -1,12 +1,12 @@
 /**
- * coder-sandbox.test.js — Package 2B (Atomic 04): filesystem and network
+ * coder-sandbox.test.js — filesystem and network
  * capability adapter.
  *
  * RED/GREEN: node --test test/coder-sandbox.test.js
  *
  * Covers Section 6.5 of docs/reliable-delegation-contract-plan.md: exact
  * enforced|best_effort|unavailable capability reporting on darwin|linux|
- * win32, honest best-effort parity (no Package 0 backend selected),
+ * win32, honest best-effort parity (no enforced sandbox backend selected),
  * fail-closed credential isolation with absolute credential-store and
  * parent-process canaries, and mount allowlist denial (symlink/path escape,
  * broad roots, HOME/SSH/cloud).
@@ -46,7 +46,7 @@ test('capability reporting is exact on darwin|linux|win32 for both engines', () 
   }
 });
 
-test('without a Package 0 backend, sandbox and quotas are unavailable, not claimed enforced', () => {
+test('without an enforced sandbox backend, sandbox and quotas are unavailable, not claimed enforced', () => {
   for (const platform of PLATFORMS) {
     const caps = resolveCoderSandbox({ platform, proxyAvailable: false });
     assert.equal(caps.sandbox, 'unavailable');

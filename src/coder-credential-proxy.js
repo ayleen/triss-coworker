@@ -1,5 +1,5 @@
 /**
- * coder-credential-proxy.js — Package 2A (Atomic 03): parent-owned loopback
+ * coder-credential-proxy.js — parent-owned loopback
  * credential proxy.
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md):
@@ -22,7 +22,7 @@
  *  - exact-secret non-disclosure: the real credential is never returned,
  *    logged, or placed in engine env/argv/config by this module.
  *
- * URL contract (P0 fix): `endpoint` is the upstream ORIGIN
+ * URL contract (Invariant): `endpoint` is the upstream ORIGIN
  * (`https://host[:port]`, no path). The engine's base URL points at
  * `scopedBaseUrl` (loopback origin + pathPrefix), so requests arrive with
  * the prefix verbatim and forwarding is a plain origin + path join — the
@@ -111,7 +111,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     throw new TypeError('startCoderCredentialProxy: model is required');
   }
   // Endpoint pinning is origin-exact: an endpoint that already carries an
-  // API path would double the prefix on every forward (the exact P0 this
+  // API path would double the prefix on every forward (the exact redirect this
   // validation exists to catch), so it fails closed at construction.
   if (typeof endpoint !== 'string' || !isValidOrigin(endpoint)) {
     throw new TypeError(

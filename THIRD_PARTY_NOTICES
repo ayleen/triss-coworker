@@ -1,0 +1,26 @@
+Triss Coworker third-party notices
+==================================
+
+The npm package installs the following direct runtime dependencies. Their
+license texts and transitive notices are distributed with those packages:
+
+- @modelcontextprotocol/sdk — MIT
+- commander — MIT
+- dotenv — BSD-2-Clause
+- linkedom — ISC
+- openai — Apache-2.0
+- picocolors — ISC
+- turndown — MIT
+
+The project concept acknowledges `imkunal007219/claude-coworker-model`, an
+MIT-licensed project, in README.md:
+
+  Copyright (c) 2026 Kunal Bhardwaj
+  https://github.com/imkunal007219/claude-coworker-model
+
+This notice records attribution and does not assert that its source code is
+bundled in Triss.
+
+The complete resolved dependency graph is recorded in package-lock.json. The
+standalone artifact bundles production npm dependencies and includes this
+notice alongside their package license files.

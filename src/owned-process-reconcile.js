@@ -1,11 +1,11 @@
 /**
- * owned-process-reconcile.js — Package 2D2 (Atomic 10): owned-process owner
+ * owned-process-reconcile.js — owned-process owner
  * reconciliation.
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md)
- * and Atomic 10: this is the sole owner of the high-level
- * `allocateOwnedProcessSet()`, composing the Package 2D platform reservation
- * with the Package 2D1 journal reservation plus the injected owner-reference
+ * and transition: this is the sole owner of the high-level
+ * `allocateOwnedProcessSet()`, composing the component platform reservation
+ * with the component journal reservation plus the injected owner-reference
  * publication/rollback, live transition, and cancellation.
  *
  * Protocol (journal rows are mode-0600, no-follow, at most 32 entries):

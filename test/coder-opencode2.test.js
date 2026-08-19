@@ -72,7 +72,7 @@ function withEnv(vars, fn) {
   };
 }
 
-// spawnSync seam that satisfies the exact-pin gate. Round-3 #6: the detector
+// spawnSync seam that satisfies the exact-pin gate. The detector
 // canonicalizes the `which` output with node realpathSync and requires a
 // regular executable file, so the fake binary is a REAL temp script (0755).
 // The --version probe is answered for any non-V1 command (realpathSync adds
@@ -158,7 +158,7 @@ test('OPENCODE2 pin is the exact verified 0.0.0-next-17430 with TRISS_CODER_OPEN
 
 test('detectOpenCode2 runs only the opencode2 binary with --version and parses the beta string', () => {
   // `opencode2 v0.0.0-next-17430` — non-semver beta string, exact-match pin.
-  // Round-3 #6: the detector requires an ABSOLUTE `which` output, canonicalizes
+  // The detector requires an absolute `which` output and canonicalizes
   // with Node realpathSync, and verifies a regular executable file — the fs
   // seams below keep the unit hermetic.
   const fsOk = {
@@ -177,7 +177,7 @@ test('detectOpenCode2 runs only the opencode2 binary with --version and parses t
   assert.equal(det.found, true);
   assert.equal(det.version, '0.0.0-next-17430');
   assert.equal(det.satisfiesPin, true);
-  assert.equal(det.path, '/resolved/bin/opencode2'); // resolved absolute path (round-2 #5)
+  assert.equal(det.path, '/resolved/bin/opencode2'); // resolved absolute path (invariant #5)
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
@@ -196,7 +196,7 @@ test('detectOpenCode2 runs only the opencode2 binary with --version and parses t
   );
 });
 
-test('detectOpenCode2 round-3 #6: relative which output, realpath failure, and non-executable files fail closed', () => {
+test('detectOpenCode2 invariant #6: relative which output, realpath failure, and non-executable files fail closed', () => {
   const statFor = (st) => ({ realpathSync: (p) => p, statSync: () => st });
   const whichReturns = (p) => () => ({
     status: 0, stdout: `${p}\n`, error: null,
@@ -490,7 +490,7 @@ test(
         stdoutWrite: capture.stdoutWrite,
       });
       const { cmd, argv, options } = rec.calls[0];
-      assert.equal(cmd, realpathSync(FAKE_OC2)); // canonicalized absolute path (round-2 #5, round-3 #6)
+      assert.equal(cmd, realpathSync(FAKE_OC2)); // canonicalized absolute path (invariant #5, invariant #6)
       // Live-matrix finding (Phase 6): V2 does NOT auto-load the V1
       // `.opencode/agents` templates the way V1 does, so injecting the
       // default `--agent coder` made every run fail with "Agent not found"

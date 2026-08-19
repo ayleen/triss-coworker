@@ -1266,7 +1266,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
   // Capture model overrides that are in the environment BEFORE loadEnvFiles()
   // merges the .env files — i.e. genuine shell exports, which have higher
   // precedence than any .env file and so would shadow whatever init pins.
-  // Review round 6 #3: the pre-dotenv snapshots are taken FIRST and the env
+  // Invariant: the pre-dotenv snapshots are taken FIRST and the env
   // files are loaded BEFORE the engine dispatch — the dispatch used to read
   // TRISS_CODER_ENGINE from the shell env only, so `TRISS_CODER_ENGINE=
   // opencode2` in a .env file silently ran the whole V1 init path (V1 binary
@@ -1418,7 +1418,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// assertV2WorkerTransportProvenance (round-4 P0, cross-review fix): the
+// assertV2WorkerTransportProvenance (invariant, invariant): the
 // worker credential and its transport must form ONE profile of consistent
 // trust. Precedence is shell > project .triss.env > global .env PER FIELD,
 // so a repository can steer the effective transport while the key comes from
@@ -1497,10 +1497,11 @@ function staticOpenCode2Preflight(cwd) {
       `OpenCode 2 preflight aborted: unsupported agent source "${agentOffender.path}" ` +
         `(${agentOffender.origin}). No OpenCode 2 subagent is verified to retain ` +
         'the deny-first shell policy — remove or disable the agent source, then re-run. ' +
-        'See docs/opencode2-engine-plan.md "Static preflight".',
+        'See docs/opencode2-engine-plan.md "Configuration and permission audit".',
     );
   }
-  // Round-3 P0-1: custom tool dirs (.opencode/{tool,tools}/** and the global
+  // Executable configuration surfaces: custom tool dirs
+  // (.opencode/{tool,tools}/** and the global
   // config root) are top-level executable surfaces imported INSIDE the
   // OpenCode process — with the provider credential in process.env — so the
   // beta rejects them like plugins. mcp blocks are rejected by the document
@@ -1513,22 +1514,22 @@ function staticOpenCode2Preflight(cwd) {
       `OpenCode 2 preflight aborted: unsupported custom tool source "${toolOffender.path}" ` +
         `(${toolOffender.origin}). Custom tools execute inside the OpenCode process with the ` +
         'provider credential in the environment — none are verified for the beta. Remove the ' +
-        'tool directory and re-run. See docs/opencode2-engine-plan.md "Review round 3".',
+        'tool directory and re-run. See docs/opencode2-engine-plan.md "Configuration and permission audit".',
     );
   }
   return sources;
 }
 
 async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
-  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4; review
-  // round-2 P1-4 full rewrite). The V2 init OWNS its whole flow:
+  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4). The V2 init
+  // owns its complete flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
   //      (plugin + agent gates, shared with the run path).
   //   2. Exact-pin gate TERMINALLY — a missing/mismatched binary must not
   //      mutate any configuration (beta contract).
   //   3. Credential + scope handling mirroring the V1 runCoderInit head:
   //      --local/--global resolution, .env file creation, setupKey prompt,
-  //      .gitignore for local .triss.env. (Round-2 fix: previously the V2
+  //      .gitignore for local .triss.env. Previously the V2
   //      path jumped straight into runCoderSetup and skipped all of this,
   //      so a missing key only failed at the late gate AFTER config/pins
   //      were written, and --local was silently ignored.)
@@ -1538,13 +1539,13 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   //   5. Post-setup FULL audit (auditOpenCode2Run + static gate) over the
   //      final filesystem state — not just the plugin/agent scan.
   staticOpenCode2Preflight(deps.cwd || process.cwd());
-  // Cross-review fix 6: document-CONTENT gates (mcp, command-bearing and
+  // Invariant: document-CONTENT gates (mcp, command-bearing and
   // unknown top-level keys, dual legacy/native forms, malformed JSONC) used
   // to run only in the POST-setup audit — after setupKey had written the
   // credential to the env file. Run the document audit up front too, so a
   // hostile tree rejects BEFORE any credential write.
   const headDocs = auditOpenCode2Documents({ cwd: deps.cwd || process.cwd() }, { enumerate: deps.enumerateOpenCodeSources });
-  // Review round 6 #4: the permission gate over EXISTING layers must fire
+  // Invariant: the permission gate over EXISTING layers must fire
   // HERE — before the credential write. Every existing V1 user's config
   // carries the V1 template allowlist (git status, npm test, …), and the
   // post-setup audit used to discover `live-allow-rule (git status)` only
@@ -1555,7 +1556,7 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
     const policy = computeEffectivePermissionPolicy({ layerDocs: headDocs.layerDocs });
     if (policy.unsafe) {
       const detail = policy.detail ? ` (${policy.detail})` : '';
-      // Round-7 follow-up: the remediation differs by reason — a config with
+      // Remediation differs by reason: a config with
       // NO wildcard deny needs one ADDED, a live allow rule needs one
       // REMOVED. Saying "remove the allow rules" to the first case sends the
       // operator in the wrong direction.
@@ -1569,13 +1570,14 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
         'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
           `effective shell policy is not deny-everything (${policy.reason}${detail}). ${remediation} ` +
           'Alternatively keep using `--engine opencode` until the V2 beta grows real credential ' +
-          'isolation. See docs/opencode2.md "Troubleshooting".',
+          'isolation. See docs/engines/opencode2.md "Troubleshooting".',
       );
     }
   }
   process.stderr.write('\n' + pc.bold('── coder (opencode2 engine) ──') + '\n');
   const sh = deps.spawnSync || nodeSpawnSync;
-  // (2) Exact pin, TERMINAL on mismatch (round-2 4.4).
+  // Exact binary pinning is terminal on mismatch; otherwise the audited
+  // configuration semantics may differ from the spawned engine.
   const det = detectOpenCode2(sh);
   if (!det.found || !det.satisfiesPin) {
     throw new Error(
@@ -1586,25 +1588,24 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   }
   process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (matches pin ${opencode2VersionPin()})\n`));
   // (3) Credential + scope — the V1 head flow. The worker-shell snapshot is
-  // taken BEFORE loadEnvFiles() (round-3 P1-7): snapshotting after the dotenv
+  // taken BEFORE loadEnvFiles() (invariant): snapshotting after the dotenv
   // merge made a local .triss.env value indistinguishable from a genuine
   // shell export, so `coder init --engine opencode2 --global --provider worker`
   // run inside a project could silently satisfy the key check from the LOCAL
   // env file and leave the global scope unset.
-  // Review round 6 #3: when dispatched from runCoderInit the env files are
+  // Invariant: when dispatched from runCoderInit the env files are
   // ALREADY loaded (the engine dispatch must see TRISS_CODER_ENGINE from
   // .env), so the pre-dotenv snapshots come in via `precaptured` — the local
   // captures below are the fallback for direct callers only.
   const workerShellEnv = precaptured.workerShellEnv || captureWorkerShellSnapshot();
-  // Review round 5 #5: capture the shell-export model pins BEFORE
-  // loadEnvFiles() — exactly like the V1 runCoderInit head — so
+  // Capture shell-export model pins before loadEnvFiles() so
   // warnIfPinShadowed can see a shadowing export. V2 used to pass nothing,
   // silently disabling the shell-export half of the pin-shadow check.
   const inheritedModels = precaptured.inheritedModels || {
     model: process.env.TRISS_CODER_MODEL,
     smallModel: process.env.TRISS_CODER_SMALL_MODEL,
   };
-  // Cross-review fix 1 + review round 5 #4: provenance is resolved from the
+  // Credential provenance is resolved from the
   // PRE-DOTENV snapshot (a decoy key in the project .triss.env cannot
   // displace a shell export), and only when the worker credential is
   // actually in play — a non-worker init must not fail on an unrelated
@@ -1627,7 +1628,7 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // Triss-owned XDG roots under the PROJECT (not $HOME): run time pins
   // XDG_DATA_HOME/XDG_STATE_HOME here so V2 state stays off V1 turf.
   ensureOpenCode2RuntimeDirs(projectRoot());
-  // (4) Shared surface — WITHOUT the V1-only steps (review P1-4): the V1
+  // Shared surface — without the V1-only steps. The V1
   // runCoderInit path checks/installs the V1 `opencode` binary and then
   // scaffoldAgentTemplates() writes .opencode/agent files the V2 preflight
   // itself REJECTS, making a fresh V2 init deterministically poison the
@@ -1641,7 +1642,7 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // (5) Post-setup preflight over the resulting tree: the shared setup must
   // not have created any source the V2 gate rejects — and the FULL audit
   // (provider + permission) must pass over the written config. The audit
-  // walks the CANONICAL (realpath) directory (round-4), same as the run path.
+  // walks the CANONICAL (realpath) directory (invariant), same as the run path.
   const postDir = realpathSync.native(deps.cwd || process.cwd());
   staticOpenCode2Preflight(postDir);
   const pinnedModel = process.env.TRISS_CODER_MODEL || readOpencodeModels(opencodeConfigPath(scope)).model;
@@ -1821,7 +1822,7 @@ async function runCoderSetupUnlocked(
       ),
     );
   }
-  // Round-3 P1-8: the V1 binary check/install applies to the V1 engine only.
+  // Engine separation: the V1 binary check/install applies to the V1 engine only.
   // runOpenCode2Init already verified the opencode2 exact pin terminally, so
   // requiring `opencode` here would force a V1 install on machines that only
   // run the V2 beta (engine is undefined on the legacy V1 init/wizard paths —
@@ -1887,12 +1888,12 @@ async function runCoderSetupUnlocked(
     engine,
   });
   let blocking = writeResult.blocking;
-  // Review round 6 #5: a FRESH V2-init write puts deny-everything bash into
+  // Invariant: a FRESH V2-init write puts deny-everything bash into
   // the SHARED opencode.json — the default engine is still opencode (V1), so
   // plain `triss coder run` silently loses git status / git diff / npm test.
   // Warn loudly instead; re-running plain `triss coder init` restores the
   // V1 allowlist (and makes the tree V2-incompatible again — that tension is
-  // documented in docs/opencode2.md).
+  // documented in docs/engines/opencode2.md).
   if (engine === 'opencode2' && writeResult.created) {
     const v1Degradation = pc.yellow(
       '  ⚠ opencode2 init wrote a deny-everything bash policy into the SHARED opencode.json — plain ' +
@@ -1941,7 +1942,7 @@ async function runCoderSetupUnlocked(
     // recovery commands when applicable — so a blocking audit on a stale Zen
     // pin surfaces a focused, actionable recovery rather than only this line.
     // The generic message is retained verbatim because existing contracts
-    // (coder-init P2-round8) match on "existing opencode.json issues".
+    // (coder-init compatibility contract) match on "existing opencode.json issues".
     throw new Error(
       'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
     );
@@ -1949,7 +1950,7 @@ async function runCoderSetupUnlocked(
   persistCoderModels(resolvedScope, model, smallModel);
   // V2 init must NOT scaffold V1 agent templates: the static preflight
   // rejects every agent source, so scaffolding would deterministically break
-  // the next V2 run on a clean tree (review P1-4). skipAgentTemplates is set
+  // the next V2 run on a clean tree. skipAgentTemplates is set
   // by runOpenCode2Init; V1 init keeps its templates.
   if (engine !== 'opencode2' && !skipAgentTemplates) {
     scaffoldAgentTemplates(resolvedScope);
@@ -2238,7 +2239,7 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
-// ─── credential proxy endpoint resolution (Release A / P0 fix) ────────────────
+// ─── credential proxy endpoint resolution ──────────────────────────────────
 //
 // The production run path must start the parent-owned loopback credential
 // proxy BEFORE spawning either engine and hand the child only the one-run
@@ -2304,7 +2305,8 @@ export function coderCredentialEndpoint(credEnv, modelUsed) {
   }
 }
 
-// Round-3 P0-2: the V1 template's bash allowlist (git status / ls / npm test
+// Credential exposure boundary: the V1 template's bash allowlist
+// (git status / ls / npm test
 // …) is UNSAFE for the opencode2 beta — the credential sits in the child env,
 // so any allowed command can disclose it (env expansion in an error message,
 // `npm test` running untrusted JS with the key in process.env). V2 init
@@ -2752,7 +2754,7 @@ function warnIfProviderMismatch(path, providerInfo) {
 // contract). Returns true when it emitted anything. No-clobber is preserved:
 // this only PRINTS; the user runs the printed command to recover (the blocking
 // throw that follows still uses the generic "existing opencode.json issues"
-// line so existing contracts like coder-init P2-round8 keep matching, while
+// line so existing CLI diagnostic contracts keep matching, while
 // THIS block supplies the actionable recovery detail). `deps.outputs` (when an
 // array) receives the same lines so a headless wizard caller (e.g. an injected
 // deps bag) can read them without scraping stderr.
@@ -3343,7 +3345,7 @@ export function createEventFolder() {
     // copied into a warning (bounded categories only).
     omittedCount: 0,
     // A top-level `error` event is an internal engine-error observation even
-    // if a fake child later exits zero (Reference surface 2).
+    // if a fake child later exits zero (documented contract).
     engineErrorObserved: false,
   };
 }
@@ -3413,7 +3415,7 @@ export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
     evt = JSON.parse(line);
   } catch {
     // Malformed NDJSON: bounded category warning + exact counter; the raw
-    // line is never copied into a warning (Reference surface 2).
+    // line is never copied into a warning (documented contract).
     state.omittedCount += 1;
     pushWarning(state, 'unparseable line (omitted)');
     return;
@@ -3461,7 +3463,7 @@ export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
       break;
     case 'error': {
       // A top-level engine error is an internal engine-error observation even
-      // if a fake child later exits zero (Reference surface 2).
+      // if a fake child later exits zero (documented contract).
       state.engineErrorObserved = true;
       const msg = evt.error?.data?.message || evt.error?.name || 'unknown engine error';
       pushWarning(state, `engine error: ${msg}`);
@@ -3492,7 +3494,7 @@ function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent, proxyBa
   }
   const value = credentialValue === undefined ? process.env[credEnv] : credentialValue;
   if (credEnv && value) env[credEnv] = value;
-  // Package 2A: when a credential proxy is active the child additionally
+  // component: when a credential proxy is active the child additionally
   // learns the loopback base URL, so an OpenAI-compatible engine can be
   // pointed at the proxy instead of the upstream provider host.
   if (proxyBaseUrl) {
@@ -3539,7 +3541,7 @@ function readSessionsMap() {
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch (err) {
-    // FAIL-CLOSED (review P1-8): malformed JSON must NOT degrade to an empty
+    // Malformed JSON must not degrade to an empty
     // store — the next successful persist would overwrite and destroy it.
     // Surface the corruption instead of silently rewriting the file.
     throw new Error(
@@ -3580,14 +3582,14 @@ const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
 // Normalize any on-disk shape (legacy flat map OR versioned) into the
 // versioned in-memory shape. Pure: never mutates the argument.
 //
-// FAIL-CLOSED (review P1-8): an unknown `version` (e.g. 3, written by a
+// An unknown `version` (e.g. 3, written by a
 // future Triss) or a version-2 object with a malformed `engines` field is
 // NOT treated as a legacy flat map — treating {version:3, engines:{...}} as
 // legacy silently discards both fields and the next persist DESTROYS the
 // unknown data (data loss). Such a store throws; persistSessionMapping
 // propagates and the file is never rewritten. Only a genuinely legacy flat
 // object (no `version` key at all) migrates.
-// Round-3 P2-9: namespaces are NULL-PROTOTYPE dictionaries. A plain `{}`+
+// Prototype-pollution boundary: namespaces are null-prototype dictionaries. A plain `{}`+
 // `namespace[slug]` lookup resolves `constructor`/`toString` from
 // Object.prototype, an assignment under the `__proto__` slug mutates the
 // prototype instead of recording a mapping, and legacy flat slugs literally
@@ -3610,7 +3612,7 @@ function normalizeSessionStore(raw) {
             'refusing to migrate or rewrite it (fail-closed). Fix or remove the file manually.',
         );
       }
-      // Review round 5 #7: an UNRECOGNIZED engines.* key is future/corrupted
+      // Invariant: an UNRECOGNIZED engines.* key is future/corrupted
       // data — copying only the known namespaces made the next persist
       // silently erase it. Same fail-closed contract as every other
       // unrecognized store shape.
@@ -3627,7 +3629,7 @@ function normalizeSessionStore(raw) {
         const namespace = raw.engines[engine];
         if (namespace == null) continue; // absent is fine
         if (typeof namespace !== 'object' || Array.isArray(namespace)) {
-          // Round-2 7.2: a string/array namespace (corrupted or future
+          // A string/array namespace (corrupted or future
           // shape) used to be silently skipped; the next persist then
           // REWROTE the store without that data. Fail closed instead —
           // the file is never rewritten when its shape is not understood.
@@ -3642,7 +3644,7 @@ function normalizeSessionStore(raw) {
             store.engines[engine][slug] = realId;
           } else {
             // Non-string slug/value entries are corruption too — same
-            // fail-closed contract (round-2 7.2: silent drops lose data
+            // fail-closed contract: silent drops lose data
             // on the next rewrite).
             throw new Error(
               `Session store at ${sessionsFilePath()} has a malformed entry in "engines.${engine}" ` +
@@ -3661,7 +3663,7 @@ function normalizeSessionStore(raw) {
     );
   }
   if ('engines' in raw) {
-    // Structural disambiguation (round-3 P2-9): a legacy flat map whose slugs
+    // Structural disambiguation (invariant): a legacy flat map whose slugs
     // literally include "version"/"engines" carries STRING session-id values
     // — every value a string means legacy. Anything else with an `engines`
     // key but no numeric version is an unrecognized shape: fail closed.
@@ -3675,8 +3677,9 @@ function normalizeSessionStore(raw) {
     }
   }
   // Legacy flat map: every entry belongs to the V1 engine (the only writer
-  // that ever produced this shape). Malformed entries fail closed (round-3
-  // P2-9: silent drops lose data on the next rewrite).
+  // that ever produced this shape). Malformed entries fail closed (invariant
+  // Unknown namespaces are rejected because silent drops lose data on the
+  // next rewrite.
   for (const [slug, realId] of Object.entries(raw)) {
     if (typeof realId !== 'string') {
       throw new Error(
@@ -3700,7 +3703,7 @@ function readSessionStore() {
 export function lookupSessionRealId(engine, slug) {
   const store = readSessionStore();
   const namespace = store.engines[engine] || emptyNamespace();
-  // Own-property only (round-3 P2-9): `constructor`/`toString` must never
+  // Own-property only (invariant): `constructor`/`toString` must never
   // resolve from Object.prototype as a session id.
   return Object.prototype.hasOwnProperty.call(namespace, slug) ? namespace[slug] : null;
 }
@@ -3716,7 +3719,7 @@ export function sessionsLockPath() {
 // the VERSIONED shape (legacy content migrates here), atomic write-then-
 // rename, serialized under the engine-neutral session-store mutation lock.
 //
-// Review round 6 #1: this runs AFTER the engine finished and BEFORE the
+// Invariant: this runs AFTER the engine finished and BEFORE the
 // envelope is written — the model output is ready and the tokens are already
 // paid for. acquireCoderMutationLock throws LOCK_HELD IMMEDIATELY (no wait,
 // no retry), so two parallel `coder run --session a` / `--session b` in one
@@ -3736,7 +3739,7 @@ function acquireSessionsLock({ acquireLock, retryMs } = {}) {
       return acquire();
     } catch (err) {
       if (err?.code !== 'LOCK_HELD') throw err;
-      // DELIBERATE blocking sleep (round-7 follow-up: this is Atomics.wait,
+      // DELIBERATE blocking sleep (invariant follow-up: this is Atomics.wait,
       // not an await) — persistSessionMapping is a synchronous CLI-final
       // path (the engine is done, only the envelope write remains), so
       // nothing else needs the event loop and a busy-wait-free sleep is the
@@ -3753,7 +3756,7 @@ function acquireSessionsLock({ acquireLock, retryMs } = {}) {
   }
 }
 export function persistSessionMapping(sh, engine, slug, realId, deps = {}) {
-  // Review round 5 #7: without this guard a future/typo'd engine argument
+  // Invariant: without this guard a future/typo'd engine argument
   // would CREATE an unrecognized engines.* namespace that the very next read
   // (and rewrite) silently erased.
   if (!SESSION_STORE_ENGINES.includes(engine)) {
@@ -3820,7 +3823,7 @@ function atomicWriteJson(path, obj) {
 // config.js's maybeAddGitignore guard) — a non-git cwd still gets the
 // mapping file written, just not a .gitignore entry for it.
 //
-// Review round 6 #1: the historical lock-free rationale ("two concurrent
+// Invariant: the historical lock-free rationale ("two concurrent
 // runs can each drop the other's mapping; the atomic write only prevents
 // torn reads") is now the DEGRADED fallback of persistSessionMapping — used
 // only when the session lock stays held past the bounded retry, because
@@ -4372,7 +4375,7 @@ function spawnEngine({
     });
 
     if (child.stdout) {
-      // Bounded line scanner (P1 fix): readline buffers an entire line in
+      // Bounded line scanner (Invariant): readline buffers an entire line in
       // memory BEFORE emitting it, so one huge unterminated record could
       // exhaust memory before MAX_RECORD_BYTES ever fired. Here the pending
       // bytes are capped as they arrive; an unterminated oversized record
@@ -4915,7 +4918,7 @@ async function runCrushFlow({
     parent_call_id: ctx?.parentCallId,
   });
 
-  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // Run-identity invariant: allocate the v2 identity from the actual run
   // facts — anonymous runs get anon-<32hex>; retention requires the full
   // eligibility matrix (isolated + changed + enforced quota + reservation).
   const runIdentity = allocateRunIdentity({
@@ -4950,8 +4953,8 @@ async function runCrushFlow({
     envelope_version: 2,
     engine_version: engineVersion,
     session_id: parsed.session_id || null,
-    // Package 5E: every safe envelope carries the run identity + honest
-    // execution capabilities (Section 6.3 / Reference surface 3).
+    // component: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / documented contract).
     ...runIdentity,
     execution_capabilities: buildExecutionCapabilities({
       engine: 'crush',
@@ -5055,7 +5058,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     );
   }
   const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
-  // Atomic 24 / Package 24: an isolation downgrade to a best-effort CALLER
+  // shared contract: an isolation downgrade to a best-effort CALLER
   // worktree is opt-in only. Without the explicit flag the run fails before
   // spawn when the enforced sandbox is unavailable (fail closed).
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
@@ -5434,12 +5437,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
-  // ─── Credential proxy (Release A P0): the production run path NEVER hands
+  // ─── Credential proxy: the production run path never hands
   // the raw provider credential to the engine. Start the parent-owned
   // loopback proxy FIRST; the child receives only the one-run token and the
   // loopback base URL. If the proxy cannot start (or no canonical endpoint
   // is known for this credential), the run fails closed BEFORE spawn.
-  // ─── Credential-store isolation preflight (P0): the loopback token proxy
+  // ─── Credential-store isolation preflight: the loopback token proxy
   // removes the raw key from the child's env/argv/config, but a same-UID
   // child can still READ the raw credential stores (project/global
   // .triss.env) directly. Per the plan (Section 6.5), a best-effort run is
@@ -5570,11 +5573,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   // Engine-namespaced slug -> real-id lookup (versioned store): an opencode2
   // run never sees opencode's ids even for the same slug. Deferred into the
-  // engine branches (round-2 7.1): the store read FAILS CLOSED on malformed/
+  // engine branches: the store read fails closed on malformed/
   // unknown shapes, and the V2 branch must clean up a freshly-created
   // isolation worktree when it throws — previously this line ran BEFORE the
   // V2 try/catch existed, leaking .triss/wt/<slug> + the coder/<slug> branch.
-  // Review round 6 #2: the V1 lookup leaks the SAME way — it runs after
+  // Invariant: the V1 lookup leaks the SAME way — it runs after
   // setupIsolation but was never wrapped in the cleanup guard, so
   // `coder run --isolate --session foo` with a corrupted sessions.json
   // stranded a worktree+branch that blocked re-runs until `coder clean`.
@@ -5599,19 +5602,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // routes are fixture-gated: any route without a deterministic current-pin
   // translation fixture fails closed BEFORE a credential is forwarded.
   if (engine === 'opencode2') {
-    // ─── OpenCode 2 fail-closed preflight (review P0-1/P0-2/P1-5/P1-6) ───
+    // ─── OpenCode 2 fail-closed preflight ───
     const root = projectRoot();
     // The audit runs against the EXACT child runtime directory — the
     // isolation worktree when --isolate, else the resolved --cwd, else
     // process.cwd(). deps.cwd is a TEST seam only and must never select the
-    // audited tree in production (review P1-5).
+    // audited tree in production; otherwise a test seam could bypass the
+    // effective runtime configuration.
     const runtimeDir = isolation
       ? isolation.wtPath
       : opts.cwd
         ? resolvePath(opts.cwd)
         : process.cwd();
     // session/--continue mutual exclusion BEFORE any isolation side effects
-    // are possible (validation order moved up; review P2-12). setupIsolation
+    // are possible. setupIsolation
     // runs before runCoderRun's engine branches, so a freshly-created
     // worktree MUST be cleaned up when this rejects.
     if (opts.session && opts.continue) {
@@ -5629,7 +5633,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
       );
     }
-    // Session lookup INSIDE the guarded zone (round-2 7.1): the store read
+    // Session lookup inside the guarded zone: the store read
     // fails closed on malformed/unknown shapes and must not leak a
     // freshly-created isolation worktree.
     let sessionRealIdArg2;
@@ -5640,14 +5644,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       throw err;
     }
     // Full effective-configuration audit BEFORE the credential is read:
-    // route fixture gate (final modelUsed prefix, however selected —
-    // P1-6), provider projection vs fixture with the EXACT worker profile
-    // baseURL (P0-1 round 2), deny-first permission proof incl. agents via
-    // the real last-match-wins evaluator (P0-2 round 2), plus the existing
+    // route fixture gate for the final model prefix, provider projection vs.
+    // the exact worker profile baseURL, deny-first permission proof including
+    // agents via the real last-match-wins evaluator, plus the existing
     // plugin/agent source rejection. Any failure leaves NO worktree/branch
-    // behind (P2-12).
+    // behind.
     //
-    // Round-4 P1 (P0 impact): the audit must walk the CANONICAL runtime
+    // The audit must walk the canonical runtime
     // directory. A symlinked --cwd makes the child chdir to the PHYSICAL
     // target, so the engine's own config walk starts from a different parent
     // chain than the lexical path the preflight enumerated — hostile sources
@@ -5663,8 +5666,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         { cause: err },
       );
     }
-    // Round-4 P0 + cross-review fix 1 + review round 5 #4: worker key +
-    // endpoint must be one profile of consistent EFFECTIVE provenance,
+    // Worker key and endpoint must be one profile of consistent effective
+    // provenance,
     // resolved from the pre-dotenv snapshot (a decoy key in the project
     // .triss.env cannot displace a shell export). Only relevant when the
     // worker credential is actually forwarded — a zai/moonshot run must not
@@ -5696,15 +5699,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     }
-    // Runtime roots 0700 before credential forwarding (review P1/P2-7).
+    // Runtime roots must be mode 0700 before credential forwarding so another
+    // local user cannot read engine state or logs.
     try {
       ensureOpenCode2RuntimeDirs(root);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     }
-    // EXACT pin verification before the credential-bearing spawn (review
-    // P1-3 + round-2 #5): resolve the binary to an ABSOLUTE path, verify the
+    // Exact pin verification before the credential-bearing spawn: resolve the
+    // binary to an absolute path, verify the
     // exact build, and spawn THAT path — never a bare name whose PATH lookup
     // can differ between the parent (pre-check) and the child cwd (spawn).
     // A missing/mismatched/garbage binary is a terminal error here — the
@@ -5743,7 +5747,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ),
     );
 
-    // Cross-review fix 4 + review round 5 #6 (TOCTOU): between the audit and
+    // Re-run the full audit immediately before spawn. Between the audit and
     // this point sat the runtime-dir setup and the binary probes (several
     // subprocesses) — a window in which the audited tree can change. Hash
     // re-verification catches modified/removed layers but NOT sources CREATED
@@ -5794,7 +5798,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       rateLimit2 = result2.rateLimit || findRecentRateLimit(spawnStartMs2, { logPath: logPath2 });
-      // Post-run exact-pin re-verification (review P1-3 + round-2 #5): the
+      // Post-run exact-pin re-verification: the
       // SAME absolute path must still resolve to the verified build — a
       // mid-run self-update, binary swap, or symlink retarget is a terminal
       // compatibility failure.
@@ -5915,7 +5919,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         billing_model: modelUsed,
         billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
         tokens: tokens2,
-        // NORMALIZED reported cost (review P2-9): finalizeOpencodeUsage
+        // Provider-specific normalized cost: finalizeOpencodeUsage
         // returns reported_total_usd=null when per-step cost coverage is
         // INCOMPLETE — a partial sum must not leak into the envelope as an
         // authoritative number, and reported_total_source must stay 'null'
@@ -5978,7 +5982,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     dir,
     pure: !!oneShotProvider,
   });
-  // Package 2A integration: the child env carries the one-run proxy token in
+  // Credential-proxy integration: the child env carries the one-run token in
   // the credential variable plus the loopback base URL — never the raw key.
   // The OPENCODE_CONFIG_CONTENT overlay (one-shot mode) pins the model; for
   // the triss-worker provider it additionally pins baseURL to the proxy.
@@ -6073,7 +6077,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
     throw err;
   } finally {
-    // Package 2A: the credential proxy is parent-owned and single-run —
+    // component: the credential proxy is parent-owned and single-run —
     // revoke it as soon as the engine exits (success, failure, or throw).
     if (credentialProxy) {
       credentialProxy.revoke();
@@ -6148,7 +6152,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     result.warnings.push('no usage data (no step_finish events) in the event stream');
   }
 
-  // Package 5E (P1 fix): allocate the v2 run identity from the ACTUAL run
+  // Run-identity invariant: allocate the v2 identity from the actual run
   // facts — anonymous runs get anon-<32hex>; retention requires the full
   // eligibility matrix (isolated + changed + enforced quota + reservation).
   const runIdentity = allocateRunIdentity({
@@ -6218,8 +6222,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     envelope_version: 2,
     engine_version: engineVersion,
     session_id: result.sessionRealId || null,
-    // Package 5E: every safe envelope carries the run identity + honest
-    // execution capabilities (Section 6.3 / Reference surface 3). The
+    // component: every safe envelope carries the run identity + honest
+    // execution capabilities (Section 6.3 / documented contract). The
     // identity is allocated from the ACTUAL run facts — anonymous runs get
     // anon-<32hex>, retention requires the full eligibility matrix.
     ...(runIdentity || {}),
@@ -6348,11 +6352,11 @@ export async function runCoderClean(opts = {}, deps = {}) {
   }
 }
 
-// ─── v2 session CLI (Atomic 23 / Package 7) ──────────────────────────────────
+// ─── v2 session CLI (shared contract) ──────────────────────────────────
 
 /**
  * `triss coder session list [--engine <name>]`: serialize the bounded
- * Package 4B1 inventory projection. Exits 0 only for a complete canonical
+ * component inventory projection. Exits 0 only for a complete canonical
  * projection; on error writes typed diagnostics to stderr and emits no
  * partial JSON.
  */
@@ -6437,7 +6441,7 @@ export async function runCoderStateReset(opts = {}) {
   // the identity itself is never deleted.
   const identity = await loadOrCreateProjectIdentity(trissRoot);
 
-  // P1 fix: actually quarantine ALL validated v2 state — every session and
+  // Invariant: actually quarantine ALL validated v2 state — every session and
   // result state directory is MOVED (recoverable) under the quarantine
   // root, not merely reported. The identity file itself is never deleted.
   const quarantineRoot = join(trissRoot, 'quarantine-v1');
@@ -6516,7 +6520,7 @@ export async function runCoderResultClean(runId, _opts = {}, deps = {}) {
   const { rm, stat } = await import('node:fs/promises');
   const runDir = join(projectRoot(), '.triss', 'coder-results-v1', 'runs', runId);
 
-  // P1 fix: go through the deletion state machine (tombstone first), not a
+  // Invariant: go through the deletion state machine (tombstone first), not a
   // bare recursive rm — a crash mid-delete must leave a recoverable
   // `.deleting.json` marker, and the run dir must be a validated registry
   // entry (state.json present) before anything is removed.

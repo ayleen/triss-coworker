@@ -1,8 +1,8 @@
 /**
- * review-blackbox-p0.test.js — P0 black-box acceptance for PR #47's
+ * review-blackbox-security.test.js — black-box acceptance for security and
  * reliable-delegation contract.
  *
- * RED/GREEN: node --test test/review-blackbox-p0.test.js
+ * RED/GREEN: node --test test/review-blackbox-security.test.js
  *
  * Covers the acceptance gaps the blocking review called out: the REAL
  * exported entry points (not the modules underneath) must uphold the
@@ -19,7 +19,7 @@
  *      against a REAL temporary repository.
  *   6. The PR acquisition lifecycle releases run directories (4 runs, no
  *      leak into the 3-run cap).
- *   7. The live Release C gate imports cleanly (no bogus client.js
+ *   7. The live sharding acceptance gate imports cleanly (no bogus client.js
  *      assertProviderText import).
  */
 
@@ -37,7 +37,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // ─── 1. credential proxy fail-closed before spawn ───────────────────────────
 
-test('BLACKBOX-P0-1: coder run without a startable proxy fails BEFORE spawn, env stays clean', async () => {
+test('coder run without a startable proxy fails BEFORE spawn, env stays clean', async () => {
   const { runCoderRun } = await import('../src/commands/coder.js');
   let spawned = false;
   let observedEnv = null;
@@ -88,7 +88,7 @@ test('BLACKBOX-P0-1: coder run without a startable proxy fails BEFORE spawn, env
   }
 });
 
-test('BLACKBOX-P0-1b: a successful proxied run hands the child the token, never the raw key', async () => {
+test('a successful proxied run hands the child the token, never the raw key', async () => {
   const { runCoderRun } = await import('../src/commands/coder.js');
   const RAW = 'zk-raw-secret-should-never-reach-child';
   let observedEnv = null;
@@ -162,7 +162,7 @@ test('BLACKBOX-P0-1b: a successful proxied run hands the child the token, never 
 
 // ─── 2. bounded stdin fail-closed ────────────────────────────────────────────
 
-test('BLACKBOX-P0-2: review --stdin rejects cap-plus-one without partial output', async () => {
+test('review --stdin rejects cap-plus-one without partial output', async () => {
   const { runReviewWithDeps } = await import('../src/commands/review.js');
   const { REVIEW_STDIN_MAX_BYTES } = await import('../src/review-input.js');
   const tooBig = 'x'.repeat(REVIEW_STDIN_MAX_BYTES + 1);
@@ -188,7 +188,7 @@ test('BLACKBOX-P0-2: review --stdin rejects cap-plus-one without partial output'
 
 // ─── 3. single-payload planner aggregate fail-closed ─────────────────────────
 
-test('BLACKBOX-P0-3: many small files whose SUM exceeds singleMaxBytes fail closed (no silent truncation)', async () => {
+test('many small files whose SUM exceeds singleMaxBytes fail closed (no silent truncation)', async () => {
   const { planSingleReviewPayload } = await import('../src/review-payload.js');
   const { reviewLimitConfig } = await import('../src/config.js');
   const limits = reviewLimitConfig().limits;
@@ -207,7 +207,7 @@ test('BLACKBOX-P0-3: many small files whose SUM exceeds singleMaxBytes fail clos
 
 // ─── 4. CLI flag surface ─────────────────────────────────────────────────────
 
-test('BLACKBOX-P0-4: triss review registers --files, --issue, --payload-mode; evidence+shard rejected', async () => {
+test('triss review registers --files, --issue, --payload-mode; evidence+shard rejected', async () => {
   const { execFileSync: exec } = await import('node:child_process');
   let help;
   try {
@@ -223,7 +223,7 @@ test('BLACKBOX-P0-4: triss review registers --files, --issue, --payload-mode; ev
   assert.match(help, /--payload-mode/);
 });
 
-test('BLACKBOX-P0-4b: validateReviewOptions rejects --payload-mode shard with --format evidence', async () => {
+test('validateReviewOptions rejects --payload-mode shard with --format evidence', async () => {
   const mod = await import('../src/commands/review.js');
   assert.throws(
     () => mod.validateReviewOptions(undefined, { payloadMode: 'shard', format: 'evidence' }),
@@ -233,7 +233,7 @@ test('BLACKBOX-P0-4b: validateReviewOptions rejects --payload-mode shard with --
 
 // ─── 5. real git: quoted paths + rename detection ────────────────────────────
 
-test('BLACKBOX-P0-5: real git quoted path parses; renames are detected as R100 (no --no-renames)', async () => {
+test('real git quoted path parses; renames are detected as R100 (no --no-renames)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'triss-bb-git-'));
   try {
     const git = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
@@ -285,7 +285,7 @@ test('BLACKBOX-P0-5: real git quoted path parses; renames are detected as R100 (
 
 // ─── 6. PR acquisition lifecycle: 4 consecutive runs, no leak ────────────────
 
-test('BLACKBOX-P0-6: four sequential withDisposablePrRepository runs never hit the 3-run cap', async () => {
+test('four sequential withDisposablePrRepository runs never hit the 3-run cap', async () => {
   const { withDisposablePrRepository } = await import('../src/review-pr.js');
   const { prRootFor } = await import('../src/review-pr-registry.js');
   const { prepareQuotaBackedDirectory } = await import('../src/coder-write-quota.js');
@@ -315,10 +315,11 @@ test('BLACKBOX-P0-6: four sequential withDisposablePrRepository runs never hit t
 
 // ─── 7. live gate imports cleanly ────────────────────────────────────────────
 
-test('BLACKBOX-P0-7: the live Release C gate module imports without a bogus client.js export', async () => {
+test('BLACKBOX-ACCEPTANCE: the live sharding acceptance gate module imports without a bogus client.js export', async () => {
   const mod = await import('../src/review-live.js');
   assert.equal(typeof mod.runLiveShardedReview, 'function');
-  // runSyntheticReleaseC must also import cleanly.
-  const acc = await import('../src/release-a-acceptance.js');
-  assert.equal(typeof acc.runLiveReleaseC, 'function');
+  // Both synthetic and live sharding acceptance exports must import cleanly.
+  const acc = await import('./support/reliable-delegation-acceptance.js');
+  assert.equal(typeof acc.runSyntheticShardingAcceptance, 'function');
+  assert.equal(typeof acc.runLiveShardingAcceptance, 'function');
 });

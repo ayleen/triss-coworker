@@ -128,7 +128,7 @@ function writeLockToken(path, token) {
 
 // ─── A1: default apply holds a real lock; a concurrent second apply cannot write ─
 test(
-  'Corrective-A1: with the default lock pre-held, applyModelChange (empty deps, the CLI shape) FAILS CLOSED (lock-held, writes nothing); after release a subsequent apply succeeds',
+  'Regression: with the default lock pre-held, applyModelChange (empty deps, the CLI shape) FAILS CLOSED (lock-held, writes nothing); after release a subsequent apply succeeds',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     assert.equal(
@@ -177,7 +177,7 @@ test(
 
 // ─── A2: rollback uses the SAME default lock and refuses while held ───────────
 test(
-  'Corrective-A2: with the default lock pre-held, rollbackModelChange for the same (engine, scope) FAILS CLOSED (lock-held) and restores nothing',
+  'Regression: with the default lock pre-held, rollbackModelChange for the same (engine, scope) FAILS CLOSED (lock-held) and restores nothing',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     assert.equal(typeof svc.lockPathFor, 'function', 'CONTRACT RED: lockPathFor must be exported');
@@ -217,7 +217,7 @@ test(
 
 // ─── A3: the lock exists during the critical section and is released after success AND error ─
 test(
-  'Corrective-A3: the default lock file EXISTS during the critical section and is RELEASED (gone) after a successful apply AND after an apply that errors and rolls back',
+  'Regression: the default lock file EXISTS during the critical section and is RELEASED (gone) after a successful apply AND after an apply that errors and rolls back',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     assert.equal(typeof svc.lockPathFor, 'function', 'CONTRACT RED: lockPathFor must be exported');
@@ -270,7 +270,7 @@ test(
 
 // ─── A3b: stale owner liveness (no signals to this test runner) ─────────────
 test(
-  'Corrective-A3b: a valid dead-PID default-lock token is reclaimed through the injected liveness probe without signalling this test runner',
+  'Regression: dead owner PID: a valid dead-PID default-lock token is reclaimed through the injected liveness probe without signalling this test runner',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     const lockPath = svc.lockPathFor('opencode', 'global');
@@ -298,7 +298,7 @@ test(
 );
 
 test(
-  'Corrective-A3c: a valid live-PID default-lock token remains fail-closed after liveness probe',
+  'Regression: live owner PID: a valid live-PID default-lock token remains fail-closed after liveness probe',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     const lockPath = svc.lockPathFor('opencode', 'global');
@@ -329,7 +329,7 @@ test(
 );
 
 test(
-  'Corrective-A3d: a malformed default-lock token remains fail-closed and is never passed to the liveness probe',
+  'Regression: malformed lock owner: a malformed default-lock token remains fail-closed and is never passed to the liveness probe',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     const lockPath = svc.lockPathFor('opencode', 'global');
@@ -356,7 +356,7 @@ test(
 );
 
 // ─── A4: the lock-held `rm` guidance is POSIX-quoted (apostrophe-safe) ─────────
-test('Corrective-A4: the lock-held stale-lock `rm` guidance POSIX-quotes the lock path so a HOME containing an apostrophe parses as ONE shell argument (no break/inject)', async () => {
+test('Regression: the lock-held stale-lock `rm` guidance POSIX-quotes the lock path so a HOME containing an apostrophe parses as ONE shell argument (no break/inject)', async () => {
   const svc = await loadService();
   assert.equal(typeof svc.lockPathFor, 'function', 'CONTRACT RED: lockPathFor must be exported');
 

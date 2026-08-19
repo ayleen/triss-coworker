@@ -1,8 +1,8 @@
 /**
- * review-executor.js — Package 19 (Atomic 40): shared single-review executor
+ * review-executor.js — shared single-review executor
  * and CLI framing.
  *
- * Reference surface 10 single executor/CLI bullets of the approved plan
+ * documented contract single executor/CLI bullets of the approved plan
  * (docs/reliable-delegation-contract-plan.md). One buffered single executor,
  * CLI mode wiring, literal file/issue options, streaming rejection, stable
  * errors, scoped verdict framing, and the transport matrix.
@@ -29,13 +29,13 @@ const SINGLE_REVIEW_METADATA_OVERHEAD_BYTES = 4096;
 
 /**
  * Execute one buffered single review over an already-acquired diff:
- *  - the diff is parsed and bounded by the injected Package 13 limits;
+ *  - the diff is parsed and bounded by the injected frozen review limits;
  *  - coverage is derived (repository vs requested scope);
  *  - the model call is made once with the merged payload.
  *
  * @param {object} deps injected seams
  * @param {Function} deps.callModel one-shot provider call (text in/out)
- * @param {object} deps.limits Package 13 frozen limits (or null to load)
+ * @param {object} deps.limits frozen review limits (or null to load)
  * @param {object} opts
  * @param {string} opts.diff acquired diff text
  * @param {string} opts.question review question
@@ -59,7 +59,7 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
     requestedPaths: selectors.length > 0 ? selectors : null,
   });
 
-  // Scoped-selection fail-closed (P0): a selector set that matched NOTHING
+  // A selector set that matched nothing must not produce a false clean verdict:
   // must never reach the model — an empty diff could yield an externally
   // plausible "clean" verdict for files that were never reviewed. Partial
   // matches proceed with honest partial coverage.
@@ -79,7 +79,7 @@ export async function executeSingleReview(deps, { diff, question, selectors = []
     };
   }
 
-  // Single-request byte bound (Package 13 limits injected). P1 fix: the
+  // Single-request byte bound (frozen limits injected). Invariant: the
   // bound is singleMaxBytes (the advertised single-request cap), NOT the
   // looser totalMaxBytes; the REAL metadata size (change corpus + linked
   // issue corpus) is accounted, not just the fixed envelope allowance —
@@ -144,7 +144,7 @@ export function renderCliReviewResult(result, { write = (s) => process.stdout.wr
   return REVIEW_EXIT_CODES.ok;
 }
 
-// ─── sequential shard execution (Atomic 44 / Package 23) ────────────────────
+// ─── sequential shard execution (shared contract) ────────────────────
 
 /**
  * Execute a planned shard plan sequentially: each shard is one model call,
@@ -156,7 +156,7 @@ export function renderCliReviewResult(result, { write = (s) => process.stdout.wr
  *
  * @param {object} deps injected seams
  * @param {Function} deps.callModel one-shot provider call (text in/out)
- * @param {object} deps.limits Package 13 frozen limits
+ * @param {object} deps.limits frozen review limits
  * @param {object} opts
  * @param {Array} opts.shards planned shards [{sections, bytes}]
  * @param {string} opts.question
@@ -176,7 +176,7 @@ export async function executeReviewPlan(deps, { shards, question, metadata = '',
   const results = [];
   let attempts = 0;
 
-  // P1 fix: re-check the GLOBAL plan bounds at execution time too — a
+  // Invariant: re-check the GLOBAL plan bounds at execution time too — a
   // stale or directly supplied plan may exceed maxShards or the cumulative
   // totalMaxBytes even when every individual shard passes its own bound.
   if (shards.length > limits.maxShards) {

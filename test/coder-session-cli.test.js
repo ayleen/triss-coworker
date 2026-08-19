@@ -1,11 +1,11 @@
 /**
- * coder-session-cli.test.js — Package 7 (Atomic 23): CLI expectation
+ * coder-session-cli.test.js — CLI expectation
  * adapter / v2 session CLI.
  *
  * RED/GREEN: node --test test/coder-session-cli.test.js
  *
  * Covers the v2 session CLI contract of docs/reliable-delegation-contract-plan.md
- * (Atomic 23): per-engine inventory list/clean, the mandatory engine flag,
+ * (transition): per-engine inventory list/clean, the mandatory engine flag,
  * idle-only clean, retained-result list/clean validation, and legacy-map
  * immunity (the shared .triss/sessions.json map never selects or cleans a v2
  * session).
@@ -146,7 +146,7 @@ test('result clean validates the run-id grammar and never accepts a slug', async
   await assert.rejects(() => runCoderResultClean('task-a', {}), /run-<32 lowercase hex>/);
   await assert.rejects(() => runCoderResultClean('', {}), /run-<32 lowercase hex>/);
   await assert.rejects(() => runCoderResultClean(null, {}), /run-<32 lowercase hex>/);
-  // P1 fix: a valid run id whose artifact is ABSENT fails closed — clean is
+  // Invariant: a valid run id whose artifact is ABSENT fails closed — clean is
   // a state-machine delete over a validated registry entry, never a blind
   // no-op rm.
   await assert.rejects(

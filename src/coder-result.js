@@ -1,5 +1,5 @@
 /**
- * coder-result.js — Package 1 (Atomic 01): pure coder result and lifecycle
+ * coder-result.js — pure coder result and lifecycle
  * contract.
  *
  * Single source of truth for the v2 envelope's orthogonal lifecycle facts
@@ -115,7 +115,7 @@ export const CAPABILITY_VALUE = Object.freeze([
 
 // Closed non-enforced capability-warning enum (Section 6.1): one code appears
 // once for each capability whose value is not `enforced`, in field order, plus
-// the persistence downgrade code. Package 1 exports this closed enum; tests
+// the persistence downgrade code. component exports this closed enum; tests
 // duplicate suppression and order.
 export const CAPABILITY_WARNING_CODES = Object.freeze([
   'TRISS_CODER_CAP_SANDBOX_BEST_EFFORT',
@@ -327,7 +327,7 @@ export function deriveArtifactStatus(input) {
   return 'no_artifact';
 }
 
-// ─── result facts (Sections 6.1/6.2, Reference surface 1) ───────────────────
+// ─── result facts (Sections 6.1/6.2, documented contract) ───────────────────
 
 /**
  * Derive the complete orthogonal result-facts block for one run.
@@ -354,7 +354,7 @@ export function deriveCoderResultFacts(input = {}) {
   const changeDetectionStatus = input.changeDetectionStatus ?? 'not_checked';
   const runFilesChanged = input.runFilesChanged ?? null;
 
-  // Artifacts first, before any failure gate (Reference surface 1).
+  // Artifacts first, before any failure gate (documented contract).
   const artifactStatus = deriveArtifactStatus({
     cleanupStatus,
     hasUsableText: usableText,
@@ -456,7 +456,7 @@ export function deriveCoderResultFacts(input = {}) {
   };
 }
 
-// ─── bounded blocker diagnostics (Atomic 27 / Package 10A) ──────────────────
+// ─── bounded blocker diagnostics (shared contract) ──────────────────
 
 export const BLOCKER_CATEGORIES = Object.freeze([
   'environment_permission',

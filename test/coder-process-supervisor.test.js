@@ -1,5 +1,5 @@
 /**
- * coder-process-supervisor.test.js — Package 2D (Atomic 08): complete
+ * coder-process-supervisor.test.js — complete
  * descendant supervisor primitive (best-effort).
  *
  * RED/GREEN: node --test test/coder-process-supervisor.test.js

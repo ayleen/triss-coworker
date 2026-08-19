@@ -108,5 +108,6 @@ and leaves local configuration unchanged.
 - Zen/Go main-small mismatch: choose two models with the same prefix even
   though both providers use the same key.
 
-See also [configuration.md](configuration.md),
-[glm-clients.md](glm-clients.md), and [opencode-zen.md](opencode-zen.md).
+See also [configuration.md](../configuration.md),
+[GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md),
+and [opencode-zen.md](opencode-zen.md).

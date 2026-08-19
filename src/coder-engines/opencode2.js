@@ -46,7 +46,7 @@ export function opencode2VersionPin() {
 export { OPENCODE2_PIN_DEFAULT };
 
 // detectOpenCode2: resolve `opencode2` ONCE to an absolute path and pin the
-// spawn to THAT path (review round-2 #5). A bare name means the parent's PATH
+// spawn to THAT path. A bare name means the parent's PATH
 // lookup and the child's PATH lookup can disagree (relative PATH entries are
 // resolved against each process's own cwd): the pre-check could verify
 // /trusted/bin/opencode2 while the credential-bearing spawn — running with a
@@ -55,7 +55,7 @@ export { OPENCODE2_PIN_DEFAULT };
 //
 // Resolution: `which opencode2` via the allowlisted env (PATH/HOME only, plus
 // OPENCODE_DISABLE_AUTOUPDATE=1 — a version probe must never trigger the
-// updater, and no credential may leak into a probe). Round 3 (#6): the
+// updater, and no credential may leak into a probe). The
 // `which` output must be ABSOLUTE (a relative PATH entry resolves against
 // each process's own cwd — the parent could verify bin/opencode2 while the
 // child executes a different file), is canonicalized with Node's
@@ -99,7 +99,7 @@ export function detectOpenCode2(
     realPath = realpathSync(resolvedPath);
   } catch {
     // Un-canonicalizable (missing, permission, symlink loop): fail closed —
-    // never fall back to the pre-realpath path (round-3 #6).
+    // never fall back to the pre-realpath path (invariant #6).
     return { found: false, path: null, version: null, satisfiesPin: false };
   }
   if (!isAbsolute(realPath)) {
@@ -174,21 +174,15 @@ export function opencode2StateRoot(projectRoot) {
   return join(projectRoot, '.triss', 'opencode2', 'state');
 }
 
-// ensureOpenCode2RuntimeDirs: create/verify the Triss-owned XDG roots as
-// user-only (0700) directories BEFORE any credential is forwarded (review
-// P1/P2-7). An existing 0755 directory is CHMOD-corrected, not tolerated; a
-// symlink or non-directory at either root is a hard failure. Re-checks the
-// final mode after chmod so a umask/failure cannot silently leave it loose.
-// NOTE: this module is a PURE adapter — process.stderr writes live in the
-// caller; here we stay silent and just return what changed.
 // ensureOpenCode2RuntimeDirs(root): create the two Triss-owned XDG roots
 // under the project (not $HOME) — <root>/.triss/opencode2/{data,state} — with
-// mode 0700 (review P1/P2-7). An existing 0755 directory is CHMOD-corrected,
+// mode 0700 before forwarding credentials. An existing 0755 directory is
+// CHMOD-corrected,
 // not tolerated; a symlink or non-directory at either root is a hard failure.
 // Re-checks the final mode after chmod so a umask/failure cannot silently
 // leave it loose.
 //
-// Round-2 #8: mkdirSync({recursive}) passes THROUGH intermediate components
+// mkdirSync({recursive}) passes through intermediate components
 // (<root>/.triss, <root>/.triss/opencode2) without validating them, so a
 // symlinked .triss would redirect the credential-bearing state outside the
 // project while the final data/state dirs still pass lstat. The whole
@@ -213,7 +207,7 @@ function assertNoSymlinkAncestors(root, dir, created) {
         throw new Error(`Cannot inspect OpenCode 2 runtime path component ${cur}: ${err.message}`, { cause: err });
       }
       mkdirSync(cur, { mode: 0o700 });
-      if (created) created.push(cur); // review round 6 #8: report what we created
+      if (created) created.push(cur); // Cleanup owns only paths created here.
       st = lstatSync(cur);
     }
     if (st.isSymbolicLink()) {
@@ -239,9 +233,8 @@ function assertNoSymlinkAncestors(root, dir, created) {
 }
 
 export function ensureOpenCode2RuntimeDirs(root) {
-  // Returns the list of directories THIS call created (review round 6 #8:
-  // the array used to be allocated and never filled, and the coder.js call
-  // site passed an options argument the one-parameter signature ignored).
+  // Return only directories created by this call so cleanup cannot remove
+  // pre-existing user paths.
   const created = [];
   for (const dir of [opencode2DataRoot(root), opencode2StateRoot(root)]) {
     assertNoSymlinkAncestors(root, dir, created);

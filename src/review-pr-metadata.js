@@ -1,12 +1,12 @@
 /**
- * review-pr-metadata.js — Package 17B (Atomic 36): bounded PR metadata
+ * review-pr-metadata.js — bounded PR metadata
  * acquisition.
  *
  * Section 9.4 `gh` metadata contract of the approved plan
- * (docs/reliable-delegation-contract-plan.md). Consumes Package 17A's
+ * (docs/reliable-delegation-contract-plan.md). Consumes the shared
  * durable reservation and runs the initial/post `gh` calls inside that set
  * with 30-second/absolute deadlines, cap-plus-one collection, cancellation,
- * no-partial JSON, pure Package 17 validation, and parent-death kill.
+ * no-partial JSON, pure component validation, and parent-death kill.
  *
  * Exports:
  *   acquirePrMetadata(sh, opts) — one bounded `gh pr view --json` round
@@ -29,9 +29,9 @@ const GH_METADATA_JSON_FIELDS = [
 /**
  * Acquire bounded PR metadata via `gh pr view --json <fields>`. The command
  * runs inside the caller-provided owned process set (the durable reservation
- * from Package 17A) with a 30-second/absolute deadline, cap-plus-one
+ * from component) with a 30-second/absolute deadline, cap-plus-one
  * collection, cancellation, and no-partial JSON (a truncated stream fails
- * closed). The result is validated by the pure Package 17 validator.
+ * closed). The result is validated by the pure component validator.
  *
  * @param {object} sh spawnSync-like ({status, stdout, stderr, error})
  * @param {object} opts

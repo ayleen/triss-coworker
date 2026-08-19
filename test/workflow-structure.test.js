@@ -1,6 +1,6 @@
 /**
- * Strict structural validation of the GitHub workflow files (review round
- * 5, §1): a duplicated mapping key (e.g. two `env:` blocks on one step) is
+ * Strict structural validation of the GitHub workflow files. A duplicated
+ * mapping key (e.g. two `env:` blocks on one step) is
  * a YAML error that lenient parsers resolve as last-key-wins — silently
  * dropping the first block's variables inside the tag-only publish flow
  * that PR CI never executes. The scanner below is block-scalar-aware, so
@@ -119,4 +119,18 @@ test('every workflow file parses without duplicated mapping keys', () => {
       `workflow files must not carry duplicated YAML keys`,
     );
   }
+});
+
+test('every external workflow action is pinned to an immutable commit', () => {
+  const floating = [];
+  for (const file of readdirSync(workflowsDir).filter((name) => name.endsWith('.yml'))) {
+    const text = readFileSync(join(workflowsDir, file), 'utf8');
+    for (const match of text.matchAll(/\buses:\s*([^\s#]+)@([^\s#]+)/g)) {
+      const [, action, ref] = match;
+      if (!action.startsWith('./') && !/^[0-9a-f]{40}$/.test(ref)) {
+        floating.push(`${file}: ${action}@${ref}`);
+      }
+    }
+  }
+  assert.deepEqual(floating, [], 'third-party actions must not follow mutable tags or branches');
 });

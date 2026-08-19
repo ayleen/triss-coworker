@@ -1129,7 +1129,7 @@ Update in lockstep:
 - `templates/claude.md` and `templates/claude-full.md`;
 - active help and `triss agent-help --target codex` expectations.
 
-Add a focused user guide at `docs/opencode2.md` covering beta status,
+Add a focused user guide at `docs/engines/opencode2.md` covering beta status,
 installation, shared config implications, missing small-model role, usage gaps,
 plugin gate, rollback, and how to return to the unchanged V1 engine.
 

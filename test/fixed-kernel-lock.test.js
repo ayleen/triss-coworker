@@ -1,5 +1,5 @@
 /**
- * fixed-kernel-lock.test.js — Package 2G (Atomic 07): fixed lock capability
+ * fixed-kernel-lock.test.js — fixed lock capability
  * primitive (best-effort non-kernel scope).
  *
  * RED/GREEN: node --test test/fixed-kernel-lock.test.js

@@ -117,7 +117,7 @@ test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets neither ZHIPU_API_KEY nor 
   assert.equal('ZHIPU_API_KEY' in env, false);
 });
 
-// ─── Package 6 Crush parity: credential proxy wiring (Atomic 22) ────────────
+// ─── Crush credential-proxy parity ──────────────────────────────────────────
 
 test('buildCrushSpawnEnv: with a proxy plan, the engine gets the token + loopback URL, never the real key', () => {
   const env = buildCrushSpawnEnv(

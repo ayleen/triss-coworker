@@ -159,6 +159,27 @@ test('standalone staging ignores the workspace companion symlink', () => {
   assert.equal(existsSync(join(stage2, 'node_modules', 'triss-dsh-provider-bundle', 'package.json')), true);
 });
 
+test('standalone staging ships only public docs and the third-party notice', () => {
+  const source = temp('artifact-public-docs');
+  mkdirSync(join(source, 'docs', 'integrations'), { recursive: true });
+  mkdirSync(join(source, 'docs', 'promo'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), '{"name":"triss-coworker","version":"0.37.1"}\n');
+  writeFileSync(join(source, 'THIRD_PARTY_NOTICES'), 'notices\n');
+  writeFileSync(join(source, 'docs', 'configuration.md'), 'public\n');
+  writeFileSync(join(source, 'docs', 'integrations', 'github.md'), 'public integration\n');
+  writeFileSync(join(source, 'docs', 'internal-plan.md'), 'internal\n');
+  writeFileSync(join(source, 'docs', 'promo', 'launch.md'), 'promo\n');
+
+  const stage = join(temp('artifact-public-docs-stage'), 'stage');
+  buildStandalone({ sourceDir: source, stageDir: stage, version: '0.37.1' });
+
+  assert.equal(existsSync(join(stage, 'THIRD_PARTY_NOTICES')), true);
+  assert.equal(existsSync(join(stage, 'docs', 'configuration.md')), true);
+  assert.equal(existsSync(join(stage, 'docs', 'integrations', 'github.md')), true);
+  assert.equal(existsSync(join(stage, 'docs', 'internal-plan.md')), false);
+  assert.equal(existsSync(join(stage, 'docs', 'promo')), false);
+});
+
 test('standalone builder reports directory depth violations before generic path validation', () => {
   const source = temp('artifact-deep-source');
   let current = source;

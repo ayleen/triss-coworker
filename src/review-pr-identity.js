@@ -1,7 +1,7 @@
 /**
- * review-pr-identity.js — Package 17 (Atomic 34): pure PR identity parser.
+ * review-pr-identity.js — pure PR identity parser.
  *
- * Reference surface 10 PR acquisition identity bullets of the approved plan
+ * documented contract PR acquisition identity bullets of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Pure: no subprocesses, no gh,
  * no directories, no Git fetch/diff, no CLI/MCP formatting.
  *
@@ -79,7 +79,7 @@ const METADATA_KEYS = Object.freeze([
   'fork',
   'owner',
   'repo',
-  // Fork identity (P1 fix): for cross-repository PRs the head commit lives
+  // Fork identity (Invariant): for cross-repository PRs the head commit lives
   // in the FORK, so acquisition needs the head repository's own coordinates.
   'head_owner',
   'head_repo',

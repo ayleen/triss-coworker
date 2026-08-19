@@ -61,7 +61,7 @@ function runWizard(home) {
 }
 
 test(
-  'Blocker-4 config wizard coder --coder-engine crush (crush absent) must NOT print a generic green "Done." as completion; it must report a structured incomplete signal and the exact next command `triss coder init --engine crush`',
+  'Regression config wizard coder --coder-engine crush (crush absent) must NOT print a generic green "Done." as completion; it must report a structured incomplete signal and the exact next command `triss coder init --engine crush`',
   () => {
     const home = makeHome();
     try {
@@ -99,7 +99,7 @@ test(
 );
 
 test(
-  'Blocker-4 config wizard coder --coder-engine crush --local (crush absent) must print exact recovery command containing "triss coder init --engine crush --local"',
+  'Regression config wizard coder --coder-engine crush --local (crush absent) must print exact recovery command containing "triss coder init --engine crush --local"',
   () => {
     const home = makeHome();
     try {
@@ -135,7 +135,7 @@ test(
 );
 
 test(
-  'Blocker-4 config wizard coder --coder-engine crush --global (crush absent) must print exact recovery command containing "triss coder init --engine crush --global"',
+  'Regression config wizard coder --coder-engine crush --global (crush absent) must print exact recovery command containing "triss coder init --engine crush --global"',
   () => {
     const home = makeHome();
     try {

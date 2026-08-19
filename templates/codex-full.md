@@ -86,7 +86,7 @@ Keep `triss coder` for agentic coding runs.
 Setup once per machine/project: `triss coder init` (installs the opencode
 engine, configures the selected provider key, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine opencode2`
-for the V2 beta (shares the opencode.json config; see docs/opencode2.md) or
+for the V2 beta (shares the opencode.json config; see docs/engines/opencode2.md) or
 `--engine crush` (or set `TRISS_CODER_ENGINE=crush`) to target the crush
 engine instead. The
 opencode engine can reuse the existing OpenAI-compatible worker profile with

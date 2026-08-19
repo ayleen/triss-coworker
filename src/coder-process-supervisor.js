@@ -1,5 +1,5 @@
 /**
- * coder-process-supervisor.js — Package 2D (Atomic 08): complete descendant
+ * coder-process-supervisor.js — complete descendant
  * supervisor primitive (best-effort).
  *
  * Sections 5 and 6.5 of the approved plan
@@ -7,7 +7,7 @@
  * platform process-set primitive and a stable in-process sandbox identity —
  * not JSON journals or owner state machines.
  *
- * Package 0 has selected no kernel/OS ownership adapter, so this module
+ * component has selected no kernel/OS ownership adapter, so this module
  * exports the documented best-effort scope: it spawns a detached process
  * group, can terminate and poll that group, and reports capability honestly.
  * It never claims complete descendant-tree ownership, never infers liveness

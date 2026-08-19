@@ -1,7 +1,7 @@
 /**
  * opencode2-preflight.js — fail-closed effective-configuration preflight for
- * the OpenCode 2 coder engine (PR review blockers P0-1, P0-2, P1-6 + round-2
- * follow-ups).
+ * the OpenCode 2 coder engine. It prevents unverified provider routes,
+ * credential redirection, and executable shell-policy bypasses.
  *
  * staticOpenCode2Preflight() only hunted plugin/agent files. This module
  * computes the FULL effective projection OpenCode 2 would run with — every
@@ -11,24 +11,24 @@
  *
  *   1. ROUTE GATE: the modelUsed provider prefix must be one of the six
  *      advertised routes AND have a deterministic current-pin translation
- *      fixture; an unproven route fails closed (P1-6 — previously only the
- *      one-shot --provider flag was gated).
+ *      fixture; an unproven route fails closed even when selected through
+ *      persistent configuration rather than a one-shot flag.
  *   2. PROVIDER GATE: the effective provider projection for the selected
  *      model must match the fixture exactly — provider id, endpoint/package/
  *      settings, the credential placeholder — and contain no unrelated
- *      providers a project layer smuggled in (P0-1 — a project repo could
- *      previously redirect the forwarded API key to an arbitrary endpoint).
- *      Round 2: the managed baseURL must equal the Triss worker profile
+ *      providers a project layer smuggled in. Otherwise untrusted repository
+ *      configuration could redirect the forwarded API key to an attacker.
+ *      The managed baseURL must equal the Triss worker profile
  *      endpoint EXACTLY (a same-package/same-placeholder override with an
  *      attacker URL failed before), `provider.<id>.api` (higher V1 migration
  *      precedence than options.baseURL) is tracked, and model-level
  *      transport overrides (models.<id>.provider.{api,npm}) are rejected.
  *   3. PERMISSION GATE: the final ordered permission policy for the primary
  *      agent and every reachable subagent must be deny-everything for shell.
- *      Round 2 made this a REAL last-match-wins evaluator over the merged
+ *      This is a real last-match-wins evaluator over the merged
  *      rule list with wildcard action/resource semantics (findLast over
- *      action/resource glob matches) — not a `some(allow)` scan. Round 3
- *      (P0-2) retired the vetted allowlist: while the credential is in the
+ *      action/resource glob matches) — not a `some(allow)` scan. The former
+ *      vetted allowlist is unsafe: while the credential is in the
  *      child env ANY live allow/ask rule can disclose it, so a rule that is
  *      not shadowed by a later wildcard deny fails the gate regardless of
  *      how narrow it is. Only dead (shadowed) allows are tolerated.
@@ -118,7 +118,7 @@ export function opencode2RouteFixture(modelUsed) {
 
 /**
  * Translate one V1 `permission.bash` value into ordered V2 shell rules.
- * Accepts BOTH shapes the official schema allows (round-2 fix, bypass A):
+ * Accepts BOTH shapes the official schema allows (invariant fix, bypass A):
  *   - a plain string ("allow" | "deny" | "ask") => one wildcard rule
  *     resource "*" (applies to EVERY command);
  *   - an object map { pattern: effect }        => one rule per key, key
@@ -206,7 +206,7 @@ const PROBE_COMMANDS = [
   'bash',
 ];
 
-// The vetted allowlist concept is RETIRED (review round-3 P0-2): while the
+// The vetted allowlist concept is retired: while the
 // provider credential sits in the child env, ANY allowed shell command can
 // disclose it — `ls -- "/x-$OPENCODE_API_KEY"` echoes the expanded secret in
 // an error, and `npm test` / `node --test` execute untrusted repo JavaScript
@@ -219,7 +219,7 @@ export const VETTED_BASH_ALLOWLIST = Object.freeze([]);
 /**
  * Compute the effective permission policy and the deny-first proof.
  *
- * Algorithm (round-2 replacement of the `some(allow)` scan):
+ * Algorithm (replacing the unsafe `some(allow)` scan):
  *   1. Merge ordered rules: built-in agent baseline FIRST, then every config
  *      layer in precedence order (V1 bash translation + native V2
  *      permissions), then the selected agent's own rules LAST (agents
@@ -292,7 +292,7 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
       .slice(k + 1)
       .some((r) => (r.action === 'shell' || r.action === '*') && r.resource === '*' && r.effect === 'deny');
     if (shadowedByLaterDeny) continue; // dead rule — grants nothing
-    // Round-3 P0-2: no allow is vetted while the credential is in the child
+    // No shell allow is safe while the provider credential is in the child
     // env — ANY live allow/ask rule (wildcard or narrow) fails the gate.
     return {
       rules: orderedRules,
@@ -336,7 +336,7 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
  * V2 shape the pin produces: npm -> package (`aisdk:` prefixed when scoped),
  * options -> settings. Returns { providers, sourceLayers }.
  *
- * Round 2: `provider.<id>.api` is captured (the official migrator maps
+ * `provider.<id>.api` is captured because the official migrator maps
  * `url = provider.api ?? lowered options.url` — api has HIGHER precedence
  * than options.baseURL, so an attacker URL there redirects the key without
  * touching options), and model-level transport overrides
@@ -377,7 +377,7 @@ export function projectEffectiveProviders({ layerDocs } = {}) {
 
 /**
  * The managed triss-worker provider shape written by `triss coder init`
- * (workerProviderDefinition). Round 2: the audit passes in the EXPECTED
+ * (workerProviderDefinition). The audit passes in the expected
  * worker profile (exact baseURL from the live Triss worker config) and the
  * definition must match it exactly — package id, settings keys, the
  * credential placeholder, the baseURL value, AND no provider.api /
@@ -396,7 +396,7 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
   if (expectedBaseURL != null && settings.baseURL !== expectedBaseURL) {
     return { ok: false, reason: 'baseurl-value', actual: settings.baseURL, expected: expectedBaseURL };
   }
-  // Model-level transport overrides (round-2 + round-3 P1-5): native V2
+  // Model-level transport overrides (invariant + invariant): native V2
   // `models.<id>.api` redirects per-model traffic exactly like
   // provider.<id>.api (a late layer can leave the top-level provider intact
   // and reroute ONE model). The managed definition writes plain { name }
@@ -416,13 +416,13 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
   return { ok: true };
 }
 
-// ─── document shape validation (round-3 P1-3 / P0-1) ────────────────────────
+// ─── document shape validation ──────────────────────────────────────────────
 
 // Top-level keys with their allowed value types, captured from the official
 // published schema (https://opencode.ai/config.json, fetched 2026-08-15; the
 // root sets additionalProperties:false — unknown keys are schema-invalid,
-// which is exactly why they fail closed here). Cross-review fix 5: the
-// round-3 table was hand-picked and would false-reject legitimate user
+// which is exactly why they fail closed here). Invariant: the
+// invariant table was hand-picked and would false-reject legitimate user
 // configs carrying keys like autoupdate/instructions/share.
 // Pin-verification caveat: the published schema may drift from the exact
 // pinned beta build — re-capture against the pin when a working
@@ -483,7 +483,7 @@ const V2_EXECUTABLE_KEYS = Object.freeze({
   experimental: 'the "experimental" block can alter engine behavior in ways Triss has no fixture for',
 });
 
-// Legacy/native dual forms (round-4 P0): when a document carries BOTH the
+// Legacy/native dual forms (invariant): when a document carries BOTH the
 // V1 and the V2 name of a security-critical field, the pinned build prefers
 // the NATIVE value — while Triss's projection reads `provider ?? providers`
 // (legacy first) and concatenates permission rules from both. Until there is
@@ -543,14 +543,14 @@ export function assertV2DocumentShape(doc, layerPath) {
  *
  * @param {object} input
  * @param {string} input.cwd — the EXACT child runtime directory (isolation
- *   worktree or resolved --cwd), never a test seam (P1-5).
+ *   worktree or resolved --cwd), never a test seam.
  * @param {string} input.modelUsed — the finally selected model (--model,
  *   TRISS_CODER_MODEL, or the configured default; the gate applies to the
- *   final value regardless of how it was chosen — P1-6).
+ *   final value regardless of how it was chosen).
  * @param {string} [input.expectedWorkerBaseURL] — the Triss worker profile
  *   endpoint for this run; managed-provider baseURL must equal it exactly
- *   (round-2 P0 fix: a same-shape override with an attacker URL failed
- *   before).
+ *   endpoint for this run. A same-shape override with an attacker URL must
+ *   fail before credential forwarding.
  * @param {object} [input.deps] — { enumerate } seams for tests.
  * @returns {{ sources, projection, policy }} for envelope/logging use.
  * @throws on ANY gate failure, before a credential is forwarded.
@@ -562,7 +562,7 @@ export function assertV2DocumentShape(doc, layerPath) {
  * and unknown top-level keys / dual legacy-native forms) — BEFORE any
  * credential write or spawn. Also returns a SHA-256 per audited file so the
  * caller can re-verify the tree right before the credential-bearing spawn
- * and close the audit→spawn TOCTOU window (cross-review fix 4).
+ * and close the audit→spawn TOCTOU window (invariant).
  *
  * @returns {{ sources, layerDocs, contentHashes: Array<{path, sha256}> }}
  */
@@ -581,7 +581,7 @@ export function auditOpenCode2Documents({ cwd }, deps = {}) {
     } catch (err) {
       throw new Error(`OpenCode 2 preflight aborted: cannot parse ${c.path} — ${err.message}`, { cause: err });
     }
-    // Round-3 P1-3/P0-1: reject malformed/schema-suspicious documents and
+    // Reject malformed or schema-suspicious documents and
     // command-bearing surfaces (mcp, tool, command, unknown keys) BEFORE the
     // provider/permission gates — a document the engine would drop whole
     // invalidates everything computed from it.
@@ -595,7 +595,7 @@ export function auditOpenCode2Documents({ cwd }, deps = {}) {
 
 /**
  * Re-verify the audited config files still hash to the audit-time values.
- * Called immediately before the credential-bearing spawn (cross-review fix 4)
+ * Called immediately before the credential-bearing spawn (invariant)
  * — between the audit and the spawn sit directory setup and binary probes
  * (several subprocesses), a window in which the audited tree can change.
  */
@@ -639,7 +639,7 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
 
   // 2. PROVIDER GATE — effective projection vs the fixture.
   const { providers, sourceLayers } = projectEffectiveProviders({ layerDocs });
-  // Cross-review fix 2: a provider definition's npm/package field tells the
+  // Invariant: a provider definition's npm/package field tells the
   // engine to LOAD CODE inside the credential-bearing process — an unrelated
   // provider id is as much an executable surface as a plugin. The beta gate
   // allows exactly ONE provider definition: the managed triss-worker fixture
@@ -682,8 +682,8 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
   }
 
   // 3. PERMISSION GATE — final ordered policy, deny-first proof via the real
-  //    last-match-wins evaluator (round 2).
-  // Cross-review fix 3: the selected agent's BLOCK (agents override config —
+  //    last-match-wins evaluator.
+  // Invariant: the selected agent's BLOCK (agents override config —
   // its rules merge LAST), not the defining document. find() used to return
   // the whole doc, re-merging doc-level rules and never seeing the agent's
   // own permissions. Later layers win for the block, mirroring the merge.

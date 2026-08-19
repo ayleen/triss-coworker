@@ -1,12 +1,12 @@
 /**
- * review-pr-metadata.test.js — Package 17B (Atomic 36): bounded PR metadata
+ * review-pr-metadata.test.js — bounded PR metadata
  * acquisition.
  *
  * RED/GREEN: node --test test/review-pr-metadata.test.js
  *
  * Covers Section 9.4 `gh` metadata contract of
  * docs/reliable-delegation-contract-plan.md: deadline, cap-plus-one
- * collection, cancellation, no-partial JSON, pure Package 17 validation,
+ * collection, cancellation, no-partial JSON, pure component validation,
  * and parent-death kill semantics. gh is faked via an injected sh.
  */
 
@@ -30,7 +30,7 @@ function validGhJson() {
 
 // ─── happy path ──────────────────────────────────────────────────────────────
 
-test('acquires and validates PR metadata from gh (pure Package 17 validation)', () => {
+test('acquires and validates PR metadata from gh (pure component validation)', () => {
   let sawArgs = null;
   const sh = (args, opts) => {
     sawArgs = { args, opts };
@@ -154,7 +154,7 @@ test('gh nonzero exit fails with a bounded stderr slice (no raw body dump)', () 
   assert.ok(r.message.length < 300);
 });
 
-test('metadata that violates Package 17 rules fails closed (equal base/head OIDs)', () => {
+test('metadata that violates component rules fails closed (equal base/head OIDs)', () => {
   const sh = () => ({
     status: 0,
     stdout: Buffer.from(

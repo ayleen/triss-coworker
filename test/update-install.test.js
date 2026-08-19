@@ -17,7 +17,7 @@ import {
   lstatSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 
@@ -448,7 +448,6 @@ test('runtime removes abandoned losing contenders without touching a live final 
 
 test('runtime recovers a marker-only publication before final lock', () => {
   const root = tempRoot();
-  const lockPath = join(root, 'update.lock');
   const metadata = {
     schema_version: 1, nonce: 'partial-runtime-owner', pid: 999999, start_identity: 'proc:old', operation: 'update',
     acquired_at: new Date(0).toISOString(),

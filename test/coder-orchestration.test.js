@@ -1,10 +1,10 @@
 /**
- * coder-orchestration.test.js — Package 5E (Atomic 21): OpenCode run and
+ * coder-orchestration.test.js — OpenCode run and
  * envelope orchestration helpers.
  *
  * RED/GREEN: node --test test/coder-orchestration.test.js
  *
- * Covers Reference surface 3 / Atomic 21 of
+ * Covers documented contract / transition of
  * docs/reliable-delegation-contract-plan.md: session_slug /
  * result_retention / result_id / execution_capabilities derivations,
  * retained-only eligibility (enforced result-store quota + successful
@@ -27,7 +27,7 @@ import {
 test('execution_capabilities carries the honest tuple for both engines', () => {
   const withProxy = buildExecutionCapabilities({ engine: 'opencode', proxyAvailable: true });
   assert.deepEqual(Object.keys(withProxy).sort(), [...EXECUTION_CAPABILITY_KEYS].sort());
-  assert.equal(withProxy.sandbox, 'unavailable'); // no Package 0 backend
+  assert.equal(withProxy.sandbox, 'unavailable'); // no enforced sandbox backend
   assert.equal(withProxy.process_supervision, 'best_effort');
   assert.equal(withProxy.locking, 'best_effort');
   assert.equal(withProxy.credential_isolation, 'best_effort');

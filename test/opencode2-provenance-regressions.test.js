@@ -1,17 +1,18 @@
 /**
- * coder-opencode2-review4.test.js — regression suite for the PR #46 review
- * round 4 findings that survived the round-3 hardening (commit 0adf265):
+ * opencode2-provenance-regressions.test.js — configuration provenance and
+ * canonical-path regression coverage.
+ * security regression coverage that survived the invariant hardening (commit 0adf265):
  *
- *   P0  dual legacy/native forms (provider+providers, plugin+plugins,
+ *   dual legacy/native forms (provider+providers, plugin+plugins,
  *       permission+permissions) — the pinned build prefers the native value
  *       while the audit modeled the legacy one
- *   P0  mixed-provenance worker profile — shell/global key + project-local
+ *   mixed-provenance worker profile — shell/global key + project-local
  *       TRISS_WORKER_BASE_URL made the provider audit's expected endpoint
  *       repository-controlled
- *   P1  symlinked --cwd — the audit walked the lexical tree while the child
+ *   symlinked --cwd — the audit walked the lexical tree while the child
  *       runs from the PHYSICAL directory (different config ancestry)
  *
- * Round-4 items already closed by round 3 are covered there: custom tools /
+ * Related cases already covered by the configuration-surface suite are covered there: custom tools /
  * mcp / remote-MCP header exfiltration (mcp key rejected whole), credential
  * disclosure via allowed shell (deny-everything policy), model-level
  * transport overrides (managed model entries must be exactly {name}).
@@ -128,9 +129,9 @@ const makeSpawn = () => {
   return { spawnFn };
 };
 
-// ─── P0: dual legacy/native forms ───────────────────────────────────────────
+// ─── dual legacy/native forms ───────────────────────────────────────────
 
-test('r4 P0: provider + providers in one document rejects (empty legacy form hides a native endpoint override)', () => withHome(async ({ proj }) => {
+test('provider + providers in one document rejects (empty legacy form hides a native endpoint override)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
@@ -152,7 +153,7 @@ test('r4 P0: provider + providers in one document rejects (empty legacy form hid
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('r4 P0: plugin + plugins in one document rejects (empty legacy form hides an executable native plugin)', () => withHome(async ({ proj }) => {
+test('plugin + plugins in one document rejects (empty legacy form hides an executable native plugin)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
@@ -172,7 +173,7 @@ test('r4 P0: plugin + plugins in one document rejects (empty legacy form hides a
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-test('r4 P0: permission + permissions in one document rejects (legacy shell deny must not mask a native policy)', () => withHome(async ({ proj }) => {
+test('permission + permissions in one document rejects (legacy shell deny must not mask a native policy)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
@@ -191,9 +192,9 @@ test('r4 P0: permission + permissions in one document rejects (legacy shell deny
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
 }));
 
-// ─── P0: mixed-provenance worker profile ────────────────────────────────────
+// ─── mixed-provenance worker profile ────────────────────────────────────
 
-test('r4 P0: shell worker key + project-local TRISS_WORKER_BASE_URL rejects before the credential is forwarded', () => withHome(async ({ proj }) => {
+test('shell worker key + project-local TRISS_WORKER_BASE_URL rejects before the credential is forwarded', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // The key is a genuine shell export; the repository's .triss.env supplies
   // ONLY the transport. Old behavior: the provider audit's expected endpoint
@@ -230,7 +231,7 @@ test('r4 P0: shell worker key + project-local TRISS_WORKER_BASE_URL rejects befo
   assert.doesNotMatch(threw.message, /wk-shell-secret/u, 'no secrets in the error');
 }));
 
-test('r4 P0: a fully project-scoped worker profile (key AND endpoint local) is consistent and reaches the pin gate', () => withHome(async ({ proj }) => {
+test('a fully project-scoped worker profile (key AND endpoint local) is consistent and reaches the pin gate', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Both fields from the project file — consistent trust, so the provenance
   // gate passes and the run proceeds to the later provider audit.
@@ -257,9 +258,9 @@ test('r4 P0: a fully project-scoped worker profile (key AND endpoint local) is c
   assert.match(chunks.join(''), /"ok"/u, 'consistent project profile runs');
 }));
 
-// ─── P1 (P0 impact): symlinked --cwd audits the canonical tree ──────────────
+// ─── symlinked --cwd audits the canonical tree ──────────────
 
-test('r4 P1: a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is found)', () => withHome(async ({ home }) => {
+test('a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is found)', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // A physical project OUTSIDE the audited home, with a hostile agent source
   // in an ANCESTOR directory of it. The lexical audit of <home>/proj-link

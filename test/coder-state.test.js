@@ -1,10 +1,10 @@
 /**
- * coder-state.test.js — Package 4 (Atomic 13): metadata persistence and
+ * coder-state.test.js — metadata persistence and
  * cleanup lifecycle.
  *
  * RED/GREEN: node --test test/coder-state.test.js test/coder-clean.test.js
  *
- * Covers Reference surface 3 / Section 6.3 of
+ * Covers documented contract / Section 6.3 of
  * docs/reliable-delegation-contract-plan.md: identity creation/loading with
  * exact keys and modes, session/result discriminant schemas, result-state
  * source-hash binding, same-device relocation, cross-device

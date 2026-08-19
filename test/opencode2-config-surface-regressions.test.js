@@ -1,19 +1,20 @@
 /**
- * coder-opencode2-review3.test.js — regression suite for the PR #46 review
- * round 3 blocking findings. Every run-path test drives runCoderRun against
+ * opencode2-config-surface-regressions.test.js — executable configuration,
+ * parser parity, model transport, and rollback regression coverage.
+ * security regression coverage. Every run-path test drives runCoderRun against
  * a hostile tree and asserts the gate fired BEFORE any opencode2 spawn.
  *
- * Round-3 blockers covered:
- *   P0-1  local executable config surfaces (custom tool dirs, mcp blocks)
- *   P1-3  parse parity: unterminated comments, unknown keys, bad key types
- *   P1-4  recursive agent discovery (nested dirs, symlinked agent files)
- *   P1-5  native V2 model-level transport override (models.<id>.api)
- *   P1-6  symlinked binary resolves through node realpathSync (unit-level
+ * Covered configuration threats:
+ *   local executable config surfaces (custom tool dirs, mcp blocks)
+ *   parse parity: unterminated comments, unknown keys, bad key types
+ *   recursive agent discovery (nested dirs, symlinked agent files)
+ *   native V2 model-level transport override (models.<id>.api)
+ *   symlinked binary resolves through node realpathSync (unit-level
  *         coverage lives in coder-opencode2.test.js)
- *   P1-7  global worker init ignores a local-only .triss.env key
- *   P1-8  V2 init works without the V1 binary
- *   P2-9  reserved session-store slugs + legacy shape validation
- *   P2-10 rollback re-checks engine AND config_backend under the lock
+ *   global worker init ignores a local-only .triss.env key
+ *   V2 init works without the V1 binary
+ *   reserved session-store slugs + legacy shape validation
+ *   rollback re-checks engine AND config_backend under the lock
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,7 +52,7 @@ const withHome = async (fn) => {
   delete process.env.TRISS_CODER_SMALL_MODEL;
   delete process.env.TRISS_WORKER_API_KEY;
   process.env.OPENCODE_API_KEY = 'sk-fake';
-  // Safe global baseline: deny-everything bash (the round-3 V2 contract).
+  // Safe global baseline: deny-everything bash (the invariant V2 contract).
   const cfgDir = join(home, '.config', 'opencode');
   mkdirSync(cfgDir, { recursive: true });
   writeFileSync(join(cfgDir, 'opencode.json'), JSON.stringify({
@@ -79,7 +80,7 @@ const withHome = async (fn) => {
   }
 };
 
-// A REAL temp executable: the round-3 detector canonicalizes with node
+// A REAL temp executable: the invariant detector canonicalizes with node
 // realpathSync + statSync, so `which` must point at a genuine 0755 file.
 const makeFakeBinary = (() => {
   let cached = null;
@@ -154,9 +155,9 @@ const expectReject = async (commands, proj, cfg, { sh, spawns }, extraOpts = {})
   return threw;
 };
 
-// ─── P0-1: executable config surfaces ───────────────────────────────────────
+// ─── executable config surfaces ───────────────────────────────────────
 
-test('P0-1 r3: a discovered .opencode/tools/*.js custom tool rejects before any spawn', () => withHome(async ({ proj }) => {
+test('a discovered .opencode/tools/*.js custom tool rejects before any spawn', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const toolDir = join(proj, '.opencode', 'tools');
   mkdirSync(toolDir, { recursive: true });
@@ -167,7 +168,7 @@ test('P0-1 r3: a discovered .opencode/tools/*.js custom tool rejects before any 
   assert.match(threw.message, /helper\.js/u);
 }));
 
-test('P0-1 r3: an mcp block in a config layer rejects (local MCP inherits the credential env)', () => withHome(async ({ proj }) => {
+test('an mcp block in a config layer rejects (local MCP inherits the credential env)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   const threw = await expectReject(commands, proj, {
@@ -177,9 +178,9 @@ test('P0-1 r3: an mcp block in a config layer rejects (local MCP inherits the cr
   assert.match(threw.message, /mcp/iu);
 }));
 
-// ─── P1-3: parse/schema parity ──────────────────────────────────────────────
+// ─── parse/schema parity ──────────────────────────────────────────────
 
-test('P1-3 r3: an unterminated block comment is a parse error (OpenCode drops the layer whole)', () => withHome(async ({ proj }) => {
+test('an unterminated block comment is a parse error (OpenCode drops the layer whole)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   const threw = await expectReject(
@@ -190,7 +191,7 @@ test('P1-3 r3: an unterminated block comment is a parse error (OpenCode drops th
   assert.match(threw.message, /unterminated block comment/iu);
 }));
 
-test('P1-3 r3: an unknown top-level key rejects (schema parity cannot be proven)', () => withHome(async ({ proj }) => {
+test('an unknown top-level key rejects (schema parity cannot be proven)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   const threw = await expectReject(commands, proj, {
@@ -200,7 +201,7 @@ test('P1-3 r3: an unknown top-level key rejects (schema parity cannot be proven)
   assert.match(threw.message, /unknown top-level key "future_v2_flag"/u);
 }));
 
-test('P1-3 r3: a wrong-typed known key ("$schema": 1) rejects like the pin would', () => withHome(async ({ proj }) => {
+test('a wrong-typed known key ("$schema": 1) rejects like the pin would', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   const threw = await expectReject(commands, proj, {
@@ -210,9 +211,9 @@ test('P1-3 r3: a wrong-typed known key ("$schema": 1) rejects like the pin would
   assert.match(threw.message, /"\$schema" must be (a )?string/u);
 }));
 
-// ─── P1-4: recursive agent discovery ────────────────────────────────────────
+// ─── recursive agent discovery ────────────────────────────────────────
 
-test('P1-4 r3: a NESTED agent file rejects (OpenCode discovers agents recursively)', () => withHome(async ({ proj }) => {
+test('a NESTED agent file rejects (OpenCode discovers agents recursively)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   const nested = join(proj, '.opencode', 'agents', 'nested');
   mkdirSync(nested, { recursive: true });
@@ -223,7 +224,7 @@ test('P1-4 r3: a NESTED agent file rejects (OpenCode discovers agents recursivel
   assert.match(threw.message, /nested.*evil\.md|evil\.md/u);
 }));
 
-test('P1-4 r3: a SYMLINKED agent file is discovered and rejects', () => withHome(async ({ home, proj }) => {
+test('a SYMLINKED agent file is discovered and rejects', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   const outside = join(home, 'outside-agent.md');
   writeFileSync(outside, '---\nmode: subagent\n---\n');
@@ -235,9 +236,9 @@ test('P1-4 r3: a SYMLINKED agent file is discovered and rejects', () => withHome
   assert.match(threw.message, /linked\.md/u);
 }));
 
-// ─── P1-5: native model-level transport override ────────────────────────────
+// ─── native model-level transport override ────────────────────────────
 
-test('P1-5 r3: native models.<id>.api override rejects (key redirected per-model)', () => withHome(async ({ proj }) => {
+test('native models.<id>.api override rejects (key redirected per-model)', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   process.env.TRISS_WORKER_API_KEY = 'wk-test-1234';
   try {
@@ -271,9 +272,9 @@ test('P1-5 r3: native models.<id>.api override rejects (key redirected per-model
   }
 }));
 
-// ─── P1-6: symlinked binary resolves through realpathSync ───────────────────
+// ─── symlinked binary resolves through realpathSync ───────────────────
 
-test('P1-6 r3: a symlinked install canonicalizes to the real file (live fs)', async () => {
+test('a symlinked install canonicalizes to the real file (live fs)', async () => {
   const { detectOpenCode2 } = await import('../src/coder-engines/opencode2.js');
   const dir = mkdtempSync(join(tmpdir(), 'oc2-r3-link-'));
   try {
@@ -293,9 +294,9 @@ test('P1-6 r3: a symlinked install canonicalizes to the real file (live fs)', as
   }
 });
 
-// ─── P1-7: global worker init ignores a local-only .triss.env key ───────────
+// ─── global worker init ignores a local-only .triss.env key ───────────
 
-test('P1-7 r3: global worker init with the key ONLY in local .triss.env fails the key gate', () => withHome(async ({ home }) => {
+test('global worker init with the key ONLY in local .triss.env fails the key gate', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // Local scope file has the key; the GLOBAL scope (the requested one) does
   // not, and no shell export exists. The pre-dotenv worker-shell snapshot
@@ -316,9 +317,9 @@ test('P1-7 r3: global worker init with the key ONLY in local .triss.env fails th
   assert.match(threw.message, /TRISS_WORKER_API_KEY is not set/u);
 }));
 
-// ─── P1-8: V2 init works without the V1 binary ──────────────────────────────
+// ─── V2 init works without the V1 binary ──────────────────────────────
 
-test('P1-8 r3: V2 init succeeds when the V1 opencode binary is missing entirely', () => withHome(async ({ home }) => {
+test('V2 init succeeds when the V1 opencode binary is missing entirely', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const { sh, spawns } = makeSh();
   // makeSh answers `opencode --version` with status 1 (not found) and has no
@@ -338,14 +339,14 @@ test('P1-8 r3: V2 init succeeds when the V1 opencode binary is missing entirely'
     0,
     'no V1 engine install may be attempted during V2 init',
   );
-  // The written shared config carries the round-3 deny-everything bash policy.
+  // The written shared config carries the invariant deny-everything bash policy.
   const cfg = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
   assert.deepEqual(cfg.permission.bash, { '*': 'deny' });
 }));
 
-// ─── P2-9: session store reserved slugs + legacy validation ─────────────────
+// ─── session store reserved slugs + legacy validation ─────────────────
 
-test('P2-9 r3: reserved slugs (constructor, __proto__, toString) round-trip as real mappings', () => withHome(async ({ home }) => {
+test('reserved slugs (constructor, __proto__, toString) round-trip as real mappings', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const sh = makeSh().sh;
   for (const slug of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
@@ -366,7 +367,7 @@ test('P2-9 r3: reserved slugs (constructor, __proto__, toString) round-trip as r
   assert.equal(raw.engines.opencode2.__proto__ ?? raw.engines.opencode2['__proto__'], 'ses_9');
 }));
 
-test('P2-9 r3: a legacy flat map with a slug literally named "version" migrates as a mapping', () => withHome(async ({ home }) => {
+test('a legacy flat map with a slug literally named "version" migrates as a mapping', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -376,7 +377,7 @@ test('P2-9 r3: a legacy flat map with a slug literally named "version" migrates 
   assert.equal(commands.lookupSessionRealId('opencode2', 'version'), null);
 }));
 
-test('P2-9 r3: a malformed legacy entry fails closed (no silent drop, no rewrite)', () => withHome(async ({ home }) => {
+test('a malformed legacy entry fails closed (no silent drop, no rewrite)', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -392,9 +393,9 @@ test('P2-9 r3: a malformed legacy entry fails closed (no silent drop, no rewrite
   );
 }));
 
-// ─── P2-10: rollback re-checks backend under the lock ───────────────────────
+// ─── rollback re-checks backend under the lock ───────────────────────
 
-test('P2-10 r3: a config_backend change between the pre-lock read and the lock aborts rollback', async () => withHome(async ({ home }) => {
+test('a config_backend change between the pre-lock read and the lock aborts rollback', async () => withHome(async ({ home }) => {
   const models = await loadModels();
   const record = join(home, 'record');
   mkdirSync(record, { recursive: true });

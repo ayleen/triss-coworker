@@ -783,7 +783,7 @@ test('MCP-H-18: exhausted EXPLICIT max_tokens (finish_reason length) gets raise/
   }
 });
 
-test('MCP-H-16: non-GLM review with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (Reference surface 8)', async () => {
+test('MCP-H-16: non-GLM review with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (documented contract)', async () => {
   const { callModel } = await import(
     `../src/mcp/handlers.js?mcp-h-16=${Date.now()}`
   );
@@ -804,7 +804,7 @@ test('MCP-H-16: non-GLM review with empty content surfaces the stable TRISS_PROV
   );
 });
 
-test('MCP-H-17: non-review glm (and no purpose) with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (Reference surface 8)', async () => {
+test('MCP-H-17: non-review glm (and no purpose) with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (documented contract)', async () => {
   const { callModel } = await import(
     `../src/mcp/handlers.js?mcp-h-17=${Date.now()}`
   );
@@ -829,7 +829,7 @@ test('MCP-H-17: non-review glm (and no purpose) with empty content surfaces the 
   }
 });
 
-// ─── MCP-REVIEW-SINGLE-* cases (Package 20 / Atomic 41) ─────────────────────
+// ─── MCP-REVIEW-SINGLE-* cases (shared contract) ─────────────────────
 
 test('MCP-REVIEW-SINGLE-01: the shared single-review path returns verdict + structured coverage', async () => {
   const { runReviewCoreSingle } = await import('../src/mcp/review-core.js');
@@ -879,7 +879,7 @@ test('MCP-REVIEW-SINGLE-04: an oversized payload fails with the stable limit cod
   assert.equal(r.code, 'TRISS_REVIEW_LIMIT');
 });
 
-// ─── MCP-REVIEW-SHARD-* cases (Package 25 / Atomic 46) ──────────────────────
+// ─── MCP-REVIEW-SHARD-* cases (shared contract) ──────────────────────
 
 const SHARD_DIFF =
   'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n' + '-x\n' + 'y'.repeat(60000) + '\n' +
@@ -1077,7 +1077,7 @@ test('MCP-SHARD-BUDGET-01: glm pro auto-budget resolves to 32K, not 16K', async 
     { base: 'main', provider: 'glm', model: 'pro' },
     {
       gitDiff: () => diff,
-      resolveModelRequest(input) {
+      resolveModelRequest(_input) {
         return { provider: 'glm', model: 'glm-5.2' };
       },
       async callModel(input) {
@@ -1172,7 +1172,7 @@ test('MCP-SHARD-RESOLVED-01: handler forwards resolved provider/model, not raw i
     { base: 'main', provider: 'glm', model: 'pro' },
     {
       gitDiff: () => diff,
-      resolveModelRequest(input) {
+      resolveModelRequest(_input) {
         return { provider: 'glm', model: 'glm-5.2' };
       },
       async callModel(input) {

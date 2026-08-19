@@ -611,15 +611,6 @@ function sameLockMetadata(left, right) {
     left?.pid === right?.pid && left?.start_identity === right?.start_identity &&
     left?.acquired_at === right?.acquired_at;
 }
-function cleanupLockPublicationMarker(markerPath, temporary, root, expected = null) {
-  const marker = readLockOwnerMarker(markerPath, temporary, root);
-  if (expected && (marker.nonce !== expected.nonce || marker.pid !== expected.pid ||
-      marker.start_identity !== expected.start_identity || marker.acquired_at !== expected.acquired_at)) {
-    fail('standalone lock publication owner marker is not owned');
-  }
-  durableRemove(markerPath);
-  return marker;
-}
 function cleanupUnpublishedLockTemp(root, receiptOwned = false) {
   const entries = readdirSync(root);
   const publications = entries.filter((name) => name.startsWith(LOCK_PUBLICATION_PREFIX));

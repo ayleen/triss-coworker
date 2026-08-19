@@ -1,10 +1,10 @@
 /**
- * provider-errors.test.js — Package 9 (Atomic 25): pure provider classifier
+ * provider-errors.test.js — pure provider classifier
  * and fallback policy.
  *
  * RED/GREEN: node --test test/provider-errors.test.js
  *
- * Covers Reference surface 7 classifier/fallback subset of
+ * Covers documented contract classifier/fallback subset of
  * docs/reliable-delegation-contract-plan.md: stable route-code grammar,
  * conflicting-field rejection, policy/auth/rate/timeout precedence,
  * one-request no-hop cases, the exact two-request recognized-mismatch case,
@@ -160,7 +160,7 @@ test('serializeProviderError is the single bounded projection shape', () => {
   assert.equal(serializeProviderError(null).code, PROVIDER_ERROR_CODES.UNKNOWN);
 });
 
-// ─── empty-response projection (Reference surface 8 / Package 10) ───────────
+// ─── empty-response projection (documented contract) ───────────────────────
 
 test('assertProviderText throws TRISS_PROVIDER_EMPTY for empty, whitespace-only, and non-string input', () => {
   assert.throws(() => assertProviderText(''), (err) => err.code === 'TRISS_PROVIDER_EMPTY');

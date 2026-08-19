@@ -47,6 +47,24 @@ const EXCLUDED_FILES = new Set([
 const INCLUDED_TOP_LEVEL = new Set([
   'bin', 'src', 'templates', 'docs', 'node_modules',
   'package.json', 'README.md', 'CHANGELOG.md', 'LICENSE',
+  'THIRD_PARTY_NOTICES',
+]);
+const PUBLIC_DOC_FILES = new Set([
+  'docs/configuration.md',
+  'docs/mcp.md',
+  'docs/usage-accounting.md',
+  'docs/getting-started.md',
+  'docs/cli-reference.md',
+  'docs/security-model.md',
+  'docs/data-flows.md',
+  'docs/compatibility.md',
+  'docs/deprecations.md',
+  'docs/troubleshooting.md',
+]);
+const PUBLIC_DOC_DIRECTORIES = new Set([
+  'docs',
+  'docs/integrations',
+  'docs/engines',
 ]);
 
 function usage() {
@@ -75,7 +93,11 @@ function ignored(relativePath, isDirectory, info) {
   if (!INCLUDED_TOP_LEVEL.has(parts[0])) return true;
   if (parts.some((part) => EXCLUDED_NAMES.has(part))) return true;
   if (!isDirectory && EXCLUDED_FILES.has(basename(relativePath))) return true;
-  if (relativePath.startsWith('docs/promo/')) return true;
+  if (parts[0] === 'docs' &&
+      !PUBLIC_DOC_FILES.has(relativePath) &&
+      !PUBLIC_DOC_DIRECTORIES.has(relativePath) &&
+      !relativePath.startsWith('docs/integrations/') &&
+      !relativePath.startsWith('docs/engines/')) return true;
   if (relativePath.startsWith('node_modules/.cache/')) return true;
   // npm creates executable shims as symlinks in this directory.  The
   // standalone launcher never invokes package binaries, and the artifact

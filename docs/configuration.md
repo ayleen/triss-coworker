@@ -132,7 +132,8 @@ Removes a variable.
 | `linear`   | `LINEAR_API_KEY`, `LINEAR_API_URL`                                       | only `LINEAR_API_KEY` is required         |
 | `coder`    | `TRISS_WORKER_API_KEY`, `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY` (setup: `triss config wizard coder --coder-engine <engine> --coder-provider <provider>`, or `triss coder init --engine <engine> --provider <provider>`) | the **selected provider's** key — existing `TRISS_WORKER_API_KEY` (`worker`), `ZHIPU_API_KEY` (`glm`), shared `OPENCODE_API_KEY` (`opencode-zen` or `opencode-go`), `MOONSHOT_API_KEY` (`moonshot`), `KIMI_API_KEY` (`kimi-for-coding`) |
 
-When you add a new integration (see [extending.md](extending.md)), its
+When you add a new integration (see the
+[extension guide](https://github.com/ayleen/triss-coworker/blob/main/docs/extending.md)), its
 `envVars` declaration is automatically picked up — no wizard changes needed.
 
 ---
@@ -263,19 +264,19 @@ self-hosted endpoints).
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
-| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engines). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md). |
+| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engines). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](engines/opencode-zen.md) and [opencode-go.md](engines/opencode-go.md). |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
 | `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engines) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
-| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](./opencode2.md)), or `crush` |
+| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-next-17430`  | Exact pin override for the `@opencode-ai/cli` npm install (opencode2 engine — exact match required) |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 
-### Review limits (Release B)
+### Review limits
 
 All four limits are reloadable at runtime; values are independently clamped
 to their hard maxima, and any contradiction (e.g. `shard_max > single_max`)
@@ -350,7 +351,7 @@ keys, and the coder MCP tools surface once **any** is set. Run
 `triss coder init --provider opencode-zen` / `--provider opencode-go` (or `--provider moonshot` /
 `--provider kimi-for-coding`) to set up a non-GLM model interactively
 (key + `opencode.json`); Zen details are in
-[opencode-zen.md](opencode-zen.md); Go details are in [opencode-go.md](opencode-go.md). The two Kimi providers need no
+[opencode-zen.md](engines/opencode-zen.md); Go details are in [opencode-go.md](engines/opencode-go.md). The two Kimi providers need no
 endpoint probe: their plans use different keys, so the provider choice
 already names the endpoint.
 
@@ -581,9 +582,19 @@ are unaffected.
 
 ### Tunables
 
+<!-- config-defaults:start -->
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TRISS_UPDATE_CHECK` | `enabled` | Set to 0 to disable passive CLI/MCP update checks and notices; explicit triss update remains available. |
+| `TRISS_USAGE_LOG_MAX_BYTES` | `41943040` | Rotate the active usage log to usage.jsonl.old at this size (40 MiB). |
+| `TRISS_FETCH_MAX_BYTES` | `10485760` | Maximum response body for triss fetch (10 MiB). |
+<!-- config-defaults:end -->
+
+Rotation keeps one `usage.jsonl.old` archive. Usage reports read the active
+file only, so totals after rotation intentionally exclude the archived file.
+
 | Variable                       | Default     | Effect                                                    |
 | ------------------------------ | ----------- | --------------------------------------------------------- |
-| `TRISS_UPDATE_CHECK`           | (on)        | `0` disables passive CLI/MCP update checks and notices; explicit `triss update` still performs its requested check |
 | `TRISS_HTTP_TIMEOUT_MS`        | `30000`     | Per-request timeout for integration HTTP calls (Jira/GitHub/GitLab/Linear/Confluence) |
 | `TRISS_REQUEST_TIMEOUT_MS`     | `600000`    | Per-attempt timeout (ms) for OpenAI-compatible model clients (worker, GLM, Kimi); integer from `1` through `2147483647`, other values retain the SDK default. GLM reviews default to an internal 30-min per-attempt timeout; under MCP the host's outer tool timeout must exceed 3 × the effective per-attempt timeout (the SDK retries twice) — precedence and the Codex `tool_timeout_sec` rules are in [docs/mcp.md](mcp.md#codex-config-codexconfigtoml). |
 | `TRISS_HTTP_MAX_BYTES`         | `26214400`  | Max response body size for integration calls (25 MB default) |
@@ -593,9 +604,7 @@ are unaffected.
 | `TRISS_PROJECT_ROOT`           | `process.cwd()` | Pin the project root used by the sandbox and `.triss.env` lookup. `triss mcp install --local` writes this into the project-local `.mcp.json` automatically; **global** installs (`~/.claude.json`, `~/.codex/config.toml`) intentionally leave it unset and let the sandbox follow the per-session cwd — see [docs/mcp.md](mcp.md#scope-and-the-path-sandbox). |
 | `TRISS_USAGE_LOG`              | (on)        | `0` disables the usage tracker (`~/.cache/triss/usage.jsonl`) |
 | `TRISS_USAGE_LOG_CWD`          | (on)        | `0` omits the absolute cwd from each record (then `--by-project` groups under `(unknown)`) |
-| `TRISS_USAGE_LOG_MAX_BYTES`    | `41943040`  | Rotate the active log to `usage.jsonl.old` once it crosses this size (40 MiB default; reports read only the active file) |
 | `TRISS_PRICE_<MODEL_ID>`       | list prices | `uncached,cache_read,out` (or `uncached,cache_read,cache_write,out`) USD-per-token override per model (e.g. `TRISS_PRICE_ZAI_GLM_5_2` for `zai/glm-5.2`); models without a price, including `opencode/*` Zen models, report `unknown`, not `$0` |
-| `TRISS_FETCH_MAX_BYTES`        | `10485760`  | Max body size for `triss fetch` (default 10 MB)           |
 | `TRISS_RESTRICT_PATHS`         | `1` in MCP, unset in CLI | `0` opts the MCP server out of the project-root file IO sandbox |
 | `TRISS_ALLOW_PRIVATE_NETWORKS` | (off)       | `1` allows `triss fetch` / `triss ask --urls` to hit RFC1918, loopback, link-local, and cloud-metadata IPs. Off blocks SSRF; turn on only for self-hosted internal docs. **Known residual risk:** the guard checks DNS once before fetch; the underlying connection performs another lookup, leaving a narrow DNS-rebinding window. For high-trust environments use network-level egress filtering as the primary control. |
 

@@ -1,27 +1,28 @@
 /**
- * coder-opencode2-review5.test.js — regressions for the PR #46 review
- * round 5 (medium/low findings on top of cac7f02):
+ * opencode2-model-state-regressions.test.js — model inspection, credential
+ * provenance, TOCTOU, and session-store regression coverage.
+ * Covered failure modes:
  *
- *   R5-2  opencode2 falls into the V1 warning branch (config_main-based),
+ *   opencode2 falls into the V1 warning branch (config_main-based),
  *         not the Crush branch (runtimeMain-based) — a shell-exported GLM
  *         model must not false-positive as configured-model-unavailable.
- *   R5-3  model inspection tolerates unrelated hostile config shapes
+ *   model inspection tolerates unrelated hostile config shapes
  *         ({"plugin": 123}) — strict enumeration used to crash
  *         inspectCoderModelState and with it the post-commit audit of a
  *         successful `coder model set`.
- *   R5-4  the worker-transport provenance gate fires only when worker
+ *   the worker-transport provenance gate fires only when worker
  *         credentials are actually forwarded (triss-worker run / worker
  *         init), never on a zai/moonshot run with an unrelated
  *         project-local TRISS_WORKER_BASE_URL.
- *   R5-5  V2 init captures the pre-dotenv model pins and passes them to
+ *   V2 init captures the pre-dotenv model pins and passes them to
  *         warnIfPinShadowed — a shadowing shell export must fail init.
- *   R5-6  the TOCTOU guard covers sources CREATED in the audit→spawn window
+ *   the TOCTOU guard covers sources CREATED in the audit→spawn window
  *         (full re-audit before spawn), not only modified existing files.
- *   R5-7  an unknown engines.* namespace fails closed (no silent erase on
+ *   an unknown engines.* namespace fails closed (no silent erase on
  *         the next persist) and persistSessionMapping rejects unknown
  *         engines.
  *
- * (R5-1 — opencode-go pricing — is covered in test/usage-opencode2-family.test.js.)
+ * OpenCode Go pricing is covered in test/usage-opencode2-family.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -138,9 +139,9 @@ const makeSpawn = () => {
   return { spawnFn, managedCalls };
 };
 
-// ─── R5-2: opencode2 uses the config_main-based warning branch ─────────────
+// ─── opencode2 uses the config_main-based warning branch ─────────────
 
-test('R5-2: a shell-exported GLM model does not false-positive on opencode2 (config_main branch)', () => withHome(async () => {
+test('a shell-exported GLM model does not false-positive on opencode2 (config_main branch)', () => withHome(async () => {
   const models = await loadModels();
   // Shell export of a zai model; the selected provider is zen with an ok
   // catalogue that does NOT list GLM. runtimeMain IS the GLM export — under
@@ -179,9 +180,9 @@ test('R5-2: a shell-exported GLM model does not false-positive on opencode2 (con
   }
 }));
 
-// ─── R5-3: inspection tolerates unrelated hostile config shapes ─────────────
+// ─── inspection tolerates unrelated hostile config shapes ─────────────
 
-test('R5-3: inspectCoderModelState tolerates {"plugin": 123} in the config', () => withHome(async () => {
+test('inspectCoderModelState tolerates {"plugin": 123} in the config', () => withHome(async () => {
   const models = await loadModels();
   const cfgDir = join(process.env.TRISS_PROJECT_ROOT, '.config', 'opencode');
   writeFileSync(join(cfgDir, 'opencode.json'), JSON.stringify({
@@ -195,9 +196,9 @@ test('R5-3: inspectCoderModelState tolerates {"plugin": 123} in the config', () 
   assert.equal(state.config_main?.value ?? state.roles?.main?.value ?? 'zai/glm-4.7', 'zai/glm-4.7');
 }));
 
-// ─── R5-4: provenance gate only when worker credentials are forwarded ───────
+// ─── provenance gate only when worker credentials are forwarded ───────
 
-test('R5-4: a zai run is NOT blocked by a project-local TRISS_WORKER_BASE_URL', () => withHome(async ({ home, proj }) => {
+test('a zai run is NOT blocked by a project-local TRISS_WORKER_BASE_URL', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();
   process.env.TRISS_WORKER_API_KEY = 'wk-shell';
   process.env.TRISS_WORKER_BASE_URL = undefined;
@@ -214,9 +215,9 @@ test('R5-4: a zai run is NOT blocked by a project-local TRISS_WORKER_BASE_URL', 
   }
 }));
 
-// ─── R5-5: V2 init sees shadowing shell model exports ───────────────────────
+// ─── V2 init sees shadowing shell model exports ───────────────────────
 
-test('R5-5: V2 init fails on a shadowing TRISS_CODER_MODEL shell export (like V1)', () => withHome(async ({ home }) => {
+test('V2 init fails on a shadowing TRISS_CODER_MODEL shell export (like V1)', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   process.env.TRISS_CODER_MODEL = 'zai/glm-4.6';
   const { sh } = makeSh();
@@ -235,9 +236,9 @@ test('R5-5: V2 init fails on a shadowing TRISS_CODER_MODEL shell export (like V1
   assert.match(threw.message, /higher-precedence model override/u);
 }));
 
-// ─── R5-6: TOCTOU covers sources created in the audit→spawn window ──────────
+// ─── TOCTOU covers sources created in the audit→spawn window ──────────
 
-test('R5-6: a hostile .opencode/opencode.json created during the detect window aborts the run', () => withHome(async ({ proj }) => {
+test('a hostile .opencode/opencode.json created during the detect window aborts the run', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // The sh seam plants a hostile permissive layer INSIDE the window: the
   // pre-spawn detect probe runs after the audit, so its callback is exactly
@@ -265,9 +266,9 @@ test('R5-6: a hostile .opencode/opencode.json created during the detect window a
   assert.equal(managedCalls.length, 0, 'zero managed spawns');
 }));
 
-// ─── R5-7: unknown engines.* namespace fails closed ─────────────────────────
+// ─── unknown engines.* namespace fails closed ─────────────────────────
 
-test('R5-7: an unknown engines.* namespace fails closed and is never rewritten', () => withHome(async ({ home }) => {
+test('an unknown engines.* namespace fails closed and is never rewritten', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const storePath = join(home, '.triss', 'sessions.json');
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -283,7 +284,7 @@ test('R5-7: an unknown engines.* namespace fails closed and is never rewritten',
   assert.equal(readFileSync(storePath, 'utf8'), original, 'file must never be rewritten');
 }));
 
-test('R5-7: persistSessionMapping rejects an unknown engine argument', () => withHome(async () => {
+test('persistSessionMapping rejects an unknown engine argument', () => withHome(async () => {
   const commands = await loadCommands();
   const sh = makeSh().sh;
   assert.throws(

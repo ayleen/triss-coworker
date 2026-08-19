@@ -1,5 +1,5 @@
 /**
- * coder-credential-proxy.test.js — Package 2A (Atomic 03): parent-owned
+ * coder-credential-proxy.test.js — parent-owned
  * loopback credential proxy.
  *
  * RED/GREEN: node --test test/coder-credential-proxy.test.js
@@ -17,7 +17,7 @@ import { connect as netConnect } from 'node:net';
 import { startCoderCredentialProxy } from '../src/coder-credential-proxy.js';
 
 const REAL_CREDENTIAL = 'sk-real-provider-secret-0123456789abcdef';
-// P0 fix: `endpoint` is the upstream ORIGIN only — the engine sends the API
+// Invariant: `endpoint` is the upstream ORIGIN only — the engine sends the API
 // path (pathPrefix) verbatim, so forwarding is a plain origin+path join and
 // the prefix can never be doubled.
 const ENDPOINT = 'https://api.provider.example';

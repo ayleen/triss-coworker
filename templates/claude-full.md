@@ -187,7 +187,7 @@ Then hand off implementation work instead of writing it yourself:
 
 ```bash
 triss coder run "<task>"
-  --engine <name>     # opencode (default), opencode2 (beta — see docs/opencode2.md), or crush
+  --engine <name>     # opencode (default), opencode2 (beta — see docs/engines/opencode2.md), or crush
   --session <id>      # triss-side slug, mapped to a real opencode session id
                        # in .triss/sessions.json (first run creates it, later
                        # runs with the same slug continue that conversation)
@@ -271,7 +271,7 @@ always fail closed even with the opt-in — clean or pick a new slug.
 `opencode.json` (curated safe commands only) that actually works — prefer it
 when you want that safety layer. `opencode2` (`--engine opencode2`) is the
 V2 beta: same shared config and policy, plus a fail-closed plugin/agent
-preflight (see docs/opencode2.md). `crush` (`--engine crush` /
+preflight (see docs/engines/opencode2.md). `crush` (`--engine crush` /
 `TRISS_CODER_ENGINE=crush`; npm `@phpcraftdream/crush` ≥0.1.3, bin `crush`)
 has a **weaker, interim** safety story: live testing proved crush 0.1.3
 **ignores** its `permissions.run` config block and a denied bash command

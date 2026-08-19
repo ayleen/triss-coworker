@@ -1,5 +1,5 @@
 /**
- * coder-git-mediator.js — Package 2C (Atomic 05): bounded Git mediator.
+ * coder-git-mediator.js — bounded Git mediator.
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md):
  * Git inspection receives no direct source .git/common-dir/refs/objects —

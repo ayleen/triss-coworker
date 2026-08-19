@@ -1,21 +1,22 @@
 /**
- * coder-opencode2-review6.test.js — regressions for the PR #46 review
- * round 6 findings:
+ * opencode2-lifecycle-regressions.test.js — lock, cleanup, routing, and
+ * runtime-directory lifecycle regression coverage.
+ * security regression coverage:
  *
- *   R6-1  a held session-store lock no longer discards a finished run —
+ *   a held session-store lock no longer discards a finished run —
  *         persistSessionMapping retries with backoff and degrades to the
  *         lock-free protocol (mapping still written).
- *   R6-2  a corrupted sessions.json on the V1 path with --isolate leaves
+ *   a corrupted sessions.json on the V1 path with --isolate leaves
  *         NO worktree/branch behind (the V2 branch already cleaned up).
- *   R6-3  TRISS_CODER_ENGINE=opencode2 from a .env file routes init to the
+ *   TRISS_CODER_ENGINE=opencode2 from a .env file routes init to the
  *         V2 flow (no V1 binary probe, no V1 agent templates).
- *   R6-4  V2 init on a tree with the V1 allowlist config rejects BEFORE any
+ *   V2 init on a tree with the V1 allowlist config rejects BEFORE any
  *         credential/config write, with actionable guidance.
- *   R6-5  a fresh V2 init warns that the shared deny-everything policy
+ *   a fresh V2 init warns that the shared deny-everything policy
  *         degrades plain V1 runs.
- *   R6-6  tolerant enumeration survives an EACCES config candidate.
- *   R6-7  rollback of an opencode2 manifest reports engine opencode2.
- *   R6-8  ensureOpenCode2RuntimeDirs reports the directories it created.
+ *   tolerant enumeration survives an EACCES config candidate.
+ *   rollback of an opencode2 manifest reports engine opencode2.
+ *   ensureOpenCode2RuntimeDirs reports the directories it created.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,9 +103,9 @@ const makeSh = () => {
   return { sh, spawns };
 };
 
-// ─── R6-1: lock-held never discards the mapping ─────────────────────────────
+// ─── lock-held never discards the mapping ─────────────────────────────
 
-test('R6-1: a permanently held session lock degrades to the lock-free persist (mapping written)', () => withHome(async ({ home }) => {
+test('a permanently held session lock degrades to the lock-free persist (mapping written)', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const held = new Error('coder mutation lock-held');
   held.code = 'LOCK_HELD';
@@ -124,7 +125,7 @@ test('R6-1: a permanently held session lock degrades to the lock-free persist (m
   assert.match(errWrites.join(''), /without the lock/u, 'a warning explains the degraded write');
 }));
 
-test('R6-1: a transiently held lock is retried and the mapping persists under the lock', () => withHome(async ({ home }) => {
+test('a transiently held lock is retried and the mapping persists under the lock', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   const held = new Error('coder mutation lock-held');
   held.code = 'LOCK_HELD';
@@ -148,9 +149,9 @@ test('R6-1: a transiently held lock is retried and the mapping persists under th
   assert.ok(releases.length >= 1, 'the acquired lock was released');
 }));
 
-// ─── R6-2: V1 --isolate + corrupted sessions.json leaves no worktree ────────
+// ─── V1 --isolate + corrupted sessions.json leaves no worktree ────────
 
-test('R6-2: V1 --isolate --session with a corrupted sessions.json cleans the worktree', () => withHome(async ({ home }) => {
+test('V1 --isolate --session with a corrupted sessions.json cleans the worktree', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   execSync('git init -q && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init', { cwd: home });
   mkdirSync(join(home, '.triss'), { recursive: true });
@@ -174,9 +175,9 @@ test('R6-2: V1 --isolate --session with a corrupted sessions.json cleans the wor
   assert.ok(!existsSync(wtRoot) || readdirSync(wtRoot).length === 0, 'no abandoned isolation worktree');
 }));
 
-// ─── R6-3: engine from .env routes to V2 init ───────────────────────────────
+// ─── engine from .env routes to V2 init ───────────────────────────────
 
-test('R6-3: TRISS_CODER_ENGINE=opencode2 in the project .env file routes init to V2', () => withHome(async ({ home }) => {
+test('TRISS_CODER_ENGINE=opencode2 in the project .env file routes init to V2', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // No --engine flag; the engine comes from the project .triss.env only —
   // resolvable only AFTER loadEnvFiles.
@@ -202,9 +203,9 @@ test('R6-3: TRISS_CODER_ENGINE=opencode2 in the project .env file routes init to
   assert.ok(existsSync(join(home, '.triss', 'opencode2', 'data')), 'V2 XDG roots were created (V2 path ran)');
 }));
 
-// ─── R6-4: existing V1 allowlist config rejects BEFORE any write ────────────
+// ─── existing V1 allowlist config rejects BEFORE any write ────────────
 
-test('R6-4: V2 init on a V1-allowlist config aborts before the credential write', () => withHome(async ({ home }) => {
+test('V2 init on a V1-allowlist config aborts before the credential write', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // The classic V1-init result: wildcard deny + allowlist AFTER it (live).
   writeFileSync(join(home, '.config', 'opencode', 'opencode.json'), JSON.stringify({
@@ -237,7 +238,7 @@ test('R6-4: V2 init on a V1-allowlist config aborts before the credential write'
   assert.ok(!existsSync(join(home, '.config', 'triss', '.env')), 'no global env file was written');
 }));
 
-test('R6-4b (round 7): a config with NO permission block gets ADD-the-deny guidance, not remove-the-allows', () => withHome(async ({ home }) => {
+test('a config with NO permission block gets ADD-the-deny guidance, not remove-the-allows', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // No permission block anywhere: the head gate fires with
   // reason=no-wildcard-deny — the old message told this user to "remove the
@@ -261,9 +262,9 @@ test('R6-4b (round 7): a config with NO permission block gets ADD-the-deny guida
   assert.doesNotMatch(threw.message, /Remove the allow rules/u, 'no remove-guidance for a MISSING deny');
 }));
 
-// ─── R6-5: fresh V2 init warns about the shared-policy V1 degradation ───────
+// ─── fresh V2 init warns about the shared-policy V1 degradation ───────
 
-test('R6-5: a fresh V2 init warns that plain V1 runs lose the allowlisted commands', () => withHome(async ({ home }) => {
+test('a fresh V2 init warns that plain V1 runs lose the allowlisted commands', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   // Fresh machine: no existing config, so writeOpencodeConfig CREATES one.
   rmSync(join(home, '.config', 'opencode', 'opencode.json'));
@@ -287,9 +288,9 @@ test('R6-5: a fresh V2 init warns that plain V1 runs lose the allowlisted comman
   assert.deepEqual(cfg.permission.bash, { '*': 'deny' });
 }));
 
-// ─── R6-6: tolerant enumeration survives an unreadable config candidate ─────
+// ─── tolerant enumeration survives an unreadable config candidate ─────
 
-test('R6-6: an EACCES config candidate degrades to absent in tolerant mode', async () => {
+test('an EACCES config candidate degrades to absent in tolerant mode', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc2-r6-eacces-'));
   const cfgDir = join(dir, '.config', 'opencode');
   mkdirSync(cfgDir, { recursive: true });
@@ -314,13 +315,13 @@ test('R6-6: an EACCES config candidate degrades to absent in tolerant mode', asy
   }
 });
 
-// ─── R6-7: rollback reports the manifest's engine ───────────────────────────
+// ─── rollback reports the manifest's engine ───────────────────────────
 // (covered by an assertion in test/coder-opencode2-rollback.test.js — the
 // opencode2-manifest restore now asserts result.engine === 'opencode2'.)
 
-// ─── R6-8: runtime dirs report what they created ────────────────────────────
+// ─── runtime dirs report what they created ────────────────────────────
 
-test('R6-8: ensureOpenCode2RuntimeDirs returns the created directories', async () => {
+test('ensureOpenCode2RuntimeDirs returns the created directories', async () => {
   const { ensureOpenCode2RuntimeDirs } = await import('../src/coder-engines/opencode2.js');
   const root = mkdtempSync(join(tmpdir(), 'oc2-r6-roots-'));
   try {

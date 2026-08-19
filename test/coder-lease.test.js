@@ -1,5 +1,5 @@
 /**
- * coder-lease.test.js — Package 4A (Atomic 14): fixed kernel locks and coder
+ * coder-lease.test.js — fixed kernel locks and coder
  * leases.
  *
  * RED/GREEN: node --test test/coder-lease.test.js
@@ -104,12 +104,13 @@ test('slot leases serialize two run/clean cycles on the same slot', async () => 
       });
     await Promise.all([run(1), run(2)]);
     // Serialized: no interleaving of start/end across runs.
-    const starts = events.filter((e) => e.endsWith('-start')).length;
-    const ends = events.filter((e) => e.endsWith('-end')).length;
-    assert.equal(starts, 2);
-    assert.equal(ends, 2);
-    assert.equal(events[0], 'run-1-start');
-    assert.equal(events[1], 'run-1-end');
+    assert.equal(events.length, 4);
+    for (const id of [1, 2]) {
+      const startIndex = events.indexOf(`run-${id}-start`);
+      const endIndex = events.indexOf(`run-${id}-end`);
+      assert.notEqual(startIndex, -1);
+      assert.equal(endIndex, startIndex + 1);
+    }
   } finally {
     await fx.cleanup();
   }

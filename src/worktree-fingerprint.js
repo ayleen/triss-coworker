@@ -1,7 +1,7 @@
 /**
- * worktree-fingerprint.js — Package 3 (Atomic 12): fingerprint primitive.
+ * worktree-fingerprint.js — fingerprint primitive.
  *
- * Reference surface 3 / Section 6.3 of the approved plan
+ * documented contract / Section 6.3 of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Captures bounded visible-
  * worktree fingerprint snapshots:
  *   - NUL-delimited `git ls-files --cached --others -z` enumeration with

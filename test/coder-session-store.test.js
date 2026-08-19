@@ -1,5 +1,5 @@
 /**
- * coder-session-store.test.js — Package 4C (Atomic 18): bounded per-session
+ * coder-session-store.test.js — bounded per-session
  * generation store.
  *
  * RED/GREEN: node --test test/coder-session-store.test.js
@@ -244,7 +244,7 @@ test('a corrupt mapping fails closed on load', async () => {
   }
 });
 
-// ─── store adapter (Package 4B2 interface) ───────────────────────────────────
+// ─── store adapter contract ─────────────────────────────────────────────────
 
 test('createCoderSessionStoreAdapter implements inspect/transitionDelete with injected fs', async () => {
   const fx = await fixture();

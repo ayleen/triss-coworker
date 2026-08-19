@@ -1,14 +1,14 @@
 /**
- * coder-orchestration.js — Package 5E (Atomic 21): OpenCode run and envelope
+ * coder-orchestration.js — OpenCode run and envelope
  * orchestration helpers (pure).
  *
- * Reference surface 3 / Atomic 21 of the approved plan
+ * documented contract / transition of the approved plan
  * (docs/reliable-delegation-contract-plan.md): every safe envelope after
  * allocation carries `session_slug`, `result_retention`, `result_id`, and
  * `execution_capabilities`. This module owns the pure derivations; the
  * `src/commands/coder.js` orchestration path embeds them.
  *
- * Rules (Section 6.3 / Reference surface 3):
+ * Rules (Section 6.3 / documented contract):
  *  - session_slug: the explicit --session slug, or an anonymous generated
  *    slug (anon-<32 lowercase hex>) for unnamed runs;
  *  - result_retention: `retained` only for isolated changed runs with
@@ -183,7 +183,7 @@ export function allocateRunIdentity({
   const sessionSlug = anonymous ? `anon-${randomBytes(16).toString('hex')}` : slug;
 
   // Retained results require: isolated + changed + enforced result-store
-  // quota + a successful 1 GiB reservation (Reference surface 3).
+  // quota + a successful 1 GiB reservation (documented contract).
   const retained =
     isolated &&
     changed &&

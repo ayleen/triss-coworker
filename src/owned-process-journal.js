@@ -1,11 +1,11 @@
 /**
- * owned-process-journal.js — Package 2D1 (Atomic 09): owned-process journal
+ * owned-process-journal.js — owned-process journal
  * codec and transaction.
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md):
  * the canonical mode-0600, 64 KiB-capped `.journal.json` under
  * `.triss/process-sets-v2/`, protected by the regular/no-follow mode-0600
- * kernel mutex `.journal.lock` (via Package 2G's withFixedKernelLock).
+ * kernel mutex `.journal.lock` (via `withFixedKernelLock`).
  *
  * Schema: exact ordered keys
  *   {schema_version, entries, updated_at}

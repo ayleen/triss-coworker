@@ -1,17 +1,14 @@
-# Reliable Delegation — Release A contract
+# Reliable Delegation contract
 
-> **Release B** (Atomic 30–43) extends the contract with bounded single
-> review, exact PR acquisition, and the issue trust boundary. The Release B
-> section below is authoritative for that scope.
+> The review section extends the contract with bounded single review, exact
+> PR acquisition, and the issue trust boundary.
 >
-> **Release C** (Atomic 44–48) adds sequential sharding. The Release C
-> section at the end is authoritative for that scope.
+> The sharding section adds sequential review sharding and its explicit
+> no-global-verdict constraint.
 
-This document is the Release A documentation gate (Reference surface 14 of
-`docs/reliable-delegation-contract-plan.md`). It covers the coder envelope v2
+This document covers the coder envelope v2
 fields, expectation semantics, lifecycle, bounded diagnostics, provider error
-codes, and the execution-capability model. It is authoritative for Release A
-wording.
+codes, and the execution-capability model.
 
 ## Envelope fields
 
@@ -40,8 +37,8 @@ wording.
 
 - `files_changed`: the complete isolated deliverable list.
 - `run_files_changed`: the only changes-expectation evidence.
-- Non-isolated `files_changed` is `null` (NOT `[]`) — a Release A
-  compatibility change. Consumers that require an array must branch on
+- Non-isolated `files_changed` is `null` (NOT `[]`) — a compatibility change.
+  Consumers that require an array must branch on
   `envelope_version` and `change_detection.status`.
 - `change_summary` carries the bounded human-readable summary; `diff_stat`
   falls back truthfully to `null` when the diff source is unavailable.
@@ -96,11 +93,11 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
   (`files_changed: null`, `worktree: null`, edits may reach the caller
   worktree).
 - Unavailable credential isolation ALWAYS blocks before spawn to protect the
-  real provider key. Release A intentionally rejects every coder run when the
+  real provider key. Triss intentionally rejects every coder run when the
   credential proxy is unavailable.
 - A best-effort envelope is advisory-only: `null` change lists, no
   explicit-expectation success, no persistent session.
-- The credential proxy is a loopback one-run-token proxy (Package 2A);
+- The credential proxy is a loopback one-run-token proxy;
   revocation invalidates the token immediately; request bodies are never
   logged or echoed.
 
@@ -113,7 +110,7 @@ JSON-plus-LF, mode 0600, capped reads (cap + 1 pre-read), atomic
 temp/fsync/rename publication, exact ordered keys, fail-closed validation.
 
 Lease behavior: maintenance → inventory → slot leases form the fixed lock
-hierarchy (Package 4A); slot leases serialize run/clean cycles on the same
+hierarchy; slot leases serialize run/clean cycles on the same
 slot; leases are released in `finally`.
 
 Cleanup: `triss coder session clean <slug> --engine <opencode|crush>` removes
@@ -131,13 +128,11 @@ preflight is satisfied. Quarantine data is never deleted by adopt/reset.
 
 ---
 
-# Reliable Delegation — Release B contract
+# Review contract
 
 Scope: safe single review, literal file selection, exact PR diff
 acquisition, the issue trust boundary, and review configuration
-(Reference surface 15 of `docs/reliable-delegation-contract-plan.md`).
-Sharding is NOT available yet — `--payload-mode shard` is not documented as
-usable and `evidence + shard` is rejected when the exec router exists.
+Sharding has a separate contract below; `evidence + shard` is rejected.
 
 ## Review limits (all four, reloadable)
 
@@ -230,10 +225,9 @@ projection with no partial output.
 
 ---
 
-# Reliable Delegation — Release C contract
+# Sequential sharding contract
 
-Scope: sequential sharding and coverage (Reference surface 16 of
-`docs/reliable-delegation-contract-plan.md`). `--payload-mode shard`
+Scope: sequential sharding and coverage. `--payload-mode shard`
 executes source-ordered whole-file shards sequentially.
 
 ## Completed sharded execution is NOT a global review
