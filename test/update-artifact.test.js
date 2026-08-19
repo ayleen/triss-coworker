@@ -163,9 +163,18 @@ test('standalone staging ships only public docs and the third-party notice', () 
   const source = temp('artifact-public-docs');
   mkdirSync(join(source, 'docs', 'integrations'), { recursive: true });
   mkdirSync(join(source, 'docs', 'promo'), { recursive: true });
-  writeFileSync(join(source, 'package.json'), '{"name":"triss-coworker","version":"0.37.1"}\n');
+  writeFileSync(join(source, 'package.json'), JSON.stringify({
+    name: 'triss-coworker',
+    version: '0.37.1',
+    files: [
+      'docs/configuration.md',
+      'docs/new-public.md',
+      'docs/integrations/',
+    ],
+  }));
   writeFileSync(join(source, 'THIRD_PARTY_NOTICES'), 'notices\n');
   writeFileSync(join(source, 'docs', 'configuration.md'), 'public\n');
+  writeFileSync(join(source, 'docs', 'new-public.md'), 'newly allowlisted public doc\n');
   writeFileSync(join(source, 'docs', 'integrations', 'github.md'), 'public integration\n');
   writeFileSync(join(source, 'docs', 'internal-plan.md'), 'internal\n');
   writeFileSync(join(source, 'docs', 'promo', 'launch.md'), 'promo\n');
@@ -175,9 +184,40 @@ test('standalone staging ships only public docs and the third-party notice', () 
 
   assert.equal(existsSync(join(stage, 'THIRD_PARTY_NOTICES')), true);
   assert.equal(existsSync(join(stage, 'docs', 'configuration.md')), true);
+  assert.equal(existsSync(join(stage, 'docs', 'new-public.md')), true,
+    'standalone docs must follow the source package.json files allowlist');
   assert.equal(existsSync(join(stage, 'docs', 'integrations', 'github.md')), true);
   assert.equal(existsSync(join(stage, 'docs', 'internal-plan.md')), false);
   assert.equal(existsSync(join(stage, 'docs', 'promo')), false);
+});
+
+test('standalone docs policy accepts npm directory entries without a trailing slash', () => {
+  const source = temp('artifact-public-doc-directory');
+  mkdirSync(join(source, 'docs', 'engines'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), JSON.stringify({
+    name: 'triss-coworker',
+    version: '0.37.1',
+    files: ['docs/engines'],
+  }));
+  writeFileSync(join(source, 'docs', 'engines', 'public.md'), 'public\n');
+
+  const stage = join(temp('artifact-public-doc-directory-stage'), 'stage');
+  buildStandalone({ sourceDir: source, stageDir: stage, version: '0.37.1' });
+  assert.equal(existsSync(join(stage, 'docs', 'engines', 'public.md')), true);
+});
+
+test('standalone docs policy fails closed when package.json has no files allowlist', () => {
+  const source = temp('artifact-public-doc-missing-policy');
+  mkdirSync(join(source, 'docs'));
+  writeFileSync(join(source, 'package.json'), '{"name":"triss-coworker","version":"0.37.1"}\n');
+  writeFileSync(join(source, 'docs', 'public.md'), 'public\n');
+
+  const stage = join(temp('artifact-public-doc-missing-policy-stage'), 'stage');
+  assert.throws(
+    () => buildStandalone({ sourceDir: source, stageDir: stage, version: '0.37.1' }),
+    /package\.json files must declare the public docs/,
+  );
+  assert.equal(existsSync(stage), false);
 });
 
 test('standalone builder reports directory depth violations before generic path validation', () => {

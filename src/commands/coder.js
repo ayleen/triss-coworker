@@ -1418,9 +1418,9 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// assertV2WorkerTransportProvenance (invariant, invariant): the
-// worker credential and its transport must form ONE profile of consistent
-// trust. Precedence is shell > project .triss.env > global .env PER FIELD,
+// Credential/transport provenance invariant: the worker credential and its
+// transport must form one consistently trusted profile. Precedence is shell
+// > project .triss.env > global .env PER FIELD,
 // so a repository can steer the effective transport while the key comes from
 // a higher-trust source — and a DECOY key in the project file does not make
 // the profile consistent (dotenv override:false can never displace a shell
@@ -3677,9 +3677,8 @@ function normalizeSessionStore(raw) {
     }
   }
   // Legacy flat map: every entry belongs to the V1 engine (the only writer
-  // that ever produced this shape). Malformed entries fail closed (invariant
-  // Unknown namespaces are rejected because silent drops lose data on the
-  // next rewrite.
+  // that ever produced this shape). Malformed entries fail closed because
+  // silently dropping them would lose data on the next rewrite.
   for (const [slug, realId] of Object.entries(raw)) {
     if (typeof realId !== 'string') {
       throw new Error(

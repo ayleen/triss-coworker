@@ -118,7 +118,8 @@ export function opencode2RouteFixture(modelUsed) {
 
 /**
  * Translate one V1 `permission.bash` value into ordered V2 shell rules.
- * Accepts BOTH shapes the official schema allows (invariant fix, bypass A):
+ * Accepts both shapes allowed by the official schema. Treating only the
+ * object-map form as valid would reject legitimate wildcard policies:
  *   - a plain string ("allow" | "deny" | "ask") => one wildcard rule
  *     resource "*" (applies to EVERY command);
  *   - an object map { pattern: effect }        => one rule per key, key
@@ -396,8 +397,9 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
   if (expectedBaseURL != null && settings.baseURL !== expectedBaseURL) {
     return { ok: false, reason: 'baseurl-value', actual: settings.baseURL, expected: expectedBaseURL };
   }
-  // Model-level transport overrides (invariant + invariant): native V2
-  // `models.<id>.api` redirects per-model traffic exactly like
+  // Model-level transport overrides require the same scrutiny as provider-
+  // level overrides. In native V2, `models.<id>.api` redirects traffic
+  // exactly like
   // provider.<id>.api (a late layer can leave the top-level provider intact
   // and reroute ONE model). The managed definition writes plain { name }
   // entries — ANY other key in ANY model entry is an override and rejects.
@@ -421,9 +423,10 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
 // Top-level keys with their allowed value types, captured from the official
 // published schema (https://opencode.ai/config.json, fetched 2026-08-15; the
 // root sets additionalProperties:false — unknown keys are schema-invalid,
-// which is exactly why they fail closed here). Invariant: the
-// invariant table was hand-picked and would false-reject legitimate user
-// configs carrying keys like autoupdate/instructions/share.
+// which is exactly why they fail closed here). An earlier hand-picked subset
+// false-rejected legitimate configs carrying keys such as
+// autoupdate/instructions/share; this table instead mirrors the published
+// schema while preserving fail-closed handling for genuinely unknown keys.
 // Pin-verification caveat: the published schema may drift from the exact
 // pinned beta build — re-capture against the pin when a working
 // `debug config` oracle is available (sandboxed XDG currently cannot start

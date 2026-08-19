@@ -43,7 +43,14 @@ for (const file of files) {
     } else if (!existsSync(resolved)) {
       failures.push(`${file}: missing link target: ${link.raw}`);
     } else {
-      statSync(resolved);
+      try {
+        const target = statSync(resolved);
+        if (!target.isFile() && !target.isDirectory()) {
+          failures.push(`${file}: link target is not a regular file or directory: ${link.raw}`);
+        }
+      } catch (error) {
+        failures.push(`${file}: cannot inspect link target ${link.raw}: ${error.message}`);
+      }
     }
   }
 }

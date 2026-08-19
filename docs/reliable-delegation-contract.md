@@ -104,9 +104,8 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
 ## Local metadata schema v1
 
 `coder-state-v2`, `engine-sessions-v2`, `coder-results-v1`, `quarantine-v1`,
-`locks-v2`, and `wt-v2` under `.triss/` follow the exact schemas in Section
-6.3 of `docs/reliable-delegation-contract-plan.md`: canonical compact
-JSON-plus-LF, mode 0600, capped reads (cap + 1 pre-read), atomic
+`locks-v2`, and `wt-v2` under `.triss/` use canonical compact JSON-plus-LF,
+mode 0600, capped reads (cap + 1 pre-read), atomic
 temp/fsync/rename publication, exact ordered keys, fail-closed validation.
 
 Lease behavior: maintenance → inventory → slot leases form the fixed lock

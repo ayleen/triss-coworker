@@ -99,7 +99,8 @@ export function detectOpenCode2(
     realPath = realpathSync(resolvedPath);
   } catch {
     // Un-canonicalizable (missing, permission, symlink loop): fail closed —
-    // never fall back to the pre-realpath path (invariant #6).
+    // never fall back to the pre-realpath path: the credential-bearing spawn
+    // must use the exact canonical executable that passed preflight.
     return { found: false, path: null, version: null, satisfiesPin: false };
   }
   if (!isAbsolute(realPath)) {

@@ -71,7 +71,7 @@ visible in the host's MCP-server log — so you can verify the resolved
 root:
 
 ```
-triss MCP: root=$HOME/projects/foo (from cwd), sandbox=on
+triss MCP: root=/Users/me/projects/foo (from cwd), sandbox=on
 ```
 
 ### Claude config (`~/.claude.json` or `./.mcp.json`)

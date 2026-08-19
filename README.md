@@ -572,8 +572,8 @@ triss review --issue ENG-42  # explicit tracker issue (never inferred from prose
 
 ### Reliable delegation — review safety (review acceptance)
 
-Review runs are bounded and fail closed (see
-[`docs/security-model.md`](docs/security-model.md)):
+Review runs are bounded and fail closed (see the
+[`docs/reliable-delegation-contract.md`](docs/reliable-delegation-contract.md)):
 
 - **Limits**: single request (256 KiB default / 1 MiB hard max), shard
   (96 KiB / 256 KiB), total corpus (4 MiB / 16 MiB), shard count (64 /
@@ -698,8 +698,8 @@ repository or worktree creation failure — slug/branch conflicts like
 `best_effort_caller_worktree`: stderr and envelope `warnings` carry
 `TRISS_CODER_ISOLATION_DOWNGRADED` and `effective_isolation` becomes
 `best_effort_caller_worktree` (advisory-only, `files_changed` is `null`,
-edits may reach the caller worktree). Full details:
-`docs/security-model.md`.
+edits may reach the caller worktree). Full details are in the
+[`docs/reliable-delegation-contract.md`](docs/reliable-delegation-contract.md).
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases

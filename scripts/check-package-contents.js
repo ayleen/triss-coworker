@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractMarkdownLinkTargets } from './markdown-links.js';
+import { extractMarkdownLinkTargets, extractRootDocReferences } from './markdown-links.js';
+import { containsDeveloperPathLeak } from './package-path-leaks.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = join(root, 'scripts', 'package-contents-manifest.json');
@@ -75,14 +76,13 @@ function validatePolicy(pack, manifest) {
     fail(`unpacked size ${pack.unpackedSize} exceeds budget ${manifest.max_unpacked_bytes}`);
   }
 
-  const localPathPattern = /(?:^|[\s"'`(])(?:\/Users\/[A-Za-z0-9._-]+\/|\/Volumes\/[A-Za-z0-9._-]+\/|\/home\/(?!<)[A-Za-z0-9._-]+\/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\)/m;
   const pathLeaks = [];
   for (const entry of pack.files) {
     const source = join(root, entry.path);
     if (!existsSync(source) || entry.size > 2 * 1024 * 1024) continue;
     const bytes = readFileSync(source);
     if (bytes.includes(0)) continue;
-    if (localPathPattern.test(bytes.toString('utf8'))) pathLeaks.push(entry.path);
+    if (containsDeveloperPathLeak(bytes.toString('utf8'))) pathLeaks.push(entry.path);
   }
   if (pathLeaks.length) fail(`absolute developer paths found in package files: ${pathLeaks.join(', ')}`);
   return paths;
@@ -144,6 +144,22 @@ function validatePackagedRuntimeDocReferences(paths) {
   }
 }
 
+function validatePackagedProseDocReferences(paths) {
+  const packaged = new Set(paths);
+  const missing = new Set();
+  const prose = paths.filter((path) =>
+    path === 'README.md' || path.startsWith('templates/') || path.startsWith('docs/'));
+  for (const path of prose) {
+    const source = readFileSync(join(root, path), 'utf8');
+    for (const reference of extractRootDocReferences(source)) {
+      if (!packaged.has(reference)) missing.add(`${path} -> ${reference}`);
+    }
+  }
+  if (missing.size) {
+    fail(`packaged prose references excluded docs: ${[...missing].join(', ')}`);
+  }
+}
+
 function smokeTarball(tarball) {
   const consumer = join(work, 'consumer');
   const consumerHome = join(work, 'home');
@@ -193,6 +209,7 @@ try {
   }
   validatePackagedMarkdownLinks(paths);
   validatePackagedRuntimeDocReferences(paths);
+  validatePackagedProseDocReferences(paths);
 
   const packed = npmPack(['--pack-destination', work]);
   compareManifest(packed.files.map((entry) => entry.path).sort(), paths);

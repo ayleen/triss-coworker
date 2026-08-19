@@ -1118,7 +1118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TRISS_PROJECT_ROOT=<install-time-cwd>` baked in. Because that config
   is shared by every Claude Code / Codex session, every install from a
   new project would overwrite the pin and silently sandbox unrelated
-  sessions to the wrong root — yielding `outside project root $HOME/.../X`
+  sessions to the wrong root — yielding `outside project root /Users/.../X`
   errors when working in project Y. Global installs now omit
   `TRISS_PROJECT_ROOT`; the sandbox follows the per-session cwd. Local
   `./.mcp.json` installs continue to pin the path (the config travels
