@@ -371,7 +371,7 @@ Plan
 
 Constraints
 - Scope boundaries, compatibility requirements, files or APIs that must not change.
-- Approval boundaries: no commit, push, deploy, external write, or destructive action unless authorized.
+- Approval boundaries: no commit, push, deploy, external write, or destructive action — commit is never delegated; the orchestrator collects and stages the diff itself.
 
 Relevant context
 - Known entry points, related files, prior findings, errors, or reference behavior.
@@ -427,21 +427,28 @@ The heredoc is a shell example; over MCP, pass the same packet as the tool's
 ### Context and sessions
 
 Default to a **fresh non-persistent run** with the complete packet: an
-unnamed run gets a newly generated per-run session id and is not a
-resumable conversation, so it never inherits this conversation implicitly.
-Use `--session <slug>` only when continuation is intentional and the
-previous task context remains relevant; do not use `--continue` as a
-general default.
+unnamed run gets a newly generated per-run session id and never inherits
+this conversation implicitly. It is not a resumable conversation on the
+`opencode` engine; on `crush` an isolated run also registers that id as a
+native crush session, so resume it only deliberately (`--session <id>` /
+`--continue`). Use `--session <slug>` only when continuation is
+intentional and the previous task context remains relevant; do not use
+`--continue` as a general default.
 
 ### Final acceptance checklist
 
 Before treating a coder result as done:
 
 - read the envelope's `exit_reason`, `files_changed` / `run_files_changed`,
-  `diff_stat`, and `worktree`;
-- for isolated runs, inspect the retained worktree directly. Triss stages
-  the deliverable changes (`git add`) before returning the envelope, so
-  check BOTH the staged and the unstaged state (set `$worktree` to the
+  `diff_stat`, and `worktree` (the `opencode` and `crush` engines report
+  `run_files_changed`; the `opencode2` beta returns the older envelope
+  without it);
+- for isolated runs, inspect the retained worktree only when the envelope
+  returns one: if `worktree` is null and `run_files_changed` is empty, the
+  run produced **no retained deliverable** (Triss removed the disposable
+  worktree) — skip the git inspection. Otherwise Triss stages the
+  deliverable changes (`git add`) before returning the envelope, so check
+  BOTH the staged and the unstaged state (set `$worktree` to the
   envelope's `worktree` path):
 
   ```bash

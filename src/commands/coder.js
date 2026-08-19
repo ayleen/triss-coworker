@@ -1255,9 +1255,10 @@ self-verification.
    state, and any unresolved blockers or risks truthfully.
 
 Hard boundaries: stay inside the working directory you were given; do not
-push, deploy, or touch anything outside this checkout; do not modify
-unrelated files; do not claim a check passed unless it actually ran
-successfully.
+commit; do not push, deploy, or touch anything outside this checkout; do
+not modify unrelated files; and never claim a check passed unless it
+actually ran successfully. Leave the finished change on disk — the
+orchestrator collects and stages the diff after you finish.
 `;
 
 const RESEARCHER_AGENT_TEMPLATE = `---

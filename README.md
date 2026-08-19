@@ -739,19 +739,25 @@ triss coder state backup --project <path>         # Section 15 rollback backup
 triss coder state validate --project <path> --backup <dir>
 ```
 
-Every `triss coder run` envelope (and the matching MCP tool) carries the
-Release A contract fields: `session_slug` (explicit slug or a generated
-per-run slug — never an implicit persistent conversation), `result_retention`
+Every `triss coder run` envelope on the `opencode` and `crush` engines
+(and the matching MCP tool) carries the Release A contract fields:
+`session_slug` (explicit slug or a generated per-run slug — never an
+implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
-`effective_isolation`). Non-isolated `files_changed` is `null`; the only
+`effective_isolation`). The `opencode2` beta engine still returns the older
+envelope shape (`session_id`, `exit_reason`, `final_text`, `files_changed`,
+`diff_stat`, `worktree`, `usage`, `warnings`) without these fields — use its
+`files_changed` / `diff_stat` / `worktree` as evidence there. Non-isolated `files_changed` is `null`; the only
 changes-expectation evidence is `run_files_changed`. Process completion and a
 non-empty final text are not task satisfaction — use `--isolate`, check
 `run_files_changed` in the envelope, and verify the retained worktree/diff
-directly: `git status --short`, then review the staged patch with
-`git diff --cached` and any unstaged changes with `git diff` (Triss stages
-the deliverable changes before returning the envelope). Unavailable OS sandbox/cleanup/lock/quota does not block a
+directly when the envelope returns one (a run with `run_files_changed: []`
+and `worktree: null` produced no retained deliverable): `git status --short`,
+then review the staged patch with `git diff --cached` and any unstaged
+changes with `git diff` (Triss stages the deliverable changes before
+returning the envelope). Unavailable OS sandbox/cleanup/lock/quota does not block a
 non-isolated/best-effort run but provides none of those guarantees; explicit
 or default isolation needs `--allow-best-effort-caller-worktree` (default
 off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`

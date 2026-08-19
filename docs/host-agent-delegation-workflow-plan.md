@@ -66,13 +66,11 @@ That longer chain is justified only when its stages are genuinely independent or
 
 ### Confirmed expectation-contract drift
 
-The public documentation currently says that users can run:
-
-```text
-triss coder run --expect changes --isolate
-```
-
-and that `--expect changes|analysis` applies a deterministic expectation gate. The current public implementation does not expose that contract:
+The public documentation currently advertises the unsupported command
+`triss coder run --expect changes --isolate` (drift reference only — NOT a
+runnable current command) and says that `--expect changes|analysis` applies
+a deterministic expectation gate. The current public implementation does not
+expose that contract:
 
 - `bin/triss.js` does not declare `--expect` for `coder run`;
 - `src/mcp/tools.js` has no expectation property in `triss_coder_run`;
@@ -142,7 +140,7 @@ Plan
 
 Constraints
 - Scope boundaries, compatibility requirements, files or APIs that must not change.
-- Approval boundaries: no commit, push, deploy, external write, or destructive action unless authorized.
+- Approval boundaries: no commit, push, deploy, external write, or destructive action — commit is never delegated; the orchestrator collects and stages the diff itself.
 
 Relevant context
 - Known entry points, related files, prior findings, errors, or reference behavior.

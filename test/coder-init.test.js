@@ -1925,6 +1925,10 @@ test(
       'coder template must keep the no-push/no-deploy boundary',
     );
     assert.ok(
+      coderAgent.includes('do not commit'),
+      'coder template must unconditionally forbid commit (Triss collects the staged diff itself)',
+    );
+    assert.ok(
       coderAgent.includes('claim') && coderAgent.includes('ran successfully'),
       'coder template must not claim checks that did not run',
     );

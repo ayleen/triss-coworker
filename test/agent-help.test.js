@@ -215,6 +215,18 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
       out.includes('not browser automation'),
       `${target} full cookbook must not claim browser automation for triss fetch`,
     );
+    assert.ok(
+      out.includes('Approval boundaries: no commit, push, deploy, external write, or destructive action'),
+      `${target} full cookbook task packet must unconditionally forbid commit (no host-authorized escape hatch)`,
+    );
+    assert.ok(
+      out.includes('no retained deliverable'),
+      `${target} full cookbook checklist must treat a null worktree plus empty run_files_changed as no retained deliverable`,
+    );
+    assert.ok(
+      out.includes('older envelope'),
+      `${target} full cookbook must note the opencode2 beta returns the older envelope without Release A fields`,
+    );
   }
 });
 
