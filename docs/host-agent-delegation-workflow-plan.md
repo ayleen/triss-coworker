@@ -257,7 +257,7 @@ Add, in this order:
 1. `Core workflow` with the normal host -> one coder -> host path.
 2. A routing decision table for ask/fetch, coder, review, and host browser tools.
 3. The reusable task packet.
-4. Context/session policy: fresh non-persistent run by default (an unnamed run gets a generated per-run session id and is reported `anonymous: false`), explicit session reuse only when needed.
+4. Context/session policy: fresh non-persistent run by default (an unnamed run gets an engine/isolation-specific generated per-run session id and anonymity status; see the Release A matrix), explicit session reuse only when needed.
 5. Final acceptance checklist based on the actual envelope, worktree, `git status`, and `git diff`.
 6. A short section on independent parallel workstreams and explicit handoff boundaries.
 

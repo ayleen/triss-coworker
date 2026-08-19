@@ -740,8 +740,8 @@ triss coder state validate --project <path> --backup <dir>
 ```
 
 Every `triss coder run` envelope (and the matching MCP tool) carries the
-Release A contract fields: `session_slug` (explicit slug or an anonymous
-generated one — never an implicit persistent conversation), `result_retention`
+Release A contract fields: `session_slug` (explicit slug or a generated
+per-run slug — never an implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
