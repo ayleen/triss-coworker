@@ -176,6 +176,77 @@ test('triss_review MCP schema remains branch/PR-only and has no stdin property',
   assert.match(review.description, /current branch|GitHub PR/i);
 });
 
+test('ask and review MCP tools accept timeout_ms within Node timer bounds', async () => {
+  const tools = await listTools();
+  for (const name of ['triss_ask', 'triss_review']) {
+    const tool = tools.find((entry) => entry.name === name);
+    const schema = tool.inputSchema.properties.timeout_ms;
+    assert.ok(schema, `${name} must expose timeout_ms`);
+    assert.equal(schema.type, 'integer');
+    assert.equal(schema.minimum, 1);
+    assert.equal(schema.maximum, 2147483647);
+  }
+});
+
+test('ask and review declare an exact outputSchema for {content, reasoning_content?, code?}; other tools keep none', async () => {
+  const tools = await listTools();
+  for (const name of ['triss_ask', 'triss_review']) {
+    const tool = tools.find((entry) => entry.name === name);
+    assert.ok(tool.outputSchema, `${name} must declare an outputSchema`);
+    assert.equal(tool.outputSchema.type, 'object');
+    assert.equal(tool.outputSchema.properties.content.type, 'string');
+    assert.equal(tool.outputSchema.properties.reasoning_content.type, 'string');
+    assert.equal(tool.outputSchema.properties.code.type, 'string');
+    assert.equal(tool.outputSchema.properties.code.pattern, '^TRISS_[A-Z0-9_]+$');
+    assert.deepEqual(tool.outputSchema.required, ['content']);
+    assert.ok(
+      !(tool.outputSchema.required || []).includes('reasoning_content'),
+      'reasoning_content stays optional',
+    );
+    // The schema is exact: structuredContent never carries anything beyond
+    // content/reasoning_content/code, so unknown keys must be rejected.
+    assert.equal(
+      tool.outputSchema.additionalProperties,
+      false,
+      `${name} outputSchema must be exact (additionalProperties: false)`,
+    );
+    assert.deepEqual(
+      Object.keys(tool.outputSchema.properties).sort(),
+      ['code', 'content', 'reasoning_content'],
+      `${name} outputSchema must declare only content/reasoning_content/code`,
+    );
+    assert.ok(
+      !(tool.outputSchema.required || []).includes('code'),
+      'code stays optional',
+    );
+  }
+  // Tools without an outputSchema keep their old shape — nothing new added.
+  const chat = tools.find((entry) => entry.name === 'triss_chat');
+  assert.equal(chat.outputSchema, undefined);
+});
+
+test('toMcpToolList carries outputSchema only when a tool declares one', async () => {
+  const wire = toMcpToolList(await listTools());
+  const ask = wire.find((t) => t.name === 'triss_ask');
+  const review = wire.find((t) => t.name === 'triss_review');
+  const chat = wire.find((t) => t.name === 'triss_chat');
+  assert.ok(ask.outputSchema, 'triss_ask outputSchema must reach the wire list');
+  // The exact schema, including the optional stable error code, survives the
+  // wire transform untouched.
+  for (const tool of [ask, review]) {
+    assert.equal(tool.outputSchema.additionalProperties, false);
+    assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), [
+      'code',
+      'content',
+      'reasoning_content',
+    ]);
+    assert.equal(tool.outputSchema.properties.code.type, 'string');
+    assert.equal(tool.outputSchema.properties.code.pattern, '^TRISS_[A-Z0-9_]+$');
+    assert.ok(!tool.outputSchema.required.includes('code'));
+  }
+  assert.equal(chat.outputSchema, undefined, 'triss_chat must not gain an outputSchema');
+});
+
 test('listTools loads project-local .triss.env so per-project credentials work', async () => {
   // Regression test: previously listTools read process.env without first
   // loading .env files, so a .triss.env with ATLASSIAN_* in the cwd was

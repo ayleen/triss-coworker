@@ -231,19 +231,77 @@ export async function chat({
   maxTokens,
   temperature,
   label,
+  timeoutMs,
+  signal,
+  thinking,
+  onReasoning,
 }) {
+  // Two distinct shapes go to the OpenAI SDK: the JSON body (argument 1) and
+  // the per-request transport options (argument 2). timeout/signal are
+  // transport-only — they never appear in the API body.
+  const body = buildChatCompletionsBody({
+    provider,
+    model,
+    messages,
+    maxTokens,
+    temperature,
+    thinking,
+  });
+  const requestOptions = buildRequestOptions({ timeoutMs, signal });
   const { result: resp, baseUrl: usedBaseUrl } = await withGlmEndpointFallback(
     { provider, baseUrl, model, endpointSource },
     (url) =>
-      getClient({ provider, baseUrl: url }).chat.completions.create({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature: temperature ?? 0.2,
-      }),
+      getClient({ provider, baseUrl: url }).chat.completions.create(body, requestOptions),
   );
+  // Buffered GLM thinking responses carry reasoning_content on the message.
+  // It stays separate from content (responseText never promotes it) but a
+  // caller that wants to surface thinking can opt in via onReasoning.
+  const reasoning = resp?.choices?.[0]?.message?.reasoning_content;
+  if (onReasoning && typeof reasoning === 'string' && reasoning) onReasoning(reasoning);
   recordUsage(resp, label || 'chat', { provider, baseUrl: usedBaseUrl, model });
   return resp;
+}
+
+// The per-request chat-completions JSON body. API fields only: model, messages,
+// token budget, temperature, the streaming shape, and the GLM thinking toggle.
+// Transport concerns (timeout, AbortSignal) live in buildRequestOptions(),
+// which the OpenAI SDK consumes as a separate argument — they must never be
+// serialized into this body. Timeout/signal are per-call only; the global
+// clients built by getClient() stay untouched, and omitting them leaves the
+// OpenAI SDK's own defaults and retry behavior intact.
+export function buildChatCompletionsBody({
+  provider,
+  model,
+  messages,
+  maxTokens,
+  temperature,
+  stream,
+  streamOptions,
+  thinking,
+} = {}) {
+  const body = {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature: temperature ?? 0.2,
+  };
+  if (stream) {
+    body.stream = true;
+    body.stream_options = streamOptions || { include_usage: true };
+  }
+  if (provider === 'glm' && thinking) body.thinking = { type: 'enabled' };
+  return body;
+}
+
+// Per-request OpenAI SDK transport options — the second argument to
+// chat.completions.create(). Kept apart from the JSON body so an API request
+// never serializes timeout or signal, and omitted fields leave the SDK's own
+// per-request defaults untouched.
+export function buildRequestOptions({ timeoutMs, signal } = {}) {
+  const options = {};
+  if (timeoutMs !== undefined) options.timeout = timeoutMs;
+  if (signal !== undefined) options.signal = signal;
+  return options;
 }
 
 export function reportUsage(resp, label = 'worker', { provider } = {}) {
@@ -336,39 +394,74 @@ export async function chatStream({
   temperature,
   label,
   onChunk,
+  timeoutMs,
+  signal,
+  thinking,
+  onReasoning,
 }) {
   // The endpoint rejects a mismatched key while opening the stream, so the
   // fallback wraps creation only — nothing has been emitted to the caller yet
   // at that point, which is what makes retrying on the sibling safe.
+  const body = buildChatCompletionsBody({
+    provider,
+    model,
+    messages,
+    maxTokens,
+    temperature,
+    stream: true,
+    thinking,
+  });
+  const requestOptions = buildRequestOptions({ timeoutMs, signal });
   const { result: stream, baseUrl: usedBaseUrl } = await withGlmEndpointFallback(
     { provider, baseUrl, model, endpointSource },
     (url) =>
-      getClient({ provider, baseUrl: url }).chat.completions.create({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature: temperature ?? 0.2,
-        stream: true,
-        stream_options: { include_usage: true },
-      }),
+      getClient({ provider, baseUrl: url }).chat.completions.create(body, requestOptions),
   );
 
-  let text = '';
-  let lastChunk = null;
-  for await (const chunk of stream) {
-    const delta = chunk.choices?.[0]?.delta?.content;
-    if (delta) {
-      text += delta;
-      if (onChunk) onChunk(delta);
-    }
-    if (chunk.usage) lastChunk = chunk;
-  }
-
-  const fakeResp = {
-    model,
-    choices: [{ message: { content: text }, finish_reason: lastChunk?.choices?.[0]?.finish_reason ?? 'stop' }],
-    usage: lastChunk?.usage,
-  };
+  const fakeResp = await assembleStreamResponse({ chunks: stream, model, onChunk, onReasoning });
   recordUsage(fakeResp, label || 'chat-stream', { provider, baseUrl: usedBaseUrl, model });
   return fakeResp;
+}
+
+// Folds raw stream chunks into the OpenAI-style response shape. Content
+// deltas feed onChunk and the assembled message.content; reasoning_content
+// deltas are collected in a separate buffer, surfaced through onReasoning
+// (never onChunk), and returned as message.reasoning_content — so a thinking
+// model's reasoning is observable without ever being merged into the verdict.
+// Deterministic and pure so tests can drive it with plain chunk arrays.
+export async function assembleStreamResponse({ chunks = [], model, onChunk, onReasoning } = {}) {
+  let text = '';
+  let reasoning = '';
+  let usageChunk = null;
+  // finish_reason travels independently of usage: an OpenAI-style stream
+  // (stream_options.include_usage) ends with a finish_reason chunk followed
+  // by a final choices:[] chunk that carries only usage. Pinning the reason
+  // to the usage chunk would erase finish_reason — turning `length` back into
+  // the 'stop' default and losing the exhausted-budget signal.
+  let finishReason;
+  for await (const chunk of chunks) {
+    const delta = chunk?.choices?.[0]?.delta || {};
+    if (delta.content) {
+      text += delta.content;
+      if (onChunk) onChunk(delta.content);
+    }
+    if (delta.reasoning_content) {
+      reasoning += delta.reasoning_content;
+      if (onReasoning) onReasoning(delta.reasoning_content);
+    }
+    const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
+    if (chunkFinishReason) finishReason = chunkFinishReason;
+    if (chunk?.usage) usageChunk = chunk;
+  }
+
+  const message = { content: text };
+  if (reasoning) message.reasoning_content = reasoning;
+  return {
+    model,
+    choices: [{
+      message,
+      finish_reason: finishReason ?? 'stop',
+    }],
+    usage: usageChunk?.usage,
+  };
 }

@@ -6,6 +6,7 @@ import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
 import { getConfig } from '../config.js';
 // Shared provider metadata keeps MCP exposure aligned with `triss status`.
 import { coderCredentialReady } from '../coder-providers.js';
+import { NODE_TIMER_MAX_MS } from '../option-validation.js';
 import {
   askHandler,
   chatHandler,
@@ -58,6 +59,28 @@ import {
   gitlabCommentHandler,
 } from './handlers.js';
 
+// Output schema shared by the two tools that surface model reasoning. When a
+// tool declares an outputSchema, the MCP server always attaches matching
+// structuredContent to successful results: content mirrors content[0].text and
+// reasoning_content carries any GLM thinking (omitted when there is none).
+// Tools without an outputSchema keep their old plain { content: [...] } shape.
+// On error (isError:true) the server projects the stable allowlisted
+// TRISS_* code as {content, code} — the optional code field is part of the
+// closed schema so a real MCP Client validating error structuredContent does
+// not reject the result (the SDK validates even on isError; see Client.callTool).
+const TEXT_WITH_REASONING_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    content: { type: 'string' },
+    reasoning_content: { type: 'string' },
+    code: { type: 'string', pattern: '^TRISS_[A-Z0-9_]+$' },
+  },
+  required: ['content'],
+  // Exact schema: structuredContent never carries anything beyond these three
+  // keys, so hosts can rely on the shape being closed.
+  additionalProperties: false,
+};
+
 const CORE_TOOLS = [
   {
     name: 'triss_chat',
@@ -97,6 +120,12 @@ const CORE_TOOLS = [
         },
         model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        timeout_ms: {
+          type: 'integer',
+          minimum: 1,
+          maximum: NODE_TIMER_MAX_MS,
+          description: 'Request timeout in ms (1..2147483647)',
+        },
         system: { type: 'string', description: 'Optional system prompt override' },
         response_format: {
           type: 'string',
@@ -106,6 +135,7 @@ const CORE_TOOLS = [
       },
       required: ['question'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: askHandler,
   },
   {
@@ -147,6 +177,12 @@ const CORE_TOOLS = [
         },
         model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        timeout_ms: {
+          type: 'integer',
+          minimum: 1,
+          maximum: NODE_TIMER_MAX_MS,
+          description: 'Request timeout in ms (1..2147483647)',
+        },
         response_format: {
           type: 'string',
           enum: ['text', 'evidence'],
@@ -171,6 +207,7 @@ const CORE_TOOLS = [
         },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: reviewHandler,
   },
   {
@@ -193,6 +230,12 @@ const CORE_TOOLS = [
         },
         model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        timeout_ms: {
+          type: 'integer',
+          minimum: 1,
+          maximum: NODE_TIMER_MAX_MS,
+          description: 'Request timeout in ms (1..2147483647)',
+        },
         files: {
           type: 'array',
           items: { type: 'string' },
@@ -991,11 +1034,13 @@ export async function findTool(name) {
   return tools.find((t) => t.name === name);
 }
 
-// Strip the `handler` field for the wire format.
+// Strip the `handler` field for the wire format. outputSchema is only emitted
+// when a tool declares one, so tools without it keep their previous shape.
 export function toMcpToolList(tools) {
-  return tools.map(({ name, description, inputSchema }) => ({
+  return tools.map(({ name, description, inputSchema, outputSchema }) => ({
     name,
     description,
     inputSchema,
+    ...(outputSchema ? { outputSchema } : {}),
   }));
 }

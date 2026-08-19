@@ -372,9 +372,10 @@ successful-response text contract accepts both OpenAI-compatible
 complete final answer, not metadata: CLI must print it and MCP must return it.
 Only a response containing neither form is considered empty.
 
-For GLM 5.2 code review, use `triss review --provider glm --model pro
---max-tokens 16384` as the minimum. The generic 8192-token default can be
-consumed by reasoning before a verdict is emitted, especially for large diffs.
+For GLM 5.2 code review, use `triss review --provider glm --model pro` without
+`--max-tokens` to enable the model-sized auto-budget. If you pass an explicit
+budget, use at least 16384; explicit budgets disable auto-sizing, and the generic
+8192-token value can be consumed by reasoning before a verdict is emitted.
 When reviewing a focused remediation, narrow `--base` to that commit as well.
 
 ### 5.2 Engine choice

@@ -585,7 +585,7 @@ are unaffected.
 | ------------------------------ | ----------- | --------------------------------------------------------- |
 | `TRISS_UPDATE_CHECK`           | (on)        | `0` disables passive CLI/MCP update checks and notices; explicit `triss update` still performs its requested check |
 | `TRISS_HTTP_TIMEOUT_MS`        | `30000`     | Per-request timeout for integration HTTP calls (Jira/GitHub/GitLab/Linear/Confluence) |
-| `TRISS_REQUEST_TIMEOUT_MS`     | `600000`    | Timeout in ms for OpenAI-compatible model clients (worker, GLM, Kimi). Set an integer from `1` through `2147483647` for long buffered `ask`/`chat`/`review` calls; other values retain the SDK default. |
+| `TRISS_REQUEST_TIMEOUT_MS`     | `600000`    | Per-attempt timeout (ms) for OpenAI-compatible model clients (worker, GLM, Kimi); integer from `1` through `2147483647`, other values retain the SDK default. GLM reviews default to an internal 30-min per-attempt timeout; under MCP the host's outer tool timeout must exceed 3 × the effective per-attempt timeout (the SDK retries twice) — precedence and the Codex `tool_timeout_sec` rules are in [docs/mcp.md](mcp.md#codex-config-codexconfigtoml). |
 | `TRISS_HTTP_MAX_BYTES`         | `26214400`  | Max response body size for integration calls (25 MB default) |
 | `TRISS_FILE_MAX_BYTES`         | `1048576`   | Per-file cap for `triss ask --paths`; oversized files are reported and skipped (1 MB default) |
 | `TRISS_CORPUS_MAX_BYTES`       | `16777216`  | Total corpus cap across all files in one `ask` call (16 MB default) |

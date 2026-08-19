@@ -74,8 +74,9 @@ For one-shot GLM analysis, use `triss ask ... --provider glm` or
 `triss review --provider glm`. `--model pro` is `glm-5.2`; `--model flash` is
 `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go. An
 unpinned endpoint is auto-corrected once if the key belongs to the other plan.
-For GLM 5.2 code review, use `--max-tokens 16384` as the minimum; the generic
-8192-token default can be exhausted by reasoning before it emits a verdict.
+For GLM 5.2 code review, omit `--max-tokens` to use the model-sized auto-budget.
+If you pass it explicitly, use at least 16384; explicit budgets disable
+auto-sizing, and the generic 8192-token value can be exhausted by reasoning.
 For Kimi, use `--provider kimi` (needs `MOONSHOT_API_KEY`): `pro` is
 `kimi-k3`, `flash` is `kimi-k2.6` — one endpoint, bare model ids.
 Keep `triss coder` for agentic coding runs.

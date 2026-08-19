@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runReviewWithDeps } from '../src/commands/review.js';
+import { assembleStreamResponse } from '../src/client.js';
+import { glmReviewMaxTokens, GLM_REVIEW_TIMEOUT_MS } from '../src/review-defaults.js';
 import { gitDiff } from '../src/git.js';
+import { stripAnsi } from './_ansi.js';
 
 const BIN = join(process.cwd(), 'bin/triss.js');
 
@@ -662,4 +665,822 @@ test('REV-STDIN-08: without --stdin, branch mode remains explicit Git-only behav
     process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── GLM review thinking defaults (REV-GLM-THINK-*) ───────────────────────────
+
+test('REV-GLM-DEFAULT-01: glmReviewMaxTokens maps known GLM families to their output-token budgets', () => {
+  // Long-context thinking family: glm-5.x, glm-4.7, glm-4.6 text → 131072.
+  for (const model of [
+    'glm-5.2', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.6',
+    'zai/glm-5.2', 'zai-coding-plan/glm-4.7',
+  ]) {
+    assert.equal(glmReviewMaxTokens(model), 131072, model);
+  }
+  // glm-4.5 text series → 98304.
+  for (const model of ['glm-4.5', 'glm-4.5-air', 'glm-4.5-flash']) {
+    assert.equal(glmReviewMaxTokens(model), 98304, model);
+  }
+  // glm-4.6v vision family → 32768, including suffixed ids like glm-4.6v-flash.
+  for (const model of ['glm-4.6v', 'glm-4.6v-flash', 'zai/glm-4.6v-flash']) {
+    assert.equal(glmReviewMaxTokens(model), 32768, model);
+  }
+  // glm-4.5v vision family → 16384.
+  for (const model of ['glm-4.5v', 'glm-4.5v-flash']) {
+    assert.equal(glmReviewMaxTokens(model), 16384, model);
+  }
+  // Matching is case-insensitive: Z.AI ids are lowercase, callers are not
+  // required to remember that.
+  assert.equal(glmReviewMaxTokens('GLM-5.2'), 131072, 'GLM-5.2');
+  assert.equal(glmReviewMaxTokens('GLM-4.5-AIR'), 98304, 'GLM-4.5-AIR');
+  assert.equal(glmReviewMaxTokens('GLM-4.6V-FLASH'), 32768, 'GLM-4.6V-FLASH');
+  assert.equal(glmReviewMaxTokens('Glm-4.5v'), 16384, 'Glm-4.5v');
+  // Anything else keeps the legacy budget.
+  for (const model of ['glm-4.9', 'pro', 'deepseek-v4-pro', undefined, '']) {
+    assert.equal(glmReviewMaxTokens(model), 16384, String(model));
+  }
+});
+
+test('REV-GLM-DEFAULT-02: the GLM review timeout default is 30 minutes', () => {
+  assert.equal(GLM_REVIEW_TIMEOUT_MS, 1800000);
+});
+
+test('REV-GLM-THINK-01: glm review without --max-tokens gets the model budget, thinking on, and the long timeout', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-4.7' });
+  // No TRISS_REQUEST_TIMEOUT_MS override, so the GLM default applies.
+  deps.requestTimeoutMs = () => undefined;
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(output.value, 'No issues found.');
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].maxTokens, 65536);
+  assert.equal(events.chats[0].thinking, true);
+  assert.equal(events.chats[0].timeoutMs, 1800000);
+  assert.equal(typeof events.chats[0].onReasoning, 'function');
+});
+
+test('REV-GLM-THINK-07: a configured TRISS_REQUEST_TIMEOUT_MS override wins over the GLM review timeout default', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  // The reloadable config value (e.g. 30s) takes precedence over 1800000.
+  deps.requestTimeoutMs = () => 30000;
+  await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].timeoutMs, 30000);
+});
+
+test('REV-GLM-THINK-02: an explicit --max-tokens wins over the GLM model default', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  await captureOutput(() =>
+    runReviewWithDeps(
+      undefined,
+      { stdin: true, skipIssue: true, noStream: true, maxTokens: '16384' },
+      deps,
+    ),
+  );
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].maxTokens, 16384, 'explicit tokens must not be overridden');
+});
+
+test('REV-GLM-THINK-03: non-GLM review keeps the legacy request shape', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'worker', model: 'deepseek-v4-pro' });
+  await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].maxTokens, 8192, 'worker keeps the legacy default budget');
+  assert.ok(!('thinking' in events.chats[0]));
+  assert.ok(!('timeoutMs' in events.chats[0]));
+  assert.ok(!('onReasoning' in events.chats[0]));
+});
+
+test('REV-GLM-THINK-04: buffered glm review emits reasoning to stderr and content only to stdout', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    input.onReasoning('thinking about the diff');
+    return {
+      choices: [{ message: { content: 'No issues found.', reasoning_content: 'thinking about the diff' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(output.value, 'No issues found.');
+  assert.match(output.stdout, /No issues found\./);
+  assert.doesNotMatch(output.stdout, /thinking about the diff/);
+  assert.match(output.stderr, /thinking about the diff/);
+});
+
+test('REV-GLM-THINK-05: streaming glm review keeps reasoning out of onChunk and stdout', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onChunk('Outcome: no issues found');
+    input.onReasoning('deep reasoning');
+    return {
+      choices: [{ message: { content: 'Outcome: no issues found' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(output.value, 'Outcome: no issues found');
+  assert.match(output.stdout, /Outcome: no issues found/);
+  assert.doesNotMatch(output.stdout, /deep reasoning/);
+  assert.match(output.stderr, /deep reasoning/);
+  assert.equal(typeof events.streams[0].onReasoning, 'function');
+});
+
+test('REV-GLM-THINK-06: a thinking-only glm review fails without a verdict and carries the retry/shard hint', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    input.onReasoning('thought but never concluded');
+    return {
+      choices: [{ message: { content: '', reasoning_content: 'thought but never concluded' } }],
+      usage: {},
+    };
+  };
+  await assert.rejects(
+    () => captureOutput(() =>
+      runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+    ),
+    (err) => {
+      // The CLI wrapper catches the thrown error; the message itself must stay
+      // actionable and correct: retry, then split the diff into smaller shards.
+      // The standalone CLI error line keeps its [triss/review] label (unlike
+      // the MCP path, where the server already prefixes `triss/triss_review
+      // failed:`).
+      assert.match(err.message, /^\[triss\/review\] /);
+      assert.match(err.message, /empty response/i);
+      assert.match(err.message, /no review content/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      // GLM budgets are already model-sized, so a 16384 bump cannot help and
+      // must not be suggested.
+      assert.doesNotMatch(err.message, /16384/);
+      // Never suggest disabling thinking.
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+  assert.equal(events.chats.length, 1);
+});
+
+// ── stderr/stdout reasoning boundary + ANSI stripping (REV-GLM-THINK-ANSI-01, REV-GLM-THINK-08..11) ──
+
+test('REV-GLM-THINK-ANSI-01: stripAnsi removes picocolors escapes without removing ordinary text', () => {
+  // picocolors dim()/reset() sequences (\x1b[2m / \x1b[22m) are what CI
+  // inserts between reasoning chunks. The shared helper must remove them
+  // while keeping the human-readable text, newlines, and leading spaces.
+  const raw =
+    '\x1b[2m[triss/review thinking]\n\x1b[22m' +
+    '\x1b[2mdeep thought \x1b[22m\x1b[2mcontinued\x1b[22m\n';
+  assert.equal(
+    stripAnsi(raw),
+    '[triss/review thinking]\ndeep thought continued\n',
+  );
+  // Ordinary text without escape sequences passes through unchanged.
+  assert.equal(stripAnsi('plain text with a  leading space'), 'plain text with a  leading space');
+  assert.equal(stripAnsi(''), '');
+  // No SGR escape sequence survives in the stripped output. stripAnsi only
+  // removes SGR (Select Graphic Rendition) sequences — the dim/reset family
+  // picocolors emits — so non-SGR escapes are out of scope for the helper.
+  // eslint-disable-next-line no-control-regex
+  assert.doesNotMatch(stripAnsi(raw), /\x1b\[[0-9;]*m/);
+});
+
+test('REV-GLM-THINK-08: buffered review opens the thinking marker and closes the reasoning line before the verdict', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    // Multiple reasoning callbacks must not add a newline per chunk.
+    input.onReasoning('deep thought ');
+    input.onReasoning('continued');
+    return {
+      choices: [{ message: { content: 'Verdict text.', reasoning_content: 'deep thought continued' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(output.value, 'Verdict text.');
+  // picocolors wraps each dim reasoning chunk in dim/reset escape sequences
+  // under CI, so strip them before asserting on the human-readable text.
+  const stderr = stripAnsi(output.stderr);
+  // The marker appears exactly once, on its own line.
+  assert.equal(stderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  assert.match(stderr, /\[triss\/review thinking\]\ndeep thought continued\n/);
+  // Exactly one closing newline, so the verdict never joins the reasoning
+  // line in combined terminal output.
+  assert.doesNotMatch(stderr, /continuedVerdict/);
+  assert.equal(output.stdout, 'Verdict text.\n');
+});
+
+test('REV-GLM-THINK-09: streaming review closes the reasoning line before the first content chunk', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onReasoning('step one');
+    input.onReasoning(' step two');
+    input.onChunk('Verdict');
+    input.onChunk(' text.');
+    return {
+      choices: [{ message: { content: 'Verdict text.' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(output.value, 'Verdict text.');
+  const stderr = stripAnsi(output.stderr);
+  assert.equal(stderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  // Chunks concatenate on the reasoning line; the first content chunk closes
+  // it with exactly one newline before anything reaches stdout.
+  assert.match(stderr, /\[triss\/review thinking\]\nstep one step two\n/);
+  assert.doesNotMatch(stderr, /step twoVerdict/);
+  // No chunk ended in a newline, so the verdict gets exactly one terminator —
+  // no trailing blank line, no missing newline.
+  assert.equal(output.stdout, 'Verdict text.\n');
+});
+
+test('REV-GLM-THINK-10: a thinking-only review still closes the stderr reasoning line before failing', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    input.onReasoning('thought but never concluded');
+    return {
+      choices: [{ message: { content: '', reasoning_content: 'thought but never concluded' } }],
+      usage: {},
+    };
+  };
+  const originalErr = process.stderr.write;
+  let stderr = '';
+  process.stderr.write = (chunk) => {
+    stderr += String(chunk);
+    return true;
+  };
+  try {
+    await assert.rejects(
+      () => runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+      /empty response|no review content/i,
+    );
+  } finally {
+    process.stderr.write = originalErr;
+  }
+  // The reasoning line is closed with a newline even though no verdict exists.
+  // stripAnsi removes the dim/reset escapes picocolors adds around each
+  // reasoning chunk in CI, so the exact `\n$` termination is asserted on the
+  // human-readable text.
+  const plainStderr = stripAnsi(stderr);
+  assert.match(plainStderr, /\[triss\/review thinking\]\nthought but never concluded\n$/);
+  assert.equal(events.chats.length, 1);
+});
+
+test('REV-GLM-THINK-11: streaming reasoning that arrives after content started is buffered and emitted after the verdict line', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    // Deterministic interleaving: reasoning → content → reasoning → content.
+    input.onReasoning('early thought');
+    input.onChunk('Verdict');
+    input.onReasoning(' late thought');
+    input.onChunk(' text.');
+    return {
+      choices: [{ message: { content: 'Verdict text.' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+
+  // Capture stdout and stderr into ONE ordered entry list so the real-time
+  // interleaving is observable: a marker reopened mid-verdict would land
+  // between the content chunks.
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const entries = [];
+  process.stdout.write = (chunk) => { entries.push(['stdout', String(chunk)]); return true; };
+  process.stderr.write = (chunk) => { entries.push(['stderr', String(chunk)]); return true; };
+  try {
+    await runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps);
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+  }
+
+  const stdoutText = entries.filter(([s]) => s === 'stdout').map(([, c]) => c).join('');
+  const stderrText = entries.filter(([s]) => s === 'stderr').map(([, c]) => c).join('');
+  // The verdict stays a clean single line on stdout; reasoning never leaks in.
+  assert.equal(stdoutText, 'Verdict text.\n');
+  assert.doesNotMatch(stdoutText, /thought/, 'reasoning never reaches stdout');
+  // stripAnsi removes the dim/reset escapes picocolors adds around each
+  // reasoning chunk in CI; the semantic line structure is asserted on the
+  // plain text.
+  const plainStderr = stripAnsi(stderrText);
+  // The marker opens once before the verdict and reopens once AFTER the
+  // verdict is complete — never in the middle of it.
+  assert.equal(plainStderr.match(/\[triss\/review thinking\]/g)?.length, 2);
+  assert.match(plainStderr, /\[triss\/review thinking\]\nearly thought\n/);
+  assert.match(plainStderr, /\[triss\/review thinking\]\n late thought\n/);
+  // No thinking marker between the two verdict content chunks.
+  const verdictIndexes = entries
+    .map(([s, c], i) => (s === 'stdout' && (c === 'Verdict' || c === ' text.') ? i : -1))
+    .filter((i) => i >= 0);
+  const markerIndexes = entries
+    .map(([, c], i) => (c.includes('[triss/review thinking]') ? i : -1))
+    .filter((i) => i >= 0);
+  assert.ok(
+    !markerIndexes.some((m) => m > verdictIndexes[0] && m < verdictIndexes[1]),
+    'no thinking marker mid-verdict',
+  );
+  // The late reasoning is flushed only after the verdict line is complete:
+  // its marker must come after every stdout write (including the closing \n).
+  const lastStdoutIndex = entries.reduce((max, [s, c], i) => (s === 'stdout' && c.length ? i : max), -1);
+  const lateMarkerIndex = entries.findIndex(([, c]) => c.includes(' late thought'));
+  assert.ok(lateMarkerIndex > lastStdoutIndex, 'late reasoning emitted only after the verdict line');
+});
+
+// ── chat/chatStream rejection cleanup (PR #49 review) ─────────────────────────
+//
+// If chat/chatStream rejects after emitting reasoning and/or content chunks,
+// the review command must: close an open stderr reasoning line, terminate a
+// partial verdict line on stdout exactly when needed, flush late pending
+// reasoning only once the stdout line is complete, and rethrow the ORIGINAL
+// error — with no duplicate newlines anywhere.
+
+async function captureRejection(fn) {
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  let stdout = '';
+  let stderr = '';
+  process.stdout.write = (chunk) => {
+    stdout += String(chunk);
+    return true;
+  };
+  process.stderr.write = (chunk) => {
+    stderr += String(chunk);
+    return true;
+  };
+  let error;
+  try {
+    await fn();
+  } catch (err) {
+    error = err;
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+  }
+  return { stdout, stderr, error };
+}
+
+test('REV-GLM-THINK-12: buffered chat rejection after early reasoning closes the stderr line and rethrows the original error', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('simulated buffered failure');
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    input.onReasoning('early thought');
+    throw sentinel;
+  };
+  const { stdout, stderr, error } = await captureRejection(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(error, sentinel, 'the original error must be rethrown unchanged');
+  assert.equal(events.chats.length, 1);
+  // Buffered mode wrote nothing to stdout before the rejection.
+  assert.equal(stdout, '', 'no verdict content may reach stdout on rejection');
+  const plainStderr = stripAnsi(stderr);
+  // The reasoning line is closed exactly once — no dangling, no double newline.
+  assert.equal(plainStderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  assert.match(plainStderr, /\[triss\/review thinking\]\nearly thought\n$/);
+  assert.doesNotMatch(plainStderr, /early thought\n\n/);
+});
+
+test('REV-GLM-THINK-13: streaming chatStream rejection after a partial verdict terminates the stdout line exactly once', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('simulated streaming failure');
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onReasoning('thinking first');
+    input.onChunk('Part');
+    input.onChunk('ial');
+    throw sentinel;
+  };
+  const { stdout, stderr, error } = await captureRejection(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(error, sentinel, 'the original error must be rethrown unchanged');
+  assert.equal(events.streams.length, 1);
+  // The partial verdict line is terminated with exactly one newline.
+  assert.equal(stdout, 'Partial\n', 'partial stdout must be line-terminated once');
+  const plainStderr = stripAnsi(stderr);
+  assert.equal(plainStderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  assert.match(plainStderr, /\[triss\/review thinking\]\nthinking first\n$/);
+});
+
+test('REV-GLM-THINK-14: streaming rejection flushes late pending reasoning only after the stdout line is complete', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('simulated late failure');
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onChunk('Verdict');
+    input.onReasoning(' late thought');
+    throw sentinel;
+  };
+  // Ordered entries so the real-time interleaving is observable.
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const entries = [];
+  process.stdout.write = (chunk) => { entries.push(['stdout', String(chunk)]); return true; };
+  process.stderr.write = (chunk) => { entries.push(['stderr', String(chunk)]); return true; };
+  let error;
+  try {
+    await runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps);
+  } catch (err) {
+    error = err;
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+  }
+  assert.equal(error, sentinel, 'the original error must be rethrown unchanged');
+  const stdoutText = entries.filter(([s]) => s === 'stdout').map(([, c]) => c).join('');
+  assert.equal(stdoutText, 'Verdict\n', 'partial stdout terminated before the late reasoning is flushed');
+  const stderrText = entries.filter(([s]) => s === 'stderr').map(([, c]) => c).join('');
+  const plainStderr = stripAnsi(stderrText);
+  // The buffered reasoning gets its own marker, exactly once, after stdout.
+  assert.equal(plainStderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  assert.match(plainStderr, /\[triss\/review thinking\]\n late thought\n/);
+  const lastStdoutIndex = entries.reduce((max, [s, c], i) => (s === 'stdout' && c.length ? i : max), -1);
+  const lateMarkerIndex = entries.findIndex(([, c]) => c.includes(' late thought'));
+  assert.ok(lateMarkerIndex > lastStdoutIndex, 'late reasoning emitted only after the verdict line');
+});
+
+// ── usage line on the success path (GLM 5.3 review) ──────────────────────────
+//
+// The review command formats its token-usage line on stderr as
+// `\n[triss/review: …]finish: …]\n`. When reportUsage returns '' (the
+// provider reported no usage), the wrapper must emit NOTHING — the old
+// `'\n' + '' + '\n'` produced two bare stderr blank lines. When usage is
+// present the exact current shape (a leading blank line, the dimmed usage
+// line, one trailing newline) must be preserved.
+
+test('REV-GLM-THINK-23: a streaming review with no reported usage emits no usage line and no double blank lines', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onChunk('Verdict text');
+    // No usage object at all: reportUsage returns '' and the stderr usage
+    // wrapper must stay silent instead of writing two blank lines.
+    return { choices: [{ message: { content: 'Verdict text' } }] };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(output.value, 'Verdict text');
+  assert.equal(output.stdout, 'Verdict text\n');
+  const plainStderr = stripAnsi(output.stderr);
+  // The diagnostic is still there, but no [triss/review: usage line may appear.
+  assert.match(plainStderr, /source=stdin/);
+  assert.doesNotMatch(plainStderr, /\[triss\/review: /, 'no usage line when usage is missing');
+  assert.ok(!plainStderr.endsWith('\n\n'), 'no double trailing blank lines when usage is missing');
+  assert.equal(
+    plainStderr.match(/\n\n/g)?.length ?? 0,
+    0,
+    'no adjacent blank line pair anywhere on the missing-usage path',
+  );
+});
+
+test('REV-GLM-THINK-24: a streaming review with reported usage keeps the exact single usage line shape', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onChunk('Verdict text');
+    return {
+      choices: [{ message: { content: 'Verdict text' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  const output = await captureOutput(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(output.value, 'Verdict text');
+  assert.equal(output.stdout, 'Verdict text\n');
+  const plainStderr = stripAnsi(output.stderr);
+  // Exactly one usage line, in the current `\n[triss/review: …]\n` shape —
+  // the leading newline separates it from the reasoning line, the trailing
+  // newline terminates it. No second blank line may follow.
+  assert.equal(
+    plainStderr.match(/\[triss\/review: /g)?.length,
+    1,
+    'exactly one usage line must be emitted when usage is present',
+  );
+  assert.match(plainStderr, /\n\[triss\/review: .*finish: stop\]\n$/);
+  assert.ok(!plainStderr.endsWith('\n\n'), 'the usage line must not be followed by a blank line');
+});
+
+test('REV-GLM-THINK-15: rejection before any reasoning or content leaves no stray newlines', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('early abort');
+  deps.chat = async () => {
+    throw sentinel;
+  };
+  const { stdout, stderr, error } = await captureRejection(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
+  );
+  assert.equal(error, sentinel, 'the original error must be rethrown unchanged');
+  assert.equal(stdout, '', 'no verdict content may reach stdout on rejection');
+  const plainStderr = stripAnsi(stderr);
+  // Only the diagnostic line exists — no thinking marker, no duplicate newline.
+  assert.doesNotMatch(plainStderr, /thinking/);
+  assert.match(plainStderr, /source=stdin/);
+  assert.ok(!plainStderr.endsWith('\n\n'), 'no duplicate trailing newlines');
+});
+
+test('REV-GLM-THINK-16: a newline-complete stdout chunk needs no extra terminator on rejection', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('simulated failure after a complete line');
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    input.onChunk('Verdict\n');
+    throw sentinel;
+  };
+  const { stdout, error } = await captureRejection(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(error, sentinel, 'the original error must be rethrown unchanged');
+  assert.equal(stdout, 'Verdict\n', 'a line that is already complete must not get a second newline');
+});
+
+test('REV-GLM-THINK-17: streaming chatStream rejection after reasoning-only chunks closes the reasoning line, leaves stdout untouched, and rethrows the exact error', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  const sentinel = new Error('simulated streaming failure after reasoning-only chunks');
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    // Reasoning-only stream: every chunk is thinking, no content chunk ever
+    // fires onChunk, then the stream rejects.
+    input.onReasoning('thinking first');
+    input.onReasoning(' then more');
+    throw sentinel;
+  };
+  const { stdout, stderr, error } = await captureRejection(() =>
+    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps),
+  );
+  assert.equal(error, sentinel, 'the exact original error object must be rethrown');
+  assert.equal(events.streams.length, 1);
+  // No content chunk was ever emitted, so stdout must remain untouched — no
+  // terminator, no stray newline.
+  assert.equal(stdout, '', 'stdout must remain untouched when only reasoning was emitted');
+  // The open stderr reasoning line is closed with exactly one newline. stripAnsi
+  // makes the assertion FORCE_COLOR-compatible: picocolors wraps each dim chunk
+  // in dim/reset escapes when colors are forced (CI / FORCE_COLOR), so the
+  // semantic line structure is asserted on the plain text.
+  const plainStderr = stripAnsi(stderr);
+  assert.equal(plainStderr.match(/\[triss\/review thinking\]/g)?.length, 1);
+  assert.match(plainStderr, /\[triss\/review thinking\]\nthinking first then more\n$/);
+  assert.doesNotMatch(plainStderr, /thinking first\n\n/, 'no duplicate newline on the closed reasoning line');
+});
+
+test('REV-GLM-THINK-18: an explicit --max-tokens exhausted (finish_reason length) produces the raise/remove guidance with the CLI label', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    input.onReasoning('thought but hit the explicit budget');
+    return {
+      choices: [{ message: { content: '', reasoning_content: 'thought but hit the explicit budget' }, finish_reason: 'length' }],
+      usage: {},
+    };
+  };
+  await assert.rejects(
+    () => captureOutput(() =>
+      runReviewWithDeps(
+        undefined,
+        { stdin: true, skipIssue: true, noStream: true, maxTokens: '16384' },
+        deps,
+      ),
+    ),
+    (err) => {
+      // The standalone CLI error keeps its [triss/review] label.
+      assert.match(err.message, /^\[triss\/review\] /);
+      // Explicit-budget exhaustion: the message must tell the user the limit
+      // was exhausted and to raise or remove it, retry, and split only at the
+      // model maximum — never a bare retry-then-split, never a 16384 bump.
+      assert.match(err.message, /explicit max_tokens limit was exhausted/i);
+      assert.match(err.message, /finish_reason: length/);
+      assert.match(err.message, /raise or remove the explicit max_tokens limit/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /already at its maximum output budget/i);
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      assert.doesNotMatch(err.message, /16384/);
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].maxTokens, 16384, 'the explicit budget must be what was sent');
+});
+
+test('REV-GLM-THINK-19: an explicit --max-tokens with a non-length finish keeps the retry-then-split guidance', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    return {
+      choices: [{ message: { content: '', reasoning_content: 'thinking only' }, finish_reason: 'stop' }],
+      usage: {},
+    };
+  };
+  await assert.rejects(
+    () => captureOutput(() =>
+      runReviewWithDeps(
+        undefined,
+        { stdin: true, skipIssue: true, noStream: true, maxTokens: '16384' },
+        deps,
+      ),
+    ),
+    (err) => {
+      // Explicit limit present, but the model finished on its own — the empty
+      // response is not a budget truncation, so the guidance stays retry-then-split.
+      assert.match(err.message, /^\[triss\/review\] /);
+      assert.match(err.message, /empty response/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      assert.doesNotMatch(err.message, /exhausted/i);
+      return true;
+    },
+  );
+});
+
+test('REV-GLM-THINK-20: an OpenAI-style usage-only final chunk keeps finish_reason length and the explicit-budget raise/remove guidance', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    // Drive the REAL stream assembly through the review path: the finish_reason
+    // chunk is separate from the final OpenAI-style choices:[] usage-only chunk.
+    // If assembly erased finish_reason=length (resetting it to 'stop'), the
+    // explicit-budget exhaustion would be invisible and this review would get
+    // the generic retry-then-split guidance instead of raise/remove.
+    return assembleStreamResponse({
+      chunks: [
+        { choices: [{ delta: { reasoning_content: 'thought but hit the explicit budget' } }] },
+        { choices: [{ delta: {}, finish_reason: 'length' }] },
+        { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2 } },
+      ],
+      model: 'glm-5.2',
+      onReasoning: input.onReasoning,
+    });
+  };
+  await assert.rejects(
+    () => captureOutput(() =>
+      runReviewWithDeps(
+        undefined,
+        { stdin: true, skipIssue: true, stream: true, maxTokens: '16384' },
+        deps,
+      ),
+    ),
+    (err) => {
+      // The standalone CLI error keeps its [triss/review] label.
+      assert.match(err.message, /^\[triss\/review\] /);
+      // finish_reason=length survived the usage-only final chunk, so the
+      // explicit-budget exhaustion guidance fires.
+      assert.match(err.message, /explicit max_tokens limit was exhausted/i);
+      assert.match(err.message, /finish_reason: length/);
+      assert.match(err.message, /raise or remove the explicit max_tokens limit/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /already at its maximum output budget/i);
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      // Never suggest disabling thinking.
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+  assert.equal(events.streams.length, 1);
+  assert.equal(events.streams[0].maxTokens, 16384, 'the explicit budget must be what was sent');
+});
+
+test('REV-GLM-THINK-21: a non-GLM explicit --max-tokens exhausted (finish_reason length) gets the provider-agnostic raise/remove guidance', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  // Default worker provider (not GLM): the exhausted-budget guidance is
+  // provider-agnostic and must fire for any provider with an explicit limit.
+  deps.chat = async (input) => {
+    events.chats.push(input);
+    return {
+      choices: [{ message: { content: '' }, finish_reason: 'length' }],
+      usage: {},
+    };
+  };
+  await assert.rejects(
+    () => captureOutput(() =>
+      runReviewWithDeps(
+        undefined,
+        { stdin: true, skipIssue: true, noStream: true, maxTokens: '4096' },
+        deps,
+      ),
+    ),
+    (err) => {
+      // The standalone CLI error keeps its [triss/review] label.
+      assert.match(err.message, /^\[triss\/review\] /);
+      // Explicit-budget exhaustion: raise or remove the limit, retry, and
+      // split only at the model maximum — no generic retry-then-split, no
+      // thinking-disable advice.
+      assert.match(err.message, /explicit max_tokens limit was exhausted/i);
+      assert.match(err.message, /finish_reason: length/);
+      assert.match(err.message, /raise or remove the explicit max_tokens limit/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /already at its maximum output budget/i);
+      assert.doesNotMatch(err.message, /16384/);
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+  assert.equal(events.chats.length, 1);
+  assert.equal(events.chats[0].provider, 'worker');
+  assert.equal(events.chats[0].maxTokens, 4096, 'the explicit budget must be what was sent');
+});
+
+test('REV-GLM-THINK-22: a newline-complete streaming verdict gets no extra blank line on success', async () => {
+  const events = {};
+  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
+  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.chatStream = async (input) => {
+    events.streams.push(input);
+    // The model ends its own output with a newline, then late reasoning
+    // arrives after the verdict started.
+    input.onChunk('Verdict text.\n');
+    input.onReasoning(' late thought');
+    return {
+      choices: [{ message: { content: 'Verdict text.\n' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+  };
+  // Ordered entries so the reasoning ordering stays observable.
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const entries = [];
+  process.stdout.write = (chunk) => { entries.push(['stdout', String(chunk)]); return true; };
+  process.stderr.write = (chunk) => { entries.push(['stderr', String(chunk)]); return true; };
+  try {
+    await runReviewWithDeps(undefined, { stdin: true, skipIssue: true, stream: true }, deps);
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+  }
+  // Exactly one trailing newline — the success path must not append a
+  // cosmetic blank line after a chunk that already ended in a newline.
+  const stdoutText = entries.filter(([s]) => s === 'stdout').map(([, c]) => c).join('');
+  assert.equal(stdoutText, 'Verdict text.\n', 'a newline-complete verdict must not get a second newline');
+  const plainStderr = stripAnsi(entries.filter(([s]) => s === 'stderr').map(([, c]) => c).join(''));
+  // Late reasoning is still flushed after the verdict line is complete.
+  assert.match(plainStderr, /\[triss\/review thinking\]\n late thought\n/);
+  const lastStdoutIndex = entries.reduce((max, [s, c], i) => (s === 'stdout' && c.length ? i : max), -1);
+  const lateMarkerIndex = entries.findIndex(([, c]) => c.includes(' late thought'));
+  assert.ok(lateMarkerIndex > lastStdoutIndex, 'late reasoning emitted only after the verdict line');
 });

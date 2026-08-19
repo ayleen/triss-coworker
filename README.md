@@ -253,7 +253,32 @@ verify with `codex mcp list`. Tools become first-class (faster, per-tool
 permissions, no Bash subprocess overhead).
 
 The Codex entry includes `startup_timeout_sec = 30` and `tool_timeout_sec
-= 120` defaults so `--model pro` calls have headroom.
+= 5460`. The outer tool timeout must exceed 3 × the selected per-attempt
+timeout plus headroom, because the OpenAI SDK keeps its retries enabled
+(2 retries, 3 attempts total) and each attempt may run the full internal
+timeout: the default 5460s covers only the default 1800s-per-attempt GLM
+review (3 × 1800s + 60s), so a long thinking review is never killed by
+the host before the model finishes. If you raise the per-attempt timeout
+above 1800000 ms via `TRISS_REQUEST_TIMEOUT_MS` or the MCP `timeout_ms`
+argument, also raise `tool_timeout_sec` to at least 3 × your new value
+plus headroom. The startup timeout only bounds process launch.
+
+New installs write `tool_timeout_sec = 5460` directly. Existing Codex
+configs that still carry the historical `tool_timeout_sec = 120` are
+migrated automatically: the first `triss mcp serve` startup after
+updating Triss (through any distribution path) upgrades that single value
+in `~/.codex/config.toml` and prints a notice. Only the root-level
+`[mcp_servers.triss]` direct key counts — a `tool_timeout_sec` under the
+`[mcp_servers.triss.env]` sub-table is an environment variable, never the
+host timeout, and is left untouched. Because the host reads the config at
+launch, restart any currently running Codex sessions once so they pick up
+the new timeout. Values other than the exact historical `120` are never
+overwritten — an exact root-level `120` is always treated as legacy,
+since it is indistinguishable from a deliberately custom `120`, and every
+legacy exact-120 install is migrated by design.
+Re-running `triss mcp install --global --target codex` is still available
+as an optional repair route if you ever want to rewrite the block by hand
+(see [`docs/mcp.md`](docs/mcp.md#migrating-from-older-versions)).
 
 #### Scope: Project vs Global
 
@@ -493,7 +518,9 @@ wins. Streaming is automatically off for MCP tool calls.
 For a buffered request that cannot stream, set `TRISS_REQUEST_TIMEOUT_MS` to
 a positive integer timeout in milliseconds no greater than `2147483647`.
 Unset, invalid, zero, negative, and larger values retain the OpenAI SDK
-default (600000 ms).
+default (600000 ms) for non-review calls; an unset GLM review instead runs
+with the internal 30-minute per-attempt timeout (1800000 ms). An explicit
+MCP `timeout_ms` always wins over both.
 
 ### `triss chat`
 
@@ -589,10 +616,12 @@ impersonate metadata or a linked ticket.
 
 Defaults to the `pro` preset because review needs reasoning. Output is
 a list of concrete issues with file:line citations — not a diff
-summary. GLM 5.2 reviews should use at least `--max-tokens 16384`; the generic
-8192-token default can be consumed by reasoning and return an empty verdict,
-especially on large diffs. Narrow the base/scope as well when only a remediation
-commit needs review. Cost: a 25KB diff review on `pro` runs ~$0.005-0.01 with
+summary. GLM reviews auto-size the output budget (up to 64 KiB for a single
+review and 32 KiB per shard), so omitting `--max-tokens` is recommended. If you
+pass it explicitly, use at least 16384; that disables auto-sizing and the
+generic 8192-token value can be exhausted by reasoning. Narrow the base/scope
+as well when only a remediation commit needs review. Cost: a 25KB diff review on
+`pro` runs ~$0.005-0.01 with
 prompt caching.
 
 Example shape:
@@ -985,16 +1014,17 @@ invoking the agentic `coder` runtime:
 
 ```bash
 triss ask --paths ... --question "..." --provider glm --model flash
-triss review --provider glm --model pro --max-tokens 16384
+triss review --provider glm --model pro
 triss review --provider glm --model zai/glm-5.2  # pay-as-you-go endpoint
 triss review --provider kimi                     # pro preset → kimi-k3
 triss ask --paths ... --question "..." --provider kimi --model flash  # kimi-k2.6
 ```
 
-Use `--max-tokens 16384` as the minimum for GLM 5.2 code review. With the
-generic 8192-token default, internal reasoning can exhaust the budget and leave
-no review verdict; for a large PR, also narrow `--base` to the change that needs
-re-review.
+GLM reviews auto-size the output budget (up to 64 KiB single / 32 KiB per shard) so
+omitting `--max-tokens` is the recommended default. If you pass `--max-tokens`
+explicitly the auto-budget is disabled — use at least 16384 (the generic 8192 can be
+exhausted by reasoning and return an empty verdict); for a large PR, also narrow
+`--base` to the change that needs re-review.
 
 One-shot `ask` / `review` output is provider-shape tolerant: Triss emits the
 assistant text whether the successful response carries OpenAI-style

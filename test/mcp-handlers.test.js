@@ -10,6 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
+import { emptyReviewResponseMessage } from '../src/review-defaults.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -467,6 +468,367 @@ test('MCP-H-08: statusHandler reports GLM readiness, endpoint, and presets', asy
   }
 });
 
+// ─── timeout_ms, signal, reasoning, and GLM review defaults ──────────────────
+
+test('MCP-H-09: timeout_ms is validated against Node timer bounds before any work', async () => {
+  const { askHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-09=${Date.now()}`
+  );
+  for (const bad of [0, -1, 1.5, 'abc', ' 5000', 2147483648, Number.MAX_SAFE_INTEGER]) {
+    await assert.rejects(
+      () => askHandler({ paths: ['package.json'], question: 'q', timeout_ms: bad }),
+      /timeout_ms must be an integer between 1 and 2147483647/,
+      String(bad),
+    );
+  }
+  // The maximum valid value is accepted and forwarded for any provider.
+  let chatInput;
+  const result = await askHandler(
+    { paths: ['package.json'], question: 'q', timeout_ms: 2147483647 },
+    {
+      resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-flash' }),
+      chat: async (input) => {
+        chatInput = input;
+        return { choices: [{ message: { content: 'ok' } }], usage: {} };
+      },
+    },
+  );
+  assert.match(result, /^ok/);
+  assert.equal(chatInput.timeoutMs, 2147483647);
+});
+
+test('MCP-H-10: askHandler forwards timeout_ms, signal, and onReasoning to chat', async () => {
+  const { askHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-10=${Date.now()}`
+  );
+  const controller = new AbortController();
+  const reasoning = [];
+  let chatInput;
+  const result = await askHandler(
+    { paths: ['package.json'], question: 'What is this?', timeout_ms: 5000 },
+    {
+      resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-flash' }),
+      signal: controller.signal,
+      onReasoning: (chunk) => reasoning.push(chunk),
+      chat: async (input) => {
+        chatInput = input;
+        // The real client.chat fires onReasoning once with buffered
+        // reasoning_content; the mock simulates that contract.
+        input.onReasoning('thinking chunk');
+        return {
+          choices: [{ message: { content: 'ok', reasoning_content: 'thinking chunk' } }],
+          usage: {},
+        };
+      },
+    },
+  );
+  assert.match(result, /^ok/);
+  assert.equal(chatInput.timeoutMs, 5000, 'explicit timeout_ms works for any provider');
+  assert.equal(chatInput.signal, controller.signal, 'caller signal must reach the OpenAI request');
+  assert.equal(chatInput.thinking, undefined, 'ask purpose must not force thinking');
+  assert.equal(typeof chatInput.onReasoning, 'function');
+  assert.deepEqual(reasoning, ['thinking chunk']);
+});
+
+test('MCP-H-11: GLM review resolves once and applies the model budget, thinking, and timeout precedence', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-11=${Date.now()}`
+  );
+  let chatInput;
+  const send = async (input) => {
+    chatInput = input;
+    return { choices: [{ message: { content: 'reviewed' } }], usage: {} };
+  };
+  const resolve = (_input) => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL });
+
+  // No explicit timeout and no TRISS_REQUEST_TIMEOUT_MS → 1800000.
+  await callModel(
+    { provider: 'glm', model: 'zai/glm-5.2', messages: [], purpose: 'review' },
+    { resolveModelRequest: resolve, requestTimeoutMs: () => undefined, chat: send },
+  );
+  assert.equal(chatInput.model, 'glm-5.2', 'resolution first keeps the bare resolved model');
+  assert.equal(chatInput.baseUrl, ZAI_PAYG_BASE_URL, 'prefixed GLM endpoint routing is preserved');
+  assert.equal(chatInput.maxTokens, 65536);
+  assert.equal(chatInput.timeoutMs, 1800000);
+  assert.equal(chatInput.thinking, true);
+
+  // Explicit timeout_ms beats configured TRISS_REQUEST_TIMEOUT_MS beats 1800000.
+  await callModel(
+    { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review', timeoutMs: 5000 },
+    { resolveModelRequest: resolve, requestTimeoutMs: () => 30000, chat: send },
+  );
+  assert.equal(chatInput.timeoutMs, 5000);
+
+  await callModel(
+    { provider: 'glm', model: 'glm-4.7', messages: [], purpose: 'review' },
+    { resolveModelRequest: resolve, requestTimeoutMs: () => 30000, chat: send },
+  );
+  assert.equal(chatInput.timeoutMs, 30000);
+
+  // Explicit max_tokens wins over the model-sized default.
+  await callModel(
+    { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review', maxTokens: 16384 },
+    { resolveModelRequest: resolve, requestTimeoutMs: () => undefined, chat: send },
+  );
+  assert.equal(chatInput.maxTokens, 16384);
+});
+
+test('MCP-H-12: non-GLM review keeps 8192 and passes timeout_ms through without thinking', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-12=${Date.now()}`
+  );
+  let chatInput;
+  await callModel(
+    { provider: 'worker', model: 'pro', messages: [], purpose: 'review', timeoutMs: 9000 },
+    {
+      resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-pro' }),
+      chat: async (input) => {
+        chatInput = input;
+        return { choices: [{ message: { content: 'reviewed' } }], usage: {} };
+      },
+    },
+  );
+  assert.equal(chatInput.maxTokens, 8192);
+  assert.equal(chatInput.timeoutMs, 9000, 'explicit timeout_ms works for any provider');
+  assert.equal(chatInput.thinking, undefined);
+});
+
+test('MCP-H-13: non-review callModel callers keep the implicit 4096 budget when maxTokens is absent', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-13=${Date.now()}`
+  );
+  let chatInput;
+  await callModel(
+    { provider: 'worker', model: 'flash', messages: [] },
+    {
+      resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-flash' }),
+      chat: async (input) => {
+        chatInput = input;
+        return { choices: [{ message: { content: 'ok' } }], usage: {} };
+      },
+    },
+  );
+  assert.equal(chatInput.maxTokens, 4096, 'absent maxTokens must not reach the transport');
+  assert.equal(chatInput.thinking, undefined);
+});
+
+test('MCP-H-14: reviewHandler validates negative timeout_ms before any git work', async () => {
+  const { reviewHandler } = await import(
+    `../src/mcp/handlers.js?mcp-h-14=${Date.now()}`
+  );
+  for (const bad of [0, -1, 1.5, 'abc', ' 5000', 2147483648, Number.MAX_SAFE_INTEGER]) {
+    await assert.rejects(
+      () => reviewHandler({ timeout_ms: bad, base: 'main', question: 'q' }),
+      /timeout_ms must be an integer between 1 and 2147483647/,
+      String(bad),
+    );
+  }
+});
+
+// ── empty / reasoning-only responses (PR #49 review) ──────────────────────────
+//
+// For purpose=review with a RESOLVED glm provider, callModel must surface the
+// same actionable guidance as the CLI (shared construction, no label — the
+// server already prefixes `triss/triss_review failed:`) and must never suggest
+// disabling thinking. The guidance splits on the budget: an EXPLICIT max_tokens
+// input that was exhausted (finish_reason: length) says to raise or remove the
+// explicit limit and retry (split only at the model maximum); the model-sized
+// default budget or a non-length finish keeps the retry-then-split hint. Other
+// purposes / providers keep the legacy hint.
+
+test('MCP-H-15: review + resolved glm with empty content throws the shared unlabeled guidance, never max_tokens, never a [triss/review] label', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-15=${Date.now()}`
+  );
+  const resolve = (_input) => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL });
+  // Reasoning-only response (reasoning_content present, content empty).
+  await assert.rejects(
+    () =>
+      callModel(
+        { provider: 'glm', model: 'zai/glm-5.2', messages: [], purpose: 'review' },
+        {
+          resolveModelRequest: resolve,
+          requestTimeoutMs: () => undefined,
+          chat: async () => ({
+            choices: [{ message: { content: '', reasoning_content: 'thought but never concluded' } }],
+            usage: {},
+          }),
+        },
+      ),
+    (err) => {
+      assert.equal(
+        err.message,
+        emptyReviewResponseMessage({ labeled: false }),
+        'the MCP path must share the CLI review guidance construction verbatim',
+      );
+      assert.match(err.message, /empty response/i);
+      assert.match(err.message, /no review content/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      // The server wraps the error as `triss/triss_review failed: …`, so the
+      // message itself must never carry the [triss/review] label twice.
+      assert.doesNotMatch(err.message, /\[triss\/review\]/);
+      // GLM budgets are already model-sized — never tell the caller to raise them.
+      assert.doesNotMatch(err.message, /max[_ ]?tokens?|increase/i);
+      // Never suggest disabling thinking.
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+  // Plain empty content (no reasoning at all) gets the same guidance.
+  await assert.rejects(
+    () =>
+      callModel(
+        { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review' },
+        {
+          resolveModelRequest: resolve,
+          requestTimeoutMs: () => undefined,
+          chat: async () => ({ choices: [{ message: { content: '' } }], usage: {} }),
+        },
+      ),
+    (err) => {
+      assert.equal(err.message, emptyReviewResponseMessage({ labeled: false }));
+      assert.doesNotMatch(err.message, /max[_ ]?tokens?|increase/i);
+      assert.doesNotMatch(err.message, /\[triss\/review\]/);
+      return true;
+    },
+  );
+});
+
+test('MCP-H-18: exhausted EXPLICIT max_tokens (finish_reason length) gets raise/remove guidance; default budget or non-length finish keeps retry-then-split', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-18=${Date.now()}`
+  );
+  const resolve = (_input) => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL });
+  const emptyChat = (finishReason) => async () => ({
+    choices: [{ message: { content: '' }, finish_reason: finishReason }],
+    usage: {},
+  });
+
+  // Explicit max_tokens input + finish_reason length → exhausted guidance.
+  await assert.rejects(
+    () =>
+      callModel(
+        { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review', maxTokens: 16384 },
+        {
+          resolveModelRequest: resolve,
+          requestTimeoutMs: () => undefined,
+          chat: emptyChat('length'),
+        },
+      ),
+    (err) => {
+      assert.equal(
+        err.message,
+        emptyReviewResponseMessage({ explicitMaxTokens: true, finishReason: 'length', labeled: false }),
+        'explicit-budget exhaustion must use the raise/remove guidance',
+      );
+      assert.match(err.message, /explicit max_tokens limit was exhausted/i);
+      assert.match(err.message, /finish_reason: length/);
+      assert.match(err.message, /raise or remove the explicit max_tokens limit/i);
+      assert.match(err.message, /retry/i);
+      assert.match(err.message, /already at its maximum output budget/i);
+      assert.doesNotMatch(err.message, /\[triss\/review\]/);
+      assert.doesNotMatch(err.message, /disable.*(thinking|reasoning)|turn.*off.*thinking/i);
+      return true;
+    },
+  );
+
+  // Default model-sized budget (no max_tokens input) + length → retry-then-split.
+  await assert.rejects(
+    () =>
+      callModel(
+        { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review' },
+        {
+          resolveModelRequest: resolve,
+          requestTimeoutMs: () => undefined,
+          chat: emptyChat('length'),
+        },
+      ),
+    (err) => {
+      assert.equal(
+        err.message,
+        emptyReviewResponseMessage({ finishReason: 'length', labeled: false }),
+        'a default-budget length truncation is not an explicit-limit exhaustion',
+      );
+      assert.match(err.message, /split the diff into smaller review shards/i);
+      assert.doesNotMatch(err.message, /exhausted/i);
+      return true;
+    },
+  );
+
+  // Explicit max_tokens but a non-length finish → retry-then-split.
+  for (const finishReason of ['stop', undefined]) {
+    await assert.rejects(
+      () =>
+        callModel(
+          { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'review', maxTokens: 16384 },
+          {
+            resolveModelRequest: resolve,
+            requestTimeoutMs: () => undefined,
+            chat: emptyChat(finishReason),
+          },
+        ),
+      (err) => {
+        assert.equal(
+          err.message,
+          emptyReviewResponseMessage({ explicitMaxTokens: true, finishReason, labeled: false }),
+          `finish_reason ${finishReason} must keep retry-then-split guidance`,
+        );
+        assert.match(err.message, /split the diff into smaller review shards/i);
+        assert.doesNotMatch(err.message, /exhausted/i);
+        return true;
+      },
+      String(finishReason),
+    );
+  }
+});
+
+test('MCP-H-16: non-GLM review with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (Reference surface 8)', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-16=${Date.now()}`
+  );
+  await assert.rejects(
+    () =>
+      callModel(
+        { provider: 'worker', model: 'pro', messages: [], purpose: 'review' },
+        {
+          resolveModelRequest: () => ({ provider: 'worker', model: 'deepseek-v4-pro' }),
+          chat: async () => ({ choices: [{ message: { content: '' } }], usage: {} }),
+        },
+      ),
+    (err) => {
+      assert.equal(err.code, 'TRISS_PROVIDER_EMPTY');
+      assert.match(err.message, /TRISS_PROVIDER_EMPTY/);
+      return true;
+    },
+  );
+});
+
+test('MCP-H-17: non-review glm (and no purpose) with empty content surfaces the stable TRISS_PROVIDER_EMPTY code (Reference surface 8)', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-h-17=${Date.now()}`
+  );
+  const resolve = () => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL });
+  for (const input of [
+    { provider: 'glm', model: 'glm-5.2', messages: [] }, // no purpose
+    { provider: 'glm', model: 'glm-5.2', messages: [], purpose: 'ask' },
+  ]) {
+    await assert.rejects(
+      () =>
+        callModel(input, {
+          resolveModelRequest: resolve,
+          chat: async () => ({ choices: [{ message: { content: '' } }], usage: {} }),
+        }),
+      (err) => {
+        assert.equal(err.code, 'TRISS_PROVIDER_EMPTY');
+        assert.match(err.message, /TRISS_PROVIDER_EMPTY/);
+        return true;
+      },
+      JSON.stringify(input),
+    );
+  }
+});
+
 // ─── MCP-REVIEW-SINGLE-* cases (Package 20 / Atomic 41) ─────────────────────
 
 test('MCP-REVIEW-SINGLE-01: the shared single-review path returns verdict + structured coverage', async () => {
@@ -702,4 +1064,123 @@ test('MCP-REVIEW-SCOPED-01: runReviewCore files selection is inventory-first and
       return true;
     },
   );
+});
+
+
+// ─── shard budget regression (was 8192 -> 16384, must be 32768 for glm-5.2) ───
+
+test('MCP-SHARD-BUDGET-01: glm pro auto-budget resolves to 32K, not 16K', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js?mcp-sb01=' + Date.now());
+  let capturedInput = null;
+  const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+  await reviewShardHandler(
+    { base: 'main', provider: 'glm', model: 'pro' },
+    {
+      gitDiff: () => diff,
+      resolveModelRequest(input) {
+        return { provider: 'glm', model: 'glm-5.2' };
+      },
+      async callModel(input) {
+        capturedInput = input;
+        assert.equal(input.maxTokens, 32768, 'auto shard budget must be 32K for glm-5.2, not 16K');
+        assert.equal(input.explicitMaxTokens, false);
+        return { content: 'ok', usageReport: '' };
+      },
+    },
+  );
+  assert.ok(capturedInput, 'callModel must have been called');
+});
+
+test('MCP-SHARD-BUDGET-02: explicit max_tokens is forwarded and marked explicit', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js?mcp-sb02=' + Date.now());
+  let capturedInput = null;
+  const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+  await reviewShardHandler(
+    { base: 'main', provider: 'glm', max_tokens: 8192 },
+    {
+      gitDiff: () => diff,
+      async callModel(input) {
+        capturedInput = input;
+        assert.equal(input.maxTokens, 8192);
+        assert.equal(input.explicitMaxTokens, true);
+        return { content: 'ok', usageReport: '' };
+      },
+    },
+  );
+  assert.ok(capturedInput);
+});
+
+test('MCP-SHARD-SIGNAL-01: aborted signal propagates into runReviewCoreShard', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js?mcp-ss01=' + Date.now());
+  const controller = new AbortController();
+  controller.abort();
+  const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+  await assert.rejects(
+    () =>
+      reviewShardHandler(
+        { base: 'main' },
+        {
+          signal: controller.signal,
+          gitDiff: () => diff,
+          callModel: async () => {
+            throw new Error('model must not run when already cancelled');
+          },
+        },
+      ),
+    (err) => {
+      assert.equal(err.code, 'TRISS_CANCELLED');
+      return true;
+    },
+  );
+});
+
+test('MCP-SHARD-TIMEOUT-01: timeout_ms is validated and forwarded to callModel', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js?mcp-st01=' + Date.now());
+  // invalid
+  await assert.rejects(
+    () => reviewShardHandler({ base: 'main', timeout_ms: 0 }, { gitDiff: () => 'diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n' }),
+    /timeout_ms must be an integer between 1 and 2147483647/,
+  );
+  // valid -> forwarded
+  let capturedInput = null;
+  const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+  await reviewShardHandler(
+    { base: 'main', timeout_ms: 12345 },
+    {
+      gitDiff: () => diff,
+      async callModel(input) {
+        capturedInput = input;
+        assert.equal(input.timeoutMs, 12345);
+        return { content: 'ok', usageReport: '' };
+      },
+    },
+  );
+  assert.ok(capturedInput);
+  // schema exposure
+  const { listTools } = await import('../src/mcp/tools.js?mcp-st-schema=' + Date.now());
+  const tools = await listTools();
+  const shard = tools.find((t) => t.name === 'triss_review_shard');
+  assert.ok(shard.inputSchema.properties.timeout_ms, 'triss_review_shard must expose timeout_ms');
+  assert.equal(shard.inputSchema.properties.timeout_ms.maximum, 2147483647);
+});
+
+test('MCP-SHARD-RESOLVED-01: handler forwards resolved provider/model, not raw input', async () => {
+  const { reviewShardHandler } = await import('../src/mcp/handlers.js?mcp-sr01=' + Date.now());
+  let capturedInput = null;
+  const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+  await reviewShardHandler(
+    { base: 'main', provider: 'glm', model: 'pro' },
+    {
+      gitDiff: () => diff,
+      resolveModelRequest(input) {
+        return { provider: 'glm', model: 'glm-5.2' };
+      },
+      async callModel(input) {
+        capturedInput = input;
+        return { content: 'ok', usageReport: '' };
+      },
+    },
+  );
+  assert.equal(capturedInput.provider, 'glm');
+  assert.equal(capturedInput.model, 'glm-5.2', 'must forward resolved model, not raw pro');
 });

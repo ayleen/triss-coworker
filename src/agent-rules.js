@@ -13,8 +13,12 @@ import { showStatus as mcpStatus } from './mcp/install.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = resolve(HERE, '..', 'templates');
 
-export const START_MARKER = '<!-- triss:start -->';
-export const END_MARKER = '<!-- triss:end -->';
+// The markers live in a neutral module (agent-rule-markers.js) so the marker
+// transaction primitive can use them without importing this file and closing
+// the install → marker-transaction → agent-rules → install cycle. Re-export
+// keeps every existing `import { START_MARKER } from './agent-rules.js'`
+// call site compatible.
+export { START_MARKER, END_MARKER } from './agent-rule-markers.js';
 
 export const TARGETS = {
   claude: {
