@@ -326,6 +326,32 @@ what `triss init` and `triss agent-help` render into other projects:
 The expensive primary agent decides **what** to do. Triss does the **reading
 and writing**.
 
+### Recommended host-agent workflow
+
+Keep one primary agent and one coder per implementation stream. You (the
+expensive primary agent) understand the request, decide the plan, and own
+architecture, authorization, and final acceptance; the coder owns the
+repository investigation, implementation, tests, debugging, and
+self-verification; you then inspect the actual diff and evidence and make
+the final decision. Do not default to a researcher -> planner -> coder ->
+verifier -> reviewer chain — use `triss ask` / `triss fetch` for
+research-only work and `triss review` only when complexity, security
+sensitivity, or regression risk materially improves confidence. Split work
+across coders only when the streams are independently executable with
+explicit merge or handoff boundaries. Prefer a fresh anonymous run with the
+complete task packet over `--session` / `--continue` reuse.
+
+Pass the whole plan as one task packet — Goal, Plan, Constraints, Relevant
+context, Success criteria, Validation, Return — via `triss coder run --stdin`
+for long prompts or as the MCP `prompt` string. `triss agent-help` prints
+the generated host-agent cookbook with the copy-pasteable CLI example and
+the final acceptance checklist.
+
+Existing `triss coder init` installations keep their generated agent files
+(`init` never overwrites them). To adopt the stronger coder/researcher
+roles, re-scaffold in a fresh checkout or update
+`.opencode/agents/coder.md` / `.opencode/agents/researcher.md` manually.
+
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
 | `triss ask`        | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
@@ -683,9 +709,10 @@ generated one — never an implicit persistent conversation), `result_retention`
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
 `effective_isolation`). Non-isolated `files_changed` is `null`; the only
-changes-expectation evidence is `run_files_changed`. Process completion is not
-task satisfaction — use `--expect changes --isolate` and inspect `git status`
-yourself. Unavailable OS sandbox/cleanup/lock/quota does not block a
+changes-expectation evidence is `run_files_changed`. Process completion and a
+non-empty final text are not task satisfaction — use `--isolate`, check
+`run_files_changed` in the envelope, and verify the retained worktree/diff
+(`git status`, `git diff`) directly. Unavailable OS sandbox/cleanup/lock/quota does not block a
 non-isolated/best-effort run but provides none of those guarantees; explicit
 or default isolation needs `--allow-best-effort-caller-worktree` (default
 off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`

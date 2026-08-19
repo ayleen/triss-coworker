@@ -171,3 +171,46 @@ test('AGENT-HELP-05: MCP-hint blockquote appears when mcpServers.triss is regist
     rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+
+test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow contract', async () => {
+  const { runAgentHelp } = await import('../src/commands/agent-help.js');
+  // Collapse line wrapping in the rendered cookbook — prose assertions check
+  // exact words in order, not where the template happened to wrap a line.
+  const flat = (s) => s.replace(/\s+/g, ' ');
+  for (const target of ['claude', 'codex']) {
+    const out = flat(await captureStdout(() => runAgentHelp({ target })));
+
+    assert.ok(out.includes('Recommended host-agent workflow'), `${target} full cookbook needs the workflow section`);
+    assert.ok(out.includes('Core workflow'), `${target} full cookbook needs a Core workflow section`);
+    assert.ok(
+      out.includes('one coder in charge') || out.includes('one coder owns'),
+      `${target} full cookbook must state the one-host/one-coder default`,
+    );
+    assert.ok(
+      out.includes('repository investigation, implementation, tests, debugging, and self-verification'),
+      `${target} full cookbook must assign repository research, implementation, tests, debugging, and self-verification to the coder`,
+    );
+    assert.ok(
+      out.includes('Independent diff review') && out.includes('security-sensitive'),
+      `${target} full cookbook must make review use risk-based`,
+    );
+    assert.ok(
+      out.includes('independently executable') && out.includes('explicit merge or handoff boundary'),
+      `${target} full cookbook must allow parallelism only for independent workstreams with explicit boundaries`,
+    );
+    assert.ok(
+      out.includes('task packet') && out.includes('fresh anonymous run'),
+      `${target} full cookbook must prefer fresh explicit task packets`,
+    );
+    assert.ok(
+      out.includes('final acceptance') && out.includes('inspect the actual diff'),
+      `${target} full cookbook must reserve final acceptance to the host after inspecting the actual diff`,
+    );
+    assert.ok(
+      out.includes('not browser automation'),
+      `${target} full cookbook must not claim browser automation for triss fetch`,
+    );
+  }
+});
+

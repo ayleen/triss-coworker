@@ -49,6 +49,16 @@ wording.
 
 ### Expectation exit codes
 
+> **Current public surface (v0.37.1).** The `--expect` flag and the MCP
+> `expectation` field are part of the *designed* Release A contract — they
+> are NOT exposed by the shipped v0.37.1 CLI or MCP schema. The strict gate
+> will be published only once at least one supported execution path can
+> produce verified cleanup and verified stable change evidence
+> (`cleanup_status: "verified"`, `change_detection.status: "verified"`)
+> without weakening the result matrix. Today: use `--isolate`, check
+> `run_files_changed` in the envelope, and inspect the retained
+> worktree/diff (`git status`, `git diff`) directly.
+
 `--expect changes|analysis` selects the deterministic expectation gate.
 Process completion is NOT task satisfaction: a finished run whose expectation
 is unmet exits non-zero with the expectation verdict in the envelope. Use
