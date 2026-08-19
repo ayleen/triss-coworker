@@ -1,5 +1,5 @@
 /**
- * coder-result-quarantine.test.js — Package 5D (Atomic 20D): quarantine
+ * coder-result-quarantine.test.js — quarantine
  * transaction and quarantine clean.
  *
  * RED/GREEN: node --test test/coder-result-quarantine.test.js

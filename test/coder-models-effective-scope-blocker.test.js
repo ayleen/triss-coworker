@@ -62,7 +62,7 @@ function withEnv(home, project, fn) {
 }
 
 test(
-  'Blocker-5 inspectCoderModelState: a project opencode.json overriding the global file is the EFFECTIVE state by default — current.main reflects the project value, source_path points at the project file, and recovery scope matches the winning (local) scope',
+  'Regression inspectCoderModelState: a project opencode.json overriding the global file is the EFFECTIVE state by default — current.main reflects the project value, source_path points at the project file, and recovery scope matches the winning (local) scope',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-effscope-home-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-effscope-proj-')));

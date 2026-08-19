@@ -1,5 +1,5 @@
 /**
- * coder-state-backup.test.js — Package 4D (Atomic 19): rollback backup
+ * coder-state-backup.test.js — rollback backup
  * orchestrator.
  *
  * RED/GREEN: node --test test/coder-state-backup.test.js

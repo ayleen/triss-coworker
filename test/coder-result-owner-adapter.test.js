@@ -1,5 +1,5 @@
 /**
- * coder-result-owner-adapter.test.js — Package 5B (Atomic 20B): retained-result
+ * coder-result-owner-adapter.test.js — retained-result
  * process-owner adapter.
  *
  * RED/GREEN: node --test test/coder-result-owner-adapter.test.js

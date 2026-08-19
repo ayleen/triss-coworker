@@ -1,5 +1,5 @@
 /**
- * coder-result-transitions.js — Package 5A (Atomic 20A): retained-result
+ * coder-result-transitions.js — retained-result
  * transitions and deletion.
  *
  * Section 6.3 result quota / immutable provenance / deletion phases of the
@@ -10,7 +10,7 @@
  *  - multi-root quota conversion, immutable freeze/verify;
  *  - phase-aware tombstone rename/delete with dual-form crash recovery;
  *  - publication dual-form recovery and temp reconciliation;
- * using the Atomic 20 codec.
+ * using the transition codec.
  *
  * Exports: reserveCoderResultCapacity(), publishCoderRetainedResult(),
  * releaseCoderResultReservation(), beginCoderResultDeletion(),

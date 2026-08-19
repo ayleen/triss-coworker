@@ -38,7 +38,7 @@ function help(args) {
 
 // ─── 10a: active option/help text must not advertise hy3 ─────────────────────
 
-test('Blocker-10a `triss coder init --help` option text must not advertise hy3/hy3-free as a current model', () => {
+test('Regression `triss coder init --help` option text must not advertise hy3/hy3-free as a current model', () => {
   const out = help(['coder', 'init']);
   assert.doesNotMatch(
     out,
@@ -59,7 +59,7 @@ test('coder run help makes one-shot cross-provider selection and persistence exp
   assert.match(norm, /does not modify[\s\S]*opencode\.json/i);
 });
 
-test('Blocker-10a README coder/init prose must not present hy3 as a current OpenCode Zen model', () => {
+test('Regression README coder/init prose must not present hy3 as a current OpenCode Zen model', () => {
   const readme = read('README.md');
   // The buggy line frames hy3 as a current model offered by the opencode-zen
   // provider ("free OpenCode Zen models like `hy3`"). Historical incident
@@ -71,7 +71,7 @@ test('Blocker-10a README coder/init prose must not present hy3 as a current Open
   );
 });
 
-test('Blocker-10a .env.example active comments must not frame opencode/hy3-free as a current default', () => {
+test('Regression .env.example active comments must not frame opencode/hy3-free as a current default', () => {
   const env = read('.env.example');
   assert.doesNotMatch(
     env,
@@ -92,7 +92,7 @@ test('Blocker-10a .env.example active comments must not frame opencode/hy3-free 
 
 // ─── 10b: README must describe TRISS_CODER_MODEL as a runtime MAIN override ───
 
-test('Blocker-10b README must describe TRISS_CODER_MODEL as a runtime MAIN override (it sits in the OpenCode-main precedence chain) and must NOT claim it is not a runtime override', () => {
+test('Regression README must describe TRISS_CODER_MODEL as a runtime MAIN override (it sits in the OpenCode-main precedence chain) and must NOT claim it is not a runtime override', () => {
   const readme = read('README.md');
   // The buggy claim: presents TRISS_CODER_MODEL as "not runtime overrides".
   assert.doesNotMatch(
@@ -112,7 +112,7 @@ test('Blocker-10b README must describe TRISS_CODER_MODEL as a runtime MAIN overr
 
 // ─── 10c: README must not claim `coder models` lists "everything" ────────────
 
-test('Blocker-10c README must not claim `triss coder models` lists "everything" when it resolves one effective engine/provider per invocation', () => {
+test('Regression README must not claim `triss coder models` lists "everything" when it resolves one effective engine/provider per invocation', () => {
   const readme = read('README.md');
   // The buggy line: `triss coder models  # everything wired up`. The command
   // resolves ONE effective engine/provider, so "everything" overstates it.
@@ -125,7 +125,7 @@ test('Blocker-10c README must not claim `triss coder models` lists "everything" 
 
 // ─── 10d: Crush help paths must be exact ─────────────────────────────────────
 
-test('Blocker-10d `triss coder model rollback --help` --local description must name the exact local Crush config path ./.crush/crush.json (not ./crush.json)', () => {
+test('Regression `triss coder model rollback --help` --local description must name the exact local Crush config path ./.crush/crush.json (not ./crush.json)', () => {
   const out = help(['coder', 'model', 'rollback']);
   // The local option help today says "./opencode.json or ./crush.json" but the
   // real local Crush config path (read/written by the adapters) is
@@ -142,7 +142,7 @@ test('Blocker-10d `triss coder model rollback --help` --local description must n
   );
 });
 
-test('Blocker-10e `triss coder model set --help` must name exact config paths: OpenCode global ~/.config/opencode/opencode.json, OpenCode local ./opencode.json plus ./.triss.env, Crush global ~/.local/share/crush/crush.json, Crush local ./.crush/crush.json', () => {
+test('Regression `triss coder model set --help` must name exact config paths: OpenCode global ~/.config/opencode/opencode.json, OpenCode local ./opencode.json plus ./.triss.env, Crush global ~/.local/share/crush/crush.json, Crush local ./.crush/crush.json', () => {
   const out = help(['coder', 'model', 'set']);
 
   // OpenCode global path.
@@ -183,7 +183,7 @@ test('OpenCode Go docs stay aligned across .env.example and the MCP reference', 
   assert.match(env, /^# TRISS_CODER_SMALL_MODEL=opencode-go\/deepseek-v4-flash$/m);
   assert.match(mcp, /--provider opencode-go/);
   assert.match(mcp, /opencode-go\/deepseek-v4-flash/);
-  assert.match(mcp, /\[opencode-go\.md\]\(opencode-go\.md\)/);
+  assert.match(mcp, /\[opencode-go\.md\]\(engines\/opencode-go\.md\)/);
 });
 
 test('README coder command table retains setup and runtime safety guarantees', () => {

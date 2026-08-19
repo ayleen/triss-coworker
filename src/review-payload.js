@@ -1,11 +1,11 @@
 /**
- * review-payload.js — Package 14 (Atomic 31): pure diff parser and coverage
+ * review-payload.js — pure diff parser and coverage
  * model.
  *
- * Reference surface 9 parser/coverage subset of the approved plan
+ * documented contract parser/coverage subset of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Pure core: input strings and
  * options in, plan/result out. No Git, GitHub, provider, stdout, or
- * environment reads inside. Package 13's frozen configuration result is
+ * environment reads inside. The caller's frozen review-limit configuration is
  * injected.
  *
  * Exports:
@@ -14,8 +14,8 @@
  *   planSingleReviewPayload(opts)       — single-request planning with exact
  *                                         byte accounting
  *
- * Shard packing/shard-count enforcement belong to Reference surface 12 /
- * Package 23 — NOT here.
+ * Shard packing/shard-count enforcement belong to documented contract /
+ * component — NOT here.
  */
 
 const METADATA_OVERHEAD_BYTES = 4096; // bounded envelope/metadata allowance
@@ -276,7 +276,7 @@ export function planSingleReviewPayload({
 }) {
   if (!Array.isArray(sections)) return { error: 'sections must be an array' };
   if (!limits || typeof limits.singleMaxBytes !== 'number') {
-    return { error: 'limits are required (inject Package 13 frozen config)' };
+    return { error: 'limits are required (inject frozen review limits)' };
   }
   // Malformed oversized stdin: refuse to split arbitrarily.
   if (typeof question !== 'string') return { error: 'question must be a string' };
@@ -295,7 +295,7 @@ export function planSingleReviewPayload({
     total += sec.bytes;
   }
 
-  // P0 fix: single mode NEVER silently truncates whole files. When every
+  // Invariant: single mode NEVER silently truncates whole files. When every
   // file is individually under the cap but their aggregate (plus fixed
   // metadata) exceeds it, the plan fails closed — the caller must shard
   // instead of issuing a clean verdict over a partial corpus.
@@ -309,28 +309,28 @@ export function planSingleReviewPayload({
   return { plan: { sections: selected, total_bytes: total }, error: null };
 }
 
-// ─── sequential shard planning (Atomic 44 / Package 23) ─────────────────────
+// ─── sequential shard planning (shared contract) ─────────────────────
 
 /**
  * Plan source-ordered whole-file shards for sequential execution.
  * Whole-file shards keep each file's hunks together (no cross-file mixing);
  * shards are source-ordered by the first section's path. The total bound is
- * precomputed against the injected Package 13 limits (shardMaxBytes,
+ * precomputed against the injected frozen review limits (shardMaxBytes,
  * maxShards, totalMaxBytes). Fresh boundaries are returned as a pure plan —
  * the executor re-checks every limit at execution time.
  *
  * @param {object} opts
- * @param {Array} opts.sections parsed sections (Package 14)
+ * @param {Array} opts.sections parsed sections (component)
  * @param {string} opts.question
  * @param {string} [opts.metadata='']
- * @param {object} opts.limits Package 13 frozen limits
+ * @param {object} opts.limits frozen review limits
  * @returns {{plan?: {shards: Array, total_bytes: number},
  *   error?: string, path?: string|null}}
  */
 export function planSequentialShards({ sections, question, metadata = '', limits }) {
   if (!Array.isArray(sections)) return { error: 'sections must be an array' };
   if (!limits || typeof limits.shardMaxBytes !== 'number' || typeof limits.maxShards !== 'number') {
-    return { error: 'limits are required (inject Package 13 frozen config)' };
+    return { error: 'limits are required (inject frozen review limits)' };
   }
   if (typeof question !== 'string') return { error: 'question must be a string' };
   if (typeof metadata !== 'string') return { error: 'metadata must be a string' };
@@ -349,7 +349,7 @@ export function planSequentialShards({ sections, question, metadata = '', limits
   const shards = [];
   let current = [];
   let currentBytes = fixed;
-  // P2 fix: iterate files in FIRST-SEEN order (Map preserves insertion
+  // Invariant: iterate files in FIRST-SEEN order (Map preserves insertion
   // order) — the advertised source-ordered planner. Sorting alphabetically
   // would move dependent changes into a different review sequence than the
   // input diff.

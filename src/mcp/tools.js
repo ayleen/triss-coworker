@@ -947,7 +947,7 @@ const CODER_TOOLS = [
         engine: {
           type: 'string',
           enum: ['opencode', 'opencode2', 'crush'],
-          description: 'Coding engine (default: opencode V1; opencode2 is the V2 beta — see docs/opencode2.md; or TRISS_CODER_ENGINE)',
+          description: 'Coding engine (default: opencode V1; opencode2 is the V2 beta — see docs/engines/opencode2.md; or TRISS_CODER_ENGINE)',
         },
         session: {
           type: 'string',

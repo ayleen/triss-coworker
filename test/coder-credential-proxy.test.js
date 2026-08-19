@@ -1,5 +1,5 @@
 /**
- * coder-credential-proxy.test.js — Package 2A (Atomic 03): parent-owned
+ * coder-credential-proxy.test.js — parent-owned
  * loopback credential proxy.
  *
  * RED/GREEN: node --test test/coder-credential-proxy.test.js
@@ -17,7 +17,7 @@ import { connect as netConnect } from 'node:net';
 import { startCoderCredentialProxy } from '../src/coder-credential-proxy.js';
 
 const REAL_CREDENTIAL = 'sk-real-provider-secret-0123456789abcdef';
-// P0 fix: `endpoint` is the upstream ORIGIN only — the engine sends the API
+// Invariant: `endpoint` is the upstream ORIGIN only — the engine sends the API
 // path (pathPrefix) verbatim, so forwarding is a plain origin+path join and
 // the prefix can never be doubled.
 const ENDPOINT = 'https://api.provider.example';
@@ -447,6 +447,46 @@ test('revoke is idempotent and resolves the closed promise', async () => {
   proxy.revoke();
   await proxy.closed;
   assert.ok(true);
+});
+
+test('revoke aborts a genuinely in-flight upstream request and settles safely', async () => {
+  let fetchStarted;
+  let markFetchStarted;
+  fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  let upstreamSignal;
+  const fetchImpl = async (_url, init) => {
+    upstreamSignal = init.signal;
+    markFetchStarted();
+    return new Promise((_resolve, reject) => {
+      const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      if (upstreamSignal.aborted) abort();
+      else upstreamSignal.addEventListener('abort', abort, { once: true });
+    });
+  };
+  const { proxy } = await startProxy({ fetchImpl });
+  const body = JSON.stringify({ model: 'glm-5.2', secret_payload: 'IN-FLIGHT-BODY' });
+  const request = post(proxy, { body });
+  await fetchStarted;
+  assert.equal(upstreamSignal.aborted, false);
+
+  proxy.revoke();
+  await proxy.closed;
+  assert.equal(upstreamSignal.aborted, true);
+
+  let settleTimeout;
+  const settled = await Promise.race([
+    request.then(
+      async (res) => ({ text: await res.text() }),
+      (error) => ({ error: String(error?.message || error) }),
+    ),
+    new Promise((resolve) => { settleTimeout = setTimeout(() => resolve({ timeout: true }), 2000); }),
+  ]);
+  clearTimeout(settleTimeout);
+  assert.equal(settled.timeout, undefined, 'the client request must settle after revocation');
+  const observable = settled.text || settled.error || '';
+  assert.equal(observable.includes(REAL_CREDENTIAL), false);
+  assert.equal(observable.includes('IN-FLIGHT-BODY'), false);
+  assert.equal(observable.includes(proxy.token), false);
 });
 
 test('caller-supplied token is accepted for deterministic tests', async () => {

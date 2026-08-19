@@ -44,7 +44,7 @@ test('estimateCanonicalCost: usage_source=opencode2 gets OpenCode per-step cover
 });
 
 test('opencode-go/ routes price as unknown (no fabricated reseller totals)', () => {
-  // Review round 5: OpenCode Go is a separate paid reseller whose tariffs are
+  // Invariant: OpenCode Go is a separate paid reseller whose tariffs are
   // not modeled (billing mode 'unknown') — stripping the prefix made Triss
   // publish bare-DeepSeek list prices as concrete totals. A Go route must
   // price as null unless the user sets the PREFIXED override key explicitly.

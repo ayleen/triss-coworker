@@ -130,7 +130,7 @@ test('init --global warns AND a separate process confirms a local .triss.env rea
   }
 });
 
-test('the REAL `config wizard coder` path FAILS (non-zero) when no provider key is set (P2-round6)', () => {
+test('the REAL `config wizard coder` path FAILS (non-zero) when no provider key is set', () => {
   const { home, project } = makeDirs();
   try {
     // Drive the ACTUAL wizard with NO ZHIPU/OPENCODE key in the env and empty
@@ -153,7 +153,7 @@ test('the REAL `config wizard coder` path FAILS (non-zero) when no provider key 
   }
 });
 
-test('the REAL `config wizard coder` path enforces the blocking audit and exits non-zero (P2-b)', () => {
+test('the REAL `config wizard coder` path enforces the blocking audit and exits non-zero', () => {
   const { home, project } = makeDirs();
   try {
     // A project opencode.json (higher precedence at run time) with a

@@ -21,8 +21,8 @@ jobs:
       fail-fast: false
     name: node ${{ matrix.node }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -31,12 +31,10 @@ jobs:
           npm install --global "npm@${NPM_VERSION}"
           test "$(npm --version)" = "$NPM_VERSION"
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
+      - run: npm run check
 
-  # The bundle matrix and the real-Harness lifecycle job live in a reusable
-  # workflow so the tag publish flow gates on the SAME checks (review round
-  # 4, §3): a branches-only filter never ran them for tag pushes.
+  # The bundle matrix and real-Harness lifecycle job are reusable so pull
+  # requests and tag publication run the same checks.
   bundle-checks:
     uses: ./.github/workflows/bundle-checks.yml
 
@@ -44,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     name: pnpm install (consumer smoke test)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -74,8 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     name: build canonical standalone artifact
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -101,7 +99,7 @@ jobs:
             --artifact "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz" \
             --metadata "$RUNNER_TEMP/triss-standalone/standalone.ndjson.gz.metadata.json" \
             --checksum "$RUNNER_TEMP/triss-standalone/standalone.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: standalone-canonical
           path: |
@@ -120,11 +118,11 @@ jobs:
       fail-fast: false
     name: standalone smoke (${{ matrix.os }}, Node ${{ matrix.node }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: standalone-canonical
           path: ${{ runner.temp }}/triss-standalone

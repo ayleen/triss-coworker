@@ -56,7 +56,7 @@ function withEnv(home, project, fn) {
 }
 
 test(
-  'Blocker-6 precedence: shell TRISS_CODER_MODEL wins over both project and global env files',
+  'Regression precedence: shell TRISS_CODER_MODEL wins over both project and global env files',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-home-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-proj-')));
@@ -102,7 +102,7 @@ test(
 );
 
 test(
-  'Blocker-6 precedence: project .triss.env wins over global Triss env when shell is unset',
+  'Regression precedence: project .triss.env wins over global Triss env when shell is unset',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-home2-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-proj2-')));
@@ -140,7 +140,7 @@ test(
 );
 
 test(
-  'Blocker-6 precedence: global Triss env wins when shell and project are unset',
+  'Regression precedence: global Triss env wins when shell and project are unset',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-home3-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-precedence-proj3-')));

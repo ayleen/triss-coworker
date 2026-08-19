@@ -92,7 +92,7 @@ function confirmedPlan(scope = 'global') {
 }
 
 test(
-  'Blocker-6a applyModelChange acquires deps.lock(engine, scope) before the first write and releases it only after BOTH config + env commits (deterministic concurrency seam, no sleeps)',
+  'Regression applyModelChange acquires deps.lock(engine, scope) before the first write and releases it only after BOTH config + env commits (deterministic concurrency seam, no sleeps)',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     const events = [];
@@ -150,7 +150,7 @@ test(
 );
 
 test(
-  'Blocker-6b applyModelChange with a held/stale lock (deps.lock throws) aborts with a structured lock-held diagnostic and writes NOTHING (opencode.json byte-identical)',
+  'Regression applyModelChange with a held/stale lock (deps.lock throws) aborts with a structured lock-held diagnostic and writes NOTHING (opencode.json byte-identical)',
   withTmpHome(async ({ home }) => {
     const svc = await loadService();
     const before = readFileSync(cfgPath(home), 'utf8');

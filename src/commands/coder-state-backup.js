@@ -1,5 +1,5 @@
 /**
- * coder-state-backup.js (commands) — Package 4D (Atomic 19): CLI run
+ * coder-state-backup.js (commands) — CLI run
  * functions for `triss coder state backup` and `triss coder state validate`.
  *
  * Wraps the pure orchestration in ../coder-state-backup.js. Prints only

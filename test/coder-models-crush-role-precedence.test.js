@@ -57,7 +57,7 @@ function withEnv(home, project, fn) {
 }
 
 test(
-  'Blocker-6 Crush role split: local .crush/crush.json with only models.large + global crush.json with only models.small resolves large from local, small from global with distinct source_paths (never synthetic null)',
+  'Regression Crush role split: local .crush/crush.json with only models.large + global crush.json with only models.small resolves large from local, small from global with distinct source_paths (never synthetic null)',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-home-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-proj-')));
@@ -127,7 +127,7 @@ test(
 );
 
 test(
-  'Blocker-6 Crush local overrides global per role: when both local and global define models.large, local wins',
+  'Regression Crush local overrides global per role: when both local and global define models.large, local wins',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-home2-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-proj2-')));

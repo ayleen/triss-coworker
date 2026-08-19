@@ -1,0 +1,30 @@
+name: Provider compatibility
+description: Report a model provider, endpoint, or protocol compatibility problem.
+title: "[Provider]: "
+labels: [provider-compatibility]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and endpoint type
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model identifier
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Redacted command and response shape
+      description: Never include API keys, prompts, private URLs, or proprietary code.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected compatibility
+    validations:
+      required: true

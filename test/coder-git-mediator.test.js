@@ -1,5 +1,5 @@
 /**
- * coder-git-mediator.test.js — Package 2C (Atomic 05): bounded Git mediator.
+ * coder-git-mediator.test.js — bounded Git mediator.
  *
  * RED/GREEN: node --test test/coder-git-mediator.test.js
  *

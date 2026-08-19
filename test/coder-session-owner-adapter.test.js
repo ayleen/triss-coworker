@@ -1,5 +1,5 @@
 /**
- * coder-session-owner-adapter.test.js — Package 4B2 (Atomic 17): session
+ * coder-session-owner-adapter.test.js — session
  * process-owner adapter.
  *
  * RED/GREEN: node --test test/coder-session-owner-adapter.test.js

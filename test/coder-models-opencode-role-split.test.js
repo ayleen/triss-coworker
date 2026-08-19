@@ -57,7 +57,7 @@ function withEnv(home, project, fn) {
 }
 
 test(
-  'Blocker-6 opencode role split: local config with only model + global config with only small_model resolves config main from local, config small from global with distinct source_paths',
+  'Regression opencode role split: local config with only model + global config with only small_model resolves config main from local, config small from global with distinct source_paths',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-role-home-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-role-proj-')));

@@ -168,7 +168,7 @@ export async function verifyRegistryPackage(local, {
   // additionally validated for shape and must match the very bytes we just
   // downloaded. A MISSING declaration must also fail closed — returning
   // integrityOk: true without checking anything broke the fail-closed
-  // contract (review round 4, §5).
+  // contract so a missing declaration cannot pass publication.
   if (!dist.integrity) {
     die(`registry metadata for ${url} carries no dist.integrity`);
   }
@@ -206,7 +206,7 @@ export function selectLocalPackage(manifest, packageName) {
 }
 
 /**
- * Release-train tag authorization (review round 4, §1). An npm
+ * Release-train tag authorization. An npm
  * package@version combination can never be published twice, so a partially
  * published release must stay completable even after `main` moves past the
  * tag. Mode selection is a pure function of the live-registry plan plus two
@@ -241,7 +241,7 @@ export function authorizeTagRelease(plan, { exactMain, ancestorMain } = {}) {
 }
 
 /**
- * Safe-retry publication plan for the two-package release train (review §2):
+ * Safe-retry publication plan for the two-package release train (release contract):
  * consult the live registry for BOTH packages and decide what still needs
  * publishing. A package already published with byte-identical content is
  * skipped; any byte mismatch fails closed (a re-publish of the same version
@@ -304,7 +304,7 @@ async function main() {
     // the two packages still need publishing. Idempotent on retry: a package
     // already published with identical bytes is skipped, so re-running the
     // workflow after a partial failure never re-publishes an existing
-    // version (review §2).
+    // version (release contract).
     const manifest = JSON.parse(readFileSync(args['local-manifest'], 'utf8'));
     const plan = await planPublication(manifest);
     process.stdout.write(`${JSON.stringify({

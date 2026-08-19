@@ -73,7 +73,7 @@ test('assertSafePath rejects ../ escape attempts when restricted', () => {
 });
 
 test('MCP sandbox does not widen to sibling worktrees of a checkout', () => {
-  // Regression guard (PR #45 review §3): running inside a coding-agent
+  // Regression guard (PR #45 release contract): running inside a coding-agent
   // worktree must NOT step the project root up to the shared checkout,
   // because projectRoot() is the MCP restricted-mode boundary. If it did,
   // a task started in /repo/.codex/worktrees/task-a could read files in

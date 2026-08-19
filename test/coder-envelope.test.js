@@ -81,7 +81,7 @@ test('foldEventLine: truncated / non-JSON lines are tolerated as bounded warning
     foldEventLine(state, ''); // blank lines are silently ignored, not warned
   });
   // Distinct bounded category warning, deduplicated; raw lines are never
-  // copied into warnings (Reference surface 2), the exact count is kept in
+  // copied into warnings (documented contract), the exact count is kept in
   // `omittedCount`.
   assert.equal(state.warnings.length, 1);
   assert.match(state.warnings[0], /unparseable line/);
@@ -470,9 +470,9 @@ test(
   }),
 );
 
-// ─── Package 2 (Atomic 02): bounded OpenCode event folding (CODER-EVENT-) ────
+// ─── bounded OpenCode event folding (CODER-EVENT-) ────
 //
-// Reference surface 2 RED tests. All package-specific cases carry the
+// documented contract RED tests. All package-specific cases carry the
 // `CODER-EVENT-` prefix so the host can confirm the prefix in TAP output.
 
 test('CODER-EVENT-01: fixture produces exact event and tool totals', () => {
@@ -564,9 +564,9 @@ test('CODER-EVENT-06: top-level error event records an internal engine-error obs
       },
     );
     const envelope = JSON.parse(capture.text().trim());
-    // v2 engine_status projection is Package 3's surface; the typed exit
+    // v2 engine_status projection is part of the result contract; the typed exit
     // reason must reflect the observed engine error even on a fake zero
-    // exit (P1 fix: engineErrorObserved can never map to end_turn).
+    // exit (Invariant: engineErrorObserved can never map to end_turn).
     assert.equal(envelope.exit_reason, 'error');
     assert.match(envelope.warnings.join(' '), /engine error: boom/);
   })();
@@ -744,7 +744,7 @@ test('CODER-EVENT-14: activity first/last timestamps are host-observed and never
   assert.equal(state.activity.last_event_at, 600);
 });
 
-// ─── Package 5E envelope fields (Atomic 21) ──────────────────────────────────
+// ─── component envelope fields (transition) ──────────────────────────────────
 
 test('CODER-EVENT-15: every safe envelope carries session_slug, result_retention, result_id, execution_capabilities', () => {
   return withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {

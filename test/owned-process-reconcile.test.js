@@ -1,11 +1,11 @@
 /**
- * owned-process-reconcile.test.js — Package 2D2 (Atomic 10): owned-process
+ * owned-process-reconcile.test.js — owned-process
  * owner reconciliation.
  *
  * RED/GREEN: node --test test/owned-process-reconcile.test.js
  *
  * Covers Section 6.5 of docs/reliable-delegation-contract-plan.md and
- * Atomic 10: reserving -> live -> verified_empty -> release_pending ->
+ * transition: reserving -> live -> verified_empty -> release_pending ->
  * acknowledged transitions, the TRISS_PROCESS_SET_CAP at 32, durable
  * recovery requiring a matching owner adapter (ephemeral accepts null),
  * begin/reference-remove/ack/prune crash rows, adapter mismatch, and the
@@ -352,6 +352,49 @@ test('reconcileOwnedProcessSetRelease runs the full two-phase protocol and prune
     assert.deepEqual(adapter.calls, [
       ['releaseReference', sandbox(1)],
     ]);
+    const read = await readJournal({ journalDir: fx.journalDir });
+    assert.equal(read.entries.length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('concurrent reconcile calls for one sandbox settle safely and release once', async () => {
+  const fx = await fixture();
+  try {
+    await allocateToVerifiedEmpty(fx, sandbox(1), 'session_inventory', 'opencode:slug-1');
+    const calls = [];
+    let releaseStartedResolve;
+    const releaseStarted = new Promise((resolve) => { releaseStartedResolve = resolve; });
+    let releaseGate;
+    const releaseAllowed = new Promise((resolve) => { releaseGate = resolve; });
+    const adapter = {
+      async releaseReference(entry) {
+        calls.push(['releaseReference', entry.sandbox_id]);
+        releaseStartedResolve();
+        await releaseAllowed;
+      },
+    };
+
+    const first = reconcileOwnedProcessSetRelease({
+      journalDir: fx.journalDir,
+      sandboxId: sandbox(1),
+      ownerAdapter: adapter,
+    });
+    await releaseStarted;
+    const second = reconcileOwnedProcessSetRelease({
+      journalDir: fx.journalDir,
+      sandboxId: sandbox(1),
+      ownerAdapter: adapter,
+    });
+    // Give the competing call a chance to observe release_pending while the
+    // first adapter transition is deliberately held open. A keyed reconcile
+    // lock should keep it queued; without one this is the release race.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseGate();
+    const results = await Promise.all([first, second]);
+    assert.deepEqual(results.map((result) => result.action).sort(), ['noop', 'pruned']);
+    assert.deepEqual(calls, [['releaseReference', sandbox(1)]]);
     const read = await readJournal({ journalDir: fx.journalDir });
     assert.equal(read.entries.length, 0);
   } finally {

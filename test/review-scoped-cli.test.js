@@ -1,5 +1,5 @@
 /**
- * review-scoped-cli.test.js — P0 regression: literal `--files` selection is
+ * review-scoped-cli.test.js — security regression: literal `--files` selection is
  * acquired inventory-first and never buffers or plans the full diff.
  *
  * RED/GREEN: node --test test/review-scoped-cli.test.js

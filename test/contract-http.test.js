@@ -126,7 +126,7 @@ test('stripHtml does not treat hyphenated custom tags as script/style', () => {
   assert.equal(stripHtml('<style-type>Keep?</style-type>After'), 'Keep?After');
 });
 
-// ─── REVIEW-ISSUE-* integration cases (Package 18 / Atomic 39) ──────────────
+// ─── REVIEW-ISSUE-* integration cases (shared contract) ──────────────
 
 test('REVIEW-ISSUE-01: httpJson honours a per-call maxBytes override below the global cap', async () => {
   const big = new Uint8Array(4096).fill(66); // 'B' x 4096
@@ -145,7 +145,7 @@ test('REVIEW-ISSUE-01: httpJson honours a per-call maxBytes override below the g
       },
     },
   });
-  // Per-call maxBytes (Package 18 review-specific bounded reading) rejects
+  // Per-call maxBytes (component review-specific bounded reading) rejects
   // the 4 KiB body even though the global cap would allow it.
   await assert.rejects(
     () => httpJson('https://example.com/per-call-cap', { maxBytes: 1024 }),

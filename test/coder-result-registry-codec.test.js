@@ -1,5 +1,5 @@
 /**
- * coder-result-registry-codec.test.js — Package 5 (Atomic 20): retained-result
+ * coder-result-registry-codec.test.js — retained-result
  * registry codec.
  *
  * RED/GREEN: node --test test/coder-result-registry-codec.test.js
@@ -8,7 +8,7 @@
  * docs/reliable-delegation-contract-plan.md: exact byte fixtures, 64/8 KiB
  * cap-plus-one reads, aggregate string bounds, fixed lock reuse, temp-name/
  * mode/owner limits, and malformed-temp classification. It never decides
- * stale/partial temp deletion or recovery transitions (Atomic 20A owns those).
+ * stale/partial temp deletion or recovery transitions (transition owns those).
  */
 
 import test from 'node:test';

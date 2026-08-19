@@ -195,7 +195,7 @@ test('matrix 6: companion update between two fixture versions changes the effect
   assert.deepEqual(Object.keys(baseRouteConfig(first.entries)).sort(), BUNDLE_ROUTES);
 
   // Update: the v2 fixture carries a genuinely different effective patch —
-  // an extra provider key with its own env marker (review §4: identical
+  // an extra provider key with its own env marker (release contract: identical
   // patchText made this test vacuous; includes() !== undefined is a
   // tautology that passes for ANY path).
   const updated = companionFixtureDir(repoRoot, {

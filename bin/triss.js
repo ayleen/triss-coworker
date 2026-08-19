@@ -346,7 +346,7 @@ coder
   .description('Install/configure a coding engine (opencode default, opencode2 beta, or crush), provider key, permission policy, and agent templates')
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
-  .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/opencode2.md), or crush')
+  .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), or crush')
   .option('--provider <name>', 'opencode engine model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
@@ -355,7 +355,7 @@ coder
 coder
   .command('run [prompt]')
   .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default; opencode2 beta or --engine crush) — and print a JSON envelope to stdout')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/opencode2.md), or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), or crush')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
   .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
@@ -458,7 +458,7 @@ coderState
   .requiredOption('--project <absolute-path>', 'absolute path of the validated project root')
   .action((opts) => wrap(runCoderStateReset)(opts));
 
-// `coder session` group (v2 session CLI contract, Atomic 23).
+// `coder session` group (v2 session CLI contract).
 const coderSession = coder
   .command('session')
   .description('List or clean v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)');
@@ -475,7 +475,7 @@ coderSession
   .requiredOption('--engine <name>', 'coding engine: opencode or crush (MANDATORY)')
   .action((slug, opts) => wrap(runCoderSessionClean)(slug, opts));
 
-// `coder result` group (retained-result CLI, Atomic 23).
+// `coder result` group (retained-result CLI contract).
 const coderResult = coder
   .command('result')
   .description('List or clean retained result artifacts (never persistent sessions)');

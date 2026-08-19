@@ -1248,7 +1248,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: an explicit provider beats a stale cross-provider TRISS_CODER_MODEL (P1)',
+  'runCoderInit --provider opencode-zen: an explicit provider beats a stale cross-provider TRISS_CODER_MODEL',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // A leftover Z.AI preset must NOT be written into a Zen setup — otherwise
@@ -1275,7 +1275,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: an existing Zen opencode.json is pinned to TRISS_CODER_MODEL, not left empty (P2)',
+  'runCoderInit --provider opencode-zen: an existing Zen opencode.json is pinned to TRISS_CODER_MODEL, not left empty',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Pre-existing, correct Zen config (e.g. hand-written or from a prior run)
@@ -1308,7 +1308,7 @@ test(
 );
 
 test(
-  'runCoderInit --global: warns when a higher-precedence local .triss.env shadows the global pin (P1-a)',
+  'runCoderInit --global: warns when a higher-precedence local .triss.env shadows the global pin',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // A local .triss.env (project scope) outranks the global one we write.
@@ -1328,7 +1328,7 @@ test(
 );
 
 test(
-  'runCoderInit: warns when a shell-exported TRISS_CODER_MODEL will shadow the pin (P1-a)',
+  'runCoderInit: warns when a shell-exported TRISS_CODER_MODEL will shadow the pin',
   withTmpHome(async ({ captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Simulate a shell export present before init (highest precedence of all).
@@ -1346,7 +1346,7 @@ test(
 );
 
 test(
-  'runCoderInit: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy (P1-round7)',
+  'runCoderInit: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1373,7 +1373,7 @@ test(
 );
 
 test(
-  'runCoderInit --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds (P1-round7)',
+  'runCoderInit --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1394,7 +1394,7 @@ test(
 );
 
 test(
-  'runCoderInit: audits an existing opencode.json and warns on a cross-provider small_model (P2)',
+  'runCoderInit: audits an existing opencode.json and warns on a cross-provider small_model',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1534,13 +1534,13 @@ test(
 );
 
 test(
-  'runCoderInit --global: a VALID in-catalogue project small_model that merely differs from the global default does NOT block (P2-round8)',
+  'runCoderInit --global: a VALID in-catalogue project small_model that merely differs from the global default does NOT block',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Project-scope opencode.json with a correct deny-policy and an in-catalogue
     // small_model that isn't the global default (DeepSeek). It's valid — the run
     // will use it fine — so the cross-scope audit must NOT flag it stale just
-    // because it differs from the global resolvedSmall (the round-7 regression).
+    // because it differs from the global resolvedSmall (the invariant regression).
     writeFileSync(
       join(home, 'opencode.json'),
       JSON.stringify({
@@ -1559,7 +1559,7 @@ test(
 );
 
 test(
-  'runCoderInit --global: BLOCKS on a project small_model the live catalogue no longer lists (P2-round8)',
+  'runCoderInit --global: BLOCKS on a project small_model the live catalogue no longer lists',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Project-scope small_model that's a gone free model — opencode reads it from
@@ -1608,7 +1608,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: picks the first AVAILABLE model from the priority list (P1-a)',
+  'runCoderInit --provider opencode-zen: picks the first AVAILABLE model from the priority list',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // The live catalogue contains the top priority, so both roles select DeepSeek.
@@ -1626,7 +1626,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: warns availability is unverified when the catalogue fetch fails (P1-a)',
+  'runCoderInit --provider opencode-zen: warns availability is unverified when the catalogue fetch fails',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // A non-200 (and the Z.AI probe never runs for zen) — fall back to the
@@ -1666,7 +1666,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: drops a stale TRISS_CODER_MODEL preset the live catalogue no longer lists (P1-round6)',
+  'runCoderInit --provider opencode-zen: drops a stale TRISS_CODER_MODEL preset the live catalogue no longer lists',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // A previous init pinned hy3-free into the global .env FILE (not a shell
@@ -1695,7 +1695,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: drops a stale existing opencode.json MAIN model (overridden at run time) and pins an available one (P1-round6)',
+  'runCoderInit --provider opencode-zen: drops a stale existing opencode.json MAIN model (overridden at run time) and pins an available one',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1719,7 +1719,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: BLOCKS on a stale existing small_model the catalogue no longer lists (P1-round7)',
+  'runCoderInit --provider opencode-zen: BLOCKS on a stale existing small_model the catalogue no longer lists',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1751,7 +1751,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: BLOCKS (non-zero) when a verified catalogue lists none of triss\'s known free models (P1-round6)',
+  'runCoderInit --provider opencode-zen: BLOCKS (non-zero) when a verified catalogue lists none of triss\'s known free models',
   withTmpHome(async () => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Catalogue successfully fetched, but only a model triss doesn't know —
@@ -1769,7 +1769,7 @@ test(
 );
 
 test(
-  'runCoderInit --provider opencode-zen: a single in-catalogue TRISS_CODER_MODEL preset also supplies the small model (P2-round7)',
+  'runCoderInit --provider opencode-zen: a single in-catalogue TRISS_CODER_MODEL preset also supplies the small model',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     // Catalogue offers only a paid/custom id triss doesn't know; the user sets
@@ -1787,7 +1787,7 @@ test(
 );
 
 test(
-  'runCoderInit: does NOT reuse an existing zai model whose plan differs from the detected plan (P1-b)',
+  'runCoderInit: does NOT reuse an existing zai model whose plan differs from the detected plan',
   withTmpHome(async ({ home }) => {
     process.env.ZHIPU_API_KEY = 'zk-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1812,7 +1812,7 @@ test(
 );
 
 test(
-  'runCoderInit: FAILS (non-zero) when the provider key is never set (P2-a)',
+  'runCoderInit: FAILS (non-zero) when the provider key is never set',
   withTmpHome(async ({ home }) => {
     // No ZHIPU_API_KEY, non-TTY (key prompt returns empty) -> setup unusable.
     // Provider is explicit (`--provider zai`) so the provider-intent gate is

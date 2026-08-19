@@ -54,7 +54,7 @@ function runInit(home, env) {
 }
 
 test(
-  'Blocker-3 coder init non-TTY with MULTIPLE provider credentials (ZHIPU+OPENCODE) and no --provider fails on PROVIDER intent before spawn/write, lists all four alternatives, never silently zai',
+  'Regression coder init non-TTY with MULTIPLE provider credentials (ZHIPU+OPENCODE) and no --provider fails on PROVIDER intent before spawn/write, lists all four alternatives, never silently zai',
   () => {
     const home = makeHome();
     try {
@@ -104,7 +104,7 @@ test(
 );
 
 test(
-  'Blocker-3 coder init non-TTY with ZERO provider credentials and no --provider fails on PROVIDER intent before spawn/write, lists all four alternatives, never silently zai',
+  'Regression coder init non-TTY with ZERO provider credentials and no --provider fails on PROVIDER intent before spawn/write, lists all four alternatives, never silently zai',
   () => {
     const home = makeHome();
     try {

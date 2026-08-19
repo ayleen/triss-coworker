@@ -1,5 +1,5 @@
 /**
- * managed-root.js — Package 2F (Atomic 06): managed-root capability primitive.
+ * managed-root.js — managed-root capability primitive.
  *
  * Section 5 of the approved plan (docs/reliable-delegation-contract-plan.md):
  * all host-managed paths are reached component-wise with no-follow,
@@ -7,7 +7,7 @@
  * ownership, mount/device changes, `..`, path races, and realpath escape are
  * rejected; destructive transitions recheck pinned identities.
  *
- * Package 0 has selected no dir-FD backend, so this module implements the
+ * component has selected no dir-FD backend, so this module implements the
  * documented path-based best-effort variant: it performs the same
  * component-wise validation and same-UID/no-follow checks through the
  * ordinary `fs` API, never advertises dir-FD enforcement, and refuses
@@ -245,7 +245,7 @@ export async function managedTouchPath(handle, basename) {
 }
 
 /**
- * Honest capability: with no Package 0 dir-FD backend this is always
+ * Honest capability: with no native dir-FD backend this is always
  * `best_effort`; dir-FD enforcement is never advertised.
  */
 export function managedRootEnforcement() {

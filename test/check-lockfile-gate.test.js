@@ -1,9 +1,9 @@
 /**
- * Lockfile-gate tests (plan §Package and release topology: the release train
+ * Lockfile-gate tests for the release topology: the release train
  * must update "the top-level and root-package version fields in
  * package-lock.json"). The gate runs against fixture trees through --root so
  * drift in the two generated root fields fails exactly like workspace drift
- * does (review §6).
+ * does (release contract).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

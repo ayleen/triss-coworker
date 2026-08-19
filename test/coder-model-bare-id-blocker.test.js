@@ -92,7 +92,7 @@ const zenBareListFetch = (bareIds) => {
 // ─── Blocker 1: listProviderModels canonicalizes bare ids ────────────────────
 
 test(
-  'Blocker-1 listProviderModels: a BARE-id Zen catalogue response is normalized to canonical opencode/<id> in every returned model id',
+  'Regression listProviderModels: a BARE-id Zen catalogue response is normalized to canonical opencode/<id> in every returned model id',
   withTmpHome(async () => {
     process.env.OPENCODE_API_KEY = 'sk-fake';
     const svc = await loadService();
@@ -112,7 +112,7 @@ test(
 // ─── Blocker 1: inspectCoderModelState availability/recommendation use canonical ids ──
 
 test(
-  'Blocker-1 inspectCoderModelState: a canonical configured model present in the BARE-id catalogue resolves to availability=available; available_models + recommended are canonical',
+  'Regression inspectCoderModelState: a canonical configured model present in the BARE-id catalogue resolves to availability=available; available_models + recommended are canonical',
   withTmpHome(async ({ home }) => {
     seedGlobalConfig(home, {
       model: 'opencode/deepseek-v4-flash-free',
@@ -173,7 +173,7 @@ test(
 // ─── Blocker 1 + 2: stale canonical model over a bare-id catalogue ───────────
 
 test(
-  'Blocker-1+2 inspectCoderModelState: a stale canonical configured model (opencode/hy3-free) absent from the BARE-id catalogue is authoritatively unavailable, while the recommended pair is canonical and drawn from the live catalogue',
+  'Regression: bare-id catalogue consistency: a stale canonical configured model (opencode/hy3-free) absent from the BARE-id catalogue is authoritatively unavailable, while the recommended pair is canonical and drawn from the live catalogue',
   withTmpHome(async ({ home }) => {
     seedGlobalConfig(home, {
       model: 'opencode/hy3-free',
@@ -203,7 +203,7 @@ test(
 // ─── Blocker 2: recovery command shape + execution-level smoke ───────────────
 
 test(
-  'Blocker-2 formatModelRecovery (execution-level smoke, injected catalogue, no network): the first recovery command is a `triss coder model set` with explicit canonical main + --small opencode/<id> + --engine opencode + --provider opencode-zen + scope + --yes',
+  'Regression formatModelRecovery (execution-level smoke, injected catalogue, no network): the first recovery command is a `triss coder model set` with explicit canonical main + --small opencode/<id> + --engine opencode + --provider opencode-zen + scope + --yes',
   withTmpHome(async ({ home }) => {
     seedGlobalConfig(home, {
       model: 'opencode/hy3-free',

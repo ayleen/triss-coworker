@@ -1,10 +1,10 @@
 /**
- * coder-write-quota.test.js — Package 2E (Atomic 11): aggregate writable
+ * coder-write-quota.test.js — aggregate writable
  * quota adapter (best-effort).
  *
  * RED/GREEN: node --test test/coder-write-quota.test.js
  *
- * Covers Section 6.5 / Atomic 11 of docs/reliable-delegation-contract-plan.md:
+ * Covers Section 6.5 / transition of docs/reliable-delegation-contract-plan.md:
  * block accounting, one-block overshoot, many-small-file pressure,
  * filesystem_quota cause, authenticated synchronous first-rejection
  * notification, first-cause-before-ack ordering, duplicate-event immunity,
@@ -29,7 +29,7 @@ import {
 
 // ─── capability honesty ──────────────────────────────────────────────────────
 
-test('capability is honestly unavailable without a Package 0 filesystem proof', () => {
+test('capability is honestly unavailable without a component filesystem proof', () => {
   assert.deepEqual(coderQuotaCapability(), {
     writable_quota: 'unavailable',
     result_store_quota: 'unavailable',

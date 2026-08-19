@@ -1,10 +1,10 @@
 /**
- * review-input.test.js — Package 18 (Atomic 39): bounded stdin and issue
+ * review-input.test.js — bounded stdin and issue
  * trust boundary.
  *
  * RED/GREEN: node --test test/review-input.test.js
  *
- * Covers Reference surface 10 stdin and issue bullets of
+ * Covers documented contract stdin and issue bullets of
  * docs/reliable-delegation-contract-plan.md: streaming stdin bounds,
  * explicit issue validation/retrieval, deprecated --skip-issue, and proof
  * that PR prose can never trigger tracker access.

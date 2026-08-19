@@ -72,7 +72,7 @@ export async function runReviewCore({
   let changedFilesFromInventory = null;
 
   if (selectors.length > 0) {
-    // Inventory-first scoped acquisition (P0 parity with the CLI): only the
+    // Inventory-first scoped acquisition mirrors the CLI: only the
     // selected content is acquired — never the full diff.
     const scoped = await acquireScopedDiff({}, { pr, base, selectors });
     if (!scoped.ok) {
@@ -117,7 +117,7 @@ export async function runReviewCore({
 
   if (!diff.trim()) return emptyReviewResponse(responseFormat);
 
-  // Release B trust boundary (MCP parity): the linked issue comes ONLY from
+  // review acceptance trust boundary (MCP parity): the linked issue comes ONLY from
   // the explicit `issue` argument. PR prose (title/body) can never trigger
   // tracker access — parseTicketKey auto-extraction was removed. The local
   // branch name remains a legacy convenience for non-PR reviews.
@@ -152,8 +152,8 @@ export async function runReviewCore({
     `</change>`,
   ].filter(Boolean).join('\n');
 
-  // Release B bounded single payload: parse, plan against singleMaxBytes,
-  // and execute through the shared Package 19 executor with structured
+  // review acceptance bounded single payload: parse, plan against singleMaxBytes,
+  // and execute through the shared review executor with structured
   // coverage. A payload that cannot fit fails closed (shard hint) instead
   // of silently truncating files.
   const limits = reviewLimitConfig().limits;
@@ -161,7 +161,7 @@ export async function runReviewCore({
   if (parsedSections.error) {
     throw new Error(`failed to parse diff: ${parsedSections.error}`);
   }
-  // Selection happens BEFORE planning (P0 parity): the planner sees only the
+  // Selection happens before planning so the planner sees only the
   // requested sections, so unrelated files cannot fail a scoped review.
   const selectedSections = selectors.length > 0
     ? parsedSections.sections.filter((s) => selectors.includes(s.new_path) || selectors.includes(s.old_path))
@@ -246,13 +246,13 @@ export async function runReviewCore({
   return result.verdict;
 }
 
-// ─── single-review path (Package 20 / Atomic 41) ────────────────────────────
+// ─── single-review path (shared contract) ────────────────────────────
 
 /**
- * MCP single-review parity: the shared Package 19 executor wired with
+ * MCP single-review parity: the shared review executor wired with
  * project-root enforcement, cancellation, structured coverage, and safe
  * error projection. The diff is acquired exactly once (buffered), parsed by
- * Package 14, bounded by Package 13 limits, and reviewed by the shared
+ * parser, bounded by frozen review limits, and reviewed by the shared
  * executor — no duplicate payload assembly.
  *
  * @param {object} opts
@@ -282,7 +282,7 @@ export async function runReviewCoreSingle({ diff, question, selectors = [], call
 }
 
 /**
- * MCP shard parity (Package 25 / Atomic 46): sequential whole-file shards
+ * MCP shard parity (shared contract): sequential whole-file shards
  * through the shared executor, cancellation parity, structured partial
  * errors, usage accounting, and NO completed prose or raw diff in errors.
  *
@@ -345,7 +345,7 @@ export async function runReviewCoreShard({ diff, question, metadata = '', callMo
   return { ok: true, shards: result.shards, attempts: result.attempts };
 }
 
-// P1 parity: without an injected test seam, the full diff also comes from
+// Without an injected test seam, the full diff also comes from
 // the exact inventory-first machinery (merge-base OIDs, sealed projection,
 // bounded output, fork-aware PR fetch) — never an unbounded legacy diff.
 async function defaultAcquireFullDiff({ pr, base }) {

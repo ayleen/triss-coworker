@@ -1,10 +1,10 @@
 /**
- * review-payload.test.js — Package 14 (Atomic 31): pure diff parser and
+ * review-payload.test.js — pure diff parser and
  * coverage model.
  *
  * RED/GREEN: node --test test/review-payload.test.js
  *
- * Covers Reference surface 9 parser/coverage subset of
+ * Covers documented contract parser/coverage subset of
  * docs/reliable-delegation-contract-plan.md: UTF-8 byte accounting, exact
  * boundaries, section splitting, CRLF preservation, quoted-path decoding,
  * rename/create/delete/binary handling, coverage, and single-request
@@ -224,7 +224,7 @@ test('manifest contains no diff contents', () => {
   assert.ok(!JSON.stringify(cov).includes('SECRET_DIFF_LINE'), 'coverage must not embed diff bodies');
 });
 
-// ─── sequential shard planning (Atomic 44 / Package 23) ─────────────────────
+// ─── sequential shard planning (shared contract) ─────────────────────
 
 const SHARD_LIMITS = { singleMaxBytes: 262144, shardMaxBytes: 6000, totalMaxBytes: 65536, maxShards: 8 };
 
@@ -242,7 +242,7 @@ test('REVIEW-SHARD-PLAN-01: source-ordered whole-file shards never split a file'
   const { plan, error } = planSequentialShards({ sections, question: 'q', limits: SHARD_LIMITS });
   assert.equal(error, null);
   assert.ok(plan.shards.length >= 2, 'fits in multiple shards');
-  // First-seen source order (P2 fix): z.txt appears first in the diff, so
+  // First-seen source order (Invariant): z.txt appears first in the diff, so
   // it must be in the FIRST shard; alphabetical sorting is a contract
   // violation that reorders dependent changes.
   const firstPath = plan.shards[0].sections[0].new_path;
@@ -287,7 +287,7 @@ test('REVIEW-SHARD-PLAN-03: shard-count and total-bound overflows fail closed', 
   assert.equal(totalFail.error, 'total_max_exceeded');
 });
 
-test('REVIEW-SHARD-PLAN-04: limits are required (injected Package 13 frozen config)', () => {
+test('REVIEW-SHARD-PLAN-04: limits are required (injected frozen review limits)', () => {
   const r = planSequentialShards({ sections: [smallSection('a.txt', 10)], question: 'q' });
   assert.match(r.error, /limits are required/);
 });

@@ -1,5 +1,5 @@
 /**
- * coder-result-transitions.test.js — Package 5A (Atomic 20A): retained-result
+ * coder-result-transitions.test.js — retained-result
  * transitions and deletion.
  *
  * RED/GREEN: node --test test/coder-result-transitions.test.js

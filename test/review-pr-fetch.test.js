@@ -1,5 +1,5 @@
 /**
- * review-pr-fetch.test.js — Package 17C (Atomic 37): bounded disposable PR
+ * review-pr-fetch.test.js — bounded disposable PR
  * fetch.
  *
  * RED/GREEN: node --test test/review-pr-fetch.test.js
@@ -70,7 +70,7 @@ test('fetches base/head objects into a disposable bare repo and verifies exact O
     assert.equal(r.ok, true);
     assert.equal(r.base_oid, BASE);
     assert.equal(r.head_oid, HEAD);
-    // P1 fix: the filesystem reservation stays HELD while the bare repo is
+    // Invariant: the filesystem reservation stays HELD while the bare repo is
     // on disk — the caller releases it when the directory is actually
     // removed. Releasing here would over-admit runs beyond the disk bound.
     assert.equal(fx.quota.usedBytes(), 128 * 1024 * 1024);

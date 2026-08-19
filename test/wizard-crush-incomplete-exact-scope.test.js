@@ -49,7 +49,7 @@ function runWizard(home, scopeFlag) {
 }
 
 test(
-  'Blocker-4 wizard Crush incomplete with --local: recovery command must include --local flag',
+  'Regression wizard Crush incomplete with --local: recovery command must include --local flag',
   () => {
     const home = makeHome();
     try {
@@ -75,7 +75,7 @@ test(
 );
 
 test(
-  'Blocker-4 wizard Crush incomplete with --global: recovery command must include --global flag',
+  'Regression wizard Crush incomplete with --global: recovery command must include --global flag',
   () => {
     const home = makeHome();
     try {

@@ -1,12 +1,12 @@
 /**
- * fixed-kernel-lock.js — Package 2G (Atomic 07): fixed lock capability
+ * fixed-kernel-lock.js — fixed lock capability
  * primitive.
  *
  * Sections 5, 6.3, and 6.5 of the approved plan
  * (docs/reliable-delegation-contract-plan.md): the sole owner of
  * regular/no-follow, same-UID, mode-0600 fixed advisory-lock creation.
  *
- * Package 0 has selected no kernel lock backend, so this module exports the
+ * component has selected no kernel lock backend, so this module exports the
  * documented best-effort non-kernel scope with the same lifetime API:
  * `acquireFixedKernelLock()` and `withFixedKernelLock()`. It never claims
  * cross-process locking (no kernel advisory lock exists on the open file
@@ -111,7 +111,7 @@ async function acquireExclusiveMarker(fd, { signal }) {
 }
 
 /**
- * Honest capability result: without a Package 0 kernel backend this is
+ * Honest capability result: without a component kernel backend this is
  * always `best_effort` and never claims cross-process locking.
  */
 export function fixedLockCapability() {

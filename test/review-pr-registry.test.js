@@ -1,5 +1,5 @@
 /**
- * review-pr-registry.test.js — Package 17A (Atomic 35): disposable PR
+ * review-pr-registry.test.js — disposable PR
  * ownership registry.
  *
  * RED/GREEN: node --test test/review-pr-registry.test.js
@@ -7,7 +7,7 @@
  * Covers Section 9.4 marker/registry contract of
  * docs/reliable-delegation-contract-plan.md: three-entry admission cap,
  * strict-capability preflight, dual-form marker publication, crash
- * recovery, exact cleanup, and the Package 2D2 owner adapter with borrowed
+ * recovery, exact cleanup, and the PR owner adapter with borrowed
  * vs acquired lock contexts.
  */
 

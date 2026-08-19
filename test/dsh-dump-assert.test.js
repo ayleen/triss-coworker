@@ -1,5 +1,5 @@
 /**
- * dsh-dump-assert tests (review round 4, §2): route assertions must parse
+ * dsh-dump-assert tests: route assertions must parse
  * the dumped llm-pi-ai.config.providers object instead of grepping
  * substrings. The negative fixtures are the exact false-positive shapes the
  * reviewer reproduced: a dump missing the standalone opencode route, a

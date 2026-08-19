@@ -63,7 +63,7 @@ function withEnv(home, project, fn) {
 }
 
 test(
-  'Blocker-6 inspectCoderModelState: real split state (global Triss env runtime main zai-coding-plan/glm-5.2 while global opencode.json.model is stale opencode/hy3-free) must expose BOTH values distinctly — current.main reports the runtime main (glm-5.2), config_main reports the config-only main (hy3-free), and neither field calls the stale config main "current"',
+  'Regression inspectCoderModelState: real split state (global Triss env runtime main zai-coding-plan/glm-5.2 while global opencode.json.model is stale opencode/hy3-free) must expose BOTH values distinctly — current.main reports the runtime main (glm-5.2), config_main reports the config-only main (hy3-free), and neither field calls the stale config main "current"',
   async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-split-home-')));
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'triss-split-proj-')));

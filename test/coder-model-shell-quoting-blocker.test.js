@@ -103,7 +103,7 @@ function argAfter(argv, flag) {
 // ─── 9a: rollback --from path with space + apostrophe + semicolon + $() ──────
 
 test(
-  'Blocker-9a rollback command POSIX-quotes the --from record path containing space, apostrophe, semicolon, and $() so /bin/sh parses it back as a single argument equal to the original (no injection, no word-split)',
+  'Regression rollback command POSIX-quotes the --from record path containing space, apostrophe, semicolon, and $() so /bin/sh parses it back as a single argument equal to the original (no injection, no word-split)',
   withHome(async ({ home }) => {
     const svc = await loadService();
     const plan = await canonicalCrushPlan(svc, 'global');
@@ -146,7 +146,7 @@ test(
 // ─── 9b: rollback --from path with an embedded newline ──────────────────────
 
 test(
-  'Blocker-9b rollback command POSIX-quotes the --from record path containing an embedded newline so /bin/sh parses it back as a single argument',
+  'Regression rollback command POSIX-quotes the --from record path containing an embedded newline so /bin/sh parses it back as a single argument',
   withHome(async ({ home }) => {
     const svc = await loadService();
     const plan = await canonicalCrushPlan(svc, 'global');
@@ -183,7 +183,7 @@ test(
 // ─── 9c: formatModelRecovery quotes a model id containing space + apostrophe ──
 
 test(
-  'Blocker-9c formatModelRecovery POSIX-quotes dynamic model ids (space + apostrophe) so /bin/sh parses the main and --small values as single arguments',
+  'Regression formatModelRecovery POSIX-quotes dynamic model ids (space + apostrophe) so /bin/sh parses the main and --small values as single arguments',
   withHome(async () => {
     const svc = await loadService();
     // Crafted state with shell-hostile model ids in the recommended pair. The

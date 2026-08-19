@@ -26,7 +26,7 @@ accepting a result.
 **`triss coder run "<task>"`** hands an implementation subtask to a
 separate GLM coding agent instead of writing it yourself (setup once via
 `triss coder init`; default `opencode` V1 engine, `--engine opencode2` for
-the V2 beta (see docs/opencode2.md), or `--engine crush`). The
+the V2 beta (see docs/engines/opencode2.md), or `--engine crush`). The
 default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in

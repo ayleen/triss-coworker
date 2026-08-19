@@ -1,5 +1,5 @@
 /**
- * review-pr-registry.js — Package 17A (Atomic 35): disposable PR ownership
+ * review-pr-registry.js — disposable PR ownership
  * registry.
  *
  * Section 9.4 marker/registry contract of the approved plan
@@ -11,7 +11,7 @@
  *   publishPrRunState()         — marker + active registry entry (dual-form)
  *   recoverPrRunDirectories()   — idempotent crash recovery
  *   cleanPrRunDirectory()       — exact validated removal
- *   createPrProcessOwnerAdapter({heldOwnerLockContext}) — Package 2D2
+ *   createPrProcessOwnerAdapter({heldOwnerLockContext}) — component
  *                                owner-interface adapter
  */
 
@@ -217,7 +217,7 @@ export async function cleanPrRunDirectory({ trissRootPath, runId, quota }) {
 }
 
 /**
- * Package 2D2 owner-interface adapter for PR runs. A borrowed context is the
+ * component owner-interface adapter for PR runs. A borrowed context is the
  * active `.registry.lock` scope; a null context acquires it for fresh
  * recovery. Never creates/replaces/unlinks/independently opens the lock inode.
  */

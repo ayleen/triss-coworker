@@ -772,7 +772,7 @@ test('REV-10: MCP review evidence returns the model-authored contract without th
   }
 });
 
-// ─── REVIEW-SHARD-CLI-* cases (Atomic 45 / Package 24) ──────────────────────
+// ─── REVIEW-SHARD-CLI-* cases (shared contract) ──────────────────────
 
 test('REVIEW-SHARD-CLI-01: shard mode prints per-shard verdicts and no global clean verdict', async () => {
   const dir = makeTmpDir();

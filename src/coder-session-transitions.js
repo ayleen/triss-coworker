@@ -1,10 +1,10 @@
 /**
- * coder-session-transitions.js — Package 4B1 (Atomic 16): session admission
+ * coder-session-transitions.js — session admission
  * and inventory transitions.
  *
  * Section 6.3 admission/recovery state table of the approved plan
- * (docs/reliable-delegation-contract-plan.md). Reuses Package 4A lock
- * contexts and Package 4B codec.
+ * (docs/reliable-delegation-contract-plan.md). Reuses shared lock
+ * contexts and component codec.
  *
  * Exports:
  *   allocateCoderSessionSlug()          — 128 random bits, collision scan,

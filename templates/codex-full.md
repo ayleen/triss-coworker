@@ -243,7 +243,7 @@ Keep `triss coder` for agentic coding runs.
 Setup once per machine/project: `triss coder init` (installs the opencode
 engine, configures the selected provider key, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine opencode2`
-for the V2 beta (shares the opencode.json config; see docs/opencode2.md) or
+for the V2 beta (shares the opencode.json config; see docs/engines/opencode2.md) or
 `--engine crush` (or set `TRISS_CODER_ENGINE=crush`) to target the crush
 engine instead. The
 opencode engine can reuse the existing OpenAI-compatible worker profile with
@@ -303,7 +303,8 @@ for each entry. Override per-run with `--restrict` / `--no-restrict`, or via
 `TRISS_CODER_CRUSH_RESTRICT=1`. crush is simpler otherwise (one JSON envelope,
 native session ids). Both share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads
 it natively; triss also forwards it as `ZAI_API_KEY` for older binaries). See
-`docs/crush-restrict-issues.md` for the live-verified bug facts.
+`docs/engines/crush.md` for the supported configuration, safety boundaries,
+and current upstream limitations.
 
 Env: `ZHIPU_API_KEY` (required for the default GLM provider;
 `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other

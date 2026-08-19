@@ -1,0 +1,11 @@
+/.github/workflows/ @ayleen
+/install.sh @ayleen
+/scripts/standalone-bootstrap.js @ayleen
+/scripts/publish-gate.js @ayleen
+/scripts/check-package-contents.js @ayleen
+/src/secrets.js @ayleen
+/src/net.js @ayleen
+/src/coder-credential-proxy.js @ayleen
+/src/update/ @ayleen
+/package.json @ayleen
+/package-lock.json @ayleen

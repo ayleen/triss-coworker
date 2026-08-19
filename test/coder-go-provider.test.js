@@ -100,7 +100,7 @@ test(
     const modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
     assert.equal(capturedArgv[modelIdx + 1], 'opencode-go/deepseek-v4-flash');
-    // Release A: proxy token, never the raw credential.
+    // session acceptance: proxy token, never the raw credential.
     assert.match(capturedEnv.OPENCODE_API_KEY, /^[0-9a-f]{32}$/);
     assert.notEqual(capturedEnv.OPENCODE_API_KEY, 'sk-go-fake');
     assert.equal('ZHIPU_API_KEY' in capturedEnv, false);

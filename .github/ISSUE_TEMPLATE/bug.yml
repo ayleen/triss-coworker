@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible Triss defect.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Remove secrets, private URLs, and proprietary source before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Triss version
+      placeholder: triss --version
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation type
+      options: [npm, pnpm, yarn, standalone, source]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Include the smallest commands and inputs that reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and redacted logs
+    validations:
+      required: true

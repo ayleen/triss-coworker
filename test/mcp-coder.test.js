@@ -156,7 +156,7 @@ test(
   }),
 );
 
-// ─── Atomic 24 (Package 8) MCP additions ─────────────────────────────────────
+// ─── transition (component) MCP additions ─────────────────────────────────────
 
 test(
   'listTools: triss_coder_run exposes allowBestEffortCallerWorktree (default-false opt-in)',
@@ -364,7 +364,7 @@ test(
     assert.ok(engineProp, 'engine property must exist on triss_coder_run');
     assert.equal(engineProp.type, 'string');
     // Phase 5: the engine enum must list all three engines — opencode2 is
-    // the V2 beta (docs/opencode2.md); a client discovering the tool schema
+    // the V2 beta (docs/engines/opencode2.md); a client discovering the tool schema
     // must never interpret plain `opencode` as V2.
     assert.deepEqual(engineProp.enum, ['opencode', 'opencode2', 'crush']);
     // isolate stays OPTIONAL with NO schema default — the undefined tristate

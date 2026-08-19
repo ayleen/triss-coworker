@@ -1,5 +1,5 @@
 /**
- * coder-session-transitions.test.js — Package 4B1 (Atomic 16): session
+ * coder-session-transitions.test.js — session
  * admission and inventory transitions.
  *
  * RED/GREEN: node --test test/coder-session-transitions.test.js

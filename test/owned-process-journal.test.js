@@ -1,5 +1,5 @@
 /**
- * owned-process-journal.test.js — Package 2D1 (Atomic 09): owned-process
+ * owned-process-journal.test.js — owned-process
  * journal codec and transaction.
  *
  * RED/GREEN: node --test test/owned-process-journal.test.js

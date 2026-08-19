@@ -239,8 +239,8 @@ test('session store: persistSessionMapping/sessionsLockPath are exported; a held
   // non-repo project dir (tmp) — gitRepoRoot returns null, no .gitignore add.
   const sh = () => ({ error: true, status: 128, stdout: '' });
   // Pre-hold the session-store lock exactly the way a concurrent V1/V2
-  // writer would (O_EXCL create via the shared lock primitive). Review
-  // round 6 #1: this persist runs AFTER a finished engine run — throwing
+  // writer would (O_EXCL create via the shared lock primitive). This persist
+  // runs after a finished engine run, so throwing
   // away the mapping meant throwing away a paid run. The new contract
   // retries, then degrades to the lock-free protocol: the mapping is
   // written, a warning explains it, and the foreign lock is NOT stolen.

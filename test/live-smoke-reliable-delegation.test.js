@@ -1,10 +1,10 @@
 /**
- * live-smoke-reliable-delegation.test.js — Package 11 (Atomic 28): Release A
+ * live-smoke-reliable-delegation.test.js — session acceptance
  * synthetic acceptance harness.
  *
  * RED/GREEN: node --test test/live-smoke-reliable-delegation.test.js
  *
- * Covers Reference surface 17 / Atomic 28 of
+ * Covers documented contract / transition of
  * docs/reliable-delegation-contract-plan.md: persistent admission cap
  * (sessions 1-4 admitted, the fifth fails before spawn with
  * TRISS_CODER_SESSION_CAP), bounded listing, exact-engine clean with
@@ -19,12 +19,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runSyntheticReleaseA, SESSION_CAP_CODE, runSyntheticReleaseB, runSyntheticReleaseC } from '../src/release-a-acceptance.js';
+import {
+  runSyntheticSessionAcceptance,
+  SESSION_CAP_CODE,
+  runSyntheticReviewAcceptance,
+  runSyntheticShardingAcceptance,
+} from './support/reliable-delegation-acceptance.js';
 import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 
 async function fixture() {
-  const trissRoot = await mkdtemp(join(tmpdir(), 'triss-release-a-test-'));
+  const trissRoot = await mkdtemp(join(tmpdir(), 'triss-session-acceptance-test-'));
   return {
     trissRoot,
     async cleanup() {
@@ -33,10 +38,10 @@ async function fixture() {
   };
 }
 
-test('RELEASE-A: the synthetic suite passes end-to-end with zero failures', async () => {
+test('SESSION-ACCEPTANCE: the synthetic suite passes end-to-end with zero failures', async () => {
   const fx = await fixture();
   try {
-    const { passed, failed } = await runSyntheticReleaseA({ trissRoot: fx.trissRoot });
+    const { passed, failed } = await runSyntheticSessionAcceptance({ trissRoot: fx.trissRoot });
     assert.deepEqual(failed, [], `synthetic cases failed: ${JSON.stringify(failed)}`);
     // All five case groups present.
     assert.ok(passed.some((p) => p.startsWith('persistent admission')), 'admission cap case ran');
@@ -49,10 +54,10 @@ test('RELEASE-A: the synthetic suite passes end-to-end with zero failures', asyn
   }
 });
 
-test('RELEASE-A: the inventory on disk is bounded after the suite (no leftover rows)', async () => {
+test('SESSION-ACCEPTANCE: the inventory on disk is bounded after the suite (no leftover rows)', async () => {
   const fx = await fixture();
   try {
-    await runSyntheticReleaseA({ trissRoot: fx.trissRoot });
+    await runSyntheticSessionAcceptance({ trissRoot: fx.trissRoot });
     const opencodeDir = sessionInventoryPath(fx.trissRoot, 'opencode');
     const read = await readCoderSessionInventory(opencodeDir);
     assert.equal(read.error, undefined);
@@ -64,15 +69,15 @@ test('RELEASE-A: the inventory on disk is bounded after the suite (no leftover r
   }
 });
 
-test('RELEASE-A: SESSION_CAP_CODE is the stable documented constant', () => {
+test('SESSION-ACCEPTANCE: SESSION_CAP_CODE is the stable documented constant', () => {
   assert.equal(SESSION_CAP_CODE, 'TRISS_CODER_SESSION_CAP');
 });
 
-// ─── SMOKE-B-* cases (Package 21 / Atomic 42) ────────────────────────────────
+// ─── REVIEW-ACCEPTANCE-* cases (shared contract) ────────────────────────────────
 
-test('SMOKE-B-01: the Release B synthetic suite passes end-to-end with zero failures', async () => {
-  const { passed, failed } = await runSyntheticReleaseB();
-  assert.deepEqual(failed, [], `synthetic B cases failed: ${JSON.stringify(failed)}`);
+test('REVIEW-ACCEPTANCE-01: the review acceptance synthetic suite passes end-to-end with zero failures', async () => {
+  const { passed, failed } = await runSyntheticReviewAcceptance();
+  assert.deepEqual(failed, [], `synthetic review cases failed: ${JSON.stringify(failed)}`);
   assert.ok(passed.some((p) => p.startsWith('full local review')), 'full review case ran');
   assert.ok(passed.some((p) => p.startsWith('rename selection')), 'rename case ran');
   assert.ok(passed.some((p) => p.startsWith('issue trust')), 'issue trust case ran');
@@ -80,11 +85,11 @@ test('SMOKE-B-01: the Release B synthetic suite passes end-to-end with zero fail
   assert.ok(passed.some((p) => p.startsWith('empty provider')), 'empty response case ran');
 });
 
-// ─── SMOKE-C-* cases (Package 26 / Atomic 47) ────────────────────────────────
+// ─── SHARDING-ACCEPTANCE-* cases (shared contract) ────────────────────────────────
 
-test('SMOKE-C-01: the Release C synthetic suite passes end-to-end with zero failures', async () => {
-  const { passed, failed } = await runSyntheticReleaseC();
-  assert.deepEqual(failed, [], `synthetic C cases failed: ${JSON.stringify(failed)}`);
+test('SHARDING-ACCEPTANCE-01: the sharding acceptance synthetic suite passes end-to-end with zero failures', async () => {
+  const { passed, failed } = await runSyntheticShardingAcceptance();
+  assert.deepEqual(failed, [], `synthetic sharding cases failed: ${JSON.stringify(failed)}`);
   assert.ok(passed.some((p) => p.startsWith('sharding order')), 'sharding order case ran');
   assert.ok(passed.some((p) => p.startsWith('no-global-verdict')), 'no-global-verdict case ran');
   assert.ok(passed.some((p) => p.startsWith('second-shard failure')), 'no-third-call case ran');

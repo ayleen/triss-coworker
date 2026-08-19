@@ -1,10 +1,10 @@
 /**
- * coder-result.test.js — Package 1 (Atomic 01): pure coder result and
+ * coder-result.test.js — pure coder result and
  * lifecycle contract.
  *
  * RED/GREEN: node --test test/coder-result.test.js
  *
- * Covers Reference surface 1 of docs/reliable-delegation-contract-plan.md:
+ * Covers documented contract of docs/reliable-delegation-contract-plan.md:
  * enum validation, the deterministic result matrix (Section 6.2), orthogonal
  * lifecycle precedence, result-retention facts, and activity normalization
  * (Section 6.4). No network, no process spawning.
@@ -343,7 +343,7 @@ test('best_effort cleanup: no verified change evidence, advisory only', () => {
   assert.equal(noText.requirementStatus, 'not_evaluated');
 });
 
-// ─── result retention (Reference surface 1) ─────────────────────────────────
+// ─── result retention (documented contract) ─────────────────────────────────
 
 test('verified changed ephemeral run derives retained + run-bound result_id', () => {
   const facts = deriveCoderResultFacts(
@@ -516,7 +516,7 @@ test('deriveCoderResultFacts is pure: same input → same output, input untouche
   assert.equal(JSON.stringify(input), snapshot);
 });
 
-// ─── bounded blocker diagnostics (Atomic 27 / Package 10A) ──────────────────
+// ─── bounded blocker diagnostics (shared contract) ──────────────────
 
 test('classifyCoderBlockers: EPERM/EACCES tool errors add only environment_permission', () => {
   const blockers = classifyCoderBlockers([{ text: 'tool failed: EPERM: operation not permitted on /var/lib/x' }]);
