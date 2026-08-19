@@ -153,6 +153,8 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     assert.ok(threw, 'plugin gate must reject');
     assert.match(threw.message, /plugin/u);
     assert.match(threw.message, /evil\.js/u);
+    assert.match(threw.message, /docs\/engines\/opencode2\.md/u);
+    assert.doesNotMatch(threw.message, /-plan\.md/u);
     assert.doesNotMatch(threw.message, /sk-/u, 'no secrets in the error');
   }));
 

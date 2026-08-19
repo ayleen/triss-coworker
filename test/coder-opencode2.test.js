@@ -740,6 +740,8 @@ test(
         ),
         (err) => {
           assert.match(err.message, /not verified|no translation fixture|unsupported/i);
+          assert.match(err.message, /docs\/engines\/opencode2\.md/u);
+          assert.doesNotMatch(err.message, /-plan\.md/u);
           return true;
         },
       );

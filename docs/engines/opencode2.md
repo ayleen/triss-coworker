@@ -59,16 +59,18 @@ maps `opencode2` into the same engine family as `opencode` (explicit
 engines — the Go reseller's tariffs are not modeled (a
 `TRISS_PRICE_OPENCODE_GO_<MODEL>` override prices it explicitly).
 
-## Plugin and agent gates (fail closed)
+## Plugin, agent, and custom-tool gates (fail closed)
 
-No V2 plugin or subagent is verified to preserve the deny-first policy yet, so
-**any** configured or discovered plugin/agent source rejects the run **before
-any process spawns or credential is forwarded** — in both `coder init` and
-`coder run`:
+No V2 plugin, subagent, or custom tool is verified to preserve the deny-first
+policy yet, so **any** configured or discovered plugin, agent, or custom-tool
+source rejects the run **before any process spawns or credential is
+forwarded** — in both `coder init` and `coder run`:
 
 - `~/.config/opencode/plugins`, `.opencode/plugin`, configured plugin entries;
 - `~/.config/opencode/agents/*`, `.opencode/agent/*`, configured agent
-  sources.
+  sources;
+- `~/.config/opencode/tool`, `~/.config/opencode/tools`,
+  `.opencode/tool`, and `.opencode/tools` custom-tool directories.
 
 The error names the offending source path (never secrets). Remove or disable
 the source, then re-run. One-shot `--provider`/`--small-model` overlays are
@@ -99,7 +101,7 @@ To fully remove V2: `npm uninstall -g @opencode-ai/cli` and delete
 |---|---|
 | `live-allow-rule (git status)` / `… not deny-everything` from `coder init --engine opencode2` | The existing (typically V1-authored) `opencode.json` carries live bash allow rules — the V2 beta cannot run while any exist. V2 init rejects **before writing anything**: remove the allow rules from `opencode.json` (V1 runs lose them too), or stay on `--engine opencode` until the V2 beta grows real credential isolation. |
 | V1 `coder run` lost `git status` / `npm test` after a V2 init | A fresh V2 init writes deny-everything into the SHARED `opencode.json` (init prints this warning). Export `TRISS_CODER_ENGINE=opencode2`, or re-run plain `triss coder init` to restore the V1 allowlist — which makes the tree V2-incompatible again. |
-| `unsupported plugin source "…"` / `unsupported agent source "…"` | The static preflight found an unverified source. Remove or disable it (see the path in the error). **Note:** the standard `~/.config/opencode/agents/` templates written by a V1 `triss coder init` also trip this gate — V2 beta requires a machine without V1 agent templates (or with them temporarily moved) until subagents are fixture-verified. |
+| `unsupported plugin source "…"` / `unsupported agent source "…"` / `unsupported custom tool source "…"` | The static preflight found an unverified source. Remove or disable it (see the path in the error). **Note:** the standard `~/.config/opencode/agents/` templates written by a V1 `triss coder init` also trip this gate — V2 beta requires a machine without V1 agent templates (or with them temporarily moved) until subagents are fixture-verified. |
 | `Agent not found: "coder"` on an older Triss build | Older builds injected `--agent coder` into V2 runs; current builds use the engine's built-in primary agent when `--agent` is not passed. Update Triss. |
 | `opencode2 not found` | Install the exact pin: `npm install -g @opencode-ai/cli@0.0.0-next-17430`. |
 | `version mismatch (pin …)` | `TRISS_CODER_OPENCODE2_VERSION` override or reinstall the pinned build — V2 is exact-pin only. |

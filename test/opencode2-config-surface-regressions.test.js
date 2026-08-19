@@ -166,6 +166,8 @@ test('a discovered .opencode/tools/*.js custom tool rejects before any spawn', (
   const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns });
   assert.match(threw.message, /tool/u);
   assert.match(threw.message, /helper\.js/u);
+  assert.match(threw.message, /docs\/engines\/opencode2\.md/u);
+  assert.doesNotMatch(threw.message, /-plan\.md/u);
 }));
 
 test('an mcp block in a config layer rejects (local MCP inherits the credential env)', () => withHome(async ({ proj }) => {

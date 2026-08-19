@@ -1486,7 +1486,7 @@ function staticOpenCode2Preflight(cwd) {
       `OpenCode 2 preflight aborted: unsupported plugin source "${offender.path}" ` +
         `(${offender.origin}${offender.exists === false ? ', target missing' : ''}). ` +
         'No OpenCode 2 plugin is verified compatible yet — remove or disable the plugin reference, ' +
-        'then re-run. See docs/opencode2-engine-plan.md "Plugin compatibility gate".',
+        'then re-run. See docs/engines/opencode2.md "Plugin, agent, and custom-tool gates (fail closed)".',
     );
   }
   const agentOffender = sources.agentSources.find(
@@ -1497,7 +1497,7 @@ function staticOpenCode2Preflight(cwd) {
       `OpenCode 2 preflight aborted: unsupported agent source "${agentOffender.path}" ` +
         `(${agentOffender.origin}). No OpenCode 2 subagent is verified to retain ` +
         'the deny-first shell policy — remove or disable the agent source, then re-run. ' +
-        'See docs/opencode2-engine-plan.md "Configuration and permission audit".',
+        'See docs/engines/opencode2.md "Plugin, agent, and custom-tool gates (fail closed)".',
     );
   }
   // Executable configuration surfaces: custom tool dirs
@@ -1514,7 +1514,7 @@ function staticOpenCode2Preflight(cwd) {
       `OpenCode 2 preflight aborted: unsupported custom tool source "${toolOffender.path}" ` +
         `(${toolOffender.origin}). Custom tools execute inside the OpenCode process with the ` +
         'provider credential in the environment — none are verified for the beta. Remove the ' +
-        'tool directory and re-run. See docs/opencode2-engine-plan.md "Configuration and permission audit".',
+        'tool directory and re-run. See docs/engines/opencode2.md "Plugin, agent, and custom-tool gates (fail closed)".',
     );
   }
   return sources;
@@ -5090,7 +5090,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
       throw new Error(
         '--provider/--small-model one-shot runs are unsupported on the opencode2 engine for now: ' +
           'every advertised provider route needs a verified translation fixture on the pinned build first ' +
-          '(docs/opencode2-engine-plan.md). Use --engine opencode for one-shot provider runs.',
+          '(see docs/engines/opencode2.md). Use --engine opencode for one-shot provider runs.',
       );
     }
     if (!modelOverride) {
@@ -5630,7 +5630,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       throw new Error(
         `--provider/--small-model one-shot overlays are not implemented for the opencode2 engine yet — ` +
           'the six advertised provider routes each need a verified translation fixture first ' +
-          '(docs/opencode2-engine-plan.md Phase 4). Use --engine opencode for one-shot provider runs.',
+          '(see docs/engines/opencode2.md). Use --engine opencode for one-shot provider runs.',
       );
     }
     // Session lookup inside the guarded zone: the store read

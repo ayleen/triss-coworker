@@ -128,6 +128,22 @@ function validatePackagedMarkdownLinks(paths) {
   if (missing.length) fail(`packaged Markdown links target excluded files: ${missing.join(', ')}`);
 }
 
+function validatePackagedRuntimeDocReferences(paths) {
+  const excludedPlanReference = /docs\/[A-Za-z0-9._/-]*-plan\.md\b/u;
+  const offenders = [];
+  for (const path of paths.filter((entry) => entry.endsWith('.js'))) {
+    const source = readFileSync(join(root, path), 'utf8');
+    for (const [index, line] of source.split(/\r?\n/u).entries()) {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
+      if (excludedPlanReference.test(line)) offenders.push(`${path}:${index + 1}`);
+    }
+  }
+  if (offenders.length) {
+    fail(`packaged runtime strings reference excluded plan docs: ${offenders.join(', ')}`);
+  }
+}
+
 function smokeTarball(tarball) {
   const consumer = join(work, 'consumer');
   const consumerHome = join(work, 'home');
@@ -176,6 +192,7 @@ try {
     compareManifest(paths, manifest.files);
   }
   validatePackagedMarkdownLinks(paths);
+  validatePackagedRuntimeDocReferences(paths);
 
   const packed = npmPack(['--pack-destination', work]);
   compareManifest(packed.files.map((entry) => entry.path).sort(), paths);
