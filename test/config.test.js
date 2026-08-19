@@ -1,9 +1,9 @@
 /**
- * config.test.js — Package 13 (Atomic 30): review limit configuration.
+ * config.test.js — review limit configuration.
  *
  * RED/GREEN: node --test test/config.test.js
  *
- * Covers the limit-config subset of Reference surface 9 of
+ * Covers the limit-config subset of documented contract of
  * docs/reliable-delegation-contract-plan.md. All cases use the REVIEW-LIMIT-
  * prefix (mandatory in TAP output): defaults, hard maxima, atomic relational
  * validation, precedence, and reload behavior.
@@ -67,7 +67,7 @@ test('REVIEW-LIMIT-04: values above the hard maxima fall back to defaults', () =
       TRISS_REVIEW_SINGLE_MAX_BYTES: '2097152', // 2 MiB > 1 MiB hard max
     }),
   });
-  // P1 fix: the fallback is ATOMIC — one invalid value returns the
+  // Invariant: the fallback is ATOMIC — one invalid value returns the
   // COMPLETE default set with one warning (no per-value silent defaults).
   assert.deepEqual(limits, REVIEW_LIMIT_DEFAULTS);
   assert.match(warning, /falling back to the complete default set/);

@@ -87,7 +87,7 @@ export async function httpJson(url, { method = 'GET', headers = {}, body, signal
   let text;
   try {
     res = await fetch(url, init);
-    // Per-call maxBytes overrides the global cap (Package 18 review-specific
+    // Per-call maxBytes overrides the global cap (component review-specific
     // calls use bounded abort-aware response reading).
     text = await readBodyCapped(res, maxBytes ?? httpMaxBytes(), `${method} ${url}`);
   } catch (err) {

@@ -1,9 +1,10 @@
 /**
- * coder-lease.js — Package 4A (Atomic 14): fixed kernel locks and coder
+ * coder-lease.js — fixed kernel locks and coder
  * leases.
  *
  * Section 6.3 lease contract of the approved plan
- * (docs/reliable-delegation-contract-plan.md). Reuses Package 2G exclusively;
+ * (docs/reliable-delegation-contract-plan.md). Reuses fixed kernel-lock
+ * primitives exclusively;
  * no later package opens a kernel lock directly.
  *
  * Lock hierarchy (authoritative order):

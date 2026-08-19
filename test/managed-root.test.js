@@ -1,5 +1,5 @@
 /**
- * managed-root.test.js — Package 2F (Atomic 06): managed-root capability
+ * managed-root.test.js — managed-root capability
  * primitive (path-based best-effort variant).
  *
  * RED/GREEN: node --test test/managed-root.test.js
@@ -7,7 +7,7 @@
  * Covers Section 5 of docs/reliable-delegation-contract-plan.md: component-
  * wise no-follow/directory-only/same-UID checks, symlink/escape/foreign
  * ownership rejection, identity revalidation before destructive transitions,
- * and honest best_effort enforcement (no Package 0 dir-FD backend). All
+ * and honest best_effort enforcement (no native dir-FD backend). All
  * fixtures live in a disposable temp dir.
  */
 
@@ -236,6 +236,6 @@ test('destructive operations recheck pinned identity after substitution', async 
 
 // ─── capability honesty ──────────────────────────────────────────────────────
 
-test('enforcement is honestly best_effort without a Package 0 dir-FD backend', () => {
+test('enforcement is honestly best_effort without a native dir-FD backend', () => {
   assert.equal(managedRootEnforcement(), 'best_effort');
 });

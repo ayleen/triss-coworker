@@ -1,9 +1,9 @@
 /**
- * coder-state-backup.js — Package 4D (Atomic 19): rollback backup
+ * coder-state-backup.js — rollback backup
  * orchestrator.
  *
  * Section 15 rollback contract of the approved plan
- * (docs/reliable-delegation-contract-plan.md). Reuses Package 4A's
+ * (docs/reliable-delegation-contract-plan.md). Reuses the shared
  * maintenance/slot/inventory wrappers without another lock implementation.
  *
  * Backup layout (bounded):
@@ -106,7 +106,7 @@ function decodeCompletionMarker(text) {
 }
 
 async function hashFileNoFollow(filePath, state) {
-  // Race-free no-follow (P1 fix): the lstat-then-open pair let a swap place
+  // Race-free no-follow (Invariant): the lstat-then-open pair let a swap place
   // a symlink at the path between the check and the open. The open itself is
   // O_NOFOLLOW (a symlink fails with ELOOP), and the identity/regular-file
   // check runs on the OPEN DESCRIPTOR (fstat), so the hashed bytes are
@@ -139,7 +139,7 @@ async function hashFileNoFollow(filePath, state) {
  * Inventory the v2 coder state under a project root: the engine session
  * stores and coder-state records, bounded, no-follow.
  *
- * Before Atomic 20C introduces the result registry, any non-empty
+ * Before transition introduces the result registry, any non-empty
  * `.triss/coder-results-v1/` root is reported as
  * TRISS_CODER_ROLLBACK_RESULTS_PENDING and the backup fails before copying:
  * the backup never parses, deletes, or invents a second result codec.
@@ -327,7 +327,7 @@ export async function validateCoderV2Backup(backupDir) {
     reasons.push('completion marker hash does not match manifest');
   }
 
-  // P1 fix: strict entry-schema re-validation BEFORE any path join. A
+  // Invariant: strict entry-schema re-validation BEFORE any path join. A
   // manifest is untrusted input at validation time — entry.path values like
   // `../../target` must be rejected instead of escaping the backup root,
   // and each entry must be a well-formed {path, sha256, size} record.

@@ -24,7 +24,8 @@ Requirements:
 
 ```bash
 npm run lint     # ESLint flat config, eslint:recommended
-npm test         # node --test test/*.test.js
+npm test         # secure-default suite, then isolated best-effort tests
+npm run check    # lint, syntax, tests, generated docs, package smoke
 ```
 
 CI runs both on every pull request (Node 22 + 24 matrix).
@@ -47,8 +48,6 @@ hooks (CI catches violations).
 - `src/mcp/` contains the stdio MCP server.
 - `templates/` contains the `CLAUDE.md` / `AGENTS.md` snippets rendered by
   `triss init`.
-- Root `CLAUDE.md` and `AGENTS.md` are contributor instructions for this
-  repository, not user-facing templates.
 
 ## Code conventions
 
@@ -61,6 +60,22 @@ hooks (CI catches violations).
 - Spawn subprocesses with `spawnSync(cmd, [args...])`; do not use
   `shell: true`.
 - Do not log full secrets. Use the existing secret masking helpers.
+
+## Security-sensitive changes
+
+- Route agent-controlled URLs through `fetchUrl` or `fetchAsMarkdown` so the
+  SSRF guard, redirect checks, timeouts, and response bounds stay active.
+- Call `assertSafePath(path, { kind: 'read' | 'write' })` before new
+  repository file operations.
+- Never pass raw provider credentials to a child engine or include them in
+  output, fixtures, logs, or error messages.
+- Keep subprocess arguments as arrays and never enable `shell: true`.
+- Do not commit `.triss.env`, usage logs, credentials, or generated local
+  state.
+
+For behavior changes, document the public contract first, add focused failing
+coverage, implement the smallest passing change, and then run the full suite.
+Do not weaken tests to preserve undocumented behavior.
 
 ## Documentation checklist
 

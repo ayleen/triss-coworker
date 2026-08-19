@@ -109,11 +109,23 @@ test('workspace declares the companion without entangling the root package', () 
     'bin/',
     'src/',
     'templates/',
-    'docs/',
-    '!docs/promo/',
+    'docs/configuration.md',
+    'docs/mcp.md',
+    'docs/usage-accounting.md',
+    'docs/getting-started.md',
+    'docs/cli-reference.md',
+    'docs/security-model.md',
+    'docs/reliable-delegation-contract.md',
+    'docs/data-flows.md',
+    'docs/compatibility.md',
+    'docs/deprecations.md',
+    'docs/troubleshooting.md',
+    'docs/integrations/',
+    'docs/engines/',
     'README.md',
     'CHANGELOG.md',
     'LICENSE',
+    'THIRD_PARTY_NOTICES',
   ]);
 });
 
@@ -247,7 +259,7 @@ test('packed root tarball contains neither the companion manifest nor the patch'
 
 test('lifecycle CI proves the real in-place update path and manifest-level removal', () => {
   // The lifecycle job lives in the reusable bundle-checks workflow so the
-  // tag publish flow gates on the same checks (review round 4, §3).
+  // tag publish flow gates on the same checks.
   const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'bundle-checks.yml'), 'utf8');
   const caller = readFileSync(join(repoRoot, '.github', 'workflows', 'test.yml'), 'utf8');
   assert.match(caller, /uses: \.\/\.github\/workflows\/bundle-checks\.yml/,
@@ -259,7 +271,7 @@ test('lifecycle CI proves the real in-place update path and manifest-level remov
     new RegExp(`name: ${name}[^\\n]*\\n\\s+run: \\|\\n([\\s\\S]*?)(?=\\n\\s+- name:)`),
   )?.[1];
   // The update step must exercise a REAL update — add v2 over v1 without a
-  // remove first (review §4: the old step silently re-tested reinstall).
+  // remove first (release contract: the old step silently re-tested reinstall).
   const updateStep = step('update ');
   assert.ok(updateStep, 'lifecycle job must have an update step');
   assert.match(updateStep, /dsh plugin --profile headless add -w "\$V2"/);
@@ -270,10 +282,10 @@ test('lifecycle CI proves the real in-place update path and manifest-level remov
   );
   // Route assertions parse the dump: the updated mode requires the three
   // original routes PLUS the v2 marker (substring greps accepted updates
-  // that dropped a route — review round 4, §2).
+  // that dropped a route; missing routes must fail the gate.
   assert.match(updateStep, /dsh-dump-assert\.js updated/);
   // Removal must verify the profile MANIFEST, not only dump-config output
-  // (review §4: dependency gone from package.json, bundle gone from
+  // (release contract: dependency gone from package.json, bundle gone from
   // dsh.profile.bundles, template bundles retained).
   const removeStep = step('remove ');
   assert.ok(removeStep, 'lifecycle job must have a remove step');
@@ -296,7 +308,7 @@ test('companion README documents prerequisites and the acceptance route table', 
   assert.match(readme, /dsh plugin --profile headless add -w triss-dsh-provider-bundle@/);
   // Every documented `plugin add` command must carry the pnpm workspace-root
   // flag — the bare form reproduces the exact ERR_PNPM workspace-root failure
-  // the prerequisites paragraph warns about (review §3). Command lines start
+  // the prerequisites paragraph warns about (release contract). Command lines start
   // at column zero; prose mentions of `dsh plugin add` must not match.
   const addCommands = readme.match(/^dsh plugin .*add.*$/gm) ?? [];
   assert.ok(addCommands.length > 0, 'README must document the plugin add command');
@@ -305,14 +317,14 @@ test('companion README documents prerequisites and the acceptance route table', 
   }
   // The install command must reference THIS package's version — the 0.34.0
   // regression slipped through because only the command prefix was checked
-  // (review §7).
+  // (release contract).
   const manifest = JSON.parse(readFileSync(join(companionDir, 'package.json'), 'utf8'));
   const installMatch = readme.match(/dsh plugin --profile headless add -w triss-dsh-provider-bundle@([0-9][^\s`.]*(?:\.[0-9][^\s`]*)*)/);
   assert.ok(installMatch, 'README must show the versioned install command');
   assert.equal(installMatch[1], manifest.version,
     `README install command pins ${installMatch[1]} but the package version is ${manifest.version}`);
   // One verified pnpm tuple everywhere: every version the README quotes for
-  // pnpm must equal the lifecycle CI pin (review §3: 9.15.9 vs 9.0.0 drift).
+  // pnpm must equal the lifecycle CI pin (release contract: 9.15.9 vs 9.0.0 drift).
   const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'bundle-checks.yml'), 'utf8');
   const lifecycleJob = workflow.slice(workflow.indexOf('dsh-plugin-lifecycle:'));
   const ciPin = lifecycleJob.match(/corepack prepare pnpm@(\d+(?:\.\d+){0,2}) --activate/)?.[1];
@@ -322,7 +334,7 @@ test('companion README documents prerequisites and the acceptance route table', 
   for (const pin of readmePnpmPins) {
     assert.equal(pin, ciPin, `README quotes pnpm ${pin} but the lifecycle CI pin is ${ciPin}`);
   }
-  // Profile-template documentation must cover all three cases (review §6).
+  // Profile-template documentation must cover all three cases (release contract).
   assert.match(readme, /headless/);
   assert.match(readme, /dsh-web-app/);
   assert.match(readme, /custom base-only profile/);

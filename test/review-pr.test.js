@@ -1,9 +1,9 @@
 /**
- * review-pr.test.js — Package 17D (Atomic 38): PR acquisition composition.
+ * review-pr.test.js — PR acquisition composition.
  *
  * RED/GREEN: node --test test/review-pr.test.js
  *
- * Covers Sections 9.4/11 and Reference surface 10 PR integration bullets of
+ * Covers Sections 9.4/11 and documented contract PR integration bullets of
  * docs/reliable-delegation-contract-plan.md: identity recheck, unique
  * merge-base, inventory-first literal selection, selected content,
  * cancellation, and finally cleanup. All Git/registry seams are injected.
@@ -206,7 +206,7 @@ test('a fetch failure propagates and the finally cleanup still runs', async () =
 });
 
 
-// ─── quota lifecycle (P1: reservations are released exactly once) ────────────
+// ─── quota lifecycle (reservations are released exactly once) ────────────
 
 test('a successful run releases BOTH the 512 MiB root and 128 MiB fetch reservations', async () => {
   const fx = await fixture();
@@ -272,7 +272,7 @@ test('a mid-flow failure still releases the fetch reservation after cleanup', as
   }
 });
 
-// ─── fork acquisition (P1: head OID comes from the fork repository) ──────────
+// ─── fork acquisition (head OID comes from the fork repository) ──────────
 
 test('a fork PR fetches base and head OIDs from their own repositories', async () => {
   const fx = await fixture();

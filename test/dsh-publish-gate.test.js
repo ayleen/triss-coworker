@@ -1,5 +1,5 @@
 /**
- * Release-gate tests for the two-package release train (plan §Package and
+ * Release-gate tests for the two-package release train and
  * release topology): both manifests share the tag version, both tarballs
  * are inspected, registry verification is safely retryable and fails
  * closed on integrity mismatch.
@@ -47,7 +47,7 @@ test('pack-inspect verifies both tarballs against their allowlists', () => {
 });
 
 test('pack-inspect creates an explicitly passed --workdir that does not exist yet', () => {
-  // Publish-workflow scenario (review §1): the runner passes
+  // Publish-workflow scenario (release contract): the runner passes
   // $RUNNER_TEMP/publish-pack, which does not exist on a clean runner.
   // npm pack --pack-destination does NOT create the parent directory
   // (verified on npm 11.6.2), so the gate itself must own mkdir.
@@ -95,7 +95,7 @@ test('registry verification fails closed on a malformed or lying dist.integrity'
   const bytes = Buffer.from('tarball-bytes');
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const url = 'https://x/t.tgz';
-  // Malformed shape (the old gate accepted "sha512-abc" here — review §2).
+  // Malformed shape (the old gate accepted "sha512-abc" here — release contract).
   await assert.rejects(
     () => verifyRegistryPackage({ name: COMPANION_NAME, version: '0.34.0', sha256 }, {
       fetchJson: async () => ({ status: 200, body: { dist: { tarball: url, integrity: 'sha512-abc' } } }),
@@ -178,8 +178,8 @@ test('publish workflow gates both packages from one tag', () => {
   assert.match(workflow, /publish-gate\.js pack-inspect/);
   // Safe retry: publication is PLANNED from live registry state for BOTH
   // packages, publish steps are conditional on the gates job's plan outputs
-  // (review §2), and the fresh-vs-retry tag authorization runs in the
-  // UNPRIVILEGED release-gates job (review round 4, §1/§4).
+  // (release contract), and the fresh-vs-retry tag authorization runs in the
+  // unprivileged release-gates job, before any publish credentials exist.
   assert.match(workflow, /publish-gate\.js plan-publish/);
   assert.match(workflow, /publish-gate\.js authorize-tag/);
   assert.match(workflow, /merge-base --is-ancestor/);
@@ -195,7 +195,7 @@ test('publish workflow gates both packages from one tag', () => {
   assert.match(workflow, /working-directory: packages\/dsh-provider-bundle/);
   // The published bytes are the verified bytes: the publish job repacks with
   // scripts disabled and byte-compares against the gates artifact (review
-  // round 4, §7).
+  // release-integrity contract).
   assert.match(workflow, /Repack and byte-verify both tarballs against the gates artifact/);
   assert.match(workflow, /sha256sum/);
 });
@@ -220,7 +220,7 @@ test('publish workflow creates the pack workdir before the pack-inspect | tee pi
   const workflow = readFileSyncWorkflow();
   // Both sides of a shell pipeline start concurrently: unless mkdir -p runs
   // BEFORE the pipeline, tee opens local-manifest.json before Node gets to
-  // its own mkdirSync() and dies with ENOENT (review §1 — reproduced 20/20
+  // its own mkdirSync() and dies with ENOENT (release contract — reproduced 20/20
   // on the runner shell; pack-inspect's internal mkdir cannot help its own
   // stdout consumer).
   const step = workflow.match(
@@ -238,18 +238,18 @@ test('publish workflow runs registry acceptance on the published package before 
   const workflow = readFileSyncWorkflow();
   // Plan step 16 (automatable half): the published REGISTRY package must be
   // installed into fresh profiles — not re-packed locally — before the GitHub
-  // release is created (review §5).
+  // release is created (release contract).
   assert.match(workflow, /registry-acceptance:/);
   assert.match(workflow, /dsh plugin --profile headless add -w "triss-dsh-provider-bundle@\$\{VERSION\}"/);
   assert.match(workflow, /dsh plugin --profile headless remove triss-dsh-provider-bundle/);
   // Provenance is verified, not assumed: attestations are read from
   // dist.attestations (where npm/pacote store them) AND checked
-  // cryptographically via npm audit signatures (review round 5, §2).
+  // cryptographically via npm audit signatures.
   assert.match(workflow, /dist\?\.attestations/);
   assert.match(workflow, /npm audit signatures --json --include-attestations/);
   // The compatibility tuple is fail-closed and backed by artifacts: the
   // profile pnpm list and lockfile are saved, and any missing field fails
-  // the job (review round 5, §3).
+  // the job; missing attestations must fail publication.
   assert.match(workflow, /pnpm --dir "\$PROFILE" list --depth Infinity --json/);
   assert.match(workflow, /compatibility tuple is incomplete/);
   assert.match(workflow, /pnpm-list\.json[\s\S]*pnpm-lock\.yaml[\s\S]*audit-signatures\.json/);
@@ -285,7 +285,7 @@ test('tag authorization: fresh requires exact main, retry accepts an ancestor', 
     () => authorizeTagRelease(plan(false, false), { exactMain: false, ancestorMain: true }),
     /fresh release authorization failed: neither package is published/,
   );
-  // Review round 4 §1 scenario: companion published + root missing + main
+  // Invariant §1 scenario: companion published + root missing + main
   // advanced past the tag — the retry MUST stay authorized.
   assert.deepEqual(
     authorizeTagRelease(plan(true, false), { exactMain: false, ancestorMain: true }),
@@ -333,7 +333,7 @@ test('CHANGELOG integrity section pins the exact companion tarball bytes', () =>
   // epoch mtime; verified identical across repeated runs and across npm
   // 10.9.8 and 11.6.2), so the recorded release evidence must match the
   // packed artifact exactly. A README edit after recording the hash used to
-  // silently invalidate the evidence (review §2) — this test makes that a
+  // silently invalidate the evidence (release contract) — this test makes that a
   // hard failure.
   const result = packAndInspect();
   const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8');

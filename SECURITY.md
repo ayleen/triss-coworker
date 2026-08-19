@@ -29,12 +29,13 @@ Write commands for trackers (`create`, `update`, `comment --post`,
 transitions, etc.) call the target provider directly and do not ask the model
 to invent the HTTP request.
 
-There are three categories of outbound traffic: the configured model endpoint,
-the tracker APIs you configured, and a credential-free passive GET to Triss's
-fixed public GitHub Release endpoint when the update cache is due. The update
-request includes no prompt, project path, repository name, command arguments,
-usage record, integration configuration, or API key. GitHub necessarily sees
-ordinary connection metadata such as the source IP and User-Agent.
+The authoritative table of model, integration, update-check, and coder-engine
+flows is [docs/data-flows.md](docs/data-flows.md). Repository content may be
+sent to a third-party model provider when a model-backed or coder command is
+requested. The passive update request includes no prompt, project path,
+repository name, command arguments, usage record, integration configuration,
+or API key. GitHub necessarily sees ordinary connection metadata such as the
+source IP and User-Agent.
 
 ## No telemetry
 
@@ -73,8 +74,9 @@ optional `parent_call_id`, and the working directory. **Prompt and file
 content is never written to this log** — metadata only. If working-directory
 paths are themselves sensitive (client names in folder names), set
 `TRISS_USAGE_LOG_CWD=0`, or disable the log entirely with
-`TRISS_USAGE_LOG=0`. The file rotates once past `TRISS_USAGE_LOG_MAX_BYTES`
-(default 10 MB); delete it at any time with `triss usage --reset`.
+`TRISS_USAGE_LOG=0`. The file rotates once past `TRISS_USAGE_LOG_MAX_BYTES`;
+the generated defaults table in [docs/configuration.md](docs/configuration.md#tunables)
+is the source of truth. Delete it at any time with `triss usage --reset`.
 
 ## Data residency and GDPR
 
@@ -91,11 +93,12 @@ Triss adds no additional data flows on top of it.
 
 ## Supply chain
 
-Triss ships as plain ESM JavaScript with no build step — the code you audit
-on GitHub is the code that runs. Runtime dependencies are intentionally few
-(seven direct packages, listed in `package.json`); `npm audit` is kept clean
-and the lockfile is committed. Install from npm with a pinned version or from
-a reviewed checkout if your policy requires it.
+The npm package ships source modules plus declared third-party dependencies.
+The standalone artifact is generated from a clean, locked production install.
+Release CI verifies package contents, compares independently staged builds,
+and smokes the promoted bytes. This provides a reviewable source-to-artifact
+pipeline; it does not mean every installed byte is a verbatim repository file.
+Install a pinned version or use a reviewed checkout if policy requires it.
 
 ## Credentials
 

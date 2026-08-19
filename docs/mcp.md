@@ -450,7 +450,7 @@ override for self-hosted instances):
 Exposed **when a provider credential is set** — `TRISS_WORKER_API_KEY` (the
 existing OpenAI-compatible worker profile), `ZHIPU_API_KEY` (Z.AI GLM,
 the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
-[opencode-zen.md](opencode-zen.md) and [opencode-go.md](opencode-go.md)),
+[opencode-zen.md](engines/opencode-zen.md) and [opencode-go.md](engines/opencode-go.md)),
 `MOONSHOT_API_KEY` (Moonshot Kimi pay-as-you-go), **or** `KIMI_API_KEY`
 (Kimi for Coding subscription). Setup: `triss coder init`
 (`--provider worker`, `--provider opencode-zen`, `--provider opencode-go`, `--provider moonshot`, or
@@ -477,7 +477,7 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `diff_stat`, `worktree`, `usage`, `warnings` — as the tool result. `engine` is the
   `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
   `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
-  [opencode2.md](opencode2.md));
+  [opencode2.md](engines/opencode2.md));
    `isolate` is unset by default in the schema — opencode resolves unset to
    isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
    `permissions.run` config is inert and denied bash deadlocks, so the
@@ -553,7 +553,7 @@ If `triss` is not on your `PATH` (e.g. you installed via source without
 linking), you can register an absolute path:
 
 ```bash
-triss mcp install --command "/Users/me/projects/triss-coworker/bin/triss.js"
+triss mcp install --command "$HOME/projects/triss-coworker/bin/triss.js"
 triss mcp install --args "mcp serve"
 ```
 

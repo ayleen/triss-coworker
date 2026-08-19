@@ -77,7 +77,7 @@ export async function callModel(
   });
   const text = responseText(resp);
   // Empty responses fail with the stable TRISS_PROVIDER_EMPTY code
-  // (Reference surface 8): GLM reviews get the shared actionable guidance
+  // (documented contract): GLM reviews get the shared actionable guidance
   // (never "disable thinking") with err.code TRISS_PROVIDER_EMPTY; every
   // other empty response goes through assertProviderText (same stable code).
   if (!text || !String(text).trim()) {
@@ -1176,12 +1176,12 @@ export async function coderStatusHandler() {
   return lines.join('\n');
 }
 
-// ─── retained-result actions (Atomic 24 / Package 8) ─────────────────────────
+// ─── retained-result actions (shared contract) ─────────────────────────
 
 export async function coderResultListHandler() {
   const { runCoderResultList } = await import('../commands/coder.js');
   const capture = [];
-  // P1 fix: stdoutWrite is a property of the SINGLE deps argument — the old
+  // Invariant: stdoutWrite is a property of the SINGLE deps argument — the old
   // two-argument call passed it as a second parameter the function never
   // reads, so the handler always returned an empty string.
   await runCoderResultList({ stdoutWrite: (s) => capture.push(s) });

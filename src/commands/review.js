@@ -46,11 +46,11 @@ export function validateReviewOptions(prNumber, opts) {
       'Cannot combine --base with --stdin. Use: git diff | triss review --stdin',
     );
   }
-  // Atomic 45 / Package 24: evidence + shard is rejected in the CLI router.
+  // shared contract: evidence + shard is rejected in the CLI router.
   if (opts.payloadMode === 'shard' && responseFormat === 'evidence') {
     throw new Error('--payload-mode shard cannot be combined with --format evidence');
   }
-  // Release B trust boundary: --files selectors and --issue are literal,
+  // review acceptance trust boundary: --files selectors and --issue are literal,
   // explicit options; they cannot be derived from PR prose.
   if (opts.files !== undefined && !Array.isArray(opts.files)) {
     throw new Error('--files expects literal path selectors');
@@ -75,7 +75,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
         '--stdin requires piped input. Try: git diff | triss review --stdin',
       );
     }
-    // Release B: bounded streaming stdin — cap-plus-one bytes, fail closed
+    // review acceptance: bounded streaming stdin — cap-plus-one bytes, fail closed
     // on overflow instead of buffering unbounded input. The legacy
     // deps.readStdin seam (tests, embedders) is honoured as a plain string
     // source and cap-checked the same way; the production path always uses
@@ -121,7 +121,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   let urlNote = '';
   let changedFilesFromInventory = null;
 
-  // Release B: literal --files selectors validated up front; exact merge-base
+  // review acceptance: literal --files selectors validated up front; exact merge-base
   // comparison under the sealed Git projection.
   const scopedSelectors = Array.isArray(opts.files) ? opts.files : [];
   if (stdinMode) {
@@ -366,7 +366,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       `base=${baseRef} head=${headRef}\n`;
   process.stderr.write(pc.dim(diagnostic));
 
-  // Release B: bounded single-request payload planning (P0 fix — a payload
+  // review acceptance: bounded single-request payload planning (Invariant — a payload
   // that cannot fit singleMaxBytes fails closed with a shard hint instead
   // of a silent clean verdict over truncated files).
   const limits = reviewLimitConfig().limits;
@@ -375,7 +375,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   if (parsedSections.error) {
     throw new Error(`failed to parse diff: ${parsedSections.error}`);
   }
-  // Literal --files selection happens BEFORE planning (P0 fix): the planner
+  // Literal --files selection happens BEFORE planning (Invariant): the planner
   // sees only the requested sections, so an unrelated huge file in the same
   // change can no longer fail a small scoped review with single_max_exceeded.
   const selectedSections = selectors.length > 0
@@ -632,7 +632,7 @@ async function tryLoadLinkedIssue(key) {
   return '';
 }
 
-// Extract a ticket key from a LOCAL branch name only (Release B: PR prose
+// Extract a ticket key from a LOCAL branch name only (review acceptance: PR prose
 // never triggers tracker access; the branch name is operator-chosen, not
 // attacker-controlled PR text).
 function branchTicketKey(headRef) {

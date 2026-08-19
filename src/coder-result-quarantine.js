@@ -1,5 +1,5 @@
 /**
- * coder-result-quarantine.js — Package 5D (Atomic 20D): quarantine
+ * coder-result-quarantine.js — quarantine
  * transaction and quarantine clean.
  *
  * Section 6.3 quarantine transaction contract of the approved plan

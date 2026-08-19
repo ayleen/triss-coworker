@@ -712,7 +712,7 @@ Update before production code or new tests:
 
 - `README.md`;
 - `docs/configuration.md`;
-- `docs/opencode-zen.md`;
+- `docs/engines/opencode-zen.md`;
 - `docs/glm-clients.md`;
 - this implementation plan if repository findings require a contract change.
 

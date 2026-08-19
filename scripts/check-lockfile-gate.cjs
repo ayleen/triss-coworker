@@ -1,7 +1,7 @@
 // Gate: lockfile integrity for the two-package workspace (plan step 9).
 // Asserts the exact workspace identity (name, version, engines) against the
 // live manifests, the pinned dsh-app-boot, and the lockfile format — a
-// partial presence check let drift slip through (review §7).
+// partial presence check let drift slip through (release contract).
 const path = require('node:path');
 const { readFileSync } = require('node:fs');
 
@@ -35,7 +35,7 @@ if (rootManifest.version !== companionManifest.version) {
 
 // --- generated root lockfile fields must track the release version (plan:
 // "update the top-level and root-package version fields in package-lock.json";
-// review §6 — a gate that ignored these stayed green on drifted releases) ---
+// release contract — a gate that ignored these stayed green on drifted releases) ---
 if (lock.version !== rootManifest.version) {
   fail(`top-level lockfile version ${lock.version} != package.json ${rootManifest.version} — regenerate the lockfile with npm`);
 }

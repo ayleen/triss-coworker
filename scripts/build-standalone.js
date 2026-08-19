@@ -47,7 +47,49 @@ const EXCLUDED_FILES = new Set([
 const INCLUDED_TOP_LEVEL = new Set([
   'bin', 'src', 'templates', 'docs', 'node_modules',
   'package.json', 'README.md', 'CHANGELOG.md', 'LICENSE',
+  'THIRD_PARTY_NOTICES',
 ]);
+function packageDocPolicy(source) {
+  const packagePath = join(source, 'package.json');
+  const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+  if (!Array.isArray(manifest.files)) {
+    if (existsSync(join(source, 'docs'))) {
+      throw new Error('package.json files must declare the public docs included in the standalone artifact');
+    }
+    return { files: new Set(), directoryRoots: [], traversalDirectories: new Set() };
+  }
+  const files = new Set();
+  const directoryRoots = [];
+  const traversalDirectories = new Set();
+  const addParents = (path) => {
+    let parent = dirname(path);
+    while (parent !== '.' && parent !== '/') {
+      traversalDirectories.add(parent);
+      parent = dirname(parent);
+    }
+  };
+  for (const raw of manifest.files) {
+    if (typeof raw !== 'string') throw new Error('package.json files entries must be strings');
+    const path = raw.replace(/^\.\//u, '');
+    if (!path.startsWith('docs/')) continue;
+    if (path.includes('\\') || path.split('/').includes('..') || /[*?{}[\]!]/u.test(path)) {
+      throw new Error(`unsupported package.json docs files entry: ${raw}`);
+    }
+    const declaredPath = join(source, path.replace(/\/$/u, ''));
+    const isDirectoryEntry = path.endsWith('/') ||
+      (existsSync(declaredPath) && lstatSync(declaredPath).isDirectory());
+    if (isDirectoryEntry) {
+      const root = path.replace(/\/$/u, '');
+      directoryRoots.push(root);
+      traversalDirectories.add(root);
+      addParents(root);
+    } else {
+      files.add(path);
+      addParents(path);
+    }
+  }
+  return { files, directoryRoots, traversalDirectories };
+}
 
 function usage() {
   process.stderr.write(
@@ -70,12 +112,19 @@ function parseArgs(argv) {
   return options;
 }
 
-function ignored(relativePath, isDirectory, info) {
+function ignored(relativePath, isDirectory, info, docs) {
   const parts = relativePath.split('/');
   if (!INCLUDED_TOP_LEVEL.has(parts[0])) return true;
   if (parts.some((part) => EXCLUDED_NAMES.has(part))) return true;
   if (!isDirectory && EXCLUDED_FILES.has(basename(relativePath))) return true;
-  if (relativePath.startsWith('docs/promo/')) return true;
+  if (parts[0] === 'docs') {
+    const insideDirectoryRule = docs.directoryRoots.some(
+      (directory) => relativePath === directory || relativePath.startsWith(`${directory}/`),
+    );
+    if (isDirectory) {
+      if (!docs.traversalDirectories.has(relativePath) && !insideDirectoryRule) return true;
+    } else if (!docs.files.has(relativePath) && !insideDirectoryRule) return true;
+  }
   if (relativePath.startsWith('node_modules/.cache/')) return true;
   // npm creates executable shims as symlinks in this directory.  The
   // standalone launcher never invokes package binaries, and the artifact
@@ -91,6 +140,7 @@ function ignored(relativePath, isDirectory, info) {
 }
 
 function copyTree(source, target) {
+  const docs = packageDocPolicy(source);
   mkdirSync(target, { recursive: true, mode: 0o700 });
   const stack = [{ source, target, prefix: '', depth: 0 }];
   let objects = 0;
@@ -104,7 +154,7 @@ function copyTree(source, target) {
       const sourcePath = join(frame.source, entry.name);
       const targetPath = join(frame.target, entry.name);
       const info = lstatSync(sourcePath);
-      if (ignored(relativePath, info.isDirectory(), info)) continue;
+      if (ignored(relativePath, info.isDirectory(), info, docs)) continue;
       objects += 1;
       if (objects > ARTIFACT_LIMITS.maxFiles + ARTIFACT_LIMITS.maxDirectories) {
         throw new Error(`standalone staging object count exceeds ${ARTIFACT_LIMITS.maxFiles + ARTIFACT_LIMITS.maxDirectories}`);

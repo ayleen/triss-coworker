@@ -1,8 +1,8 @@
 /**
- * coder-run-state.js — Package 5C (Atomic 20C): coder run-state and rollback
+ * coder-run-state.js — coder run-state and rollback
  * composition.
  *
- * Reference surface 3 state-orchestration subset and Section 15 result
+ * documented contract state-orchestration subset and Section 15 result
  * preflight of the approved plan (docs/reliable-delegation-contract-plan.md).
  *
  * Composes the exported result subsystem with project identity, ephemeral-
@@ -13,8 +13,8 @@
  * Exports:
  *   assertNoRetainedCoderResultsForRollback({resultsRoot}) — Section 15
  *     result preflight: a non-empty retained-result registry blocks rollback
- *     backup until Atomic 20C's exact registry preflight replaces the
- *     Package 4D conservative guard.
+ *     backup until transition's exact registry preflight replaces the
+ *     earlier conservative guard.
  *   buildCoderRunState({identity, engine, slug, isolationMode, ephemeral}) —
  *     bounded run-state projection.
  */
@@ -26,7 +26,7 @@ export const EPHEMERAL_DEFAULT = true;
 
 /**
  * Section 15 result preflight for rollback. The conservative guard semantics
- * (replacing Package 4D's TRISS_CODER_ROLLBACK_RESULTS_PENDING): a non-empty
+ * (replacing the earlier `TRISS_CODER_ROLLBACK_RESULTS_PENDING` guard): a non-empty
  * `coder-results-v1` root blocks rollback until the registry can be read.
  *
  * @param {object} opts

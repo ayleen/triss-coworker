@@ -1,10 +1,10 @@
 /**
- * review-git.test.js — Package 15 (Atomic 32): comparison identity and
+ * review-git.test.js — comparison identity and
  * bounded rename inventory.
  *
  * RED/GREEN: node --test test/review-git.test.js
  *
- * Covers Reference surface 10 local-Git bullets of
+ * Covers documented contract local-Git bullets of
  * docs/reliable-delegation-contract-plan.md. All cases use the
  * REVIEW-GIT-INVENTORY- prefix (mandatory in TAP output). Git is faked via
  * an injected sh; no real repository required.
@@ -172,7 +172,7 @@ test('REVIEW-GIT-INVENTORY-10: the rename candidate limit constant is 2,000', ()
   assert.equal(REVIEW_RENAME_CANDIDATE_LIMIT, 2000);
 });
 
-// ─── selected local content acquisition (Atomic 33 / Package 16) ────────────
+// ─── selected local content acquisition (shared contract) ────────────
 
 const SEL_DIFF_KEY =
   '--no-pager -c core.quotepath=false -c core.attributesFile=/dev/null -c core.quotepath=false diff --no-ext-diff --no-color --unified=3 ' +
@@ -227,7 +227,7 @@ test('REVIEW-GIT-SELECTED-03: a missing selector yields an empty byte-identical 
   assert.equal(r.bytes, 0);
 });
 
-test('REVIEW-GIT-SELECTED-04: an empty selector list means full scope (P1 fix)', () => {
+test('REVIEW-GIT-SELECTED-04: an empty selector list means full scope (Invariant)', () => {
   let called = false;
   const sh = (args) => {
     called = true;
@@ -275,7 +275,7 @@ test('REVIEW-GIT-SELECTED-06: git failure surfaces TRISS_REVIEW_LIMIT without pa
   assert.equal(r.diff, undefined, 'no partial output');
 });
 
-// ─── sealed environment (P0: strict GIT_* allowlist) ─────────────────────────
+// ─── sealed environment (strict GIT_* allowlist) ─────────────────────────
 
 test('REVIEW-GIT-ENV-01: the sealed env never inherits GIT_* or unrelated vars', async () => {
   const { buildSealedGitEnv } = await import('../src/review-git.js');
@@ -332,7 +332,7 @@ test('REVIEW-GIT-ENV-02: resolveReviewComparison runs git under the sealed env',
   }
 });
 
-// ─── rename candidate bound (P1: enforced, not decorative) ───────────────────
+// ─── rename candidate bound (enforced, not decorative) ───────────────────
 
 test('REVIEW-GIT-INVENTORY-11: rename candidates beyond the documented bound fail closed', () => {
   const parts = [];

@@ -86,7 +86,7 @@ function readManifest(recordDir) {
 // ─── Blocker 7a: local apply passes cwd == projectRoot to the spawn seam ─────
 
 test(
-  'Blocker-7a applyCrushModelChange (local) runs `crush models use` with cwd aligned to the manifest path (projectRoot), so --local writes ./.crush/crush.json at the exact recorded absolute path',
+  'Regression applyCrushModelChange (local) runs `crush models use` with cwd aligned to the manifest path (projectRoot), so --local writes ./.crush/crush.json at the exact recorded absolute path',
   withProject(async ({ project }) => {
     const svc = await loadService();
     const plan = await canonicalPlan(svc, 'local');
@@ -134,7 +134,7 @@ test(
 // ─── Blocker 7b: success records outputHash for existed:true (and verifies readable) ─
 
 test(
-  'Blocker-7b applyCrushModelChange success (existed:true) verifies the manifest config path exists/readable AND records a non-empty outputHash in the manifest target',
+  'Regression applyCrushModelChange success (existed:true) verifies the manifest config path exists/readable AND records a non-empty outputHash in the manifest target',
   withProject(async ({ home }) => {
     const svc = await loadService();
     const plan = await canonicalPlan(svc, 'global');
@@ -176,7 +176,7 @@ test(
 // ─── Blocker 8a: existed:false failure compensation must NOT remove the file ─
 
 test(
-  'Blocker-8a applyCrushModelChange (existed:false) on a failing spawn MUST NOT remove the file at the config path (no outputHash recorded → ownership unprovable → never rmSync an unowned/concurrently-created file)',
+  'Regression applyCrushModelChange (existed:false) on a failing spawn MUST NOT remove the file at the config path (no outputHash recorded → ownership unprovable → never rmSync an unowned/concurrently-created file)',
   withProject(async ({ home }) => {
     const svc = await loadService();
     const plan = await canonicalPlan(svc, 'global');
@@ -226,7 +226,7 @@ test(
 // ─── Blocker 8b: restoration failure surfaced as rollback-failed (not swallowed) ─
 
 test(
-  'Blocker-8b applyCrushModelChange with deps.failRollback surfaces a structured rollback-failed result with the retained record + manual recovery paths, not a bare fatal throw that hides the restoration failure',
+  'Regression applyCrushModelChange with deps.failRollback surfaces a structured rollback-failed result with the retained record + manual recovery paths, not a bare fatal throw that hides the restoration failure',
   withProject(async ({ home }) => {
     const svc = await loadService();
     const plan = await canonicalPlan(svc, 'global');

@@ -1,10 +1,10 @@
 /**
- * review-git.js — Package 15 (Atomic 32): comparison identity and bounded
+ * review-git.js — comparison identity and bounded
  * rename inventory.
  *
- * Reference surface 10 local-Git bullets of the approved plan
+ * documented contract local-Git bullets of the approved plan
  * (docs/reliable-delegation-contract-plan.md). This package is the sole
- * local sealed-projection owner; Package 2E enforces the copy quota.
+ * local sealed-projection owner; component enforces the copy quota.
  *
  * Exports:
  *   resolveReviewComparison(sh, opts)      — exact commit OIDs + unique merge
@@ -152,7 +152,7 @@ export function acquireNameStatusInventory(sh, { cwd, baseOid, headOid, maxEntri
   const run = (args) =>
     sh(gitArgs({}, args), { cwd, env: buildSealedGitEnv(), encoding: 'buffer', timeout: deadlineMs });
 
-  // P1 fix: deterministic bounded rename detection. `--no-renames` made the
+  // Invariant: deterministic bounded rename detection. `--no-renames` made the
   // R* parsing below unreachable for real Git (a rename would be emitted as
   // separate A/D entries). Rename detection is explicitly ON with the
   // documented candidate limit passed to Git itself (-l caps the
@@ -259,7 +259,7 @@ export function expandRenameSelection(inventory, { selectors = [] } = {}) {
   };
 }
 
-// ─── selected local content acquisition (Atomic 33 / Package 16) ─────────────
+// ─── selected local content acquisition (shared contract) ─────────────
 
 const SEALED_ATTRIBUTES = Object.freeze([
   '-c', 'core.attributesFile=/dev/null',
@@ -290,7 +290,7 @@ export function acquireSelectedLocalDiff(sh, { cwd, baseOid, headOid, selectors,
   if (!Array.isArray(selectors)) {
     return { ok: false, code: 'TRISS_REVIEW_INVALID_INPUT', message: 'selectors must be an array' };
   }
-  // P1 fix: an EMPTY selector list means FULL-PR scope — default to every
+  // Invariant: an EMPTY selector list means FULL-PR scope — default to every
   // inventoried path. (An explicit empty list cannot be distinguished from
   // "no selectors given", and the inventory-derived full set is exactly the
   // bounded pathspec the sealed diff needs.)

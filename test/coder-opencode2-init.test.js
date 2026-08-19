@@ -61,7 +61,7 @@ const withHome = async (fn) => {
 };
 
 // Answers the V2 binary RESOLUTION chain (which -> Node realpathSync ->
-// --version on the resolved absolute path, round-3 #6) plus the `opencode
+// --version on the resolved absolute path, invariant #6) plus the `opencode
 // --version` probe. `which` points at a REAL temp executable (chmod 0755) so
 // the detector's realpathSync/statSync checks pass. Anything else fails
 // closed like a missing binary.
@@ -124,7 +124,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     const commands = await loadCommands();
     const cfg = join(home, '.config', 'opencode', 'opencode.json');
     mkdirSync(dirname(cfg), { recursive: true });
-    // Round-3 P1-3: an existing config with an unknown top-level key would
+    // Unknown top-level keys make effective configuration impossible to prove and
     // now fail the post-setup V2 audit, so the no-clobber fixture sticks to
     // known keys.
     const before = JSON.stringify({
@@ -153,6 +153,8 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     assert.ok(threw, 'plugin gate must reject');
     assert.match(threw.message, /plugin/u);
     assert.match(threw.message, /evil\.js/u);
+    assert.match(threw.message, /docs\/engines\/opencode2\.md/u);
+    assert.doesNotMatch(threw.message, /-plan\.md/u);
     assert.doesNotMatch(threw.message, /sk-/u, 'no secrets in the error');
   }));
 

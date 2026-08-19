@@ -1,13 +1,13 @@
 /**
- * coder-result-owner-adapter.js — Package 5B (Atomic 20B): retained-result
+ * coder-result-owner-adapter.js — retained-result
  * process-owner adapter.
  *
  * Section 6.5 `owner_kind=result_registry` of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Accepts exactly one opaque
- * active Atomic 20 context or null; never creates, reacquires, or releases a
+ * active transition context or null; never creates, reacquires, or releases a
  * borrowed context. With a borrowed context, `withOwnerLock` must not
  * reacquire/release maintenance or the registry lock; with null it acquires/
- * releases both in the documented order via the Atomic 20 registry-lock
+ * releases both in the documented order via the transition registry-lock
  * wrapper, then revalidates the journal snapshot.
  *
  * The exact injected interface:
@@ -36,7 +36,7 @@ export function createCoderResultProcessOwnerAdapter({ context = null, registryL
   /**
    * Run a callback under the owner lock. Borrowed context: no reacquire/
    * release. Null context: acquire maintenance + registry lock via the
-   * Atomic 20 wrapper, then revalidate the journal snapshot.
+   * transition wrapper, then revalidate the journal snapshot.
    */
   async function withOwnerLock(callback) {
     if (typeof callback !== 'function') throw new TypeError('coder-result-owner: callback is required');

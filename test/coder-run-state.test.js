@@ -1,11 +1,11 @@
 /**
- * coder-run-state.test.js — Package 5C (Atomic 20C): coder run-state and
+ * coder-run-state.test.js — coder run-state and
  * rollback composition.
  *
  * RED/GREEN: node --test test/coder-run-state.test.js
  *   and node --test --test-name-pattern='RUN-STATE-' test/coder-clean.test.js
  *
- * Covers Reference surface 3 state-orchestration subset and Section 15
+ * Covers documented contract state-orchestration subset and Section 15
  * result preflight of docs/reliable-delegation-contract-plan.md:
  * assertNoRetainedCoderResultsForRollback preflight, ephemeral-default vs
  * persistent admission, engine-scoped binding, and the run-state projection.

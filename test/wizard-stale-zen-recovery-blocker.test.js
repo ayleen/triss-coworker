@@ -102,7 +102,7 @@ function argAfter(argv, flag) {
 }
 
 test(
-  'Corrective-B: the wizard stale-Zen incident recovery command is ONE executable `coder model set` with explicit canonical main+--small+engine+provider+scope+--yes (POSIX-safe, applies via the real CLI, no repeat-wizard)',
+  'Regression: the wizard stale-Zen incident recovery command is ONE executable `coder model set` with explicit canonical main+--small+engine+provider+scope+--yes (POSIX-safe, applies via the real CLI, no repeat-wizard)',
   async () => {
     const zenKey = 'sk-zen-incident';
     const bareIds = ['deepseek-v4-flash-free', 'north-mini-code-free'];

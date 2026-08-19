@@ -1,5 +1,5 @@
 /**
- * coder-result-registry-codec.js — Package 5 (Atomic 20): retained-result
+ * coder-result-registry-codec.js — retained-result
  * registry codec.
  *
  * Section 6.3 exact result-registry schema of the approved plan

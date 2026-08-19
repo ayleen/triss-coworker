@@ -1,5 +1,5 @@
 /**
- * coder-isolation-gate.test.js — P0 regression: a best-effort coder run is
+ * coder-isolation-gate.test.js — security regression: a best-effort coder run is
  * refused BEFORE spawn whenever a raw credential store is readable by the
  * same-UID engine child, unless the operator explicitly acknowledged the
  * best-effort scope.

@@ -117,7 +117,7 @@ test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets neither ZHIPU_API_KEY nor 
   assert.equal('ZHIPU_API_KEY' in env, false);
 });
 
-// ─── Package 6 Crush parity: credential proxy wiring (Atomic 22) ────────────
+// ─── Crush credential-proxy parity ──────────────────────────────────────────
 
 test('buildCrushSpawnEnv: with a proxy plan, the engine gets the token + loopback URL, never the real key', () => {
   const env = buildCrushSpawnEnv(
@@ -338,7 +338,7 @@ test('buildCrushRunArgv: restrict OFF appends NEITHER --restrict-run NOR any all
 });
 
 test('CRUSH_ALLOW_TOOLS: is the working coder file-tool set [view, edit, write, ls]', () => {
-  // Verified live against crush 0.1.3 (docs/crush-restrict-issues.md): the
+  // Verified live against crush 0.1.3 (docs/engines/crush.md): the
   // file-tool taxonomy a coder needs under --restrict-run.
   assert.deepEqual(CRUSH_ALLOW_TOOLS, ['view', 'edit', 'write', 'ls']);
 });

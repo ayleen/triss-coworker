@@ -1,10 +1,10 @@
 /**
- * review-executor.test.js — Package 19 (Atomic 40): shared single-review
+ * review-executor.test.js — shared single-review
  * executor and CLI framing.
  *
  * RED/GREEN: node --test test/review-executor.test.js
  *
- * Covers Reference surface 10 single executor/CLI bullets of
+ * Covers documented contract single executor/CLI bullets of
  * docs/reliable-delegation-contract-plan.md: one buffered single executor,
  * stable errors, scoped verdict framing, byte bounds, cancellation, and the
  * transport matrix exit codes.
@@ -149,7 +149,7 @@ test('the transport matrix exit codes are the documented constants', () => {
   assert.equal(REVIEW_EXIT_CODES.provider, 1);
 });
 
-// ─── sequential shard execution (Atomic 44 / Package 23) ────────────────────
+// ─── sequential shard execution (shared contract) ────────────────────
 
 test('executes all shards sequentially with per-shard attempt facts and no aggregation', async () => {
   const calls = [];
@@ -275,7 +275,7 @@ test('an empty shard verdict stops with TRISS_PROVIDER_EMPTY and no further call
   assert.deepEqual(calls, ['a.txt']);
 });
 
-// ─── scoped-selection fail-closed (P0: no false clean on empty scope) ───────
+// ─── scoped-selection fail-closed (no false clean on empty scope) ───────
 
 test('selectors that match NOTHING fail closed before any model call', async () => {
   let called = false;

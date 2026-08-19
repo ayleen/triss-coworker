@@ -1,9 +1,9 @@
 /**
- * worktree-fingerprint.test.js — Package 3 (Atomic 12): fingerprint primitive.
+ * worktree-fingerprint.test.js — fingerprint primitive.
  *
  * RED/GREEN: node --test test/worktree-fingerprint.test.js
  *
- * Covers Reference surface 3 / Section 6.3 of
+ * Covers documented contract / Section 6.3 of
  * docs/reliable-delegation-contract-plan.md: NUL-safe enumeration, no-follow
  * hashing, canonical manifest/test vectors, full snapshot hash, race retry,
  * exhaustive ignored/untracked enumeration immune to self-ignore and

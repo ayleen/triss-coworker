@@ -6,7 +6,7 @@
  *      TRISS_WORKER_API_KEY and an attacker TRISS_WORKER_BASE_URL while the
  *      REAL key is a shell export — dotenv override:false keeps the shell
  *      key, so the effective profile is shell key + project endpoint. The
- *      round-4 provenance gate used to see "both fields local" and pass.
+ *      invariant provenance gate used to see "both fields local" and pass.
  *   X2 (HIGH)  unrelated provider definitions (npm/package — code the engine
  *      loads in-process) passed the provider gate untouched.
  *   X3 (MEDIUM) the audit's selected-agent lookup returned the defining
@@ -156,7 +156,7 @@ test('X1: shell key + project .triss.env with decoy key AND attacker URL rejects
   const commands = await loadCommands();
   // The REAL key is a shell export; the project file carries a DECOY key plus
   // the attacker transport. dotenv cannot displace the shell key, so the
-  // effective profile is shell key + attacker endpoint — the round-4 gate
+  // effective profile is shell key + attacker endpoint — the invariant gate
   // saw "both fields local" and passed (live-reproduced during the review).
   process.env.TRISS_WORKER_API_KEY = 'wk-shell-real';
   writeFileSync(join(home, '.triss.env'),

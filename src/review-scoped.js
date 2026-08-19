@@ -1,6 +1,6 @@
 /**
  * review-scoped.js — inventory-first acquisition for literal `--files`
- * selection (P0 fix).
+ * selection (Invariant).
  *
  * Sections 9.3/9.4 of docs/reliable-delegation-contract-plan.md: when the
  * caller supplies literal path selectors, the selected content is acquired
@@ -10,7 +10,7 @@
  * plans the planner against unrelated files. The legacy full-diff path stays
  * for selector-less reviews (a full review legitimately needs the full diff).
  *
- * Pure composition over Package 15/16/17 seams: every spawn goes through the
+ * Pure composition over component/16/17 seams: every spawn goes through the
  * injected sh adapters (sealed env inside review-git.js; the gh/git process
  * adapter inherits the ambient environment for network credentials).
  */

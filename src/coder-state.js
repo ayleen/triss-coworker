@@ -1,8 +1,8 @@
 /**
- * coder-state.js — Package 4 (Atomic 13): metadata persistence and cleanup
+ * coder-state.js — metadata persistence and cleanup
  * lifecycle.
  *
- * Reference surface 3 / Section 6.3 of the approved plan
+ * documented contract / Section 6.3 of the approved plan
  * (docs/reliable-delegation-contract-plan.md).
  *
  * Implements:
@@ -49,7 +49,7 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
 
   let existing;
   try {
-    // P1 fix: enforce the documented no-follow + 4 KiB cap on read. A plain
+    // Invariant: enforce the documented no-follow + 4 KiB cap on read. A plain
     // readFile follows symlinks and buffers the whole file first; here the
     // lstat check rejects non-regular files and the read is capped by the
     // stated identity bound.

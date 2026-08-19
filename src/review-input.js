@@ -1,8 +1,8 @@
 /**
- * review-input.js — Package 18 (Atomic 39): bounded stdin and issue trust
+ * review-input.js — bounded stdin and issue trust
  * boundary.
  *
- * Reference surface 10 stdin and issue bullets of the approved plan
+ * documented contract stdin and issue bullets of the approved plan
  * (docs/reliable-delegation-contract-plan.md). Streaming stdin bounds,
  * supplied_input coverage, explicit issue validation/retrieval, deprecated
  * --skip-issue, and proof that PR prose can never trigger tracker access.

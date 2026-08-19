@@ -32,7 +32,7 @@ function runHelp() {
 }
 
 test(
-  'Blocker-6 coder model set help: must describe both opencode and crush engines',
+  'Regression coder model set help: must describe both opencode and crush engines',
   () => {
     const res = runHelp();
     const combined = `${res.stdout ?? ''}${res.stderr ?? ''}`;
@@ -62,7 +62,7 @@ test(
 );
 
 test(
-  'Blocker-6 coder model set help: must list exact file paths for global and local scopes',
+  'Regression coder model set help: must list exact file paths for global and local scopes',
   () => {
     const res = runHelp();
     const combined = `${res.stdout ?? ''}${res.stderr ?? ''}`;
@@ -98,7 +98,7 @@ test(
 );
 
 test(
-  'Blocker-6 coder model set help: must clarify the distinction between runtime main and config main for OpenCode',
+  'Regression coder model set help: must clarify the distinction between runtime main and config main for OpenCode',
   () => {
     const res = runHelp();
     const combined = `${res.stdout ?? ''}${res.stderr ?? ''}`;

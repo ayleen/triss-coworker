@@ -1,10 +1,10 @@
 /**
- * coder-clean.test.js — Package 4 (Atomic 13): focused cleanup lifecycle
+ * coder-clean.test.js — focused cleanup lifecycle
  * cases.
  *
  * RED/GREEN: node --test test/coder-state.test.js test/coder-clean.test.js
  *
- * Covers the cleanup subset of Reference surface 3: successful removal,
+ * Covers the cleanup subset of documented contract: successful removal,
  * retained dirty/failed state, stale owned orphan removal, foreign/tampered
  * retention, and rollback inventory.
  */
@@ -117,7 +117,7 @@ test('rollback inventory records what was removed so a crashed clean can be retr
   }
 });
 
-// ─── CODER-LEASE-* cleanup cases (Package 4A host gate) ──────────────────────
+// ─── CODER-LEASE-* lease-backed cleanup cases ──────────────────────────────
 
 test('CODER-LEASE-01: run/clean serializes via the fixed slot lease', async () => {
   const fx = await fixture();
@@ -194,7 +194,7 @@ test('CODER-LEASE-03: release in finally even when the callback throws', async (
   }
 });
 
-// ─── RUN-STATE-* clean cases (Package 5C host gate) ──────────────────────────
+// ─── RUN-STATE-* persisted-run cleanup cases ────────────────────────────────
 
 test('RUN-STATE-01: clean with retained results blocked by Section 15 preflight', async () => {
   const fx = await fixture();

@@ -1,5 +1,5 @@
 /**
- * coder-session-inventory.test.js — Package 4B (Atomic 15): project-worktree
+ * coder-session-inventory.test.js — project-worktree
  * session inventory codec.
  *
  * RED/GREEN: node --test test/coder-session-inventory.test.js

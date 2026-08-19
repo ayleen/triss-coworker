@@ -74,7 +74,7 @@ export function parseOpenCodeDocument(text, { path: sourcePath = null } = {}) {
         }
         i += 1;
       }
-      // Round-3 parse parity: an unterminated block comment is a parse error
+      // Parse parity: an unterminated block comment is a parse error
       // in the engine's jsonc-parser. Silently consuming it to EOF made a
       // truncated document parse as its complete prefix — OpenCode would
       // reject the layer and run a DIFFERENT baseline than the preflight
@@ -86,7 +86,7 @@ export function parseOpenCodeDocument(text, { path: sourcePath = null } = {}) {
       i += 2;
       continue;
     }
-    // Trailing commas (review P3-13 + round-2 #6): removed INSIDE the
+    // Trailing commas are removed inside the
     // string-aware state machine — a regex over the whole document would
     // also rewrite string contents (`{"pattern":"value,}"}` used to become
     // `{"pattern":"value}"}`). When a comma is followed only by whitespace
@@ -199,7 +199,7 @@ function parsedModelOf(path) {
 
 // Tolerant variant for model INSPECTION (coder models / status): a malformed
 // layer must not crash the whole inspection — the layer is marked with its
-// parse error instead, and role resolution reports it (P2-10 contract).
+// parse error instead, and role resolution reports it rather than guessing.
 function tolerantParsedModelOf(path) {
   try {
     return parsedModelOf(path);
@@ -302,7 +302,7 @@ function collectConfiguredAgentBlocks(doc, configPath, layer, out) {
 }
 
 // File-defined agent sources: <level>/agent{,s}/mode{,s}/** and the same
-// under <level>/.opencode/. RECURSIVE (review round-3 P1-4): OpenCode
+// under <level>/.opencode/. Recursion is required because OpenCode
 // discovers agents through the whole subtree, so a nested
 // .opencode/agents/nested/evil.md used to be invisible to the preflight while
 // still loadable by the engine. statSync (symlink-following) mirrors the
@@ -347,7 +347,7 @@ function collectLevelAgentFiles(levelDir, layer, out) {
   }
 }
 
-// Custom tool sources (review round-3 P0-1): .opencode/{tool,tools}/** and
+// Custom tool sources include .opencode/{tool,tools}/** and
 // the global config root's tool{,s}/. Every regular file is a top-level
 // executable surface imported INSIDE the OpenCode process with the provider
 // credential in `process.env` — the beta preflight rejects them all.
@@ -378,7 +378,7 @@ function collectToolDirFiles(levelDir, layer, out) {
 export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantParsing = false } = {}) {
   if (!cwd) throw new Error('enumerateOpenCodeSources: cwd is required');
   const homeDir = resolve(home || homedir());
-  // Review round 6 #6: tolerantParsing must make the whole walk
+  // Invariant: tolerantParsing must make the whole walk
   // non-throwing, not just the doc parsing — a stat error on a config
   // candidate (EACCES) or an ambiguous project boundary used to hard-crash
   // `coder models` where it used to degrade. Strict (preflight) callers
@@ -403,7 +403,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   let precedence = 0;
   const pushConfig = (path, layer, levelDir) => {
     const kind = path.endsWith('.jsonc') ? 'jsonc' : 'json';
-    // Tolerant stat (review round 6 #6): an unreadable candidate (EACCES)
+    // In tolerant inspection mode, an unreadable candidate (EACCES)
     // degrades to "absent" for inspection instead of crashing.
     let exists;
     try {
@@ -451,7 +451,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   // inline agent blocks. Strict by default (fail closed on malformed — the
   // V2 preflight contract); tolerantParsing skips plugin/agent collection
   // for a malformed layer and lets the configs[] marker carry the error.
-  // Review round 5: tolerant mode also tolerates UNRELATED hostile shapes —
+  // Invariant: tolerant mode also tolerates UNRELATED hostile shapes —
   // a non-string plugin reference (`"plugin": 123`) or an unreadable plugin
   // dir (EACCES) used to throw and crash model INSPECTION
   // (resolveOpenCodeConfigRoles) and with it the post-commit audit of a
@@ -486,7 +486,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   };
 
   // Discovered plugin dirs: global config root + each level's .opencode/
-  // ONLY (review P2-11). Bare `plugins/` inside a random project level is
+  // only. Bare `plugins/` inside a random project level is
   // NOT an OpenCode source in the pinned build — the official migration
   // docs enumerate `.opencode/plugin(s)` (and direct dirs only under the
   // GLOBAL config root), so scanning bare project `plugins/` produced
@@ -499,7 +499,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
   });
 
   // Agent/mode dir files: global config root + each level's .opencode/ only
-  // (review P2-11 — same reasoning as plugins above).
+  // for the same traversal-boundary reason as plugins above.
   collectDiscoveredSources(() => {
     collectLevelAgentFiles(globalDir, 'global', agentSources);
     for (const levelDir of levels) {
@@ -507,7 +507,7 @@ export function enumerateOpenCodeSources({ cwd, projectBoundary, home, tolerantP
     }
   });
 
-  // Custom tool dirs (review round-3 P0-1): same discovery scopes as plugins —
+  // Custom tool dirs use the same discovery scopes as plugins:
   // global config root + each level's .opencode/.
   collectDiscoveredSources(() => {
     collectToolDirFiles(globalDir, 'global', toolSources);

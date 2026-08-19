@@ -1,5 +1,5 @@
 /**
- * review-live.js — Package 26 (Atomic 47): live sharded review acceptance
+ * review-live.js — live sharded review acceptance
  * helper. Runs ONE real sequential sharded review over the current branch
  * diff with the configured worker credentials.
  *
@@ -14,7 +14,7 @@ import { parseUnifiedDiff, planSequentialShards } from './review-payload.js';
 import { reviewLimitConfig } from './config.js';
 import { executeReviewPlan } from './review-executor.js';
 import { resolveModelRequest } from './models.js';
-// P1 fix: assertProviderText is exported from provider-errors.js, NOT
+// Invariant: assertProviderText is exported from provider-errors.js, NOT
 // client.js — the previous import crashed module load the moment any
 // credential was present, masquerading as an environment block.
 import { chat, responseText } from './client.js';

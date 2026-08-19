@@ -1,10 +1,10 @@
 /**
- * coder-sandbox.js — Package 2B (Atomic 04): filesystem and network
+ * coder-sandbox.js — filesystem and network
  * capability adapter.
  *
  * Section 6.5 of the approved plan (docs/reliable-delegation-contract-plan.md).
  *
- * Package 0 has not selected a platform backend (the feasibility spike is
+ * component has not selected a platform backend (the feasibility spike is
  * intentionally stopped), so this adapter implements only the documented
  * best-effort path: every capability is reported honestly as
  * `enforced|best_effort|unavailable` per platform, an unavailable sandbox
@@ -65,7 +65,7 @@ function isAbsolutePath(value) {
 /**
  * Resolve the exact capability tuple for one engine/platform tuple.
  *
- * Honest best-effort reporting (Package 0 has selected no enforced backend):
+ * Honest best-effort reporting (component has selected no enforced backend):
  *  - `sandbox`/`managed_root`/quotas: `unavailable` everywhere until a
  *    reviewed backend exists;
  *  - `process_supervision`: `best_effort` (Triss group kill + residual
@@ -101,12 +101,12 @@ export function resolveCoderSandbox({
   }
 
   const capabilities = {
-    // No Package 0-reviewed backend exists on any platform yet.
+    // No component-reviewed backend exists on any platform yet.
     sandbox: 'unavailable',
     process_supervision: 'best_effort',
     locking: 'best_effort',
     writable_quota: 'unavailable',
-    // P0 honesty fix: the loopback token proxy removes the raw credential
+    // The loopback token proxy removes the raw credential
     // from the engine's env/argv/config — a real boundary — but the child
     // still runs as the same unrestricted user who can read the raw
     // credential stores (project/global .triss.env, HOME). Until an

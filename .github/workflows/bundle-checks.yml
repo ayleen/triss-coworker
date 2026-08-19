@@ -1,7 +1,6 @@
 name: Bundle checks
 
-# Reusable bundle-verification block (review round 4, §3): the same
-# bundle matrix AND real-Harness lifecycle checks must gate PRs and the
+# The same bundle matrix and real-Harness lifecycle checks must gate PRs and the
 # tag publish workflow, so both callers include this workflow instead of
 # duplicating job definitions that only PR CI would run.
 on:
@@ -23,8 +22,8 @@ jobs:
       fail-fast: false
     name: bundle matrix (Node ${{ matrix.node }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -58,8 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     name: dsh plugin lifecycle (real Harness + pnpm)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -124,7 +123,7 @@ jobs:
           dsh plugin --profile headless add -w "$V1"
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-v1.yml
           node scripts/dsh-dump-assert.js present /tmp/lifecycle/dump-v1.yml
-          # Manifest-level proof (review §4): dump-config alone does not show
+          # Manifest-level proof (release contract): dump-config alone does not show
           # the dependency or the dsh.profile.bundles registry.
           node - "$DSH_HOME/profiles/headless/package.json" "$V1" <<'EOF'
           const [manifestPath, tarball] = process.argv.slice(2);
@@ -142,7 +141,7 @@ jobs:
           export DSH_HOME="$RUNNER_TEMP/dsh-home"
           V2=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*lifecycle*.tgz)
           test -n "$V2"
-          # The REAL update path (review §4): add v2 over v1 without remove.
+          # The REAL update path (release contract): add v2 over v1 without remove.
           # Verified live on dsh 0.1.0-rc.6 × pnpm 9.0.0: `dsh plugin add`
           # forwards to pnpm, which replaces the file: dependency, swaps
           # node_modules, and the effective patch changes in place. (An
@@ -151,8 +150,8 @@ jobs:
           dsh plugin --profile headless add -w "$V2"
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-v2.yml
           # All three original routes must survive the replacement PLUS the
-          # v2 marker (review round 4, §2: substring greps let an update that
-          # dropped opencode pass as green).
+          # v2 marker. Structured assertions prevent a partial route set from
+          # passing on a substring match.
           node scripts/dsh-dump-assert.js updated /tmp/lifecycle/dump-v2.yml
           node - "$DSH_HOME/profiles/headless/package.json" "$V2" <<'EOF'
           const fs = require('fs');
@@ -177,10 +176,9 @@ jobs:
           dsh plugin --profile headless remove triss-dsh-provider-bundle
           dsh --profile headless --dump-config > /tmp/lifecycle/dump-removed.yml
           # No bundle route AND no bundle credential reference may remain
-          # (review round 4, §2: a surviving zai route escaped the old
-          # OPENCODE_API_KEY-only grep).
+          # so a surviving provider route cannot escape a key-only grep.
           node scripts/dsh-dump-assert.js absent /tmp/lifecycle/dump-removed.yml
-          # Manifest-level proof (review §4): the dependency must be gone and
+          # Manifest-level proof (release contract): the dependency must be gone and
           # dsh.profile.bundles must drop the companion while keeping the
           # profile template bundles.
           node - "$DSH_HOME/profiles/headless/package.json" <<'EOF'

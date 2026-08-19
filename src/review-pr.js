@@ -1,7 +1,7 @@
 /**
- * review-pr.js — Package 17D (Atomic 38): PR acquisition composition.
+ * review-pr.js — PR acquisition composition.
  *
- * Sections 9.4/11 and Reference surface 10 PR integration bullets of the
+ * Sections 9.4/11 and documented contract PR integration bullets of the
  * approved plan (docs/reliable-delegation-contract-plan.md). Composes
  * Packages 15-17C: identity recheck, unique merge-base, inventory-first
  * literal selection, selected content, coverage, cancellation, and finally
@@ -62,16 +62,16 @@ export async function withDisposablePrRepository({ trissRootPath, quota, managed
  *
  * @param {object} deps injected seams
  * @param {Function} deps.sh spawnSync-like
- * @param {Function} deps.resolveComparison Package 15 resolver
- * @param {Function} deps.acquireInventory Package 15 name-status
- * @param {Function} deps.expandSelection Package 15 rename expansion
- * @param {Function} deps.acquireDiff Package 16 selected content
+ * @param {Function} deps.resolveComparison component resolver
+ * @param {Function} deps.acquireInventory component name-status
+ * @param {Function} deps.expandSelection component rename expansion
+ * @param {Function} deps.acquireDiff component selected content
  * @param {object} opts
  * @param {string} opts.trissRootPath
  * @param {object} opts.quota
  * @param {object} opts.managedRoot
  * @param {object} opts.parentHandle
- * @param {object} opts.meta validated PR metadata (Package 17)
+ * @param {object} opts.meta validated PR metadata (component)
  * @param {string} opts.sourceUrl
  * @param {string[]} [opts.selectors=[]]
  * @param {AbortSignal} [opts.signal]

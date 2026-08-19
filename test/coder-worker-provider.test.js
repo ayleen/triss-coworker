@@ -591,7 +591,7 @@ test(
         stdoutWrite: () => true,
       },
     );
-    // Release A: the child never receives the raw provider credential —
+    // session acceptance: the child never receives the raw provider credential —
     // only the one-run loopback proxy token (a fresh 32-hex value that is
     // NOT the env value) plus the proxy base URL.
     assert.match(childEnv.TRISS_WORKER_API_KEY, /^[0-9a-f]{32}$/);
@@ -631,7 +631,7 @@ test(
       },
     );
 
-    // Release A: the worker provider definition is rewritten to point at the
+    // session acceptance: the worker provider definition is rewritten to point at the
     // run-scoped loopback proxy — a one-run token and 127.0.0.1 baseURL —
     // so the child config never carries the raw credential.
     const workerCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
@@ -673,7 +673,7 @@ test(
     const glmCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
     assert.equal(glmCfg.model, 'zai-coding-plan/glm-5.2');
     assert.equal(glmCfg.small_model, 'zai-coding-plan/glm-5-turbo');
-    // Release A: proxy token, never the raw credential.
+    // session acceptance: proxy token, never the raw credential.
     assert.match(childEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
     assert.notEqual(childEnv.ZHIPU_API_KEY, 'sk-zai-fake');
     assert.equal('TRISS_WORKER_API_KEY' in childEnv, false);
@@ -745,7 +745,7 @@ test(
         model: entry.model,
         small_model: entry.model,
       });
-      // Release A: proxy token, never the raw credential.
+      // session acceptance: proxy token, never the raw credential.
       assert.match(childEnv[entry.key], /^[0-9a-f]{32}$/);
       assert.notEqual(childEnv[entry.key], entry.value);
       for (const key of [

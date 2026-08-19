@@ -24,7 +24,7 @@ GitHub Issues, and GitLab Issues, so your agent can search, read, create,
 update, comment on, and transition work items without pulling thousands of
 tokens of tracker chatter into its own context. Adding a new provider
 (Notion, Asana, Sentry, ...) takes one folder — see
-[docs/extending.md](docs/extending.md).
+[extension guide](https://github.com/ayleen/triss-coworker/blob/main/docs/extending.md).
 
 ---
 
@@ -56,7 +56,8 @@ tokens of tracker chatter into its own context. Adding a new provider
   yarn, git, tar, unzip, or a checksum utility once a standalone Release exists.
 - A **DeepSeek API key** (free tier works) for the worker model: <https://platform.deepseek.com/>.
 
-Triss has no other runtime dependencies.
+No external service or system-wide binary is required for the core CLI. npm
+dependencies are installed with the package.
 
 ## Install
 
@@ -305,7 +306,7 @@ The exposed tool set is **filtered by configured credentials**:
   `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
   (`opencode` V1 default; `--engine opencode2` beta — see
-  [opencode2.md](docs/opencode2.md) — or `crush`); its timeout defaults to
+  [opencode2.md](docs/engines/opencode2.md) — or `crush`); its timeout defaults to
   1500s (25 min) over MCP, above the CLI's 900s, since coding runs are
   expected to be long; override per call via the `timeout` arg. For
   runs that may exceed it, use `triss coder run` on the CLI instead.
@@ -314,9 +315,8 @@ Add credentials later → restart session → new tools appear automatically.
 
 Full reference: [docs/mcp.md](docs/mcp.md).
 
-The root `CLAUDE.md` and `AGENTS.md` in this repository are contributor
-instructions for working on Triss itself. The files under `templates/` are
-what `triss init` and `triss agent-help` render into other projects:
+The files under `templates/` are what `triss init` and `triss agent-help`
+render into other projects:
 `claude.md` / `codex.md` are the nano variants written by `init`, and
 `claude-full.md` / `codex-full.md` are the long cookbook served by
 `agent-help`.
@@ -337,8 +337,8 @@ and writing**.
 | `triss review`     | Code review on a branch, PR, or explicitly piped diff (linked ticket only for branch/PR) | The agent reading the whole diff |
 | `triss commit-msg` | Generates a commit message from staged diff           | Hand-writing or copy-pasting from web LLMs |
 | `triss usage`      | Cumulative cost / token usage with per-project breakdown | Squinting at stderr after each call |
-| `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/opencode2.md](docs/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
-| `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/opencode2.md](docs/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
+| `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/engines/opencode2.md](docs/engines/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
+| `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/engines/opencode2.md](docs/engines/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
 | `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|crush`) | Hand-patching the session store |
 | `triss coder result` | Lists / cleans retained result artifacts (enforced result-store quota) | Finding result-store files by hand |
@@ -569,10 +569,10 @@ triss review --files src/a.js test/b.test.js  # literal file selection (after --
 triss review --issue ENG-42  # explicit tracker issue (never inferred from prose)
 ```
 
-### Reliable delegation — review safety (Release B)
+### Reliable delegation — review safety (review acceptance)
 
-Review runs are bounded and fail closed (see
-[`docs/reliable-delegation-release-a.md`](docs/reliable-delegation-release-a.md)):
+Review runs are bounded and fail closed (see the
+[`docs/reliable-delegation-contract.md`](docs/reliable-delegation-contract.md)):
 
 - **Limits**: single request (256 KiB default / 1 MiB hard max), shard
   (96 KiB / 256 KiB), total corpus (4 MiB / 16 MiB), shard count (64 /
@@ -593,7 +593,7 @@ Review runs are bounded and fail closed (see
 - **Empty responses** fail with `TRISS_PROVIDER_EMPTY` instead of
   producing a clean verdict; usable non-empty text is never trimmed.
 
-### Sharding (Release C)
+### Sequential review sharding
 
 `triss review --payload-mode shard` runs source-ordered whole-file shards
 sequentially. A file is never split across shards; the first failure or
@@ -659,7 +659,7 @@ default timeout, configurable via `--timeout <ms>`.
 Delegates an implementation task to a cheap coding agent — the existing
 OpenAI-compatible Triss worker, GLM, Kimi,
 OpenCode Zen, or OpenCode Go models (the `opencode` V1 engine by default;
-`opencode2` beta — see [docs/opencode2.md](docs/opencode2.md) — or `crush`; see
+`opencode2` beta — see [docs/engines/opencode2.md](docs/engines/opencode2.md) — or `crush`; see
 **Engines** below) instead of the primary model writing
 the code itself.
 
@@ -677,7 +677,7 @@ triss coder state validate --project <path> --backup <dir>
 ```
 
 Every `triss coder run` envelope (and the matching MCP tool) carries the
-Release A contract fields: `session_slug` (explicit slug or an anonymous
+session acceptance contract fields: `session_slug` (explicit slug or an anonymous
 generated one — never an implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
@@ -697,8 +697,8 @@ repository or worktree creation failure — slug/branch conflicts like
 `best_effort_caller_worktree`: stderr and envelope `warnings` carry
 `TRISS_CODER_ISOLATION_DOWNGRADED` and `effective_isolation` becomes
 `best_effort_caller_worktree` (advisory-only, `files_changed` is `null`,
-edits may reach the caller worktree). Full details:
-`docs/reliable-delegation-release-a.md`.
+edits may reach the caller worktree). Full details are in the
+[`docs/reliable-delegation-contract.md`](docs/reliable-delegation-contract.md).
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases
@@ -715,8 +715,8 @@ providers need no probe at all — their plans use different keys
 (`MOONSHOT_API_KEY` vs `KIMI_API_KEY`), so the choice already names the
 endpoint. Either way it lets you pick the model interactively. See the
 **Providers** section below and
-[docs/opencode-zen.md](docs/opencode-zen.md) and
-[docs/opencode-go.md](docs/opencode-go.md) for the OpenCode provider deep-dives.
+[docs/engines/opencode-zen.md](docs/engines/opencode-zen.md) and
+[docs/engines/opencode-go.md](docs/engines/opencode-go.md) for the OpenCode provider deep-dives.
 
 Prints one JSON envelope to stdout — `files_changed`, `diff_stat`, and
 `worktree` tell you what to review; `--isolate` runs the agent in a
@@ -726,7 +726,8 @@ waits for any residual process in the selected engine's process group, so tests 
 clients cannot keep locks or write files after completion. MCP cancellation is
 forwarded to the same cleanup path. `--session <slug>` continues the same opencode
 conversation across calls. **POSIX only** (macOS/Linux) for now. See
-`docs/glm-clients.md` for the full picture of how Triss talks to GLM
+the [GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md)
+for the full picture of how Triss talks to GLM
 (all engines, key/endpoint routing, models, and every usage mode),
 `docs/configuration.md` for the coder env vars, and `docs/mcp.md` for the
 MCP tool equivalents.
@@ -748,8 +749,9 @@ CLI flag > env > crush.json `permissions.run.restrict` > default OFF). For
 Z.AI GLM, the opencode engines and crush all use the single `ZHIPU_API_KEY`
 (crush ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY`
 for older binaries; see
-**Providers** below for the opencode-only OpenCode alternatives). See
-`docs/crush-restrict-issues.md` for the live-verified bug facts.
+**Providers** below for the opencode-only OpenCode alternatives). See the
+[Crush engine guide](docs/engines/crush.md) for the supported configuration,
+safety boundaries, and current upstream limitations.
 
 **Providers** — the `opencode` engine isn't limited to Z.AI. The required
 API key follows the model's `<provider>/` prefix: `triss-worker/*` reuses
@@ -858,7 +860,7 @@ override within the current provider; use `--provider` + `--model` and optional
 `--small-model` to switch the complete pair for one run. The deny-first
 `opencode.json` bash policy applies to every provider.
 Full details, the model catalogue, and every configuration path are in
-[docs/opencode-zen.md](docs/opencode-zen.md) and [docs/opencode-go.md](docs/opencode-go.md).
+[docs/engines/opencode-zen.md](docs/engines/opencode-zen.md) and [docs/engines/opencode-go.md](docs/engines/opencode-go.md).
 
 If your Z.AI plan hits its usage limit, `triss coder run` fails fast with
 the reset time converted to your local timezone (Z.AI reports it in
@@ -883,7 +885,7 @@ Not every engine speaks every provider:
 | Engine     | Providers served                                  |
 | ---------- | ------------------------------------------------- |
 | `opencode` | Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
-| `opencode2` | Same provider routing as V1 (shares `opencode.json`; one-shot `--provider` / `--small-model` overlays rejected — see [docs/opencode2.md](docs/opencode2.md)) |
+| `opencode2` | Same provider routing as V1 (shares `opencode.json`; one-shot `--provider` / `--small-model` overlays rejected — see [docs/engines/opencode2.md](docs/engines/opencode2.md)) |
 | `crush`    | Z.AI GLM (coding-plan only)                       |
 
 `triss coder init` drives setup in that order — **engine, then provider,
@@ -935,8 +937,9 @@ Triss surfaces that replacement command rather than auto-switching you
 to GLM.
 
 Full flag reference, the model catalogues, key/endpoint routing, and
-the stale-model recovery flow are in [docs/glm-clients.md](docs/glm-clients.md),
-[docs/opencode-zen.md](docs/opencode-zen.md), [docs/opencode-go.md](docs/opencode-go.md), and
+the stale-model recovery flow are in the
+[GLM client guide](https://github.com/ayleen/triss-coworker/blob/main/docs/glm-clients.md),
+[docs/engines/opencode-zen.md](docs/engines/opencode-zen.md), [docs/engines/opencode-go.md](docs/engines/opencode-go.md), and
 [docs/configuration.md](docs/configuration.md).
 
 ## Integrations
@@ -975,7 +978,8 @@ hints live in the on-demand cookbook, not in the always-loaded block.)
 
 The plugin contract is one folder + one file. A working **GitHub Issues**
 integration in ~80 lines is documented end-to-end in
-[**docs/extending.md**](docs/extending.md). High-level recipe:
+[**extension guide**](https://github.com/ayleen/triss-coworker/blob/main/docs/extending.md).
+High-level recipe:
 
 1. Create `src/integrations/<name>/index.js`.
 2. `export default { name, description, envVars, register(program, { wrap }) {}, agentInstructions: { claude, codex } }`.
@@ -1190,15 +1194,17 @@ rules of thumb.
 ## Security & privacy
 
 The short version for a vendor security review — full details in
-[SECURITY.md](SECURITY.md):
+[SECURITY.md](https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md):
 
 - **Local-first.** Triss is a CLI/MCP server on your machine, not a hosted
   service. It stores nothing server-side and has **no telemetry** — zero
   data goes to the Triss developers.
-- **Two outbound flows, both yours to configure.** Prompts and selected
-  context go to the model endpoint you set (`TRISS_WORKER_BASE_URL`,
-  DeepSeek by default); tracker commands talk to the Jira/Linear/GitHub/…
-  instances you configured. Nothing else leaves the machine.
+- **Outbound data is explicit and documented.** Model commands and coder
+  engines may send selected repository content to the configured provider;
+  integrations call their configured services; a credential-free GitHub
+  Releases check runs when the update cache is due. The complete recipient,
+  payload, trigger, and opt-out table is in
+  [docs/data-flows.md](docs/data-flows.md).
 - **Data residency is a config option.** Need an EU processor, a DPA, or
   zero retention? Point the worker at Azure OpenAI, Bedrock, Mistral, or a
   self-hosted model — see [provider recipes](#provider-recipes).
@@ -1208,11 +1214,12 @@ The short version for a vendor security review — full details in
 - **Guardrails.** SSRF guard on all agent-controlled fetches, path sandbox
   in MCP mode, response-size caps, secret masking in output. Residual risks
   are documented, not hidden.
-- **Auditable supply chain.** Plain ESM, no build step, seven direct
-  dependencies, committed lockfile, `npm audit` kept clean.
+- **Auditable supply chain.** npm contents are allowlisted and smoke-tested;
+  the standalone artifact has a deterministic source-to-artifact pipeline.
+  Direct and transitive npm dependencies remain part of the installed code.
 
 Report vulnerabilities via GitHub Security Advisories
-([SECURITY.md](SECURITY.md#reporting-vulnerabilities)).
+([SECURITY.md](https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md#reporting-vulnerabilities)).
 
 ## Roadmap
 
@@ -1223,9 +1230,8 @@ wizard · bash + zsh completions · `--stdin` · `triss review [PR]` ·
 `triss chat` · MCP server · Cost tracking · `triss commit-msg` · GitHub /
 Confluence / GitLab integrations · Streaming output for `ask`/`chat`/
 `review` · Codex `AGENTS.md` rules · Path-safety sandbox in MCP mode ·
-test suite · Reliable delegation, Release A — coder envelope v2,
-session/result stores, credential proxy, and Section 15 rollback ·
-Reliable delegation, Releases B/C — bounded review corpus limits, exact
+test suite · Reliable delegation — coder envelope v2, session/result stores,
+credential proxy, bounded review corpus limits, exact
 merge-base diff identity, disposable PR bare repos, and sequential
 whole-file review sharding · `triss exec` deterministic routing ·
 `triss coder` (opencode V1 default, opencode2 beta, crush) with worktree
@@ -1237,16 +1243,18 @@ provider recipe blocks for Kimi, Ollama, and OpenRouter.
 - [ ] Crush upstream `permissions.run` enforcement (currently inert —
       the working allowlist is the CLI `--restrict` flags).
 - [ ] opencode2 beta graduation: real credential isolation and
-      fixture-verified subagent support (see [docs/opencode2.md](docs/opencode2.md)).
+      fixture-verified subagent support (see [docs/engines/opencode2.md](docs/engines/opencode2.md)).
 
 ## Contributing and security
 
-Contributions are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md)
+Contributions are welcome; start with
+[CONTRIBUTING.md](https://github.com/ayleen/triss-coworker/blob/main/CONTRIBUTING.md)
 for local setup, test commands, and the project conventions.
 
 Security-sensitive changes deserve extra care because Triss sits between an
 agent, your filesystem, web URLs, and tracker credentials. See
-[SECURITY.md](SECURITY.md) for the reporting path and the current trust
+[SECURITY.md](https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md)
+for the reporting path and the current trust
 boundaries.
 
 ## Changelog

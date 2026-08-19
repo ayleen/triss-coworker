@@ -1,5 +1,5 @@
 /**
- * coder-session-owner-adapter.js — Package 4B2 (Atomic 17): session
+ * coder-session-owner-adapter.js — session
  * process-owner adapter.
  *
  * Section 6.5 owner-adapter contract of the approved plan
@@ -132,7 +132,7 @@ export function createCoderSessionProcessOwnerAdapter({ context = null, storeAda
   }
 
   /**
-   * Package 2D2 owner-adapter contract: recovery of a durable owner row.
+   * Owner-adapter contract: recovery of a durable owner row.
    * Runs only inside the owner-lock callback (validated context).
    */
   async function recover(ownerRow) {
@@ -155,7 +155,7 @@ export function createCoderSessionProcessOwnerAdapter({ context = null, storeAda
     return { ok: true, action: 'kept', observed: 'canonical_complete' };
   }
 
-  /** Package 2D2 releaseReference contract: release the session reference. */
+  /** Release the session reference owned by this adapter. */
   async function releaseReference(ownerRow) {
     requireValidContext(context);
     requireDeletingRow(ownerRow);
