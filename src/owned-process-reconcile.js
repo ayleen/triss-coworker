@@ -37,6 +37,14 @@ const STATE_VERIFIED_EMPTY = 'verified_empty';
 const STATE_RELEASE_PENDING = 'release_pending';
 const STATE_ACKNOWLEDGED = 'acknowledged';
 
+// Journal transitions are individually locked, but reconciliation is a
+// multi-step protocol (begin -> releaseReference -> acknowledge -> prune).
+// Serialize that protocol per journal/sandbox within this process so two
+// callers cannot both act on the same release_pending row. This guard is
+// deliberately in-process only: separate processes still have the documented
+// best-effort scope, and owner adapters must keep releaseReference idempotent.
+const reconcileLocks = new Map();
+
 function requireSandboxId(sandboxId) {
   if (!isSafeSandboxId(sandboxId)) {
     throw new Error(`owned-process: invalid sandbox_id: ${JSON.stringify(sandboxId)}`);
@@ -262,7 +270,7 @@ export async function recoverOwnedProcessSet({ journalDir, sandboxId, ownerAdapt
  * transition happens exactly once; on a crash between begin and reference
  * removal the journal row itself is the recovery trigger.
  */
-export async function reconcileOwnedProcessSetRelease({ journalDir, sandboxId, ownerAdapter }) {
+async function reconcileOwnedProcessSetReleaseUnlocked({ journalDir, sandboxId, ownerAdapter }) {
   requireJournalDir(journalDir);
   requireSandboxId(sandboxId);
 
@@ -295,4 +303,26 @@ export async function reconcileOwnedProcessSetRelease({ journalDir, sandboxId, o
   }
   // live / reserving without verified emptiness blocks cleanup.
   throw new Error(`owned-process: cleanup blocked in state ${entry.state}`);
+}
+
+/**
+ * Serialize the complete release protocol for one sandbox in this process.
+ * A second caller waits for the first to finish and then observes the durable
+ * post-prune state, making concurrent cleanup idempotent without claiming a
+ * cross-process mutex.
+ */
+export async function reconcileOwnedProcessSetRelease(args) {
+  const { journalDir, sandboxId } = args || {};
+  const key = `${journalDir}\u0000${sandboxId}`;
+  const previous = reconcileLocks.get(key) || Promise.resolve();
+  let releaseTurn;
+  const turn = new Promise((resolve) => { releaseTurn = resolve; });
+  reconcileLocks.set(key, turn);
+  await previous;
+  try {
+    return await reconcileOwnedProcessSetReleaseUnlocked(args);
+  } finally {
+    releaseTurn();
+    if (reconcileLocks.get(key) === turn) reconcileLocks.delete(key);
+  }
 }

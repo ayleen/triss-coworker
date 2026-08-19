@@ -1326,6 +1326,74 @@ test('runCoderRun abort signal terminates the detached OpenCode process group', 
   }
 });
 
+test('runCoderRun does not return while a cancelled child or descendant can still write', async () => {
+  const repoRoot = initRepo();
+  const writePath = join(repoRoot, 'cancelled-run-writes.log');
+  const run = withIsolatedRun(repoRoot, async () => {
+    const controller = new AbortController();
+    const fixtureBase64 = Buffer.from(FIXTURE).toString('base64');
+    const writerScript = [
+      "const fs = require('node:fs');",
+      "const file = process.env.TRISS_TEST_WRITE_FILE;",
+      "let n = 0;",
+      "const timer = setInterval(() => fs.appendFileSync(file, String(++n) + '\\n'), 2);",
+      "process.on('SIGTERM', () => { clearInterval(timer); process.exit(0); });",
+    ].join('');
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(writerScript)}], { stdio: 'ignore', env: process.env });`,
+      "process.stdout.write(Buffer.from(process.env.TRISS_TEST_FIXTURE, 'base64'));",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ].join('');
+    let ownedGroupPid = null;
+    const spawnFn = (_cmd, _argv, opts) => {
+      const child = spawn(process.execPath, ['-e', parentScript], {
+        ...opts,
+        env: {
+          ...opts.env,
+          TRISS_TEST_WRITE_FILE: writePath,
+          TRISS_TEST_FIXTURE: fixtureBase64,
+        },
+      });
+      ownedGroupPid = child.pid;
+      return child;
+    };
+    const killOwnedGroup = (pid, signal) => {
+      assert.equal(pid, -ownedGroupPid, 'cancellation may signal only this run\'s process group');
+      return process.kill(pid, signal);
+    };
+
+    let captured = '';
+    const promise = runCoderRun('cancel after descendant write', {}, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      abortSignal: controller.signal,
+      killProcess: killOwnedGroup,
+      pollMs: 0,
+    });
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (existsSync(writePath) && readFileSync(writePath, 'utf8').trim().split('\n').length >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const beforeCancellation = readFileSync(writePath, 'utf8');
+    assert.ok(beforeCancellation.trim().split('\n').length >= 2, 'the descendant must have written repeatedly before cancellation');
+    controller.abort();
+    await promise;
+
+    const afterRun = readFileSync(writePath, 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(readFileSync(writePath, 'utf8'), afterRun, 'no child or descendant writes after run completion');
+    assert.equal(JSON.parse(captured.trim()).exit_reason, 'killed');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('runCoderRun abort fails closed when the OpenCode process group cannot be signalled', async () => {
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
