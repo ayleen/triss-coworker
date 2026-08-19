@@ -50,7 +50,7 @@ test('publish workflow builds one canonical artifact and smokes only downloaded 
   assert.match(workflow, /standalone-smoke:/);
   assert.match(workflow, /node:\s*\['22', '24'\]/);
   assert.match(workflow, /os:\s*\[ubuntu-latest, macos-latest\]/);
-  assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02[\s\S]*name: standalone-canonical/);
+  assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a[\s\S]*name: standalone-canonical/);
   assert.match(workflow, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093[\s\S]*name: standalone-canonical/);
   assert.match(workflow, /verify-artifact[\s\S]*--checksum/);
 
@@ -76,7 +76,7 @@ test('PR workflow smokes the same canonical artifact on min/max Node and macOS',
   assert.match(workflow, /standalone-smoke:/);
   assert.match(workflow, /os:\s*\[ubuntu-latest, macos-latest\]/);
   assert.match(workflow, /node:\s*\['22', '24'\]/);
-  assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02[\s\S]*name: standalone-canonical/);
+  assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a[\s\S]*name: standalone-canonical/);
   const smoke = workflow.slice(workflow.indexOf('  standalone-smoke:'));
   assert.doesNotMatch(smoke, /build-twice/);
   assert.match(smoke, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093[\s\S]*name: standalone-canonical/);
