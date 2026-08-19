@@ -146,7 +146,8 @@ for each entry. Override per-run with `--restrict` / `--no-restrict`, or via
 `TRISS_CODER_CRUSH_RESTRICT=1`. crush is simpler otherwise (one JSON envelope,
 native session ids). Both share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads
 it natively; triss also forwards it as `ZAI_API_KEY` for older binaries). See
-`docs/crush-restrict-issues.md` for the live-verified bug facts.
+`docs/engines/crush.md` for the supported configuration, safety boundaries,
+and current upstream limitations.
 
 Env: `ZHIPU_API_KEY` (required for the default GLM provider;
 `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other

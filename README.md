@@ -315,9 +315,8 @@ Add credentials later → restart session → new tools appear automatically.
 
 Full reference: [docs/mcp.md](docs/mcp.md).
 
-The root `CLAUDE.md` and `AGENTS.md` in this repository are contributor
-instructions for working on Triss itself. The files under `templates/` are
-what `triss init` and `triss agent-help` render into other projects:
+The files under `templates/` are what `triss init` and `triss agent-help`
+render into other projects:
 `claude.md` / `codex.md` are the nano variants written by `init`, and
 `claude-full.md` / `codex-full.md` are the long cookbook served by
 `agent-help`.
@@ -750,8 +749,9 @@ CLI flag > env > crush.json `permissions.run.restrict` > default OFF). For
 Z.AI GLM, the opencode engines and crush all use the single `ZHIPU_API_KEY`
 (crush ≥0.1.1 reads it natively; triss also forwards it as `ZAI_API_KEY`
 for older binaries; see
-**Providers** below for the opencode-only OpenCode alternatives). See
-`docs/crush-restrict-issues.md` for the live-verified bug facts.
+**Providers** below for the opencode-only OpenCode alternatives). See the
+[Crush engine guide](docs/engines/crush.md) for the supported configuration,
+safety boundaries, and current upstream limitations.
 
 **Providers** — the `opencode` engine isn't limited to Z.AI. The required
 API key follows the model's `<provider>/` prefix: `triss-worker/*` reuses

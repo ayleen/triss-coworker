@@ -557,8 +557,8 @@ config that was written *without* the canonical deny-first policy, while
 **preserving** that config as-is. It is scoped to the opencode engine,
 never touches keys, and in noninteractive use must be paired with `--yes`.
 
-See `docs/crush-restrict-issues.md` for the live-verified bug facts and
-`docs/crush-issues.md` for the fuller list of crush caveats.
+See the [Crush engine guide](engines/crush.md) for the supported
+configuration, safety boundaries, and current upstream limitations.
 
 `triss coder run` is **POSIX only** (macOS/Linux) — its engine env
 allowlist and `--timeout` kill both rely on POSIX process-group

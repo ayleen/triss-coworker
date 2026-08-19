@@ -1,7 +1,7 @@
 // src/coder-models.js — shared model-management service.
 //
-// Extracts provider/model resolution + auditing into a small, testable,
-// in-process service (Phase 3 of docs/coder-model-management-plan.md). The
+// Extracts provider/model resolution and auditing into a testable in-process
+// service. The
 // CLI (`coder models` / `coder model set`), the wizard, and `triss status`
 // hints will eventually render the SAME structured facts this module
 // returns — never stderr strings composed inline. Every operation takes a
@@ -2851,7 +2851,7 @@ function readRollbackManifest(manifestPath) {
 // directory; its manifest.json's `engine` field selects OpenCode vs Crush
 // restoration so rollback never re-derives the engine from live config.
 //
-// Corrective Blocker A: rollback acquires the SAME default (engine, scope)
+// Rollback acquires the same default (engine, scope)
 // filesystem lock as apply — BEFORE any target/snapshot read or restore, held
 // through restore, released in finally. The manifest is read once PRE-LOCK to
 // learn the engine (record metadata, not a target read), then RE-READ under the

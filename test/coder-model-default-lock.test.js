@@ -1,16 +1,11 @@
 /**
- * coder-model-default-lock-blocker.test.js — RED contract tests for
- * Corrective Blocker A of docs/coder-model-management-plan.md
- * ("Independently verified blockers — Corrective Blocker A").
+ * Contract tests for the default model-configuration mutation lock.
  *
- * Blocker 6 was implemented with an OPTIONAL deps.lock seam only: the real CLI
- * calls applyModelChange(..., {}) with empty deps, so production has NO
- * interprocess lock, and rollbackModelChange has no lock at all. Corrective A
- * requires a DEFAULT built-in cross-process filesystem lock for every real
- * apply AND rollback, keyed by (engine, scope), acquired before snapshots/
- * target reads and held through all commits/compensation; absence of deps.lock
- * must NEVER mean unlocked; fail-closed on a held/stale lock with path + manual
- * guidance; never auto-break an unknown lock.
+ * Every production apply and rollback must acquire a cross-process lock keyed
+ * by configuration backend and scope before snapshots or target reads, hold it
+ * through commit or compensation, and release it in finally. Omitting the
+ * injected test seam must never mean unlocked operation. Unknown held locks
+ * fail closed and are never broken automatically.
  *
  * Deterministic seam (no sleeps, no real network): the service exports
  * `lockPathFor(engine, scope)` returning the absolute path of an O_EXCL
@@ -223,7 +218,7 @@ test(
     assert.equal(typeof svc.lockPathFor, 'function', 'CONTRACT RED: lockPathFor must be exported');
     const lockPath = svc.lockPathFor('opencode', 'global');
 
-    // Phase 1 — success: the sync hook fires mid-CS (after the config rename,
+    // Success path: the sync hook fires mid-critical-section (after the config rename,
     // before the env commit). The lock file MUST exist at that point, and MUST
     // be gone once the apply resolves ok.
     let existedDuringSuccess = null;
@@ -242,7 +237,7 @@ test(
     );
     assert.equal(existsSync(lockPath), false, 'the default lock MUST be released after a successful apply');
 
-    // Phase 2 — error/rollback: a hook that throws after recording forces the
+    // Compensation path: a hook that throws after recording forces the
     // rollback path (exitCode 2). The lock MUST still be held inside the CS and
     // released after the rollback completes.
     let existedDuringError = null;

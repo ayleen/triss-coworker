@@ -338,7 +338,7 @@ test('buildCrushRunArgv: restrict OFF appends NEITHER --restrict-run NOR any all
 });
 
 test('CRUSH_ALLOW_TOOLS: is the working coder file-tool set [view, edit, write, ls]', () => {
-  // Verified live against crush 0.1.3 (docs/crush-restrict-issues.md): the
+  // Verified live against crush 0.1.3 (docs/engines/crush.md): the
   // file-tool taxonomy a coder needs under --restrict-run.
   assert.deepEqual(CRUSH_ALLOW_TOOLS, ['view', 'edit', 'write', 'ls']);
 });

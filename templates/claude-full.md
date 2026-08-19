@@ -287,7 +287,8 @@ entry. Override per-run with `--restrict` / `--no-restrict`, or via
 (one JSON envelope on stdout, native get-or-create session ids). Both engines
 share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it natively; triss also
 forwards it as `ZAI_API_KEY` for older binaries. See
-`docs/crush-restrict-issues.md` for the live-verified bug facts.
+`docs/engines/crush.md` for the supported configuration, safety boundaries,
+and current upstream limitations.
 
 Configure via `triss coder init` or `triss config wizard coder`. The opencode
 engine can reuse the existing OpenAI-compatible worker profile with

@@ -1,22 +1,18 @@
-// crush adapter — the SECOND coding engine behind `triss coder run --engine
-// crush`. See docs/coder-agent-plan.md "Phase 6 recon (crush fork — 2026-07-05)"
-// for the verified facts this adapter follows, and docs/crush-issues.md for the
-// maintainer bug report (esp. the ZAI_API_KEY mismatch and the dirty version
-// string).
+// Crush adapter behind `triss coder run --engine
+// crush`. See docs/engines/crush.md for the supported configuration, safety
+// boundaries, and upstream limitations this adapter must preserve.
 //
 // Scope of THIS file: PURE adapter functions — detect, argv/env builders,
 // single-envelope parser, exit-reason mapper. NO process orchestration, NO
 // isolation/worktree logic, NO logUsage. That lives in src/commands/coder.js
 // (engine-agnostic), which calls into this adapter. Keeping the adapter pure
-// means a future engine #3 slots in by adding a sibling file with the same
-// member shape.
+// means another engine can be added as a sibling with the same member shape.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
 // Pin the npm package version. The semver-parse fix landed in 0.1.3 (crush
-// ≥0.1.3 reports a clean `crush version vX.Y.Z` — docs/crush-issues.md "[High]
-// Version string does not match the release"), so detect() parses the semver
+// ≥0.1.3 reports a clean `crush version vX.Y.Z`), so detect() parses the semver
 // and compares against this pin (installed >= pin). The pin tracks the latest
 // version verified live against the triss adapter (envelope shape, ZHIPU→ZAI
 // env bridge, --restrict-run CLI-flag enforcement, worktree isolation — all
@@ -58,7 +54,7 @@ function semverGte(a, b) {
 
 // detect(): spawnSync('crush', ['--version']) — NEVER shell:true. crush 0.1.3+
 // reports a clean `crush version v0.1.3`; earlier builds reported a dirty dev
-// string like `v0.0.0-20260704...+dirty` (docs/crush-issues.md). We parse the
+// string like `v0.0.0-20260704...+dirty`. We parse the
 // `vX.Y.Z` semver out of whatever it prints and return {found, version,
 // satisfiesPin}: `version` is the bare `0.1.3` (or the raw string when no
 // semver is parseable, for diagnostics); `satisfiesPin` is parsed >= pin.
@@ -116,7 +112,7 @@ export function installHintCrush() {
 // restrict: when ON, append `--restrict-run` AND the allowlist as CLI flags
 // (`--allow-bash <p>` per pattern, `--allow-tool <t>` per tool). This is the
 // ONLY enforcement path that actually works today: live testing (see
-// docs/crush-restrict-issues.md) proved crush 0.1.3 IGNORES the
+// docs/engines/crush.md) proved crush 0.1.3 IGNORES the
 // `permissions.run` config block — only the CLI flags take effect. So when
 // restrict is ON we emit the full allowlist on the command line. When OFF,
 // append nothing — crush then auto-approves every tool (its default). The
@@ -150,7 +146,7 @@ export function buildCrushRunArgv({
     // the comment block above). One --allow-bash per pattern, one --allow-tool
     // per tool, so the working coder can read/edit/write files + run the
     // read-only bash allowlist. A denied *bash* command deadlocks to timeout
-    // (docs/crush-restrict-issues.md [Medium]), so the bash set is deliberately
+    // (docs/engines/crush.md), so the bash set is deliberately
     // narrow; pair restrict with worktree isolation (the crush isolate default)
     // for defense-in-depth.
     for (const p of CRUSH_ALLOW_BASH_PATTERNS) argv.push('--allow-bash', p);
@@ -170,10 +166,10 @@ export function buildCrushRunArgv({
 // KEY BRIDGE: crush ≥0.1.1 reads `ZHIPU_API_KEY` natively (the ecosystem-
 // standard name used by Z.AI's own docs, opencode, and triss). We forward
 // `ZHIPU_API_KEY` straight through into the spawn env AND still forward
-// `ZAI_API_KEY` as a compat alias for older crush binaries that read only
-// that name (docs/crush-issues.md "[High] Provider env var mismatch" —
-// fixed upstream in 0.1.1; the alias keeps <0.1.1 binaries working with a
-// single user-facing ZHIPU_API_KEY). NEVER log either value (use
+// `ZAI_API_KEY` as a compatibility alias for older crush binaries that read
+// only that name. Native `ZHIPU_API_KEY` support landed in 0.1.1; the alias
+// keeps older binaries working with a single user-facing key. See
+// docs/engines/crush.md. NEVER log either value (use
 // maskValue() at the call site if anything is echoed).
 export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   const env = {};
@@ -197,8 +193,7 @@ export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
 }
 
 // parseCrushEnvelope: crush prints ONE JSON object on stdout at end of run
-// (confirmed live, docs/crush-issues.md "What works well": "emits exactly one
-// pure-JSON object on stdout"). Shape:
+// (confirmed live; see docs/engines/crush.md). Shape:
 //   {session_id, exit_reason, final_text, assistant_notes?, tool_calls,
 //    usage:{delta_tokens, delta_cost_usd}, duration_ms, error}
 //
@@ -287,8 +282,7 @@ export const CRUSH_ALLOW_BASH_PATTERNS = [
 ];
 
 // The non-bash tool allowlist emitted as `--allow-tool <t>` flags when restrict
-// is ON. Verified live against crush 0.1.3 (docs/crush-restrict-issues.md
-// "What works well"): the file-tool taxonomy is `view`, `edit`, `write`, `ls`
+// is ON. The verified file-tool taxonomy is `view`, `edit`, `write`, `ls`
 // (each accepts a bare name or `tool:action`). This is the WORKING set a coder
 // needs to read and edit files under `--restrict-run` — broader than the
 // `allow_tools: ['view']` we seed into crush.json (which is the conservative
@@ -300,7 +294,7 @@ export const CRUSH_ALLOW_TOOLS = ['view', 'edit', 'write', 'ls'];
 // restrict:true + the curated read-only allow_bash above + `view` as the only
 // always-allowed non-bash tool — the opencode-parity persistent policy shape.
 //
-// FORWARD-COMAT CAVEAT (live-verified 2026-07-06, docs/crush-restrict-issues.md):
+// Forward-compatibility caveat (see docs/engines/crush.md):
 // crush 0.1.3 IGNORES this config block — `permissions.run` in crush.json is
 // not honored by `crush run --restrict-run`. We keep seeding it because it is
 // harmless AND correct once the maintainer honors config (then this becomes the
@@ -379,7 +373,7 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
   };
 }
 
-// The adapter object — the shape a future engine #3 mirrors.
+// The adapter object defines the shape another engine implementation mirrors.
 export const crush = {
   id: 'crush',
   binaryName: 'crush',

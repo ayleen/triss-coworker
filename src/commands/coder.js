@@ -4,9 +4,7 @@
 // envelope, native session ids; crush 0.1.3's permissions.run config is
 // currently inert, so crush defaults to worktree isolation and an opt-in
 // CLI-flag allowlist — see src/coder-engines/crush.js and
-// docs/crush-restrict-issues.md).
-// See docs/coder-agent-plan.md for the original roadmap (init/run/clean,
-// the opencode adapter, MCP wiring — all shipped). Naming: "agent" is
+// docs/engines/crush.md). Naming: "agent" is
 // taken (the AI assistant using triss), so this feature is "coder"
 // everywhere (command, file, env prefix).
 
@@ -77,10 +75,10 @@ import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
   isTransientOpenCodeReadError,
 } from '../opencode-catalogue.js';
-// crush is the SECOND coding engine behind `--engine crush`. The adapter is
+// Crush is an optional coding engine behind `--engine crush`. The adapter is
 // pure (detect/argv/env/parse/map); this module owns the engine-agnostic
-// orchestration (isolation, spawn, envelope assembly). See Phase 6 step 1 in
-// docs/coder-agent-plan.md and docs/crush-issues.md.
+// orchestration (isolation, spawn, envelope assembly). See
+// docs/engines/crush.md for the supported engine boundary.
 import { crush as crushEngine } from '../coder-engines/crush.js';
 import {
   opencode2 as opencode2Engine,
@@ -93,27 +91,27 @@ import {
   opencode2LogPath,
 } from '../coder-engines/opencode2.js';
 import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes, computeEffectivePermissionPolicy } from '../opencode2-preflight.js';
-// Canonical OpenCode source enumeration (Phase 4): one walker for every
-// opencode.json layer + plugin/agent discovery, shared by the V2 static
-// preflight and model inspection.
+// One canonical walker enumerates every opencode.json layer plus plugin and
+// agent discovery; V2 static preflight and model inspection must see the same
+// source set.
 import { enumerateOpenCodeSources } from '../opencode-config.js';
 
 // Pinned opencode-ai version, overridable for testing/upgrades.
 // 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
 // changes; 1.18.4 specifically improved Kimi model handling.
 export const OPENCODE_PIN = '1.18.7';
-// Provider corrected during Phase 0 recon: the configured ZHIPU_API_KEY is
-// a `zai-coding-plan` (subscription) key, not a pay-as-you-go `zai` key —
+// The default assumes a `zai-coding-plan` subscription key, not a pay-as-you-go
+// `zai` key:
 // `zai/glm-*` fails with "Insufficient balance or no resource package" on
-// that key. See docs/coder-agent-plan.md's "Recon results" section.
+// that key. Runtime provider detection below verifies the actual key type.
 const DEFAULT_CODER_MODEL = 'zai-coding-plan/glm-5.2';
 const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 
-// Default coding engine. opencode is engine #1 (shipped — deny-first
-// opencode.json policy is its safety layer). crush is engine #2 (Phase 6 —
-// simpler single-envelope model, but a weaker safety story: crush 0.1.3's
-// permissions.run config is inert and denied bash deadlocks, so this module
-// compensates by defaulting --isolate ON for crush and making restrict opt-in).
+// OpenCode remains the default because its deny-first opencode.json policy is
+// enforced. Crush has a simpler single-envelope model but a weaker safety
+// story: verified Crush releases ignore the persistent permissions.run config
+// and a denied bash command can wait until timeout, so this module
+// compensates by defaulting --isolate ON for Crush and making restrict opt-in.
 // Override per-call via --engine or globally via TRISS_CODER_ENGINE.
 export const DEFAULT_CODER_ENGINE = 'opencode';
 const VALID_CODER_ENGINES = ['opencode', 'opencode2', 'crush'];
@@ -134,8 +132,7 @@ export function resolveCoderEngine(opts = {}) {
 
 // ─── Z.AI provider auto-detection ───────────────────────────────────────────
 //
-// The zai-coding-plan default above was derived from ONE account's
-// subscription key during Phase 0 recon — a pay-as-you-go `zai` key hits
+// A coding-plan subscription key sent to the pay-as-you-go `zai` endpoint hits
 // the wrong base URL and opencode retries the failing call forever (see
 // the DEFAULT_CODER_MODEL comment). `triss coder init` now probes which
 // base a given key actually authenticates against, so the written
@@ -149,7 +146,7 @@ export function resolveCoderEngine(opts = {}) {
 // tutorial to configure your dedicated endpoint" with no independent
 // spec. So the cheapest *verifiable* probe is a real chat completion with
 // `max_tokens: 1`, tried against coding-plan first (the more common key
-// type observed in recon), falling back to pay-as-you-go.
+// likely subscription route first, falling back to pay-as-you-go.
 const ZAI_PROBE_MODEL = 'glm-5-turbo';
 const ZAI_PROBE_TIMEOUT_MS = 10_000;
 
@@ -1281,7 +1278,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
   const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
-  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4) ──────────────
+  // OpenCode 2 shares the V1-compatible configuration surface.
   // V2 shares the V1-compatible opencode.json surface: the SAME
   // setupKey/runCoderSetup flow configures the shared config, then the V2
   // specifics (XDG state roots + static plugin/agent preflight + binary pin
@@ -1329,7 +1326,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // --role smart/fast resolve to GLM deterministically; (2) seed the
     // permissions.run policy (restrict + read-only allow_bash) into crush.json
     // as a FORWARD-COMPAT gesture — crush 0.1.3 currently IGNORES this block
-    // (docs/crush-restrict-issues.md), so it does NOT make crush restricted by
+    // (docs/engines/crush.md), so it does NOT make crush restricted by
     // itself; the working allowlist is enforced via CLI flags at run time when
     // --restrict is on (see buildCrushRunArgv). The adapter bridges
     // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
@@ -1453,7 +1450,7 @@ function assertV2WorkerTransportProvenance(workerShellEnv = captureWorkerShellSn
   );
 }
 
-// ── OpenCode 2 init (Phase 4) ────────────────────────────────────────────────//
+// ── OpenCode 2 init ──────────────────────────────────────────────────────────//
 // Reuses the shared V1 surface (same env file, same key setup, same
 // runCoderSetup flow onto the shared opencode.json) and adds the V2 specifics:
 //   1. Static source/plugin/agent preflight via the canonical enumerator —
@@ -1521,8 +1518,7 @@ function staticOpenCode2Preflight(cwd) {
 }
 
 async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
-  // ── OpenCode 2 init (docs/opencode2-engine-plan.md Phase 4). The V2 init
-  // owns its complete flow:
+  // The V2 init path owns its complete flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
   //      (plugin + agent gates, shared with the run path).
   //   2. Exact-pin gate TERMINALLY — a missing/mismatched binary must not
@@ -2088,7 +2084,7 @@ function opencodeConfigPath(scope) {
     : join(homedir(), '.config', 'opencode', 'opencode.json');
 }
 
-// crush.json locations (verified live, Phase 6 recon): `crush models use ...
+// Verified Crush paths: `crush models use ...
 // --global` writes ~/.local/share/crush/crush.json; `--local` writes
 // ./.crush/crush.json. Used only for presence checks in `triss status` — we
 // never parse or write it from here (crush owns the shape).
@@ -2104,7 +2100,7 @@ function crushConfigPath(scope) {
 // touch the JSON that `crush models use` already wrote — and we MERGE, never
 // clobbering the `models` block or a user-set `permissions.run`.
 //
-// FORWARD-COMPAT CAVEAT (live-verified 2026-07-06, docs/crush-restrict-issues.md):
+// Forward-compatibility caveat (see docs/engines/crush.md):
 // crush 0.1.3 IGNORES this `permissions.run` config block — `crush run
 // --restrict-run` does not honor it. We keep seeding it because it is harmless
 // and correct once the maintainer honors config (then it becomes the editable
@@ -2183,7 +2179,7 @@ function seedCrushPermissions(scope) {
 }
 
 // crush's restrict policy default. INTERIM (live-verified 2026-07-06,
-// docs/crush-restrict-issues.md): crush 0.1.3 IGNORES the permissions.run
+// docs/engines/crush.md): crush 0.1.3 IGNORES the permissions.run
 // config block, and a denied bash command deadlocks to the timeout instead of
 // denying cleanly. A coding agent routinely runs bash outside a read-only
 // allowlist (`npm run build`, `tsc`, ...), so restrict-ON-by-default would make
@@ -2215,8 +2211,8 @@ function readCrushConfigRestrict() {
   return undefined;
 }
 
-// Resolve the crush restrict tristate to a concrete boolean. Order (per the
-// Phase 6 fix spec):
+// Resolve the Crush restrict tristate to a concrete boolean. Order is part of
+// the public configuration contract:
 //   1. CLI flag --restrict (true) / --no-restrict (false) — opts.restrict.
 //      Both options are declared WITHOUT a Commander default in bin/triss.js,
 //      so opts.restrict is undefined when neither is passed (the tristate is
@@ -2799,7 +2795,7 @@ function emitZenStaleIncident(path, existingModels, resolved, zenAvailable, file
       ),
     );
   }
-  // Corrective Blocker B: print exactly ONE executable persistent repair
+  // Print exactly one executable persistent repair
   // command — `triss coder model set <canonical-main> --small <canonical-small>
   // --engine opencode --provider opencode-zen <scope> --yes` — built from the
   // replacements triss just resolved, POSIX-quoted. The command must apply
@@ -3029,11 +3025,11 @@ function scaffoldAgentTemplates(scope) {
   writeTemplateIfMissing(join(dir, 'researcher.md'), RESEARCHER_AGENT_TEMPLATE);
 }
 
-// ─── worktree helpers (engine-agnostic — Phase 2 reuses these) ────────────────
+// ─── engine-agnostic worktree helpers ────────────────────────────────────────
 //
 // Fixed layout from the plan: `.triss/wt/<slug>` working trees, each on its
 // own `coder/<slug>` branch. These are plain wrappers around `git`/`spawnSync`
-// so both `coder clean` (Phase 3) and `coder run --isolate` (Phase 2) can
+// so both `coder clean` and `coder run --isolate` can
 // share them without depending on the opencode engine at all.
 
 function worktreesRoot(repoRoot) {
@@ -3108,12 +3104,12 @@ function gitBranchDeleteSafe(sh, repoRoot, branch) {
   return !!r && !r.error && r.status === 0;
 }
 
-// ─── status helper (Phase 3 status block) ──────────────────────────────────────
+// ─── status helper ───────────────────────────────────────────────────────────
 
 // Read-only snapshot used by `triss status`. Never throws — every check
 // degrades to a "not found / unknown" value instead, so a missing engine
 // or a non-git cwd never crashes `triss status`. Additively reports BOTH
-// engines (opencode #1, crush #2) and which engine a bare `triss coder run`
+// engines and which engine a bare `triss coder run`
 // resolves to, so the user knows what's installed and what's the default.
 export function describeCoderStatus(deps = {}) {
   const sh = deps.spawnSync || nodeSpawnSync;
@@ -3130,15 +3126,15 @@ export function describeCoderStatus(deps = {}) {
   } catch {
     worktreeCount = 0;
   }
-  // crush engine #2 — additive awareness. detect() is presence-only (crush
-  // --version reports a dirty dev string, docs/crush-issues.md); crush.json
+  // Crush detection is presence-only (crush
+  // --version reports a dirty dev string; see docs/engines/crush.md); crush.json
   // presence is a best-effort file check, never parsed deeply. Never throws.
   const crushDetect = crushEngine.detect(sh);
   const crushConfigs = ['global', 'local'].map((scope) => {
     const path = crushConfigPath(scope);
     return { scope, path, exists: existsSync(path) };
   });
-  // opencode2 engine #3 — same detect shape as crush, but the pin is an
+  // OpenCode 2 uses the same detect shape as Crush, but the pin is an
   // EXACT match (non-semver beta builds: any other number is a different,
   // unverified build). `opencode2 --version` is a one-shot read-only probe:
   // it leaves no service behind (verified live), unlike debug config /
@@ -3177,15 +3173,14 @@ export function describeCoderStatus(deps = {}) {
   };
 }
 
-// ─── coder run (Phase 2) ────────────────────────────────────────────────────────
+// ─── coder run ───────────────────────────────────────────────────────────────
 //
 // The core adapter: spawn opencode headlessly, fold its ndjson event
 // stream into one envelope, print exactly that envelope to stdout. Every
 // other message in this module (and in this section) goes to stderr —
 // stdout is reserved for the single JSON line the caller parses.
 //
-// Session handling deviates from the plan's original "get-or-create"
-// description per Phase 0 recon: opencode's own `--session <id>` requires
+// OpenCode's own `--session <id>` requires
 // a real, opencode-issued `ses_...` id — it will NOT create a session
 // keyed by a caller-chosen slug. So `--session <slug>` on the triss side
 // is a lookup key into `.triss/sessions.json` (slug -> real id), not a
@@ -3319,7 +3314,7 @@ export function findRecentRateLimit(sinceMs, deps = {}) {
   return latest;
 }
 
-// ─── event folding (exported: replayable against the Phase 0 fixture) ──────────
+// ─── event folding ───────────────────────────────────────────────────────────
 
 export function createEventFolder() {
   return {
@@ -3574,7 +3569,7 @@ function readSessionsMap() {
 // accessors below normalize BOTH shapes in memory so readers never see the
 // flat form, while the on-disk file is only rewritten when a mapping is
 // actually persisted (an existing safe V1 file is not rewritten merely by a
-// V2 read — Phase 4 acceptance).
+// V2 read).
 
 const SESSION_STORE_VERSION = 2;
 const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
@@ -3829,7 +3824,7 @@ function atomicWriteJson(path, obj) {
 // discarding a finished run (tokens already paid) over a mapping file was
 // strictly worse than a rare lost slug update.
 
-// ─── isolation (worktree) setup — Phase 3 helpers reused ───────────────────────
+// ─── isolation worktree setup ────────────────────────────────────────────────
 
 function setupIsolation(sh, slug) {
   const repoRoot = gitRepoRoot(sh, projectRoot());
@@ -4143,7 +4138,7 @@ function spawnEngine({
   residualTermGraceMs = RESIDUAL_GROUP_TERM_GRACE_MS,
   residualKillWaitMs = RESIDUAL_GROUP_KILL_WAIT_MS,
   processGroupPollMs = PROCESS_GROUP_POLL_MS,
-  // ── engine seam (OpenCode 2, engine #3) ──
+  // OpenCode 2 overrides this engine seam; omitted values preserve V1.
   // The V1 path is unchanged when these are omitted: binary 'opencode',
   // V1 event fold, V1 diagnostics labels (tests pin the exact messages).
   // V2 passes its adapter's members.
@@ -4302,7 +4297,7 @@ function spawnEngine({
     // immediate PID. But the timeout timer is not the only way this
     // process can end: a user hitting Ctrl-C (SIGINT) or a supervisor
     // sending SIGTERM ends the PARENT without touching the detached
-    // child's group at all — per Phase 0 recon, opencode retries failed
+    // child's group at all. OpenCode retries failed
     // API calls indefinitely, so an orphaned engine can burn quota
     // headless forever. Forward both signals to the child's group.
     //
@@ -4484,14 +4479,14 @@ function spawnEngine({
   });
 }
 
-// ─── crush spawn + flow (engine #2) ─────────────────────────────────────────────
+// ─── Crush spawn and flow ────────────────────────────────────────────────────
 //
 // spawnCrush mirrors spawnEngine's process-management (detached process group,
 // timeout, SIGTERM->SIGKILL escalation, host SIGINT/SIGTERM forwarding) but for
 // crush's single-envelope output model: NO ndjson fold, NO rate-limit log
 // polling (crush has its own --timeout that preserves the partial answer and
-// does not retry a failing call forever — see docs/coder-agent-plan.md Phase 6
-// recon). crush writes the whole JSON envelope at end-of-run, so stdout is
+// does not retry a failing call forever). Crush writes the whole JSON envelope
+// at end-of-run, so stdout is
 // buffered fully and parsed once on close.
 
 function spawnCrush({
@@ -5262,7 +5257,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
   //     reliable safety layer — it actually enforces).
   //   - crush: isolate-ON. crush 0.1.3's `permissions.run` config block is
-  //     INERT (live-verified, docs/crush-restrict-issues.md) and a denied bash
+  //     INERT (see docs/engines/crush.md) and a denied bash
   //     command deadlocks to the timeout instead of denying cleanly. So the
   //     config allowlist is NOT a dependable safety layer today; the disposable
   //     git worktree is. crush therefore ships isolate-ON by default — the same
@@ -5279,7 +5274,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // `--agent coder` failed live with "Agent not found" unless agent files
   // were hand-installed — and the static agent-source preflight rejects
   // those. A beta V2 run without an explicit --agent uses the engine's
-  // BUILT-IN primary agent instead (live-matrix finding, Phase 6).
+  // built-in primary agent instead.
   const agent = opts.agent || (engine === 'opencode2' ? null : 'coder');
 
   const modelUsed = modelOverride || coderModel();
@@ -5591,7 +5586,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
-  // ─── OpenCode 2 (engine #3) ────────────────────────────────────────────────
+  // ─── OpenCode 2 ───────────────────────────────────────────────────────────
   //
   // Shares spawnEngine's process management through the engine seam (binary/
   // label/createState/foldLine/cwd) but diverges from V1 on: XDG-isolated
@@ -6271,12 +6266,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   await completeV2SessionRow(sessionV2);
 }
 
-// ─── coder clean (Phase 3) ──────────────────────────────────────────────────────
+// ─── coder clean ─────────────────────────────────────────────────────────────
 
 // Removes `.triss/wt/<slug>` worktrees whose branch has no diff vs the
 // repo's default branch, then SAFE-deletes (`git branch -d`, never `-D`)
 // the matching `coder/<slug>` branch so a re-run of `coder run --isolate`
-// with the same slug can re-create it via `-b` (Phase 2's contract — `-b`
+// with the same slug can re-create it via `-b` (`-b`
 // fails if the branch already exists). Only branches under the `coder/`
 // prefix are ever touched; a branch a user manually checked out into a
 // `.triss/wt/*` dir some other way is left alone. `--all` forces removal

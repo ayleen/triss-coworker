@@ -1,15 +1,13 @@
 /**
- * coder-model-crush-tdd-block1.test.js — RED FIRST: docs-first TDD correction
- * block 1 tests for current dirty worktree. These are execution-level tests
- * that reproduce the exact failures described in the correction block:
+ * Execution-level contract tests for persistent Crush model configuration:
  *
  *   1. CLI pre-held lock exiting nonzero/no green
  *   2. Init-style models.large/small inspection (not models.fast)
  *   3. Opencode-zen provider rejected before fake crush spawn
  *   4. Fake crush exit 0 with unchanged/wrong config rejected
  *
- * Tests are written as RED and should fail against current implementation.
- * After GREEN fixes, these tests should pass.
+ * These cases protect fail-closed behavior when the child process or the
+ * resulting configuration does not match the requested state.
  */
 
 import test from 'node:test';
@@ -35,7 +33,7 @@ const CANON_MAIN = 'zai-coding-plan/glm-5.2';
 const CANON_SMALL = 'zai-coding-plan/glm-5-turbo';
 
 function makeSandbox() {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-block1-')));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'triss-crush-model-contract-')));
   mkdirSync(join(home, '.config', 'triss'), { recursive: true });
   writeFileSync(join(home, '.config', 'triss', '.env'), '');
   mkdirSync(join(home, 'bin'), { recursive: true });
@@ -108,7 +106,7 @@ function runCli(args, { home }) {
 }
 
 // ─── Test 1: Pre-held lock must exit nonzero and NOT print green success ────
-test('BLOCK1-1: crush model set with pre-held lock exits nonzero and prints structured error (no green success)', () => {
+test('crush model set with pre-held lock exits nonzero and prints no success', () => {
   const { home } = makeSandbox();
   const lockPath = join(home, '.local', 'share', 'crush', '.lock');
 
@@ -138,7 +136,7 @@ test('BLOCK1-1: crush model set with pre-held lock exits nonzero and prints stru
 });
 
 // ─── Test 2: models.large/small inspection (not models.fast) ──────────────
-test('BLOCK1-2: crush models inspection reads models.large and models.small (not models.fast)', () => {
+test('crush models inspection reads models.large and models.small, not models.fast', () => {
   const { home } = makeSandbox();
 
   // Write crush.json with models.large and models.small (correct physical keys)
@@ -168,7 +166,7 @@ test('BLOCK1-2: crush models inspection reads models.large and models.small (not
 });
 
 // ─── Test 3: --engine crush --provider opencode-zen must reject before spawn ───
-test('BLOCK1-3: --engine crush --provider opencode-zen rejects before spawn (never calls crush binary)', () => {
+test('crush rejects an OpenCode Zen provider before spawning the engine', () => {
   const { home } = makeSandbox();
   const markerPath = join(home, 'crush-was-called');
 
@@ -195,7 +193,7 @@ test('BLOCK1-3: --engine crush --provider opencode-zen rejects before spawn (nev
 });
 
 // ─── Test 4a: Fake crush exit 0 with wrong config must be rejected ────────
-test('BLOCK1-4a: fake crush exit 0 with wrong config (models.main/fast) is rejected (not ok:true)', () => {
+test('crush rejects a successful child that writes models.main and models.fast', () => {
   const { home } = makeSandbox();
 
   writeFakeCrush(join(home, 'bin'), 'wrong-config');
@@ -221,7 +219,7 @@ test('BLOCK1-4a: fake crush exit 0 with wrong config (models.main/fast) is rejec
 });
 
 // ─── Test 4b: Fake crush exit 0 with unchanged config must be rejected ───
-test('BLOCK1-4b: fake crush exit 0 with unchanged config (different from requested) is rejected (not ok:true)', () => {
+test('crush rejects a successful child that leaves the requested models unchanged', () => {
   const { home } = makeSandbox();
 
   writeFakeCrush(join(home, 'bin'), 'unchanged-config');
@@ -247,7 +245,7 @@ test('BLOCK1-4b: fake crush exit 0 with unchanged config (different from request
 });
 
 // ─── Test 4c: Fake crush exit 0 with correct config must succeed ───────────
-test('BLOCK1-4c: fake crush exit 0 with correct config (models.large/small) succeeds (ok:true)', () => {
+test('crush accepts a successful child that writes the requested large and small models', () => {
   const { home } = makeSandbox();
 
   writeFakeCrush(join(home, 'bin'), 'success');

@@ -114,8 +114,6 @@ test('workspace declares the companion without entangling the root package', () 
     'docs/usage-accounting.md',
     'docs/getting-started.md',
     'docs/cli-reference.md',
-    'docs/crush-issues.md',
-    'docs/crush-restrict-issues.md',
     'docs/security-model.md',
     'docs/reliable-delegation-contract.md',
     'docs/data-flows.md',

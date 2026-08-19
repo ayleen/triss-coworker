@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Reliable delegation (sharding acceptance)** — sequential sharding per
-  `docs/reliable-delegation-contract-plan.md`:
+- **Reliable delegation (sharding acceptance)** — sequential sharding per the
+  public `docs/reliable-delegation-contract.md`:
   - `--payload-mode shard` CLI + MCP shard parity: source-ordered
     whole-file shards (a file is never split across shards);
   - sequential executor with first-failure stop, cancellation
@@ -54,8 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     BLOCKED_ENVIRONMENT recorded separately, never upgraded to success).
 
 - **Reliable delegation (review acceptance)** — bounded single review, exact PR
-  diff acquisition, and the issue trust boundary per
-  `docs/reliable-delegation-contract-plan.md`:
+  diff acquisition, and the issue trust boundary per the public
+  `docs/reliable-delegation-contract.md`:
   - reloadable review limits (`TRISS_REVIEW_SINGLE_MAX_BYTES`,
     `TRISS_REVIEW_SHARD_MAX_BYTES`, `TRISS_REVIEW_TOTAL_MAX_BYTES`,
     `TRISS_REVIEW_MAX_SHARDS`) with atomic validation and full-default
@@ -209,8 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Reliable delegation (session acceptance)** — coder envelope v2 orchestration per
-  `docs/reliable-delegation-contract-plan.md`:
+- **Reliable delegation (session acceptance)** — coder envelope v2 orchestration
+  per the public `docs/reliable-delegation-contract.md`:
   - envelope fields `session_slug`, `result_retention`, `result_id`, and
     `execution_capabilities` (eight honest `enforced|best_effort|unavailable`
     values + `effective_isolation`) on every safe envelope
@@ -805,9 +805,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   npm version. (#10)
 - New `docs/glm-clients.md` — a single reference for how Triss talks to
   GLM (both engines, key/endpoint routing, model selection, usage modes,
-  and the safety model), and `docs/crush-issues.md` /
-  `docs/crush-restrict-issues.md` capturing the crush maintainer bug
-  reports. (#10)
+  and the safety model), plus two Crush maintainer bug reports. (#10)
 
 ### Changed
 
