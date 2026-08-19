@@ -26,6 +26,7 @@
     "docs/troubleshooting.md",
     "docs/integrations/",
     "docs/engines/",
+    "!docs/website/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
