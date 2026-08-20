@@ -32,9 +32,9 @@ test('estimateCost applies the right per-token rates', () => {
     cached_tokens: 200,
     completion_tokens: 100,
   });
-  // fresh = 800 * 0.14e-6 + cached = 200 * 0.0028e-6 + out = 100 * 0.28e-6
-  // = 0.000112 + 0.00000056 + 0.000028 = 0.00014056
-  assert.ok(Math.abs(cost - 0.00014056) < 1e-9, `unexpected cost ${cost}`);
+  // fresh = 800 * 0.22e-6 + cached = 200 * 0.007e-6 + out = 100 * 0.66e-6
+  // = 0.000176 + 0.0000014 + 0.000066 = 0.0002434
+  assert.ok(Math.abs(cost - 0.0002434) < 1e-9, `unexpected cost ${cost}`);
 });
 
 test('estimateCost delegates the legacy flat shape through the canonical estimator', () => {
@@ -66,17 +66,17 @@ test('estimateCost preserves legacy JavaScript arithmetic for malformed flat cou
     {
       name: 'negative cache',
       record: { model, prompt_tokens: 10, cached_tokens: -5, completion_tokens: 10 },
-      expected: 0.000004886,
+      expected: 0.000009865000000000001,
     },
     {
       name: 'fractional counters',
       record: { model, prompt_tokens: 10.5, cached_tokens: 0, completion_tokens: 2.5 },
-      expected: 0.0000021700000000000004,
+      expected: 0.00000396,
     },
     {
       name: 'numeric strings',
       record: { model, prompt_tokens: '10', cached_tokens: '2', completion_tokens: '3' },
-      expected: 0.0000019656000000000003,
+      expected: 0.000003754,
     },
   ];
   for (const { name, record, expected } of cases) {

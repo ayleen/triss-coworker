@@ -18,9 +18,9 @@ function close(a, b, eps = 1e-12) {
 
 test('priceFor returns the DeepSeek flash row in USD per token with a null cache_write rate', () => {
   const p = priceFor('deepseek-v4-flash');
-  close(p.input_uncached, 0.14e-6);
-  close(p.cache_read, 0.0028e-6);
-  close(p.output, 0.28e-6);
+  close(p.input_uncached, 0.22e-6);
+  close(p.cache_read, 0.007e-6);
+  close(p.output, 0.66e-6);
   assert.equal(p.cache_write, null);
 });
 
@@ -110,9 +110,9 @@ test('a malformed TRISS_PRICE override is ignored and the built-in row is used',
   process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = 'abc,def';
   try {
     const p = priceFor('deepseek-v4-flash');
-    close(p.input_uncached, 0.14e-6);
-    close(p.cache_read, 0.0028e-6);
-    close(p.output, 0.28e-6);
+    close(p.input_uncached, 0.22e-6);
+    close(p.cache_read, 0.007e-6);
+    close(p.output, 0.66e-6);
     assert.equal(p.cache_write, null);
   } finally {
     if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
@@ -134,9 +134,9 @@ test('a blank field in a TRISS_PRICE override is rejected and the built-in row i
       'an override with a blank field must not answer for the model',
     );
     // Falls back to the built-in deepseek-v4-flash row, cache_read intact.
-    close(p.input_uncached, 0.14e-6);
-    close(p.cache_read, 0.0028e-6);
-    close(p.output, 0.28e-6);
+    close(p.input_uncached, 0.22e-6);
+    close(p.cache_read, 0.007e-6);
+    close(p.output, 0.66e-6);
     assert.equal(p.cache_write, null);
   } finally {
     if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
@@ -150,7 +150,7 @@ test('whitespace-only override fields are rejected the same way', () => {
   try {
     const p = priceFor('deepseek-v4-flash');
     assert.equal(priceIsOverride('deepseek-v4-flash'), false);
-    close(p.cache_read, 0.0028e-6);
+    close(p.cache_read, 0.007e-6);
   } finally {
     if (before === undefined) delete process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH;
     else process.env.TRISS_PRICE_DEEPSEEK_V4_FLASH = before;
@@ -216,10 +216,10 @@ test('a complete DeepSeek PAYG component estimate sums the priced components', (
       output_total: 100,
     },
   });
-  close(c.input_uncached_usd, 800 * 0.14e-6);
-  close(c.cache_read_usd, 200 * 0.0028e-6);
-  close(c.output_total_usd, 100 * 0.28e-6);
-  close(c.total_usd, 800 * 0.14e-6 + 200 * 0.0028e-6 + 100 * 0.28e-6);
+  close(c.input_uncached_usd, 800 * 0.22e-6);
+  close(c.cache_read_usd, 200 * 0.007e-6);
+  close(c.output_total_usd, 100 * 0.66e-6);
+  close(c.total_usd, 800 * 0.22e-6 + 200 * 0.007e-6 + 100 * 0.66e-6);
   assert.equal(c.source, 'estimated');
   assert.equal(c.complete, true);
   assert.deepEqual(c.unknown_components, []);
