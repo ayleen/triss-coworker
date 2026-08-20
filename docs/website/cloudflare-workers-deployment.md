@@ -8,7 +8,8 @@ setup instructions.
 
 ```text
 Worker name:                  triss
-Production URL:               https://triss.ikar-autobridge.workers.dev/
+Production URL:               https://triss.work/
+Technical Worker URL:         https://triss.ikar-autobridge.workers.dev/
 Git repository:               ayleen/triss-coworker
 Production branch:            main
 Root directory:               site
@@ -23,7 +24,7 @@ Static asset directory:       site/dist/
 The committed `site/wrangler.jsonc` is authoritative for the Worker name,
 compatibility date, preview URLs, asset directory, HTML routing, and custom
 404 behavior. `SITE_URL` controls Astro canonical URLs, sitemap output, and
-`robots.txt`; its repository default is the production workers.dev URL.
+`robots.txt`; its repository default is the canonical custom domain.
 
 ## Connect the existing Worker to GitHub
 
@@ -50,11 +51,15 @@ deployment.
    Non-production branch command:     npx wrangler versions upload
    ```
 
-7. If the Build variables section is present, add `NODE_VERSION=24`. Do not
-   add `SITE_URL` unless changing the canonical hostname; the repository has
-   the correct workers.dev default.
-8. Save the build configuration. Updated settings affect the next build.
-9. Open **Deployments**, then **View build history**, and retry the latest
+7. If the Build variables section is present, add `NODE_VERSION=24`. If
+   `SITE_URL` is present, set it to `https://triss.work`; do not set
+   `SKIP_DEPENDENCY_INSTALL`, because Workers Builds must install the locked
+   site dependencies before running Astro.
+8. Leave build watch include/exclude paths empty unless every glob is entered
+   and validated separately. An invalid combined include value can suppress
+   production builds.
+9. Save the build configuration. Updated settings affect the next build.
+10. Open **Deployments**, then **View build history**, and retry the latest
    `main` build or push a new reviewed commit to `main`.
 
 Do not use **Edit code** to paste generated HTML into the starter Worker. The
@@ -88,12 +93,12 @@ and deployment completed successfully.
 Then verify:
 
 ```sh
-curl -fsS https://triss.ikar-autobridge.workers.dev/ | grep -q '<title>'
-curl -fsSI https://triss.ikar-autobridge.workers.dev/
-curl -fsS https://triss.ikar-autobridge.workers.dev/robots.txt
-curl -fsS https://triss.ikar-autobridge.workers.dev/sitemap-index.xml
+curl -fsS https://triss.work/ | grep -q '<title>'
+curl -fsSI https://triss.work/
+curl -fsS https://triss.work/robots.txt
+curl -fsS https://triss.work/sitemap-index.xml
 curl -fsS -o /dev/null -w '%{http_code}\n' \
-  https://triss.ikar-autobridge.workers.dev/this-route-must-not-exist
+  https://triss.work/this-route-must-not-exist
 ```
 
 Acceptance requires:
@@ -103,7 +108,7 @@ Acceptance requires:
   `/docs/` return 200;
 - an unknown route returns the custom 404 page with status 404;
 - canonical, Open Graph, `robots.txt`, and sitemap URLs use
-  `https://triss.ikar-autobridge.workers.dev`;
+  `https://triss.work`;
 - `_headers` rules are present on HTML responses;
 - fonts, images, CSS, and JavaScript load without failed requests;
 - the deployed pages pass the same responsive, accessibility, and Lighthouse
@@ -111,19 +116,20 @@ Acceptance requires:
 
 ## Custom domain
 
-After the workers.dev deployment passes acceptance:
+The canonical custom domain is `triss.work`. To reproduce or repair its
+configuration after the workers.dev deployment passes acceptance:
 
 1. Open **Settings → Domains & Routes** for `triss`.
-2. Add the selected custom domain.
-3. Set the Workers Builds variable `SITE_URL` to the final HTTPS origin with
-   no trailing slash.
+2. Add `triss.work` as the custom domain.
+3. Set the Workers Builds variable `SITE_URL` to `https://triss.work` with no
+   trailing slash.
 4. Redeploy `main`.
 5. Verify canonicals, sitemap, robots directives, HTTPS, and redirect behavior.
 6. Add a host-specific `X-Robots-Tag: noindex` rule for the workers.dev host
    only after the custom domain has become canonical.
 
-Changing DNS or attaching a custom domain is a separate production action and
-requires explicit authorization.
+Changing DNS or attaching a custom domain remains a separate production
+action and requires explicit authorization.
 
 ## Web Analytics
 

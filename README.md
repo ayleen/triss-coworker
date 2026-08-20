@@ -11,6 +11,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Changelog](https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange.svg)](CHANGELOG.md)
 
+**Website:** [triss.work](https://triss.work/) · **Quickstart:**
+[triss.work/docs/getting-started](https://triss.work/docs/getting-started/)
+
 Triss is a small CLI (`triss`) that hands token-heavy I/O off to a cheap
 DeepSeek model so your expensive primary agent (Claude Code, Codex, or
 anything else that can run a shell/MCP tool) stays focused on reasoning and

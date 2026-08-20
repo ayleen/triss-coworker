@@ -125,12 +125,12 @@ Use one non-secret `SITE_URL` build variable as the source for Astro's `site`
 configuration, canonical metadata, sitemap URLs, and the generated
 `robots.txt` response.
 
-- Initially, production uses
-  `https://triss.ikar-autobridge.workers.dev`.
+- Production uses `https://triss.work`; the workers.dev hostname remains a
+  technical fallback and preview origin.
 - Preview builds use the current production canonical URL, not their temporary
   preview hostname.
-- When the custom domain is attached, update `SITE_URL` to the final HTTPS
-  hostname and redeploy before public promotion.
+- Keep `SITE_URL=https://triss.work` in Workers Builds and redeploy after any
+  canonical-hostname change.
 - Generate `robots.txt` from `SITE_URL`; do not commit a hostname-specific
   static file.
 
@@ -155,7 +155,7 @@ Build command:                 npm run build
 Deploy command:                npx wrangler deploy
 Non-production deploy command: npx wrangler versions upload
 Node version:                  24 (NODE_VERSION=24 and site/.node-version)
-Canonical URL:                 SITE_URL, defaulting to the production workers.dev URL
+Canonical URL:                 SITE_URL, defaulting to https://triss.work
 ```
 
 Expected deployment behavior:
@@ -163,9 +163,9 @@ Expected deployment behavior:
 - pushes to `main` create production deployments;
 - enabled non-production branch builds create version preview deployments;
 - build status is reported to the connected GitHub commit;
-- the initial production hostname uses `*.workers.dev`;
-- the custom domain is attached only after the default deployment passes the
-  launch checks;
+- the technical deployment hostname uses `*.workers.dev`;
+- `triss.work` is attached only after the default deployment passes the launch
+  checks and then becomes canonical;
 - HTTPS is required;
 - Cloudflare Web Analytics is enabled after the first deployment and verified
   after the next deployment.

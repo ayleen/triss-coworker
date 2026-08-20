@@ -121,6 +121,12 @@ input[type="range"]::-moz-range-thumb {
   div[style*="grid-template-columns: repeat(3, 1fr)"],
   div[style*="grid-template-columns: repeat(4, auto)"] { grid-template-columns: 1fr 1fr !important; }
   div[style*="220px 1fr"], div[style*="240px 1fr"] { gap: 24px !important; }
+  .quickstart-steps {
+    position: static !important;
+    top: auto !important;
+    padding: 28px 0 0 !important;
+  }
+  .quickstart-layout > main { padding-top: 28px !important; }
 }
 @media (max-width: 640px) {
   h1 { font-size: 36px !important; }

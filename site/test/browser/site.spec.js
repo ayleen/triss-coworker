@@ -124,6 +124,24 @@ test("mobile menu is keyboard-operable and resets at the desktop breakpoint", as
   await expect(button).toHaveText("☰");
 });
 
+test("quickstart step navigation stops being sticky on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/docs/getting-started/");
+  const steps = page.locator(".quickstart-steps");
+  await expect(steps).toHaveCSS("position", "static");
+
+  await page.locator("#step-3").scrollIntoViewIfNeeded();
+  const mobilePosition = await steps.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { bottom: rect.bottom, viewportHeight: window.innerHeight };
+  });
+  expect(mobilePosition.bottom).toBeLessThan(0);
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/docs/getting-started/");
+  await expect(steps).toHaveCSS("position", "sticky");
+});
+
 test("command search renders hostile input only as text", async ({ page }) => {
   await page.goto("/commands/");
   const hostile = '<img src=x onerror="window.__siteXss = true">';
