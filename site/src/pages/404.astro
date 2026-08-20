@@ -1,0 +1,14 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+<Base title="404 — Triss" description="The requested Triss page could not be found. Return to the project home page or open the documentation.">
+  <Header />
+  <main style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter); text-align: center;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label);">404</div>
+    <h1 style="font-size: 36px; color: var(--color-text-strong);">That page drifted off.</h1>
+    <p style="color: var(--color-text-secondary);"><a href="/">Back to home</a> · <a href="/docs/">Documentation</a></p>
+  </main>
+  <Footer />
+</Base>

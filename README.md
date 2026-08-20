@@ -48,7 +48,7 @@ tokens of tracker chatter into its own context. Adding a new provider
 
 ## Requirements
 
-- **Node.js ≥ 22** (LTS). Check with `node --version`.
+- **Node.js ≥ 22.12** (LTS). Check with `node --version`.
   - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
 - **npm** (ships with Node.js) — used only for the package-manager install path.
   `pnpm` and `yarn` also work.
@@ -148,9 +148,9 @@ triss config wizard
 
 The wizard first asks **Standard** vs **Advanced**:
 
-- **Standard** — for most users. Just two prompts: API key + worker model
-  name. Triss writes the model into both `flash` and `pro` presets so
-  `--model pro` works the same as `--model flash`. No questions about
+- **Standard** — for most users. Two prompts for API key + worker model
+  (writes the model into both `flash` and `pro` so `--model pro` works), then
+  asks which agent to wire up: **Claude / Codex / Both**. No questions about
   Jira/Linear/base URL/etc. *Recommended starting point.*
 - **Advanced** — full control: separate `flash`/`pro` presets, custom
   base URL, integrations (Jira, Linear, …), default-preset choice.
@@ -206,7 +206,7 @@ top-level commands; `triss config <Tab>`, `triss jira <Tab>`,
 
 | Mode in `triss config wizard` | What it does about your agent |
 | ----------------------------- | ------------------------------ |
-| **Standard** (default)        | Installs **both** paths automatically — MCP server *and* global agent rules. No question asked. |
+| **Standard** (default)        | After the two prompts, asks **Claude / Codex / Both** and installs MCP + global rules accordingly. |
 | **Advanced** (`--advanced`)   | Asks at the end: Both / MCP only / rules only / Skip. Default = Both. |
 
 The two paths cooperate: MCP is primary, `CLAUDE.md` / `AGENTS.md` rules are
@@ -1228,8 +1228,7 @@ OpenCode stores (quota usage on subscriptions, not necessarily cash paid).
 ### An earlier example week (the Triss worker)
 
 One full week of real usage on this codebase, captured from the DeepSeek
-dashboard (May 6–13, 2026, all at list price — DeepSeek's off-peak window
-would add another ~75% discount we did not use):
+dashboard (May 6–13, 2026, all at the list price then in effect):
 
 | Metric         | Pro       | Flash     | **Total**  |
 | -------------- | --------- | --------- | ---------- |
@@ -1257,9 +1256,9 @@ raw 5.8M input. That compounds across turns.
 For reference, here is a single measured call of the kind that drives
 the weekly numbers above:
 
-| Task | Source bytes | DeepSeek (pro, -75%) | DeepSeek (pro, list price) | Same job in Opus 4.x |
-| ---- | ------------ | -------------------- | -------------------------- | -------------------- |
-| `triss ask --urls --paths` over the original `claude-coworker-model` README + 12 of our source files (18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.010** | \$0.040 | ≈ \$0.45 |
+| Task | Source bytes | DeepSeek (pro, list price) | Same job in Opus 4.x |
+| ---- | ------------ | -------------------------- | -------------------- |
+| `triss ask --urls --paths` over the original `claude-coworker-model` README + 12 of our source files (18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.040** | ≈ \$0.45 |
 
 Real savings depend on which operations you delegate (bulk reads win
 the most; tiny lookups break even); see `templates/claude.md` for the

@@ -1,0 +1,79 @@
+---
+interface Props { current?: string; }
+const { current } = Astro.props;
+const linkStyle = (active: boolean) =>
+  active ? "color: var(--color-accent); font-weight: 500;" : "color: var(--color-text-muted);";
+---
+<header
+  style="position: sticky; top: 0; z-index: 50; background: var(--color-bg-header); backdrop-filter: blur(12px); border-bottom: 1px solid var(--color-border);"
+>
+  <div
+    style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter); height: var(--header-height); display: flex; align-items: center; justify-content: space-between; gap: 24px;"
+  >
+    <a
+      href="/"
+      style="display: flex; align-items: center; gap: 12px; color: var(--color-text-heading); font-family: var(--font-mono); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none;"
+    >
+      <picture>
+        <source srcset="/triss-avatar.webp" type="image/webp" />
+        <img
+          src="/triss-avatar.png"
+          alt="Triss mascot"
+          width="36"
+          height="36"
+          style="display: block; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);"
+        />
+      </picture>
+      <span style="display: flex; flex-direction: column; line-height: 1;">
+        <span style="font-size: 15px; letter-spacing: -0.02em;">triss</span>
+        <span style="font-size: 9px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint); margin-top: 1px;">coworker</span>
+      </span>
+    </a>
+    <nav id="main-nav" style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
+      <a href="/#how" aria-current={current === "how" ? "page" : undefined} style={linkStyle(current === "how")}>How it works</a>
+      <a href="/coder" aria-current={current === "coder" ? "page" : undefined} style={linkStyle(current === "coder")}>Coder</a>
+      <a href="/integrations" aria-current={current === "integrations" ? "page" : undefined} style={linkStyle(current === "integrations")}>Integrations</a>
+      <a href="/docs/getting-started" aria-current={current === "quickstart" ? "page" : undefined} style={linkStyle(current === "quickstart")}>Quickstart</a>
+      <a href="/commands" aria-current={current === "commands" ? "page" : undefined} style={linkStyle(current === "commands")}>Commands</a>
+      <a href="/cost" aria-current={current === "cost" ? "page" : undefined} style={linkStyle(current === "cost")}>Cost</a>
+      <a href="/security" aria-current={current === "security" ? "page" : undefined} style={linkStyle(current === "security")}>Security</a>
+    </nav>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <a
+        href="https://github.com/ayleen/triss-coworker"
+        style="font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); border: 1px solid var(--color-border-strong); padding: 6px 12px;"
+        >GitHub ↗</a
+      >
+      <button id="mobile-menu-btn" aria-label="Open menu" aria-controls="mobile-nav" aria-expanded="false" style="display: none; background: transparent; border: 1px solid var(--color-border-strong); padding: 8px 10px; cursor: pointer; color: var(--color-text); font-family: var(--font-mono); font-size: 12px;">☰</button>
+    </div>
+  </div>
+  <nav id="mobile-nav" style="display: none; flex-direction: column; gap: 0; background: var(--color-bg); border-top: 1px solid var(--color-border); padding: 12px var(--layout-gutter);">
+    <a href="/#how" aria-current={current === "how" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">How it works</a>
+    <a href="/coder" aria-current={current === "coder" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Coder</a>
+    <a href="/integrations" aria-current={current === "integrations" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Integrations</a>
+    <a href="/docs/getting-started" aria-current={current === "quickstart" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Quickstart</a>
+    <a href="/commands" aria-current={current === "commands" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Commands</a>
+    <a href="/cost" aria-current={current === "cost" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Cost</a>
+    <a href="/security" aria-current={current === "security" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Security</a>
+  </nav>
+</header>
+<style>
+  @media (max-width: 900px) {
+    #main-nav { display: none !important; }
+    #mobile-menu-btn { display: block !important; }
+  }
+  @media (min-width: 901px) {
+    #mobile-menu-btn, #mobile-nav { display: none !important; }
+  }
+  @media (max-width: 640px) {
+    header div[style*="max-width"] { padding: 0 16px !important; }
+  }
+</style>
+<script>
+// @ts-nocheck
+  import { setupMobileMenu } from '../scripts/mobile-menu.js';
+  const btn = document.getElementById('mobile-menu-btn');
+  const nav = document.getElementById('mobile-nav');
+  const mediaQuery = window.matchMedia('(min-width: 901px)');
+  setupMobileMenu({ btn, nav, mediaQuery });
+</script>

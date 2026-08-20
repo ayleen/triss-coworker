@@ -64,6 +64,25 @@ function stdoutCapture() {
   };
 }
 
+async function withFixedDate(timestamp, fn) {
+  const RealDate = globalThis.Date;
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(args.length === 0 ? timestamp : args[0]);
+    }
+
+    static now() {
+      return RealDate.parse(timestamp);
+    }
+  }
+  globalThis.Date = FixedDate;
+  try {
+    return await fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 // Fake spawn that records the exact (cmd, argv, options) and replays a
 // fixture stream. `killProcess` is NOT injected: runCoderRun defaults it to
 // noInjectedProcessGroup when spawnFn !== nodeSpawn, whose ESRCH-coded throw
@@ -93,6 +112,16 @@ const MINIMAL_SUCCESS_STREAM = [
     type: 'step_finish',
     sessionID: 'ses_char_v1_0001',
     part: { tokens: { input: 11, output: 7, cache: { read: 3, write: 0 } }, cost: { total: 0.002 } },
+  }),
+].join('\n') + '\n';
+
+const COMPLETE_PEAK_STREAM = [
+  JSON.stringify({ type: 'step_start', sessionID: 'ses_char_peak_0001' }),
+  JSON.stringify({ type: 'text', sessionID: 'ses_char_peak_0001', part: { text: 'done' } }),
+  JSON.stringify({
+    type: 'step_finish',
+    sessionID: 'ses_char_peak_0001',
+    part: { tokens: { input: 11, output: 7, reasoning: 0, total: 21, cache: { read: 3, write: 0 } }, cost: 0 },
   }),
 ].join('\n') + '\n';
 
@@ -177,6 +206,28 @@ test(
       assert.equal(envelope.engine, 'opencode');
       assert.equal(envelope.exit_reason, 'end_turn');
     },
+  ),
+);
+
+test(
+  'characterization: V1 precomputed DeepSeek cost uses the run timestamp for peak pricing',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-char-peak',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => withFixedDate('2026-08-20T01:00:00.000Z', async () => {
+      const capture = stdoutCapture();
+      await runCoderRun('peak pricing', { model: 'deepseek-v4-flash' }, {
+        disableCredentialProxy: true,
+        spawn: recordingSpawn(COMPLETE_PEAK_STREAM).spawnFn,
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: capture.stdoutWrite,
+      });
+      const envelope = JSON.parse(capture.text().trim());
+      const expected = (11 * 0.22e-6 + 3 * 0.007e-6 + 7 * 0.66e-6) * 2;
+      assert.ok(Math.abs(envelope.usage.cost.total_usd - expected) < 1e-12, JSON.stringify(envelope.usage));
+    }),
   ),
 );
 

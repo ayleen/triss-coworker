@@ -50,19 +50,30 @@ const CODING_PLAN_PRICE = {
   output: 0,
 };
 
-// DeepSeek list prices as of 2026-07-03, USD per token. Override via env
-// if pricing changes or you point Triss at a different provider.
+// DeepSeek's versioned price schedule, in USD per 1M tokens. The new
+// peak/off-peak schedule took effect at the exact cutoff below; usage before it
+// must retain the fixed list price that was in force when the call happened.
+// Official announcement: https://api-docs.deepseek.com/news/news260813
+// Immutable price card: https://api-docs.deepseek.com/img/v4_260813_price_en.png
+export const DEEPSEEK_PRICING = Object.freeze({
+  effectiveAt: '2026-08-16T16:00:00.000Z',
+  peakMultiplier: 2,
+  peakWindowsUtc: Object.freeze([[1, 4], [6, 10]]),
+  legacy: Object.freeze({
+    flash: Object.freeze({ input_uncached: 0.14, cache_read: 0.0028, output: 0.28 }),
+    pro: Object.freeze({ input_uncached: 0.435, cache_read: 0.003625, output: 0.87 }),
+  }),
+  offPeak: Object.freeze({
+    flash: Object.freeze({ input_uncached: 0.22, cache_read: 0.007, output: 0.66 }),
+    pro: Object.freeze({ input_uncached: 0.66, cache_read: 0.022, output: 1.98 }),
+  }),
+  source: Object.freeze({
+    notice: 'https://api-docs.deepseek.com/news/news260813',
+    priceCard: 'https://api-docs.deepseek.com/img/v4_260813_price_en.png',
+  }),
+});
+
 const DEFAULT_PRICES = {
-  'deepseek-v4-flash': {
-    input_uncached: 0.14e-6,
-    cache_read: 0.0028e-6,
-    output: 0.28e-6,
-  },
-  'deepseek-v4-pro': {
-    input_uncached: 0.435e-6,
-    cache_read: 0.003625e-6,
-    output: 0.87e-6,
-  },
   // Z.AI pay-as-you-go list prices as of 2026-07-26 (docs.z.ai pricing
   // overview), USD per token. Only the models both Z.AI endpoints advertise
   // via GET /models are listed — anything else stays `unknown` rather than
@@ -129,7 +140,49 @@ function priceOverride(billingModel) {
   return rates;
 }
 
-export function priceFor(billingModel) {
+function parseTimestamp(timestamp) {
+  if (timestamp == null) return null;
+  let date;
+  try {
+    date = timestamp instanceof Date ? new Date(timestamp.getTime()) : new Date(timestamp);
+  } catch {
+    return null;
+  }
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Peak windows are UTC half-open intervals. Explicit TRISS_PRICE_* overrides
+// never pass through this schedule. Missing/invalid timestamps use today's
+// off-peak row, preserving the CLI's longstanding default estimate behavior.
+function isDeepSeekPeak(date) {
+  const hour = date.getUTCHours();
+  return DEEPSEEK_PRICING.peakWindowsUtc.some(([start, end]) => hour >= start && hour < end);
+}
+
+// Parse the scientific-notation form directly so this schedule preserves the
+// exact IEEE-754 values of the former `0.22e-6` literals. Some legacy callers
+// intentionally observe JavaScript's raw arithmetic, including malformed
+// negative counters, so changing the rounding path would break that contract.
+function perMillionToToken(rate) {
+  return Number(`${rate}e-6`);
+}
+
+function deepSeekPriceFor(bare, timestamp) {
+  const model = bare === 'deepseek-v4-flash' ? 'flash' : bare === 'deepseek-v4-pro' ? 'pro' : null;
+  if (!model) return null;
+  const date = parseTimestamp(timestamp);
+  const usesCurrentSchedule = !date || date.getTime() >= Date.parse(DEEPSEEK_PRICING.effectiveAt);
+  const row = usesCurrentSchedule ? DEEPSEEK_PRICING.offPeak[model] : DEEPSEEK_PRICING.legacy[model];
+  const multiplier = usesCurrentSchedule && date && isDeepSeekPeak(date) ? DEEPSEEK_PRICING.peakMultiplier : 1;
+  return {
+    input_uncached: perMillionToToken(row.input_uncached) * multiplier,
+    cache_read: perMillionToToken(row.cache_read) * multiplier,
+    cache_write: null,
+    output: perMillionToToken(row.output) * multiplier,
+  };
+}
+
+export function priceFor(billingModel, timestamp = undefined) {
   // Allow env overrides like TRISS_PRICE_<MODELID>=<miss>,<hit>,<out> or the
   // four-value form that also sets a cache-write rate.
   const rates = priceOverride(billingModel);
@@ -146,9 +199,17 @@ export function priceFor(billingModel) {
   // account for a plan model if their contract changes elsewhere.
   if (bare.startsWith('zai-coding-plan/')) return { ...CODING_PLAN_PRICE };
   if (bare.startsWith('kimi-for-coding/')) return { ...CODING_PLAN_PRICE };
+  const deepSeekPrice = deepSeekPriceFor(bare, timestamp);
+  if (deepSeekPrice) return deepSeekPrice;
   const row = DEFAULT_PRICES[bare];
   // No built-in row carries a cache-write rate — that would silently expire.
-  return row ? { ...row, cache_write: null } : null;
+  if (!row) return null;
+  return {
+    input_uncached: row.input_uncached,
+    cache_read: row.cache_read,
+    cache_write: null,
+    output: row.output,
+  };
 }
 
 // Whether an explicit TRISS_PRICE_<MODEL_ID> override answers for this billing
@@ -174,11 +235,25 @@ function estimateLegacyFlatCost(record, price) {
   );
 }
 
+// Usage callers may provide the instant at which the provider call was billed
+// as a Date, ISO string, or epoch milliseconds. Persist one canonical ISO
+// representation so the cost and record always refer to the same instant;
+// malformed/missing values safely fall back to the current time.
+function normalizeUsageTimestamp(value) {
+  if (value == null) return new Date().toISOString();
+  try {
+    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 export function estimateCost(record) {
   // Deprecated flat API kept for one transition release. Canonical counters
   // use the v2 estimator; malformed historical inputs retain the exact old
   // JavaScript arithmetic, including NaN and coercion behavior.
-  const price = priceFor(record.model);
+  const price = priceFor(record.model, record.timestamp ?? record.ts);
   if (!price) return null;
   const prompt = record.prompt_tokens;
   const cached = record.cached_tokens ?? 0;
@@ -190,6 +265,7 @@ export function estimateCost(record) {
   const cost = estimateCanonicalCost({
     billing_model: record.model,
     billing_mode: resolveBillingMode({ billing_model: record.model }),
+    timestamp: record.timestamp ?? record.ts,
     tokens: {
       input_uncached: fresh,
       cache_read: cached,
@@ -211,6 +287,7 @@ export function logUsage(input = {}) {
     engine,
   } = input;
   if (process.env.TRISS_USAGE_LOG === '0') return; // opt-out
+  const timestamp = normalizeUsageTimestamp(input.timestamp);
 
   // Legacy v1 call form: flat fields, no `tokens` key. Its null-prompt guard
   // and output shape are part of the historical contract and stay untouched.
@@ -218,7 +295,7 @@ export function logUsage(input = {}) {
     const { prompt_tokens, cached_tokens, completion_tokens } = input;
     if (!model || prompt_tokens == null) return;
     const record = {
-      ts: new Date().toISOString(),
+      ts: timestamp,
       model,
       prompt_tokens,
       cached_tokens: cached_tokens || 0,
@@ -262,6 +339,7 @@ export function logUsage(input = {}) {
     estimateCanonicalCost({
       billing_model,
       billing_mode,
+      timestamp,
       // The estimator sees the unnormalized input too, so it independently
       // fails closed if a caller bypasses this write-boundary sanitizer.
       tokens: input.tokens,
@@ -271,7 +349,7 @@ export function logUsage(input = {}) {
 
   const record = {
     schema_version: 2,
-    ts: new Date().toISOString(),
+    ts: timestamp,
     model: resolvedModel,
     billing_model,
     billing_mode,
@@ -662,8 +740,9 @@ export function estimateCanonicalCost({
   reported_total_usd = null,
   reported_total_source = null,
   usage_source,
+  timestamp,
 } = {}) {
-  const p = priceFor(billing_model);
+  const p = priceFor(billing_model, timestamp);
   const isCrush = billing_model === 'crush' || usage_source === 'crush';
   const usageMeta = tokens && tokens.__usage_meta;
   const isOpenCode = isOpenCodeUsageSource(usage_source) || isOpenCodeUsageSource(usageMeta?.source);

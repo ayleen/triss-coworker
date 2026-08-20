@@ -1,0 +1,45 @@
+/* Design tokens — adopted from prototype draft (local) (Triss Landing.dc.html + uploads/index.css) */
+/* See docs/website/brand-direction.md — Adopted website design 2026-08-19 */
+:root {
+  /* Background / surfaces */
+  --color-bg: #0b0d10;
+  --color-bg-raised: #0f1114;
+  --color-bg-code: #08090b;
+  --color-bg-header: rgba(11, 13, 16, 0.88);
+  --color-border: #1a1d23;
+  --color-border-strong: #252830;
+  --color-border-subtle: #1e2128;
+
+  /* Accent */
+  --color-accent: #5fb464;
+  --color-accent-hover: #74c479;
+  --color-accent-link-hover: #9ad39e;
+  --color-accent-selection: rgba(95, 180, 100, 0.3);
+  --color-accent-selection-bg: rgba(95, 180, 100, 0.08);
+  --color-accent-selection-border: rgba(95, 180, 100, 0.35);
+
+  /* Text */
+  --color-text: #e2e8f0;
+  --color-text-strong: #fbfcfd;
+  --color-text-heading: #f4f6f8;
+  --color-text-secondary: #a3adbc;
+  --color-text-muted: #8b95a5;
+  --color-text-faint: #78828f;
+  --color-text-label: #8b95a5;
+  --color-text-code: #c2cad6;
+
+  /* Semantic */
+  --color-danger: #f87171;
+  --color-danger-strike: rgba(248, 113, 113, 0.45);
+
+  /* Typography */
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-fallback-sans: 'Outfit', sans-serif;
+  --font-fallback-mono: 'Source Code Pro', monospace;
+
+  /* Layout */
+  --layout-max: 1140px;
+  --layout-gutter: 32px;
+  --header-height: 60px;
+}

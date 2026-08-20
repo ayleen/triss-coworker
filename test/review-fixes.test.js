@@ -145,7 +145,13 @@ test('projectRoot falls back to process.cwd when env unset', async () => {
   delete process.env.TRISS_PROJECT_ROOT;
   try {
     const { projectRoot } = await import(`../src/safety.js?root-cwd=${Date.now()}`);
-    assert.equal(projectRoot(), realpathSync(process.cwd()));
+    const cwd = realpathSync(process.cwd());
+    // In a git worktree, projectRoot strips the .claude/worktrees/<id> suffix
+    // and returns the main repo root; accept either when running inside a worktree.
+    const expected = cwd.includes('.claude/worktrees')
+      ? cwd.split('.claude/worktrees')[0].replace(/\/$/, '')
+      : cwd;
+    assert.equal(projectRoot(), expected);
   } finally {
     restore();
   }

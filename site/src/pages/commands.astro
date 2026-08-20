@@ -1,0 +1,105 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+import CommandCard from "../components/CommandCard.astro";
+import { COMMANDS } from "../data/commands.js";
+---
+
+<Base title="Commands reference — Triss" description="All Triss commands: ask, review, write, fetch, commit-msg, coder, extract, mcp, usage — with flags and examples.">
+  <Header current="commands" />
+
+  <main>
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 36px; border-bottom: 1px solid var(--color-border);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">commands</div>
+    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong);">Every command, one handbook.</h1>
+    <p style="margin: 18px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">Grouped by what they do: delegate to the worker, work locally, or set things up. The agent decides when — you just need to know they exist.</p>
+    <div style="margin-top: 28px; max-width: 520px; position: relative;">
+      <label for="cmd-search" style="position: absolute; left: -9999px;">Filter commands</label>
+      <input id="cmd-search" type="text" placeholder="filter commands… (ask, review, --question)" aria-label="Filter commands" style="width: 100%; background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 12px 14px; font-family: var(--font-mono); font-size: 13.5px; color: var(--color-text); outline: none;" />
+    </div>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 40px var(--layout-gutter);">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px;">
+      <button data-filter="all" class="filter-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">all (22)</button>
+      <button data-filter="delegate" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">delegate (6)</button>
+      <button data-filter="core" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">core (7)</button>
+      <button data-filter="setup" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">setup (4)</button>
+      <button data-filter="trackers" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">trackers (5)</button>
+    </div>
+    <div id="cmd-grid" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);">
+      {COMMANDS.map((command) => <CommandCard command={command} />)}
+    </div>
+  </section>
+  </main>
+
+  <Footer />
+
+  <script>
+// @ts-nocheck
+    import { renderEmptyState } from "../scripts/command-search.js";
+    import { COMMANDS as CMDS } from "../data/commands.js";
+    let filter = "all";
+    let query = "";
+    function render() {
+      const grid = document.getElementById("cmd-grid");
+      if (!grid) return;
+      grid.replaceChildren();
+      const filtered = CMDS.filter(c => {
+        if (filter !== "all" && c.group !== filter) return false;
+        if (query) {
+          const q = query.toLowerCase();
+          if (!c.name.includes(q) && !c.body.toLowerCase().includes(q) && !c.flags.join(" ").toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
+      filtered.forEach(c => {
+        const d = document.createElement("div");
+        d.style.cssText = "background: var(--color-bg-raised); padding: 22px;";
+        const heading = document.createElement("div");
+        heading.style.cssText = "display:flex; gap:10px; align-items:center; flex-wrap:wrap;";
+        const name = document.createElement("span");
+        name.style.cssText = "font-family:var(--font-mono); font-size:15px; font-weight:600; color:var(--color-text-heading);";
+        name.textContent = "triss " + c.name;
+        const tier = document.createElement("span");
+        tier.style.cssText = "font-family:var(--font-mono); font-size:11px; padding:4px 8px; border:1px solid var(--color-border-strong); color:" + (c.tier === "pro" ? "#e0a458" : c.tier === "flash" ? "var(--color-accent)" : "var(--color-text-muted)") + ";";
+        tier.textContent = c.tier;
+        const group = document.createElement("span");
+        group.style.cssText = "font-family:var(--font-mono); font-size:11px; color:var(--color-text-label);";
+        group.textContent = c.group;
+        heading.append(name, tier, group);
+        const body = document.createElement("p");
+        body.style.cssText = "margin:10px 0 0; font-size:13.5px; line-height:1.6; color:var(--color-text-secondary);";
+        body.textContent = c.body;
+        const flags = document.createElement("div");
+        flags.style.cssText = "margin-top:12px; display:flex; gap:6px; flex-wrap:wrap;";
+        c.flags.forEach(f => {
+          const flag = document.createElement("span");
+          flag.style.cssText = "font-family:var(--font-mono); font-size:11.5px; background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:4px 8px; color:var(--color-text-muted);";
+          flag.textContent = f;
+          flags.appendChild(flag);
+        });
+        const example = document.createElement("pre");
+        example.style.cssText = "margin:12px 0 0; background:#08090b; border:1px solid var(--color-border-subtle); padding:12px; font-family:var(--font-mono); font-size:12px; white-space:pre-wrap; color:var(--color-accent);";
+        example.textContent = c.example;
+        d.append(heading, body, flags, example);
+        grid.appendChild(d);
+      });
+      if (filtered.length === 0) renderEmptyState(grid, query);
+    }
+    document.querySelectorAll(".filter-btn").forEach(b => b.addEventListener("click", () => {
+      filter = b.getAttribute("data-filter");
+      document.querySelectorAll(".filter-btn").forEach(x => {
+        const on = x.getAttribute("data-filter")===filter;
+        x.style.background = on ? "var(--color-accent)" : "transparent";
+        x.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
+        x.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+        x.setAttribute("aria-pressed", String(on));
+      });
+      render();
+    }));
+    const search = document.getElementById("cmd-search");
+    if (search) search.addEventListener("input", e => { query = e.target.value; render(); });
+  </script>
+</Base>

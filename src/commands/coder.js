@@ -5910,6 +5910,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       reported_total_usd: reportedTotalUsd2, reported_total_source: reportedTotalSource2 } =
       finalizeOpencodeUsage(result2.usage);
     if (normalizeWarnings2.length) result2.warnings.push(...normalizeWarnings2);
+    const usageTimestamp2 = new Date().toISOString();
 
     // Missing usage -> null cost object with explicit unknowns (the plan's
     // "never reported as zero" rule); reported usage -> normal canonical cost.
@@ -5933,6 +5934,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       cost2 = estimateCanonicalCost({
         billing_model: modelUsed,
         billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
+        timestamp: usageTimestamp2,
         tokens: tokens2,
         // Provider-specific normalized cost: finalizeOpencodeUsage
         // returns reported_total_usd=null when per-step cost coverage is
@@ -5954,6 +5956,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       usage_source: 'opencode2',
       engine: 'opencode2',
       usage_status: usageStatus2,
+      timestamp: usageTimestamp2,
       tokens: tokens2,
       cost: cost2,
       label: 'coder',
@@ -6181,12 +6184,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (normalizeWarnings.length) result.warnings.push(...normalizeWarnings);
   const billing_model = modelUsed;
   const billing_mode = resolveBillingMode({ billing_model, engine: 'opencode' });
+  const usageTimestamp = new Date().toISOString();
   // Estimate the canonical cost. An unknown provider zero stays unknown ("unknown
   // is not zero") — exactly how an engine zero on an unpriced pay-per-token route
   // reports source:'unknown', complete:false instead of a claimed $0.
   const cost = estimateCanonicalCost({
     billing_model,
     billing_mode,
+    timestamp: usageTimestamp,
     tokens,
     reported_total_usd,
     reported_total_source,
@@ -6207,6 +6212,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     usage_source: 'opencode',
     engine: 'opencode',
     usage_status,
+    timestamp: usageTimestamp,
     tokens,
     cost,
     label: 'coder',

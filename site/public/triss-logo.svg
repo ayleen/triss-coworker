@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="200" height="40">
+  <g transform="translate(0, 4)">
+    <path d="M22 3 C 9 1 2 11 4 20 C 6 28 16 32 24 29 C 15 29 11 23 11 16 C 11 9 16 5 22 3 Z" fill="#D97757"/>
+    <path d="M17 11 L18.5 15.5 L23 17 L18.5 18.5 L17 23 L15.5 18.5 L11 17 L15.5 15.5 Z" fill="#61D7EF"/>
+  </g>
+  <!-- Light variant: <text x="38" y="29" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="700" fill="#ffffff">Triss</text> -->
+  <text x="38" y="29" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="700" fill="#111C29">Triss</text>
+</svg>

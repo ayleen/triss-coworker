@@ -1,0 +1,116 @@
+---
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Base title="Triss Coder — The part where she writes the code" description="triss coder is an agent runtime with worktree isolation, driven by a cheap model — so the expensive one can stay on the plan and the review.">
+  <Header current="coder" />
+
+  <main>
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 68px; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: start; border-bottom: 1px solid var(--color-border);">
+    <div>
+      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">triss coder</div>
+      <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 20em;">The part where she writes the code.</h1>
+      <p style="margin: 22px 0 0; max-width: 40em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">
+        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss coder</code> is not another summariser. It is an agent runtime with worktree isolation, driven by a cheap model.
+      </p>
+    </div>
+    <div style="border: 1px solid var(--color-border-strong); background: var(--color-bg-code);">
+      <div style="padding: 12px 16px; border-bottom: 1px solid var(--color-border-subtle); font-family: var(--font-mono); font-size: 11.5px; color: var(--color-text-label);">a whole task, delegated</div>
+      <div style="padding: 20px 22px; font-family: var(--font-mono); font-size: 13px; line-height: 1.9;">
+        <div style="white-space: pre-wrap; color: var(--color-text-code);">$ triss coder init</div>
+        <div style="white-space: pre-wrap; color: var(--color-text-faint);">  engine? provider? key? → done once</div>
+        <div style="height: 24px;"></div>
+        <div style="white-space: pre-wrap; color: var(--color-text-code);">$ triss coder run \</div>
+        <div style="white-space: pre-wrap; color: var(--color-text-code);">    "add input validation to /signup" \</div>
+        <div style="white-space: pre-wrap; color: var(--color-text-code);">    --isolate</div>
+        <div style="height: 24px;"></div>
+        <div style="white-space: pre-wrap; color: var(--color-accent);">→ 3 files changed in .triss/wt/signup</div>
+        <div style="white-space: pre-wrap; color: var(--color-text-secondary);">→ your working tree: untouched</div>
+      </div>
+    </div>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">engines</div>
+    <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Pick one engine. The provider catalogue is the same.</h2>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px;">
+      <button data-engine="opencode" class="engine-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">opencode <span>default</span></button>
+      <button data-engine="opencode2" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">opencode2 <span>beta</span></button>
+      <button data-engine="crush" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span>interim</span></button>
+      <button data-engine="harness" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">harness bundle <span>DSH plugin, not --engine</span></button>
+    </div>
+    <div id="engine-body" style="margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
+    <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-label);" id="engine-flag"></div>
+  </section>
+
+  <section style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 80px;">
+    <h2 style="font-size: 28px; color: var(--color-text-strong);">The envelope you actually review</h2>
+    <p style="color: var(--color-text-secondary);">One JSON envelope printed to stdout per run — honest about isolation, files changed, and capabilities.</p>
+    <div style="display: grid; grid-template-columns: 240px 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 24px;">
+      <div id="field-list" style="background: var(--color-bg); display: flex; flex-direction: column;"></div>
+      <div style="background: var(--color-bg-code); padding: 20px;">
+        <div id="field-title" style="font-size: 15px; font-weight: 600; color: var(--color-text-heading);"></div>
+        <div id="field-body" style="margin-top: 8px; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary);"></div>
+        <code id="field-hint" style="display: block; margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); background: rgba(95,180,100,0.08); border: 1px solid rgba(95,180,100,0.35); padding: 8px 10px;"></code>
+      </div>
+    </div>
+  </section>
+
+  </main>
+
+  <Footer />
+
+  <script>
+// @ts-nocheck
+    const ENGINES = {
+      opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
+      opencode2: { body: "The V2 line. Shares the same opencode.json config and provider catalogue, so switching is one flag.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
+      crush: { body: "Supported with isolation ON by default. The disposable worktree is the layer Triss can guarantee.", flag: "--engine crush", isolation: "ON by default" },
+      harness: { body: "Not an --engine value — opt-in DSH companion bundle. One profile dependency instead of hand-authoring provider mapping.", flag: "dsh plugin add triss-dsh-provider-bundle", isolation: "owned by Harness" },
+    };
+    let engine = "opencode";
+    function renderEngine() {
+      const e = ENGINES[engine];
+      document.getElementById("engine-body").innerHTML = "<div style='font-size:15px; font-weight:600; color:var(--color-text-heading);'>" + engine + "</div><p style='margin:8px 0 0; font-size:13.5px; line-height:1.6; color:var(--color-text-secondary);'>" + e.body + "</p><div style='margin-top:12px; font-family:var(--font-mono); font-size:12px;'><span style='background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:6px 10px; color:var(--color-accent);'>" + e.flag + "</span> <span style='color:var(--color-text-label); margin-left:8px;'>isolation: " + e.isolation + "</span></div>";
+      document.getElementById("engine-flag").textContent = e.flag + " · isolation: " + e.isolation;
+      document.querySelectorAll(".engine-btn").forEach(b => {
+        const on = b.getAttribute("data-engine")===engine;
+        b.setAttribute("aria-pressed", String(on));
+        b.style.background = on ? "var(--color-accent)" : "transparent";
+        b.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
+        b.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+      });
+    }
+    document.querySelectorAll(".engine-btn").forEach(b => b.addEventListener("click", () => { engine = b.getAttribute("data-engine"); renderEngine(); }));
+    renderEngine();
+
+    const FIELDS = [
+      { key: "session_slug", title: "Never an implicit conversation", body: "Either the slug you passed or a generated anonymous one. A run never silently continues a previous session.", hint: "triss coder session list" },
+      { key: "files_changed", title: "Null unless isolated", body: "Only an isolated run can honestly count changed files. Otherwise this is null.", hint: "--isolate" },
+      { key: "worktree", title: "A disposable checkout", body: "The isolated run happens here, never in your working tree. Triss waits for residual processes.", hint: ".triss/wt/<slug>" },
+      { key: "effective_isolation", title: "Enforced, or honestly downgraded", body: "Fails before spawn unless you opted into best-effort. Advisory only when downgraded.", hint: "--allow-best-effort-caller-worktree" },
+      { key: "execution_capabilities", title: "Eight honest verdicts", body: "Each capability reports enforced, best_effort, or unavailable — verified for the run.", hint: "docs/reliable-delegation-contract.md" },
+    ];
+    let field = "files_changed";
+    function renderField() {
+      const list = document.getElementById("field-list");
+      if (!list) return;
+      list.innerHTML = "";
+      FIELDS.forEach(f => {
+        const b = document.createElement("button");
+        b.textContent = f.key;
+        b.style.cssText = "text-align:left; padding:10px 14px; font-family:var(--font-mono); font-size:12px; cursor:pointer; border:none; border-bottom:1px solid var(--color-border-subtle); background:" + (f.key===field ? "var(--color-bg-raised)" : "transparent") + "; color:" + (f.key===field ? "var(--color-accent)" : "var(--color-text-muted)");
+        b.setAttribute("aria-pressed", String(f.key===field));
+        b.addEventListener("click", () => { field=f.key; renderField(); });
+        list.appendChild(b);
+      });
+      const cur = FIELDS.find(f=>f.key===field);
+      document.getElementById("field-title").textContent = cur.title;
+      document.getElementById("field-body").textContent = cur.body;
+      document.getElementById("field-hint").textContent = cur.hint;
+    }
+    renderField();
+  </script>
+</Base>
