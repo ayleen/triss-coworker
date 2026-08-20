@@ -73,6 +73,43 @@ a:hover { color: var(--color-accent-link-hover); }
 code, pre, kbd { font-family: var(--font-mono); }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: #252830;
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 3px solid #0b0d10;
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: #252830;
+  border-radius: 2px;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 3px solid #0b0d10;
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
 /* Responsive grids - cover all hard grids from review */
 @media (max-width: 900px) {
   section[style*="grid-template-columns: 1.05fr 0.95fr"],
@@ -97,8 +134,20 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
 
-/* Keep touch controls at the Apple HIG 44px minimum on coarse pointers. */
-@media (max-width: 900px) and (pointer: coarse) {
-  button { min-width: 44px; min-height: 44px; }
-  #mobile-nav a { display: flex; align-items: center; min-height: 44px; }
+/* Keep every visible interactive target at the Apple HIG 44px minimum when
+   the primary pointer is coarse, including header/footer links and controls. */
+@media (pointer: coarse) {
+  a,
+  button,
+  input:not([type="hidden"]),
+  select,
+  textarea,
+  summary,
+  [role="button"],
+  [tabindex]:not([tabindex="-1"]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  a { display: inline-flex; align-items: center; }
+  #mobile-nav a { display: flex; }
 }

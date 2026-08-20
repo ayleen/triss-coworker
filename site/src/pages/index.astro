@@ -234,27 +234,6 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
 
   <Footer />
 
-  <style>
-    input[type="range"] {
-      -webkit-appearance: none;
-      appearance: none;
-      height: 4px;
-      background: #252830;
-      border-radius: 2px;
-      outline: none;
-    }
-    input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      background: var(--color-accent);
-      cursor: pointer;
-      border: 3px solid #0b0d10;
-      box-shadow: 0 0 0 1px var(--color-accent);
-    }
-  </style>
-
   <script is:inline define:vars={{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS }}>
 // @ts-nocheck
     const PROFILE = profile;

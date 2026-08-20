@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEEPSEEK_PRICING,
   priceFor,
   priceIsOverride,
   resolveProvider,
@@ -23,6 +24,30 @@ test('priceFor returns the DeepSeek flash row in USD per token with a null cache
   close(p.cache_read, 0.007e-6);
   close(p.output, 0.66e-6);
   assert.equal(p.cache_write, null);
+});
+
+test('DeepSeek pricing switches from the historical fixed row at the published cutoff', () => {
+  assert.equal(DEEPSEEK_PRICING.effectiveAt, '2026-08-16T16:00:00.000Z');
+  for (const [model, legacy, current] of [
+    ['deepseek-v4-flash', [0.14e-6, 0.0028e-6, 0.28e-6], [0.22e-6, 0.007e-6, 0.66e-6]],
+    ['deepseek-v4-pro', [0.435e-6, 0.003625e-6, 0.87e-6], [0.66e-6, 0.022e-6, 1.98e-6]],
+  ]) {
+    const before = priceFor(model, '2026-08-16T15:59:59.999Z');
+    const after = priceFor(model, '2026-08-16T16:00:00.000Z');
+    close(before.input_uncached, legacy[0]);
+    close(before.cache_read, legacy[1]);
+    close(before.output, legacy[2]);
+    close(after.input_uncached, current[0]);
+    close(after.cache_read, current[1]);
+    close(after.output, current[2]);
+  }
+});
+
+test('DeepSeek historical prices are fixed even during a future peak-window hour', () => {
+  const p = priceFor('deepseek-v4-flash', '2026-08-15T06:00:00.000Z');
+  close(p.input_uncached, 0.14e-6);
+  close(p.cache_read, 0.0028e-6);
+  close(p.output, 0.28e-6);
 });
 
 test('DeepSeek peak pricing uses UTC half-open windows for both models', () => {

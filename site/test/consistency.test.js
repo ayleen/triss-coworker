@@ -2,7 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { ANTHROPIC, DEEPSEEK, DEFAULTS, PROFILE } from "../src/data/pricing.js";
+import { DEEPSEEK_PRICING } from "../../src/usage.js";
+import {
+  ANTHROPIC,
+  DEEPSEEK,
+  DEEPSEEK_EFFECTIVE_AT,
+  DEEPSEEK_SOURCE,
+  DEFAULTS,
+  PROFILE,
+} from "../src/data/pricing.js";
 
 const read = (file) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 
@@ -20,6 +28,28 @@ test("calculator clients receive the canonical pricing data", () => {
     assert.doesNotMatch(source, /const DEEPSEEK = \{\s*flash:/);
   }
   assert.deepEqual(DEFAULTS, { reqs: 40, share: 65, primary: "sonnet", worker: "flash", cacheHit: 77 });
+});
+
+test("website and CLI DeepSeek schedules stay in sync", () => {
+  const toWebsiteRow = ({ input_uncached, cache_read, output }) => ({
+    input: input_uncached,
+    cache: cache_read,
+    output,
+  });
+  assert.deepEqual(DEEPSEEK.flash, toWebsiteRow(DEEPSEEK_PRICING.offPeak.flash));
+  assert.deepEqual(DEEPSEEK.pro, toWebsiteRow(DEEPSEEK_PRICING.offPeak.pro));
+  assert.deepEqual(DEEPSEEK.flashPeak, {
+    input: DEEPSEEK.flash.input * DEEPSEEK_PRICING.peakMultiplier,
+    cache: DEEPSEEK.flash.cache * DEEPSEEK_PRICING.peakMultiplier,
+    output: DEEPSEEK.flash.output * DEEPSEEK_PRICING.peakMultiplier,
+  });
+  assert.deepEqual(DEEPSEEK.proPeak, {
+    input: DEEPSEEK.pro.input * DEEPSEEK_PRICING.peakMultiplier,
+    cache: DEEPSEEK.pro.cache * DEEPSEEK_PRICING.peakMultiplier,
+    output: DEEPSEEK.pro.output * DEEPSEEK_PRICING.peakMultiplier,
+  });
+  assert.equal(DEEPSEEK_EFFECTIVE_AT, DEEPSEEK_PRICING.effectiveAt);
+  assert.deepEqual(DEEPSEEK_SOURCE, DEEPSEEK_PRICING.source);
 });
 
 test("historical benchmark keeps its May 2026 list-price result", () => {

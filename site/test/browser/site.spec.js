@@ -141,24 +141,44 @@ test("touch controls meet the 44px target on coarse pointers", async ({ browser 
     isMobile: true,
   });
   const page = await context.newPage();
-  for (const route of routes.filter((route) => route !== "/404.html")) {
+  const selector = [
+    "a:visible",
+    "button:visible",
+    "input:not([type=hidden]):visible",
+    "select:visible",
+    "textarea:visible",
+    "summary:visible",
+    "[role=button]:visible",
+    "[tabindex]:not([tabindex='-1']):visible",
+  ].join(", ");
+  for (const route of routes) {
     await page.goto(route);
-    const undersized = await page.locator("button:visible").evaluateAll((buttons) =>
-      buttons.map((button) => {
-        const rect = button.getBoundingClientRect();
-        return { label: button.getAttribute("aria-label") || button.textContent?.trim(), width: rect.width, height: rect.height };
+    const undersized = await page.locator(selector).evaluateAll((controls) =>
+      [...new Set(controls)].map((control) => {
+        const rect = control.getBoundingClientRect();
+        return {
+          tag: control.tagName.toLowerCase(),
+          label: control.getAttribute("aria-label") || control.textContent?.trim() || control.getAttribute("name"),
+          width: rect.width,
+          height: rect.height,
+        };
       }).filter(({ width, height }) => width < 44 || height < 44));
-    expect(undersized, `${route} has undersized touch buttons`).toEqual([]);
+    expect(undersized, `${route} has undersized interactive touch targets`).toEqual([]);
   }
 
   await page.goto("/");
   await page.locator("#mobile-menu-btn").click();
-  const undersizedNavLinks = await page.locator("#mobile-nav a:visible").evaluateAll((links) =>
-    links.map((link) => {
-      const rect = link.getBoundingClientRect();
-      return { label: link.textContent?.trim(), width: rect.width, height: rect.height };
+  const undersizedOpenMenuTargets = await page.locator(selector).evaluateAll((controls) =>
+    [...new Set(controls)].map((control) => {
+      const rect = control.getBoundingClientRect();
+      return {
+        tag: control.tagName.toLowerCase(),
+        label: control.getAttribute("aria-label") || control.textContent?.trim(),
+        width: rect.width,
+        height: rect.height,
+      };
     }).filter(({ width, height }) => width < 44 || height < 44));
-  expect(undersizedNavLinks).toEqual([]);
+  expect(undersizedOpenMenuTargets).toEqual([]);
   await context.close();
 });
 

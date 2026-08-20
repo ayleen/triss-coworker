@@ -50,19 +50,30 @@ const CODING_PLAN_PRICE = {
   output: 0,
 };
 
-// DeepSeek pricing as of 2026-08 — https://api-docs.deepseek.com/quick_start/pricing/
-// Peak 01:00–04:00 and 06:00–10:00 UTC, off-peak 50% off. Stored as off-peak; peak is 2×.
+// DeepSeek's versioned price schedule, in USD per 1M tokens. The new
+// peak/off-peak schedule took effect at the exact cutoff below; usage before it
+// must retain the fixed list price that was in force when the call happened.
+// Official announcement: https://api-docs.deepseek.com/news/news260813
+// Immutable price card: https://api-docs.deepseek.com/img/v4_260813_price_en.png
+export const DEEPSEEK_PRICING = Object.freeze({
+  effectiveAt: '2026-08-16T16:00:00.000Z',
+  peakMultiplier: 2,
+  peakWindowsUtc: Object.freeze([[1, 4], [6, 10]]),
+  legacy: Object.freeze({
+    flash: Object.freeze({ input_uncached: 0.14, cache_read: 0.0028, output: 0.28 }),
+    pro: Object.freeze({ input_uncached: 0.435, cache_read: 0.003625, output: 0.87 }),
+  }),
+  offPeak: Object.freeze({
+    flash: Object.freeze({ input_uncached: 0.22, cache_read: 0.007, output: 0.66 }),
+    pro: Object.freeze({ input_uncached: 0.66, cache_read: 0.022, output: 1.98 }),
+  }),
+  source: Object.freeze({
+    notice: 'https://api-docs.deepseek.com/news/news260813',
+    priceCard: 'https://api-docs.deepseek.com/img/v4_260813_price_en.png',
+  }),
+});
+
 const DEFAULT_PRICES = {
-  'deepseek-v4-flash': {
-    input_uncached: 0.22e-6,
-    cache_read: 0.007e-6,
-    output: 0.66e-6,
-  },
-  'deepseek-v4-pro': {
-    input_uncached: 0.66e-6,
-    cache_read: 0.022e-6,
-    output: 1.98e-6,
-  },
   // Z.AI pay-as-you-go list prices as of 2026-07-26 (docs.z.ai pricing
   // overview), USD per token. Only the models both Z.AI endpoints advertise
   // via GET /models are listed — anything else stays `unknown` rather than
@@ -129,22 +140,38 @@ function priceOverride(billingModel) {
   return rates;
 }
 
-// DeepSeek's built-in prices are stored at the off-peak rate. The provider
-// publishes peak windows in UTC: [01:00, 04:00) and [06:00, 10:00). The
-// optional timestamp accepts a Date, an ISO date string, or epoch milliseconds;
-// absent/invalid timestamps intentionally retain the historical off-peak
-// behavior. Explicit TRISS_PRICE_* overrides are never adjusted by this rule.
-function isDeepSeekPeak(timestamp) {
-  if (timestamp == null) return false;
+function parseTimestamp(timestamp) {
+  if (timestamp == null) return null;
   let date;
   try {
     date = timestamp instanceof Date ? new Date(timestamp.getTime()) : new Date(timestamp);
   } catch {
-    return false;
+    return null;
   }
-  if (Number.isNaN(date.getTime())) return false;
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Peak windows are UTC half-open intervals. Explicit TRISS_PRICE_* overrides
+// never pass through this schedule. Missing/invalid timestamps use today's
+// off-peak row, preserving the CLI's longstanding default estimate behavior.
+function isDeepSeekPeak(date) {
   const hour = date.getUTCHours();
-  return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10);
+  return DEEPSEEK_PRICING.peakWindowsUtc.some(([start, end]) => hour >= start && hour < end);
+}
+
+function deepSeekPriceFor(bare, timestamp) {
+  const model = bare === 'deepseek-v4-flash' ? 'flash' : bare === 'deepseek-v4-pro' ? 'pro' : null;
+  if (!model) return null;
+  const date = parseTimestamp(timestamp);
+  const usesCurrentSchedule = !date || date.getTime() >= Date.parse(DEEPSEEK_PRICING.effectiveAt);
+  const row = usesCurrentSchedule ? DEEPSEEK_PRICING.offPeak[model] : DEEPSEEK_PRICING.legacy[model];
+  const multiplier = usesCurrentSchedule && date && isDeepSeekPeak(date) ? DEEPSEEK_PRICING.peakMultiplier : 1;
+  return {
+    input_uncached: row.input_uncached * 1e-6 * multiplier,
+    cache_read: row.cache_read * 1e-6 * multiplier,
+    cache_write: null,
+    output: row.output * 1e-6 * multiplier,
+  };
 }
 
 export function priceFor(billingModel, timestamp = undefined) {
@@ -164,15 +191,16 @@ export function priceFor(billingModel, timestamp = undefined) {
   // account for a plan model if their contract changes elsewhere.
   if (bare.startsWith('zai-coding-plan/')) return { ...CODING_PLAN_PRICE };
   if (bare.startsWith('kimi-for-coding/')) return { ...CODING_PLAN_PRICE };
+  const deepSeekPrice = deepSeekPriceFor(bare, timestamp);
+  if (deepSeekPrice) return deepSeekPrice;
   const row = DEFAULT_PRICES[bare];
   // No built-in row carries a cache-write rate — that would silently expire.
   if (!row) return null;
-  const multiplier = bare.startsWith('deepseek-v4-') && isDeepSeekPeak(timestamp) ? 2 : 1;
   return {
-    input_uncached: row.input_uncached * multiplier,
-    cache_read: row.cache_read * multiplier,
+    input_uncached: row.input_uncached,
+    cache_read: row.cache_read,
     cache_write: null,
-    output: row.output * multiplier,
+    output: row.output,
   };
 }
 
