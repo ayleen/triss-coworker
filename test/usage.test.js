@@ -37,6 +37,67 @@ test('estimateCost applies the right per-token rates', () => {
   assert.ok(Math.abs(cost - 0.0002434) < 1e-9, `unexpected cost ${cost}`);
 });
 
+test('logUsage prices canonical records using the exact timestamp it persists', () => {
+  const RealDate = globalThis.Date;
+  const fixedTimestamp = '2026-08-20T01:00:00.000Z';
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(args.length === 0 ? fixedTimestamp : args[0]);
+    }
+
+    static now() {
+      return new RealDate(fixedTimestamp).getTime();
+    }
+  }
+  globalThis.Date = FixedDate;
+  let record;
+  try {
+    record = logUsage({
+      model: 'deepseek-v4-flash',
+      billing_model: 'deepseek-v4-flash',
+      usage_source: 'api',
+      tokens: {
+        input_uncached: 1000,
+        cache_read: 0,
+        cache_write: 0,
+        input_total: 1000,
+        output_total: 100,
+      },
+    });
+  } finally {
+    globalThis.Date = RealDate;
+  }
+  assert.equal(record.ts, fixedTimestamp);
+  assert.equal(record.cost.complete, true);
+  assert.ok(Math.abs(record.cost.total_usd - (1000 * 0.22e-6 + 100 * 0.66e-6) * 2) < 1e-12);
+});
+
+test('logUsage preserves a caller-provided timestamp with a precomputed estimate', () => {
+  const timestamp = '2026-08-20T01:00:00.000Z';
+  const tokens = {
+    input_uncached: 1000,
+    cache_read: 0,
+    cache_write: 0,
+    input_total: 1000,
+    output_total: 100,
+  };
+  const cost = estimateCanonicalCost({
+    billing_model: 'deepseek-v4-flash',
+    timestamp,
+    tokens,
+  });
+  const record = logUsage({
+    model: 'deepseek-v4-flash',
+    billing_model: 'deepseek-v4-flash',
+    timestamp,
+    tokens,
+    cost,
+    usage_source: 'opencode',
+  });
+  assert.equal(record.ts, timestamp);
+  assert.equal(record.cost.total_usd, cost.total_usd);
+});
+
 test('estimateCost delegates the legacy flat shape through the canonical estimator', () => {
   const flat = {
     model: 'deepseek-v4-flash',

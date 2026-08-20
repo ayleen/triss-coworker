@@ -5,6 +5,7 @@ import {
   priceIsOverride,
   resolveProvider,
   resolveBillingMode,
+  estimateCost,
   estimateCanonicalCost,
 } from '../src/usage.js';
 
@@ -22,6 +23,92 @@ test('priceFor returns the DeepSeek flash row in USD per token with a null cache
   close(p.cache_read, 0.007e-6);
   close(p.output, 0.66e-6);
   assert.equal(p.cache_write, null);
+});
+
+test('DeepSeek peak pricing uses UTC half-open windows for both models', () => {
+  const boundaries = [
+    ['2026-08-20T00:59:59.999Z', false],
+    ['2026-08-20T01:00:00.000Z', true],
+    ['2026-08-20T03:59:59.999Z', true],
+    ['2026-08-20T04:00:00.000Z', false],
+    ['2026-08-20T05:59:59.999Z', false],
+    ['2026-08-20T06:00:00.000Z', true],
+    ['2026-08-20T09:59:59.999Z', true],
+    ['2026-08-20T10:00:00.000Z', false],
+  ];
+  for (const [timestamp, peak] of boundaries) {
+    for (const [model, base] of [
+      ['deepseek-v4-flash', [0.22e-6, 0.007e-6, 0.66e-6]],
+      ['deepseek-v4-pro', [0.66e-6, 0.022e-6, 1.98e-6]],
+    ]) {
+      const p = priceFor(model, timestamp);
+      const multiplier = peak ? 2 : 1;
+      close(p.input_uncached, base[0] * multiplier);
+      close(p.cache_read, base[1] * multiplier);
+      close(p.output, base[2] * multiplier);
+    }
+  }
+});
+
+test('canonical and legacy cost estimates apply the same timestamp-aware rate', () => {
+  const tokens = {
+    input_uncached: 1000,
+    cache_read: 0,
+    cache_write: 0,
+    input_total: 1000,
+    output_total: 100,
+  };
+  const offPeak = estimateCanonicalCost({
+    billing_model: 'deepseek-v4-flash',
+    tokens,
+    timestamp: '2026-08-20T04:00:00Z',
+  });
+  const peak = estimateCanonicalCost({
+    billing_model: 'deepseek-v4-flash',
+    tokens,
+    timestamp: new Date('2026-08-20T06:00:00Z'),
+  });
+  const expectedOffPeak = 1000 * 0.22e-6 + 100 * 0.66e-6;
+  close(offPeak.total_usd, expectedOffPeak);
+  close(peak.total_usd, expectedOffPeak * 2);
+  assert.equal(offPeak.complete, true);
+  assert.equal(peak.complete, true);
+
+  const legacyPeak = estimateCost({
+    model: 'deepseek-v4-flash',
+    prompt_tokens: 1000,
+    cached_tokens: 0,
+    completion_tokens: 100,
+    ts: '2026-08-20T01:00:00Z',
+  });
+  close(legacyPeak, expectedOffPeak * 2);
+});
+
+test('explicit DeepSeek overrides have priority over peak adjustment', () => {
+  const envKey = 'TRISS_PRICE_DEEPSEEK_V4_FLASH';
+  const before = process.env[envKey];
+  process.env[envKey] = '0.000001,0.0000001,0.000005';
+  try {
+    const p = priceFor('deepseek-v4-flash', '2026-08-20T01:00:00Z');
+    close(p.input_uncached, 0.000001);
+    close(p.cache_read, 0.0000001);
+    close(p.output, 0.000005);
+    const cost = estimateCanonicalCost({
+      billing_model: 'deepseek-v4-flash',
+      timestamp: '2026-08-20T01:00:00Z',
+      tokens: {
+        input_uncached: 1000,
+        cache_read: 0,
+        cache_write: 0,
+        input_total: 1000,
+        output_total: 100,
+      },
+    });
+    close(cost.total_usd, 1000 * 0.000001 + 100 * 0.000005);
+  } finally {
+    if (before === undefined) delete process.env[envKey];
+    else process.env[envKey] = before;
+  }
 });
 
 test('priceFor returns the Z.AI PAYG row with a null cache_write rate', () => {

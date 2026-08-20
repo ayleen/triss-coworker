@@ -361,6 +361,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
         const on = b.getAttribute("data-tab") === tab;
         b.style.background = on ? "#08090b" : "var(--color-bg-raised)";
         b.style.color = on ? "var(--color-accent)" : "var(--color-text-muted)";
+        b.setAttribute("aria-pressed", String(on));
       });
     }
     document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => { tab = b.getAttribute("data-tab"); renderTab(); }));
