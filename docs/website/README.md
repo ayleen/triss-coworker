@@ -5,11 +5,10 @@ official Triss project website.
 
 ## Current status
 
-The Astro website is implemented and validated in repository CI. The assigned
-production Worker is `triss` at
-`https://triss.ikar-autobridge.workers.dev/`. Cloudflare must deploy the
-reviewed `site/dist/` static assets before that hostname is considered live; a
-starter `Hello world` Worker is not a website deployment.
+The Astro website is implemented, validated in repository CI, and published at
+`https://triss.work/`. The Cloudflare Worker is named `triss`; its workers.dev
+hostname remains a technical fallback and preview origin, not the canonical
+public website.
 
 The agreed delivery model is:
 
@@ -19,8 +18,8 @@ The agreed delivery model is:
 - use Cloudflare Workers version previews for non-production branches;
 - deploy the `main` branch to production;
 - enable Cloudflare Web Analytics for privacy-oriented, page-level analytics;
-- attach a custom domain after the default `*.workers.dev` deployment is
-  validated.
+- keep `https://triss.work/` as the canonical custom domain after validating
+  deployments on the default `*.workers.dev` origin.
 
 The repository is public. Website source, build configuration, and client-side
 environment values must therefore be treated as public. Secrets must never be

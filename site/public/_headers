@@ -8,7 +8,7 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
 
-# Version previews are public workers.dev URLs. While workers.dev is the canonical
-# production host, review previews must not be linked or submitted for indexing.
-# After a custom domain becomes canonical, add a host-specific workers.dev rule
-# with X-Robots-Tag: noindex and verify it against production and preview hosts.
+# Version previews and the technical fallback are public workers.dev URLs.
+# triss.work is canonical; workers.dev hosts must not be linked or submitted
+# for indexing. Configure host-specific noindex behavior in Cloudflare because
+# the static-assets _headers format matches paths rather than hostnames.

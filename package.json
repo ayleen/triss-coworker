@@ -78,7 +78,7 @@
   "bugs": {
     "url": "https://github.com/ayleen/triss-coworker/issues"
   },
-  "homepage": "https://github.com/ayleen/triss-coworker#readme",
+  "homepage": "https://triss.work",
   "engines": {
     "node": ">=22.12.0"
   },
