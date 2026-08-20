@@ -257,7 +257,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
     // Pricing — keep in sync with src/data/pricing.js and src/usage.js
     const PROFILE = { inK: 28, outK: 4.7, sumInK: 1.5, sumOutK: 0.3 };
     const ANTHROPIC = { sonnet: { input: 3, output: 15 }, opus: { input: 5, output: 25 } };
-    const DEEPSEEK = { flash: { input: 0.14, cache: 0.0028, output: 0.28 } };
+    const DEEPSEEK = { flash: { input: 0.22, cache: 0.007, output: 0.66 } }; // off-peak, peak 2×
     function primaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.inK * p.input + PROFILE.outK * p.output) / 1000; }
     function summaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.sumInK * p.input + PROFILE.sumOutK * p.output) / 1000; }
     function workerPer(hit) { const d = DEEPSEEK.flash; return (PROFILE.inK * (1-hit/100) * d.input + PROFILE.inK * (hit/100) * d.cache + PROFILE.outK * d.output) / 1000; }
@@ -318,7 +318,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
 
     // Commands preview
     const CMDS = [
-      { name: "ask", tier: "flash", short: "Reads files, URLs, or stdin — returns a focused summary.", note: "The whole trick: the primary agent gets the useful bits, not a firehose.", lines: "$ triss ask --paths \"src/**/*.ts\" \\\n    --question \"where do we read the API key?\"\n\n→ 47 files read \u00b7 18.3K in / 2.4K out\n→ src/config.js:31, src/mcp/server.js:88\ncost: $0.010" },
+      { name: "ask", tier: "flash", short: "Reads files, URLs, or stdin — returns a focused summary.", note: "The whole trick: the primary agent gets the useful bits, not a firehose.", lines: "$ triss ask --paths \"src/**/*.ts\" \\\n    --question \"where do we read the API key?\"\n\n→ 47 files read \u00b7 18.3K in / 2.4K out via flash (off-peak)\n→ src/config.js, src/mcp/server.js\ncost: $0.0056 (off-peak, $0.011 peak)" },
       { name: "review", tier: "pro", short: "Code review on a branch, a PR, or a piped diff.", note: "Concrete issues with file:line citations — not a diff summary.", lines: "$ triss review 123\n\nFindings\n- src/auth.js:42 accepts an expired token\n- test/auth.test.js:88 covers only happy path\nResidual risk: refresh path untested" },
       { name: "write", tier: "pro", short: "Generates code or docs from a spec plus a reference file.", note: "Boilerplate the primary model should never type.", lines: "$ triss write --spec \"pytest for auth.py\" \\\n    --context tests/test_main.py \\\n    --target tests/test_auth.py\n\n→ wrote tests/test_auth.py (128 lines)" },
       { name: "fetch", tier: "flash", short: "Fetches URLs and returns clean markdown.", note: "SSRF-guarded, 30s timeout, strips chrome.", lines: "$ triss fetch https://api-docs.example.com/ \\\n    --question \"auth header format?\"\n\n→ 214KB HTML → 3.1K markdown\n→ Bearer <token>, no refresh" },
@@ -336,6 +336,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
         const b = document.createElement("button");
         b.textContent = "triss " + c.name + "  · " + c.tier;
         b.style.cssText = "text-align:left; padding:12px 16px; font-family:var(--font-mono); font-size:12.5px; cursor:pointer; border:none; border-bottom:1px solid var(--color-border-subtle); background:" + (i===cmdIdx ? "#151920" : "var(--color-bg-raised)") + "; color:" + (i===cmdIdx ? "var(--color-accent)" : "var(--color-text-code)");
+        b.setAttribute("aria-pressed", String(i===cmdIdx));
         b.addEventListener("click", () => { cmdIdx = i; renderCmd(); });
         cmdList.appendChild(b);
       });

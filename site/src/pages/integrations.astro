@@ -32,11 +32,11 @@ import Footer from "../components/Footer.astro";
 
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 80px var(--layout-gutter);">
     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-      <button data-int="jira" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-accent); border: 1px solid var(--color-border-strong);">Jira</button>
-      <button data-int="confluence" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Confluence</button>
-      <button data-int="linear" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Linear</button>
-      <button data-int="github" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitHub</button>
-      <button data-int="gitlab" class="int-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitLab</button>
+      <button data-int="jira" class="int-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-accent); border: 1px solid var(--color-border-strong);">Jira</button>
+      <button data-int="confluence" class="int-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Confluence</button>
+      <button data-int="linear" class="int-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Linear</button>
+      <button data-int="github" class="int-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitHub</button>
+      <button data-int="gitlab" class="int-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">GitLab</button>
     </div>
     <div id="int-panel" style="margin-top: 20px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
   </section>

@@ -35,10 +35,10 @@ import Footer from "../components/Footer.astro";
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">engines</div>
     <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Pick one engine. The provider catalogue is the same.</h2>
     <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px;">
-      <button data-engine="opencode" class="engine-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">opencode <span style="opacity:0.6;">default</span></button>
-      <button data-engine="opencode2" class="engine-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">opencode2 <span style="opacity:0.6;">beta</span></button>
-      <button data-engine="crush" class="engine-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span style="opacity:0.6;">interim</span></button>
-      <button data-engine="harness" class="engine-btn" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">harness bundle <span style="opacity:0.6;">DSH plugin, not --engine</span></button>
+      <button data-engine="opencode" class="engine-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">opencode <span style="opacity:0.6;">default</span></button>
+      <button data-engine="opencode2" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">opencode2 <span style="opacity:0.6;">beta</span></button>
+      <button data-engine="crush" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span style="opacity:0.6;">interim</span></button>
+      <button data-engine="harness" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">harness bundle <span style="opacity:0.6;">DSH plugin, not --engine</span></button>
     </div>
     <div id="engine-body" style="margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
     <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-label);" id="engine-flag"></div>
@@ -74,6 +74,7 @@ import Footer from "../components/Footer.astro";
       document.getElementById("engine-flag").textContent = e.flag + " · isolation: " + e.isolation;
       document.querySelectorAll(".engine-btn").forEach(b => {
         const on = b.getAttribute("data-engine")===engine;
+        b.setAttribute("aria-pressed", String(on));
         b.style.background = on ? "var(--color-accent)" : "transparent";
         b.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
         b.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";

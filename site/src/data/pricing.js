@@ -11,9 +11,15 @@ export const ANTHROPIC = {
 };
 
 export const DEEPSEEK = {
-  // src/usage.js DEFAULT_PRICES as of 2026-07-03, USD per 1M
-  flash: { input: 0.14, cache: 0.0028, output: 0.28 },
-  pro: { input: 0.435, cache: 0.003625, output: 0.87 },
+  // DeepSeek API pricing as of 2026-08 — https://api-docs.deepseek.com/quick_start/pricing/
+  // Peak 01:00–04:00 and 06:00–10:00 UTC, off-peak 50% off. Calculator uses off-peak (17h/day) as default; peak is 2×.
+  // flash off-peak: input $0.22, cache $0.007, output $0.66; peak is 2×
+  // pro off-peak: input $0.66, cache $0.022, output $1.98; peak is 2×
+  flash: { input: 0.22, cache: 0.007, output: 0.66 },
+  pro: { input: 0.66, cache: 0.022, output: 1.98 },
+  // Peak prices (for reference, 2× off-peak):
+  flashPeak: { input: 0.44, cache: 0.014, output: 1.32 },
+  proPeak: { input: 1.32, cache: 0.044, output: 3.96 },
 };
 
 export function primaryPerReq(model) {
