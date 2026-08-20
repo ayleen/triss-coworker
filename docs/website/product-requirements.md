@@ -148,12 +148,14 @@ The site must expose stable links to:
 - `robots.txt` and an XML sitemap for production.
 - A useful 404 page.
 - Preview deployments must not be treated as canonical production content.
-  Cloudflare Pages adds `X-Robots-Tag: noindex` to previews by default; verify
-  the header on the real preview before launch.
+  Workers version previews are public by default. Keep the production
+  canonical URL in their HTML and do not publish previews as permanent links.
+  After a custom domain becomes canonical, keep workers.dev hosts out of the
+  index with a host-specific `X-Robots-Tag: noindex` rule.
 
 ## Analytics requirements
 
-Enable Cloudflare Web Analytics after the initial Pages project is deployed.
+Enable Cloudflare Web Analytics after the initial Worker is deployed.
 The first release needs only:
 
 - visits and page views;
@@ -175,7 +177,7 @@ or storage of visitor personal data in the first release.
 - No secrets in source, build arguments, generated HTML, or client-visible
   environment variables.
 - No user-supplied HTML or runtime content ingestion.
-- No forms, API routes, Pages Functions, or third-party embeds in the first
+- No forms, API routes, Worker scripts, or third-party embeds in the first
   release unless separately reviewed.
 - External scripts are limited to the Cloudflare Web Analytics beacon unless
   another script is explicitly approved.
@@ -203,12 +205,12 @@ The first production release is ready when:
 - automated tests, production build, browser acceptance checks, and the
   Lighthouse target are checked against the production build;
 - the pull-request preview is reviewed and approved;
-- Cloudflare Pages deploys the merge commit from `main`;
+- Cloudflare Workers Builds deploys the merge commit from `main`;
 - HTTPS works on the production hostname;
 - Cloudflare Web Analytics receives a verified page view;
 - sitemap, robots directives, canonical metadata, social metadata, and the 404
   page are verified on the deployed site.
 
 Attaching the final custom domain may follow the first successful
-`*.pages.dev` deployment, but the selected custom domain must become the
+`*.workers.dev` deployment, but the selected custom domain must become the
 canonical hostname before public promotion begins.

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Triss project website (Astro + Cloudflare Pages)",
+  "description": "Triss project website (Astro + Cloudflare Workers Static Assets)",
   "packageManager": "npm@11.6.2",
   "engines": {
     "node": ">=22.12.0"
@@ -17,7 +17,10 @@
     "test": "node --test test/*.test.js",
     "test:browser": "playwright test",
     "test:lighthouse": "node scripts/check-lighthouse.mjs",
-    "audit:dependencies": "npm audit --audit-level=high"
+    "audit:dependencies": "npm audit --audit-level=high",
+    "cloudflare:check": "wrangler deploy --dry-run --outdir .wrangler/deploy-check",
+    "cloudflare:deploy": "wrangler deploy",
+    "cloudflare:preview": "wrangler versions upload"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.0",
@@ -30,6 +33,7 @@
     "globals": "^17.0.0",
     "lighthouse": "^13.4.1",
     "png-to-ico": "^3.0.2",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "wrangler": "4.125.0"
   }
 }
