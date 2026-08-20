@@ -18,6 +18,8 @@ Deploy command:               npx wrangler deploy
 Non-production deploy command:npx wrangler versions upload
 Node version:                 24
 Package manager:              npm 11.6.2
+Build watch include paths:    *
+Build watch exclude paths:    (empty)
 Static asset directory:       site/dist/
 ```
 
@@ -55,9 +57,10 @@ deployment.
    `SITE_URL` is present, set it to `https://triss.work`; do not set
    `SKIP_DEPENDENCY_INSTALL`, because Workers Builds must install the locked
    site dependencies before running Astro.
-8. Leave build watch include/exclude paths empty unless every glob is entered
-   and validated separately. An invalid combined include value can suppress
-   production builds.
+8. Set the build watch **Include paths** to the single value `*` and leave
+   **Exclude paths** empty. Cloudflare uses `*` as the default match-all rule;
+   an empty include list or several space-separated globs entered as one value
+   can suppress production builds.
 9. Save the build configuration. Updated settings affect the next build.
 10. Open **Deployments**, then **View build history**, and retry the latest
    `main` build or push a new reviewed commit to `main`.
@@ -163,6 +166,7 @@ asset configuration and does not publish anything.
 ## Official references
 
 - [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
+- [Workers Builds watch paths](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)
 - [Workers Static Assets SSG and 404 routing](https://developers.cloudflare.com/workers/static-assets/routing/static-site-generation/)
 - [Workers Static Assets headers](https://developers.cloudflare.com/workers/static-assets/headers/)
 - [Workers preview URLs](https://developers.cloudflare.com/workers/versions-and-deployments/preview-urls/)
