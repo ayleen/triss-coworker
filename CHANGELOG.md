@@ -7,7 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.2] — 2026-08-20
+
+### Added
+
+- **Host-agent delegation workflow guidance** — a single documented
+  one-host/one-coder workflow: the host plans and decides, sends one complete
+  task packet to one `triss coder run`, the coder investigates, implements,
+  tests, debugs, and self-verifies, and the host inspects the actual diff and
+  makes the final decision. Taught consistently in `README.md`, the full
+  cookbooks (`templates/codex-full.md`, `templates/claude-full.md`), the nano
+  templates (`templates/codex.md`, `templates/claude.md`), and the
+  authoritative `docs/reliable-delegation-contract.md`.
+
+### Changed
+
+- Coder and researcher agent templates now state the approval boundary
+  explicitly: the coder never commits, pushes, deploys, or touches anything
+  outside its checkout and reports truthfully; the researcher is a
+  research-only specialist and not a mandatory precursor to coder work.
+
+### Documentation
+
+- Scope the constant `expectation: "either"` output field and the
+  `run_files_changed` change-evidence field to the `opencode`/`crush`
+  engines in `docs/reliable-delegation-contract.md` and `docs/mcp.md`; the
+  `opencode2` beta envelope reports neither and uses `files_changed`
+  instead.
+
+### Artifact integrity (0.37.2)
+
+- `triss-dsh-provider-bundle-0.37.2.tgz` — sha256
+  `0327051792f0fe0d5431619aee7e2dee120fbbdb744b3e7f9afdd0eb958740b9`,
+  integrity
+  `sha512-BBZlA9OiA8pIp+n+GJ9RBX4+yPQpRoKjQLx8KY/5ZIlqRCMUJ5SResBEuVpPiMI9UDTnWq2rQp5JI/6TVh0Y7w==`
+  (computed with the pinned release npm 11.6.2 via `npm pack`; `npm pack`
+  output is byte-deterministic).
+- Root `triss-coworker-0.37.2.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.37.2` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file); registry verification compares the packed
+  artifact against the published tarball byte-for-byte.
+
 ## [0.37.1] — 2026-08-19
+
 
 ### Fixed
 
