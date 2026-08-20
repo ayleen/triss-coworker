@@ -2,11 +2,11 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
-import { calcMonthly } from "../data/pricing.js";
+import { ANTHROPIC, DEEPSEEK, DEFAULTS, PROFILE, calcMonthly } from "../data/pricing.js";
 // pkg version is 0.37.2 — keep in sync with root package.json
 
 // Static calc for SSR — must match client JS defaults (sonnet + flash at 77% hit)
-const _idxDefaults = { reqs: 40, share: 65, primary: "sonnet", worker: "flash", cacheHit: 77 };
+const _idxDefaults = DEFAULTS;
 const _idxCalc = calcMonthly(_idxDefaults);
 function _idxMoney(v: number) { return v >= 100 ? "$" + Math.round(v).toLocaleString("en-US") : "$" + v.toFixed(2); }
 const _idxWithout = _idxMoney(_idxCalc.without);
@@ -17,10 +17,11 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
 
 <Base
   title="Triss — Your agent is a brilliant engineer. A very expensive proofreader."
-  description="Triss is a Node CLI that delegates token-heavy work to a cheap worker. Your primary agent gets a 1–2K summary instead of a 28K firehose. Measured ~60% less on one profile — see /cost for the $2.22 week."
+  description="Triss is a Node CLI that delegates token-heavy work to a cheaper worker and returns a compact summary to your primary agent. See the measured $2.22 week."
 >
   <Header />
 
+  <main>
   <!-- Hero -->
   <section
     id="top"
@@ -53,7 +54,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
           style="display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: #0b0d10; background: var(--color-accent); border: none; padding: 14px 20px; cursor: pointer;"
         >
           <span>npm install -g triss-coworker</span>
-          <span id="copy-label" style="opacity: 0.55; font-size: 12px;">copy</span>
+          <span id="copy-label" style="font-size: 12px; font-weight: 600;">copy</span>
         </button>
         <a
           href="/docs/getting-started"
@@ -229,6 +230,8 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
     </div>
   </section>
 
+  </main>
+
   <Footer />
 
   <style>
@@ -252,22 +255,21 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
     }
   </style>
 
-  <script>
+  <script is:inline define:vars={{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS }}>
 // @ts-nocheck
-    // Pricing — keep in sync with src/data/pricing.js and src/usage.js
-    const PROFILE = { inK: 28, outK: 4.7, sumInK: 1.5, sumOutK: 0.3 };
-    const ANTHROPIC = { sonnet: { input: 3, output: 15 }, opus: { input: 5, output: 25 } };
-    const DEEPSEEK = { flash: { input: 0.22, cache: 0.007, output: 0.66 } }; // off-peak, peak 2×
+    const PROFILE = profile;
+    const ANTHROPIC = anthropic;
+    const DEEPSEEK = deepseek;
     function primaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.inK * p.input + PROFILE.outK * p.output) / 1000; }
     function summaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.sumInK * p.input + PROFILE.sumOutK * p.output) / 1000; }
     function workerPer(hit) { const d = DEEPSEEK.flash; return (PROFILE.inK * (1-hit/100) * d.input + PROFILE.inK * (hit/100) * d.cache + PROFILE.outK * d.output) / 1000; }
     function trissPer(m, hit) { return workerPer(hit) + summaryPer(m); }
-    const DEFAULT_HIT = 77;
+    const DEFAULT_HIT = defaults.cacheHit;
     function money(v) {
       if (v >= 100) return "$" + Math.round(v).toLocaleString("en-US");
       return "$" + v.toFixed(2);
     }
-    let state = { reqs: 40, share: 65, model: "sonnet" };
+    let state = { reqs: defaults.reqs, share: defaults.share, model: defaults.primary };
     const els = {
       reqs: document.getElementById("reqs-display"),
       share: document.getElementById("share-display"),

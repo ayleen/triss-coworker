@@ -95,9 +95,10 @@ engine in `site/package.json`, and add a `site/.node-version` file containing
 - Do not read arbitrary repository Markdown during the Cloudflare build in the
   first release. Explicitly migrated website content avoids accidental
   publication of internal planning documents.
-- Use `IBM Plex Sans` / `IBM Plex Mono` as in the prototype (loaded via
-  `link` with self-host fallback). Do not make page rendering depend on a
-  third-party font service at runtime; pin or self-host the font assets.
+- Use pinned, self-hosted `IBM Plex Sans` / `IBM Plex Mono` WOFF2 assets in
+  `site/public/fonts/`, with the OFL license shipped beside them. Define the
+  local `@font-face` rules in the build so page rendering never depends on a
+  third-party font service at runtime.
 
 ## Content synchronization
 
@@ -203,10 +204,26 @@ The workflow must:
 2. set up the selected Node.js version with npm caching for
    `site/package-lock.json`;
 3. install and verify npm 11.6.2, then run `npm ci` in `site/`;
-4. run formatting/linting, Astro checks, tests, and the production build;
-5. run an internal-link check against the generated site;
-6. upload the static build only as a diagnostic artifact when useful; it must
-   not publish production independently of Cloudflare Pages.
+4. reject high/critical npm advisories, then run linting, Astro checks, tests,
+   and the production build;
+5. validate internal links, metadata, security headers, local runtime assets,
+   image dimensions, source-map exclusion, and explicit HTML/JS/CSS/font/image
+   size budgets against `site/dist/`;
+6. install a pinned Playwright Chromium and run the complete route set through
+   the 320/375/768/900/1440 px responsive matrix, axe WCAG 2.2 AA checks,
+   keyboard/mobile-menu behavior, hostile search input, coarse-pointer touch
+   targets, reduced motion, local font loading, browser console errors, and
+   failed resource requests;
+7. run Lighthouse on the home page, command reference, and getting-started
+   page with a blocking score floor of 90 for Performance, Accessibility, Best
+   Practices, and SEO;
+8. upload the static build, Playwright traces/screenshots/report, and Lighthouse
+   reports only on failure as short-lived diagnostic artifacts; it must not
+   publish production independently of Cloudflare Pages.
+
+The workflow also supports manual dispatch, cancels superseded runs for the
+same branch or pull request, and has a 25-minute timeout so a browser process
+cannot occupy a runner indefinitely.
 
 The existing root workflow remains responsible for CLI and package tests.
 Website-only changes must not weaken or bypass the existing repository checks.
@@ -218,10 +235,17 @@ Website-only changes must not weaken or bypass the existing repository checks.
 - Astro/type validation.
 - Source linting and formatting checks.
 - Focused component or behavior tests for interactive controls.
+- Regression tests for hostile search strings and for mobile disclosure reset
+  across the 900 px breakpoint.
 - Critical-content consistency checks against repository metadata.
 - Production build from `npm ci`.
 - Internal-link and missing-asset checks against `site/dist/`.
 - HTML accessibility checks where reliable automation is available.
+- Browser acceptance checks at 320/375/768/900 px and desktop, including no
+  horizontal overflow, keyboard/screen-reader semantics, text zoom, safe
+  areas, reduced motion, touch-target sizing, and focus visibility.
+- Verify generated CSS/assets contain only the pinned local font files and no
+  third-party runtime font URL.
 - Verification that preview deployments expose `X-Robots-Tag: noindex` once
   the Cloudflare integration exists.
 
@@ -230,6 +254,10 @@ Website-only changes must not weaken or bypass the existing repository checks.
 - Inspect home, documentation index, getting started, and 404 pages at mobile
   and desktop widths.
 - Navigate the complete site using only the keyboard.
+- Open the mobile menu at 375 px, resize above 900 px, and confirm the nav,
+  icon, `aria-expanded`, and disclosure state reset.
+- Enter `<img src=x onerror=alert(1)>` in command search and confirm it is
+  rendered as text with no created element or handler.
 - Verify copy-button state and manual-selection fallback.
 - Inspect dark/light presentation if both themes are implemented.
 - Run Lighthouse against a production build and investigate individual

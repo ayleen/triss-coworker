@@ -1,6 +1,7 @@
 name: Site
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'site/**'
@@ -22,9 +23,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: site-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  quality:
+    name: Build, accessibility, browser, Lighthouse
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
@@ -37,9 +44,15 @@ jobs:
       - name: Install site deps
         working-directory: site
         run: npm ci
+      - name: Dependency audit
+        working-directory: site
+        run: npm run audit:dependencies
+      - name: Install Chromium
+        working-directory: site
+        run: npx playwright install --with-deps chromium
       - name: Astro check
         working-directory: site
-        run: npx astro check
+        run: npm run check
       - name: Lint
         working-directory: site
         run: npm run lint
@@ -52,9 +65,21 @@ jobs:
       - name: Tests
         working-directory: site
         run: npm test
-      - name: Upload dist
+      - name: Browser and WCAG acceptance
+        working-directory: site
+        run: npm run test:browser
+      - name: Lighthouse budgets
+        working-directory: site
+        run: npm run test:lighthouse
+      - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: site-dist
-          path: site/dist
+          name: site-quality-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            site/dist
+            site/playwright-report
+            site/test-results
+            site/.lighthouse

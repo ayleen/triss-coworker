@@ -73,6 +73,17 @@ approved GitHub integration is installed.
   `Outfit` / `Source Code Pro` from the Tailwind build). The copper/cyan
   palette in `brand-direction.md` v2 remains the character/mascot
   direction but is not the website palette.
+- **Accessibility and interaction contract (pending browser acceptance):** the
+  implementation targets mobile-first behavior from 320 px through desktop,
+  no horizontal overflow, mobile disclosure reset across the 900 px
+  breakpoint, keyboard/screen-reader use, text zoom, safe areas, reduced
+  motion, and Apple-HIG-sized touch targets. WCAG 2.2 AA, Lighthouse >=90,
+  automated tests, and browser acceptance checks are launch evidence, not
+  claims of compliance before those checks pass.
+- **Typography and DOM safety:** IBM Plex Sans/Mono are pinned local WOFF2
+  assets bundled in the build with no runtime font service. User strings are
+  inserted through safe DOM APIs (`textContent` or equivalent), never
+  `innerHTML`.
 - **Logos and marks — decided 2026-08-19:** regenerate all production
   logos, marks, and favicons with `agy` (do not copy
   `brand-concepts/*.png` into `site/public` unchanged). See

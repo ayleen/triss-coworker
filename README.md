@@ -1228,8 +1228,7 @@ OpenCode stores (quota usage on subscriptions, not necessarily cash paid).
 ### An earlier example week (the Triss worker)
 
 One full week of real usage on this codebase, captured from the DeepSeek
-dashboard (May 6–13, 2026, all at list price — DeepSeek's off-peak window
-would add another ~75% discount we did not use):
+dashboard (May 6–13, 2026, all at the list price then in effect):
 
 | Metric         | Pro       | Flash     | **Total**  |
 | -------------- | --------- | --------- | ---------- |
@@ -1257,9 +1256,9 @@ raw 5.8M input. That compounds across turns.
 For reference, here is a single measured call of the kind that drives
 the weekly numbers above:
 
-| Task | Source bytes | DeepSeek (pro, -75%) | DeepSeek (pro, list price) | Same job in Opus 4.x |
-| ---- | ------------ | -------------------- | -------------------------- | -------------------- |
-| `triss ask --urls --paths` over the original `claude-coworker-model` README + 12 of our source files (18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.010** | \$0.040 | ≈ \$0.45 |
+| Task | Source bytes | DeepSeek (pro, list price) | Same job in Opus 4.x |
+| ---- | ------------ | -------------------------- | -------------------- |
+| `triss ask --urls --paths` over the original `claude-coworker-model` README + 12 of our source files (18.3K in / 2.4K out, structured 4-section report) | ≈ 65 KB | **\$0.040** | ≈ \$0.45 |
 
 Real savings depend on which operations you delegate (bulk reads win
 the most; tiny lookups break even); see `templates/claude.md` for the

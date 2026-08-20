@@ -41,7 +41,7 @@ Prototype design tokens (extracted from `Triss Landing.dc.html` and
 | Secondary text | `#a3adbc` / `#8b95a5` | descriptions |
 | Muted text | `#78828f` / `#5f6874` | labels, captions |
 | Danger / strikethrough | `#f87171` | old cost comparison |
-| Typography | `IBM Plex Sans` 400/500/600/700 + `IBM Plex Mono` 400/500/600 | Tailwind fallback `Outfit` / `Source Code Pro` |
+| Typography | self-hosted `IBM Plex Sans` 400/500/600/700 + `IBM Plex Mono` 400/500/600 | system fallback only; pinned WOFF2 assets and OFL license in `site/public/fonts/` |
 | Layout | `max-width: 1140px`, 32px gutter, 60px sticky header | all pages |
 
 ## Brand idea

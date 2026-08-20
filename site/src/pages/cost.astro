@@ -2,8 +2,8 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
-import { calcMonthly } from "../data/pricing.js";
-const _costDefaults = { reqs: 40, share: 65, primary: "mid", worker: "flash", cacheHit: 77 };
+import { ANTHROPIC, DEEPSEEK, DEFAULTS, PROFILE, calcMonthly } from "../data/pricing.js";
+const _costDefaults = { ...DEFAULTS, primary: "mid" };
 // Map cost page primary "mid" -> pricing "sonnet" (mid is Sonnet 4), "top" -> opus
 const _costPrimaryMap: Record<string, string> = { mid: "sonnet", top: "opus" };
 const _costCalc = calcMonthly({ ..._costDefaults, primary: _costPrimaryMap[_costDefaults.primary] });
@@ -18,6 +18,7 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
 <Base title="Cost & savings — Triss" description="Every number is either a published list price or a measurement from one real week on the Triss codebase. 209 calls, 5.84M in, $2.22.">
   <Header current="cost" />
 
+  <main>
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 40px;">
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">cost & savings</div>
     <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">The arithmetic, with the awkward parts left in.</h1>
@@ -159,6 +160,8 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
     </div>
   </section>
 
+  </main>
+
   <Footer />
 
   <style>
@@ -166,16 +169,12 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
     input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); cursor: pointer; border: 3px solid #0b0d10; box-shadow: 0 0 0 1px var(--color-accent); }
   </style>
 
-  <script>
+  <script is:inline define:vars={{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS }}>
 // @ts-nocheck
-    const IN_TOK = 28, OUT_TOK = 4.7, SUM_IN = 1.5, SUM_OUT = 0.3;
-    const PRIMARY = { mid: { inP: 3, outP: 15 }, top: { inP: 5, outP: 25 } };
-    // DeepSeek pricing 2026-08 — https://api-docs.deepseek.com/quick_start/pricing/ — peak 01:00–04:00/06:00–10:00 UTC, off-peak 50% off; calculator uses off-peak
-    const DEEPSEEK = {
-      flash: { input: 0.22, cache: 0.007, output: 0.66 },
-      pro: { input: 0.66, cache: 0.022, output: 1.98 }
-    };
-    let s = { reqs: 40, share: 65, primary: "mid", worker: "flash", cacheHit: 77 };
+    const IN_TOK = profile.inK, OUT_TOK = profile.outK, SUM_IN = profile.sumInK, SUM_OUT = profile.sumOutK;
+    const PRIMARY = { mid: anthropic.sonnet, top: anthropic.opus };
+    const DEEPSEEK = deepseek;
+    let s = { reqs: defaults.reqs, share: defaults.share, primary: "mid", worker: defaults.worker, cacheHit: defaults.cacheHit };
     function money(v) {
       if (v >= 1000) return "$" + Math.round(v).toLocaleString("en-US");
       if (v >= 100) return "$" + v.toFixed(0);
@@ -191,8 +190,8 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
     function render() {
       const p = PRIMARY[s.primary];
       const wPer = workerPer(s.worker, s.cacheHit);
-      const primaryPer = (IN_TOK * p.inP + OUT_TOK * p.outP) / 1000;
-      const summaryPer = (SUM_IN * p.inP + SUM_OUT * p.outP) / 1000;
+      const primaryPer = (IN_TOK * p.input + OUT_TOK * p.output) / 1000;
+      const summaryPer = (SUM_IN * p.input + SUM_OUT * p.output) / 1000;
       const monthly = s.reqs * 30;
       const delegated = monthly * (s.share / 100);
       const kept = monthly - delegated;

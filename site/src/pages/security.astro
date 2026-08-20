@@ -7,10 +7,11 @@ import Footer from "../components/Footer.astro";
 <Base title="Security & privacy — Triss" description="Triss sits between an agent, your filesystem, and your credentials. The trust boundary spelled out plainly.">
   <Header current="security" />
 
+  <main>
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 44px; border-bottom: 1px solid var(--color-border);">
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">security & privacy</div>
     <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">Triss sits between an agent, your filesystem, and your credentials.</h1>
-    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">This page is the short version for a vendor security review. <a href="https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md">SECURITY.md</a> is the normative document.</p>
+    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">This page is the short version for a vendor security review. <a href="https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md" style="text-decoration: underline; text-underline-offset: 0.16em;">SECURITY.md</a> is the normative document.</p>
     <div style="display: grid; grid-template-columns: repeat(4, auto); gap: 34px; margin-top: 38px; padding-top: 26px; border-top: 1px solid var(--color-border); justify-content: start;">
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">no telemetry</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">zero data to the developers</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">local-first</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">CLI, not hosted service</div></div>
@@ -52,6 +53,8 @@ import Footer from "../components/Footer.astro";
     </div>
     <div id="topic-panel" style="margin-top: 20px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
   </section>
+
+  </main>
 
   <Footer />
 

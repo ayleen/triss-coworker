@@ -23,4 +23,26 @@ test('built site contains required entry points', () => {
   for (const p of pages) {
     assert.ok(fs.existsSync(path.join(dist, p, 'index.html')), `missing dist/${p}/index.html`);
   }
+  for (const font of [
+    'IBMPlexSans-Bold.woff2',
+    'IBMPlexSans-Regular.woff2',
+    'IBMPlexSans-Medium.woff2',
+    'IBMPlexSans-SemiBold.woff2',
+    'IBMPlexMono-Regular.woff2',
+    'IBMPlexMono-Medium.woff2',
+    'IBMPlexMono-SemiBold.woff2',
+  ]) {
+    assert.ok(fs.existsSync(path.join(dist, 'fonts', font)), `missing dist/fonts/${font}`);
+  }
+  const css = fs.readdirSync(dist, { recursive: true })
+    .filter((name) => name.endsWith('.html') || name.endsWith('.css'))
+    .map((name) => fs.readFileSync(path.join(dist, name), 'utf8'))
+    .join('\n');
+  assert.match(css, /\/fonts\/IBMPlexSans-Regular\.woff2/);
+  assert.match(css, /\/fonts\/IBMPlexSans-Bold\.woff2/);
+  assert.match(css, /\/fonts\/IBMPlexMono-Regular\.woff2/);
+  assert.match(css, /safe-area-inset-left/);
+  assert.match(css, /pointer:coarse/);
+  assert.match(css, /min-height:44px/);
+  assert.doesNotMatch(css, /fonts\.(googleapis|gstatic)\.com/);
 });

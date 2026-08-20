@@ -2,6 +2,8 @@
   "name": "Triss — Cheap DeepSeek Coworker",
   "short_name": "Triss",
   "description": "Delegate token-heavy work to a cheap DeepSeek worker",
+  "start_url": "/",
+  "scope": "/",
   "icons": [
     {
       "src": "/icon-192.png",

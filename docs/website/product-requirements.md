@@ -107,12 +107,23 @@ The site must expose stable links to:
 
 ## Visual and interaction requirements
 
-- Responsive from 320 px mobile widths through large desktop displays.
-- Keyboard-accessible navigation and controls.
+- Mobile-first responsive behavior must work from 320 px through large desktop
+  displays, with an explicit disclosure reset when the viewport crosses the
+  900 px navigation breakpoint.
+- No horizontal overflow at 320 px, 375 px, 768 px, 900 px, or desktop widths.
+- Keyboard-accessible navigation and controls with semantic screen-reader
+  names, state (`aria-expanded` / `aria-pressed`) and visible focus states.
+- Layout must remain usable at 200% text zoom and preserve safe-area insets on
+  notched mobile devices.
+- Touch targets should follow Apple HIG guidance (at least 44 CSS px where a
+  control is intended for touch).
 - Semantic HTML with a logical heading hierarchy and visible focus states.
-- Text and interactive-control contrast meeting WCAG 2.2 AA targets.
+- Text and interactive-control contrast and focus indicators must meet WCAG
+  2.2 AA (which subsumes WCAG 2.1 AA) targets.
 - Respect `prefers-reduced-motion`; core comprehension must not depend on
   animation.
+- User-provided strings (including search queries) must be inserted with safe
+  DOM APIs such as `textContent`, never as executable HTML.
 - Copy buttons must provide visible success feedback and remain usable without
   JavaScript through manual text selection.
 - Avoid a generic dashboard aesthetic. The site should feel like a focused
@@ -126,6 +137,8 @@ The site must expose stable links to:
 - Target a Lighthouse score of at least 90 for Performance, Accessibility,
   Best Practices, and SEO on the production build, while treating specific
   audit findings rather than the score alone as the acceptance evidence.
+- Fonts must be pinned and bundled at build time or self-hosted; no runtime
+  third-party font service may be required.
 
 ## SEO and sharing requirements
 
@@ -178,8 +191,17 @@ The first production release is ready when:
 - the production build succeeds from a clean install;
 - relevant automated tests, linting, type checks, and link checks pass;
 - mobile and desktop layouts are visually inspected;
-- keyboard navigation and visible focus behavior are verified;
-- the Lighthouse target is checked against a production build;
+- 320 px, 375 px, 768 px, 900 px, and desktop layouts are visually inspected;
+- keyboard and screen-reader navigation, text zoom, safe areas, touch targets,
+  and visible focus behavior are verified;
+- opening the mobile menu at 375 px and resizing above 900 px hides it and
+  resets internal disclosure state and `aria-expanded`;
+- hostile HTML entered into command search remains text and creates no DOM
+  elements or event handlers;
+- built CSS references the pinned local IBM Plex assets and contains no
+  runtime font-service dependency;
+- automated tests, production build, browser acceptance checks, and the
+  Lighthouse target are checked against the production build;
 - the pull-request preview is reviewed and approved;
 - Cloudflare Pages deploys the merge commit from `main`;
 - HTTPS works on the production hostname;
