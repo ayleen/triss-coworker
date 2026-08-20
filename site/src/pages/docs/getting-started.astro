@@ -97,16 +97,20 @@ import Footer from "../../components/Footer.astro";
     --question "where is the API key read?"
 
   47 files · 18.3K in / 2.4K out · deepseek-v4-flash
-  src/config.js:31 — process.env.TRISS_WORKER_API_KEY
-  src/mcp/server.js:88 — forwarded to the child env
+  src/config.js — reads TRISS_WORKER_API_KEY
+  src/mcp/server.js — forwards env to MCP child
 
-cost: $0.010</pre>
+cost: $0.003</pre>
         <div style="margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
           <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Source install (no npm)</div>
           <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ git clone https://github.com/ayleen/triss-coworker.git
 $ cd triss-coworker && npm install && npm link
 $ triss --version && triss status</pre>
           <p style="margin: 8px 0 0; font-size: 12.5px; color: var(--color-text-muted);">Verify with <code style="font-family: var(--font-mono); color: var(--color-accent);">triss status</code> — shows <code style="font-family: var(--font-mono);">worker flash/pro</code>, <code style="font-family: var(--font-mono);">key ✓</code>, and masked env sources. Keep in sync with <a href="https://github.com/ayleen/triss-coworker#readme">README</a>.</p>
+        </div>
+        <div style="margin-top: 24px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px;">
+          <a href="https://github.com/ayleen/triss-coworker/blob/main/docs/configuration.md" style="border: 1px solid var(--color-border-strong); padding: 8px 12px; font-family: var(--font-mono);">Configuration →</a>
+          <a href="https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md" style="border: 1px solid var(--color-border-strong); padding: 8px 12px; font-family: var(--font-mono);">MCP setup →</a>
         </div>
       </section>
     </main>
@@ -120,9 +124,9 @@ $ triss --version && triss status</pre>
     let pm = "npm";
     let agent = "claude";
     const PM = {
-      npm: "$ npm install -g triss-coworker\n\nadded 8 packages in 3s\n$ triss --version\n0.37.1",
-      pnpm: "$ pnpm add -g triss-coworker\n\n$ triss --version\n0.37.1",
-      yarn: "$ yarn global add triss-coworker\n\n$ triss --version\n0.37.1",
+      npm: "$ npm install -g triss-coworker\n\nadded 1 package in 2s\n$ triss --version\n0.37.2",
+      pnpm: "$ pnpm add -g triss-coworker\n\n$ triss --version\n0.37.2",
+      yarn: "$ yarn global add triss-coworker\n\n$ triss --version\n0.37.2",
       curl: "$ curl -fsSL https://raw.githubusercontent.com/\\n    ayleen/triss-coworker/main/install.sh | bash\n\n→ ~/.local/share/triss (receipt-backed)\n→ linked ~/.local/bin/triss",
     };
     const AGENT = {

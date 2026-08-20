@@ -22,7 +22,7 @@ import Footer from "../components/Footer.astro";
       <button data-filter="all" class="filter-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">all (22)</button>
       <button data-filter="delegate" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">delegate (6)</button>
       <button data-filter="core" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">core (7)</button>
-      <button data-filter="setup" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">setup (5)</button>
+      <button data-filter="setup" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">setup (4)</button>
       <button data-filter="trackers" class="filter-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">trackers (5)</button>
     </div>
     <div id="cmd-grid" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);"></div>
@@ -51,10 +51,10 @@ import Footer from "../components/Footer.astro";
       { name: "coder", tier: "agent", group: "setup", body: "Run a coding agent (opencode/opencode2/crush) with worktree isolation.", flags: ["run <task>", "--isolate", "--provider worker|zai"], example: "$ triss coder run \"add /signup validation\" --isolate"},
       { name: "mcp", tier: "setup", group: "setup", body: "MCP server: register Triss for Claude Code / Codex.", flags: ["install --target claude|codex|both"], example: "$ triss mcp install --target both"},
       { name: "jira", tier: "setup", group: "trackers", body: "Jira — search, read, create, update, comment, transition.", flags: ["search", "issue", "create"], example: "$ triss jira search \"project=ENG\" --question \"blocked?\""},
-      { name: "linear", tier: "setup", group: "trackers", body: "Linear — issues, projects, initiatives, labels.", flags: ["search", "issue"], example: "$ triss linear search --project \"Q3\" --question \"unowned?\""},
+      { name: "linear", tier: "setup", group: "trackers", body: "Linear — issues, projects, initiatives, labels.", flags: ["search", "issue"], example: "$ triss linear search \"Q3\" --question \"unowned?\""},
       { name: "github", tier: "setup", group: "trackers", body: "GitHub Issues — search, read, create, comment.", flags: ["search", "issue"], example: "$ triss github issue 812 --question \"reproduced?\""},
       { name: "gitlab", tier: "setup", group: "trackers", body: "GitLab Issues — search, read, create, comment.", flags: ["search", "issue"], example: "$ triss gitlab issue 204 --question \"open?\""},
-      { name: "confluence", tier: "setup", group: "trackers", body: "Confluence — CQL search, read, create, update pages.", flags: ["search", "page"], example: "$ triss confluence search --question \"policy?\""},
+      { name: "confluence", tier: "setup", group: "trackers", body: "Confluence — CQL search, read, create, update pages.", flags: ["search", "page"], example: "$ triss confluence search 'space = ENG AND title ~ \"policy\"' --question \"policy?\""},
     ];
     let filter = "all";
     let query = "";

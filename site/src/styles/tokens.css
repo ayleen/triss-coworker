@@ -1,4 +1,4 @@
-/* Design tokens — adopted from /Volumes/Orange/tmp/triss-site-draft.zip (Triss Landing.dc.html + uploads/index.css) */
+/* Design tokens — adopted from prototype draft (local) (Triss Landing.dc.html + uploads/index.css) */
 /* See docs/website/brand-direction.md — Adopted website design 2026-08-19 */
 :root {
   /* Background / surfaces */
@@ -25,7 +25,7 @@
   --color-text-secondary: #a3adbc;
   --color-text-muted: #8b95a5;
   --color-text-faint: #78828f;
-  --color-text-label: #5f6874;
+  --color-text-label: #8b95a5;
   --color-text-code: #c2cad6;
 
   /* Semantic */

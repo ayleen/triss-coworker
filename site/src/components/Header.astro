@@ -30,13 +30,13 @@ const linkStyle = (active: boolean) =>
       </span>
     </a>
     <nav id="main-nav" style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
-      <a href="/#how" style={linkStyle(current === "how")}>How it works</a>
-      <a href="/coder" style={linkStyle(current === "coder")}>Coder</a>
-      <a href="/integrations" style={linkStyle(current === "integrations")}>Integrations</a>
-      <a href="/docs/getting-started" style={linkStyle(current === "quickstart")}>Quickstart</a>
-      <a href="/commands" style={linkStyle(current === "commands")}>Commands</a>
-      <a href="/cost" style={linkStyle(current === "cost")}>Cost</a>
-      <a href="/security" style={linkStyle(current === "security")}>Security</a>
+      <a href="/#how" aria-current={current === "how" ? "page" : undefined} style={linkStyle(current === "how")}>How it works</a>
+      <a href="/coder" aria-current={current === "coder" ? "page" : undefined} style={linkStyle(current === "coder")}>Coder</a>
+      <a href="/integrations" aria-current={current === "integrations" ? "page" : undefined} style={linkStyle(current === "integrations")}>Integrations</a>
+      <a href="/docs/getting-started" aria-current={current === "quickstart" ? "page" : undefined} style={linkStyle(current === "quickstart")}>Quickstart</a>
+      <a href="/commands" aria-current={current === "commands" ? "page" : undefined} style={linkStyle(current === "commands")}>Commands</a>
+      <a href="/cost" aria-current={current === "cost" ? "page" : undefined} style={linkStyle(current === "cost")}>Cost</a>
+      <a href="/security" aria-current={current === "security" ? "page" : undefined} style={linkStyle(current === "security")}>Security</a>
     </nav>
     <div style="display: flex; align-items: center; gap: 10px;">
       <a

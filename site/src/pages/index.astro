@@ -2,11 +2,22 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import { calcMonthly } from "../data/pricing.js";
+// pkg version is 0.37.2 — keep in sync with root package.json
+
+// Static calc for SSR — must match client JS defaults (sonnet + flash at 77% hit)
+const _idxDefaults = { reqs: 40, share: 65, primary: "sonnet", worker: "flash", cacheHit: 77 };
+const _idxCalc = calcMonthly(_idxDefaults);
+function _idxMoney(v: number) { return v >= 100 ? "$" + Math.round(v).toLocaleString("en-US") : "$" + v.toFixed(2); }
+const _idxWithout = _idxMoney(_idxCalc.without);
+const _idxWith = _idxMoney(_idxCalc.withTriss);
+const _idxSaved = _idxMoney(_idxCalc.saved);
+const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
 ---
 
 <Base
   title="Triss — Your agent is a brilliant engineer. A very expensive proofreader."
-  description="Triss is a Node CLI that delegates token-heavy work to a cheap DeepSeek worker. Your primary agent gets a 1–2K summary instead of a 5.8M-token firehose. Save 60–70% of token budget."
+  description="Triss is a Node CLI that delegates token-heavy work to a cheap worker. Your primary agent gets a 1–2K summary instead of a 28K firehose. Measured ~60% less on one profile — see /cost for the $2.22 week."
 >
   <Header />
 
@@ -54,8 +65,8 @@ import Footer from "../components/Footer.astro";
         style="display: grid; grid-template-columns: repeat(3, auto); gap: 36px; margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--color-border); justify-content: start;"
       >
         <div>
-          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-accent);">60–70%</div>
-          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">token budget saved</div>
+          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-accent);"><a href="/cost" style="color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px;">~60% less</a></div>
+          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">on 28K/4.7K profile · <a href="/cost" style="color: var(--color-text-faint); text-decoration: underline;">measured week $2.22</a></div>
         </div>
         <div>
           <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-text);">≈1¢</div>
@@ -96,11 +107,13 @@ import Footer from "../components/Footer.astro";
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
             <button
               id="btn-sonnet"
+              aria-pressed="true"
               style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);"
               >Sonnet 4.6</button
             >
             <button
               id="btn-opus"
+              aria-pressed="false"
               style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);"
               >Opus 4.7</button
             >
@@ -111,19 +124,19 @@ import Footer from "../components/Footer.astro";
             <span style="font-size: 13px; color: var(--color-text-faint);">Agent alone</span>
             <span
               id="cost-without"
-              style="font-family: var(--font-mono); font-size: 16px; color: var(--color-danger); text-decoration: line-through; text-decoration-color: var(--color-danger-strike);">$183.60</span
+              style="font-family: var(--font-mono); font-size: 16px; color: var(--color-danger); text-decoration: line-through; text-decoration-color: var(--color-danger-strike);">{_idxWithout}</span
             >
           </div>
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <span style="font-size: 13px; color: var(--color-text-code);">Agent + Triss</span>
             <span
               id="cost-with"
-              style="font-family: var(--font-mono); font-size: 30px; font-weight: 600; color: var(--color-accent); letter-spacing: -0.02em;">$70.07</span
+              style="font-family: var(--font-mono); font-size: 30px; font-weight: 600; color: var(--color-accent); letter-spacing: -0.02em;">{_idxWith}</span
             >
           </div>
           <div
             id="saved-line"
-            style="background: var(--color-accent-selection-bg); border: 1px solid var(--color-accent-selection-border); padding: 11px 13px; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">saves $113.53 / month · 62% less</div
+            style="background: var(--color-accent-selection-bg); border: 1px solid var(--color-accent-selection-border); padding: 11px 13px; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">saves {_idxSaved} / month · {_idxPct}% less</div
           >
           <p style="margin: 2px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--color-text-label);">
             Baselines from published list prices and one measured week of real Triss usage (209 calls, 5.84M in, $2.22).
@@ -241,7 +254,15 @@ import Footer from "../components/Footer.astro";
 
   <script>
 // @ts-nocheck
-    const PER_REQ = { sonnet: 0.153, opus: 0.766, triss: 0.0106 };
+    // Pricing — keep in sync with src/data/pricing.js and src/usage.js
+    const PROFILE = { inK: 28, outK: 4.7, sumInK: 1.5, sumOutK: 0.3 };
+    const ANTHROPIC = { sonnet: { input: 3, output: 15 }, opus: { input: 5, output: 25 } };
+    const DEEPSEEK = { flash: { input: 0.14, cache: 0.0028, output: 0.28 } };
+    function primaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.inK * p.input + PROFILE.outK * p.output) / 1000; }
+    function summaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.sumInK * p.input + PROFILE.sumOutK * p.output) / 1000; }
+    function workerPer(hit) { const d = DEEPSEEK.flash; return (PROFILE.inK * (1-hit/100) * d.input + PROFILE.inK * (hit/100) * d.cache + PROFILE.outK * d.output) / 1000; }
+    function trissPer(m, hit) { return workerPer(hit) + summaryPer(m); }
+    const DEFAULT_HIT = 77;
     function money(v) {
       if (v >= 100) return "$" + Math.round(v).toLocaleString("en-US");
       return "$" + v.toFixed(2);
@@ -260,9 +281,9 @@ import Footer from "../components/Footer.astro";
     };
     function render() {
       const monthly = state.reqs * 30;
-      const per = PER_REQ[state.model];
+      const per = primaryPer(state.model);
       const without = monthly * per;
-      const withT = monthly * (1 - state.share / 100) * per + monthly * (state.share / 100) * PER_REQ.triss;
+      const withT = monthly * (1 - state.share / 100) * per + monthly * (state.share / 100) * trissPer(state.model, DEFAULT_HIT);
       const saved = without - withT;
       if (els.reqs) els.reqs.textContent = String(state.reqs);
       if (els.share) els.share.textContent = state.share + "%";
@@ -274,6 +295,8 @@ import Footer from "../components/Footer.astro";
         els.sonnet.style.background = on ? "var(--color-accent)" : "transparent";
         els.sonnet.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
         els.sonnet.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+        els.sonnet.setAttribute("aria-pressed", String(on));
+        els.opus.setAttribute("aria-pressed", String(!on));
         els.opus.style.background = !on ? "var(--color-accent)" : "transparent";
         els.opus.style.color = !on ? "#0b0d10" : "var(--color-text-muted)";
         els.opus.style.borderColor = !on ? "var(--color-accent)" : "var(--color-border-strong)";

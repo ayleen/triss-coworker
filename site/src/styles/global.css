@@ -30,6 +30,8 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 @media (max-width: 640px) {
   h1 { font-size: 36px !important; }
   h2 { font-size: 28px !important; }
+  div[style*="grid-template-columns: repeat(3, 1fr)"],
+  div[style*="grid-template-columns: repeat(4, auto)"] { grid-template-columns: 1fr !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
