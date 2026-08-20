@@ -61,6 +61,9 @@ jobs:
       - name: Build
         working-directory: site
         run: npm run build
+      - name: Cloudflare deployment dry run
+        working-directory: site
+        run: npm run cloudflare:check
       - name: Link check
         working-directory: site
         run: node scripts/check-links.mjs

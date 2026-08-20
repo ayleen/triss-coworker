@@ -3,7 +3,7 @@
 ## Technical decision
 
 Use Astro to generate a static website and deploy the generated output with
-Cloudflare Pages.
+Cloudflare Workers Static Assets through Workers Builds.
 
 Astro is an implementation dependency of the website only. The CLI package and
 its release dependencies must remain isolated from website dependencies.
@@ -38,6 +38,7 @@ site/
   package-lock.json
   astro.config.mjs
   tsconfig.json
+  wrangler.jsonc
   public/
     _headers
     favicon.svg
@@ -55,7 +56,7 @@ The separation is intentional:
 
 - the root `npm ci`, CLI tests, and npm release remain unchanged;
 - Astro dependencies do not enter the CLI package lock or published tarball;
-- Cloudflare Pages can install and build from `site/` independently;
+- Cloudflare Workers Builds can install and build from `site/` independently;
 - site-specific CI can run only when relevant files change.
 
 The site must have a committed `site/package-lock.json`. Generated `site/dist/`
@@ -77,7 +78,7 @@ npm test          # focused site tests
 Exact tool versions must be selected during implementation, committed to the
 site lockfile, and compatible with the active Node.js LTS releases used by the
 repository. The initial deployment contract uses Node.js 24 and npm 11.6.2 in
-both CI and Cloudflare Pages. Record `packageManager: npm@11.6.2` and a Node.js
+both CI and Workers Builds. Record `packageManager: npm@11.6.2` and a Node.js
 engine in `site/package.json`, and add a `site/.node-version` file containing
 `24`. Do not reference unpinned remote scripts or runtime CDN libraries.
 
@@ -124,7 +125,8 @@ Use one non-secret `SITE_URL` build variable as the source for Astro's `site`
 configuration, canonical metadata, sitemap URLs, and the generated
 `robots.txt` response.
 
-- Initially, production uses the assigned `https://<project>.pages.dev` URL.
+- Initially, production uses
+  `https://triss.ikar-autobridge.workers.dev`.
 - Preview builds use the current production canonical URL, not their temporary
   preview hostname.
 - When the custom domain is attached, update `SITE_URL` to the final HTTPS
@@ -132,35 +134,36 @@ configuration, canonical metadata, sitemap URLs, and the generated
 - Generate `robots.txt` from `SITE_URL`; do not commit a hostname-specific
   static file.
 
-Cloudflare Pages adds `X-Robots-Tag: noindex` to preview deployments by default.
-Verify that header on the pull-request preview. After a custom domain becomes
-canonical, add host-specific rules to `site/public/_headers` to keep both the
-production and versioned `*.pages.dev` hostnames out of search results while
-leaving the custom domain indexable.
+Workers version previews are public by default. Preview HTML must retain the
+production canonical URL and preview URLs must not be published as permanent
+links. After a custom domain becomes canonical, add a host-specific rule to
+`site/public/_headers` that applies `X-Robots-Tag: noindex` to the workers.dev
+host while leaving the custom domain indexable.
 
 The base `site/public/_headers` file must also define and document the selected
 static-site security headers. Validate the effective deployed headers; do not
 assume the committed file alone proves Cloudflare applied them.
 
-## Cloudflare Pages configuration
+## Cloudflare Workers Builds configuration
 
-Connect the public GitHub repository to Cloudflare Pages with:
+Connect the existing `triss` Worker to the public GitHub repository with:
 
 ```text
-Production branch: main
-Root directory:    site
-Build command:     npm install --global npm@11.6.2 && npm ci && npm run build
-Build output:      dist
-Node version:      24 (NODE_VERSION=24 and site/.node-version)
-Canonical URL:     SITE_URL, initially the assigned production pages.dev URL
+Production branch:             main
+Root directory:                site
+Build command:                 npm run build
+Deploy command:                npx wrangler deploy
+Non-production deploy command: npx wrangler versions upload
+Node version:                  24 (NODE_VERSION=24 and site/.node-version)
+Canonical URL:                 SITE_URL, defaulting to the production workers.dev URL
 ```
 
 Expected deployment behavior:
 
 - pushes to `main` create production deployments;
-- pull requests from branches in this repository create preview deployments;
-- preview deployment status is reported to the GitHub pull request;
-- the initial production hostname uses `*.pages.dev`;
+- enabled non-production branch builds create version preview deployments;
+- build status is reported to the connected GitHub commit;
+- the initial production hostname uses `*.workers.dev`;
 - the custom domain is attached only after the default deployment passes the
   launch checks;
 - HTTPS is required;
@@ -173,12 +176,12 @@ reproduced. Never place Cloudflare API tokens in the repository.
 
 Official references:
 
-- [Cloudflare Pages Git integration](https://developers.cloudflare.com/pages/configuration/git-integration/)
-- [Cloudflare Pages custom domains](https://developers.cloudflare.com/pages/configuration/custom-domains/)
-- [Cloudflare Pages headers](https://developers.cloudflare.com/pages/configuration/headers/)
-- [Cloudflare Pages preview deployments](https://developers.cloudflare.com/pages/configuration/preview-deployments/)
+- [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
+- [Workers custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+- [Workers Static Assets headers](https://developers.cloudflare.com/workers/static-assets/headers/)
+- [Workers preview URLs](https://developers.cloudflare.com/workers/versions-and-deployments/preview-urls/)
 - [Enable Cloudflare Web Analytics](https://developers.cloudflare.com/web-analytics/get-started/)
-- [Cloudflare Pages limits](https://developers.cloudflare.com/pages/platform/limits/)
+- [Workers Static Assets limits](https://developers.cloudflare.com/workers/platform/limits/#static-assets)
 
 ## CI plan
 
@@ -219,7 +222,7 @@ The workflow must:
    Practices, and SEO;
 8. upload the static build, Playwright traces/screenshots/report, and Lighthouse
    reports only on failure as short-lived diagnostic artifacts; it must not
-   publish production independently of Cloudflare Pages.
+   publish production independently of Cloudflare Workers Builds.
 
 The workflow also supports manual dispatch, cancels superseded runs for the
 same branch or pull request, and has a 25-minute timeout so a browser process
@@ -246,8 +249,8 @@ Website-only changes must not weaken or bypass the existing repository checks.
   areas, reduced motion, touch-target sizing, and focus visibility.
 - Verify generated CSS/assets contain only the pinned local font files and no
   third-party runtime font URL.
-- Verification that preview deployments expose `X-Robots-Tag: noindex` once
-  the Cloudflare integration exists.
+- Verification that preview deployments retain production canonical URLs and
+  that host-specific noindex rules are applied after a custom domain exists.
 
 ### Manual
 
@@ -305,7 +308,7 @@ Exit condition: all requirements for the initial routes are satisfied locally.
 
 ### Phase 3: Preview and quality pass
 
-- Connect the GitHub repository to Cloudflare Pages.
+- Connect the GitHub repository to the existing Cloudflare Worker.
 - Review the pull-request preview at required viewport sizes.
 - Run accessibility, link, metadata, and Lighthouse checks.
 - Fix issues and obtain pull-request approval.
@@ -333,7 +336,7 @@ the documentation or implementation:
 - pushing the feature branch;
 - opening a pull request;
 - installing or authorizing the Cloudflare GitHub application;
-- creating the Cloudflare Pages project;
+- creating or replacing a Cloudflare Worker;
 - changing DNS or attaching a custom domain;
 - merging the pull request;
 - publicly announcing the website.

@@ -35,7 +35,7 @@ test("built pages have unique complete metadata and one main heading", { skip: !
     const description = attribute(html, /<meta\s+name="description"\s+content="([^"]+)"/i, "description", relative);
     const canonical = attribute(html, /<link\s+rel="canonical"\s+href="([^"]+)"/i, "canonical URL", relative);
     assert.ok(description.length >= 50 && description.length <= 180, `${relative} description length is ${description.length}`);
-    assert.match(canonical, /^https:\/\/triss\.pages\.dev\//);
+    assert.match(canonical, /^https:\/\/triss\.ikar-autobridge\.workers\.dev\//);
     assert.equal(titles.has(title), false, `${relative} duplicates title from ${titles.get(title)}`);
     assert.equal(canonicals.has(canonical), false, `${relative} duplicates canonical from ${canonicals.get(canonical)}`);
     titles.set(title, relative);
