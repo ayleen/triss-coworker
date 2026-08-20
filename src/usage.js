@@ -159,6 +159,14 @@ function isDeepSeekPeak(date) {
   return DEEPSEEK_PRICING.peakWindowsUtc.some(([start, end]) => hour >= start && hour < end);
 }
 
+// Parse the scientific-notation form directly so this schedule preserves the
+// exact IEEE-754 values of the former `0.22e-6` literals. Some legacy callers
+// intentionally observe JavaScript's raw arithmetic, including malformed
+// negative counters, so changing the rounding path would break that contract.
+function perMillionToToken(rate) {
+  return Number(`${rate}e-6`);
+}
+
 function deepSeekPriceFor(bare, timestamp) {
   const model = bare === 'deepseek-v4-flash' ? 'flash' : bare === 'deepseek-v4-pro' ? 'pro' : null;
   if (!model) return null;
@@ -167,10 +175,10 @@ function deepSeekPriceFor(bare, timestamp) {
   const row = usesCurrentSchedule ? DEEPSEEK_PRICING.offPeak[model] : DEEPSEEK_PRICING.legacy[model];
   const multiplier = usesCurrentSchedule && date && isDeepSeekPeak(date) ? DEEPSEEK_PRICING.peakMultiplier : 1;
   return {
-    input_uncached: row.input_uncached * 1e-6 * multiplier,
-    cache_read: row.cache_read * 1e-6 * multiplier,
+    input_uncached: perMillionToToken(row.input_uncached) * multiplier,
+    cache_read: perMillionToToken(row.cache_read) * multiplier,
     cache_write: null,
-    output: row.output * 1e-6 * multiplier,
+    output: perMillionToToken(row.output) * multiplier,
   };
 }
 
