@@ -63,20 +63,22 @@ codes, and the execution-capability model.
 > produce verified cleanup and verified stable change evidence
 > (`cleanup_status: "verified"`, `change_detection.status: "verified"`)
 > without weakening the result matrix. Today: use `--isolate`, check
-> `run_files_changed` in the envelope, and inspect the retained
+> `run_files_changed` (on `opencode`/`crush`) or `files_changed` (on the
+> `opencode2` beta) in the envelope, and inspect the retained
 > worktree/diff directly: `git status --short`, the staged patch with
 > `git diff --cached` (Triss stages the deliverables before returning the
 > envelope), and any unstaged changes with `git diff`.
 >
 > This note is about the *input* gate (`--expect` / the MCP `expectation`
-> argument): the returned envelope still reports a constant
-> `expectation: "either"` output field, which is informational, not a caller
-> control.
+> argument). On the `opencode` and `crush` engines, the returned envelope
+> reports `expectation: "either"` as an informational output field, not a
+> caller control; the `opencode2` beta envelope has no `expectation` field.
 
 The `--expect` CLI flag and the MCP `expectation` argument are NOT part of
 the v0.37.1 surface (see above), so no `--expect` command is valid today.
 Use the current workflow instead: run with `--isolate`, check
-`run_files_changed` in the envelope, and inspect the retained worktree/diff
+`run_files_changed` on `opencode`/`crush` (or `files_changed` on the
+`opencode2` beta) in the envelope, and inspect the retained worktree/diff
 directly (`git status --short`, `git diff --cached`, `git diff`). Process
 completion and a non-empty final text are not task satisfaction.
 
