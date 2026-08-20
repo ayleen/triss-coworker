@@ -16,10 +16,20 @@ codes, and the execution-capability model.
 
 - `session_id` is the engine's real session identifier (e.g. an OpenCode
   session id), when the engine reports one.
-- `session_slug` is the triss-side v2 slug. An explicit `--session <slug>`
-  selects the per-engine v2 store for that slug; an unnamed run receives an
-  anonymous generated slug `anon-<32 lowercase hex>` which is correlation
-  evidence, NOT an implicit persistent conversation.
+- `session_slug` is the triss-side v2 slug, either the explicit
+  `--session <slug>` or a generated per-run slug. A generated slug is
+  correlation evidence, never an implicit continuation of your
+  conversation; its anonymity status depends on the engine and isolation:
+  an unnamed *non-isolated* run on the `opencode` or `crush` engine gets an
+  `anon-<32 lowercase hex>` id (`anonymous: true`); the `opencode2` beta
+  envelope reports neither `session_slug` nor `expectation`; an unnamed
+  *isolated* opencode run reuses its
+  per-run worktree slug `run-<6 lowercase hex>` as the session id
+  (`anonymous: false`, correlation only, not resumable); an unnamed
+  *isolated* crush run gets the same `run-<6 lowercase hex>` slug and also
+  passes it as a native crush `--session` (`anonymous: false`), making that
+  id a resumable crush session — resume only deliberately with `--session
+  <id>` / `--continue`.
 - Legacy `.triss/sessions.json` (the shared map) and direct real engine ids
   can neither select nor clean a v2 session.
 
@@ -40,17 +50,52 @@ codes, and the execution-capability model.
 - Non-isolated `files_changed` is `null` (NOT `[]`) — a compatibility change.
   Consumers that require an array must branch on
   `envelope_version` and `change_detection.status`.
-- `change_summary` carries the bounded human-readable summary; `diff_stat`
-  falls back truthfully to `null` when the diff source is unavailable.
+- `diff_stat` carries the bounded diff summary and falls back truthfully to
+  `null` when the diff source is unavailable.
 - Null/empty semantics are exact: an unreported class is `null`, never `0`.
 
-### Expectation exit codes
+### Expectation exit codes — current surface (v0.37.1)
 
-`--expect changes|analysis` selects the deterministic expectation gate.
-Process completion is NOT task satisfaction: a finished run whose expectation
-is unmet exits non-zero with the expectation verdict in the envelope. Use
-`--expect changes --isolate` for a verifiable deliverable check and always
-inspect the local `git status` / `git diff` directly.
+> **Current public surface (v0.37.1).** The `--expect` flag and the MCP
+> `expectation` field are part of the *designed* Release A contract — they
+> are NOT exposed by the shipped v0.37.1 CLI or MCP schema. The strict gate
+> will be published only once at least one supported execution path can
+> produce verified cleanup and verified stable change evidence
+> (`cleanup_status: "verified"`, `change_detection.status: "verified"`)
+> without weakening the result matrix. Today: use `--isolate`, check
+> `run_files_changed` (on `opencode`/`crush`) or `files_changed` (on the
+> `opencode2` beta) in the envelope, and inspect the retained
+> worktree/diff directly: `git status --short`, the staged patch with
+> `git diff --cached` (Triss stages the deliverables before returning the
+> envelope), and any unstaged changes with `git diff`.
+>
+> This note is about the *input* gate (`--expect` / the MCP `expectation`
+> argument). On the `opencode` and `crush` engines, the returned envelope
+> reports `expectation: "either"` as an informational output field, not a
+> caller control; the `opencode2` beta envelope has no `expectation` field.
+
+The `--expect` CLI flag and the MCP `expectation` argument are NOT part of
+the v0.37.1 surface (see above), so no `--expect` command is valid today.
+Use the current workflow instead: run with `--isolate`, check
+`run_files_changed` on `opencode`/`crush` (or `files_changed` on the
+`opencode2` beta) in the envelope, and inspect the retained worktree/diff
+directly (`git status --short`, `git diff --cached`, `git diff`). Process
+completion and a non-empty final text are not task satisfaction.
+
+### Designed expectation gate (future, gated)
+
+The designed Release A contract will add a deterministic expectation gate,
+published only once at least one supported execution path can produce
+verified cleanup and verified stable change evidence
+(`cleanup_status: "verified"`, `change_detection.status: "verified"`)
+without weakening the result matrix. When shipped:
+
+- `--expect changes|analysis` will select the gate; a finished run whose
+  expectation is unmet will exit non-zero with the expectation verdict in
+  the envelope;
+- `--expect changes --isolate` will provide a verifiable deliverable
+  check (the host will still inspect the local worktree/diff directly);
+- MCP `triss_coder_run` will accept the same closed enum.
 
 ## Bounded diagnostics
 

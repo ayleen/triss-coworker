@@ -326,6 +326,70 @@ render into other projects:
 The expensive primary agent decides **what** to do. Triss does the **reading
 and writing**.
 
+### Recommended host-agent workflow
+
+Keep one primary agent and one coder per implementation stream. You (the
+expensive primary agent) understand the request, decide the plan, and own
+architecture, authorization, and final acceptance; the coder owns the
+repository investigation, implementation, tests, debugging, and
+self-verification; you then inspect the actual diff and evidence and make
+the final decision. Do not default to a researcher -> planner -> coder ->
+verifier -> reviewer chain — use `triss ask` / `triss fetch` for
+research-only work and `triss review` only when complexity, security
+sensitivity, or regression risk materially improves confidence. Split work
+across coders only when the streams are independently executable with
+explicit merge or handoff boundaries. Prefer a fresh run without intentional
+session reuse: pass the complete task packet to every run and rely on
+`--session` / `--continue` only for deliberate continuation.
+
+Pass the whole plan as one task packet — Goal, Plan, Constraints, Relevant
+context, Success criteria, Validation, Return — via `triss coder run --stdin`
+for long prompts or as the MCP `prompt` string:
+
+```bash
+triss coder run --stdin --isolate <<'TASK'
+Goal
+- Add the requested behavior.
+
+Plan
+- Follow the host-approved implementation steps.
+
+Constraints
+- Preserve existing public behavior outside the requested scope.
+- Do not commit, push, deploy, or modify files outside this checkout.
+
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
+
+Success criteria
+- Focused regression tests pass.
+- The final diff contains only the requested change.
+
+Validation
+- Run the relevant repository-native focused tests.
+
+Return
+- Outcome, files changed, checks, and unresolved blockers.
+TASK
+```
+
+`triss agent-help` prints the generated host-agent cookbook and the final
+acceptance checklist.
+
+Existing `triss coder init` installations keep their generated agent files
+(`init` never overwrites them, so re-running it alone will not refresh
+them). To adopt the stronger coder/researcher roles:
+
+- local scope: merge or replace `./.opencode/agents/coder.md` /
+  `./.opencode/agents/researcher.md`;
+- global scope (the `triss coder init` default): merge or replace
+  `~/.config/opencode/agents/coder.md` /
+  `~/.config/opencode/agents/researcher.md`;
+- to regenerate them, back up or remove the generated files first, then
+  re-run `triss coder init` with the matching explicit `--local` / `--global`
+  scope.
+
 | Command         | Does                                                  | Replaces                            |
 | --------------- | ----------------------------------------------------- | ----------------------------------- |
 | `triss ask`        | Reads files, URLs, and/or piped stdin — returns a summary | The agent reading the source itself |
@@ -676,16 +740,26 @@ triss coder state backup --project <path>         # Section 15 rollback backup
 triss coder state validate --project <path> --backup <dir>
 ```
 
-Every `triss coder run` envelope (and the matching MCP tool) carries the
-session acceptance contract fields: `session_slug` (explicit slug or an anonymous
-generated one — never an implicit persistent conversation), `result_retention`
+Every `triss coder run` envelope on the `opencode` and `crush` engines
+(and the matching MCP tool) carries the session acceptance contract fields:
+`session_slug` (explicit slug or a generated per-run slug — never an
+implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
-`effective_isolation`). Non-isolated `files_changed` is `null`; the only
-changes-expectation evidence is `run_files_changed`. Process completion is not
-task satisfaction — use `--expect changes --isolate` and inspect `git status`
-yourself. Unavailable OS sandbox/cleanup/lock/quota does not block a
+`effective_isolation`). The `opencode2` beta engine still returns the older
+envelope shape (`session_id`, `exit_reason`, `final_text`, `files_changed`,
+`diff_stat`, `worktree`, `usage`, `warnings`) without these fields — use its
+`files_changed` / `diff_stat` / `worktree` as evidence there. Non-isolated `files_changed` is `null`; the only
+changes-expectation evidence is `run_files_changed`. Process completion and a
+non-empty final text are not task satisfaction — use `--isolate`, check
+`run_files_changed` in the envelope, and verify the retained worktree/diff
+directly when the envelope returns one (a run with `worktree: null` and an
+empty `run_files_changed` — or empty `files_changed` on the `opencode2` beta
+— produced no retained deliverable): `git status --short`,
+then review the staged patch with `git diff --cached` and any unstaged
+changes with `git diff` (Triss stages the deliverable changes before
+returning the envelope). Unavailable OS sandbox/cleanup/lock/quota does not block a
 non-isolated/best-effort run but provides none of those guarantees; explicit
 or default isolation needs `--allow-best-effort-caller-worktree` (default
 off) or fails before spawn with `TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED`

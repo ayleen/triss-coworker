@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -170,4 +170,101 @@ test('AGENT-HELP-05: MCP-hint blockquote appears when mcpServers.triss is regist
     if (origHome !== undefined) process.env.HOME = origHome;
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+
+test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow contract', async () => {
+  const { runAgentHelp } = await import('../src/commands/agent-help.js');
+  // Collapse line wrapping in the rendered cookbook — prose assertions check
+  // exact words in order, not where the template happened to wrap a line.
+  const flat = (s) => s.replace(/\s+/g, ' ');
+  for (const target of ['claude', 'codex']) {
+    const out = flat(await captureStdout(() => runAgentHelp({ target })));
+
+    assert.ok(out.includes('Recommended host-agent workflow'), `${target} full cookbook needs the workflow section`);
+    assert.ok(out.includes('Core workflow'), `${target} full cookbook needs a Core workflow section`);
+    assert.ok(
+      out.includes('one coder in charge') || out.includes('one coder owns'),
+      `${target} full cookbook must state the one-host/one-coder default`,
+    );
+    assert.ok(
+      out.includes('repository investigation, implementation, tests, debugging, and self-verification'),
+      `${target} full cookbook must assign repository research, implementation, tests, debugging, and self-verification to the coder`,
+    );
+    assert.ok(
+      out.includes('Independent diff review') && out.includes('security-sensitive'),
+      `${target} full cookbook must make review use risk-based`,
+    );
+    assert.ok(
+      out.includes('independently executable') && out.includes('explicit merge or handoff boundary'),
+      `${target} full cookbook must allow parallelism only for independent workstreams with explicit boundaries`,
+    );
+    assert.ok(
+      out.includes('task packet') && out.includes('fresh run without intentional session reuse'),
+      `${target} full cookbook must prefer fresh explicit task packets`,
+    );
+    assert.ok(
+      out.includes('final acceptance') && out.includes('inspect the actual diff'),
+      `${target} full cookbook must reserve final acceptance to the host after inspecting the actual diff`,
+    );
+    assert.ok(
+      out.includes('git -C "$worktree" status --short') && out.includes('diff --cached'),
+      `${target} full cookbook must inspect staged and unstaged state in the retained worktree`,
+    );
+    assert.ok(
+      out.includes('not browser automation'),
+      `${target} full cookbook must not claim browser automation for triss fetch`,
+    );
+    assert.ok(
+      out.includes('Approval boundaries: no commit, push, deploy, external write, or destructive action'),
+      `${target} full cookbook task packet must unconditionally forbid commit (no host-authorized escape hatch)`,
+    );
+    assert.ok(
+      out.includes('no retained deliverable'),
+      `${target} full cookbook checklist must treat a null worktree plus empty run_files_changed as no retained deliverable`,
+    );
+    assert.ok(
+      out.includes('files_changed` on the `opencode2` beta'),
+      `${target} full cookbook checklist must also accept the opencode2 no-deliverable form (files_changed)`,
+    );
+    assert.ok(
+      out.includes('older envelope'),
+      `${target} full cookbook must note the opencode2 beta returns the older envelope without Release A fields`,
+    );
+  }
+});
+
+test('AGENT-HELP-08: task packets are complete and acceptance fences stay in the list item', () => {
+  const repoRoot = resolve(dirname(TRISS_BIN), '..');
+  const read = (file) => readFileSync(join(repoRoot, file), 'utf8');
+  const packetFiles = ['README.md', 'templates/claude-full.md', 'templates/codex-full.md'];
+  for (const file of packetFiles) {
+    const content = read(file);
+    const packet = content.match(/triss coder run --stdin --isolate <<'TASK'\n([\s\S]*?)\nTASK\n```/);
+    assert.ok(packet, `${file} must include the copy-paste task-packet heredoc`);
+    assert.match(
+      packet[1],
+      /Relevant context\n- Known entry points, related files, prior findings, errors, or reference behavior\.\n- Include only context needed for this task; let the coder inspect the repository for the rest\.\n\nSuccess criteria/,
+      `${file} task packet must include Relevant context before Success criteria`,
+    );
+  }
+  const acceptanceFences = ['templates/claude-full.md', 'templates/codex-full.md'].map((file) => {
+    const content = read(file);
+    const checklist = content.slice(content.indexOf('### Final acceptance checklist'));
+    const fence = checklist.match(/\n {2}```bash\n([\s\S]*?)\n {2}```\n\n {2}Isolation worktrees/);
+
+    assert.ok(fence, `${file} must indent the acceptance fence and following base note inside the list item`);
+    assert.doesNotMatch(
+      checklist,
+      /\n```bash\n(?:git -C "\$worktree" [^\n]*\n){4}/,
+      `${file} must not split the list item with a column-0 fence`,
+    );
+    return fence[0];
+  });
+
+  assert.equal(
+    acceptanceFences[0],
+    acceptanceFences[1],
+    'Claude and Codex acceptance checklist fences must remain semantically identical',
+  );
 });

@@ -319,6 +319,165 @@ provider), `OPENCODE_API_KEY` (optional — shared by `opencode/*` Zen and `open
 Windows. `triss coder init`/`clean` are unaffected.
 
 {{INTEGRATIONS}}
+## Recommended host-agent workflow
+
+### Core workflow
+
+For a normal implementation request, keep one primary agent (you) and one
+coder in charge of a single stream of work:
+
+```text
+User request
+  -> you understand the request and decide the plan
+  -> you send ONE complete task packet to ONE triss coder run
+  -> the coder investigates the repository
+  -> the coder implements
+  -> the coder runs relevant checks and debugs failures
+  -> the coder inspects its own result and reports evidence
+  -> you inspect the actual diff and evidence
+  -> you make the final decision and answer the user
+```
+
+You own request interpretation, architecture, authorization, task
+decomposition, and final acceptance. The coder owns repository
+investigation, implementation, tests, debugging, and self-verification.
+Process completion, a non-empty final text, and a model-authored success
+sentence are NOT acceptance evidence — check the actual artifact and
+evidence yourself.
+
+Do **not** default to a researcher -> planner -> coder -> verifier ->
+reviewer chain. That longer chain is justified only when its stages are
+genuinely independent or materially improve confidence.
+
+### Routing decisions
+
+| Need | Preferred Triss route | Default use |
+| --- | --- | --- |
+| Bulk repository or official-page research without edits | `triss ask` / `triss fetch` | Research-only work or an independent research lane |
+| Tool-using implementation | `triss coder run` | One coder owns the normal implementation stream |
+| Independent diff review | `triss review` | Only for complex, risky, security-sensitive, or regression-prone changes |
+| Browser/runtime evidence | Your own browser or DevTools tools | Outside Triss — `triss fetch` is a page fetch, not browser automation |
+
+### Task packet
+
+Pass the whole plan to the coder as one explicit packet — via MCP structured
+input, or `triss coder run --stdin` for long prompts:
+
+```text
+Goal
+- The concrete user-visible outcome.
+
+Plan
+- The implementation steps already decided by the host.
+
+Constraints
+- Scope boundaries, compatibility requirements, files or APIs that must not change.
+- Approval boundaries: no commit, push, deploy, external write, or destructive action — commit is never delegated; the orchestrator collects and stages the diff itself.
+
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
+
+Success criteria
+- Observable behavior that must work.
+- Required regression cases and edge cases.
+
+Validation
+- Repository-native tests, lint, type checks, builds, or focused checks to run.
+- State what to do if a check is unavailable.
+
+Return
+- Outcome.
+- Files changed.
+- Checks run and exact pass/fail state.
+- Important diff or behavior evidence.
+- Remaining blockers or unresolved risks.
+```
+
+```bash
+triss coder run --stdin --isolate <<'TASK'
+Goal
+- Add the requested behavior.
+
+Plan
+- Follow the host-approved implementation steps.
+
+Constraints
+- Preserve existing public behavior outside the requested scope.
+- Do not commit, push, deploy, or modify files outside this checkout.
+
+Relevant context
+- Known entry points, related files, prior findings, errors, or reference behavior.
+- Include only context needed for this task; let the coder inspect the repository for the rest.
+
+Success criteria
+- Focused regression tests pass.
+- The final diff contains only the requested change.
+
+Validation
+- Run the relevant repository-native focused tests.
+
+Return
+- Outcome, files changed, checks, and unresolved blockers.
+TASK
+```
+
+The heredoc is a shell example; over MCP, pass the same packet as the tool's
+`prompt` string instead of constructing shell commands.
+
+### Context and sessions
+
+Default to a **fresh run without intentional session reuse** with the
+complete packet: an unnamed run gets a newly generated per-run session id
+and never inherits this conversation implicitly. It is not a resumable
+conversation on the `opencode` engine; on `crush` an isolated run also
+registers that id as a native crush session, so resume it only deliberately
+with `--session <id>` (optionally `--continue`) — note `--continue` alone
+is rejected for isolated runs. Use `--session <slug>` only when
+continuation is intentional and the previous task context remains relevant;
+do not use `--continue` as a general default.
+
+### Final acceptance checklist
+
+Before treating a coder result as done:
+
+- read the envelope's `exit_reason`, `files_changed` / `run_files_changed`,
+  `diff_stat`, and `worktree` (the `opencode` and `crush` engines report
+  `run_files_changed`; the `opencode2` beta returns the older envelope
+  without it);
+- for isolated runs, inspect the retained worktree only when the envelope
+  returns one: if `worktree` is null and `run_files_changed` — or
+  `files_changed` on the `opencode2` beta — is empty, the run produced
+  **no retained deliverable** (Triss removed the disposable
+  worktree) — skip the git inspection. Otherwise Triss stages the
+  deliverable changes (`git add`) before returning the envelope, so check
+  BOTH the staged and the unstaged state (set `$worktree` to the
+  envelope's `worktree` path):
+
+  ```bash
+  git -C "$worktree" status --short
+  git -C "$worktree" diff --cached --stat
+  git -C "$worktree" diff --cached
+  git -C "$worktree" diff
+  ```
+
+  Isolation worktrees start from the HEAD that was checked out when the run
+  started, not necessarily the repository's default branch — do not assume
+  `main` is the diff base;
+- verify the checks the coder claims actually ran — a model sentence is not
+  a test result;
+- check for unrelated or accidental edits in the diff;
+- make the final accept/reject decision yourself; push, deploy, and other
+  irreversible actions stay with you.
+
+### Parallel workstreams
+
+Split work across multiple coders only when the streams are independently
+executable and you can point at an explicit merge or handoff boundary
+(separate modules, separate files, a defined interface). Otherwise one coder
+owns the whole stream — parallel fan-out you cannot verify is usually slower
+and harder to accept than a single focused run.
+
 ### When NOT to delegate
 - Tasks under ~2000 tokens of work — delegation overhead costs more than it saves.
 - Architectural decisions, hard debugging, safety-critical code.

@@ -1896,3 +1896,68 @@ test(
 // `runCoderClean` (Phase 3) and `runCoderRun` (Phase 2) are both
 // implemented now — see test/coder-clean.test.js, test/coder-envelope.test.js,
 // and test/coder-isolate.test.js.
+
+// ─── scaffolded role contract: coder owns the full implementation stream ─────
+
+test(
+  'scaffolded coder agent template assigns the full implementation stream and keeps hard boundaries',
+  withTmpHome(async ({ home }) => {
+    process.env.ZHIPU_API_KEY = 'zk-fake';
+    await runCoderSetup(
+      { scope: 'global' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+
+    // Collapse line wrapping in the scaffolded agent markdown — prose
+    // assertions check exact words in order, not wrap positions.
+    const flat = (s) => s.replace(/\s+/g, ' ');
+    const coderAgent = flat(readFileSync(join(home, '.config', 'opencode', 'agents', 'coder.md'), 'utf8'));
+    assert.ok(
+      coderAgent.includes('repository investigation, implementation, tests, debugging, and self-verification'),
+      'coder template must own repository research, implementation, tests, debugging, and self-verification',
+    );
+    assert.ok(coderAgent.includes('task packet'), 'coder template must be driven by the complete task packet');
+    assert.ok(coderAgent.includes('focused tests'), 'coder template must add/update focused tests on behavior change');
+    assert.ok(coderAgent.includes('Inspect the final diff'), 'coder template must inspect the final diff for accidental edits');
+    assert.ok(coderAgent.includes('unresolved blockers'), 'coder template must report unresolved blockers truthfully');
+    assert.ok(
+      coderAgent.includes('do not push, deploy') || coderAgent.includes('never push') || coderAgent.includes('no push'),
+      'coder template must keep the no-push/no-deploy boundary',
+    );
+    assert.ok(
+      coderAgent.includes('do not commit'),
+      'coder template must unconditionally forbid commit (Triss collects the staged diff itself)',
+    );
+    assert.ok(
+      coderAgent.includes('claim') && coderAgent.includes('ran successfully'),
+      'coder template must not claim checks that did not run',
+    );
+
+    const researcherAgent = flat(readFileSync(join(home, '.config', 'opencode', 'agents', 'researcher.md'), 'utf8'));
+    assert.ok(researcherAgent.includes('research-only'), 'researcher template must be a research-only specialist');
+    assert.ok(
+      researcherAgent.includes('not a mandatory precursor'),
+      'researcher template must clarify it is not a mandatory precursor to coder work',
+    );
+    assert.match(researcherAgent, /edit: deny/, 'researcher keeps edit deny');
+    assert.match(researcherAgent, /bash: deny/, 'researcher keeps bash deny');
+  }),
+);
+
+test(
+  'scaffolded agent templates stay no-clobber: existing coder.md is never overwritten',
+  withTmpHome(async ({ home }) => {
+    const agentsDir = join(home, '.config', 'opencode', 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    const coderAgentPath = join(agentsDir, 'coder.md');
+    writeFileSync(coderAgentPath, '---\ncustom: true\n---\nmy own coder agent\n');
+
+    process.env.ZHIPU_API_KEY = 'zk-existing-key';
+    await runCoderSetup(
+      { scope: 'global' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
+    );
+
+    assert.match(readFileSync(coderAgentPath, 'utf8'), /my own coder agent/);
+  }),
+);
