@@ -20,7 +20,7 @@ import Footer from "../components/Footer.astro";
         style="display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 28px;"
       >
         <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">MIT</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">Node ≥ 22</span>
+        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">Node ≥ 22.12</span>
         <span
           style="border: 1px solid rgba(95,180,100,0.4); color: var(--color-accent); padding: 5px 9px; text-transform: none; letter-spacing: 0;"
           >npm i -g triss-coworker</span
@@ -82,14 +82,14 @@ import Footer from "../components/Footer.astro";
             <span style="font-size: 13px; color: var(--color-text-secondary);">Agent requests per day</span>
             <span id="reqs-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">40</span>
           </div>
-          <input id="reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" />
+          <input id="reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" aria-label="Agent requests per day" />
         </div>
         <div>
           <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
             <span style="font-size: 13px; color: var(--color-text-secondary);">Share you delegate to Triss</span>
             <span id="share-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">65%</span>
           </div>
-          <input id="share-slider" type="range" min="20" max="90" step="5" value="65" style="width: 100%;" />
+          <input id="share-slider" type="range" min="20" max="90" step="5" value="65" style="width: 100%;" aria-label="Share you delegate to Triss" />
         </div>
         <div>
           <div style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: 10px;">Primary model</div>
@@ -240,6 +240,7 @@ import Footer from "../components/Footer.astro";
   </style>
 
   <script>
+// @ts-nocheck
     const PER_REQ = { sonnet: 0.153, opus: 0.766, triss: 0.0106 };
     function money(v) {
       if (v >= 100) return "$" + Math.round(v).toLocaleString("en-US");

@@ -48,7 +48,7 @@ tokens of tracker chatter into its own context. Adding a new provider
 
 ## Requirements
 
-- **Node.js ≥ 22** (LTS). Check with `node --version`.
+- **Node.js ≥ 22.12** (LTS). Check with `node --version`.
   - Don't have it? Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), Homebrew (`brew install node`), or [nodejs.org](https://nodejs.org/).
 - **npm** (ships with Node.js) — used only for the package-manager install path.
   `pnpm` and `yarn` also work.

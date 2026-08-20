@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-const [nodeMajor] = process.versions.node.split('.').map(Number);
-if (nodeMajor < 22) {
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
   process.stderr.write(
-    `triss requires Node.js >= 22 (you are on ${process.versions.node}).\n` +
+    `triss requires Node.js >= 22.12.0 (you are on ${process.versions.node}).\n` +
       `Upgrade via nvm/fnm or https://nodejs.org/.\n`,
   );
   process.exit(1);

@@ -80,7 +80,7 @@
   },
   "homepage": "https://github.com/ayleen/triss-coworker#readme",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "packageManager": "npm@11.6.2",
   "dependencies": {

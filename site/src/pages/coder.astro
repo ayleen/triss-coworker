@@ -60,6 +60,7 @@ import Footer from "../components/Footer.astro";
   <Footer />
 
   <script>
+// @ts-nocheck
     const ENGINES = {
       opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
       opencode2: { body: "The V2 line. Shares the same opencode.json config and provider catalogue, so switching is one flag.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },

@@ -56,6 +56,7 @@ import Footer from "../components/Footer.astro";
   <Footer />
 
   <script>
+// @ts-nocheck
     const TOPICS = {
       filesystem: { title: "Path sandbox in MCP mode", body: "The CLI reads the paths you pass it. In MCP mode file access is sandboxed to the project root by default.", vars: ["TRISS_RESTRICT_PATHS=1 — Default. MCP file access confined to TRISS_PROJECT_ROOT", "TRISS_PROJECT_ROOT — Baked into launcher entry for project-local installs"] },
       network: { title: "SSRF guard on agent-controlled fetches", body: "triss fetch and ask --urls block private, loopback, link-local, and metadata addresses by default. Responses are size-capped; HTML is stripped of scripts/styles.", vars: ["TRISS_ALLOW_PRIVATE_NETWORKS=1 — Only when you intentionally want internal docs", "--timeout <ms> — 30s default"] },

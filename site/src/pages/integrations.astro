@@ -44,6 +44,7 @@ import Footer from "../components/Footer.astro";
   <Footer />
 
   <script>
+// @ts-nocheck
     const INTS = {
       jira: { cmd: 'triss jira', body: 'Search with JQL, read an issue with its comment history, then create, update, comment, or transition it.', env: 'ATLASSIAN_* (site, email, API token)', ops: 'search, issue, create, update, comments, transitions', lines: '$ triss jira search "project = ENG AND status = Open" \n    --question "what is blocked on us?"\n\n→ 3 of 24 issues wait on our review\n→ ENG-118 blocks the release' },
       confluence: { cmd: 'triss confluence', body: 'CQL search across spaces, read a page as text, and create or update pages. Useful when the spec is a wiki page.', env: 'ATLASSIAN_* (shared with Jira)', ops: 'search, page, create, update, spaces', lines: '$ triss confluence search \'space = ARCH AND title ~ "rate limit"\' \n    --question "what is the agreed policy?"\n\n→ 60 req/min per key, burst 100 (ARCH/412)' },

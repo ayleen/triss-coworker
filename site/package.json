@@ -6,7 +6,7 @@
   "description": "Triss project website (Astro + Cloudflare Pages)",
   "packageManager": "npm@11.6.2",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "astro dev",
