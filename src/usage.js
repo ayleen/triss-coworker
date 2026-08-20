@@ -50,18 +50,18 @@ const CODING_PLAN_PRICE = {
   output: 0,
 };
 
-// DeepSeek list prices as of 2026-07-03, USD per token. Override via env
-// if pricing changes or you point Triss at a different provider.
+// DeepSeek pricing as of 2026-08 — https://api-docs.deepseek.com/quick_start/pricing/
+// Peak 01:00–04:00 and 06:00–10:00 UTC, off-peak 50% off. Stored as off-peak; peak is 2×.
 const DEFAULT_PRICES = {
   'deepseek-v4-flash': {
-    input_uncached: 0.14e-6,
-    cache_read: 0.0028e-6,
-    output: 0.28e-6,
+    input_uncached: 0.22e-6,
+    cache_read: 0.007e-6,
+    output: 0.66e-6,
   },
   'deepseek-v4-pro': {
-    input_uncached: 0.435e-6,
-    cache_read: 0.003625e-6,
-    output: 0.87e-6,
+    input_uncached: 0.66e-6,
+    cache_read: 0.022e-6,
+    output: 1.98e-6,
   },
   // Z.AI pay-as-you-go list prices as of 2026-07-26 (docs.z.ai pricing
   // overview), USD per token. Only the models both Z.AI endpoints advertise

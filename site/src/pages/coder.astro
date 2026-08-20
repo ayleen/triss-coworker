@@ -99,6 +99,7 @@ import Footer from "../components/Footer.astro";
         const b = document.createElement("button");
         b.textContent = f.key;
         b.style.cssText = "text-align:left; padding:10px 14px; font-family:var(--font-mono); font-size:12px; cursor:pointer; border:none; border-bottom:1px solid var(--color-border-subtle); background:" + (f.key===field ? "var(--color-bg-raised)" : "transparent") + "; color:" + (f.key===field ? "var(--color-accent)" : "var(--color-text-muted)");
+        b.setAttribute("aria-pressed", String(f.key===field));
         b.addEventListener("click", () => { field=f.key; renderField(); });
         list.appendChild(b);
       });
