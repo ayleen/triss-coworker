@@ -35,6 +35,7 @@ import pc from 'picocolors';
 import {
   captureWorkerShellSnapshot,
   loadEnvFiles,
+  readCoderCredentialMode,
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
@@ -43,7 +44,6 @@ import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleField
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 import {
-  resolveCoderCredentialMode,
   resolveCoderProviderRoute,
   coderRoutesShareTransport,
   buildCoderTransientProviderOverlay,
@@ -1429,11 +1429,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
     // this path and the wizard's postSetup path fail the same way.
+    const credentialMode = opts.credentialMode ?? readCoderCredentialMode({
+      scope,
+      parentEnv: deps.credentialModeParentEnv,
+    });
     await runCoderSetup(
       {
         scope,
         provider,
-        credentialMode: resolveCoderCredentialMode(),
+        credentialMode,
         inheritedModels,
         allowUnsafeBash: opts.allowUnsafeBash,
         allowUnverified: opts.allowUnverified,
@@ -1580,7 +1584,17 @@ function staticOpenCode2Preflight(cwd, credentialMode = 'protected_proxy') {
 }
 
 async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
-  const credentialMode = resolveCoderCredentialMode();
+  // Scope is part of the acknowledgement boundary. Resolve it before the
+  // mode-dependent preflight: a global setup must ignore a project-local raw
+  // acknowledgement, while local/effective setup keeps local-over-global
+  // precedence. The resolver rereads files and uses the immutable parent
+  // snapshot captured by config.js, so long-lived MCP state cannot leak in.
+  let scope = precaptured.scope || resolveScope(opts);
+  if (!scope) scope = await chooseScope('Where to save the coder key and config?');
+  const credentialMode = opts.credentialMode ?? readCoderCredentialMode({
+    scope,
+    parentEnv: deps.credentialModeParentEnv,
+  });
   // The V2 init path owns its complete flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
   //      (plugin + agent gates, shared with the run path).
@@ -1679,8 +1693,6 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   if (provider === 'worker') {
     assertV2WorkerTransportProvenance(workerShellEnv);
   }
-  let scope = resolveScope(opts);
-  if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   const envPath = ensureEnvFile(scope);
   const scopedWorker = provider === 'worker'
     ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
@@ -1800,10 +1812,16 @@ export async function runCoderSetup(input = {}, deps = {}) {
   const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
   // `config wizard coder` enters through this public boundary after writing
   // the selected credential to an env file. Resolve the OpenCode credential
-  // mode only after loadEnvFiles() so a scoped acknowledgement is honored.
+  // mode from a fresh scope-aware snapshot so edits in a long-lived process
+  // and the selected init scope are both honored.
   // Explicit caller intent (notably runOpenCode2Init) remains authoritative.
   const resolvedCredentialMode = input.credentialMode ?? (
-    input.engine === 'crush' ? 'protected_proxy' : resolveCoderCredentialMode()
+    input.engine === 'crush'
+      ? 'protected_proxy'
+      : readCoderCredentialMode({
+          scope: resolvedScope,
+          parentEnv: deps.credentialModeParentEnv,
+        })
   );
   if (input.engine === 'crush') {
     return runCoderSetupUnlocked({
@@ -5503,7 +5521,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
-  const credentialMode = resolveCoderCredentialMode();
+  const credentialMode = readCoderCredentialMode({
+    scope: 'effective',
+    parentEnv: deps.credentialModeParentEnv,
+  });
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
@@ -5815,7 +5836,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // readable, the run fails closed BEFORE spawn unless the operator has
   // explicitly acknowledged the best-effort scope via
   // TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.
-  if (!deps.allowBestEffortIsolation && process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION !== '1') {
+  if (!deps.allowBestEffortIsolation && credentialMode !== 'best_effort_raw') {
     const readableStores = [];
     for (const storePath of [
       join(projectRoot(), '.triss.env'),
@@ -5824,12 +5845,19 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     ]) {
       try {
         const { vars } = readEnvFile(storePath);
-        // Fail-closed policy: ANY non-empty variable assignment in a .triss.env
-        // store is treated as potential credential material that makes the
-        // raw store a leak channel for same-UID child processes.
+        // Fail-closed policy: any non-empty variable assignment in a
+        // .triss.env store is treated as potential credential material that
+        // makes the raw store a leak channel for same-UID child processes.
+        // The credential-mode acknowledgement itself is a non-secret control
+        // value, so literal 0/other protected values must not make a clean
+        // store look credential-bearing during a raw -> protected transition.
         // Empty stores (0-byte files, comments-only, blank values) contain no
         // keys and are safely ignored.
-        const hasEntries = Object.entries(vars).some(([_, v]) => typeof v === 'string' && v.trim().length > 0);
+        const hasEntries = Object.entries(vars).some(([key, value]) =>
+          key !== 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION' &&
+          typeof value === 'string' &&
+          value.trim().length > 0,
+        );
         if (hasEntries) {
           readableStores.push(storePath);
         }

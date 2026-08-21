@@ -177,6 +177,9 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('do the thing', {}, {
         disableCredentialProxy: true,
+        credentialModeParentEnv: {
+          TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+        },
         spawn: rec.spawnFn,
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -386,6 +389,9 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('x', {}, {
         disableCredentialProxy: true,
+        credentialModeParentEnv: {
+          TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+        },
         spawn: rec.spawnFn,
         // version probe fails -> engineVersion falls back to the pin string
         spawnSync: () => ({ status: 1, stdout: '', error: null }),

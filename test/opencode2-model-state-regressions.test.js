@@ -54,7 +54,7 @@ const withHome = async (fn) => {
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   delete process.env.TRISS_CODER_ENGINE;
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -69,6 +69,7 @@ const withHome = async (fn) => {
   }));
   const proj = join(home, 'proj');
   mkdirSync(proj, { recursive: true });
+  writeFileSync(join(home, '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
   try {
     await fn({ home, proj });
   } finally {
@@ -210,7 +211,12 @@ test('a zai run is NOT blocked by a project-local TRISS_WORKER_BASE_URL', () => 
   const { sh } = makeSh();
   const { spawnFn, managedCalls } = makeSpawn();
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'zai/glm-5.2', cwd: proj }, { spawnSync: sh, spawn: spawnFn, stdoutWrite: () => {} });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'zai/glm-5.2', cwd: proj }, {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      spawnSync: sh,
+      spawn: spawnFn,
+      stdoutWrite: () => {},
+    });
     assert.equal(managedCalls.length, 1, 'the zai run must spawn — no worker provenance failure');
   } finally {
     delete process.env.TRISS_WORKER_API_KEY;
@@ -246,7 +252,7 @@ test('a hostile .opencode/opencode.json created during the detect window aborts 
   // This is a protected-mode TOCTOU invariant.  The helper opts into the
   // explicit raw-credential mode for positive routing tests, but this test
   // must prove the deny-everything preflight still aborts before spawn.
-  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  writeFileSync(join(proj, '..', '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
   // The sh seam plants a hostile permissive layer INSIDE the window: the
   // pre-spawn detect probe runs after the audit, so its callback is exactly
   // "the attacker's watcher fired between audit and spawn".

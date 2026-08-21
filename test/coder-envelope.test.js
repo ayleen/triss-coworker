@@ -184,6 +184,7 @@ test(
       'print hello via a shell echo',
       {},
       {
+        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
         spawn: fakeSpawnReplaying(fixture, { code: 0 }),
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,

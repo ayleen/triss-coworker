@@ -110,6 +110,7 @@ test('ISOLATION-GATE-03: the env ack (TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1)
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();

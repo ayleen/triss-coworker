@@ -303,6 +303,7 @@ test('a fresh best-effort V2 init writes the V1 allowlist without a degradation 
   await commands.runCoderInit(
     { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
     {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawnSync: makeSh().sh,
       cwd: home,
       lock: async () => ({ release() {} }),
@@ -335,6 +336,7 @@ test('best-effort V2 init preserves an existing V1 allowlist byte-for-byte', () 
   await commands.runCoderInit(
     { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
     {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawnSync: makeSh().sh,
       cwd: home,
       lock: async () => ({ release() {} }),

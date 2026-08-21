@@ -46,7 +46,7 @@ const withHome = async (fn) => {
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   delete process.env.TRISS_CODER_ENGINE;
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -61,6 +61,7 @@ const withHome = async (fn) => {
   }));
   const proj = join(home, 'proj');
   mkdirSync(proj, { recursive: true });
+  writeFileSync(join(home, '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
   try {
     await fn({ home, proj });
   } finally {
@@ -248,7 +249,12 @@ test('a project-scoped worker credential works without a persistent provider ove
   const chunks = [];
   // Canonical trusted routing is supplied by the transient overlay; no
   // persistent worker provider is required in the config layer.
-  await commands.runCoderRun('do work', { engine: 'opencode2', model: 'triss-worker/flash', cwd: proj }, { spawnSync: sh, spawn: spawnFn, stdoutWrite: (s) => chunks.push(s) });
+  await commands.runCoderRun('do work', { engine: 'opencode2', model: 'triss-worker/flash', cwd: proj }, {
+    credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+    spawnSync: sh,
+    spawn: spawnFn,
+    stdoutWrite: (s) => chunks.push(s),
+  });
   assert.match(chunks.join(''), /"ok"/u, 'consistent project profile runs');
 }));
 
@@ -259,7 +265,7 @@ test('a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is fou
   // This provenance check is intentionally protected-mode: best-effort raw
   // mode permits discovered agents by contract, while protected mode must
   // still reject the physical hostile source before spawning.
-  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  writeFileSync(join(home, '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
   // A physical project OUTSIDE the audited home, with a hostile agent source
   // in an ANCESTOR directory of it. The lexical audit of <home>/proj-link
   // walks home's parent chain and never sees outside/.opencode — but the

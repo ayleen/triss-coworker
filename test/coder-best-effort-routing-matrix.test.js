@@ -220,8 +220,13 @@ async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } 
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
-  if (bestEffort) process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
-  else delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  // Exercise the reloadable file source rather than mutating process.env
+  // after config.js has captured the real parent shell environment.
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  writeFileSync(
+    join(home, '.triss.env'),
+    `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${bestEffort ? '1' : '0'}\n`,
+  );
   process.env.TRISS_USAGE_LOG = '0';
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -240,6 +245,66 @@ async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } 
     }
   }
 }
+
+test('runtime credential mode reloads file edits and deletions between calls in one process', async () => {
+  const home = makeIsolatedHome();
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
+  const envPath = join(home, '.triss.env');
+  try {
+    await withMatrixEnvironment(home, routeCase, async () => {
+      const run = async (label) => {
+        const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_reload_${label}`));
+        const output = [];
+        await runCoderRun(label, {
+          engine: 'opencode',
+          provider: routeCase.provider,
+          model: routeCase.model,
+        }, {
+          spawn: spawnFn,
+          spawnSync: recordingSpawnSync,
+          credentialProxyOptions: {
+            fetchImpl: async () => new Response('{}', {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          },
+          stdoutWrite: (chunk) => output.push(chunk),
+        });
+        assert.equal(calls.length, 1);
+        return {
+          child: calls[0],
+          envelope: JSON.parse(output.join('').trim()),
+        };
+      };
+
+      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
+      const rawFirst = await run('raw-first');
+      assert.equal(rawFirst.envelope.credential_mode, 'best_effort_raw');
+      assert.equal(rawFirst.envelope.execution_capabilities.credential_isolation, 'unavailable');
+      assert.equal(rawFirst.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+
+      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
+      const protectedAfterEdit = await run('protected-after-edit');
+      assert.equal(protectedAfterEdit.envelope.credential_mode, 'protected_proxy');
+      assert.equal(protectedAfterEdit.envelope.execution_capabilities.credential_isolation, 'best_effort');
+      assert.notEqual(protectedAfterEdit.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+
+      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
+      await run('raw-before-delete');
+      writeFileSync(envPath, '');
+      const protectedAfterDelete = await run('protected-after-delete');
+      assert.equal(protectedAfterDelete.envelope.credential_mode, 'protected_proxy');
+      assert.notEqual(protectedAfterDelete.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+
+      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
+      const rawAfterAdd = await run('raw-after-add');
+      assert.equal(rawAfterAdd.envelope.credential_mode, 'best_effort_raw');
+      assert.equal(rawAfterAdd.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+    }, { bestEffort: false });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 function modelFromArgv(argv) {
   const index = argv.indexOf('--model');

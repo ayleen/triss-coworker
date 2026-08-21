@@ -1739,6 +1739,9 @@ test(
         {
           spawnSync: fakeSpawnAlreadyInstalled,
           fetch: fakeZenCatalogue(['north-mini-code-free']),
+          credentialModeParentEnv: {
+            TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+          },
         },
       );
       const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));

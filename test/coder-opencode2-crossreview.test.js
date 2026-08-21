@@ -206,6 +206,11 @@ test('X1 negative: global-file key + project key AND URL stays consistent (proje
   const { threw, managedCalls } = await runExpect(commands, {
     proj,
     model: 'triss-worker/flash',
+    deps: {
+      credentialModeParentEnv: {
+        TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      },
+    },
     cfg: {
       permission: { bash: { '*': 'deny' } },
     },

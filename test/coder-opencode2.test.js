@@ -877,6 +877,7 @@ test(
       const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
       const capture = stdoutCapture();
       await runCoderRun('x', { engine: 'opencode2' }, {
+        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
         spawn: rec.spawnFn,
         spawnSync: pinSh(),
         disableCredentialProxy: true,
