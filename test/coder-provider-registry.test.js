@@ -35,6 +35,8 @@ test('canonical registry covers every advertised provider prefix and transport',
     assert.equal(entry.protocol, protocol);
   }
   assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['muse-spark-1.2-contributor'].protocol, 'openai_responses');
+  assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['grok-4.5'].protocol, 'openai_responses');
+  assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['grok-4.5'].package, '@ai-sdk/openai');
 });
 
 test('canonical resolver derives endpoint, transport, and credential for every prefix', () => {
@@ -48,6 +50,7 @@ test('canonical resolver derives endpoint, transport, and credential for every p
     ['moonshotai-cn/kimi-k2.7-code', 'MOONSHOT_API_KEY', 'https://api.moonshot.cn', '/v1', 'openai_chat'],
     ['kimi-for-coding/k3', 'KIMI_API_KEY', 'https://api.kimi.com', '/coding/v1', 'anthropic_messages'],
     ['opencode-go/muse-spark-1.2-contributor', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_responses'],
+    ['opencode-go/grok-4.5', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_responses'],
   ];
   for (const [model, credentialEnv, endpoint, pathPrefix, protocol] of cases) {
     const route = resolveCoderProviderRoute(model);

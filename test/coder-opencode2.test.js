@@ -812,6 +812,91 @@ test(
 );
 
 test(
+  'runCoderRun --engine opencode2: unaudited small transport is ignored for explicit and persisted roles',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-go-v2-unaudited-small',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      for (const [label, opts, expectedRequested] of [
+        [
+          'explicit',
+          {
+            engine: 'opencode2',
+            provider: 'opencode-go',
+            model: 'opencode-go/deepseek-v4-flash',
+            smallModel: 'opencode-go/newly-published-model',
+          },
+          'opencode-go/newly-published-model',
+        ],
+        [
+          'persisted',
+          { engine: 'opencode2' },
+          null,
+        ],
+      ]) {
+        if (label === 'persisted') {
+          process.env.TRISS_CODER_MODEL = 'opencode-go/deepseek-v4-flash';
+          process.env.TRISS_CODER_SMALL_MODEL = 'opencode-go/newly-published-model';
+        }
+        const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
+        const capture = stdoutCapture();
+        await runCoderRun('x', opts, {
+          spawn: rec.spawnFn,
+          spawnSync: pinSh(),
+          disableCredentialProxy: true,
+          stdoutWrite: capture.stdoutWrite,
+        });
+        assert.equal(rec.calls.length, 1);
+        const config = JSON.parse(rec.calls[0].options.env.OPENCODE_CONFIG_CONTENT);
+        assert.equal(config.model, 'triss-coder-transient/deepseek-v4-flash', label);
+        assert.equal(config.small_model, undefined, label);
+        assert.equal(config.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible', label);
+        const envelope = JSON.parse(capture.text().trim());
+        assert.equal(envelope.small_model.used, false, label);
+        assert.equal(envelope.small_model.requested, expectedRequested, label);
+        delete process.env.TRISS_CODER_MODEL;
+        delete process.env.TRISS_CODER_SMALL_MODEL;
+      }
+    },
+  ),
+);
+
+test(
+  'runCoderRun --engine opencode2 best_effort_raw: unknown main keeps the unused small role out of built-in audit',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-go-v2-raw-unknown-main',
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      TRISS_CODER_MODEL: 'opencode-go/unknown-main-model',
+      TRISS_CODER_SMALL_MODEL: 'opencode-go/hostile-small-model',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
+      const capture = stdoutCapture();
+      await runCoderRun('x', { engine: 'opencode2' }, {
+        spawn: rec.spawnFn,
+        spawnSync: pinSh(),
+        disableCredentialProxy: true,
+        stdoutWrite: capture.stdoutWrite,
+      });
+      assert.equal(rec.calls.length, 1);
+      assert.equal(rec.calls[0].options.env.OPENCODE_CONFIG_CONTENT, undefined);
+      assert.equal(rec.calls[0].argv[rec.calls[0].argv.indexOf('--model') + 1], 'opencode-go/unknown-main-model');
+      const envelope = JSON.parse(capture.text().trim());
+      assert.deepEqual(envelope.small_model, {
+        // Persisted small_model is intentionally not surfaced as a requested
+        // V2 role: only an explicit --small-model is validated and reported.
+        requested: null,
+        used: false,
+      });
+    },
+  ),
+);
+
+test(
   'runCoderRun --engine opencode2: protected envelope identity is honest for worker and Go Responses routes',
   withEnv(
     {

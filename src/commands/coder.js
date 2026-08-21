@@ -2480,14 +2480,18 @@ function auditProtectedRouteConfiguration({ model, route, smallModel, smallRoute
   });
 }
 
-function auditBuiltInOpenCodeRouteConfiguration({ model, cwd, configRoot }) {
+function auditBuiltInOpenCodeRouteConfiguration({ model, smallModel, cwd, configRoot }) {
   // Raw mode may use OpenCode's own provider metadata, but persistent config
-  // must not redefine that provider and redirect the selected raw key.
-  auditOneShotProviderConfiguration(model, {
-    cwd,
-    projectRoot: configRoot,
-    requireAllowedProvider: false,
-  });
+  // must not redefine either actually-used provider and redirect the selected
+  // raw key. V1 can use both roles; audit both even for persisted (non-one-shot)
+  // configuration.
+  for (const selectedModel of [...new Set([model, smallModel].filter(Boolean))]) {
+    auditOneShotProviderConfiguration(selectedModel, {
+      cwd,
+      projectRoot: configRoot,
+      requireAllowedProvider: false,
+    });
+  }
 }
 
 // Credential exposure boundary: the V1 template's bash allowlist
@@ -5515,8 +5519,22 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const rawBuiltInRoute = credentialMode === 'best_effort_raw' &&
     ['opencode-zen', 'opencode-go'].includes(routeCandidate?.provider) &&
     (!routeCandidate.transportAudited || (
-      engine === 'opencode' && oneShotProvider && !smallRouteCandidate.transportAudited
+      engine === 'opencode' &&
+      ['opencode-zen', 'opencode-go'].includes(smallRouteCandidate?.provider) &&
+      !smallRouteCandidate.transportAudited
     ));
+  if (
+    rawBuiltInRoute &&
+    engine === 'opencode' &&
+    !oneShotProvider &&
+    smallRouteCandidate?.provider !== routeCandidate?.provider
+  ) {
+    // A persisted cross-provider small pin cannot be represented by the
+    // built-in OpenCode provider selected for the raw main credential. Keep
+    // the historical non-one-shot main-provider semantics instead of asking
+    // the child to use a model whose credential is not present.
+    smallModelUsed = modelUsed;
+  }
   const canonicalOpenCodeRouting = engine !== 'crush' && (
     protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
   );
@@ -5645,10 +5663,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   // Model identifiers are the only transient config values. Credentials stay
   // in their dedicated env var and must never be embedded in this JSON overlay.
-  const oneShotConfigContent = !protectedRouting && oneShotProvider
+  const rawBuiltInV1Config = engine === 'opencode' && rawBuiltInRoute;
+  const oneShotConfigContent = !protectedRouting && (oneShotProvider || rawBuiltInV1Config)
     ? JSON.stringify({
       model: modelUsed,
-      ...(engine === 'opencode2' ? {} : { small_model: oneShotSmallModel }),
+      ...(engine === 'opencode2'
+        ? {}
+        : { small_model: rawBuiltInV1Config ? smallModelUsed : oneShotSmallModel }),
     })
     : null;
 
@@ -5717,6 +5738,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     try {
       auditBuiltInOpenCodeRouteConfiguration({
         model: modelUsed,
+        // OpenCode 2 validates --small-model for identity only; it never
+        // routes or audits that unused role as part of the built-in fallback.
+        smallModel: engine === 'opencode' ? smallModelUsed : undefined,
         cwd: runtimeDir,
         configRoot: opencodeProjectBoundary(runtimeDir),
       });

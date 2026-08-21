@@ -445,6 +445,82 @@ test('best_effort_raw unknown Zen/Go models use built-in metadata on both engine
   }
 });
 
+test('best_effort_raw V1 chooses built-in metadata when either persisted role is unaudited', async (t) => {
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
+  const cases = [
+    {
+      name: 'audited main plus unaudited small',
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'opencode-go/newly-published-model',
+      builtIn: true,
+    },
+    {
+      name: 'unaudited Go main plus persisted Moonshot small',
+      main: 'opencode-go/newly-published-model',
+      small: 'moonshotai/kimi-k2.7-code',
+      builtIn: true,
+      normalizedSmall: true,
+    },
+    {
+      name: 'unaudited main plus audited small',
+      main: 'opencode-go/newly-published-model',
+      small: 'opencode-go/deepseek-v4-flash',
+      builtIn: true,
+    },
+    {
+      name: 'both audited',
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'opencode-go/muse-spark-1.2-contributor',
+      builtIn: false,
+    },
+  ];
+  for (const row of cases) {
+    await t.test(row.name, async () => {
+      const home = makeIsolatedHome();
+      try {
+        await withMatrixEnvironment(home, routeCase, async () => {
+          process.env.TRISS_CODER_MODEL = row.main;
+          process.env.TRISS_CODER_SMALL_MODEL = row.small;
+          const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_raw_small_${row.name}`));
+          await runCoderRun('raw persisted pair', {
+            engine: 'opencode',
+          }, {
+            spawn: spawnFn,
+            spawnSync: recordingSpawnSync,
+            // Deliberately unusable proxy options: a raw built-in route must
+            // never attempt to start the credential proxy.
+            credentialProxyOptions: { host: '256.256.256.256', port: -1 },
+            stdoutWrite: () => {},
+          });
+          assert.equal(calls.length, 1);
+          const child = calls[0];
+          const childModel = modelFromArgv(child.argv);
+          if (row.builtIn) {
+            assert.equal(childModel, row.main);
+            const config = JSON.parse(child.options.env.OPENCODE_CONFIG_CONTENT);
+            assert.deepEqual(config, {
+              model: row.main,
+              small_model: row.normalizedSmall ? row.main : row.small,
+            });
+            assert.equal(config.provider, undefined);
+            if (row.normalizedSmall) {
+              assert.equal(child.options.env.MOONSHOT_API_KEY, undefined);
+            }
+          } else {
+            assert.equal(childModel, `${CODER_TRANSIENT_PROVIDER_ALIAS}/${row.main.split('/')[1]}`);
+            const config = JSON.parse(child.options.env.OPENCODE_CONFIG_CONTENT);
+            assert.ok(config.provider[CODER_TRANSIENT_PROVIDER_ALIAS]);
+            assert.ok(config.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`]);
+          }
+          assert.equal(child.options.env.OPENCODE_API_KEY, routeCase.credential);
+        });
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test('protected unknown Zen/Go models fail before spawn on both engines', async (t) => {
   for (const engine of ['opencode', 'opencode2']) {
     for (const kind of ['opencode-zen', 'opencode-go']) {
@@ -558,6 +634,74 @@ test('protected V1 distinct transports use two scoped loopback routes and one pr
     }
     await assert.rejects(fetch(`${mainBaseURL}/chat/completions`));
     await assert.rejects(fetch(`${smallBaseURL}/responses`));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('protected Go grok-4.5 reaches the exact Responses loopback/upstream path', async () => {
+  const home = makeIsolatedHome();
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
+  const upstreamCalls = [];
+  let loopbackError = null;
+  try {
+    await withMatrixEnvironment(home, routeCase, async () => {
+      const spawnFn = (_cmd, _argv, options) => {
+        const child = new EventEmitter();
+        child.pid = 789004;
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(async () => {
+          try {
+            const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+            const provider = config.provider[CODER_TRANSIENT_PROVIDER_ALIAS];
+            assert.equal(provider.npm, '@ai-sdk/openai');
+            const response = await fetch(`${provider.options.baseURL}/responses`, {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${options.env.OPENCODE_API_KEY}`,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({ model: 'grok-4.5', input: 'x' }),
+            });
+            assert.equal(response.status, 200);
+            child.stdout.end(SUCCESS_STREAM('ses_grok_responses'));
+            child.stderr.end('');
+            setImmediate(() => child.emit('close', 0, null));
+          } catch (err) {
+            loopbackError = err;
+            child.stdout.end('');
+            child.stderr.end(String(err.stack || err));
+            setImmediate(() => child.emit('close', 1, null));
+          }
+        });
+        return child;
+      };
+      await runCoderRun('protected Go Grok Responses', {
+        engine: 'opencode',
+        provider: 'opencode-go',
+        model: 'opencode-go/grok-4.5',
+        smallModel: 'opencode-go/grok-4.5',
+      }, {
+        spawn: spawnFn,
+        spawnSync: recordingSpawnSync,
+        credentialProxyOptions: {
+          fetchImpl: async (url, init) => {
+            upstreamCalls.push({ url: String(url), body: JSON.parse(init.body) });
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+        },
+        stdoutWrite: () => {},
+      });
+    }, { bestEffort: false });
+    assert.equal(loopbackError, null, loopbackError?.stack);
+    assert.deepEqual(upstreamCalls, [{
+      url: 'https://opencode.ai/zen/go/v1/responses',
+      body: { model: 'grok-4.5', input: 'x' },
+    }]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
