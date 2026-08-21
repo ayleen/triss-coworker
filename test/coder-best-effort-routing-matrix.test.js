@@ -521,7 +521,7 @@ test('best_effort_raw V1 chooses built-in metadata when either persisted role is
   }
 });
 
-test('V1 persisted cross-provider small roles are discarded before runtime route resolution', async (t) => {
+test('V1 persisted cross-scope small roles are discarded before runtime route resolution', async (t) => {
   const cases = [
     {
       name: 'Go main plus worker small',
@@ -544,6 +544,42 @@ test('V1 persisted cross-provider small roles are discarded before runtime route
       small: 'opencode-go/deepseek-v4-flash',
       credentialEnv: 'TRISS_WORKER_API_KEY',
     },
+    {
+      name: 'Z.AI coding-plan main plus PAYG small',
+      routeCase: CASES.find(({ kind }) => kind === 'zai'),
+      main: 'zai-coding-plan/glm-5.2',
+      small: 'zai/glm-5-turbo',
+      credentialEnv: 'ZHIPU_API_KEY',
+    },
+    {
+      name: 'Z.AI PAYG main plus coding-plan small',
+      routeCase: CASES.find(({ kind }) => kind === 'zai'),
+      main: 'zai/glm-5.2',
+      small: 'zai-coding-plan/glm-5-turbo',
+      credentialEnv: 'ZHIPU_API_KEY',
+    },
+    {
+      name: 'Moonshot global main plus China small',
+      routeCase: CASES.find(({ kind }) => kind === 'moonshot'),
+      main: 'moonshotai/kimi-k2.7-code',
+      small: 'moonshotai-cn/kimi-k2.6',
+      credentialEnv: 'MOONSHOT_API_KEY',
+    },
+    {
+      name: 'Moonshot China main plus global small',
+      routeCase: CASES.find(({ kind }) => kind === 'moonshot'),
+      main: 'moonshotai-cn/kimi-k2.7-code',
+      small: 'moonshotai/kimi-k2.6',
+      credentialEnv: 'MOONSHOT_API_KEY',
+    },
+    {
+      name: 'Go models with distinct transports keep both roles',
+      routeCase: CASES.find(({ kind }) => kind === 'opencode-go'),
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'opencode-go/muse-spark-1.2-contributor',
+      credentialEnv: 'OPENCODE_API_KEY',
+      preserveSmall: true,
+    },
   ];
   for (const mode of ['protected', 'best_effort_raw']) {
     for (const row of cases) {
@@ -563,7 +599,13 @@ test('V1 persisted cross-provider small roles are discarded before runtime route
             assert.equal(calls.length, 1);
             const child = calls[0];
             const config = JSON.parse(child.options.env.OPENCODE_CONFIG_CONTENT);
-            assert.equal(config.small_model, config.model);
+            if (row.preserveSmall) {
+              assert.notEqual(config.small_model, config.model);
+              assert.ok(config.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`]);
+            } else {
+              assert.equal(config.small_model, config.model);
+              assert.equal(config.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`], undefined);
+            }
             assert.equal(child.options.env[row.credentialEnv], row.routeCase.credential);
             assert.equal(child.options.env.TRISS_WORKER_API_KEY, row.credentialEnv === 'TRISS_WORKER_API_KEY'
               ? row.routeCase.credential

@@ -1798,8 +1798,20 @@ export async function runCoderSetup(input = {}, deps = {}) {
   loadEnvFiles();
   const resolvedScope = input.scope || 'global';
   const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
+  // `config wizard coder` enters through this public boundary after writing
+  // the selected credential to an env file. Resolve the OpenCode credential
+  // mode only after loadEnvFiles() so a scoped acknowledgement is honored.
+  // Explicit caller intent (notably runOpenCode2Init) remains authoritative.
+  const resolvedCredentialMode = input.credentialMode ?? (
+    input.engine === 'crush' ? 'protected_proxy' : resolveCoderCredentialMode()
+  );
   if (input.engine === 'crush') {
-    return runCoderSetupUnlocked({ ...input, scope: resolvedScope, provider: resolvedProvider }, deps);
+    return runCoderSetupUnlocked({
+      ...input,
+      scope: resolvedScope,
+      provider: resolvedProvider,
+      credentialMode: resolvedCredentialMode,
+    }, deps);
   }
   // Both OpenCode engines share the opencode-v1 configuration backend: the
   // lock key below (config backend 'opencode') and the config surface are
@@ -1811,7 +1823,12 @@ export async function runCoderSetup(input = {}, deps = {}) {
     : acquireCoderMutationLock('opencode', resolvedScope, { isPidAlive: deps.isLockPidAlive });
   try {
     return await runCoderSetupUnlocked(
-      { ...input, scope: resolvedScope, provider: resolvedProvider },
+      {
+        ...input,
+        scope: resolvedScope,
+        provider: resolvedProvider,
+        credentialMode: resolvedCredentialMode,
+      },
       deps,
     );
   } finally {
@@ -5534,19 +5551,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // and raw modes alike; other providers retain their existing overlay path.
   let smallModelUsed = oneShotSmallModel || coderSmallModel();
   // Classify both persisted roles before resolving runtime metadata. A stale
-  // cross-provider small pin is not a real role for a non-one-shot run; map it
-  // to the main model before a worker profile/credential can be loaded for it.
+  // cross-provider or cross-prefix small pin is not a real role for a
+  // non-one-shot run; map it to the main model before a worker profile or a
+  // second credential scope can be loaded for it. Distinct transports within
+  // one prefix (for example two opencode-go models) remain supported.
   const mainProviderRoute = engine !== 'crush'
     ? resolveCoderProviderRoute(modelUsed)
     : null;
   const smallProviderRoute = engine !== 'crush' && engine !== 'opencode2'
     ? resolveCoderProviderRoute(smallModelUsed)
     : mainProviderRoute;
-  if (
-    engine === 'opencode' &&
-    !oneShotProvider &&
-    mainProviderRoute?.provider !== smallProviderRoute?.provider
-  ) {
+  const sameProviderScope =
+    (!mainProviderRoute && !smallProviderRoute) ||
+    (
+      mainProviderRoute?.provider === smallProviderRoute?.provider &&
+      mainProviderRoute?.prefix === smallProviderRoute?.prefix
+    );
+  if (engine === 'opencode' && !oneShotProvider && !sameProviderScope) {
     smallModelUsed = modelUsed;
   }
   const workerSettings = cred.provider === 'worker'
