@@ -64,6 +64,17 @@ test('canonical resolver derives endpoint, transport, and credential for every p
   assert.equal(resolveCoderProviderRoute('zai/too/many/slashes'), null);
 });
 
+test('secure Zen offline fallback candidates are all transport-audited', () => {
+  for (const model of [
+    'opencode/deepseek-v4-flash-free',
+    'opencode/nemotron-3-ultra-free',
+    'opencode/mimo-v2.5-free',
+  ]) {
+    assert.equal(resolveCoderProviderRoute(model).transportAudited, true, model);
+  }
+  assert.equal(resolveCoderProviderRoute('opencode/north-mini-code-free').transportAudited, false);
+});
+
 test('Zen and Go transport metadata is model-specific and fail-closed', () => {
   const cases = [
     ['opencode/deepseek-v4-flash-free', 'openai_chat', '@ai-sdk/openai-compatible'],

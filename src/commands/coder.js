@@ -272,6 +272,8 @@ const ZEN_MAIN_PRIORITY = [
   'mimo-v2.5-free',
 ];
 const ZEN_SMALL_PRIORITY = ['deepseek-v4-flash-free', 'north-mini-code-free', 'mimo-v2.5-free'];
+const isAuditedZenModel = (modelId) =>
+  resolveCoderProviderRoute(`opencode/${modelId}`)?.transportAudited === true;
 const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
 const ZEN_MODELS_TIMEOUT_MS = 10_000;
 
@@ -431,12 +433,13 @@ function resolveGoCatalogue(outcome, { allowUnverified = false, scope = 'global'
 // Resolves a Zen catalogue { available, mainDefault, smallDefault, choices }
 // from the live model set (or the static fallback). Carries `available` (the
 // verified Set, or null when unverified) so the caller can reject a stale
-// preset/existing model the catalogue no longer lists. Warns clearly when
-// availability could not be verified. When the catalogue IS verified but lists
-// none of triss's known free models, mainDefault/smallDefault come back
-// undefined — the caller then blocks (or honors an in-catalogue preset) rather
-// than pinning a model the catalogue just said is gone.
-function resolveZenCatalogue(available) {
+// preset/existing model the catalogue no longer lists. Secure mode also keeps
+// unaudited transport ids out of choices/defaults even when the live catalogue
+// lists them; best-effort raw mode deliberately retains those explicit ids.
+// When the catalogue IS verified but lists none of the audited free models,
+// defaults come back undefined and secure init blocks rather than persisting a
+// model that protected routing cannot serve.
+function resolveZenCatalogue(available, { allowUnaudited = false } = {}) {
   if (!available) {
     process.stderr.write(
       pc.yellow(
@@ -445,20 +448,25 @@ function resolveZenCatalogue(available) {
           'set TRISS_CODER_MODEL to a model listed at https://opencode.ai/docs/zen/.\n',
       ),
     );
+    const allowed = (modelId) => allowUnaudited || isAuditedZenModel(modelId);
+    const fallbackChoices = ZEN_MODEL_CHOICES.filter(({ value }) => allowed(value));
+    const fallbackMainPriority = ZEN_MAIN_PRIORITY.filter(allowed);
+    const fallbackSmallPriority = ZEN_SMALL_PRIORITY.filter(allowed);
     return {
       available: null,
-      choices: ZEN_MODEL_CHOICES,
-      mainDefault: ZEN_MAIN_PRIORITY[0],
-      smallDefault: ZEN_SMALL_PRIORITY[0],
+      choices: fallbackChoices,
+      mainDefault: fallbackMainPriority[0],
+      smallDefault: fallbackSmallPriority[0] || fallbackMainPriority[0],
     };
   }
   const firstAvailable = (priority) => priority.find((id) => available.has(id));
-  const choices = ZEN_MODEL_CHOICES.filter((c) => available.has(c.value));
-  const mainDefault = firstAvailable(ZEN_MAIN_PRIORITY);
+  const allowed = (modelId) => allowUnaudited || isAuditedZenModel(modelId);
+  const choices = ZEN_MODEL_CHOICES.filter((c) => available.has(c.value) && allowed(c.value));
+  const mainDefault = firstAvailable(ZEN_MAIN_PRIORITY.filter(allowed));
   // Any available model can serve as the small/fast one, so if none of the
   // small-priority ids remain but a main model does, reuse it rather than
   // leaving small unresolved (which would falsely trip the "none known" block).
-  const smallDefault = firstAvailable(ZEN_SMALL_PRIORITY) || mainDefault;
+  const smallDefault = firstAvailable(ZEN_SMALL_PRIORITY.filter(allowed)) || mainDefault;
   return { available, choices, mainDefault, smallDefault };
 }
 
@@ -666,13 +674,13 @@ async function resolveInitModels(
   providerInfo,
   deps = {},
   existing = {},
-  { allowUnverified = false, scope = 'global' } = {},
+  { allowUnverified = false, allowUnaudited = false, scope = 'global' } = {},
 ) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
   const openCodeCatalogue =
     providerInfo.kind === 'opencode-zen'
-      ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch))
+      ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch), { allowUnaudited })
       : providerInfo.kind === 'opencode-go'
         ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch), {
             allowUnverified,
@@ -695,6 +703,9 @@ async function resolveInitModels(
       : null;
   const providerVerifiedAbsent = (m) => {
     if (!m) return false;
+    if (providerInfo.kind === 'opencode-zen' && !allowUnaudited && !isAuditedZenModel(providerModelId(m))) {
+      return true;
+    }
     if (providerInfo.kind === 'worker') {
       const profile = providerInfo.workerProfile || workerCoderProfile();
       return !profile.models.includes(providerModelId(m));
@@ -713,12 +724,12 @@ async function resolveInitModels(
     if (preset) {
       if (modelMatchesKind(preset, providerInfo.kind)) {
         if (providerVerifiedAbsent(preset)) {
-          // A stale Zen pin the catalogue no longer lists: don't honor it —
-          // fall through to an available model instead of pinning a dead id.
+          // A stale or unaudited secure Zen pin is never persisted; fall
+          // through to an available audited model instead.
           process.stderr.write(
             pc.yellow(
-              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} ` +
-                `${providerInfo.kind === 'worker' ? 'model settings' : 'catalogue'}; ` +
+              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} catalogue or lacks ` +
+                `secure/audited transport metadata; ` +
                 'selecting an available model instead.\n',
             ),
           );
@@ -806,6 +817,17 @@ async function resolveInitModels(
     model,
     smallPrefix,
   );
+  if (!allowUnaudited && providerInfo.kind === 'opencode-zen') {
+    for (const [label, selected] of [['main', model], ['small', smallModel]]) {
+      if (!isAuditedZenModel(providerModelId(selected))) {
+        throw new Error(
+          `Coder setup incomplete: secure OpenCode Zen ${label} model "${selected}" lacks audited transport metadata; ` +
+          'use a transport-audited model or explicitly acknowledge best-effort raw mode with ' +
+          'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.',
+        );
+      }
+    }
+  }
   // A preset/existing model with a prefix triss doesn't recognize is routed to
   // ZHIPU_API_KEY by default (coderModelCredential) and can never be served —
   // opencode retries it forever. Warn rather than silently pin it.
@@ -1411,6 +1433,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
       {
         scope,
         provider,
+        credentialMode: resolveCoderCredentialMode(),
         inheritedModels,
         allowUnsafeBash: opts.allowUnsafeBash,
         allowUnverified: opts.allowUnverified,
@@ -1922,7 +1945,11 @@ async function runCoderSetupUnlocked(
     providerInfo,
     deps,
     existing,
-    { allowUnverified, scope: resolvedScope },
+    {
+      allowUnverified,
+      allowUnaudited: credentialMode === 'best_effort_raw',
+      scope: resolvedScope,
+    },
   );
   const projectCfg = opencodeConfigPath('local');
   let projectWorkerAudit = null;
@@ -5500,16 +5527,32 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // and runs its GLM atoms, so only the explicit override is a real mistake.)
 
   const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
-  const workerSettings = cred.provider === 'worker'
-    ? readWorkerConfigSnapshot({ scope: 'effective', parentEnv: workerShellEnv })
-    : null;
-  const credentialValue = workerSettings ? workerSettings.apiKey : process.env[cred.env];
   const protectedRouting = engine !== 'crush' && credentialMode === 'protected_proxy';
   // Raw Zen/Go models without an audited Triss transport intentionally use
   // OpenCode's built-in provider metadata. Known audited models still use the
   // transient overlay so their protocol/package can be pinned in protected
   // and raw modes alike; other providers retain their existing overlay path.
   let smallModelUsed = oneShotSmallModel || coderSmallModel();
+  // Classify both persisted roles before resolving runtime metadata. A stale
+  // cross-provider small pin is not a real role for a non-one-shot run; map it
+  // to the main model before a worker profile/credential can be loaded for it.
+  const mainProviderRoute = engine !== 'crush'
+    ? resolveCoderProviderRoute(modelUsed)
+    : null;
+  const smallProviderRoute = engine !== 'crush' && engine !== 'opencode2'
+    ? resolveCoderProviderRoute(smallModelUsed)
+    : mainProviderRoute;
+  if (
+    engine === 'opencode' &&
+    !oneShotProvider &&
+    mainProviderRoute?.provider !== smallProviderRoute?.provider
+  ) {
+    smallModelUsed = modelUsed;
+  }
+  const workerSettings = cred.provider === 'worker'
+    ? readWorkerConfigSnapshot({ scope: 'effective', parentEnv: workerShellEnv })
+    : null;
+  const credentialValue = workerSettings ? workerSettings.apiKey : process.env[cred.env];
   const routeCandidate = engine !== 'crush'
     ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: false })
     : null;
@@ -5523,18 +5566,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ['opencode-zen', 'opencode-go'].includes(smallRouteCandidate?.provider) &&
       !smallRouteCandidate.transportAudited
     ));
-  if (
-    rawBuiltInRoute &&
-    engine === 'opencode' &&
-    !oneShotProvider &&
-    smallRouteCandidate?.provider !== routeCandidate?.provider
-  ) {
-    // A persisted cross-provider small pin cannot be represented by the
-    // built-in OpenCode provider selected for the raw main credential. Keep
-    // the historical non-one-shot main-provider semantics instead of asking
-    // the child to use a model whose credential is not present.
-    smallModelUsed = modelUsed;
-  }
   const canonicalOpenCodeRouting = engine !== 'crush' && (
     protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
   );

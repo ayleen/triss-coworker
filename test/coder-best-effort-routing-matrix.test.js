@@ -521,6 +521,65 @@ test('best_effort_raw V1 chooses built-in metadata when either persisted role is
   }
 });
 
+test('V1 persisted cross-provider small roles are discarded before runtime route resolution', async (t) => {
+  const cases = [
+    {
+      name: 'Go main plus worker small',
+      routeCase: CASES.find(({ kind }) => kind === 'opencode-go'),
+      main: 'opencode-go/deepseek-v4-flash',
+      small: 'triss-worker/deepseek-v4-flash',
+      credentialEnv: 'OPENCODE_API_KEY',
+    },
+    {
+      name: 'Z.AI main plus worker small',
+      routeCase: CASES.find(({ kind }) => kind === 'zai'),
+      main: 'zai-coding-plan/glm-5.2',
+      small: 'triss-worker/deepseek-v4-flash',
+      credentialEnv: 'ZHIPU_API_KEY',
+    },
+    {
+      name: 'worker main plus Go small',
+      routeCase: CASES.find(({ kind }) => kind === 'worker'),
+      main: 'triss-worker/deepseek-v4-flash',
+      small: 'opencode-go/deepseek-v4-flash',
+      credentialEnv: 'TRISS_WORKER_API_KEY',
+    },
+  ];
+  for (const mode of ['protected', 'best_effort_raw']) {
+    for (const row of cases) {
+      await t.test(`${mode}: ${row.name}`, async () => {
+        const home = makeIsolatedHome();
+        try {
+          await withMatrixEnvironment(home, row.routeCase, async () => {
+            process.env.TRISS_CODER_MODEL = row.main;
+            process.env.TRISS_CODER_SMALL_MODEL = row.small;
+            const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_stale_${mode}_${row.name}`));
+            await runCoderRun('stale cross-provider small', { engine: 'opencode' }, {
+              spawn: spawnFn,
+              spawnSync: recordingSpawnSync,
+              disableCredentialProxy: mode === 'protected',
+              stdoutWrite: () => {},
+            });
+            assert.equal(calls.length, 1);
+            const child = calls[0];
+            const config = JSON.parse(child.options.env.OPENCODE_CONFIG_CONTENT);
+            assert.equal(config.small_model, config.model);
+            assert.equal(child.options.env[row.credentialEnv], row.routeCase.credential);
+            assert.equal(child.options.env.TRISS_WORKER_API_KEY, row.credentialEnv === 'TRISS_WORKER_API_KEY'
+              ? row.routeCase.credential
+              : undefined);
+            if (row.credentialEnv !== 'TRISS_WORKER_API_KEY') {
+              assert.equal(child.options.env.TRISS_WORKER_API_KEY, undefined);
+            }
+          }, { bestEffort: mode === 'best_effort_raw' });
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
 test('protected unknown Zen/Go models fail before spawn on both engines', async (t) => {
   for (const engine of ['opencode', 'opencode2']) {
     for (const kind of ['opencode-zen', 'opencode-go']) {

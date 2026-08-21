@@ -10,6 +10,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import {
   mkdtempSync,
   mkdirSync,
@@ -27,8 +29,10 @@ import {
   CODER_MANIFEST,
   OPENCODE_PIN,
   runCoderInit,
+  runCoderRun,
   runCoderSetup,
 } from '../src/commands/coder.js';
+import { resolveCoderProviderRoute } from '../src/coder-providers.js';
 
 test('CLI: coder init --help explains the explicit Go provider requirement and alias', () => {
   const result = spawnSync(
@@ -1637,7 +1641,113 @@ test(
     );
     assert.match(captured.join(''), /could not fetch the OpenCode Zen catalogue .* availability is NOT verified/s);
     const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
-    assert.equal(config.model, 'opencode/deepseek-v4-flash-free'); // static fallback
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free'); // audited static fallback
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(resolveCoderProviderRoute(config.model).transportAudited, true);
+    assert.doesNotMatch(config.model, /north-mini-code-free/);
+  }),
+);
+
+test(
+  'offline Zen init fallback remains protected-run compatible',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      { spawnSync: fakeSpawnAlreadyInstalled, fetch: async () => ({ ok: false, status: 500 }) },
+    );
+    const configured = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(resolveCoderProviderRoute(configured.model).transportAudited, true);
+    const calls = [];
+    const spawn = (_cmd, argv, options) => {
+      calls.push({ argv, options });
+      const child = new EventEmitter();
+      child.pid = 781001;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => {
+        child.stdout.end(JSON.stringify({ type: 'text', sessionID: 'ses_offline_zen', part: { text: 'ok' } }) + '\n');
+        child.stderr.end('');
+        setImmediate(() => child.emit('close', 0, null));
+      });
+      return child;
+    };
+    await runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
+      spawn,
+      spawnSync: fakeSpawnAlreadyInstalled,
+      disableCredentialProxy: true,
+      stdoutWrite: () => {},
+    });
+    assert.equal(calls.length, 1);
+    const overlay = JSON.parse(calls[0].options.env.OPENCODE_CONFIG_CONTENT);
+    assert.equal(overlay.model, 'triss-coder-transient/deepseek-v4-flash-free');
+    assert.equal(overlay.small_model, 'triss-coder-transient/deepseek-v4-flash-free');
+  }),
+);
+
+test(
+  'protected Zen init never persists a live-only unaudited model',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    await assert.rejects(
+      () => runCoderInit(
+        { global: true, provider: 'opencode-zen' },
+        {
+          spawnSync: fakeSpawnAlreadyInstalled,
+          fetch: fakeZenCatalogue(['north-mini-code-free']),
+        },
+      ),
+      /none of triss's known free OpenCode Zen models|secure OpenCode Zen/u,
+    );
+    assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
+  }),
+);
+
+test(
+  'protected Zen init replaces an explicit live unaudited preset with an audited fallback',
+  withTmpHome(async ({ home }) => {
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    writeFileSync(
+      join(home, '.config', 'triss', '.env'),
+      'TRISS_CODER_MODEL=opencode/north-mini-code-free\nTRISS_CODER_SMALL_MODEL=opencode/north-mini-code-free\n',
+    );
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeZenCatalogue(['north-mini-code-free', 'deepseek-v4-flash-free']),
+      },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/deepseek-v4-flash-free');
+    assert.equal(config.small_model, 'opencode/deepseek-v4-flash-free');
+    assert.doesNotMatch(JSON.stringify(config), /north-mini-code-free/);
+  }),
+);
+
+test(
+  'best_effort_raw Zen init may persist an explicit live unaudited preset',
+  withTmpHome(async ({ home }) => {
+    const previous = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    process.env.TRISS_CODER_MODEL = 'opencode/north-mini-code-free';
+    process.env.TRISS_CODER_SMALL_MODEL = 'opencode/north-mini-code-free';
+    try {
+      await runCoderInit(
+        { global: true, provider: 'opencode-zen' },
+        {
+          spawnSync: fakeSpawnAlreadyInstalled,
+          fetch: fakeZenCatalogue(['north-mini-code-free']),
+        },
+      );
+      const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+      assert.equal(config.model, 'opencode/north-mini-code-free');
+      assert.equal(config.small_model, 'opencode/north-mini-code-free');
+    } finally {
+      if (previous === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+      else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = previous;
+    }
   }),
 );
 

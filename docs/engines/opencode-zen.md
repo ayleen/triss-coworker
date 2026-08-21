@@ -65,7 +65,8 @@ safety layer.
 The Zen catalogue is **live and authoritative whenever it is reachable**.
 Triss reads `GET https://opencode.ai/zen/v1/models` and treats whatever that
 endpoint returns (authenticated) as the truth; the hardcoded priority list is
-used only as the explicitly unverified offline fallback described below.
+used only as the offline availability fallback described below. Its ids still
+need audited transport metadata before secure init can write them.
 Discover the live catalogue on demand:
 
 ```bash
@@ -106,12 +107,18 @@ configuration are untouched, and GLM stays reachable through either engine (see
 model. The priority list below is an **offline fallback only** — used when the
 catalogue can't be fetched, and always labelled **not verified**:
 
-| Role | Offline priority (first available wins; the live list may differ) |
+| Role | Offline priority (first available wins; transport-audited ids only) |
 |---|---|
-| main | `deepseek-v4-flash-free` → `north-mini-code-free` → `nemotron-3-ultra-free` → `mimo-v2.5-free` |
-| small | `deepseek-v4-flash-free` → `north-mini-code-free` → `mimo-v2.5-free` |
+| main | `deepseek-v4-flash-free` → `nemotron-3-ultra-free` → `mimo-v2.5-free` |
+| small | `deepseek-v4-flash-free` → `mimo-v2.5-free` |
 
-The interactive picker only offers models the live catalogue actually lists.
+The offline path filters this list through Triss's audited transport registry;
+catalogue-only ids such as `north-mini-code-free` are not written by secure
+init when the live catalogue cannot be verified.
+
+The secure interactive picker only offers live catalogue models with audited
+transport metadata. Explicit unaudited ids remain available only through the
+best-effort raw path described above.
 For backward compatibility, Zen init keeps usable ids from a mixed response
 even when unrelated entries are malformed; a response with no usable ids still
 falls back as not verified. OpenCode Go intentionally uses a stricter all-entry
