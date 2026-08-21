@@ -45,6 +45,7 @@ import { positiveIntegerOption, positiveNumberOption } from '../option-validatio
 import {
   resolveCoderCredentialMode,
   resolveCoderProviderRoute,
+  coderRoutesShareTransport,
   buildCoderTransientProviderOverlay,
   CODER_TRANSIENT_PROVIDER_ALIAS,
 } from '../coder-providers.js';
@@ -2373,7 +2374,7 @@ export function coderCredentialEndpoint(credEnv, modelUsed) {
 // whose endpoint is operator-configurable; its snapshot has already been
 // validated by workerCoderProfile, so split that URL into the exact upstream
 // origin and path sent to the parent-owned proxy.
-function resolveRuntimeCoderProviderRoute(model, workerSettings) {
+function resolveRuntimeCoderProviderRoute(model, workerSettings, { requireAudited = true } = {}) {
   let route = resolveCoderProviderRoute(model);
   // Several established V1 paths still pass a bare provider model id (most
   // notably `deepseek-v4-flash`). Preserve that historical default by
@@ -2387,6 +2388,13 @@ function resolveRuntimeCoderProviderRoute(model, workerSettings) {
     throw new Error(
       `No protected OpenCode transport route is registered for model "${model}"; ` +
         'no provider route fixture is available.',
+    );
+  }
+  if (requireAudited && ['opencode-zen', 'opencode-go'].includes(route.provider) && !route.transportAudited) {
+    const detail = route.unsupportedTransport || 'the model has no audited protocol/package metadata';
+    throw new Error(
+      `No audited protected OpenCode transport metadata is registered for model "${model}"; ${detail}. ` +
+        'Protected mode refuses to guess Chat Completions. Retry in explicit best_effort_raw mode to use the built-in OpenCode provider, after auditing persistent provider overrides.',
     );
   }
   if (route.provider !== 'worker') return route;
@@ -2422,7 +2430,8 @@ function buildOpenCodeEnvelopeRouting({ modelUsed, credential, route, canonical 
 // Read every JSON layer OpenCode can load and reject collisions before the
 // proxy starts. JSONC is handled by the V2 canonical preflight; V1 cannot
 // safely prove its shape here and therefore fails closed as well.
-function auditTransientProviderAlias(cwd, configRoot, alias = CODER_TRANSIENT_PROVIDER_ALIAS) {
+function auditTransientProviderAlias(cwd, configRoot, aliases = CODER_TRANSIENT_PROVIDER_ALIAS) {
+  const reservedAliases = new Set(Array.isArray(aliases) ? aliases : [aliases]);
   for (const configPath of opencodeConfigAuditPaths(cwd, { projectRoot: configRoot })) {
     if (!existsSync(configPath)) continue;
     let config;
@@ -2437,7 +2446,8 @@ function auditTransientProviderAlias(cwd, configRoot, alias = CODER_TRANSIENT_PR
     for (const key of ['provider', 'providers']) {
       const providers = config?.[key];
       if (providers && typeof providers === 'object' && !Array.isArray(providers) &&
-          Object.prototype.hasOwnProperty.call(providers, alias)) {
+          [...reservedAliases].some((alias) => Object.prototype.hasOwnProperty.call(providers, alias))) {
+        const alias = [...reservedAliases].find((candidate) => Object.prototype.hasOwnProperty.call(providers, candidate));
         throw new Error(
           `${configPath} defines reserved transient provider "${alias}". ` +
             'Remove the persistent collision and retry; Triss will supply this provider only for the current run.',
@@ -2447,8 +2457,13 @@ function auditTransientProviderAlias(cwd, configRoot, alias = CODER_TRANSIENT_PR
   }
 }
 
-function auditProtectedRouteConfiguration({ model, route, smallModel, cwd, configRoot, workerSettings }) {
-  auditTransientProviderAlias(cwd, configRoot);
+function auditProtectedRouteConfiguration({ model, route, smallModel, smallRoute, cwd, configRoot, workerSettings }) {
+  auditTransientProviderAlias(cwd, configRoot, [
+    CODER_TRANSIENT_PROVIDER_ALIAS,
+    ...(smallRoute && !coderRoutesShareTransport(smallRoute, route)
+      ? [`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`]
+      : []),
+  ]);
   const allowedProvider = route.provider === 'worker'
     ? workerProviderDefinition(
       { kind: 'worker', workerProfile: workerCoderProfile(workerSettings) },
@@ -2462,6 +2477,16 @@ function auditProtectedRouteConfiguration({ model, route, smallModel, cwd, confi
     allowedProvider,
     requireAllowedProvider: false,
     allowManagedWorkerProvider: route.provider === 'worker',
+  });
+}
+
+function auditBuiltInOpenCodeRouteConfiguration({ model, cwd, configRoot }) {
+  // Raw mode may use OpenCode's own provider metadata, but persistent config
+  // must not redefine that provider and redirect the selected raw key.
+  auditOneShotProviderConfiguration(model, {
+    cwd,
+    projectRoot: configRoot,
+    requireAllowedProvider: false,
   });
 }
 
@@ -5476,27 +5501,37 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     : null;
   const credentialValue = workerSettings ? workerSettings.apiKey : process.env[cred.env];
   const protectedRouting = engine !== 'crush' && credentialMode === 'protected_proxy';
-  const canonicalOpenCodeRouting = engine !== 'crush' && (
-    protectedRouting || credentialMode === 'best_effort_raw'
-  );
+  // Raw Zen/Go models without an audited Triss transport intentionally use
+  // OpenCode's built-in provider metadata. Known audited models still use the
+  // transient overlay so their protocol/package can be pinned in protected
+  // and raw modes alike; other providers retain their existing overlay path.
   let smallModelUsed = oneShotSmallModel || coderSmallModel();
+  const routeCandidate = engine !== 'crush'
+    ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: false })
+    : null;
+  const smallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
+    ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: false })
+    : routeCandidate;
+  const rawBuiltInRoute = credentialMode === 'best_effort_raw' &&
+    ['opencode-zen', 'opencode-go'].includes(routeCandidate?.provider) &&
+    (!routeCandidate.transportAudited || (
+      engine === 'opencode' && oneShotProvider && !smallRouteCandidate.transportAudited
+    ));
+  const canonicalOpenCodeRouting = engine !== 'crush' && (
+    protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
+  );
   const runtimeRoute = canonicalOpenCodeRouting
-    ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings)
-    : null;
-  let runtimeSmallRoute = canonicalOpenCodeRouting
-    ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings)
-    : null;
-  if (canonicalOpenCodeRouting && (
-    runtimeSmallRoute.provider !== runtimeRoute.provider ||
-    runtimeSmallRoute.endpoint !== runtimeRoute.endpoint ||
-    runtimeSmallRoute.pathPrefix !== runtimeRoute.pathPrefix ||
-    runtimeSmallRoute.protocol !== runtimeRoute.protocol ||
-    runtimeSmallRoute.package !== runtimeRoute.package
-  )) {
+    ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: protectedRouting })
+    : routeCandidate;
+  let runtimeSmallRoute = canonicalOpenCodeRouting && engine !== 'opencode2'
+    ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: protectedRouting })
+    : (engine === 'opencode2' ? runtimeRoute : smallRouteCandidate);
+  if (canonicalOpenCodeRouting && engine !== 'opencode2' &&
+      runtimeSmallRoute.provider !== runtimeRoute.provider) {
     if (oneShotProvider) {
       throw new Error(
-        `Protected OpenCode routing requires the main and small models to share one transport; ` +
-        `"${modelUsed}" and "${smallModelUsed}" resolve to incompatible routes.`,
+        `Protected OpenCode routing requires the main and small models to use one provider; ` +
+        `"${modelUsed}" and "${smallModelUsed}" resolve to different providers.`,
       );
     }
     // A stale persisted small-model pin must not make the main run demand a
@@ -5505,6 +5540,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     smallModelUsed = modelUsed;
     runtimeSmallRoute = runtimeRoute;
   }
+  const separateSmallTransport = Boolean(
+    canonicalOpenCodeRouting && engine === 'opencode' &&
+    !coderRoutesShareTransport(runtimeSmallRoute, runtimeRoute),
+  );
   if (!credentialValue) {
     const suffix =
       cred.provider === 'worker'
@@ -5607,7 +5646,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Model identifiers are the only transient config values. Credentials stay
   // in their dedicated env var and must never be embedded in this JSON overlay.
   const oneShotConfigContent = !protectedRouting && oneShotProvider
-    ? JSON.stringify({ model: modelUsed, small_model: oneShotSmallModel })
+    ? JSON.stringify({
+      model: modelUsed,
+      ...(engine === 'opencode2' ? {} : { small_model: oneShotSmallModel }),
+    })
     : null;
 
   // Audit the exact directory tree OpenCode will load, not merely the Triss
@@ -5657,9 +5699,26 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         model: modelUsed,
         route: runtimeRoute,
         smallModel: smallModelUsed,
+        smallRoute: runtimeSmallRoute,
         cwd: runtimeDir,
         configRoot: opencodeProjectBoundary(runtimeDir),
         workerSettings,
+      });
+    } catch (err) {
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+  } else if (rawBuiltInRoute) {
+    const runtimeDir = isolation
+      ? isolation.wtPath
+      : opts.cwd
+        ? resolvePath(opts.cwd)
+        : process.cwd();
+    try {
+      auditBuiltInOpenCodeRouteConfiguration({
+        model: modelUsed,
+        cwd: runtimeDir,
+        configRoot: opencodeProjectBoundary(runtimeDir),
       });
     } catch (err) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
@@ -5719,12 +5778,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ? runtimeRoute
       : null;
   let credentialProxy = null;
+  let smallCredentialProxy = null;
   let credentialProxyReleased = false;
   const releaseCredentialProxy = async () => {
-    if (!credentialProxy || credentialProxyReleased) return;
+    if (credentialProxyReleased) return;
     credentialProxyReleased = true;
-    credentialProxy.revoke();
-    await credentialProxy.closed;
+    const proxies = [credentialProxy, smallCredentialProxy].filter(Boolean);
+    for (const proxy of proxies) proxy.revoke();
+    await Promise.all(proxies.map((proxy) => proxy.closed));
   };
   if (
     !protectedRouting &&
@@ -5751,9 +5812,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       credentialProxy = await startCoderCredentialProxy({
         provider: cred.provider || cred.env,
         model: protectedRouting ? transientModelName(runtimeRoute) : modelUsed,
-        smallModel: protectedRouting ? transientModelName(runtimeSmallRoute) : smallModelUsed,
+        smallModel: protectedRouting && engine !== 'opencode2' && !separateSmallTransport
+          ? transientModelName(runtimeSmallRoute)
+          : undefined,
         models: protectedRouting
-          ? [runtimeRoute.modelId, runtimeSmallRoute.modelId]
+          ? [runtimeRoute.modelId, ...(engine === 'opencode2' || separateSmallTransport
+            ? []
+            : [runtimeSmallRoute.modelId])]
           : undefined,
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,
@@ -5763,7 +5828,27 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         deadlineMs: (timeoutSec + 60) * 1000,
         ...(deps.credentialProxyOptions || {}),
       });
+      // OpenCode 1 can retain a distinct small_model role. If its audited
+      // transport differs from main, give it a separate scoped loopback
+      // route; both proxies intentionally share the one-run token because
+      // the child has one credential environment variable.
+      if (separateSmallTransport) {
+        smallCredentialProxy = await startCoderCredentialProxy({
+          provider: cred.provider || cred.env,
+          model: transientModelName(runtimeSmallRoute),
+          models: [runtimeSmallRoute.modelId],
+          endpoint: runtimeSmallRoute.endpoint,
+          pathPrefix: runtimeSmallRoute.pathPrefix,
+          protocol: runtimeSmallRoute.protocol,
+          authStyle: runtimeSmallRoute.authStyle,
+          credential: credentialValue,
+          token: credentialProxy.token,
+          deadlineMs: (timeoutSec + 60) * 1000,
+          ...(deps.credentialProxyOptions || {}),
+        });
+      }
     } catch (err) {
+      await releaseCredentialProxy();
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw new Error(
         `credential isolation unavailable: the coder run requires the parent-owned ` +
@@ -5787,12 +5872,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // without ever placing a real upstream endpoint in the child.
   const transientBaseURL = credentialProxy?.scopedBaseUrl ||
     (runtimeRoute ? `${runtimeRoute.endpoint}${runtimeRoute.pathPrefix === '/' ? '' : runtimeRoute.pathPrefix}` : `http://127.0.0.1:0/v1`);
+  const transientSmallBaseURL = smallCredentialProxy?.scopedBaseUrl ||
+    (runtimeSmallRoute ? `${runtimeSmallRoute.endpoint}${runtimeSmallRoute.pathPrefix === '/' ? '' : runtimeSmallRoute.pathPrefix}` : transientBaseURL);
   const routingConfigContent = canonicalOpenCodeRouting
     ? JSON.stringify(buildCoderTransientProviderOverlay({
       route: runtimeRoute,
       model: modelUsed,
       smallModel: smallModelUsed,
+      smallRoute: runtimeSmallRoute,
       baseURL: transientBaseURL,
+      smallBaseURL: transientSmallBaseURL,
       credentialEnv: runtimeRoute.credentialEnv,
       includeSmallModel: engine !== 'opencode2',
     }))

@@ -775,6 +775,43 @@ test(
 );
 
 test(
+  'runCoderRun --engine opencode2: same-provider Chat main plus Responses small validates small as unused',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-go-v2-small-transport',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
+      const capture = stdoutCapture();
+      await runCoderRun('x', {
+        engine: 'opencode2',
+        provider: 'opencode-go',
+        model: 'opencode-go/deepseek-v4-flash',
+        smallModel: 'opencode-go/muse-spark-1.2-contributor',
+      }, {
+        spawn: rec.spawnFn,
+        spawnSync: pinSh(),
+        disableCredentialProxy: true,
+        stdoutWrite: capture.stdoutWrite,
+      });
+      assert.equal(rec.calls.length, 1);
+      const { argv, options } = rec.calls[0];
+      assert.equal(argv[argv.indexOf('--model') + 1], 'triss-coder-transient/deepseek-v4-flash');
+      const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+      assert.equal(config.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible');
+      assert.equal(config.small_model, undefined, 'V2 must not configure the unused small transport');
+      const envelope = JSON.parse(capture.text().trim());
+      assert.deepEqual(envelope.small_model, {
+        requested: 'opencode-go/muse-spark-1.2-contributor',
+        used: false,
+      });
+      assert.ok(envelope.warnings.includes('OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.'));
+    },
+  ),
+);
+
+test(
   'runCoderRun --engine opencode2: protected envelope identity is honest for worker and Go Responses routes',
   withEnv(
     {

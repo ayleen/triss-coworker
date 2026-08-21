@@ -409,3 +409,235 @@ test('best_effort_raw matrix registry remains aligned with all six provider kind
     new Set(Object.keys(CODER_PROVIDER_REGISTRY)),
   );
 });
+
+test('best_effort_raw unknown Zen/Go models use built-in metadata on both engines', async (t) => {
+  for (const engine of ['opencode', 'opencode2']) {
+    for (const kind of ['opencode-zen', 'opencode-go']) {
+      await t.test(`${engine} × ${kind}`, async () => {
+        const home = makeIsolatedHome();
+        const routeCase = CASES.find((candidate) => candidate.kind === kind);
+        const prefix = kind === 'opencode-zen' ? 'opencode' : 'opencode-go';
+        const model = `${prefix}/newly-published-model`;
+        try {
+          await withMatrixEnvironment(home, routeCase, async () => {
+            const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_raw_unknown_${engine}_${kind}`));
+            await runCoderRun('raw unknown route', {
+              engine,
+              provider: kind,
+              model,
+            }, {
+              spawn: spawnFn,
+              spawnSync: recordingSpawnSync,
+              stdoutWrite: () => {},
+            });
+            assert.equal(calls.length, 1);
+            assert.equal(modelFromArgv(calls[0].argv), model);
+            const config = JSON.parse(calls[0].options.env.OPENCODE_CONFIG_CONTENT);
+            assert.equal(config.model, model);
+            assert.equal(config.provider, undefined, 'raw unknown models must use the built-in provider');
+            assert.equal(calls[0].options.env.OPENCODE_API_KEY, routeCase.credential);
+          });
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
+test('protected unknown Zen/Go models fail before spawn on both engines', async (t) => {
+  for (const engine of ['opencode', 'opencode2']) {
+    for (const kind of ['opencode-zen', 'opencode-go']) {
+      await t.test(`${engine} × ${kind}`, async () => {
+        const home = makeIsolatedHome();
+        const routeCase = CASES.find((candidate) => candidate.kind === kind);
+        const prefix = kind === 'opencode-zen' ? 'opencode' : 'opencode-go';
+        try {
+          await withMatrixEnvironment(home, routeCase, async () => {
+            const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_protected_unknown_${engine}_${kind}`));
+            await assert.rejects(
+              runCoderRun('protected unknown route', {
+                engine,
+                provider: kind,
+                model: `${prefix}/newly-published-model`,
+              }, {
+                spawn: spawnFn,
+                spawnSync: recordingSpawnSync,
+              }),
+              /audited protected OpenCode transport metadata|refuses to guess Chat/iu,
+            );
+            assert.equal(calls.length, 0);
+          }, { bestEffort: false });
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
+test('protected V1 distinct transports use two scoped loopback routes and one proxy token', async () => {
+  const home = makeIsolatedHome();
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
+  const upstreamCalls = [];
+  let loopbackError = null;
+  let mainBaseURL;
+  let smallBaseURL;
+  try {
+    await withMatrixEnvironment(home, routeCase, async () => {
+      const spawnFn = (_cmd, _argv, options) => {
+        const child = new EventEmitter();
+        child.pid = 789002;
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(async () => {
+          try {
+            const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+            const main = config.provider[CODER_TRANSIENT_PROVIDER_ALIAS];
+            const small = config.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`];
+            mainBaseURL = main.options.baseURL;
+            smallBaseURL = small.options.baseURL;
+            assert.notEqual(mainBaseURL, smallBaseURL);
+            assert.notEqual(options.env.OPENCODE_API_KEY, routeCase.credential);
+            const headers = {
+              authorization: `Bearer ${options.env.OPENCODE_API_KEY}`,
+              'content-type': 'application/json',
+            };
+            const responses = await Promise.all([
+              fetch(`${mainBaseURL}/chat/completions`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [] }),
+              }),
+              fetch(`${smallBaseURL}/responses`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ model: 'muse-spark-1.2-contributor', input: 'x' }),
+              }),
+            ]);
+            assert.deepEqual(responses.map(({ status }) => status), [200, 200]);
+            child.stdout.end(SUCCESS_STREAM('ses_v1_distinct_routes'));
+            child.stderr.end('');
+            setImmediate(() => child.emit('close', 0, null));
+          } catch (err) {
+            loopbackError = err;
+            child.stdout.end('');
+            child.stderr.end(String(err.stack || err));
+            setImmediate(() => child.emit('close', 1, null));
+          }
+        });
+        return child;
+      };
+      await runCoderRun('protected V1 distinct transports', {
+        engine: 'opencode',
+        provider: 'opencode-go',
+        model: 'opencode-go/deepseek-v4-flash',
+        smallModel: 'opencode-go/muse-spark-1.2-contributor',
+      }, {
+        spawn: spawnFn,
+        spawnSync: recordingSpawnSync,
+        credentialProxyOptions: {
+          fetchImpl: async (url, init) => {
+            upstreamCalls.push({ url: String(url), headers: init.headers, body: init.body });
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+        },
+        stdoutWrite: () => {},
+      });
+    }, { bestEffort: false });
+    assert.equal(loopbackError, null, loopbackError?.stack);
+    assert.deepEqual(upstreamCalls.map(({ url }) => url).sort(), [
+      'https://opencode.ai/zen/go/v1/chat/completions',
+      'https://opencode.ai/zen/go/v1/responses',
+    ]);
+    for (const call of upstreamCalls) {
+      assert.equal(call.headers.authorization, `Bearer ${routeCase.credential}`);
+    }
+    await assert.rejects(fetch(`${mainBaseURL}/chat/completions`));
+    await assert.rejects(fetch(`${smallBaseURL}/responses`));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('protected V2 routes only main and rejects the validated-unused small model at its proxy', async () => {
+  const home = makeIsolatedHome();
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
+  const upstreamModels = [];
+  let loopbackError = null;
+  try {
+    await withMatrixEnvironment(home, routeCase, async () => {
+      const spawnFn = (_cmd, _argv, options) => {
+        const child = new EventEmitter();
+        child.pid = 789003;
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(async () => {
+          try {
+            const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+            assert.equal(config.small_model, undefined);
+            assert.equal(config.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`], undefined);
+            const main = config.provider[CODER_TRANSIENT_PROVIDER_ALIAS];
+            const headers = {
+              authorization: `Bearer ${options.env.OPENCODE_API_KEY}`,
+              'content-type': 'application/json',
+            };
+            const accepted = await fetch(`${main.options.baseURL}/chat/completions`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [] }),
+            });
+            const rejected = await fetch(`${main.options.baseURL}/chat/completions`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ model: 'muse-spark-1.2-contributor', messages: [] }),
+            });
+            assert.equal(accepted.status, 200);
+            assert.equal(rejected.status, 403);
+            child.stdout.end(SUCCESS_STREAM('ses_v2_main_only_proxy'));
+            child.stderr.end('');
+            setImmediate(() => child.emit('close', 0, null));
+          } catch (err) {
+            loopbackError = err;
+            child.stdout.end('');
+            child.stderr.end(String(err.stack || err));
+            setImmediate(() => child.emit('close', 1, null));
+          }
+        });
+        return child;
+      };
+      const output = [];
+      await runCoderRun('protected V2 main-only transport', {
+        engine: 'opencode2',
+        provider: 'opencode-go',
+        model: 'opencode-go/deepseek-v4-flash',
+        smallModel: 'opencode-go/muse-spark-1.2-contributor',
+      }, {
+        spawn: spawnFn,
+        spawnSync: recordingSpawnSync,
+        credentialProxyOptions: {
+          fetchImpl: async (_url, init) => {
+            upstreamModels.push(JSON.parse(init.body).model);
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+        },
+        stdoutWrite: (chunk) => output.push(chunk),
+      });
+      const envelope = JSON.parse(output.join('').trim());
+      assert.deepEqual(envelope.small_model, {
+        requested: 'opencode-go/muse-spark-1.2-contributor',
+        used: false,
+      });
+    }, { bestEffort: false });
+    assert.equal(loopbackError, null, loopbackError?.stack);
+    assert.deepEqual(upstreamModels, ['deepseek-v4-flash']);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

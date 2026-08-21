@@ -398,6 +398,13 @@ cwd and created or reused isolation worktrees. Concurrent same-user mutation
 between preflight and spawn remains outside the guard's threat model;
 unverified OpenCode versions fail closed.
 
+For OpenCode 1, main and small models from the same provider may use different
+audited transports. Triss then creates two transient provider aliases and two
+model-scoped loopback proxy routes that share only the same one-run proxy token;
+each route remains pinned to its own protocol, package, path, and model. OpenCode
+2 validates an explicit small model as belonging to the selected provider but
+does not configure or route it because that beta has no small-model role.
+
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project
 `opencode.json` → global `opencode.json` → default — plus opencode's own

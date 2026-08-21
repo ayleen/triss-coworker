@@ -5,11 +5,109 @@ const freeze = (value) => Object.freeze(value);
 // are rejected before a credential-bearing child is spawned.
 export const CODER_TRANSIENT_PROVIDER_ALIAS = 'triss-coder-transient';
 
+const OPENAI_CHAT_ROUTE = freeze({ protocol: 'openai_chat', package: '@ai-sdk/openai-compatible' });
+const OPENAI_RESPONSES_ROUTE = freeze({ protocol: 'openai_responses', package: '@ai-sdk/openai' });
+const ANTHROPIC_MESSAGES_ROUTE = freeze({
+  protocol: 'anthropic_messages',
+  package: '@ai-sdk/anthropic',
+  authStyle: 'anthropic',
+});
+const UNSUPPORTED_GOOGLE_ROUTE = freeze({
+  unsupported: 'google/gemini transport is not vetted by the protected proxy',
+});
+
+function modelTransportMap({ chat = [], responses = [], anthropic = [], unsupportedGoogle = [] }) {
+  const entries = [
+    ...chat.map((id) => [id, OPENAI_CHAT_ROUTE]),
+    ...responses.map((id) => [id, OPENAI_RESPONSES_ROUTE]),
+    ...anthropic.map((id) => [id, ANTHROPIC_MESSAGES_ROUTE]),
+    ...unsupportedGoogle.map((id) => [id, UNSUPPORTED_GOOGLE_ROUTE]),
+  ];
+  const seen = new Set();
+  for (const [id] of entries) {
+    if (seen.has(id)) throw new Error(`duplicate audited OpenCode transport metadata for model ${id}`);
+    seen.add(id);
+  }
+  return freeze(Object.fromEntries(entries));
+}
+
 export const CODER_PROVIDER_REGISTRY = freeze({
   worker: freeze({ kind: 'worker', prefixes: freeze(['triss-worker']), credentialEnv: 'TRISS_WORKER_API_KEY', endpoint: 'https://api.deepseek.com', pathPrefix: '/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
   zai: freeze({ kind: 'zai', prefixes: freeze(['zai-coding-plan', 'zai']), credentialEnv: 'ZHIPU_API_KEY', endpoint: 'https://api.z.ai', pathPrefixByPrefix: freeze({ 'zai-coding-plan': '/api/coding/paas/v4', zai: '/api/paas/v4' }), protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
-  'opencode-zen': freeze({ kind: 'opencode-zen', prefixes: freeze(['opencode']), credentialEnv: 'OPENCODE_API_KEY', endpoint: 'https://opencode.ai', pathPrefix: '/zen/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
-  'opencode-go': freeze({ kind: 'opencode-go', prefixes: freeze(['opencode-go']), credentialEnv: 'OPENCODE_API_KEY', endpoint: 'https://opencode.ai', pathPrefix: '/zen/go/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer', modelOverrides: freeze({ 'muse-spark-1.2-contributor': freeze({ protocol: 'openai_responses', package: '@ai-sdk/openai' }) }) }),
+  // OpenCode's catalogue is model/provider specific. Keep the provider
+  // defaults for catalogue/status compatibility, but the runtime resolver
+  // below only admits an exact audited model entry for Zen/Go. An unknown
+  // model must never silently become Chat Completions.
+  'opencode-zen': freeze({
+    kind: 'opencode-zen',
+    prefixes: freeze(['opencode']),
+    credentialEnv: 'OPENCODE_API_KEY',
+    endpoint: 'https://opencode.ai',
+    pathPrefix: '/zen/v1',
+    protocol: 'openai_chat',
+    package: '@ai-sdk/openai-compatible',
+    authStyle: 'bearer',
+    // Audited against https://opencode.ai/docs/zen/ on 2026-08-22. Models
+    // present only in the catalogue remain unaudited until endpoint/package
+    // metadata is published.
+    modelOverrides: modelTransportMap({
+      chat: [
+        'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free',
+        'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+        'glm-5.2', 'glm-5.1', 'glm-5',
+        'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
+        'big-pickle', 'x-preview-f-free', 'mimo-v2.5-free', 'hy3-free',
+        'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free',
+      ],
+      responses: [
+        'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+        'gpt-5.5', 'gpt-5.5-pro',
+        'gpt-5.4', 'gpt-5.4-pro', 'gpt-5.4-mini', 'gpt-5.4-nano',
+        'gpt-5.3-codex', 'gpt-5.3-codex-spark',
+        'gpt-5.2', 'gpt-5.2-codex',
+        'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
+        'gpt-5', 'gpt-5-codex', 'gpt-5-nano',
+        'grok-4.6', 'grok-4.5', 'grok-build-0.1',
+        'muse-spark-1.2', 'muse-spark-1.2-contributor-free',
+      ],
+      anthropic: [
+        'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7',
+        'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-5',
+        'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5',
+        'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen3.5-plus',
+      ],
+      // Google/Gemini requires @ai-sdk/google and /models/*, which the
+      // credential proxy deliberately does not implement yet.
+      unsupportedGoogle: [
+        'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+        'gemini-3.5-flash-lite', 'gemini-3.1-pro', 'gemini-3-flash',
+      ],
+    }),
+  }),
+  'opencode-go': freeze({
+    kind: 'opencode-go',
+    prefixes: freeze(['opencode-go']),
+    credentialEnv: 'OPENCODE_API_KEY',
+    endpoint: 'https://opencode.ai',
+    pathPrefix: '/zen/go/v1',
+    protocol: 'openai_chat',
+    package: '@ai-sdk/openai-compatible',
+    authStyle: 'bearer',
+    // Audited against https://opencode.ai/docs/go/ on 2026-08-22.
+    modelOverrides: modelTransportMap({
+      chat: [
+        'glm-5.3', 'glm-5.2', 'glm-5.1',
+        'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6',
+        'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+        'mimo-v2.5', 'mimo-v2.5-pro', 'hy3', 'ox-alpha-free',
+      ],
+      responses: ['grok-4.5', 'gpt-5.6-luna', 'muse-spark-1.2-contributor'],
+      anthropic: [
+        'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+        'qwen3.8-max', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus',
+      ],
+    }),
+  }),
   moonshot: freeze({ kind: 'moonshot', prefixes: freeze(['moonshotai', 'moonshotai-cn']), credentialEnv: 'MOONSHOT_API_KEY', endpointByPrefix: freeze({ moonshotai: 'https://api.moonshot.ai', 'moonshotai-cn': 'https://api.moonshot.cn' }), pathPrefix: '/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
   'kimi-for-coding': freeze({ kind: 'kimi-for-coding', prefixes: freeze(['kimi-for-coding']), credentialEnv: 'KIMI_API_KEY', endpoint: 'https://api.kimi.com', pathPrefix: '/coding/v1', protocol: 'anthropic_messages', package: '@ai-sdk/anthropic', authStyle: 'anthropic' }),
 });
@@ -37,7 +135,9 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   const modelId = qualified.slice(slash + 1);
   const provider = Object.values(registry).find((candidate) => candidate.prefixes.includes(prefix));
   if (!provider) return null;
-  const override = provider.modelOverrides?.[modelId] || {};
+  const override = provider.modelOverrides?.[modelId] || null;
+  const modelSpecificTransport = provider.kind === 'opencode-zen' || provider.kind === 'opencode-go';
+  const transport = modelSpecificTransport ? override : (override || provider);
   return Object.freeze({
     model: qualified,
     modelId,
@@ -46,10 +146,22 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
     credentialEnv: provider.credentialEnv,
     endpoint: provider.endpointByPrefix?.[prefix] || provider.endpoint,
     pathPrefix: provider.pathPrefixByPrefix?.[prefix] || provider.pathPrefix,
-    protocol: override.protocol || provider.protocol,
-    package: override.package || provider.package,
-    authStyle: provider.authStyle,
+    protocol: transport?.protocol,
+    package: transport?.package,
+    authStyle: transport?.authStyle || provider.authStyle,
+    transportAudited: !modelSpecificTransport || Boolean(override && !override.unsupported),
+    unsupportedTransport: override?.unsupported || null,
   });
+}
+
+export function coderRoutesShareTransport(left, right) {
+  return Boolean(left && right &&
+    left.provider === right.provider &&
+    left.endpoint === right.endpoint &&
+    left.pathPrefix === right.pathPrefix &&
+    left.protocol === right.protocol &&
+    left.package === right.package &&
+    left.authStyle === right.authStyle);
 }
 
 /**
@@ -62,7 +174,9 @@ export function buildCoderTransientProviderOverlay({
   route,
   model,
   smallModel,
+  smallRoute,
   baseURL,
+  smallBaseURL,
   credentialEnv,
   includeSmallModel = true,
 } = {}) {
@@ -76,10 +190,25 @@ export function buildCoderTransientProviderOverlay({
     ? smallModel.slice(smallModel.indexOf('/') + 1)
     : null;
   const models = { [modelId]: { name: modelId } };
-  if (includeSmallModel && smallId) models[smallId] = { name: smallId };
+  const separateSmall = Boolean(
+    includeSmallModel && smallId && smallRoute && !coderRoutesShareTransport(smallRoute, route),
+  );
+  if (includeSmallModel && smallId && !separateSmall) models[smallId] = { name: smallId };
+  const smallAlias = separateSmall ? `${CODER_TRANSIENT_PROVIDER_ALIAS}-small` : CODER_TRANSIENT_PROVIDER_ALIAS;
+  const smallProvider = separateSmall
+    ? {
+      npm: smallRoute.package,
+      name: `Triss transient ${smallRoute.provider}`,
+      options: {
+        baseURL: smallBaseURL || baseURL,
+        apiKey: `{env:${credentialEnv}}`,
+      },
+      models: { [smallId]: { name: smallId } },
+    }
+    : null;
   return {
     model: main,
-    ...(includeSmallModel && smallId ? { small_model: `${CODER_TRANSIENT_PROVIDER_ALIAS}/${smallId}` } : {}),
+    ...(includeSmallModel && smallId ? { small_model: `${smallAlias}/${smallId}` } : {}),
     provider: {
       [CODER_TRANSIENT_PROVIDER_ALIAS]: {
         npm: route.package,
@@ -90,6 +219,7 @@ export function buildCoderTransientProviderOverlay({
         },
         models,
       },
+      ...(smallProvider ? { [smallAlias]: smallProvider } : {}),
     },
   };
 }

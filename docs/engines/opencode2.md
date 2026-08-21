@@ -58,6 +58,15 @@ reports `small_role_effective: false` for `opencode2`; the `small_model` value
 in the shared config is an **OpenCode 1 compatibility value** and is shown as
 such. There is no per-V2 small override.
 
+Zen and Go protected runs use Triss's versioned, model-specific transport
+metadata. Audited models may use Chat Completions, Responses, or Anthropic
+Messages as indicated by that metadata; an unknown or Google/Gemini model is
+rejected before spawn instead of being guessed as Chat. In explicit
+`best_effort_raw` mode, an unknown Zen/Go model uses OpenCode's built-in
+provider metadata while persistent provider overrides are still rejected. An
+explicit `--small-model` is validated for provider ownership but does not
+participate in V2 transport resolution and is reported as `used: false`.
+
 ## Usage gaps
 
 Usage comes from per-step `step_finish` events (`usage_source: "opencode2"`).
