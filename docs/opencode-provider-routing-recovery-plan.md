@@ -31,15 +31,36 @@ The completed change must provide these user-visible guarantees:
    downgrade honestly.
 3. Every advertised provider works through `opencode` and `opencode2`:
    `worker`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`, and
-   `kimi-for-coding`, including every documented prefix belonging to those
-   provider kinds.
+   `kimi-for-coding`, including every prefix exported by Triss's canonical
+   provider registry for those provider kinds.
 4. The protected path does not depend on undocumented provider-specific base
    URL environment variables. It routes through a transient, audited provider
    definition carried in `OPENCODE_CONFIG_CONTENT` and a protocol-aware
    parent-owned credential proxy.
-5. No mode forwards a credential to a repository-controlled provider endpoint
-   by accident. Best-effort means reduced isolation, not disabled endpoint,
-   model, or credential-selection validation.
+5. Triss never merges a repository-controlled provider endpoint, package,
+   header, or credential binding into the selected transport. In
+   `best_effort_raw`, repository code can still read and exfiltrate the raw
+   credential from the child environment; that risk is explicit and is not
+   presented as credential isolation.
+
+## Accepted risks and non-goals
+
+The following decisions are intentional for this recovery and are not release
+blockers:
+
+- Triss does not retain an exact-version pin or add a denylist/rollback switch
+  for a future broken OpenCode 2 beta above the supported floor. The capability
+  probe and release qualification reduce this risk; they do not eliminate it.
+- Backward compatibility for the obsolete
+  `TRISS_CODER_OPENCODE2_VERSION=0.0.0-next-17430` exact-pin override is not
+  preserved. Updated installation and configuration guidance replaces that
+  value with the beta channel and the current minimum. A stale legacy override
+  may fail until the operator removes or updates it; this migration risk is
+  accepted.
+- `best_effort_raw` does not protect a credential from repository code,
+  plugins, tools, shell commands, or other same-UID processes. It protects only
+  Triss's provider/model/endpoint selection from accidental configuration
+  redirection and reports credential isolation as unavailable.
 
 ## Current failures
 
@@ -108,6 +129,20 @@ The following facts were checked directly against
 - all three local-route smokes reached the configured loopback endpoint with a
   dummy credential and did not need a real provider key.
 
+The corresponding OpenCode 1.18.7 route was also checked directly. A
+`triss-proxy/*` provider supplied through `OPENCODE_CONFIG_CONTENT` sent both
+its title request and main request to the configured loopback
+`POST /v1/chat/completions` endpoint with the overlay token. Repeating the
+smoke with a conflicting same-id provider in the project `opencode.json`
+still used the transient overlay endpoint and token. The implementation must
+nevertheless reject a project collision with Triss's reserved transient alias
+rather than relying only on precedence.
+
+In an isolated HOME/XDG root, `opencode2 --version` and
+`opencode2 run --help` completed without creating a new
+`opencode2 serve --service` process. Preserve this as an executable regression
+check; do not infer it only from help text.
+
 These observations establish the implementation direction but do not replace
 the provider-specific live acceptance matrix later in this plan.
 
@@ -129,6 +164,12 @@ Internally rename the concepts to `minimumVersion`, `meetsMinimum`, and
 `installChannel`; keep deprecated exported aliases only where tests or public
 imports require a transition period.
 
+The override accepts the same supported release grammar as the default floor.
+An obsolete `next-*` value is an unsupported override and fails with guidance
+to remove it or replace it with a beta minimum. No automatic conversion or
+legacy exact-pin compatibility is required; this is the accepted migration
+risk above.
+
 The comparator must understand the V2 beta shape rather than comparing strings:
 
 - `0.0.0-beta-17792` is below the default floor;
@@ -136,10 +177,16 @@ The comparator must understand the V2 beta shape rather than comparing strings:
 - `0.0.0-beta-17794` meets it;
 - a later stable V2 semantic version meets the numeric floor if the required
   CLI capability probe also passes;
-- malformed output and non-release channels such as `dev` or `tui-v2` fail
-  closed by default, even if their numeric suffix is larger;
-- legacy `next-*` builds do not become greater than a beta merely because the
-  prerelease label sorts differently.
+- malformed output and every unsupported prerelease channel, including
+  `next`, `dev`, and `tui-v2`, is rejected before comparison even if its
+  numeric suffix is larger;
+- only the supported `beta-<ordinal>` grammar and a later stable V2 semantic
+  version participate in the minimum-version comparison.
+
+For a plain stable semantic version, do not invent a numeric V1/V2 major
+boundary. It is eligible for ordering only when it came from the resolved
+`opencode2` executable and that exact path/version passes the complete
+capability probe; the V1 `opencode` executable is never a candidate.
 
 Do not add a general semver dependency for this. Implement and unit-test the
 small OpenCode 2 version grammar explicitly.
@@ -171,6 +218,12 @@ Require the help surface to contain `--standalone`, `--format`, `--auto`, and
 resident service behind. Cache the successful capability result per canonical
 binary path plus version for the lifetime of the Triss process.
 
+Run both probes under the same isolated HOME/XDG policy used for the managed
+child, snapshot matching `opencode2 ... serve --service` PIDs before the probe,
+and assert after a bounded grace period that the probe created no new service.
+The regression test must cover the two probe commands themselves, not only a
+later standalone inference smoke.
+
 A version above the floor with a missing required flag fails with a clear
 `unsupported OpenCode 2 CLI contract` error and forwards no credential.
 
@@ -185,10 +238,23 @@ best_effort_raw
 
 `protected_proxy` remains the default. It supplies only a run-scoped proxy
 token to the engine and synthesizes a provider transport that points to the
-loopback proxy. It must never fall back to a raw credential silently.
+loopback proxy. It must never fall back to a raw credential silently. Its
+credential guarantee is precise: the raw provider secret is absent from the
+child. It does not claim that the authorized engine cannot spend the scoped
+token; request, model, route, rate, deadline, and revocation caps bound that
+use.
+
+For this recovery, the protected executable-surface policy is the existing
+strict policy: use the engine's pure mode where available, reject project/global
+MCP, plugin, custom-tool, and user-agent executable surfaces for OpenCode 2,
+and retain the deny-everything shell gate. Relaxing those restrictions while
+keeping a run-scoped token is separate work, not an implementation choice left
+undefined inside this plan.
 
 `best_effort_raw` is selected only when
-`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`. In this mode:
+`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`. Only the literal value `1`
+selects this mode; absent, empty, `0`, `false`, `true`, and arbitrary non-empty
+values do not. In this mode:
 
 - pass only the credential required by the selected provider;
 - allow normal shell policy, agents, plugins, and custom tools after ordinary
@@ -207,8 +273,11 @@ loopback proxy. It must never fall back to a raw credential silently.
   the credential.
 
 The flag is an explicit operational acknowledgement, not a way to disable
-model and endpoint pinning. A repository-defined provider URL, credential
-binding, or model transport still cannot capture a user credential unnoticed.
+model and endpoint pinning. Triss still refuses repository-defined provider
+URL, package, header, and credential-binding overrides. This does not prevent
+repository code, plugins, tools, or shell commands from reading or exfiltrating
+the raw credential by other means; that is the explicitly accepted risk of
+this mode.
 
 The existing `--allow-best-effort-caller-worktree` remains a separate choice.
 It controls filesystem worktree downgrade; it must not implicitly enable raw
@@ -218,13 +287,16 @@ worktree isolation.
 ## Unified provider transport model
 
 Create a pure provider-transport resolver shared by OpenCode 1 and OpenCode 2.
-Its input is the requested provider kind, fully qualified model, trusted
-provider settings, and credential mode. Its output is data, not an engine env:
+Its input is the requested provider kind, fully qualified main model, optional
+fully qualified small model, trusted provider settings, and credential mode.
+Its output is data, not an engine env:
 
 ```text
 provider kind
 requested model
+optional requested small model
 engine model/provider alias
+engine main/small alias mapping
 credential env name
 credential value source
 upstream origin
@@ -244,7 +316,7 @@ The supported provider matrix is:
 | `opencode-zen` | `opencode/*` | `OPENCODE_API_KEY` | Zen prefix and model/provider package from trusted OpenCode metadata |
 | `opencode-go` | `opencode-go/*` | `OPENCODE_API_KEY` | Go prefix and model/provider package from trusted OpenCode metadata; Responses must be supported |
 | `moonshot` | `moonshotai/*`, `moonshotai-cn/*` | `MOONSHOT_API_KEY` | Region-specific trusted base; OpenAI-compatible chat |
-| `kimi-for-coding` | `kimi-for-coding/*` | `KIMI_API_KEY` | `/coding/v1`; Anthropic `messages` with `x-api-key` |
+| `kimi-for-coding` | `kimi-for-coding/*` | `KIMI_API_KEY` | `https://api.kimi.com/coding/v1`; Anthropic `messages` with `x-api-key` |
 
 The resolver must distinguish OpenCode Zen `/zen/v1` from OpenCode Go
 `/zen/go/v1`. It must also honor a trusted model-level package override when
@@ -252,13 +324,22 @@ that model selects `@ai-sdk/openai` instead of the provider default. It must
 not infer protocol solely from a provider prefix when trusted model metadata
 says otherwise.
 
-For Zen/Go, use current authenticated catalogue/model metadata already
-obtained through the parent process. Do not ask the credential-bearing engine
-to discover its transport after receiving a proxy token. If the protected path
-cannot resolve a model's package/protocol from trusted metadata, fail before
-spawn with a recovery message. The explicit best-effort path may use the
-engine's built-in provider with the raw key, but must still reject persistent
-repository endpoint overrides.
+Make one exported Triss provider registry the source of truth for provider
+kinds, accepted prefixes, credential env names, canonical origins/prefixes,
+default protocols/packages, and audited model-level protocol overrides.
+`coderModelCredential`, provider-flag normalization, model/provider matching,
+CLI/MCP enums, status, and the transport resolver must consume that registry;
+do not copy the matrix into independent switch statements.
+
+For Zen/Go, authenticated catalogue results confirm model availability but do
+not become a mandatory runtime transport dependency. The protected resolver
+uses the versioned audited transport registry; release qualification refreshes
+known model-level package overrides against the current engine/catalogue
+metadata. A catalogue outage therefore does not break an already configured
+known transport. If a newly discovered model has no audited protocol/package,
+protected mode fails before spawn with a recovery message, while explicit
+best-effort mode may use the built-in provider with the raw key after rejecting
+persistent repository transport overrides.
 
 ## Transient provider overlay
 
@@ -271,7 +352,11 @@ than relying on undocumented built-in environment overrides. The alias must:
 - select the AI SDK package required by the protocol;
 - point `options.baseURL` at the proxy's scoped loopback URL;
 - bind the one-run proxy token;
-- expose only the selected model;
+- use a reserved per-run alias, reject any effective config layer that defines
+  the same alias, and audit the final overlay as the highest-precedence layer;
+- expose the selected main model and, for OpenCode 1, the selected small model
+  when it differs; OpenCode 2 receives only the main alias after validating the
+  optional small model as unused;
 - preserve the requested model separately for catalogue, billing, usage, and
   the public result envelope;
 - be passed to both OpenCode engines through their supported transient config
@@ -306,13 +391,26 @@ anthropic_messages -> <prefix>/messages, x-api-key + anthropic-version
 ```
 
 The proxy must continue to reject CONNECT, absolute-URI requests, other paths,
-other models, malformed bodies, and mismatched auth. Add request-body model
-extraction fixtures for both Chat Completions and Responses shapes. Preserve
-query strings only on the exact allowed path.
+other models, malformed bodies, and mismatched auth. Its existing generic
+`body.model` pin already applies to Chat Completions, Responses, and Anthropic
+Messages; preserve it and add an explicit wrong-model fixture for each of the
+three protocol profiles. Preserve query strings only on the exact allowed
+path.
+
+Preserve the existing streaming relay rather than buffering provider
+responses: carry status and content type, stream chunks with backpressure,
+enforce the cumulative response-byte cap, and abort upstream on overflow or
+revocation. Add chunked/SSE regression fixtures for all three profiles,
+including a stream longer than one chunk and a mid-stream cap overflow. The
+proxy lifetime deadline governs admission/revocation; it must not silently
+turn a valid long response into a buffered body.
 
 OpenCode-specific account/config endpoints are not inference routes and must
 not be opened in the credential proxy. The transient provider alias must avoid
-triggering built-in account discovery with the proxy token.
+triggering built-in account discovery with the proxy token. A real-engine
+loopback test must record every requested path and fail if the engine attempts
+an account, catalogue, config, or other non-inference request before or during
+the synthetic completion.
 
 ## OpenCode 2 preflight changes
 
@@ -321,7 +419,12 @@ Split the current all-or-nothing audit into invariant checks and mode checks.
 Invariant checks run in both modes:
 
 - canonical runtime directory and Git/project boundary;
-- parse every effective config document or reject;
+- reuse `enumerateOpenCodeSources()` and `parseOpenCodeDocument()` as the
+  canonical config backend: global `~/.config/opencode/opencode.json(c)`, then
+  boundary-to-cwd direct layers, then boundary-to-cwd `.opencode` layers;
+  parse every existing document or reject, append the generated transient
+  overlay as the audited final layer, and recheck existing file hashes before
+  spawn to close the audit-to-spawn window;
 - selected model belongs to the selected provider;
 - selected credential is the one mapped to that provider;
 - no untrusted endpoint, package, header, or credential-binding override is
@@ -337,8 +440,9 @@ Protected-mode checks additionally require:
 - only the proxy token reaches the engine;
 - raw credential stores do not become an alternative child-readable source
   under the current same-UID policy;
-- executable config surfaces satisfy the protected policy selected by the
-  implementation.
+- executable config surfaces satisfy the explicit strict protected policy
+  defined under Isolation modes; the implementation may not choose a weaker
+  policy ad hoc.
 
 Best-effort mode does not reject solely because the effective shell policy has
 allow/ask rules or because agents/plugins/tools are discovered. It records
@@ -349,6 +453,12 @@ Do not rewrite the user's shared V1 config from an allowlist to deny-everything
 merely because `coder init --engine opencode2` ran. Init should validate and
 report the selected mode, configure the chosen provider/model, and leave
 unrelated user policy byte-identical.
+
+The current writer already does not overwrite an existing shared
+`opencode.json`; it only created deny-everything policy in a fresh V2 file.
+Update that fresh-file behavior according to the selected mode and correct the
+documentation, but do not invent a restoration migration for an existing file
+that Triss did not overwrite.
 
 ## Result and status contract
 
@@ -372,13 +482,23 @@ opencode2 <installed> (minimum: 0.0.0-beta-17793, compatible)
 ```
 
 or a clear below-minimum / missing-capability message. Status stays read-only,
-does not contact provider APIs, and does not start an OpenCode 2 service.
+does not contact provider APIs, and does not start an OpenCode 2 service. It
+may execute the isolated `--version`/`run --help` capability probes after the
+no-new-service regression is in place. Render the effective minimum, including
+a valid `TRISS_CODER_OPENCODE2_VERSION` override, rather than always printing
+the default floor.
 
 Update help and docs so `@beta`, minimum-version semantics, best-effort risk,
 and provider coverage are consistent across CLI, MCP, README, configuration,
 engine guide, status, and generated agent guidance.
 
 ## Implementation sequence
+
+These phases are implementation checkpoints, not independently releasable
+features. Do not publish installation guidance or a build containing only the
+version-floor change. Phases 1 through 6 ship atomically after the complete
+release acceptance matrix passes; intermediate commits must retain the old
+user-facing contract or remain unreleased.
 
 ### Phase 0 — lock the live compatibility matrix
 
@@ -390,8 +510,10 @@ beta:
 3. standalone transient-provider calls to local echo servers for Chat
    Completions, Responses, and Anthropic Messages;
 4. NDJSON success, tool use, provider error, timeout, and missing-usage shapes;
-5. proof that no standalone smoke leaves an `opencode2 serve --service`
-   descendant.
+5. OpenCode 1.18.7 overlay routing and precedence over a conflicting project
+   provider definition;
+6. before/after PID proof that neither capability probe nor any standalone
+   smoke leaves a new `opencode2 serve --service` descendant.
 
 Keep these smokes isolated under temporary HOME/XDG roots and use dummy keys.
 
@@ -405,15 +527,19 @@ and same-binary post-run verification.
 ### Phase 2 — provider transport resolver
 
 Extract provider/model/credential routing out of `src/commands/coder.js` into
-a pure module. Add complete table-driven tests for every prefix, endpoint,
-protocol, package, credential, invalid model, and hostile override. Reuse it
-from both OpenCode engines before changing proxy behavior.
+the single exported provider registry and a pure resolver. Add complete
+table-driven tests for every prefix, endpoint, protocol, package, credential,
+main/small combination, invalid model, and hostile override. Reuse the same
+registry from CLI/MCP/model/status surfaces and both OpenCode engines before
+changing proxy behavior.
 
 ### Phase 3 — protocol-aware proxy and overlay builder
 
 Extend `src/coder-credential-proxy.js` with explicit protocol profiles and
-add the transient provider overlay builder. Test the real installed engines
-against loopback echo servers; a fake spawn assertion is not sufficient.
+add the transient provider overlay builder while preserving the existing
+streaming relay/backpressure behavior. Test the real installed engines against
+loopback echo servers, including forbidden account routes and multi-chunk
+streams; a fake spawn assertion is not sufficient.
 
 ### Phase 4 — credential-mode orchestration
 
@@ -426,16 +552,19 @@ the proxy and removes only freshly created isolation worktrees.
 ### Phase 5 — OpenCode 2 policy and one-shot support
 
 Make OpenCode 2 preflight mode-aware, stop rejecting normal tools/agents in
-explicit best-effort mode, stop rewriting the shared config to
-deny-everything, and accept one-shot provider selection. Keep invariant
+explicit best-effort mode, make fresh-file init follow the selected mode, and
+accept one-shot provider selection. Existing configs remain byte-identical;
+protected fresh init keeps the strict protected policy. Keep invariant
 endpoint/model/config/binary checks in both modes.
 
 ### Phase 6 — envelope, status, docs, and migration
 
 Emit the complete envelope v2 fields for OpenCode 2, update status/help/docs,
-and add migration text for users with the obsolete exact pin or a V2-created
-deny-everything shared config. Do not silently edit existing user config during
-upgrade.
+replace the obsolete exact-pin guidance, and explain that a stale legacy
+override must be removed or updated. Correct the fresh-file deny-everything
+documentation without claiming that existing files were overwritten. Do not
+silently edit existing user config during upgrade, and do not add legacy-pin
+conversion or rollback machinery.
 
 ## TDD matrix
 
@@ -445,14 +574,18 @@ Add RED tests before each production change.
 
 - below/equal/above current beta floor;
 - multi-digit build ordinals;
-- malformed, `next`, `dev`, and `tui-v2` versions;
+- malformed, `next`, `dev`, and `tui-v2` installed versions and minimum
+  overrides all reject as unsupported rather than entering ordering;
 - future stable V2 plus capability pass/fail;
 - install hint uses `@beta`, never npm `@latest`;
+- capability probes run under isolated HOME/XDG roots and create no service;
 - pre/post binary path or version change aborts.
 
 ### Mode tests
 
 - absent flag never silently selects raw credentials;
+- empty, `0`, `false`, `true`, and arbitrary non-empty flag values do not
+  select best-effort; only literal `1` does;
 - `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` reaches OpenCode 2 with a V1
   allowlist and discovered agents;
 - best-effort passes only the selected raw credential;
@@ -473,9 +606,11 @@ For both `opencode` and `opencode2`, cover:
 - Moonshot global and China prefixes;
 - Kimi for Coding Anthropic transport;
 - one-shot CLI and MCP selection;
+- distinct same-provider main/small models on OpenCode 1 and validated-unused
+  small model reporting on OpenCode 2;
 - missing/wrong credential and provider/model mismatch;
-- catalogue-unavailable protected-mode behavior and explicit best-effort
-  fallback.
+- catalogue-unavailable behavior for a known audited transport, plus unknown
+  transport rejection in protected mode and explicit best-effort fallback.
 
 Each protected-mode case must prove with a real local engine smoke that:
 
@@ -483,7 +618,10 @@ Each protected-mode case must prove with a real local engine smoke that:
 2. the path and auth style match the selected protocol;
 3. the child did not receive the real provider credential;
 4. the proxy forwarded only the pinned model and exact inference route;
-5. no request reached the real upstream.
+5. no request reached the real upstream and no account/catalogue/config route
+   was attempted;
+6. each protocol relayed a multi-chunk streaming response with backpressure
+   and enforced its cumulative byte cap.
 
 Each best-effort case must prove that the selected built-in/custom provider can
 complete a synthetic response without requiring deny-everything policy.
@@ -510,16 +648,28 @@ exact implementation worktree:
 2. full `npm test`, lint, and `git diff --check`;
 3. packaged CLI smoke, not only source invocation;
 4. latest-beta OpenCode 2 local protocol smokes with dummy keys;
-5. one minimal live completion for every provider kind on both engines where
-   the user has a configured credential/entitlement;
-6. a best-effort OpenCode 2 tool-using run from a normal V1-configured project
-   containing the standard allowlist and agents;
-7. process inspection proving no residual OpenCode/OpenCode 2 service or tool
-   descendant remains;
-8. diff review confirming no credential values or unrelated user files were
-   added;
-9. independent security review of the proxy/overlay boundary and independent
-   compatibility review of the OpenCode 2 `>=` policy.
+5. a recorded 24-row live matrix (`opencode` and `opencode2` crossed with all
+   six provider kinds and both `protected_proxy` and `best_effort_raw`), with
+   one minimal completion per row using the currently configured model. The
+   protected rows must reach the real upstream through the overlay/proxy, and
+   the best-effort rows must use the selected raw credential path. Every row
+   must be `PASS`; a missing credential, entitlement, or catalogue access is
+   `BLOCKED`, not a silent skip or pass;
+6. a best-effort OpenCode 2 tool-using run from a deterministic temporary
+   project fixture containing the current V1 template's exact shell rules
+   (`git status/diff/log`, `ls`, `node --test`, `npm test`, `npm run test`), one
+   discovered agent, and one custom tool; assert the tool ran and the downgrade
+   warning/envelope fields are exact;
+7. before/after process snapshots under an isolated HOME/XDG root: record all
+   OpenCode/OpenCode 2 and descendant PIDs, wait a bounded five-second grace
+   period after exit, and fail if any PID created by the probe/run remains;
+8. sentinel-secret tests that scan captured stdout, stderr, envelope, thrown
+   errors, logs, and retained temporary state, plus a final staged-diff review
+   confirming neither sentinels nor unrelated files are present;
+9. two review records tied to the exact release-candidate commit: one for the
+   proxy/overlay security boundary and one for OpenCode 2 version/capability
+   compatibility. Each record names the reviewer or model, commands/evidence,
+   verdict, and resolved finding list; no blocking finding may remain.
 
 Provider credentials, publication, PR creation, merge, npm release, and tag
 creation remain separate authorization gates.
@@ -530,6 +680,7 @@ At minimum:
 
 - `src/coder-engines/opencode2.js`;
 - `src/commands/coder.js`;
+- `src/coder-providers.js`, expanded into the canonical provider registry;
 - `src/coder-credential-proxy.js`;
 - `src/opencode2-preflight.js`;
 - a new pure provider-transport/overlay module;
