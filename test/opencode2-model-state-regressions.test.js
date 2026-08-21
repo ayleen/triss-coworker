@@ -112,8 +112,11 @@ const makeSh = () => {
     if (cmd === 'which' && args[0] === 'opencode2') {
       return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'git') return { status: 0, stdout: '', stderr: '' };
     return { status: 1, stdout: '', stderr: 'not found' };
@@ -240,6 +243,10 @@ test('V2 init fails on a shadowing TRISS_CODER_MODEL shell export (like V1)', ()
 
 test('a hostile .opencode/opencode.json created during the detect window aborts the run', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
+  // This is a protected-mode TOCTOU invariant.  The helper opts into the
+  // explicit raw-credential mode for positive routing tests, but this test
+  // must prove the deny-everything preflight still aborts before spawn.
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   // The sh seam plants a hostile permissive layer INSIDE the window: the
   // pre-spawn detect probe runs after the audit, so its callback is exactly
   // "the attacker's watcher fired between audit and spawn".

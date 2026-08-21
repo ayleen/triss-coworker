@@ -175,6 +175,44 @@ test('the path pin is boundary-exact: /v10 does not pass a /v1 pin', async () =>
   }
 });
 
+test('openai_responses protocol forwards only the exact /responses inference route', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({ protocol: 'openai_responses', pathPrefix: '/zen/go/v1' }, stub);
+  try {
+    const accepted = await post(proxy, {
+      path: '/zen/go/v1/responses',
+      body: '{"model":"glm-5.2","input":[]}',
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(stub.calls[0].url, `${ENDPOINT}/zen/go/v1/responses`);
+    const rejected = await post(proxy, { path: '/zen/go/v1/chat/completions' });
+    assert.equal(rejected.status, 404);
+    assert.equal(stub.calls.length, 1);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('anthropic_messages protocol forwards only /messages with x-api-key auth', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({ protocol: 'anthropic_messages', pathPrefix: '/coding/v1' }, stub);
+  try {
+    const accepted = await fetch(`${proxy.baseUrl}/coding/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': proxy.token, 'content-type': 'application/json' },
+      body: '{"model":"glm-5.2","messages":[]}',
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(stub.calls[0].url, `${ENDPOINT}/coding/v1/messages`);
+    assert.equal(stub.calls[0].headers['x-api-key'], REAL_CREDENTIAL);
+    const rejected = await post(proxy, { path: '/coding/v1/chat/completions' });
+    assert.equal(rejected.status, 404);
+    assert.equal(stub.calls.length, 1);
+  } finally {
+    proxy.revoke();
+  }
+});
+
 test('anthropic authStyle: token via x-api-key, credential via x-api-key upstream', async () => {
   const stub = stubFetch();
   const { proxy } = await startProxy(
@@ -207,6 +245,165 @@ test('anthropic authStyle: a Bearer token is not accepted downstream', async () 
     assert.equal(stub.calls.length, 0);
   } finally {
     proxy.revoke();
+  }
+});
+
+// Every supported wire profile must enforce the same proxy boundary.  Keep
+// these fixtures table-driven so a new protocol cannot accidentally inherit
+// only the OpenAI Chat coverage below: the route, downstream token header,
+// upstream credential header, and streaming/cap behavior are all protocol
+// contracts.
+const PROTOCOL_PROFILES = [
+  {
+    name: 'openai_chat',
+    protocol: 'openai_chat',
+    pathPrefix: '/v1',
+    inferencePath: '/v1/chat/completions',
+    alternatePath: '/v1/responses',
+    body: '{"model":"glm-5.2","messages":[]}',
+    authHeaders: (token) => ({ authorization: `Bearer ${token}` }),
+    assertUpstreamAuth: (headers) => {
+      assert.equal(headers.authorization, `Bearer ${REAL_CREDENTIAL}`);
+      assert.equal(headers['x-api-key'], undefined);
+    },
+  },
+  {
+    name: 'openai_responses',
+    protocol: 'openai_responses',
+    pathPrefix: '/zen/go/v1',
+    inferencePath: '/zen/go/v1/responses',
+    alternatePath: '/zen/go/v1/chat/completions',
+    body: '{"model":"glm-5.2","input":[]}',
+    authHeaders: (token) => ({ authorization: `Bearer ${token}` }),
+    assertUpstreamAuth: (headers) => {
+      assert.equal(headers.authorization, `Bearer ${REAL_CREDENTIAL}`);
+      assert.equal(headers['x-api-key'], undefined);
+    },
+  },
+  {
+    name: 'anthropic_messages',
+    protocol: 'anthropic_messages',
+    pathPrefix: '/coding/v1',
+    inferencePath: '/coding/v1/messages',
+    alternatePath: '/coding/v1/chat/completions',
+    body: '{"model":"glm-5.2","messages":[]}',
+    authHeaders: (token) => ({ 'x-api-key': token, 'anthropic-version': '2023-06-01' }),
+    assertUpstreamAuth: (headers) => {
+      assert.equal(headers['x-api-key'], REAL_CREDENTIAL);
+      assert.equal(headers.authorization, undefined);
+      assert.equal(headers['anthropic-version'], '2023-06-01');
+    },
+  },
+];
+
+function profileRequest(proxy, profile, { path = profile.inferencePath, body = profile.body, headers = {} } = {}) {
+  return fetch(`${proxy.baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...profile.authHeaders(proxy.token), ...headers },
+    body,
+  });
+}
+
+test('all protocol profiles reject wrong models and enforce exact route/auth pinning', async () => {
+  for (const profile of PROTOCOL_PROFILES) {
+    const stub = stubFetch();
+    const { proxy } = await startProxy({
+      protocol: profile.protocol,
+      pathPrefix: profile.pathPrefix,
+    }, stub);
+    try {
+      const wrongModel = await profileRequest(proxy, profile, {
+        body: '{"model":"not-the-pinned-model","messages":[]}',
+      });
+      assert.equal(wrongModel.status, 403, profile.name);
+      assert.equal(stub.calls.length, 0, profile.name);
+
+      const wrongRoute = await profileRequest(proxy, profile, { path: profile.alternatePath });
+      assert.equal(wrongRoute.status, 404, profile.name);
+      assert.equal(stub.calls.length, 0, profile.name);
+
+      const wrongAuth = await fetch(`${proxy.baseUrl}${profile.inferencePath}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...profile.authHeaders('wrong-token') },
+        body: profile.body,
+      });
+      assert.equal(wrongAuth.status, 401, profile.name);
+      assert.equal(stub.calls.length, 0, profile.name);
+
+      const accepted = await profileRequest(proxy, profile);
+      assert.equal(accepted.status, 200, profile.name);
+      assert.equal(stub.calls.length, 1, profile.name);
+      assert.equal(stub.calls[0].url, `${ENDPOINT}${profile.inferencePath}`, profile.name);
+      profile.assertUpstreamAuth(stub.calls[0].headers);
+    } finally {
+      proxy.revoke();
+    }
+  }
+});
+
+test('all protocol profiles relay chunked and SSE responses beyond one chunk', async () => {
+  for (const profile of PROTOCOL_PROFILES) {
+    const chunks = [
+      Buffer.from('data: first\\n\\n'),
+      Buffer.from('data: second\\n\\n'),
+    ];
+    const fetchImpl = async () => new Response(new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+    const { proxy } = await startProxy({
+      protocol: profile.protocol,
+      pathPrefix: profile.pathPrefix,
+      fetchImpl,
+    });
+    try {
+      const res = await profileRequest(proxy, profile);
+      assert.equal(res.status, 200, profile.name);
+      assert.equal(res.headers.get('content-type'), 'text/event-stream', profile.name);
+      assert.equal(await res.text(), 'data: first\\n\\ndata: second\\n\\n', profile.name);
+    } finally {
+      proxy.revoke();
+    }
+  }
+});
+
+test('all protocol profiles abort upstream when a response exceeds the mid-stream byte cap', async () => {
+  for (const profile of PROTOCOL_PROFILES) {
+    let upstreamAborted = false;
+    const fetchImpl = async (_url, init) => {
+      init.signal.addEventListener('abort', () => { upstreamAborted = true; }, { once: true });
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(Buffer.from('x'.repeat(8)));
+          controller.enqueue(Buffer.from('y'.repeat(8)));
+          controller.close();
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    };
+    const { proxy } = await startProxy({
+      protocol: profile.protocol,
+      pathPrefix: profile.pathPrefix,
+      maxResponseBytes: 10,
+      fetchImpl,
+    });
+    try {
+      await assert.rejects(
+        () => profileRequest(proxy, profile),
+        undefined,
+        profile.name,
+      );
+      assert.equal(upstreamAborted, true, profile.name);
+    } finally {
+      proxy.revoke();
+    }
   }
 });
 
@@ -309,6 +506,25 @@ test('unknown proxy routes are denied (endpoint pinning)', async () => {
   try {
     const res = await post(proxy, { path: '/other/route' });
     assert.equal(res.status, 404);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('non-POST inference requests are denied and never forwarded as POST', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    for (const method of ['GET', 'PUT', 'PATCH', 'DELETE']) {
+      const res = await fetch(`${proxy.baseUrl}/v1/chat/completions`, {
+        method,
+        headers: { authorization: `Bearer ${proxy.token}`, 'content-type': 'application/json' },
+        ...(method === 'GET' ? {} : { body: '{"model":"glm-5.2","messages":[]}' }),
+      });
+      assert.equal(res.status, 405, method);
+      assert.equal(res.headers.get('allow'), 'POST');
+    }
     assert.equal(stub.calls.length, 0);
   } finally {
     proxy.revoke();

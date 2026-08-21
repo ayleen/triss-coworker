@@ -79,7 +79,8 @@ function isValidOrigin(endpoint) {
  * @param {string} opts.endpoint       canonical upstream ORIGIN (https, no path)
  * @param {string} opts.credential     real provider credential (in-memory only)
  * @param {string} [opts.pathPrefix='/v1'] OpenAI-compatible scope prefix
- * @param {string} [opts.authStyle='bearer'] 'bearer' | 'anthropic'
+ * @param {string} [opts.protocol] 'openai_chat' | 'openai_responses' | 'anthropic_messages'
+ * @param {string} [opts.authStyle='bearer'] compatibility alias for protocol auth
  * @param {string} [opts.token]        pre-generated single-run token (tests)
  * @param {number} [opts.maxRequests]  request-count cap
  * @param {number} [opts.maxBodyBytes] per-request body-byte cap
@@ -103,7 +104,10 @@ export async function startCoderCredentialProxy(opts = {}) {
   const pathPrefix = typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')
     ? opts.pathPrefix.replace(/\/+$/, '') || '/'
     : '/v1';
-  const authStyle = opts.authStyle === 'anthropic' ? 'anthropic' : 'bearer';
+  const protocol = ['openai_chat', 'openai_responses', 'anthropic_messages'].includes(opts.protocol)
+    ? opts.protocol
+    : opts.authStyle === 'anthropic' ? 'anthropic_messages' : 'openai_chat';
+  const authStyle = protocol === 'anthropic_messages' ? 'anthropic' : 'bearer';
   if (typeof provider !== 'string' || provider.length === 0) {
     throw new TypeError('startCoderCredentialProxy: provider is required');
   }
@@ -167,9 +171,9 @@ export async function startCoderCredentialProxy(opts = {}) {
   // for the pinned protocol is forwarded — the whole prefix subtree is NOT
   // open (other mutating or billed provider routes must be unreachable).
   const allowedPaths = new Set(
-    authStyle === 'anthropic'
+    protocol === 'anthropic_messages'
       ? [`${pathPrefix}/messages`]
-      : [`${pathPrefix}/chat/completions`],
+      : [protocol === 'openai_responses' ? `${pathPrefix}/responses` : `${pathPrefix}/chat/completions`],
   );
 
   function pathAllowed(url) {
@@ -216,6 +220,13 @@ export async function startCoderCredentialProxy(opts = {}) {
       if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'absolute-URI forward-proxy route denied' } }));
+        return;
+      }
+      // The proxy is an inference-only surface.  Do not let a GET/PUT/etc.
+      // reach the body parser and get forwarded as POST upstream.
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json', allow: 'POST' });
+        res.end(JSON.stringify({ error: { message: 'only POST is supported' } }));
         return;
       }
       // Provider/model pinning: only the pinned OpenAI-compatible scope is
@@ -437,6 +448,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     scopedBaseUrl: `http://${LOOPBACK_HOST}:${port}${pathPrefix}`,
     provider,
     model,
+    protocol,
     revoke,
     closed,
   };

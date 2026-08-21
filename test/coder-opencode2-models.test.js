@@ -131,7 +131,9 @@ test('V2 model set: applies to shared config, records engine + config_backend', 
     small: 'opencode-go/deepseek-v4-flash',
     global: true,
     yes: true,
-    spawnSync: (_cmd, _args) => ({ status: 0, stdout: 'opencode2 v0.0.0-next-17430', stderr: '' }),
+    spawnSync: (_cmd, args) => args?.[0] === 'run'
+      ? ({ status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' })
+      : ({ status: 0, stdout: 'opencode2 v0.0.0-beta-17793', stderr: '' }),
     fetch: fakeFetch,
     lock: noOpLock(),
   }));
@@ -154,7 +156,9 @@ test('V2 model set human output states the small value is for OpenCode 1 compati
       small: 'opencode-go/deepseek-v4-flash',
       global: true,
       yes: true,
-      spawnSync: (_cmd, _args) => ({ status: 0, stdout: 'opencode2 v0.0.0-next-17430', stderr: '' }),
+      spawnSync: (_cmd, args) => args?.[0] === 'run'
+        ? ({ status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' })
+        : ({ status: 0, stdout: 'opencode2 v0.0.0-beta-17793', stderr: '' }),
       fetch: fakeFetch,
       lock: noOpLock(),
     }));
@@ -164,5 +168,3 @@ test('V2 model set human output states the small value is for OpenCode 1 compati
   const text = chunks.join('');
   assert.ok(/OpenCode 1|V1/i.test(text), 'output must state the small value is for OpenCode 1 compatibility');
 }));
-
-

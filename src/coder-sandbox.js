@@ -96,7 +96,7 @@ export function resolveCoderSandbox({
   if (!PLATFORMS.includes(platform)) {
     throw new TypeError(`unsupported platform: ${JSON.stringify(platform)}`);
   }
-  if (!['opencode', 'crush'].includes(engine)) {
+  if (!['opencode', 'opencode2', 'crush'].includes(engine)) {
     throw new TypeError(`unsupported engine: ${JSON.stringify(engine)}`);
   }
 

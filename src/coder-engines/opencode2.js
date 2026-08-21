@@ -5,8 +5,8 @@
 // NO process orchestration (that stays in src/commands/coder.js spawnEngine),
 // NO isolation logic, NO logUsage.
 //
-// Verified-against-the-pin facts encoded here (live recon 2026-08-14, exact
-// pin 0.0.0-next-17430, docs/opencode2-engine-plan.md "Pinned-build recon"):
+// Verified-against-the-supported-beta facts encoded here (live recon against
+// the current beta line; see the routing recovery plan):
 //   - CLI surface: `run --standalone --format json --auto --model <m>
 //     [--agent <a>] [--session <id> | --continue] <prompt>`; NO --pure, NO
 //     --dir (unsupported on this build — child cwd selects the project).
@@ -19,8 +19,8 @@
 //     leaves a resident `opencode2 serve --service` process behind (verified
 //     live — even `opencode2 debug config` spawns one). Standalone leaves no
 //     descendant.
-//   - Version string is a non-semver beta (`v0.0.0-next-17430`), so the pin
-//     is an EXACT MATCH, not a semver range: any other build fails the pin.
+//   - Version compatibility follows the supported beta floor and the CLI
+//     capability probe; unsupported next/dev/tui channels fail closed.
 //   - Auto-update must be disabled per invocation (OPENCODE_DISABLE_AUTOUPDATE
 //     =1) so the verified pin cannot drift under us.
 //   - Runtime state is isolated into a Triss-owned XDG root
@@ -28,22 +28,131 @@
 //     never collide with V1's ~/.local/share/opencode.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, mkdirSync, realpathSync as nodeRealpathSync, statSync as nodeStatSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync as nodeRealpathSync, rmSync, statSync as nodeStatSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
 import { parseRateLimitReset } from '../commands/coder.js';
 
-// The exact npm dist-tag build verified live. NOT semver: `next-<n>` builds
-// are opaque sequences — a newer number is a different, unverified build, so
-// detect() requires an EXACT match and every mismatch warns/fails closed.
-const OPENCODE2_PIN_DEFAULT = '0.0.0-next-17430';
+// Supported OpenCode 2 beta floor.  Runtime compatibility also requires the
+// capability probe below; version text alone is never sufficient.
+export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-17793';
+export const OPENCODE2_SMALL_MODEL_UNUSED_WARNING =
+  'OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.';
+// Deprecated export/name retained for callers during the migration.  It now
+// denotes the minimum accepted version rather than an exact build pin.
+const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
+const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
+const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
+const capabilityCache = new Map();
+
+// `opencode2 --version` prefixes the version with the executable name. Keep
+// the token extraction deliberately broader than the set of supported
+// channels so an unsupported channel (for example `-dev`, `-next`, or
+// `-tui`) is passed to the canonical parser as a whole. A narrow regex that
+// only knows about beta/next can truncate `0.0.0-dev-17819` to `0.0.0` and
+// accidentally classify it as a supported stable release.
+const VERSION_TOKEN_RE = /(?:^|\s)(v?\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)(?=\s|$)/;
+
+function parseOpenCode2VersionOutput(value) {
+  const match = VERSION_TOKEN_RE.exec(String(value || '').trim());
+  if (!match) return null;
+  const token = match[1];
+  return parseOpenCode2Version(token) ? token.replace(/^v/u, '') : null;
+}
+
+export function parseOpenCode2Version(value) {
+  const raw = String(value || '').trim().replace(/^v/, '');
+  const beta = BETA_VERSION_RE.exec(raw);
+  if (beta) return { raw, channel: 'beta', major: 0, minor: 0, patch: 0, ordinal: Number(beta[2]) };
+  const stable = STABLE_VERSION_RE.exec(raw);
+  if (stable) return { raw, channel: 'stable', major: Number(stable[1]), minor: Number(stable[2]), patch: Number(stable[3]), ordinal: null };
+  return null;
+}
+
+export function compareOpenCode2Versions(a, b) {
+  const left = typeof a === 'string' ? parseOpenCode2Version(a) : a;
+  const right = typeof b === 'string' ? parseOpenCode2Version(b) : b;
+  if (!left || !right) return null;
+  if (left.channel === 'beta' && right.channel === 'beta') return Math.sign(left.ordinal - right.ordinal);
+  if (left.channel === 'stable' && right.channel === 'stable') {
+    return Math.sign((left.major - right.major) || (left.minor - right.minor) || (left.patch - right.patch));
+  }
+  return left.channel === 'stable' ? 1 : -1;
+}
+
+export function opencode2MinimumVersion() {
+  return process.env.TRISS_CODER_OPENCODE2_VERSION || OPENCODE2_MIN_VERSION_DEFAULT;
+}
+
+export function installChannelOpenCode2() {
+  return '@opencode-ai/cli@beta';
+}
 
 export function opencode2VersionPin() {
-  return process.env.TRISS_CODER_OPENCODE2_VERSION || OPENCODE2_PIN_DEFAULT;
+  return opencode2MinimumVersion();
 }
 
 export { OPENCODE2_PIN_DEFAULT };
+
+export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
+  const key = `${path}\0${version || ''}`;
+  if (capabilityCache.has(key)) return capabilityCache.get(key);
+  const helpResult = sh(path, ['run', '--help'], { env });
+  const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
+  const missing = REQUIRED_CAPABILITIES.filter((flag) => !help.includes(flag));
+  const result = !parseOpenCode2Version(version)
+    ? { ok: false, version, reason: 'unsupported-version', missing: [], help: '' }
+    : !helpResult || helpResult.error || helpResult.status !== 0 || missing.length
+      ? { ok: false, version, reason: 'unsupported-cli-contract', missing, help }
+      : { ok: true, version, missing: [], help };
+  capabilityCache.set(key, result);
+  return result;
+}
+
+function isolatedCapabilityEnv(baseEnv) {
+  const root = mkdtempSync(join(tmpdir(), 'triss-opencode2-probe-'));
+  const env = {
+    ...baseEnv,
+    HOME: root,
+    XDG_CONFIG_HOME: join(root, 'config'),
+    XDG_DATA_HOME: join(root, 'data'),
+    XDG_STATE_HOME: join(root, 'state'),
+  };
+  for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME]) {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+  }
+  return { root, env };
+}
+
+function servicePids(spawnSync = nodeSpawnSync) {
+  try {
+    const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+    if (!result || result.status !== 0 || result.error) return { ok: false, pids: new Set() };
+    return { ok: true, pids: new Set(String(result.stdout || '').split(/\r?\n/u).flatMap((line) => {
+      if (!/opencode2(?:\s|$).*serve(?:\s|$).*--service/u.test(line)) return [];
+      const match = /^\s*(\d+)\s/u.exec(line);
+      return match ? [match[1]] : [];
+    })) };
+  } catch {
+    return { ok: false, pids: new Set() };
+  }
+}
+
+function normalizeServiceSnapshot(value) {
+  if (value instanceof Set) return { ok: true, pids: value };
+  if (!value || value.ok === false) return { ok: false, pids: new Set() };
+  const pids = value.pids instanceof Set ? value.pids : new Set(value.pids || []);
+  return { ok: true, pids };
+}
+
+function boundedProbeSleep(ms) {
+  if (!ms) return;
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, ms);
+}
 
 // detectOpenCode2: resolve `opencode2` ONCE to an absolute path and pin the
 // spawn to THAT path. A bare name means the parent's PATH
@@ -67,6 +176,7 @@ export { OPENCODE2_PIN_DEFAULT };
 export function detectOpenCode2(
   sh = nodeSpawnSync,
   fs = {},
+  processTools = {},
 ) {
   const realpathSync = fs.realpathSync || nodeRealpathSync;
   const statSync = fs.statSync || nodeStatSync;
@@ -114,24 +224,64 @@ export function detectOpenCode2(
   } catch {
     return { found: false, path: null, version: null, satisfiesPin: false };
   }
-  let r;
+  let versionResult;
+  const isolated = isolatedCapabilityEnv(probeEnv);
+  const snapshotServices = processTools.snapshot || (() => servicePids(processTools.spawnSync || nodeSpawnSync));
+  const beforeService = normalizeServiceSnapshot(snapshotServices());
   try {
-    r = sh(realPath, ['--version'], { env: probeEnv });
+    // The two commands are intentionally explicit.  In particular, do not
+    // replace this with `debug config`: some beta builds start a resident
+    // service for that command.
+    versionResult = sh(realPath, ['--version'], { env: isolated.env });
   } catch {
-    return { found: false, path: realPath, version: null, satisfiesPin: false };
+    rmSync(isolated.root, { recursive: true, force: true });
+    return { found: false, path: realPath, version: null, satisfiesPin: false, satisfiesMinimum: false, capabilities: null };
   }
-  if (!r || r.error || r.status !== 0) {
-    return { found: false, path: realPath, version: null, satisfiesPin: false };
+  const versionOutput = String(versionResult?.stdout || '').trim();
+  const version = parseOpenCode2VersionOutput(versionOutput);
+  if (!versionResult || versionResult.error || versionResult.status !== 0 || !version) {
+    rmSync(isolated.root, { recursive: true, force: true });
+    return { found: false, path: realPath, version, satisfiesPin: false, satisfiesMinimum: false, meetsMinimum: false, capabilities: null };
   }
-  const out = String(r.stdout || '').trim();
-  const m = /v(\S+)/.exec(out);
-  const version = m ? m[1] : out || null;
-  if (!version) return { found: false, path: realPath, version: null, satisfiesPin: false };
-  return { found: true, path: realPath, version, satisfiesPin: version === opencode2VersionPin() };
+  // Never mutate the cached capability result: service-process proof is a
+  // per-detection observation layered on top of the immutable CLI probe.
+  const cachedProbe = probeOpenCode2Capabilities(realPath, version, sh, isolated.env);
+  const probe = { ...cachedProbe, missing: [...(cachedProbe.missing || [])] };
+  let afterService = normalizeServiceSnapshot(snapshotServices());
+  if (afterService.ok && beforeService.ok && ![...afterService.pids].some((pid) => !beforeService.pids.has(pid))) {
+    boundedProbeSleep(processTools.graceMs ?? 20);
+    afterService = normalizeServiceSnapshot(snapshotServices());
+  }
+  const newServicePids = [...afterService.pids].filter((pid) => !beforeService.pids.has(pid));
+  rmSync(isolated.root, { recursive: true, force: true });
+  if (!beforeService.ok || !afterService.ok) {
+    probe.ok = false;
+    probe.reason = 'service-process-snapshot-unavailable';
+  } else if (newServicePids.length) {
+    probe.ok = false;
+    probe.reason = 'capability-probe-started-service';
+  }
+  const minimum = parseOpenCode2Version(opencode2MinimumVersion());
+  const installed = parseOpenCode2Version(version);
+  const satisfiesMinimum = !!(
+    probe.ok && minimum && installed && compareOpenCode2Versions(installed, minimum) >= 0
+  );
+  return {
+    found: !!version,
+    path: realPath,
+    version,
+    minimumVersion: opencode2MinimumVersion(),
+    satisfiesMinimum,
+    meetsMinimum: satisfiesMinimum,
+    // Compatibility alias for older status/tests.  It deliberately follows
+    // minimum semantics and is not an exact equality check anymore.
+    satisfiesPin: satisfiesMinimum,
+    capabilities: probe,
+  };
 }
 
 export function installHintOpenCode2() {
-  return `npm install -g @opencode-ai/cli@${opencode2VersionPin()}`;
+  return `npm install -g ${installChannelOpenCode2()}`;
 }
 
 // buildOpenCode2RunArgv: argv for `opencode2 run`. Flag order mirrors the
@@ -269,6 +419,7 @@ export function buildOpenCode2SpawnEnv({
   baseEnv = process.env,
   credentialEnv,
   credentialValue,
+  configContent,
 } = {}) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
@@ -279,6 +430,9 @@ export function buildOpenCode2SpawnEnv({
   env.OPENCODE_DISABLE_AUTOUPDATE = '1';
   env.XDG_DATA_HOME = opencode2DataRoot(projectRoot);
   env.XDG_STATE_HOME = opencode2StateRoot(projectRoot);
+  if (typeof configContent === 'string' && configContent.length > 0) {
+    env.OPENCODE_CONFIG_CONTENT = configContent;
+  }
   return env;
 }
 
@@ -400,9 +554,10 @@ export const opencode2 = {
   supportsSmallModel: false,
   // Every managed invocation MUST run --standalone (resident-service guard).
   requiresStandalone: true,
-  // --pure / OPENCODE_CONFIG_CONTENT are V1-only overlays; V2 shares the
-  // on-disk opencode.json instead (never written by Triss).
+  // --pure is unsupported; OPENCODE_CONFIG_CONTENT is the supported
+  // transient overlay surface (never written by Triss).
   supportsPureConfig: false,
+  supportsConfigContent: true,
 };
 
 export default opencode2;

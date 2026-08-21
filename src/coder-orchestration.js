@@ -38,8 +38,21 @@ export const EXECUTION_CAPABILITY_KEYS = Object.freeze([
  * Project the sandbox capability tuple into the envelope's
  * execution_capabilities object (warnings are not envelope fields).
  */
-export function buildExecutionCapabilities({ engine = 'opencode', proxyAvailable = false } = {}) {
-  const caps = resolveCoderSandbox({ engine, proxyAvailable });
+export function buildExecutionCapabilities({
+  engine = 'opencode',
+  proxyAvailable = false,
+  credentialMode = 'protected_proxy',
+} = {}) {
+  const caps = resolveCoderSandbox({
+    engine,
+    // Raw best-effort deliberately cannot inherit the proxy capability for
+    // OpenCode, which intentionally skips the proxy in that mode. Crush is
+    // different: runCrushFlow always requires and starts its proxy, so the
+    // OpenCode-only mode must not falsify Crush's capability envelope.
+    proxyAvailable: engine !== 'crush' && credentialMode === 'best_effort_raw'
+      ? false
+      : proxyAvailable,
+  });
   const out = {};
   for (const key of EXECUTION_CAPABILITY_KEYS) {
     out[key] = caps[key];

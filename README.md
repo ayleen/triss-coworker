@@ -750,10 +750,12 @@ implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
-`effective_isolation`). The `opencode2` beta engine still returns the older
-envelope shape (`session_id`, `exit_reason`, `final_text`, `files_changed`,
-`diff_stat`, `worktree`, `usage`, `warnings`) without these fields — use its
-`files_changed` / `diff_stat` / `worktree` as evidence there. Non-isolated `files_changed` is `null`; the only
+`effective_isolation`). OpenCode 2 emits the same envelope v2 fields,
+including `envelope_version`, lifecycle fields, activity, and
+OpenCode best-effort raw runs explicitly report
+`credential_isolation: "unavailable"` plus the stable downgrade warning;
+Crush remains proxy-backed and reports the proxy's `best_effort` capability.
+Non-isolated `files_changed` is `null`; the only
 changes-expectation evidence is `run_files_changed`. Process completion and a
 non-empty final text are not task satisfaction — use `--isolate`, check
 `run_files_changed` in the envelope, and verify the retained worktree/diff
@@ -962,7 +964,7 @@ Not every engine speaks every provider:
 | Engine     | Providers served                                  |
 | ---------- | ------------------------------------------------- |
 | `opencode` | Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
-| `opencode2` | Same provider routing as V1 (shares `opencode.json`; one-shot `--provider` / `--small-model` overlays rejected — see [docs/engines/opencode2.md](docs/engines/opencode2.md)) |
+| `opencode2` | Same canonical provider routing as V1 (transient `OPENCODE_CONFIG_CONTENT` overlay; protected proxy by default; explicit literal-1 `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` enables raw best-effort with an honest downgrade warning; see [docs/engines/opencode2.md](docs/engines/opencode2.md)) |
 | `crush`    | Z.AI GLM (coding-plan only)                       |
 
 `triss coder init` drives setup in that order — **engine, then provider,

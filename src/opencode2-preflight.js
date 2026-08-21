@@ -10,7 +10,7 @@
  * credential is forwarded:
  *
  *   1. ROUTE GATE: the modelUsed provider prefix must be one of the six
- *      advertised routes AND have a deterministic current-pin translation
+ *      advertised routes AND have a deterministic supported-beta translation
  *      fixture; an unproven route fails closed even when selected through
  *      persistent configuration rather than a one-shot flag.
  *   2. PROVIDER GATE: the effective provider projection for the selected
@@ -23,8 +23,11 @@
  *      attacker URL failed before), `provider.<id>.api` (higher V1 migration
  *      precedence than options.baseURL) is tracked, and model-level
  *      transport overrides (models.<id>.provider.{api,npm}) are rejected.
- *   3. PERMISSION GATE: the final ordered permission policy for the primary
- *      agent and every reachable subagent must be deny-everything for shell.
+ *   3. PERMISSION GATE: protected_proxy requires the final ordered permission
+ *      policy for the primary agent and every reachable subagent to be deny-
+ *      everything for shell. best_effort_raw is an explicit operator opt-in:
+ *      its raw credential warning is the boundary, so the normal V1 shell
+ *      policy is allowed to remain usable.
  *      This is a real last-match-wins evaluator over the merged
  *      rule list with wildcard action/resource semantics (findLast over
  *      action/resource glob matches) — not a `some(allow)` scan. The former
@@ -33,8 +36,9 @@
  *      not shadowed by a later wildcard deny fails the gate regardless of
  *      how narrow it is. Only dead (shadowed) allows are tolerated.
  *
- * Translation semantics verified live against the pinned build
- * v0.0.0-next-17430 (2026-08-15, `opencode2 debug config`):
+ * Translation semantics verified live against the supported beta's
+ * v0.0.0-beta-17793 compatibility floor and capability contract
+ * (minimum-version plus `run --help` probe; recovery-plan contract):
  *   V1 `permission.bash` entries  -> V2 `permissions` ordered rules
  *                                    {action:"shell", resource, effect}
  *   V1 `provider.<id>.npm`        -> V2 `providers.<id>.package`
@@ -51,7 +55,7 @@ import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-conf
 
 // ─── route fixtures ─────────────────────────────────────────────────────────
 //
-// A route is supported only when its exact V1->V2 translation is pinned here.
+// A route is supported only when its exact V1->V2 translation is recorded here.
 // Fields: the credential env Triss forwards for the prefix, the provider ids
 // the route may define, and whether the provider definition is TRISS-MANAGED
 // (written by `triss coder init` — endpoint/settings must match the managed
@@ -152,7 +156,7 @@ function isV2PermissionRule(rule) {
 }
 
 // The built-in agents ship a default policy where the primary agent allows
-// most tools (the pinned build's build agent defaults "*" -> allow for bash).
+// most tools (the supported beta's build agent defaults "*" -> allow for bash).
 // The audit must evaluate THAT baseline too, or a config with a single narrow
 // deny ("git status": "deny") passes while every other command stays allowed.
 const BUILTIN_AGENT_BASELINE_RULES = Object.freeze([
@@ -160,7 +164,7 @@ const BUILTIN_AGENT_BASELINE_RULES = Object.freeze([
 ]);
 
 /**
- * Wildcard matcher mirroring the pinned build's evaluator: "*" matches
+ * Wildcard matcher mirroring the supported beta's evaluator: "*" matches
  * anything; otherwise a case-sensitive glob where "*" is a any-run wildcard
  * (e.g. "git diff*" matches "git diff HEAD"). Escaped/regex metacharacters
  * are treated literally.
@@ -239,7 +243,7 @@ export const VETTED_BASH_ALLOWLIST = Object.freeze([]);
  *
  * @returns {{ rules, unsafe, reason, shellRuleCount }}
  */
-export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
+export function computeEffectivePermissionPolicy({ layerDocs, agentDoc, credentialMode = 'protected_proxy' } = {}) {
   const orderedRules = [...BUILTIN_AGENT_BASELINE_RULES];
   for (const doc of layerDocs) {
     if (!doc) continue;
@@ -257,6 +261,20 @@ export function computeEffectivePermissionPolicy({ layerDocs, agentDoc } = {}) {
     if (agentBash) {
       orderedRules.push(...translateV1BashPermissions(agentBash));
     }
+  }
+
+  // In best-effort mode the operator explicitly accepted that the selected
+  // raw credential is visible to the OpenCode process, repository code,
+  // plugins, tools, agents, and shell commands. Keep all structural/provider
+  // and TOCTOU gates intact, but do not make the deny-everything policy a
+  // second, contradictory credential-isolation gate.
+  if (credentialMode === 'best_effort_raw') {
+    return {
+      rules: orderedRules,
+      unsafe: false,
+      reason: 'best-effort-raw',
+      shellRuleCount: orderedRules.filter((r) => r.action === 'shell' || r.action === '*').length,
+    };
   }
 
   // 2. A wildcard shell deny must exist somewhere in the policy. Without it
@@ -457,6 +475,15 @@ const V2_TOP_LEVEL_TYPES = Object.freeze({
   modes: ['object'],
   agent: ['object'],
   agents: ['object'],
+  // These are executable OpenCode surfaces. They are schema-valid and are
+  // admitted only in the explicit best_effort_raw mode; protected_proxy
+  // rejects them in the executable-key gate below.
+  mcp: ['object'],
+  tool: ['object'],
+  tools: ['object'],
+  command: ['object'],
+  commands: ['object'],
+  experimental: ['object'],
   provider: ['object'],
   providers: ['object'],
   // lsp/formatter: the schema allows objects too, but an OBJECT form names a
@@ -487,7 +514,7 @@ const V2_EXECUTABLE_KEYS = Object.freeze({
 });
 
 // Legacy/native dual forms (invariant): when a document carries BOTH the
-// V1 and the V2 name of a security-critical field, the pinned build prefers
+// V1 and the V2 name of a security-critical field, the supported beta prefers
 // the NATIVE value — while Triss's projection reads `provider ?? providers`
 // (legacy first) and concatenates permission rules from both. Until there is
 // an exact canonical merger, any dual form fails closed: three independent
@@ -500,20 +527,23 @@ const V2_DUAL_FORM_PAIRS = Object.freeze([
   ['permission', 'permissions'],
 ]);
 
-export function assertV2DocumentShape(doc, layerPath) {
+export function assertV2DocumentShape(doc, layerPath, { credentialMode = 'protected_proxy' } = {}) {
+  if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
+    throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
+  }
   if (doc == null || typeof doc !== 'object' || Array.isArray(doc)) return;
   for (const [legacy, native] of V2_DUAL_FORM_PAIRS) {
     if (legacy in doc && native in doc) {
       throw new Error(
         `OpenCode 2 preflight aborted: ${layerPath} defines BOTH "${legacy}" (V1) and "${native}" (V2). ` +
-          `The pinned build prefers the native "${native}" value while Triss's audit models the legacy ` +
+          `The supported beta prefers the native "${native}" value while Triss's audit models the legacy ` +
           'one — the audited baseline would not be the running one. Keep exactly one form per document.',
       );
     }
   }
   for (const key of Object.keys(doc)) {
     const executable = V2_EXECUTABLE_KEYS[key];
-    if (executable) {
+    if (executable && credentialMode !== 'best_effort_raw') {
       throw new Error(
         `OpenCode 2 preflight aborted: ${layerPath} defines "${key}" — ${executable}. ` +
           'No local MCP/tool/command surface is verified for the beta; remove the block and re-run.',
@@ -569,7 +599,7 @@ export function assertV2DocumentShape(doc, layerPath) {
  *
  * @returns {{ sources, layerDocs, contentHashes: Array<{path, sha256}> }}
  */
-export function auditOpenCode2Documents({ cwd }, deps = {}) {
+export function auditOpenCode2Documents({ cwd, credentialMode = 'protected_proxy' }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Documents: cwd is required');
   const sources = (deps.enumerate || enumerateOpenCodeSources)({ cwd });
   const layerDocs = [];
@@ -588,7 +618,7 @@ export function auditOpenCode2Documents({ cwd }, deps = {}) {
     // command-bearing surfaces (mcp, tool, command, unknown keys) BEFORE the
     // provider/permission gates — a document the engine would drop whole
     // invalidates everything computed from it.
-    assertV2DocumentShape(doc, c.path);
+    assertV2DocumentShape(doc, c.path, { credentialMode });
     doc.__layerPath = c.path;
     layerDocs.push(doc);
     contentHashes.push({ path: c.path, sha256: createHash('sha256').update(text).digest('hex') });
@@ -624,18 +654,18 @@ export function verifyOpenCode2ContentHashes(contentHashes) {
   }
 }
 
-export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL }, deps = {}) {
+export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL, credentialMode = 'protected_proxy', allowManagedProviderAbsent = false }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Run: cwd is required');
   if (!modelUsed) throw new Error('auditOpenCode2Run: modelUsed is required');
 
-  const { sources, layerDocs, contentHashes } = auditOpenCode2Documents({ cwd }, deps);
+  const { sources, layerDocs, contentHashes } = auditOpenCode2Documents({ cwd, credentialMode }, deps);
 
   // 1. ROUTE GATE — final modelUsed prefix, however it was selected.
   const { prefix, fixture } = opencode2RouteFixture(modelUsed);
   if (!fixture) {
     throw new Error(
       `OpenCode 2 preflight aborted: model "${modelUsed}" uses provider route "${prefix}", which has no ` +
-        'verified current-pin translation fixture. Supported routes: '
+        'verified supported-beta translation fixture. Supported routes: '
         + `${Object.keys(OPENCODE2_ROUTE_FIXTURES).join(', ')}. `,
     );
   }
@@ -659,13 +689,19 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
   }
   if (fixture.managedProvider) {
     const translated = providers[prefix];
-    if (!translated) {
+    // An empty provider block carries no endpoint/package/header/credential
+    // override and is equivalent to the absent persistent definition when
+    // canonical transient routing is authoritative. Non-empty stale or
+    // hostile definitions still reach the managed-shape rejection below.
+    if ((!translated || Object.keys(translated).length === 0) && !allowManagedProviderAbsent) {
       throw new Error(
         `OpenCode 2 preflight aborted: the managed provider "${prefix}" is not defined in any auditable ` +
           'config layer — run `triss coder init --engine opencode --provider worker` first.',
       );
     }
-    const check = isManagedTrissWorkerTranslation(translated, expectedWorkerBaseURL);
+    const check = !translated || Object.keys(translated).length === 0
+      ? { ok: allowManagedProviderAbsent }
+      : isManagedTrissWorkerTranslation(translated, expectedWorkerBaseURL);
     if (!check.ok) {
       const detail = check.actual != null ? ` (baseURL "${check.actual}" != expected "${check.expected}")` : '';
       throw new Error(
@@ -697,7 +733,7 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
       if (block != null) agentBlock = block;
     }
   }
-  const policy = computeEffectivePermissionPolicy({ layerDocs, agentDoc: agentBlock });
+  const policy = computeEffectivePermissionPolicy({ layerDocs, agentDoc: agentBlock, credentialMode });
   if (policy.unsafe) {
     const detail = policy.detail ? ` (${policy.detail})` : '';
     if (policy.reason === 'no-wildcard-deny') {

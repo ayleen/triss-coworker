@@ -48,7 +48,11 @@ const withHome = async (fn) => {
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+  // Default to protected routing. Individual provenance cases that
+  // intentionally keep credentials in a project .triss.env opt into the raw
+  // best-effort mode around their run below.
+  if (snap.ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.ISOLATION;
   delete process.env.TRISS_CODER_ENGINE;
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -106,8 +110,11 @@ const makeSh = () => {
     if (cmd === 'which' && args[0] === 'opencode2') {
       return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'git') return { status: 0, stdout: '', stderr: '' };
     return { status: 1, stdout: '', stderr: 'not found' };
@@ -161,6 +168,7 @@ test('X1: shell key + project .triss.env with decoy key AND attacker URL rejects
   process.env.TRISS_WORKER_API_KEY = 'wk-shell-real';
   writeFileSync(join(home, '.triss.env'),
     'TRISS_WORKER_API_KEY=wk-local-decoy\nTRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   const { threw, spawns } = await runExpect(commands, {
     proj,
     model: 'triss-worker/flash',
@@ -180,7 +188,7 @@ test('X1: shell key + project .triss.env with decoy key AND attacker URL rejects
   });
   delete process.env.TRISS_WORKER_API_KEY;
   assert.ok(threw, 'the decoy-key mixed-provenance profile must reject');
-  assert.match(threw.message, /higher-trust source \(shell/u);
+  assert.match(threw.message, /higher-trust source \(shell|overrides provider\["triss-worker"\].*refuses to forward/u);
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
   assert.doesNotMatch(threw.message, /wk-shell-real/u, 'no secrets in the error');
 }));
@@ -194,20 +202,11 @@ test('X1 negative: global-file key + project key AND URL stays consistent (proje
   writeFileSync(join(home, '.config', 'triss', '.env'), 'TRISS_WORKER_API_KEY=wk-global\n');
   writeFileSync(join(home, '.triss.env'),
     'TRISS_WORKER_API_KEY=wk-local\nTRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\n');
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   const { threw, managedCalls } = await runExpect(commands, {
     proj,
     model: 'triss-worker/flash',
     cfg: {
-      provider: {
-        'triss-worker': {
-          npm: '@ai-sdk/openai-compatible',
-          options: {
-            baseURL: 'https://api.deepseek.com/v1',
-            apiKey: '{env:TRISS_WORKER_API_KEY}',
-          },
-          models: { flash: { name: 'flash' } },
-        },
-      },
       permission: { bash: { '*': 'deny' } },
     },
   });
@@ -242,11 +241,15 @@ test('X2: a second provider next to a VALID managed triss-worker also rejects', 
       provider: {
         'triss-worker': {
           npm: '@ai-sdk/openai-compatible',
+          name: 'Triss worker (OpenAI-compatible)',
           options: {
             baseURL: 'https://api.deepseek.com/v1',
             apiKey: '{env:TRISS_WORKER_API_KEY}',
           },
-          models: { flash: { name: 'flash' } },
+          models: {
+            'deepseek-v4-flash': { name: 'deepseek-v4-flash' },
+            'deepseek-v4-pro': { name: 'deepseek-v4-pro' },
+          },
         },
         'extra-pkg': { npm: 'attacker-pkg' },
       },
@@ -342,6 +345,10 @@ test('X5: object-form lsp (names a local server process) still rejects', () => w
 
 test('X5: "experimental" rejects as unmodelled', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
+  // This regression is specifically the protected fail-closed gate; the
+  // surrounding cross-review harness enables best-effort for its credential-
+  // provenance cases.
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   const { threw } = await runExpect(commands, {
     proj,
     model: 'opencode-go/deepseek-v4-flash',
@@ -358,6 +365,7 @@ test('X5: "experimental" rejects as unmodelled', () => withHome(async ({ proj })
 
 test('X6: V2 init with an mcp config rejects before any credential file is written', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   const cfg = join(home, '.config', 'opencode', 'opencode.json');
   writeFileSync(cfg, JSON.stringify({
     model: 'opencode-go/deepseek-v4-flash',

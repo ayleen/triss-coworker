@@ -151,7 +151,7 @@ test(
     // The resolved zen model is passed through explicitly via --model.
     const modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'opencode/hy3-free');
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/hy3-free');
   }),
 );
 
@@ -273,7 +273,7 @@ test(
         },
       );
       const modelIdx = capturedArgv.indexOf('--model');
-      assert.equal(capturedArgv[modelIdx + 1], 'opencode/hy3-free');
+      assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/hy3-free');
     },
   ),
 );

@@ -104,8 +104,11 @@ const makeSh = () => {
     if (cmd === 'which' && args[0] === 'opencode2') {
       return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'git') return { status: 0, stdout: '', stderr: '' };
     return { status: 1, stdout: '', stderr: 'not found' };
@@ -226,34 +229,25 @@ test('shell worker key + project-local TRISS_WORKER_BASE_URL rejects before the 
     delete process.env.TRISS_WORKER_API_KEY;
   }
   assert.ok(threw, 'mixed-provenance worker profile must reject');
-  assert.match(threw.message, /TRISS_WORKER_BASE_URL.*higher-trust|higher-trust source/u);
+  assert.match(threw.message, /overrides provider\["triss-worker"\]|refuses to forward/u);
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
   assert.doesNotMatch(threw.message, /wk-shell-secret/u, 'no secrets in the error');
 }));
 
-test('a fully project-scoped worker profile (key AND endpoint local) is consistent and reaches the pin gate', () => withHome(async ({ proj }) => {
+test('a project-scoped worker credential works without a persistent provider override', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // Both fields from the project file — consistent trust, so the provenance
   // gate passes and the run proceeds to the later provider audit.
   writeFileSync(join(process.env.TRISS_PROJECT_ROOT, '.triss.env'),
     'TRISS_WORKER_API_KEY=wk-local\nTRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\n');
   writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
-    provider: {
-      'triss-worker': {
-        npm: '@ai-sdk/openai-compatible',
-        options: {
-          baseURL: 'https://api.deepseek.com/v1',
-          apiKey: '{env:TRISS_WORKER_API_KEY}',
-        },
-        models: { flash: { name: 'flash' } },
-      },
-    },
     permission: { bash: { '*': 'deny' } },
   }));
   const { sh } = makeSh();
   const { spawnFn } = makeSpawn();
   const chunks = [];
-  // Must NOT throw the provenance error — a clean profile runs to completion.
+  // Canonical trusted routing is supplied by the transient overlay; no
+  // persistent worker provider is required in the config layer.
   await commands.runCoderRun('do work', { engine: 'opencode2', model: 'triss-worker/flash', cwd: proj }, { spawnSync: sh, spawn: spawnFn, stdoutWrite: (s) => chunks.push(s) });
   assert.match(chunks.join(''), /"ok"/u, 'consistent project profile runs');
 }));
@@ -262,6 +256,10 @@ test('a fully project-scoped worker profile (key AND endpoint local) is consiste
 
 test('a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is found)', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
+  // This provenance check is intentionally protected-mode: best-effort raw
+  // mode permits discovered agents by contract, while protected mode must
+  // still reject the physical hostile source before spawning.
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   // A physical project OUTSIDE the audited home, with a hostile agent source
   // in an ANCESTOR directory of it. The lexical audit of <home>/proj-link
   // walks home's parent chain and never sees outside/.opencode — but the

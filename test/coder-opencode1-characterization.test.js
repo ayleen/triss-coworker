@@ -12,7 +12,9 @@
  * adds the surfaces those suites do NOT pin: the exact spawned command line,
  * the env allowlist as forwarded today, the flat session-map persistence and
  * its best-effort (non-CAS) concurrency behavior, engine precedence text,
- * and the V1 pin identity.
+ * and the V1 pin identity. Best-effort raw mode is explicit in this fixture;
+ * it still uses the canonical transient provider route and exposes only the
+ * selected raw credential.
  *
  * No live network, no real opencode/npm calls.
  */
@@ -187,7 +189,7 @@ test(
         'do the thing',
         '--format', 'json',
         '--auto',
-        '--model', 'zai-coding-plan/glm-5.2',
+        '--model', 'triss-coder-transient/glm-5.2',
         '--agent', 'coder',
       ]);
       // detached POSIX group + piped stdio, exactly as today
@@ -198,12 +200,16 @@ test(
       assert.equal(options.env.PATH, process.env.PATH);
       assert.equal(options.env.ZHIPU_API_KEY, 'zk-char-1');
       assert.equal(options.env.OPENCODE_API_KEY, undefined);
-      assert.equal(options.env.OPENCODE_CONFIG_CONTENT, undefined);
+      const transientConfig = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+      assert.equal(transientConfig.model, 'triss-coder-transient/glm-5.2');
+      assert.equal(transientConfig.provider['triss-coder-transient'].options.apiKey, '{env:ZHIPU_API_KEY}');
+      assert.equal(transientConfig.provider['triss-coder-transient'].options.baseURL, 'https://api.z.ai/api/coding/paas/v4');
       for (const banned of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'TRISS_WORKER_API_KEY']) {
         assert.equal(options.env[banned], undefined, `${banned} must not be forwarded`);
       }
       const envelope = JSON.parse(capture.text().trim());
       assert.equal(envelope.engine, 'opencode');
+      assert.equal(envelope.credential_mode, 'best_effort_raw');
       assert.equal(envelope.exit_reason, 'end_turn');
     },
   ),
@@ -232,7 +238,7 @@ test(
 );
 
 test(
-  'characterization: one-shot provider run adds --pure and OPENCODE_CONFIG_CONTENT (model+small_model overlay)',
+  'characterization: one-shot provider run adds --pure and protected routing overlay without widening env access',
   withEnv(
     {
       OPENCODE_API_KEY: 'sk-zen-char',
@@ -249,22 +255,10 @@ test(
           disableCredentialProxy: true,
           spawn: rec.spawnFn,
           // one-shot provider runs demand the exact V1 pin via
-          // detectOpencodeVersion; the fake binary reports it. The effective
-          // audit then runs `opencode debug config --pure` via spawnSync —
-          // replay a matching effective config for the overlay.
+          // detectOpencodeVersion; the fake binary reports it.
           spawnSync: (c, a) => {
             if (c === 'opencode' && a[0] === '--version') {
               return { status: 0, stdout: OPENCODE_PIN, error: null };
-            }
-            if (c === 'opencode' && a[0] === 'debug') {
-              return {
-                status: 0,
-                error: null,
-                stdout: JSON.stringify({
-                  model: 'opencode/deepseek-v4-flash-free',
-                  small_model: 'opencode/deepseek-v4-flash-free',
-                }),
-              };
             }
             return { status: 1, stdout: '', error: null };
           },
@@ -274,10 +268,11 @@ test(
       const { argv, options } = rec.calls[0];
       assert.ok(argv.includes('--pure'), 'one-shot provider run carries --pure');
       const overlay = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
-      assert.deepEqual(overlay, {
-        model: 'opencode/deepseek-v4-flash-free',
-        small_model: 'opencode/deepseek-v4-flash-free',
-      });
+      assert.equal(overlay.model, 'triss-coder-transient/deepseek-v4-flash-free');
+      assert.equal(overlay.small_model, 'triss-coder-transient/deepseek-v4-flash-free');
+      assert.equal(overlay.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible');
+      assert.equal(overlay.provider['triss-coder-transient'].options.apiKey, '{env:OPENCODE_API_KEY}');
+      assert.match(overlay.provider['triss-coder-transient'].options.baseURL, /^https:\/\/opencode\.ai\/zen\/v1$/);
       // only the selected provider's key rides along
       assert.equal(options.env.OPENCODE_API_KEY, 'sk-zen-char');
       assert.equal(options.env.ZHIPU_API_KEY, undefined);
@@ -404,7 +399,9 @@ test(
       assert.equal(envelope.usage.tokens.input_uncached, 11);
       assert.equal(envelope.usage.tokens.output_visible, 7);
       assert.equal(envelope.usage.tokens.input_total, 14);
-      assert.deepEqual(envelope.warnings, []);
+      assert.deepEqual(envelope.warnings, [
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+      ]);
     },
   ),
 );

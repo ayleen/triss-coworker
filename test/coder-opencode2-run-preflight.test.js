@@ -72,8 +72,11 @@ const makeSh = () => {
     if (cmd === 'realpath' && args[0] === FAKE_OC2_PATH) {
       return { status: 0, stdout: `${FAKE_OC2_PATH}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd === 'opencode2') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'opencode' && args[0] === '--version') {
       return { status: 0, stdout: '1.18.7\n', stderr: '' };
