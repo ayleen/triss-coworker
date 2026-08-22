@@ -26,8 +26,15 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { OPENCODE_PIN, runCoderRun } from '../src/commands/coder.js';
+import { OPENCODE_PIN, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { stripAnsi } from './_ansi.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(new URL('.', import.meta.url).pathname, 'fixtures', 'opencode-run-events.ndjson');
 const FIXTURE = readFileSync(FIXTURE_PATH, 'utf8');

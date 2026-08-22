@@ -25,8 +25,9 @@ import { join } from 'node:path';
 
 import {
   OPENCODE_PIN,
-  runCoderRun,
+  runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import {
   CODER_PROVIDER_REGISTRY,
   CODER_TRANSIENT_PROVIDER_ALIAS,
@@ -35,6 +36,11 @@ import {
 
 const DOWNGRADE_WARNING =
   'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.';
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 const CREDENTIAL_ENVS = [
   'TRISS_WORKER_API_KEY',
   'ZHIPU_API_KEY',
@@ -868,6 +874,36 @@ test('protected Go grok-4.5 reaches the exact Responses loopback/upstream path',
       url: 'https://opencode.ai/zen/go/v1/responses',
       body: { model: 'grok-4.5', input: 'x' },
     }]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('protected V1 falls back from an unaudited persisted same-provider small model to the audited main route', async () => {
+  const home = makeIsolatedHome();
+  const routeCase = CASES.find(({ kind }) => kind === 'opencode-zen');
+  try {
+    await withMatrixEnvironment(home, routeCase, async () => {
+      process.env.TRISS_CODER_MODEL = 'opencode/deepseek-v4-flash-free';
+      process.env.TRISS_CODER_SMALL_MODEL = 'opencode/gemini-3-flash';
+      const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM('ses_stale_small_fallback'));
+      await runCoderRun('protected stale small fallback', { engine: 'opencode' }, {
+        spawn: spawnFn,
+        spawnSync: recordingSpawnSync,
+        credentialProxyOptions: {
+          fetchImpl: async () => new Response('{}', {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        },
+        stdoutWrite: () => {},
+      });
+      assert.equal(calls.length, 1);
+      const config = JSON.parse(calls[0].options.env.OPENCODE_CONFIG_CONTENT);
+      assert.equal(config.model, 'triss-coder-transient/deepseek-v4-flash-free');
+      assert.equal(config.small_model, 'triss-coder-transient/deepseek-v4-flash-free');
+      assert.equal(config.provider[CODER_TRANSIENT_PROVIDER_ALIAS].models['gemini-3-flash'], undefined);
+    }, { bestEffort: false });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

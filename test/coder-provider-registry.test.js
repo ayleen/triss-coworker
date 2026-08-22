@@ -6,6 +6,7 @@ import {
   buildCoderTransientProviderOverlay,
   resolveCoderCredentialMode,
   resolveCoderProviderRoute,
+  resolveCoderRuntimeProviderRoute,
 } from '../src/coder-providers.js';
 
 test('credential mode requires the literal one acknowledgement and is not caller-worktree isolation', () => {
@@ -14,6 +15,14 @@ test('credential mode requires the literal one acknowledgement and is not caller
   for (const value of ['true', 'yes', 'on', '01', 1, true]) {
     assert.equal(resolveCoderCredentialMode({ TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: value }), 'protected_proxy');
   }
+});
+
+test('runtime resolver preserves the historical bare-model Z.AI route', () => {
+  const route = resolveCoderRuntimeProviderRoute('deepseek-v4-flash');
+  assert.equal(route.model, 'deepseek-v4-flash');
+  assert.equal(route.provider, 'zai');
+  assert.equal(route.endpoint, 'https://api.z.ai');
+  assert.equal(resolveCoderRuntimeProviderRoute('unknown/prefixed'), null);
 });
 
 test('canonical registry covers every advertised provider prefix and transport', () => {

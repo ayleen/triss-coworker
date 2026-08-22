@@ -20,7 +20,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveCoderEngine, runCoderRun, validateCoderRunOptions } from '../src/commands/coder.js';
+import { resolveCoderEngine, runCoderRun as runCoderRunProduction, validateCoderRunOptions } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 import {
   opencode2,
   OPENCODE2_PIN_DEFAULT,

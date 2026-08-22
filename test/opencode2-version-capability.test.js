@@ -133,14 +133,58 @@ test('service process snapshots ignore pre-existing PIDs and reject a delayed ne
   assert.equal(clean.satisfiesMinimum, true, 'per-run process proof must not poison cached CLI capabilities');
 });
 
-test('service process snapshot failure fails compatibility closed', () => {
+test('service process snapshot failure degrades to an explicit best-effort warning', () => {
   const result = detectOpenCode2(
     probeFixture('/tmp/opencode2-snapshot-failure'),
     probeFs,
     { snapshot: () => ({ ok: false, pids: new Set() }), graceMs: 0 },
   );
+  assert.equal(result.satisfiesMinimum, true);
+  assert.equal(result.capabilities.ok, true);
+  assert.equal(result.capabilities.serviceProcessCheck, 'unavailable');
+  assert.equal(result.capabilities.warning, 'service-process-snapshot-unavailable');
+});
+
+test('detectOpenCode2 is total when isolated probe setup fails and cleans a partially-created root', () => {
+  const removed = [];
+  const fs = {
+    ...probeFs,
+    mkdtempSync: () => '/tmp/opencode2-partial-probe',
+    mkdirSync: () => {
+      const err = new Error('read only');
+      err.code = 'EACCES';
+      throw err;
+    },
+    rmSync: (path) => removed.push(path),
+  };
+  const result = detectOpenCode2(probeFixture('/tmp/opencode2-probe-setup-failure'), fs, {
+    snapshot: () => new Set(),
+    graceMs: 0,
+  });
+  assert.equal(result.found, true);
   assert.equal(result.satisfiesMinimum, false);
-  assert.equal(result.capabilities.reason, 'service-process-snapshot-unavailable');
+  assert.equal(result.capabilities.reason, 'capability-probe-unavailable');
+  assert.equal(result.capabilities.detail, 'EACCES');
+  assert.deepEqual(removed, ['/tmp/opencode2-partial-probe']);
+});
+
+test('same path and version are re-probed so a replaced build cannot remain cached', () => {
+  let helpCalls = 0;
+  const sh = (file, args) => {
+    if (file === 'which') return { status: 0, stdout: '/tmp/opencode2-replaced\n' };
+    if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n' };
+    if (args[0] === 'run') {
+      helpCalls += 1;
+      return helpCalls === 1
+        ? { status: 0, stdout: '--format --auto --model\n' }
+        : { status: 0, stdout: '--standalone --format --auto --model\n' };
+    }
+    return { status: 1, stdout: '' };
+  };
+  const processTools = { snapshot: () => new Set(), graceMs: 0 };
+  assert.equal(detectOpenCode2(sh, probeFs, processTools).satisfiesMinimum, false);
+  assert.equal(detectOpenCode2(sh, probeFs, processTools).satisfiesMinimum, true);
+  assert.equal(helpCalls, 2);
 });
 
 test('a delayed snapshot is checked within the bounded grace window', () => {

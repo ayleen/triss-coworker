@@ -29,10 +29,17 @@ import {
   CODER_MANIFEST,
   OPENCODE_PIN,
   runCoderInit,
-  runCoderRun,
+  runCoderRun as runCoderRunProduction,
   runCoderSetup,
 } from '../src/commands/coder.js';
 import { resolveCoderProviderRoute } from '../src/coder-providers.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 test('CLI: coder init --help explains the explicit Go provider requirement and alias', () => {
   const result = spawnSync(

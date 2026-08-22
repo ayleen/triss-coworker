@@ -23,8 +23,15 @@ import {
   parseRateLimitReset,
   rateLimitMessage,
   findRecentRateLimit,
-  runCoderRun,
+  runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const LIMIT_MSG =
   'AI_APICallError: Usage limit reached for 5 hour. Your limit will reset at 2026-07-04 19:39:04';

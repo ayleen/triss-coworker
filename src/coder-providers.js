@@ -154,6 +154,18 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   });
 }
 
+// Historical V1 compatibility: a safe bare model id has always meant the
+// Z.AI PAYG route. Keep that rule in the shared resolver so runtime and status
+// cannot disagree about a model that `triss coder run` will accept.
+export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
+  const direct = resolveCoderProviderRoute(model, registry);
+  if (direct) return direct;
+  const bare = String(model || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(bare)) return null;
+  const historical = resolveCoderProviderRoute(`zai/${bare}`, registry);
+  return historical ? Object.freeze({ ...historical, model: bare }) : null;
+}
+
 export function coderRoutesShareTransport(left, right) {
   return Boolean(left && right &&
     left.provider === right.provider &&

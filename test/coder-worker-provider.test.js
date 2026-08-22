@@ -24,8 +24,9 @@ import {
   normalizeProviderFlag,
   OPENCODE_PIN,
   runCoderInit,
-  runCoderRun,
+  runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import {
   inspectCoderModelState,
   listProviderModels,
@@ -33,6 +34,12 @@ import {
   planModelChange,
   resolveProviderIntent,
 } from '../src/coder-models.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,

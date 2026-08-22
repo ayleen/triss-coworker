@@ -27,6 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 const loadConfig = async () => import('../src/opencode-config.js');
@@ -170,7 +171,11 @@ test('V1 --isolate --session with a corrupted sessions.json cleans the worktree'
   const { sh } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode', session: 'r6iso', isolate: true }, { spawnSync: sh, cwd: home });
+    await commands.runCoderRun('do work', { engine: 'opencode', session: 'r6iso', isolate: true }, {
+      spawnSync: sh,
+      cwd: home,
+      effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    });
   } catch (err) {
     threw = err;
   }

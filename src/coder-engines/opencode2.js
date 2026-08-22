@@ -40,13 +40,14 @@ import { parseRateLimitReset } from '../commands/coder.js';
 export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-17793';
 export const OPENCODE2_SMALL_MODEL_UNUSED_WARNING =
   'OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.';
+export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
+  'OPENCODE2_SERVICE_SNAPSHOT_UNAVAILABLE: the host cannot inspect resident OpenCode 2 service processes; continuing with the verified --standalone CLI contract as best effort.';
 // Deprecated export/name retained for callers during the migration.  It now
 // denotes the minimum accepted version rather than an exact build pin.
 const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
-const capabilityCache = new Map();
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -98,33 +99,49 @@ export function opencode2VersionPin() {
 export { OPENCODE2_PIN_DEFAULT };
 
 export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
-  const key = `${path}\0${version || ''}`;
-  if (capabilityCache.has(key)) return capabilityCache.get(key);
-  const helpResult = sh(path, ['run', '--help'], { env });
+  let helpResult;
+  try {
+    helpResult = sh(path, ['run', '--help'], { env });
+  } catch (err) {
+    helpResult = { status: 1, error: err, stdout: '', stderr: '' };
+  }
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
   const missing = REQUIRED_CAPABILITIES.filter((flag) => !help.includes(flag));
-  const result = !parseOpenCode2Version(version)
+  return !parseOpenCode2Version(version)
     ? { ok: false, version, reason: 'unsupported-version', missing: [], help: '' }
     : !helpResult || helpResult.error || helpResult.status !== 0 || missing.length
       ? { ok: false, version, reason: 'unsupported-cli-contract', missing, help }
       : { ok: true, version, missing: [], help };
-  capabilityCache.set(key, result);
-  return result;
 }
 
-function isolatedCapabilityEnv(baseEnv) {
-  const root = mkdtempSync(join(tmpdir(), 'triss-opencode2-probe-'));
-  const env = {
-    ...baseEnv,
-    HOME: root,
-    XDG_CONFIG_HOME: join(root, 'config'),
-    XDG_DATA_HOME: join(root, 'data'),
-    XDG_STATE_HOME: join(root, 'state'),
-  };
-  for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME]) {
-    mkdirSync(path, { recursive: true, mode: 0o700 });
+function isolatedCapabilityEnv(baseEnv, fs = {}) {
+  const makeTemp = fs.mkdtempSync || mkdtempSync;
+  const makeDir = fs.mkdirSync || mkdirSync;
+  const remove = fs.rmSync || rmSync;
+  let root = null;
+  try {
+    root = makeTemp(join(tmpdir(), 'triss-opencode2-probe-'));
+    const env = {
+      ...baseEnv,
+      HOME: root,
+      XDG_CONFIG_HOME: join(root, 'config'),
+      XDG_DATA_HOME: join(root, 'data'),
+      XDG_STATE_HOME: join(root, 'state'),
+    };
+    for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME]) {
+      makeDir(path, { recursive: true, mode: 0o700 });
+    }
+    return { root, env, remove };
+  } catch (err) {
+    if (root) {
+      try {
+        remove(root, { recursive: true, force: true });
+      } catch {
+        // Preserve the original probe setup error.
+      }
+    }
+    throw err;
   }
-  return { root, env };
 }
 
 function servicePids(spawnSync = nodeSpawnSync) {
@@ -224,60 +241,85 @@ export function detectOpenCode2(
   } catch {
     return { found: false, path: null, version: null, satisfiesPin: false };
   }
-  let versionResult;
-  const isolated = isolatedCapabilityEnv(probeEnv);
-  const snapshotServices = processTools.snapshot || (() => servicePids(processTools.spawnSync || nodeSpawnSync));
-  const beforeService = normalizeServiceSnapshot(snapshotServices());
+  let isolated = null;
   try {
+    isolated = isolatedCapabilityEnv(probeEnv, fs);
+    const snapshotServices = processTools.snapshot || (() => servicePids(processTools.spawnSync || nodeSpawnSync));
+    const beforeService = normalizeServiceSnapshot(snapshotServices());
     // The two commands are intentionally explicit.  In particular, do not
     // replace this with `debug config`: some beta builds start a resident
     // service for that command.
-    versionResult = sh(realPath, ['--version'], { env: isolated.env });
-  } catch {
-    rmSync(isolated.root, { recursive: true, force: true });
-    return { found: false, path: realPath, version: null, satisfiesPin: false, satisfiesMinimum: false, capabilities: null };
+    const versionResult = sh(realPath, ['--version'], { env: isolated.env });
+    const versionOutput = String(versionResult?.stdout || '').trim();
+    const version = parseOpenCode2VersionOutput(versionOutput);
+    if (!versionResult || versionResult.error || versionResult.status !== 0 || !version) {
+      return { found: false, path: realPath, version, satisfiesPin: false, satisfiesMinimum: false, meetsMinimum: false, capabilities: null };
+    }
+    const baseProbe = probeOpenCode2Capabilities(realPath, version, sh, isolated.env);
+    const probe = { ...baseProbe, missing: [...(baseProbe.missing || [])] };
+    let afterService = normalizeServiceSnapshot(snapshotServices());
+    if (afterService.ok && beforeService.ok && ![...afterService.pids].some((pid) => !beforeService.pids.has(pid))) {
+      boundedProbeSleep(processTools.graceMs ?? 20);
+      afterService = normalizeServiceSnapshot(snapshotServices());
+    }
+    const newServicePids = [...afterService.pids].filter((pid) => !beforeService.pids.has(pid));
+    if (!beforeService.ok || !afterService.ok) {
+      // `ps -axo` is not portable to every supported minimal/container host.
+      // The verified --standalone CLI contract remains usable; surface the
+      // missing behavioral proof as a best-effort warning instead of turning
+      // a compatible binary into a false version/capability mismatch.
+      probe.serviceProcessCheck = 'unavailable';
+      probe.warning = 'service-process-snapshot-unavailable';
+    } else if (newServicePids.length) {
+      probe.ok = false;
+      probe.reason = 'capability-probe-started-service';
+      probe.serviceProcessCheck = 'failed';
+    } else {
+      probe.serviceProcessCheck = 'passed';
+    }
+    const minimum = parseOpenCode2Version(opencode2MinimumVersion());
+    const installed = parseOpenCode2Version(version);
+    const satisfiesMinimum = !!(
+      probe.ok && minimum && installed && compareOpenCode2Versions(installed, minimum) >= 0
+    );
+    return {
+      found: true,
+      path: realPath,
+      version,
+      minimumVersion: opencode2MinimumVersion(),
+      satisfiesMinimum,
+      meetsMinimum: satisfiesMinimum,
+      // Compatibility alias for older status/tests.  It deliberately follows
+      // minimum semantics and is not an exact equality check anymore.
+      satisfiesPin: satisfiesMinimum,
+      capabilities: probe,
+    };
+  } catch (err) {
+    return {
+      found: true,
+      path: realPath,
+      version: null,
+      minimumVersion: opencode2MinimumVersion(),
+      satisfiesMinimum: false,
+      meetsMinimum: false,
+      satisfiesPin: false,
+      capabilities: {
+        ok: false,
+        reason: 'capability-probe-unavailable',
+        detail: err?.code || err?.message || String(err),
+        missing: [],
+        help: '',
+      },
+    };
+  } finally {
+    if (isolated) {
+      try {
+        isolated.remove(isolated.root, { recursive: true, force: true });
+      } catch {
+        // Detection remains total even when cleanup itself is unavailable.
+      }
+    }
   }
-  const versionOutput = String(versionResult?.stdout || '').trim();
-  const version = parseOpenCode2VersionOutput(versionOutput);
-  if (!versionResult || versionResult.error || versionResult.status !== 0 || !version) {
-    rmSync(isolated.root, { recursive: true, force: true });
-    return { found: false, path: realPath, version, satisfiesPin: false, satisfiesMinimum: false, meetsMinimum: false, capabilities: null };
-  }
-  // Never mutate the cached capability result: service-process proof is a
-  // per-detection observation layered on top of the immutable CLI probe.
-  const cachedProbe = probeOpenCode2Capabilities(realPath, version, sh, isolated.env);
-  const probe = { ...cachedProbe, missing: [...(cachedProbe.missing || [])] };
-  let afterService = normalizeServiceSnapshot(snapshotServices());
-  if (afterService.ok && beforeService.ok && ![...afterService.pids].some((pid) => !beforeService.pids.has(pid))) {
-    boundedProbeSleep(processTools.graceMs ?? 20);
-    afterService = normalizeServiceSnapshot(snapshotServices());
-  }
-  const newServicePids = [...afterService.pids].filter((pid) => !beforeService.pids.has(pid));
-  rmSync(isolated.root, { recursive: true, force: true });
-  if (!beforeService.ok || !afterService.ok) {
-    probe.ok = false;
-    probe.reason = 'service-process-snapshot-unavailable';
-  } else if (newServicePids.length) {
-    probe.ok = false;
-    probe.reason = 'capability-probe-started-service';
-  }
-  const minimum = parseOpenCode2Version(opencode2MinimumVersion());
-  const installed = parseOpenCode2Version(version);
-  const satisfiesMinimum = !!(
-    probe.ok && minimum && installed && compareOpenCode2Versions(installed, minimum) >= 0
-  );
-  return {
-    found: !!version,
-    path: realPath,
-    version,
-    minimumVersion: opencode2MinimumVersion(),
-    satisfiesMinimum,
-    meetsMinimum: satisfiesMinimum,
-    // Compatibility alias for older status/tests.  It deliberately follows
-    // minimum semantics and is not an exact equality check anymore.
-    satisfiesPin: satisfiesMinimum,
-    capabilities: probe,
-  };
 }
 
 export function installHintOpenCode2() {

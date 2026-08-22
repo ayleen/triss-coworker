@@ -45,6 +45,7 @@ import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
 import {
   resolveCoderProviderRoute,
+  resolveCoderRuntimeProviderRoute,
   coderRoutesShareTransport,
   buildCoderTransientProviderOverlay,
   CODER_TRANSIENT_PROVIDER_ALIAS,
@@ -123,6 +124,7 @@ import {
   foldOpenCode2EventLine,
   opencode2LogPath,
   OPENCODE2_SMALL_MODEL_UNUSED_WARNING,
+  OPENCODE2_SERVICE_SNAPSHOT_WARNING,
 } from '../coder-engines/opencode2.js';
 import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashes, computeEffectivePermissionPolicy } from '../opencode2-preflight.js';
 // One canonical walker enumerates every opencode.json layer plus plugin and
@@ -1682,14 +1684,12 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // configuration semantics may differ from the spawned engine.
   const det = detectOpenCode2(sh);
   if (!det.found || !det.satisfiesPin) {
-    throw new Error(
-      `opencode2 ${det.found ? `v${det.version}` : 'not found'} does not satisfy the minimum ` +
-        `v${opencode2VersionPin()} and capability contract — managed V2 setup requires a compatible beta first ` +
-        `(${installHintOpenCode2()}). A compatibility mismatch is a terminal failure, never a warning; ` +
-        'no configuration was changed.',
-    );
+    throw openCode2CompatibilityError(det, 'setup; no configuration was changed');
   }
   process.stderr.write(pc.green(`  ✓ opencode2 ${det.version} (meets minimum ${opencode2VersionPin()} + capability contract)\n`));
+  if (det.capabilities?.warning === 'service-process-snapshot-unavailable') {
+    process.stderr.write(pc.yellow(`  ⚠ ${OPENCODE2_SERVICE_SNAPSHOT_WARNING}\n`));
+  }
   // (3) Credential + scope — the V1 head flow. The worker-shell snapshot is
   // taken BEFORE loadEnvFiles() (invariant): snapshotting after the dotenv
   // merge made a local .triss.env value indistinguishable from a genuine
@@ -2462,15 +2462,7 @@ export function coderCredentialEndpoint(credEnv, modelUsed) {
 // validated by workerCoderProfile, so split that URL into the exact upstream
 // origin and path sent to the parent-owned proxy.
 function resolveRuntimeCoderProviderRoute(model, workerSettings, { requireAudited = true } = {}) {
-  let route = resolveCoderProviderRoute(model);
-  // Several established V1 paths still pass a bare provider model id (most
-  // notably `deepseek-v4-flash`). Preserve that historical default by
-  // treating a safe, unqualified id as a Z.AI PAYG model for transport
-  // routing. Qualified unknown prefixes remain rejected by the registry.
-  if (!route && /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(String(model || ''))) {
-    const historical = resolveCoderProviderRoute(`zai/${model}`);
-    if (historical) route = Object.freeze({ ...historical, model: String(model) });
-  }
+  const route = resolveCoderRuntimeProviderRoute(model);
   if (!route) {
     throw new Error(
       `No protected OpenCode transport route is registered for model "${model}"; ` +
@@ -2662,18 +2654,6 @@ function isManagedWorkerProvider(value) {
   ));
 }
 
-function readWorkerConfigLayer(scope) {
-  const path = opencodeConfigPath(scope);
-  if (!existsSync(path)) return { path, exists: false, config: null };
-  try {
-    const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('not an object');
-    return { path, exists: true, config };
-  } catch {
-    return { path, exists: true, config: null };
-  }
-}
-
 function opencodeConfigAuditPaths(cwd, { projectRoot: configRoot } = {}) {
   const globalDir = dirname(opencodeConfigPath('global'));
   const paths = [
@@ -2789,12 +2769,11 @@ function auditOneShotProviderConfiguration(model, {
   }
 }
 
-function auditEffectiveOneShotProviderConfiguration(
+function auditEffectiveOpenCodeConfiguration(
   sh,
-  model,
-  smallModel,
+  requestedModels,
   configContent,
-  { cwd, credentialEnv, allowedProvider } = {},
+  { cwd, credentialEnv } = {},
 ) {
   // OpenCode loads account/org, managed-directory, and macOS MDM layers after
   // OPENCODE_CONFIG_CONTENT. Ask the pinned binary for the final merged config
@@ -2827,20 +2806,25 @@ function auditEffectiveOneShotProviderConfiguration(
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('The final effective OpenCode configuration is not a JSON object.');
   }
-  if (config.model !== model) {
+  let expected;
+  try {
+    expected = JSON.parse(configContent);
+  } catch {
+    throw new Error('Cannot parse the Triss run-scoped OpenCode configuration before auditing it.');
+  }
+  if (config.model !== expected.model) {
     throw new Error(
-      `The final effective OpenCode model is ${JSON.stringify(config.model)}, not ${JSON.stringify(model)}; ` +
+      `The final effective OpenCode model is ${JSON.stringify(config.model)}, not ${JSON.stringify(expected.model)}; ` +
         'Triss refuses to forward the selected credential.',
     );
   }
-  if (config.small_model !== smallModel) {
+  if (config.small_model !== expected.small_model) {
     throw new Error(
       `The final effective OpenCode small_model is ${JSON.stringify(config.small_model)}, not ` +
-        `${JSON.stringify(smallModel)}; Triss refuses to forward the selected credential.`,
+        `${JSON.stringify(expected.small_model)}; Triss refuses to forward the selected credential.`,
     );
   }
 
-  const providerId = String(model).split('/')[0];
   const providers = config.provider;
   if (providers !== undefined && (
     !providers || typeof providers !== 'object' || Array.isArray(providers)
@@ -2849,68 +2833,33 @@ function auditEffectiveOneShotProviderConfiguration(
       'Cannot safely audit provider overrides in the final effective OpenCode configuration.',
     );
   }
-  const hasSelectedProvider = Object.prototype.hasOwnProperty.call(providers || {}, providerId);
-  if (allowedProvider) {
-    const expectedProvider = {
-      ...allowedProvider,
-      options: {
-        ...allowedProvider.options,
-        apiKey: probeCredential,
-      },
-    };
-    if (!hasSelectedProvider || !isDeepStrictEqual(providers[providerId], expectedProvider)) {
+  const expectedProviders = expected.provider || {};
+  for (const [expectedProviderId, expectedProviderDefinition] of Object.entries(expectedProviders)) {
+    const expectedProvider = structuredClone(expectedProviderDefinition);
+    if (expectedProvider?.options?.apiKey === `{env:${credentialEnv}}`) {
+      expectedProvider.options.apiKey = probeCredential;
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(providers || {}, expectedProviderId) ||
+      !isDeepStrictEqual(providers[expectedProviderId], expectedProvider)
+    ) {
       throw new Error(
-        `The final effective OpenCode provider["${providerId}"] differs from the Triss-managed definition; ` +
+        `The final effective OpenCode provider["${expectedProviderId}"] differs from the Triss-managed definition; ` +
           'Triss refuses to forward the selected credential.',
       );
     }
-  } else if (hasSelectedProvider) {
-    throw new Error(
-      `The final effective OpenCode configuration overrides provider["${providerId}"]; ` +
-        'Triss refuses to forward the selected credential.',
-    );
   }
-}
-
-function validateWorkerRunConfiguration(model, settings, { oneShotSmallModel } = {}) {
-  const profile = workerCoderProfile(settings);
-  const allowed = new Set(profile.models.map((id) => `triss-worker/${id}`));
-  const local = readWorkerConfigLayer('local');
-  const global = readWorkerConfigLayer('global');
-  const localProvider = local.config?.provider?.['triss-worker'];
-  const globalProvider = global.config?.provider?.['triss-worker'];
-  const effectiveProvider = localProvider === undefined ? globalProvider : localProvider;
-  const effectiveScope = localProvider === undefined ? 'global' : 'local';
-  const expected = workerProviderDefinition(
-    { kind: 'worker', workerProfile: profile },
-    `triss-worker/${profile.flashModel}`,
-    `triss-worker/${profile.flashModel}`,
-  );
-  const effectiveModel = typeof local.config?.model === 'string'
-    ? local.config.model
-    : global.config?.model;
-  const effectiveSmall = typeof local.config?.small_model === 'string'
-    ? local.config.small_model
-    : global.config?.small_model;
-  const invalidLayer = (local.exists && !local.config) || (global.exists && !global.config);
-  const modelsToValidate = oneShotSmallModel
-    ? [model, oneShotSmallModel]
-    : [model, effectiveModel, effectiveSmall];
-  const modelsValid = modelsToValidate
-    .filter(Boolean)
-    .every((value) => allowed.has(value));
-  if (!invalidLayer && modelsValid && isDeepStrictEqual(effectiveProvider, expected)) {
-    return { apiKey: settings.apiKey, scope: effectiveScope, profile };
+  if (Object.keys(expectedProviders).length === 0) {
+    for (const model of requestedModels) {
+      const providerId = String(model).split('/')[0];
+      if (Object.prototype.hasOwnProperty.call(providers || {}, providerId)) {
+        throw new Error(
+          `The final effective OpenCode configuration overrides provider["${providerId}"]; ` +
+            'Triss refuses to forward the selected credential.',
+        );
+      }
+    }
   }
-
-  const recoveryScope = localProvider !== undefined || (local.exists && (
-    typeof local.config?.model === 'string' || typeof local.config?.small_model === 'string'
-  )) ? 'local' : 'global';
-  const command = `triss coder init --engine opencode --provider worker --${recoveryScope}`;
-  throw new Error(
-    'The effective OpenCode triss-worker provider, endpoint, or flash/pro model allowlist is missing ' +
-      `or stale. Refresh it before the credential is forwarded:\n  ${command}`,
-  );
 }
 
 function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
@@ -3409,6 +3358,23 @@ function gitBranchDeleteSafe(sh, repoRoot, branch) {
   return !!r && !r.error && r.status === 0;
 }
 
+function openCode2CompatibilityError(detected, operation) {
+  const identity = detected.found
+    ? detected.version
+      ? `v${detected.version}`
+      : `found at ${detected.path || '(unknown path)'}, version unavailable`
+    : 'not found';
+  const reason = detected.capabilities?.reason;
+  const recovery = reason === 'capability-probe-unavailable'
+    ? `Fix the temporary-directory/probe environment and retry (${detected.capabilities.detail || 'probe unavailable'}); ` +
+      'reinstalling the CLI does not repair this host error.'
+    : `Install a compatible beta (${installHintOpenCode2()}) and retry.`;
+  return new Error(
+    `opencode2 ${identity} does not satisfy the minimum v${opencode2VersionPin()} and capability contract ` +
+      `required for managed V2 ${operation}. ${recovery}`,
+  );
+}
+
 // ─── status helper ───────────────────────────────────────────────────────────
 
 // Read-only snapshot used by `triss status`. Never throws — every check
@@ -3472,6 +3438,7 @@ export function describeCoderStatus(deps = {}) {
       satisfiesMinimum: oc2Detect.satisfiesMinimum,
       satisfiesPin: oc2Detect.satisfiesPin,
       pin: opencode2VersionPin(),
+      serviceProcessCheck: oc2Detect.capabilities?.serviceProcessCheck || null,
     },
     defaultEngine,
     defaultModel,
@@ -5630,9 +5597,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const routeCandidate = engine !== 'crush'
     ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: false })
     : null;
-  const smallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
+  let smallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
     ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: false })
     : routeCandidate;
+  // A stale persisted same-provider small pin must not brick an otherwise
+  // audited protected run. Explicit one-shot --small-model remains strict;
+  // only the implicit persisted role falls back to the main audited route.
+  if (
+    protectedRouting && engine === 'opencode' && !oneShotSmallModel &&
+    ['opencode-zen', 'opencode-go'].includes(smallRouteCandidate?.provider) &&
+    !smallRouteCandidate.transportAudited && routeCandidate?.transportAudited
+  ) {
+    smallModelUsed = modelUsed;
+    smallRouteCandidate = routeCandidate;
+  }
   const rawBuiltInRoute = credentialMode === 'best_effort_raw' &&
     ['opencode-zen', 'opencode-go'].includes(routeCandidate?.provider) &&
     (!routeCandidate.transportAudited || (
@@ -5704,21 +5682,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (rawCredentialWarning) {
     process.stderr.write(pc.yellow(`  ⚠ ${rawCredentialWarning}\n`));
   }
-  let oneShotAuditOptions = null;
-  if (credentialMode !== 'best_effort_raw' && !protectedRouting && engine === 'opencode' && cred.provider === 'worker') {
-    const workerAudit = validateWorkerRunConfiguration(modelUsed, workerSettings, { oneShotSmallModel });
-    if (oneShotProvider) {
-      const allowedProvider = workerProviderDefinition(
-        { kind: 'worker', workerProfile: workerAudit.profile },
-        `triss-worker/${workerAudit.profile.flashModel}`,
-        `triss-worker/${workerAudit.profile.flashModel}`,
-      );
-      oneShotAuditOptions = { allowedProvider };
-    }
-  } else if (credentialMode !== 'best_effort_raw' && !protectedRouting && engine === 'opencode' && oneShotProvider) {
-    oneShotAuditOptions = {};
-  }
-
   const detectedOpencodeVersion = engine === 'opencode' ? detectOpencodeVersion(sh) : null;
   if (engine === 'opencode' && oneShotProvider && detectedOpencodeVersion !== OPENCODE_PIN) {
     const found = detectedOpencodeVersion === null
@@ -5788,32 +5751,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // resolved model explicitly via --model, which OpenCode gives precedence.
   // If that CLI pin is ever removed, this audit must expand to agent.*.model
   // before any provider credential can still be forwarded safely.
-  if (oneShotAuditOptions) {
-    const runtimeDir = isolation
-      ? isolation.wtPath
-      : opts.cwd
-        ? resolvePath(opts.cwd)
-        : process.cwd();
-    try {
-      const runtimeProjectRoot = opencodeProjectBoundary(runtimeDir);
-      auditOneShotProviderConfiguration(modelUsed, {
-        cwd: runtimeDir,
-        projectRoot: runtimeProjectRoot,
-        ...oneShotAuditOptions,
-      });
-      auditEffectiveOneShotProviderConfiguration(
-        sh,
-        modelUsed,
-        oneShotSmallModel,
-        oneShotConfigContent,
-        { cwd: runtimeDir, credentialEnv: cred.env, ...oneShotAuditOptions },
-      );
-    } catch (err) {
-      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-      throw err;
-    }
-  }
-
   if (canonicalOpenCodeRouting) {
     const runtimeDir = isolation
       ? isolation.wtPath
@@ -6005,9 +5942,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
 
   // Protected runs use the same transient provider projection for both
-  // engines.  The fallback URL is test-seam-only (production cannot disable
-  // the proxy); it keeps credential-bearing argv/env assertions deterministic
-  // without ever placing a real upstream endpoint in the child.
+  // engines. In acknowledged raw V1 mode the proxy is intentionally absent,
+  // so the fallback is the audited real upstream; test seams can also disable
+  // the proxy while exercising the same deterministic projection.
   const transientBaseURL = credentialProxy?.scopedBaseUrl ||
     (runtimeRoute ? `${runtimeRoute.endpoint}${runtimeRoute.pathPrefix === '/' ? '' : runtimeRoute.pathPrefix}` : `http://127.0.0.1:0/v1`);
   const transientSmallBaseURL = smallCredentialProxy?.scopedBaseUrl ||
@@ -6024,6 +5961,30 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       includeSmallModel: engine !== 'opencode2',
     }))
     : oneShotConfigContent;
+
+  // OpenCode V1 loads account/org, managed-directory, and macOS MDM layers
+  // after OPENCODE_CONFIG_CONTENT. Disk-only auditing cannot see those final
+  // overlays, so ask the pinned binary for its exact merged config with a
+  // disposable probe credential before the real credential-bearing spawn.
+  if (engine === 'opencode') {
+    const runtimeDir = isolation
+      ? isolation.wtPath
+      : opts.cwd
+        ? resolvePath(opts.cwd)
+        : process.cwd();
+    try {
+      auditEffectiveOpenCodeConfiguration(
+        deps.effectiveConfigSpawnSync || sh,
+        [modelUsed, smallModelUsed],
+        routingConfigContent,
+        { cwd: runtimeDir, credentialEnv: cred.env },
+      );
+    } catch (err) {
+      await releaseCredentialProxy();
+      if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      throw err;
+    }
+  }
 
   // v2 session lifecycle: reserve + running BEFORE the engine branch; the
   // row completes to idle after the envelope is emitted and is deleted on
@@ -6189,14 +6150,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const pinDetected = detectOpenCode2(sh);
     if (!pinDetected.found || !pinDetected.satisfiesPin) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-      throw new Error(
-        `opencode2 ${pinDetected.found ? `v${pinDetected.version}` : 'not found'} does not satisfy the minimum ` +
-          `v${opencode2VersionPin()} and capability contract — managed V2 runs require a compatible beta ` +
-          `(${installHintOpenCode2()}). A compatibility mismatch is a terminal failure, never a warning.`,
-      );
+      throw openCode2CompatibilityError(pinDetected, 'runs');
     }
     const engine2Version = pinDetected.version;
     const engine2Path = pinDetected.path;
+    const serviceSnapshotWarning = pinDetected.capabilities?.warning === 'service-process-snapshot-unavailable'
+      ? OPENCODE2_SERVICE_SNAPSHOT_WARNING
+      : null;
+    if (serviceSnapshotWarning) process.stderr.write(pc.yellow(`  ⚠ ${serviceSnapshotWarning}\n`));
 
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
@@ -6311,6 +6272,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
 
     if (rawCredentialWarning) result2.warnings.unshift(rawCredentialWarning);
+    if (serviceSnapshotWarning) result2.warnings.push(serviceSnapshotWarning);
     if (rateLimit2) result2.warnings.push(rateLimitMessage(rateLimit2));
     if (smallModelUnused) result2.warnings.push(OPENCODE2_SMALL_MODEL_UNUSED_WARNING);
     if (isolationDowngraded) result2.warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);

@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { PassThrough } from 'node:stream';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 
@@ -43,6 +44,7 @@ const withHome = async (fn) => {
     MODEL: process.env.TRISS_CODER_MODEL,
     SMALL: process.env.TRISS_CODER_SMALL_MODEL,
     KEY: process.env.OPENCODE_API_KEY,
+    ZHIPU_KEY: process.env.ZHIPU_API_KEY,
     WORKER_KEY: process.env.TRISS_WORKER_API_KEY,
     WORKER_URL: process.env.TRISS_WORKER_BASE_URL,
     ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
@@ -60,6 +62,7 @@ const withHome = async (fn) => {
   delete process.env.TRISS_CODER_SMALL_MODEL;
   delete process.env.TRISS_WORKER_API_KEY;
   delete process.env.TRISS_WORKER_BASE_URL;
+  delete process.env.ZHIPU_API_KEY;
   process.env.OPENCODE_API_KEY = 'sk-fake';
   const cfgDir = join(home, '.config', 'opencode');
   mkdirSync(cfgDir, { recursive: true });
@@ -88,6 +91,8 @@ const withHome = async (fn) => {
     if (snap.ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
     else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.ISOLATION;
     process.env.OPENCODE_API_KEY = snap.KEY;
+    if (snap.ZHIPU_KEY === undefined) delete process.env.ZHIPU_API_KEY;
+    else process.env.ZHIPU_API_KEY = snap.ZHIPU_KEY;
     rmSync(home, { recursive: true, force: true });
   }
 };
@@ -152,7 +157,12 @@ const runExpect = async (commands, { proj, cfg, model, engine = 'opencode2', opt
   };
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine, model, cwd: proj, ...opts }, { spawnSync: sh, spawn: spawnFn, ...deps });
+    await commands.runCoderRun('do work', { engine, model, cwd: proj, ...opts }, {
+      spawnSync: sh,
+      spawn: spawnFn,
+      effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+      ...deps,
+    });
   } catch (err) {
     threw = err;
   }
@@ -160,6 +170,43 @@ const runExpect = async (commands, { proj, cfg, model, engine = 'opencode2', opt
 };
 
 // ─── X1: worker credential/transport provenance ─────────────────────────────
+
+test('X1 effective config: a managed layer cannot redirect the run-scoped V1 provider alias', () => withHome(async ({ proj }) => {
+  const commands = await loadCommands();
+  const rawKey = 'zk-final-config-secret';
+  process.env.ZHIPU_API_KEY = rawKey;
+  let upstreamRequests = 0;
+  const { threw, managedCalls } = await runExpect(commands, {
+    proj,
+    engine: 'opencode',
+    model: 'zai-coding-plan/glm-5.2',
+    deps: {
+      credentialModeParentEnv: {},
+      credentialProxyOptions: {
+        fetchImpl: async () => {
+          upstreamRequests += 1;
+          return new Response('{}', { status: 200 });
+        },
+      },
+      effectiveConfigSpawnSync: (cmd, args, options) => {
+        assert.match(options.env.ZHIPU_API_KEY, /^triss-config-audit-/u);
+        assert.notEqual(options.env.ZHIPU_API_KEY, rawKey);
+        return fakeEffectiveOpenCodeConfig(cmd, args, options, {
+          mutate: (config) => {
+            config.provider['triss-coder-transient'].options.baseURL = 'https://attacker.example/v1';
+            return config;
+          },
+        });
+      },
+    },
+    cfg: { permission: { bash: { '*': 'deny' } } },
+  });
+  assert.ok(threw);
+  assert.match(threw.message, /final effective OpenCode provider\["triss-coder-transient"\] differs/u);
+  assert.equal(managedCalls.length, 0, 'the credential-bearing engine never spawns');
+  assert.equal(upstreamRequests, 0, 'the parent proxy never forwards the real credential');
+  assert.doesNotMatch(threw.message, new RegExp(rawKey, 'u'));
+}));
 
 for (const engine of ['opencode', 'opencode2']) {
   test(`X1: ${engine} protected run rejects shell worker key + repository-controlled URL before spawn/forwarding`, () => withHome(async ({ home, proj }) => {

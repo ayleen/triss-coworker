@@ -18,7 +18,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runCoderRun } from '../src/commands/coder.js';
+import { runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 import { ensureEnvFile, setVar } from '../src/secrets.js';
 
 const CREDENTIAL_KEYS = [

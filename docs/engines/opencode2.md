@@ -23,6 +23,10 @@ triss coder init --engine opencode2
 - `triss coder init --engine opencode2` never spawns a V2 service; it probes
   `opencode2 --version` and `opencode2 run --help` under isolated runtime
   roots.
+- When the host lacks a compatible `ps -axo` process snapshot (for example a
+  minimal BusyBox container), the required CLI flags and version still qualify
+  the engine. Init, status, and runs report that resident-service verification
+  is best effort instead of misdiagnosing the installed beta as incompatible.
 
 ## Shared config implications
 
@@ -139,6 +143,8 @@ To fully remove V2: `npm uninstall -g @opencode-ai/cli` and delete
 | `Agent not found: "coder"` on an older Triss build | Older builds injected `--agent coder` into V2 runs; current builds use the engine's built-in primary agent when `--agent` is not passed. Update Triss. |
 | `opencode2 not found` | Install the current beta channel: `npm install -g @opencode-ai/cli@beta`. |
 | `below minimum` / `unsupported OpenCode 2 CLI contract` | Remove an obsolete `next-*` override or set a supported beta minimum at or above `0.0.0-beta-17793`; verify that `run --help` exposes the required flags. |
+| `OPENCODE2_SERVICE_SNAPSHOT_UNAVAILABLE` | This host cannot run the optional `ps -axo` resident-service check. The verified `--standalone` CLI contract remains usable with best-effort service verification; use a host with compatible process inspection when a post-probe service proof is required. |
+| `capability-probe-unavailable` | The isolated probe HOME/XDG root could not be created or inspected. Fix `TMPDIR`/filesystem permissions and retry; reinstalling OpenCode 2 does not repair this host error. |
 | `usage_status: "missing"` | The run emitted no `step_finish`; counters are null by contract, not a bug. |
 | `--session and --continue … ambiguous` | Pick one resume intent; they are mutually exclusive on V2. |
 | Session slug not found across engines | By design: V1 and V2 keep separate session maps; a slug never cross-resumes. |

@@ -32,6 +32,7 @@ import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -58,9 +59,11 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
     TRISS_USAGE_LOG: process.env.TRISS_USAGE_LOG,
     TRISS_CODER_MODEL: process.env.TRISS_CODER_MODEL,
+    TRISS_PROJECT_ROOT: process.env.TRISS_PROJECT_ROOT,
   };
   const tempHome = mkdtempSync(join(tmpdir(), 'triss-bb-proxy-fail-home-'));
   process.env.HOME = tempHome;
+  process.env.TRISS_PROJECT_ROOT = tempHome;
   process.env.ZHIPU_API_KEY = 'zk-raw-secret-should-never-reach-child';
   delete process.env.OPENCODE_API_KEY;
   delete process.env.MOONSHOT_API_KEY;
@@ -75,6 +78,7 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
           spawn: fakeSpawn,
           spawnSync: () => ({ status: 1, stdout: '', error: null }),
           stdoutWrite: () => true,
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
           // The proxy CANNOT start (port binding fails via a dead listener).
           credentialProxyOptions: { host: '256.256.256.256', port: -1 },
         },
@@ -117,6 +121,7 @@ test('a successful proxied run hands the child the token, never the raw key', as
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
     TRISS_USAGE_LOG: process.env.TRISS_USAGE_LOG,
     TRISS_CODER_MODEL: process.env.TRISS_CODER_MODEL,
+    TRISS_PROJECT_ROOT: process.env.TRISS_PROJECT_ROOT,
   };
   process.env.ZHIPU_API_KEY = RAW;
   delete process.env.OPENCODE_API_KEY;
@@ -126,6 +131,7 @@ test('a successful proxied run hands the child the token, never the raw key', as
   const scratch = mkdtempSync(join(tmpdir(), 'triss-bb-coder-'));
   const prevCwd = process.cwd();
   process.env.HOME = scratch;
+  process.env.TRISS_PROJECT_ROOT = scratch;
   process.chdir(scratch);
   try {
     execFileSync('git', ['init', '-q'], { cwd: scratch });

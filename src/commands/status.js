@@ -5,7 +5,7 @@ import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
 import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
-import { CODER_PROVIDER_CREDENTIALS, coderCredentialReady, resolveCoderProviderRoute } from '../coder-providers.js';
+import { CODER_PROVIDER_CREDENTIALS, coderCredentialReady, resolveCoderRuntimeProviderRoute } from '../coder-providers.js';
 
 export async function runStatus(deps = {}) {
   const cfg = getConfig();
@@ -155,7 +155,7 @@ export async function runStatus(deps = {}) {
     // The model a bare opencode-engine run uses (from TRISS_CODER_MODEL). crush
     // ignores it and runs its own GLM atoms, so label it as opencode-scoped.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);
-    const defaultRoute = resolveCoderProviderRoute(coder.defaultModel);
+    const defaultRoute = resolveCoderRuntimeProviderRoute(coder.defaultModel);
     lines.push(
       `  canonical provider route      ${defaultRoute
         ? pc.cyan(`${defaultRoute.provider} → ${defaultRoute.endpoint}${defaultRoute.pathPrefix}`)
@@ -204,7 +204,9 @@ export async function runStatus(deps = {}) {
       const oc2Marker = oc2.found ? pc.green('●') : pc.dim('○');
       const oc2Label = oc2.found
         ? (oc2.satisfiesMinimum ?? oc2.satisfiesPin)
-          ? `${oc2.version} ${pc.dim('(compatible)')}`
+          ? `${oc2.version} ${pc.dim(oc2.serviceProcessCheck === 'unavailable'
+            ? '(compatible; service snapshot unavailable — best effort)'
+            : '(compatible)')}`
           : pc.yellow(`${oc2.version || '(version unknown)'} (minimum: ${oc2.pin})`)
         : pc.dim(`not installed (minimum: ${oc2.pin})`);
       lines.push(`  ${oc2Marker} opencode2                    ${oc2Label}`);

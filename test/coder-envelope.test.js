@@ -21,7 +21,20 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { createEventFolder, foldEventLine, runCoderRun } from '../src/commands/coder.js';
+import { createEventFolder, foldEventLine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    credentialModeParentEnv: {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    },
+    ...deps,
+  },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -133,6 +146,7 @@ function withEnv(vars, fn) {
     const tempHome = mkdtempSync(join(tmpdir(), 'triss-envelope-home-'));
     const fullVars = {
       HOME: tempHome,
+      TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
