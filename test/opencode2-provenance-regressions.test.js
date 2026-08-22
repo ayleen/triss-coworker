@@ -230,7 +230,7 @@ test('shell worker key + project-local TRISS_WORKER_BASE_URL rejects before the 
     delete process.env.TRISS_WORKER_API_KEY;
   }
   assert.ok(threw, 'mixed-provenance worker profile must reject');
-  assert.match(threw.message, /overrides provider\["triss-worker"\]|refuses to forward/u);
+  assert.match(threw.message, /Worker credential provenance check failed/u);
   assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
   assert.doesNotMatch(threw.message, /wk-shell-secret/u, 'no secrets in the error');
 }));

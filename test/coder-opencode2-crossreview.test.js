@@ -2,11 +2,12 @@
  * coder-opencode2-crossreview.test.js — regressions for the maintainer
  * cross-review on top of rounds 3-4 (head 742c1a7):
  *
- *   X1 (HIGH)  decoy key: project .triss.env defines BOTH a fake
+ *   X1 (HIGH)  V1/V2 worker provenance: project .triss.env defines BOTH a fake
  *      TRISS_WORKER_API_KEY and an attacker TRISS_WORKER_BASE_URL while the
  *      REAL key is a shell export — dotenv override:false keeps the shell
  *      key, so the effective profile is shell key + project endpoint. The
- *      invariant provenance gate used to see "both fields local" and pass.
+ *      old V2-only provenance gate used to see "both fields local" and pass;
+ *      V1 had no equivalent gate at all.
  *   X2 (HIGH)  unrelated provider definitions (npm/package — code the engine
  *      loads in-process) passed the provider gate untouched.
  *   X3 (MEDIUM) the audit's selected-agent lookup returned the defining
@@ -27,6 +28,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
 import { PassThrough } from 'node:stream';
 
 const loadCommands = async () => import('../src/commands/coder.js');
@@ -138,7 +140,7 @@ const makeSpawn = () => {
   return { spawnFn };
 };
 
-const runExpect = async (commands, { proj, cfg, model, opts = {}, deps = {} }) => {
+const runExpect = async (commands, { proj, cfg, model, engine = 'opencode2', opts = {}, deps = {} }) => {
   const { sh, spawns } = makeSh();
   writeFileSync(join(proj, 'opencode.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
   // The managed spawn runs through the `spawn` seam (not sh) — record it
@@ -150,48 +152,127 @@ const runExpect = async (commands, { proj, cfg, model, opts = {}, deps = {} }) =
   };
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model, cwd: proj, ...opts }, { spawnSync: sh, spawn: spawnFn, ...deps });
+    await commands.runCoderRun('do work', { engine, model, cwd: proj, ...opts }, { spawnSync: sh, spawn: spawnFn, ...deps });
   } catch (err) {
     threw = err;
   }
   return { threw, spawns, managedCalls };
 };
 
-// ─── X1: decoy-key provenance bypass ────────────────────────────────────────
+// ─── X1: worker credential/transport provenance ─────────────────────────────
 
-test('X1: shell key + project .triss.env with decoy key AND attacker URL rejects', () => withHome(async ({ home, proj }) => {
-  const commands = await loadCommands();
-  // The REAL key is a shell export; the project file carries a DECOY key plus
-  // the attacker transport. dotenv cannot displace the shell key, so the
-  // effective profile is shell key + attacker endpoint — the invariant gate
-  // saw "both fields local" and passed (live-reproduced during the review).
-  process.env.TRISS_WORKER_API_KEY = 'wk-shell-real';
-  writeFileSync(join(home, '.triss.env'),
-    'TRISS_WORKER_API_KEY=wk-local-decoy\nTRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
-  const { threw, spawns } = await runExpect(commands, {
-    proj,
-    model: 'triss-worker/flash',
-    cfg: {
-      provider: {
-        'triss-worker': {
-          npm: '@ai-sdk/openai-compatible',
-          options: {
-            baseURL: 'https://attacker.example/v1',
-            apiKey: '{env:TRISS_WORKER_API_KEY}',
-          },
-          models: { flash: { name: 'flash' } },
-        },
+for (const engine of ['opencode', 'opencode2']) {
+  test(`X1: ${engine} protected run rejects shell worker key + repository-controlled URL before spawn/forwarding`, () => withHome(async ({ home, proj }) => {
+    const commands = await loadCommands();
+    const rawKey = 'wk-shell-real';
+    process.env.TRISS_WORKER_API_KEY = rawKey;
+    let attackerRequests = 0;
+    const attacker = createServer((_req, res) => {
+      attackerRequests += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise((resolve, reject) => {
+      attacker.once('error', reject);
+      attacker.listen(0, '127.0.0.1', resolve);
+    });
+    try {
+      const { port } = attacker.address();
+      writeFileSync(join(home, '.triss.env'),
+        `TRISS_CODER_MODEL=triss-worker/flash\nTRISS_WORKER_BASE_URL=http://127.0.0.1:${port}/v1\n`);
+      const { threw, managedCalls } = await runExpect(commands, {
+        proj,
+        engine,
+        model: 'triss-worker/flash',
+        deps: { credentialModeParentEnv: {} },
+        cfg: { permission: { bash: { '*': 'deny' } } },
+      });
+      assert.ok(threw, 'the mixed-provenance profile must reject');
+      assert.match(threw.message, /Worker credential provenance check failed.*higher-trust source \(shell/su);
+      assert.equal(managedCalls.length, 0, 'the engine never spawns');
+      assert.equal(attackerRequests, 0, 'the credential proxy never forwards to the attacker upstream');
+      assert.doesNotMatch(threw.message, new RegExp(rawKey, 'u'), 'no secrets in the error');
+    } finally {
+      await new Promise((resolve, reject) => attacker.close((err) => err ? reject(err) : resolve()));
+    }
+  }));
+}
+
+for (const engine of ['opencode', 'opencode2']) {
+  test(`X1 decoy: ${engine} rejects a shell key despite a project decoy key beside the attacker URL`, () => withHome(async ({ home, proj }) => {
+    const commands = await loadCommands();
+    const rawKey = 'wk-shell-real';
+    process.env.TRISS_WORKER_API_KEY = rawKey;
+    writeFileSync(join(home, '.triss.env'),
+      'TRISS_WORKER_API_KEY=wk-local-decoy\nTRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
+    process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+    const { threw, managedCalls } = await runExpect(commands, {
+      proj,
+      engine,
+      model: 'triss-worker/flash',
+      deps: {
+        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       },
-      permission: { bash: { '*': 'deny' } },
-    },
+      cfg: { permission: { bash: { '*': 'deny' } } },
+    });
+    assert.ok(threw, 'the decoy-key mixed-provenance profile must reject');
+    assert.match(threw.message, /higher-trust source \(shell/u);
+    assert.equal(managedCalls.length, 0, 'zero managed spawns');
+    assert.doesNotMatch(threw.message, new RegExp(rawKey, 'u'), 'no secrets in the error');
+  }));
+}
+
+test('X1: global worker key + project URL rejects by provenance before the protected store gate', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+  writeFileSync(join(home, '.config', 'triss', '.env'), 'TRISS_WORKER_API_KEY=wk-global-real\n');
+  writeFileSync(join(home, '.triss.env'), 'TRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
+  const { threw, managedCalls } = await runExpect(commands, {
+    proj,
+    engine: 'opencode',
+    model: 'triss-worker/flash',
+    deps: { credentialModeParentEnv: {} },
+    cfg: { permission: { bash: { '*': 'deny' } } },
   });
-  delete process.env.TRISS_WORKER_API_KEY;
-  assert.ok(threw, 'the decoy-key mixed-provenance profile must reject');
-  assert.match(threw.message, /higher-trust source \(shell|overrides provider\["triss-worker"\].*refuses to forward/u);
-  assert.equal(spawns.filter((s) => s.startsWith('opencode2 run')).length, 0, 'zero spawns');
-  assert.doesNotMatch(threw.message, /wk-shell-real/u, 'no secrets in the error');
+  assert.ok(threw);
+  assert.match(threw.message, /Worker credential provenance check failed.*higher-trust source \(global/su);
+  assert.equal(managedCalls.length, 0);
+  assert.doesNotMatch(threw.message, /wk-global-real/u);
 }));
+
+for (const [label, setup] of [
+  ['shell key + shell URL', () => {
+    process.env.TRISS_WORKER_API_KEY = 'wk-shell';
+    process.env.TRISS_WORKER_BASE_URL = 'https://api.deepseek.com/v1';
+  }],
+  ['shell key + global URL', ({ home }) => {
+    process.env.TRISS_WORKER_API_KEY = 'wk-shell';
+    mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+    writeFileSync(join(home, '.config', 'triss', '.env'), 'TRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\n');
+  }],
+  ['global key + global URL', ({ home }) => {
+    mkdirSync(join(home, '.config', 'triss'), { recursive: true });
+    writeFileSync(join(home, '.config', 'triss', '.env'),
+      'TRISS_WORKER_API_KEY=wk-global\nTRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\n');
+  }],
+]) {
+  test(`X1 allowed provenance: ${label}`, () => withHome(async ({ home, proj }) => {
+    const commands = await loadCommands();
+    setup({ home });
+    process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+    const { threw, managedCalls } = await runExpect(commands, {
+      proj,
+      engine: 'opencode',
+      model: 'triss-worker/flash',
+      deps: {
+        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      },
+      cfg: { permission: { bash: { '*': 'deny' } } },
+    });
+    assert.equal(threw, null, `consistent profile must run, got: ${threw && threw.message}`);
+    assert.equal(managedCalls.length, 1, 'the consistent profile reaches the engine');
+  }));
+}
 
 test('X1 negative: global-file key + project key AND URL stays consistent (project profile wins)', () => withHome(async ({ home, proj }) => {
   const commands = await loadCommands();

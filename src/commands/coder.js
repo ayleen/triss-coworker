@@ -1384,6 +1384,9 @@ export async function runCoderInit(opts = {}, deps = {}) {
     : explicitProvider || await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
+  if (provider === 'worker') {
+    assertWorkerTransportProvenance(workerShellEnv);
+  }
   const path = ensureEnvFile(scope);
   const scopedWorker = provider === 'worker'
     ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
@@ -1502,7 +1505,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
 // with). The check therefore resolves the EFFECTIVE source of each field —
 // using the pre-dotenv shell snapshot — and rejects when the endpoint is
 // project-local while the key is not.
-function assertV2WorkerTransportProvenance(workerShellEnv = captureWorkerShellSnapshot()) {
+function assertWorkerTransportProvenance(workerShellEnv = captureWorkerShellSnapshot()) {
   const files = activeEnvFiles();
   const localFile = files.find((f) => f.scope === 'local');
   const localVars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
@@ -1519,7 +1522,7 @@ function assertV2WorkerTransportProvenance(workerShellEnv = captureWorkerShellSn
   const keySource = effectiveSource('TRISS_WORKER_API_KEY');
   if (keySource === 'local' || keySource == null) return;
   throw new Error(
-    `OpenCode 2 preflight aborted: the effective TRISS_WORKER_BASE_URL comes from the project .triss.env while ` +
+    `Worker credential provenance check failed: the effective TRISS_WORKER_BASE_URL comes from the project .triss.env while ` +
       `the effective TRISS_WORKER_API_KEY comes from a higher-trust source (${keySource} — a key in the project ` +
       'file cannot displace it). The worker endpoint the provider audit compares against would be ' +
       'repository-controlled, so the key could be forwarded to an attacker URL. Move the key and the endpoint ' +
@@ -1713,7 +1716,7 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   loadEnvFiles();
   const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
   if (provider === 'worker') {
-    assertV2WorkerTransportProvenance(workerShellEnv);
+    assertWorkerTransportProvenance(workerShellEnv);
   }
   const envPath = ensureEnvFile(scope);
   const scopedWorker = provider === 'worker'
@@ -5613,6 +5616,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (engine === 'opencode' && !oneShotProvider && !sameProviderScope) {
     smallModelUsed = modelUsed;
   }
+  // The worker key and endpoint are resolved independently per field. Reject
+  // a repository-local endpoint paired with a higher-trust effective key for
+  // every OpenCode engine before route construction can hand that pair to the
+  // parent credential proxy (or to a raw best-effort child).
+  if (cred.provider === 'worker') {
+    assertWorkerTransportProvenance(workerShellEnv);
+  }
   const workerSettings = cred.provider === 'worker'
     ? readWorkerConfigSnapshot({ scope: 'effective', parentEnv: workerShellEnv })
     : null;
@@ -6140,20 +6150,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         `OpenCode 2 preflight aborted: cannot canonicalize the runtime directory ${runtimeDir} — ${err.message}`,
         { cause: err },
       );
-    }
-    // Worker key and endpoint must be one profile of consistent effective
-    // provenance,
-    // resolved from the pre-dotenv snapshot (a decoy key in the project
-    // .triss.env cannot displace a shell export). Only relevant when the
-    // worker credential is actually forwarded — a zai/moonshot run must not
-    // fail on an unrelated project-local TRISS_WORKER_BASE_URL.
-    if (modelUsed.startsWith('triss-worker/')) {
-      try {
-        assertV2WorkerTransportProvenance(workerShellEnv);
-      } catch (err) {
-        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-        throw err;
-      }
     }
     const workerProfile = modelUsed.startsWith('triss-worker/')
       ? workerCoderProfile()

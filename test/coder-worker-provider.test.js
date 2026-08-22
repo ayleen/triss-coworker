@@ -378,6 +378,30 @@ test(
 );
 
 test(
+  'V1 worker init rejects a shell key paired with a repository-controlled worker URL before writing config',
+  withWorkerEnv(async ({ home }) => {
+    const rawKey = process.env.TRISS_WORKER_API_KEY;
+    delete process.env.TRISS_WORKER_BASE_URL;
+    writeFileSync(join(home, '.triss.env'),
+      'TRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
+
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      (err) => {
+        assert.match(err.message, /Worker credential provenance check failed.*higher-trust source \(shell/su);
+        assert.doesNotMatch(err.message, new RegExp(rawKey, 'u'));
+        return true;
+      },
+    );
+    assert.equal(
+      existsSync(join(home, '.config', 'opencode', 'opencode.json')),
+      false,
+      'init must reject before publishing worker config',
+    );
+  }),
+);
+
+test(
   'global worker init ignores a divergent project profile and uses global key endpoint and models',
   withWorkerEnv(async ({ home }) => {
     for (const key of [
