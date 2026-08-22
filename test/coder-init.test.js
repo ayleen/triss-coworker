@@ -1649,15 +1649,20 @@ test(
 );
 
 test(
-  'offline Zen init fallback is protected-route compatible after the canonical global store gate',
+  'shell-only Zen credential survives init model pins and reaches a protected run only as a proxy token',
   withTmpHome(async ({ home }) => {
-    process.env.OPENCODE_API_KEY = 'sk-zen-fake';
+    const rawCredential = 'sk-zen-fake';
+    process.env.OPENCODE_API_KEY = rawCredential;
     await runCoderInit(
       { global: true, provider: 'opencode-zen' },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: async () => ({ ok: false, status: 500 }) },
     );
     const configured = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
     assert.equal(resolveCoderProviderRoute(configured.model).transportAudited, true);
+    const globalEnv = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
+    assert.doesNotMatch(globalEnv, /^OPENCODE_API_KEY=/m, 'a shell credential is never persisted');
+    assert.match(globalEnv, /^TRISS_CODER_MODEL=opencode\/deepseek-v4-flash-free$/m);
+    assert.match(globalEnv, /^TRISS_CODER_SMALL_MODEL=opencode\/deepseek-v4-flash-free$/m);
     const calls = [];
     const spawn = (_cmd, argv, options) => {
       calls.push({ argv, options });
@@ -1672,36 +1677,24 @@ test(
       });
       return child;
     };
-    let blockedSpawned = false;
-    await assert.rejects(
-      () => runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
-        spawn: () => {
-          blockedSpawned = true;
-          return spawn();
-        },
-        spawnSync: fakeSpawnAlreadyInstalled,
-        disableCredentialProxy: true,
-        stdoutWrite: () => {},
-      }),
-      (err) => {
-        assert.match(err.message, /raw credential store/);
-        assert.ok(err.message.includes(join(home, '.config', 'triss', '.env')));
-        return true;
-      },
-    );
-    assert.equal(blockedSpawned, false, 'canonical global credentials block before spawn');
-
     await runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
       spawn,
       spawnSync: fakeSpawnAlreadyInstalled,
-      disableCredentialProxy: true,
-      allowBestEffortIsolation: true,
+      credentialProxyOptions: {
+        fetchImpl: async () => new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      },
       stdoutWrite: () => {},
     });
     assert.equal(calls.length, 1);
+    assert.ok(calls[0].options.env.OPENCODE_API_KEY, 'the child receives a one-run credential');
+    assert.notEqual(calls[0].options.env.OPENCODE_API_KEY, rawCredential, 'the child never receives the raw key');
     const overlay = JSON.parse(calls[0].options.env.OPENCODE_CONFIG_CONTENT);
     assert.equal(overlay.model, 'triss-coder-transient/deepseek-v4-flash-free');
     assert.equal(overlay.small_model, 'triss-coder-transient/deepseek-v4-flash-free');
+    assert.match(overlay.provider['triss-coder-transient'].options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\/zen\/v1$/u);
   }),
 );
 

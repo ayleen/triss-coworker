@@ -5,9 +5,9 @@
  * best-effort scope.
  *
  * All tests are hermetic and run against isolated temporary environments.
- * Verifies both the fail-closed rejection on non-empty stores (including
- * non-standard variable names) and the pass-through for empty/comment stores
- * or explicit operator acknowledgments.
+ * Verifies both the fail-closed rejection of credential/unknown assignments
+ * and the pass-through for empty/comment stores, known non-secret coder
+ * settings, or explicit operator acknowledgments.
  */
 
 import test from 'node:test';
@@ -27,6 +27,14 @@ const CREDENTIAL_KEYS = [
   'MOONSHOT_API_KEY',
   'KIMI_API_KEY',
   'TRISS_WORKER_API_KEY',
+];
+
+const CONFIG_KEYS = [
+  'TRISS_CODER_MODEL',
+  'TRISS_CODER_SMALL_MODEL',
+  'TRISS_WORKER_BASE_URL',
+  'TRISS_WORKER_FLASH_MODEL',
+  'TRISS_WORKER_PRO_MODEL',
 ];
 
 function fakeSpawnReplaying(streamText, { code = 0 } = {}) {
@@ -55,12 +63,14 @@ async function withIsolatedStore(envContent, fn) {
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
     credentials: Object.fromEntries(CREDENTIAL_KEYS.map((key) => [key, process.env[key]])),
+    config: Object.fromEntries(CONFIG_KEYS.map((key) => [key, process.env[key]])),
   };
   process.env.HOME = dir;
   process.env.TRISS_PROJECT_ROOT = dir;
   process.env.XDG_CONFIG_HOME = join(dir, '.config');
   delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   for (const key of CREDENTIAL_KEYS) delete process.env[key];
+  for (const key of CONFIG_KEYS) delete process.env[key];
   process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
   try {
     await fn({ dir });
@@ -75,6 +85,10 @@ async function withIsolatedStore(envContent, fn) {
     for (const key of CREDENTIAL_KEYS) {
       if (snap.credentials[key] === undefined) delete process.env[key];
       else process.env[key] = snap.credentials[key];
+    }
+    for (const key of CONFIG_KEYS) {
+      if (snap.config[key] === undefined) delete process.env[key];
+      else process.env[key] = snap.config[key];
     }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -207,7 +221,7 @@ test('ISOLATION-GATE-04: an empty (0-byte) or comment-only .triss.env does not r
   assert.equal(spawned, true, 'empty store does not block execution');
 }));
 
-test('ISOLATION-GATE-05: fail-closed policy — any non-empty variable in .triss.env refuses before spawn', () => withIsolatedStore('GLM_CUSTOM_CREDENTIAL=secret-token\n', async () => {
+test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in .triss.env refuses before spawn', () => withIsolatedStore('GLM_CUSTOM_CREDENTIAL=secret-token\n', async () => {
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
@@ -229,6 +243,9 @@ test('ISOLATION-GATE-05: fail-closed policy — any non-empty variable in .triss
 for (const [label, content] of [
   ['empty', ''],
   ['control-only', 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
+  ['model-pins', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\n'],
+  ['model-pins-and-control', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\nTRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
+  ['worker-config', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\nTRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\nTRISS_WORKER_FLASH_MODEL=deepseek-v4-flash\nTRISS_WORKER_PRO_MODEL=deepseek-v4-pro\n'],
 ]) {
   test(`ISOLATION-GATE-global-negative-${label}: a non-credential canonical global store does not block`, () => withIsolatedStore(null, async ({ dir }) => {
     writeCanonicalGlobalStore(dir, content);
@@ -247,6 +264,33 @@ for (const [label, content] of [
       assert.doesNotMatch(err.message, /raw credential store/);
     }
     assert.equal(spawned, true, 'the engine spawns when the global store has no credential material');
+  }));
+}
+
+for (const [label, extra] of [
+  ['credential', 'OPENCODE_API_KEY=secret-value\n'],
+  ['unknown', 'UNRECOGNIZED_PRIVATE_VALUE=secret-value\n'],
+]) {
+  test(`ISOLATION-GATE-global-pins-${label}: model pins do not hide credential material`, () => withIsolatedStore(null, async ({ dir }) => {
+    writeCanonicalGlobalStore(
+      dir,
+      'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\n' +
+        'TRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\n' +
+        extra,
+    );
+    let spawned = false;
+    await assert.rejects(
+      () => runCoderRun('do something', {}, {
+        spawn: () => {
+          spawned = true;
+          return fakeSpawnReplaying('')();
+        },
+        spawnSync: () => ({ status: 1, stdout: '', error: null }),
+        stdoutWrite: () => true,
+      }),
+      /raw credential store/,
+    );
+    assert.equal(spawned, false, 'credential material still blocks before spawn');
   }));
 }
 

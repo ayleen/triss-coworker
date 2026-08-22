@@ -54,6 +54,28 @@ export { coderCredentialReady } from '../coder-providers.js';
 export const CREDENTIAL_ISOLATION_DOWNGRADED_CODE = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED';
 const CREDENTIAL_ISOLATION_DOWNGRADED_WARNING =
   `${CREDENTIAL_ISOLATION_DOWNGRADED_CODE}: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.`;
+// Known configuration values that may legitimately live beside provider keys
+// in a Triss env store but carry no credential material themselves. Keep this
+// allowlist explicit: unknown assignments still fail closed, while a normal
+// shell-credential `coder init` may persist its model pins without making the
+// following protected run misclassify the store as credential-bearing.
+const NON_SECRET_CODER_STORE_KEYS = new Set([
+  'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION',
+  'TRISS_CODER_MODEL',
+  'TRISS_CODER_SMALL_MODEL',
+  'TRISS_CODER_ENGINE',
+  'TRISS_CODER_OPENCODE_VERSION',
+  'TRISS_CODER_OPENCODE2_VERSION',
+  'TRISS_CODER_CRUSH_VERSION',
+  'TRISS_CODER_CRUSH_RESTRICT',
+  'TRISS_CODER_SESSION_CAP',
+  'TRISS_WORKER_BASE_URL',
+  'TRISS_WORKER_FLASH_MODEL',
+  'TRISS_WORKER_PRO_MODEL',
+  'TRISS_DEFAULT_MODEL',
+  'TRISS_KIMI_BASE_URL',
+  'TRISS_REQUEST_TIMEOUT_MS',
+]);
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
 // because both sides only touch the imported bindings inside function
 // bodies (never at module-eval time), so it doesn't matter which module
@@ -5848,16 +5870,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     for (const storePath of storePaths) {
       try {
         const { vars } = readEnvFile(storePath);
-        // Fail-closed policy: any non-empty variable assignment in a
-        // .triss.env store is treated as potential credential material that
-        // makes the raw store a leak channel for same-UID child processes.
-        // The credential-mode acknowledgement itself is a non-secret control
-        // value, so literal 0/other protected values must not make a clean
-        // store look credential-bearing during a raw -> protected transition.
+        // Fail-closed policy: any unknown non-empty assignment, or any known
+        // credential, is potential credential material that makes the raw
+        // store a leak channel for same-UID child processes. Explicitly known
+        // non-secret coder/provider settings (including the model pins written
+        // by init) do not turn an otherwise clean store into a leak channel.
         // Empty stores (0-byte files, comments-only, blank values) contain no
         // keys and are safely ignored.
         const hasEntries = Object.entries(vars).some(([key, value]) =>
-          key !== 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION' &&
+          !NON_SECRET_CODER_STORE_KEYS.has(key) &&
           typeof value === 'string' &&
           value.trim().length > 0,
         );
