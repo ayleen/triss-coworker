@@ -2773,7 +2773,7 @@ function auditEffectiveOpenCodeConfiguration(
   sh,
   requestedModels,
   configContent,
-  { cwd, credentialEnv } = {},
+  { cwd, credentialEnv, pure = false } = {},
 ) {
   // OpenCode loads account/org, managed-directory, and macOS MDM layers after
   // OPENCODE_CONFIG_CONTENT. Ask the pinned binary for the final merged config
@@ -2781,7 +2781,7 @@ function auditEffectiveOpenCodeConfiguration(
   // credential. Any failure to obtain or parse that final view is fail-closed.
   const probeCredential = `triss-config-audit-${randomBytes(16).toString('hex')}`;
   const env = buildEngineEnv(credentialEnv, probeCredential, configContent);
-  const result = sh('opencode', ['debug', 'config', '--pure'], {
+  const result = sh('opencode', ['debug', 'config', ...(pure ? ['--pure'] : [])], {
     cwd,
     env,
     encoding: 'utf8',
@@ -2850,6 +2850,10 @@ function auditEffectiveOpenCodeConfiguration(
     }
   }
   if (Object.keys(expectedProviders).length === 0) {
+    // Protected routing pins the selected models to transient aliases whose
+    // complete definitions were compared above. Only raw built-in routing has
+    // no expected provider block, so reject persistent/managed overrides for
+    // the provider ids the real run will select.
     for (const model of requestedModels) {
       const providerId = String(model).split('/')[0];
       if (Object.prototype.hasOwnProperty.call(providers || {}, providerId)) {
@@ -5961,6 +5965,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       includeSmallModel: engine !== 'opencode2',
     }))
     : oneShotConfigContent;
+  const openCodePureMode = engine === 'opencode' && Boolean(oneShotProvider);
 
   // OpenCode V1 loads account/org, managed-directory, and macOS MDM layers
   // after OPENCODE_CONFIG_CONTENT. Disk-only auditing cannot see those final
@@ -5977,7 +5982,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         deps.effectiveConfigSpawnSync || sh,
         [modelUsed, smallModelUsed],
         routingConfigContent,
-        { cwd: runtimeDir, credentialEnv: cred.env },
+        {
+          cwd: runtimeDir,
+          credentialEnv: cred.env,
+          // Mirror the actual V1 argv exactly. One-shot runs disable external
+          // plugins in both processes; ordinary runs keep their deny-first
+          // disk policy and late managed/MDM layers visible to both.
+          pure: openCodePureMode,
+        },
       );
     } catch (err) {
       await releaseCredentialProxy();
@@ -6474,7 +6486,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
-    pure: !!oneShotProvider,
+    pure: openCodePureMode,
   });
   // Credential-proxy integration: the child env carries the one-run token in
   // the credential variable plus the loopback base URL — never the raw key.

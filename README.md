@@ -894,6 +894,14 @@ external plugins. Unreadable/JSONC/unknown layers fail closed. Concurrent
 same-user config mutation between preflight and spawn remains outside this
 guard's threat model.
 
+Every OpenCode 1 run performs this final effective-config check before the
+credential-bearing engine spawn, using a bounded `opencode debug config`
+subprocess and a disposable probe credential. The probe mirrors the actual
+run's plugin mode: explicit one-shot provider runs use `--pure` in both
+processes; ordinary runs omit it in both, so their disk-backed deny-first bash
+policy and later account/org, managed-directory, and macOS MDM layers remain
+visible to the audit.
+
 ```bash
 triss coder init --provider opencode-zen              # guided: key + opencode.json
 triss coder models --provider opencode-zen            # see live Zen ids

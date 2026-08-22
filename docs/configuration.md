@@ -390,13 +390,16 @@ provider key, Triss audits the pinned version's full file graph: global
 configs from the actual runtime directory to the Git root (or `/` for non-Git
 directories). JSONC and unreadable layers fail closed. Because account/org,
 managed-directory, and macOS MDM settings load after the in-memory overlay,
-Triss also runs `opencode debug config --pure` under the exact sanitized child
-environment with a random canary instead of the real credential. The final
+Triss also validates the final merged config before every OpenCode 1 run under
+the exact sanitized child environment, using a bounded `opencode debug config`
+subprocess and a random canary instead of the real credential. The probe mirrors
+the actual run: an explicit one-shot provider pair uses `--pure` for both probe
+and run, while an ordinary run omits `--pure` for both so its disk-backed
+deny-first bash policy and late managed layers remain visible. The final
 main/small pair and selected provider must still match before the real key is
-injected; the actual one-shot run also uses `--pure`. This includes inherited
-cwd and created or reused isolation worktrees. Concurrent same-user mutation
-between preflight and spawn remains outside the guard's threat model;
-unverified OpenCode versions fail closed.
+injected. This includes inherited cwd and created or reused isolation worktrees.
+Concurrent same-user mutation between preflight and spawn remains outside the
+guard's threat model; unverified OpenCode versions fail closed.
 
 For OpenCode 1, main and small models from the same provider may use different
 audited transports. Triss then creates two transient provider aliases and two

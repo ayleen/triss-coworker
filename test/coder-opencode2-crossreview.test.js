@@ -189,6 +189,7 @@ test('X1 effective config: a managed layer cannot redirect the run-scoped V1 pro
         },
       },
       effectiveConfigSpawnSync: (cmd, args, options) => {
+        assert.deepEqual(args, ['debug', 'config'], 'ordinary V1 probe must mirror the run without --pure');
         assert.match(options.env.ZHIPU_API_KEY, /^triss-config-audit-/u);
         assert.notEqual(options.env.ZHIPU_API_KEY, rawKey);
         return fakeEffectiveOpenCodeConfig(cmd, args, options, {

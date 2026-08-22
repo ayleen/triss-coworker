@@ -20,6 +20,7 @@ import { EventEmitter } from 'node:events';
 import { listTools } from '../src/mcp/tools.js';
 import { coderRunHandler, coderStatusHandler } from '../src/mcp/handlers.js';
 import { setRestricted } from '../src/safety.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -55,6 +56,16 @@ function fakeSpawnReplayingFixture() {
   };
 }
 
+function fakeCoderRunDeps(spawn = fakeSpawnReplayingFixture()) {
+  return {
+    spawn,
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    credentialModeParentEnv: {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+    },
+  };
+}
+
 // Isolates ZHIPU_API_KEY (and, for cwd-based tests, HOME/TRISS_PROJECT_ROOT)
 // from this repo's own configured key in .triss.env.
 function withIsolatedEnv(vars, fn) {
@@ -62,6 +73,7 @@ function withIsolatedEnv(vars, fn) {
     const tempHome = realpathSync(mkdtempSync(join(tmpdir(), 'triss-mcp-coder-home-')));
     const fullVars = {
       HOME: tempHome,
+      TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
@@ -72,7 +84,7 @@ function withIsolatedEnv(vars, fn) {
       else process.env[k] = v;
     }
     try {
-      await fn();
+      await fn(tempHome);
     } finally {
       for (const k of Object.keys(fullVars)) {
         if (saved[k] === undefined) delete process.env[k];
@@ -251,10 +263,10 @@ test(
       // alongside it.
       TRISS_CODER_MODEL: 'opencode/deepseek-v4-flash-free',
     },
-    async () => {
+    async (tempHome) => {
     const result = await coderRunHandler(
-      { prompt: 'print hello via a shell echo' },
-      { spawn: fakeSpawnReplayingFixture() },
+      { prompt: 'print hello via a shell echo', cwd: tempHome },
+      fakeCoderRunDeps(),
     );
     const envelope = JSON.parse(result);
     assert.equal(envelope.engine, 'opencode');
@@ -315,12 +327,12 @@ test(
 
 test(
   'coderRunHandler: an in-sandbox cwd is allowed through to the fake engine',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async (tempHome) => {
     setRestricted(true);
     try {
       const result = await coderRunHandler(
-        { prompt: 'do something', cwd: '.' },
-        { spawn: fakeSpawnReplayingFixture() },
+        { prompt: 'do something', cwd: tempHome },
+        fakeCoderRunDeps(),
       );
       const envelope = JSON.parse(result);
       assert.equal(envelope.exit_reason, 'end_turn');
@@ -343,7 +355,7 @@ test(
       // must NOT throw "outside the project root".
       const result = await coderRunHandler(
         { prompt: 'do something', cwd: '/etc', isolate: true, session: 'mcp-isolate-cwd' },
-        { spawn: fakeSpawnReplayingFixture() },
+        fakeCoderRunDeps(),
       );
       const envelope = JSON.parse(result);
       assert.equal(envelope.exit_reason, 'end_turn');

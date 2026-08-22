@@ -947,7 +947,7 @@ test(
 );
 
 test(
-  'one-shot provider uses the transient overlay without a final effective-config probe',
+  'one-shot provider audits the final transient overlay with --pure and a disposable credential',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     Object.assign(process.env, {
@@ -956,17 +956,21 @@ test(
       MOONSHOT_API_KEY: 'sk-moonshot-must-not-reach-probe',
       KIMI_API_KEY: 'sk-kimi-must-not-reach-probe',
     });
-    let probeCalled = false;
+    let probeCall;
     let childEnv;
     await runCoderRun('transient route', { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home }, {
       spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
-      spawnSync: (cmd, args) => {
-        if (cmd === 'opencode' && args[0] === 'debug') probeCalled = true;
-        return fakeSpawnSync(cmd, args);
+      spawnSync: fakeSpawnSync,
+      effectiveConfigSpawnSync: (cmd, args, options) => {
+        probeCall = { cmd, args, options };
+        return fakeEffectiveOpenCodeConfig(cmd, args, options);
       },
       stdoutWrite: () => true,
     });
-    assert.equal(probeCalled, false, 'generated transient overlay is authoritative');
+    assert.equal(probeCall.cmd, 'opencode');
+    assert.deepEqual(probeCall.args, ['debug', 'config', '--pure']);
+    assert.match(probeCall.options.env.ZHIPU_API_KEY, /^triss-config-audit-/u);
+    assert.notEqual(probeCall.options.env.ZHIPU_API_KEY, process.env.ZHIPU_API_KEY);
     const overlay = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
     assert.equal(overlay.model, 'triss-coder-transient/glm-5.2');
     assert.equal(overlay.provider['triss-coder-transient'].options.apiKey, '{env:ZHIPU_API_KEY}');

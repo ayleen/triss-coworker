@@ -30,7 +30,13 @@ import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
   opts,
-  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+  {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    credentialModeParentEnv: {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    },
+    ...deps,
+  },
 );
 
 const LIMIT_MSG =
@@ -174,6 +180,7 @@ function withEnv(vars, fn) {
     const tempHome = mkdtempSync(join(tmpdir(), 'triss-rate-limit-home-'));
     const fullVars = {
       HOME: tempHome,
+      TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
