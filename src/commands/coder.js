@@ -5830,19 +5830,22 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // is known for this credential), the run fails closed BEFORE spawn.
   // ─── Credential-store isolation preflight: the loopback token proxy
   // removes the raw key from the child's env/argv/config, but a same-UID
-  // child can still READ the raw credential stores (project/global
-  // .triss.env) directly. Per the plan (Section 6.5), a best-effort run is
-  // only allowed when the boundary is actually absent: if any raw store is
-  // readable, the run fails closed BEFORE spawn unless the operator has
-  // explicitly acknowledged the best-effort scope via
+  // child can still READ the raw credential stores (project .triss.env and
+  // global ~/.config/triss/.env) directly. Per the plan (Section 6.5), a
+  // best-effort run is only allowed when the boundary is actually absent: if
+  // any raw store is readable, the run fails closed BEFORE spawn unless the
+  // operator has explicitly acknowledged the best-effort scope via
   // TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.
   if (!deps.allowBestEffortIsolation && credentialMode !== 'best_effort_raw') {
     const readableStores = [];
-    for (const storePath of [
-      join(projectRoot(), '.triss.env'),
+    const storePaths = new Set([
+      ...activeEnvFiles().map(({ path }) => path),
+      // Legacy locations remain leak channels even though current writes use
+      // activeEnvFiles()' canonical local/global stores.
       join(homedir(), '.triss.env'),
       join(projectRoot(), '.triss.env.local'),
-    ]) {
+    ]);
+    for (const storePath of storePaths) {
       try {
         const { vars } = readEnvFile(storePath);
         // Fail-closed policy: any non-empty variable assignment in a

@@ -59,7 +59,9 @@ function fakeSpawnReplayingFixture() {
 // from this repo's own configured key in .triss.env.
 function withIsolatedEnv(vars, fn) {
   return async () => {
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), 'triss-mcp-coder-home-')));
     const fullVars = {
+      HOME: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
@@ -76,6 +78,7 @@ function withIsolatedEnv(vars, fn) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
+      rmSync(tempHome, { recursive: true, force: true });
     }
   };
 }

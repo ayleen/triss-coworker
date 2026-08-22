@@ -37,7 +37,9 @@ import {
 
 function withEnv(vars, fn) {
   return async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'triss-opencode1-home-'));
     const fullVars = {
+      HOME: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
@@ -51,6 +53,7 @@ function withEnv(vars, fn) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
+      rmSync(tempHome, { recursive: true, force: true });
     }
   };
 }

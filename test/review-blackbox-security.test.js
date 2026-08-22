@@ -52,12 +52,15 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
     return child;
   };
   const saved = {
+    HOME: process.env.HOME,
     ZHIPU_API_KEY: process.env.ZHIPU_API_KEY,
     OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
     TRISS_USAGE_LOG: process.env.TRISS_USAGE_LOG,
     TRISS_CODER_MODEL: process.env.TRISS_CODER_MODEL,
   };
+  const tempHome = mkdtempSync(join(tmpdir(), 'triss-bb-proxy-fail-home-'));
+  process.env.HOME = tempHome;
   process.env.ZHIPU_API_KEY = 'zk-raw-secret-should-never-reach-child';
   delete process.env.OPENCODE_API_KEY;
   delete process.env.MOONSHOT_API_KEY;
@@ -85,6 +88,7 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+    rmSync(tempHome, { recursive: true, force: true });
   }
 });
 
@@ -107,6 +111,7 @@ test('a successful proxied run hands the child the token, never the raw key', as
     return child;
   };
   const saved = {
+    HOME: process.env.HOME,
     ZHIPU_API_KEY: process.env.ZHIPU_API_KEY,
     OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
@@ -120,6 +125,7 @@ test('a successful proxied run hands the child the token, never the raw key', as
   // Run inside a scratch repo so crush's isolate-ON default finds a git root.
   const scratch = mkdtempSync(join(tmpdir(), 'triss-bb-coder-'));
   const prevCwd = process.cwd();
+  process.env.HOME = scratch;
   process.chdir(scratch);
   try {
     execFileSync('git', ['init', '-q'], { cwd: scratch });

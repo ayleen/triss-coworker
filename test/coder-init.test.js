@@ -1649,7 +1649,7 @@ test(
 );
 
 test(
-  'offline Zen init fallback remains protected-run compatible',
+  'offline Zen init fallback is protected-route compatible after the canonical global store gate',
   withTmpHome(async ({ home }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     await runCoderInit(
@@ -1672,10 +1672,30 @@ test(
       });
       return child;
     };
+    let blockedSpawned = false;
+    await assert.rejects(
+      () => runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
+        spawn: () => {
+          blockedSpawned = true;
+          return spawn();
+        },
+        spawnSync: fakeSpawnAlreadyInstalled,
+        disableCredentialProxy: true,
+        stdoutWrite: () => {},
+      }),
+      (err) => {
+        assert.match(err.message, /raw credential store/);
+        assert.ok(err.message.includes(join(home, '.config', 'triss', '.env')));
+        return true;
+      },
+    );
+    assert.equal(blockedSpawned, false, 'canonical global credentials block before spawn');
+
     await runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
       spawn,
       spawnSync: fakeSpawnAlreadyInstalled,
       disableCredentialProxy: true,
+      allowBestEffortIsolation: true,
       stdoutWrite: () => {},
     });
     assert.equal(calls.length, 1);
