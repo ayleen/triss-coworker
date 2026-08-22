@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] — 2026-08-22
+
+### Added
+
+- **Canonical OpenCode provider routing** — both `opencode` engines now resolve
+  Triss worker, Z.AI, OpenCode Zen, OpenCode Go, Moonshot, and Kimi for Coding
+  through one provider registry. Protected runs pin a transient provider in
+  `OPENCODE_CONFIG_CONTENT`, including model-specific Chat Completions,
+  Responses, and Anthropic transport metadata for audited Zen/Go models.
+- **Explicit raw best-effort credential mode** — literal
+  `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` allows either OpenCode engine to
+  run every canonical provider, including ordinary plugins, agents, custom
+  tools, and shell policies, while reporting credential isolation as
+  unavailable and warning that the selected raw credential is visible to the
+  same-UID child.
+
+### Changed
+
+- OpenCode 2 now installs from `@opencode-ai/cli@beta` and accepts compatible
+  releases at or above `0.0.0-beta-17793` when the required CLI capability
+  probe passes. `TRISS_CODER_OPENCODE2_VERSION` is a minimum-version override,
+  replacing the obsolete exact `next-*` pin.
+- `triss coder init`, `coder run`, `coder models`, `triss status`, and the MCP
+  coder path use the same provider ownership, credential, endpoint, package,
+  header, and transport rules. One-shot main/small model routing is validated
+  as one provider pair; OpenCode 2 continues to report its small role as
+  unavailable.
+- `triss-dsh-provider-bundle` is version-aligned and republished unchanged;
+  the routing and credential-mode behavior above belongs to the Triss runtime,
+  while the companion still exposes its existing OpenCode Zen, OpenCode Go,
+  and Z.AI catalogue routes.
+
+### Fixed
+
+- OpenCode 1 no longer sends Triss's run-scoped proxy token to the real
+  upstream because `OPENCODE_BASE_URL` was ignored. The transient provider
+  overlay now pins the credential proxy endpoint that the engine actually
+  uses, including the unprefixed `/responses` route.
+- The bounded effective-config audit now mirrors the real launch mode:
+  one-shot runs probe and launch with `--pure`; ordinary runs do neither, so
+  managed, account, MDM, and disk policy layers are audited without disabling
+  the deny-first project policy.
+- Protected credential-store checks now use the canonical local and global
+  Triss env paths (including `~/.config/triss/.env`), allow non-secret/control
+  entries, and reject readable stores containing provider credentials before
+  the engine starts.
+- Worker routes verify the configured base URL through the final effective
+  provider projection, and Zen/Go protected runs fail closed for unaudited or
+  unsupported model transports instead of guessing Chat Completions.
+
+### Security
+
+- Protected mode rejects persistent collisions with Triss's transient provider
+  alias and verifies the final merged provider/model projection before any
+  credential-bearing child is spawned. Raw best-effort mode remains an
+  explicit risk acknowledgement and never claims proxy isolation.
+
+### Artifact integrity (0.38.0)
+
+- `triss-dsh-provider-bundle-0.38.0.tgz` — sha256
+  `bd9efaf1a692f82c15e49333c9a23071d9e30eee49e8e4576535dd91176fc71e`,
+  integrity
+  `sha512-sunelgV+I7TsL0OfkjDiv2XcnRQc+nQ4o3KjgfVZq390t8g2sVBTQTxPtNp+LU5IE41zm+fTqpXusAZzVQRuUg==`
+  (computed with the pinned release npm 11.6.2 via `npm pack`; `npm pack`
+  output is byte-deterministic).
+- Root `triss-coworker-0.38.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.38.0` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file); registry verification compares the packed
+  artifact against the published tarball byte-for-byte.
+
 ## [0.37.2] — 2026-08-20
 
 ### Added
