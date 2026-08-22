@@ -27,6 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 const loadConfig = async () => import('../src/opencode-config.js');
@@ -41,13 +42,15 @@ const withHome = async (fn) => {
     MODEL: process.env.TRISS_CODER_MODEL,
     SMALL: process.env.TRISS_CODER_SMALL_MODEL,
     KEY: process.env.OPENCODE_API_KEY,
+    ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
   };
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
   delete process.env.TRISS_CODER_ENGINE;
   delete process.env.TRISS_CODER_MODEL;
-  delete process.env.TRISS_CODER_SMALL_MODEL;
+    delete process.env.TRISS_CODER_SMALL_MODEL;
+    delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   process.env.OPENCODE_API_KEY = 'sk-fake';
   const cfgDir = join(home, '.config', 'opencode');
   mkdirSync(cfgDir, { recursive: true });
@@ -69,6 +72,8 @@ const withHome = async (fn) => {
     else process.env.TRISS_CODER_MODEL = snap.MODEL;
     if (snap.SMALL === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
     else process.env.TRISS_CODER_SMALL_MODEL = snap.SMALL;
+    if (snap.ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.ISOLATION;
     process.env.OPENCODE_API_KEY = snap.KEY;
     rmSync(home, { recursive: true, force: true });
   }
@@ -90,8 +95,11 @@ const makeSh = () => {
     if (cmd === 'which' && args[0] === 'opencode2') {
       return { status: 0, stdout: `${OC2_BIN}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'git' && args[0] === '-C' && args.includes('rev-parse') && args.includes('--show-toplevel')) {
       return { status: 0, stdout: `${args[1]}\n`, stderr: '' };
@@ -163,7 +171,11 @@ test('V1 --isolate --session with a corrupted sessions.json cleans the worktree'
   const { sh } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode', session: 'r6iso', isolate: true }, { spawnSync: sh, cwd: home });
+    await commands.runCoderRun('do work', { engine: 'opencode', session: 'r6iso', isolate: true }, {
+      spawnSync: sh,
+      cwd: home,
+      effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    });
   } catch (err) {
     threw = err;
   }
@@ -286,6 +298,59 @@ test('a fresh V2 init warns that plain V1 runs lose the allowlisted commands', (
   );
   const cfg = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
   assert.deepEqual(cfg.permission.bash, { '*': 'deny' });
+}));
+
+test('a fresh best-effort V2 init writes the V1 allowlist without a degradation warning', () => withHome(async ({ home }) => {
+  const commands = await loadCommands();
+  rmSync(join(home, '.config', 'opencode', 'opencode.json'));
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+  const outputs = [];
+  await commands.runCoderInit(
+    { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+    {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      spawnSync: makeSh().sh,
+      cwd: home,
+      lock: async () => ({ release() {} }),
+      fetch: async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: 'deepseek-v4-flash' }] }) }),
+      outputs,
+    },
+  );
+  const cfg = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+  assert.equal(cfg.permission.bash['*'], 'deny');
+  assert.equal(cfg.permission.bash['git status'], 'allow');
+  assert.doesNotMatch(outputs.join(''), /SHARED opencode\.json.*LOST git status/u);
+}));
+
+test('best-effort V2 init preserves an existing V1 allowlist byte-for-byte', () => withHome(async ({ home }) => {
+  const commands = await loadCommands();
+  const cfgPath = join(home, '.config', 'opencode', 'opencode.json');
+  const before = JSON.stringify({
+    model: 'opencode-go/deepseek-v4-flash',
+    permission: {
+      bash: {
+        '*': 'deny',
+        'git status': 'allow',
+        'npm test*': 'allow',
+      },
+    },
+  }, null, 2) + '\n';
+  writeFileSync(cfgPath, before);
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
+  const outputs = [];
+  await commands.runCoderInit(
+    { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+    {
+      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      spawnSync: makeSh().sh,
+      cwd: home,
+      lock: async () => ({ release() {} }),
+      fetch: async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: 'deepseek-v4-flash' }] }) }),
+      outputs,
+    },
+  );
+  assert.equal(readFileSync(cfgPath, 'utf8'), before);
+  assert.doesNotMatch(outputs.join(''), /deny-everything.*SHARED/u);
 }));
 
 // ─── tolerant enumeration survives an unreadable config candidate ─────

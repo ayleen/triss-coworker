@@ -1,9 +1,10 @@
 import dotenv from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles } from './secrets.js';
+import { resolveCoderCredentialMode } from './coder-providers.js';
 
-// Every provider setting served by the reloadable snapshot below — the GLM
-// pair plus the Kimi (Moonshot) key and base-URL override.
+// Every reloadable setting served by the snapshot below — provider values plus
+// the best-effort credential-mode acknowledgement.
 const PROVIDER_ENV_KEYS = [
   'TRISS_CODER_MODEL',
   'TRISS_REQUEST_TIMEOUT_MS',
@@ -14,6 +15,7 @@ const PROVIDER_ENV_KEYS = [
   'TRISS_WORKER_BASE_URL',
   'TRISS_WORKER_FLASH_MODEL',
   'TRISS_WORKER_PRO_MODEL',
+  'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION',
 ];
 
 // This snapshot is taken before this module ever calls loadEnvFiles(), so it
@@ -102,6 +104,17 @@ export function readWorkerConfigSnapshot({ scope = 'effective', ...seams } = {})
     flashModel: pick('TRISS_WORKER_FLASH_MODEL'),
     proModel: pick('TRISS_WORKER_PRO_MODEL'),
   };
+}
+
+// Resolve the credential-isolation acknowledgement from an immutable parent
+// environment plus a fresh read of the requested file scope. This must not use
+// process.env after loadEnvFiles(): dotenv only fills missing keys, so a value
+// loaded during an earlier MCP call would otherwise survive file edits and
+// deletions for the lifetime of the server.
+export function readCoderCredentialMode({ scope = 'effective', ...seams } = {}) {
+  const key = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION';
+  const { pick } = readProviderEnvSnapshot({ ...seams, scope, keys: [key] });
+  return resolveCoderCredentialMode({ [key]: pick(key) });
 }
 
 // Node timers clamp values above 2^31 - 1 ms, so reject those alongside

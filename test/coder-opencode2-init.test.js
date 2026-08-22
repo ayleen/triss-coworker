@@ -5,9 +5,12 @@
  * - configures the SAME V1-compatible shared opencode.json surface;
  * - NEVER rewrites an existing safe config (no-clobber; the pin goes to .env);
  * - creates the Triss-owned V2 XDG state dirs under <project>/.triss/opencode2;
- * - reports the opencode2 binary pin (only `--version`, never a service spawn);
- * - applies the static plugin gate: any configured/discovered plugin source
- *   rejects init BEFORE the credential write, naming the source, no secrets;
+ * - verifies the supported opencode2 beta minimum and CLI capability contract
+ *   (`--version` plus `run --help`), never spawning a service;
+ * - in the default protected credential mode, applies the static executable
+ *   source gate: any configured/discovered plugin source rejects init BEFORE
+ *   the credential write, naming the source, no secrets; explicit raw
+ *   best-effort mode accepts such sources after structural checks;
  * - ignores a parent-shell XDG_CONFIG_HOME (config resolves from the
  *   documented ~/.config/opencode default).
  *
@@ -35,12 +38,14 @@ const withHome = async (fn) => {
     CODER_MODEL: process.env.TRISS_CODER_MODEL,
     CODER_SMALL: process.env.TRISS_CODER_SMALL_MODEL,
     OPENCODE_KEY: process.env.OPENCODE_API_KEY,
+    CREDENTIAL_MODE: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
   };
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
   delete process.env.XDG_CONFIG_HOME;
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
+  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   process.env.OPENCODE_API_KEY = 'sk-fake';
   try {
     await fn({ home });
@@ -56,6 +61,8 @@ const withHome = async (fn) => {
     else process.env.TRISS_CODER_SMALL_MODEL = snap.CODER_SMALL;
     if (snap.OPENCODE_KEY === undefined) delete process.env.OPENCODE_API_KEY;
     else process.env.OPENCODE_API_KEY = snap.OPENCODE_KEY;
+    if (snap.CREDENTIAL_MODE === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.CREDENTIAL_MODE;
     rmSync(home, { recursive: true, force: true });
   }
 };
@@ -76,8 +83,11 @@ const fakeSh = () => (cmd, args) => {
   if (cmd === 'which' && (args || [])[0] === 'opencode2') {
     return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
+  if ((args || [])[0] === 'run' && (args || [])[1] === '--help') {
+    return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+  }
   if (cmd !== 'opencode' && (args || [])[0] === '--version') {
-    return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
   }
   if (cmd === 'opencode' && (args || [])[0] === '--version') {
     return { status: 1, stdout: '', stderr: 'not found' };
@@ -103,9 +113,9 @@ const baseDeps = (home) => ({
   lock: async () => ({ release() {} }),
 });
 
-const runInit = (commands, home, extraOpts = {}) => commands.runCoderInit(
+const runInit = (commands, home, extraOpts = {}, extraDeps = {}) => commands.runCoderInit(
   { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true, ...extraOpts },
-  baseDeps(home),
+  { ...baseDeps(home), ...extraDeps },
 );
 
 test('coder init --engine opencode2 (Phase 4)', async (t) => {
@@ -221,4 +231,68 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
       delete process.env.XDG_CONFIG_HOME;
     }
   }));
+
+  await t.test('credential-mode setup respects global/local scope and immutable shell precedence', async (scopeTest) => {
+    const cases = [
+      {
+        name: 'local 1 is ignored by global setup',
+        local: '1',
+        global: undefined,
+        opts: { global: true },
+        raw: false,
+      },
+      {
+        name: 'global 1 wins for global setup despite local 0',
+        local: '0',
+        global: '1',
+        opts: { global: true },
+        raw: true,
+      },
+      {
+        name: 'local 0 overrides global 1 for local setup',
+        local: '0',
+        global: '1',
+        opts: { local: true },
+        raw: false,
+      },
+      {
+        name: 'shell 1 wins over protected file values',
+        local: '0',
+        global: '0',
+        opts: { global: true },
+        parentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+        raw: true,
+      },
+    ];
+
+    for (const row of cases) {
+      await scopeTest.test(row.name, () => withHome(async ({ home }) => {
+        const commands = await loadCommands();
+        const localEnv = join(home, '.triss.env');
+        const globalEnv = join(home, '.config', 'triss', '.env');
+        writeFileSync(localEnv, row.local === undefined
+          ? ''
+          : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.local}\n`);
+        mkdirSync(dirname(globalEnv), { recursive: true });
+        writeFileSync(globalEnv, row.global === undefined
+          ? ''
+          : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.global}\n`);
+
+        const setupDeps = row.parentEnv
+          ? { credentialModeParentEnv: row.parentEnv }
+          : {};
+        await commands.runCoderInit(
+          { engine: 'opencode2', provider: 'opencode-go', yes: true, ...row.opts },
+          { ...baseDeps(home), ...setupDeps },
+        );
+
+        const configPath = row.opts.local
+          ? join(home, 'opencode.json')
+          : join(home, '.config', 'opencode', 'opencode.json');
+        const config = JSON.parse(readFileSync(configPath, 'utf8'));
+        assert.equal(config.permission.bash['*'], 'deny');
+        assert.equal(config.permission.bash['git status'], row.raw ? 'allow' : undefined);
+      }));
+    }
+  });
 });

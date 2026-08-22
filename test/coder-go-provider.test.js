@@ -14,7 +14,14 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { coderModelCredential, runCoderRun } from '../src/commands/coder.js';
+import { coderModelCredential, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -84,6 +91,7 @@ test(
   withCleanCoderEnv({ OPENCODE_API_KEY: 'sk-go-fake' }, async () => {
     let capturedArgv;
     let capturedEnv;
+    const output = [];
     await runCoderRun(
       'do a Go thing',
       { model: 'opencode-go/deepseek-v4-flash' },
@@ -93,19 +101,36 @@ test(
           capturedEnv = opts.env;
         }),
         spawnSync: fakeSpawnSync,
-        stdoutWrite: () => true,
+        stdoutWrite: (chunk) => output.push(chunk),
       },
     );
 
     const modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'opencode-go/deepseek-v4-flash');
-    // session acceptance: proxy token, never the raw credential.
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/deepseek-v4-flash');
+    const overlay = JSON.parse(capturedEnv.OPENCODE_CONFIG_CONTENT);
+    assert.equal(overlay.model, 'triss-coder-transient/deepseek-v4-flash');
+    assert.equal(overlay.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible');
+    assert.equal(overlay.provider['triss-coder-transient'].options.apiKey, '{env:OPENCODE_API_KEY}');
+    assert.match(overlay.provider['triss-coder-transient'].options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\/zen\/go\/v1$/u);
+    // Protected mode: proxy token, never the raw credential.
     assert.match(capturedEnv.OPENCODE_API_KEY, /^[0-9a-f]{32}$/);
     assert.notEqual(capturedEnv.OPENCODE_API_KEY, 'sk-go-fake');
     assert.equal('ZHIPU_API_KEY' in capturedEnv, false);
     assert.equal('MOONSHOT_API_KEY' in capturedEnv, false);
     assert.equal('KIMI_API_KEY' in capturedEnv, false);
+    const envelope = JSON.parse(output.join('').trim());
+    assert.deepEqual({
+      requested_model: envelope.requested_model,
+      requested_provider: envelope.requested_provider,
+      engine_model: envelope.engine_model,
+      engine_provider: envelope.engine_provider,
+    }, {
+      requested_model: 'opencode-go/deepseek-v4-flash',
+      requested_provider: 'opencode-go',
+      engine_model: 'triss-coder-transient/deepseek-v4-flash',
+      engine_provider: 'triss-coder-transient',
+    });
   }),
 );
 

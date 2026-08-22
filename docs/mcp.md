@@ -503,7 +503,11 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    `debug config --pure` under the sanitized child environment and a random
    canary instead of the real key. Late provider/model overrides, unauditable
    JSONC, and unknown effective config fail closed; the actual run also uses
-   `--pure`.
+   `--pure`. All OpenCode 1 MCP runs perform the bounded final-config probe
+   before the credential-bearing spawn. Calls without `provider` omit `--pure`
+   from both probe and run, preserving their disk-backed deny-first bash policy
+   while keeping later account/org, managed-directory, and macOS MDM layers in
+   the audited view.
    Without `provider`, `model` keeps its legacy main-only semantics. `model`
    takes a `<provider>/<id>`
    string — a Triss worker model (`triss-worker/deepseek-v4-flash`, reuses

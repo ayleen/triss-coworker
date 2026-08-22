@@ -21,7 +21,7 @@ import {
   existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -384,6 +384,205 @@ test('WIZ-08: explicit Zen selector never requires ZHIPU, keeps it absent, reach
   assert.match(report, /(opencode|zen)/i, 'must reach Zen setup/recovery');
   assert.doesNotMatch(report, /(missing|not set|required)[\s\S]{0,30}ZHIPU|ZHIPU[\s\S]{0,30}(missing|not set|required)/i,
     'must not surface a generic missing-ZHIPU failure');
+});
+
+test('WIZ-10: config wizard resolves V2 credential mode from the scoped env after loading it', async () => {
+  const saved = {
+    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    model: process.env.TRISS_CODER_MODEL,
+    small: process.env.TRISS_CODER_SMALL_MODEL,
+  };
+  try {
+    for (const bestEffort of [false, true]) {
+      const zenKey = `sk-wizard-v2-${bestEffort ? 'raw' : 'protected'}`;
+      const fakeFetch = fakeZenFetch(zenKey, ['deepseek-v4-flash-free']);
+      let fx;
+      try {
+        fx = await setupCoderFixture({ opencode: zenKey, writeConfig: false });
+        const { setVar } = await import('../src/secrets.js');
+        if (bestEffort) {
+          setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', '1');
+        }
+        delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+        delete process.env.TRISS_CODER_MODEL;
+        delete process.env.TRISS_CODER_SMALL_MODEL;
+
+        const { runWizard } = await import('../src/commands/config.js');
+        await runWizard(
+          'coder',
+          { global: true, coderEngine: 'opencode2', coderProvider: 'opencode-zen' },
+          depsBag(fakeFetch),
+        );
+
+        const config = JSON.parse(readFileSync(
+          join(fx.home, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ));
+        assert.equal(config.permission.bash['*'], 'deny');
+        assert.equal(
+          config.permission.bash['git status'],
+          bestEffort ? 'allow' : undefined,
+          `wizard V2 policy must reflect ${bestEffort ? 'best_effort_raw' : 'protected_proxy'}`,
+        );
+      } finally {
+        if (fx) fx.restore();
+      }
+    }
+  } finally {
+    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
+    if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = saved.model;
+    if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
+    else process.env.TRISS_CODER_SMALL_MODEL = saved.small;
+  }
+});
+
+test('WIZ-11: config wizard Zen model selection matches protected and best-effort init semantics', async () => {
+  const saved = {
+    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    model: process.env.TRISS_CODER_MODEL,
+    small: process.env.TRISS_CODER_SMALL_MODEL,
+  };
+  try {
+    for (const bestEffort of [false, true]) {
+      const zenKey = `sk-wizard-zen-${bestEffort ? 'raw' : 'protected'}`;
+      const fakeFetch = fakeZenFetch(zenKey, [
+        'north-mini-code-free',
+        'deepseek-v4-flash-free',
+      ]);
+      let fx;
+      try {
+        fx = await setupCoderFixture({ opencode: zenKey, writeConfig: false });
+        const { setVar } = await import('../src/secrets.js');
+        setVar(fx.envPath, 'TRISS_CODER_MODEL', 'opencode/north-mini-code-free');
+        setVar(fx.envPath, 'TRISS_CODER_SMALL_MODEL', 'opencode/north-mini-code-free');
+        if (bestEffort) {
+          setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', '1');
+        }
+        delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+        delete process.env.TRISS_CODER_MODEL;
+        delete process.env.TRISS_CODER_SMALL_MODEL;
+
+        const { runWizard } = await import('../src/commands/config.js');
+        await runWizard(
+          'coder',
+          { global: true, coderEngine: 'opencode', coderProvider: 'opencode-zen' },
+          depsBag(fakeFetch),
+        );
+
+        const config = JSON.parse(readFileSync(
+          join(fx.home, '.config', 'opencode', 'opencode.json'),
+          'utf8',
+        ));
+        const expected = bestEffort
+          ? 'opencode/north-mini-code-free'
+          : 'opencode/deepseek-v4-flash-free';
+        assert.equal(config.model, expected);
+        assert.equal(config.small_model, expected);
+      } finally {
+        if (fx) fx.restore();
+      }
+    }
+  } finally {
+    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
+    if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = saved.model;
+    if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
+    else process.env.TRISS_CODER_SMALL_MODEL = saved.small;
+  }
+});
+
+test('WIZ-12: config wizard credential mode respects requested scope and shell precedence', async (t) => {
+  const saved = {
+    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    model: process.env.TRISS_CODER_MODEL,
+    small: process.env.TRISS_CODER_SMALL_MODEL,
+  };
+  const cases = [
+    {
+      name: 'local 1 is ignored by global wizard setup',
+      local: '1',
+      global: undefined,
+      opts: { global: true },
+      raw: false,
+    },
+    {
+      name: 'global 1 wins for global wizard setup despite local 0',
+      local: '0',
+      global: '1',
+      opts: { global: true },
+      raw: true,
+    },
+    {
+      name: 'local 0 overrides global 1 for local wizard setup',
+      local: '0',
+      global: '1',
+      opts: { local: true },
+      raw: false,
+    },
+    {
+      name: 'shell 1 wins over protected wizard files',
+      local: '0',
+      global: '0',
+      opts: { global: true },
+      parentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      raw: true,
+    },
+  ];
+
+  try {
+    for (const row of cases) {
+      await t.test(row.name, async () => {
+        const zenKey = `sk-wizard-scope-${row.raw ? 'raw' : 'protected'}`;
+        const fakeFetch = fakeZenFetch(zenKey, ['deepseek-v4-flash-free']);
+        let fx;
+        try {
+          fx = await setupCoderFixture({ opencode: zenKey, writeConfig: false });
+          const { setVar } = await import('../src/secrets.js');
+          if (row.global !== undefined) {
+            setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', row.global);
+          }
+          writeFileSync(
+            join(dirname(fx.opencodeJsonPath), '.triss.env'),
+            row.local === undefined
+              ? ''
+              : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.local}\n`,
+          );
+          delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+          delete process.env.TRISS_CODER_MODEL;
+          delete process.env.TRISS_CODER_SMALL_MODEL;
+
+          const { runWizard } = await import('../src/commands/config.js');
+          await runWizard(
+            'coder',
+            { ...row.opts, coderEngine: 'opencode2', coderProvider: 'opencode-zen' },
+            {
+              ...depsBag(fakeFetch),
+              ...(row.parentEnv ? { credentialModeParentEnv: row.parentEnv } : {}),
+            },
+          );
+
+          const configPath = row.opts.local
+            ? fx.opencodeJsonPath
+            : join(fx.home, '.config', 'opencode', 'opencode.json');
+          const config = JSON.parse(readFileSync(configPath, 'utf8'));
+          assert.equal(config.permission.bash['*'], 'deny');
+          assert.equal(config.permission.bash['git status'], row.raw ? 'allow' : undefined);
+        } finally {
+          if (fx) fx.restore();
+        }
+      });
+    }
+  } finally {
+    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
+    if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = saved.model;
+    if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
+    else process.env.TRISS_CODER_SMALL_MODEL = saved.small;
+  }
 });
 
 // WIZ-09: provider ambiguity must NOT fall back to Z.AI. When the opencode

@@ -102,8 +102,11 @@ const makeSh = (extra = {}) => {
     if (cmd === 'which' && args[0] === 'opencode2') {
       return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
+    if (args && args[0] === 'run' && args[1] === '--help') {
+      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    }
     if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-next-17430\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (extra.handle) {
       const r = extra.handle(cmd, args);
@@ -285,7 +288,13 @@ test('a symlinked install canonicalizes to the real file (live fs)', async () =>
     chmodSync(real, 0o755);
     const link = join(dir, 'opencode2');
     symlinkSync(real, link);
-    const det = detectOpenCode2(() => ({ status: 0, stdout: `${link}\n`, error: null }));
+    const det = detectOpenCode2((_cmd, args) => {
+      if (args?.[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', error: null };
+      if (args?.[0] === 'run' && args?.[1] === '--help') {
+        return { status: 0, stdout: '--standalone --format --auto --model\n', error: null };
+      }
+      return { status: 0, stdout: `${link}\n`, error: null };
+    });
     assert.equal(det.found, true, 'a symlinked executable resolves');
     // realpathSync canonicalizes (on macOS tmp paths that includes the
     // /private prefix) — the point is the SYMLINK is gone from the result.

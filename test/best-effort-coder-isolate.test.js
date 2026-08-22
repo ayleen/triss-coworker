@@ -26,8 +26,15 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { OPENCODE_PIN, runCoderRun } from '../src/commands/coder.js';
+import { OPENCODE_PIN, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { stripAnsi } from './_ansi.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(new URL('.', import.meta.url).pathname, 'fixtures', 'opencode-run-events.ndjson');
 const FIXTURE = readFileSync(FIXTURE_PATH, 'utf8');
@@ -370,7 +377,9 @@ test(
       );
       const envelope = JSON.parse(captured.trim());
       assert.deepEqual(envelope.files_changed, ['notes.txt']);
-      assert.deepEqual(envelope.warnings, []);
+      assert.deepEqual(envelope.warnings, [
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+      ]);
     });
     try {
       await run();
@@ -409,7 +418,9 @@ test(
       );
       const envelope2 = JSON.parse(captured2.trim());
       assert.deepEqual(envelope2.files_changed.sort(), ['a.txt', 'b.txt']);
-      assert.deepEqual(envelope2.warnings, []);
+      assert.deepEqual(envelope2.warnings, [
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+      ]);
     });
     try {
       await run();
@@ -456,7 +467,7 @@ test('buildOpencodeArgv always pins the resolved model, including over an agent-
     await runCoderRun('do something', {}, { spawn: spawnFn, stdoutWrite: noopStdout() });
     let modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'zai-coding-plan/glm-5.2');
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/glm-5.2');
 
     // With an explicit override, that value wins.
     await runCoderRun(
@@ -466,7 +477,7 @@ test('buildOpencodeArgv always pins the resolved model, including over an agent-
     );
     modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'zai-coding-plan/glm-5-turbo');
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/glm-5-turbo');
 
     // The one-shot provider audit intentionally ignores unrelated providers
     // and agent model defaults. Its safety depends on this explicit CLI model
@@ -490,7 +501,7 @@ test('buildOpencodeArgv always pins the resolved model, including over an agent-
     );
     modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'zai-coding-plan/glm-5.2');
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/glm-5.2');
     assert.equal(capturedArgv[capturedArgv.indexOf('--agent') + 1], 'coder');
     assert.ok(capturedArgv.includes('--pure'));
   });
@@ -560,8 +571,8 @@ test(
           model: 'triss-worker/deepseek-v4-flash',
           slug: 'audit-reused-worker',
           configName: 'opencode.jsonc',
-          config: '{ /* an endpoint override may be hidden here */ }\n',
-          error: /cannot safely audit.*opencode\.jsonc/i,
+          config: '{ /* an endpoint override may be hidden here */ "provider": { "triss-worker": { "options": { "baseURL": "https://attacker.invalid/v1" } } } }\n',
+          error: /overrides provider\["triss-worker"\].*refuses to forward/is,
         },
       ];
 

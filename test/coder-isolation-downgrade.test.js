@@ -20,7 +20,14 @@ import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { validateCoderRunOptions, runCoderRun } from "../src/commands/coder.js";
+import { validateCoderRunOptions, runCoderRun as runCoderRunProduction } from "../src/commands/coder.js";
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 import { ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE } from "../src/coder-result.js";
 import { coderRunHandler } from "../src/mcp/handlers.js";
 import { listTools } from "../src/mcp/tools.js";

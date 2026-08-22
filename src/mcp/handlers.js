@@ -1073,9 +1073,9 @@ export async function gitlabCommentHandler({ project, iid, body }) {
 // real bound. Callers can override per request via the `timeout` arg.
 const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 
-// `deps` (spawn/spawnSync) is only ever populated by tests — production
-// calls always fall through to the real subprocess machinery inside
-// runCoderRun. Same DI spirit as coder.js's own `deps.spawn`/`deps.spawnSync`.
+// `deps` subprocess/config/parent-env seams are only ever populated by tests;
+// production calls fall through to the real subprocess machinery and the
+// import-time parent snapshot inside runCoderRun.
 export async function coderRunHandler(
   { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel } = {},
   deps = {},
@@ -1140,6 +1140,8 @@ export async function coderRunHandler(
     {
       spawn: deps.spawn,
       spawnSync: deps.spawnSync,
+      effectiveConfigSpawnSync: deps.effectiveConfigSpawnSync,
+      credentialModeParentEnv: deps.credentialModeParentEnv,
       abortSignal: deps.signal,
       stdoutWrite: (s) => { envelope += s; },
     },

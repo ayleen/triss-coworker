@@ -23,7 +23,14 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { coderModelCredential, coderCredentialReady, runCoderRun } from '../src/commands/coder.js';
+import { coderModelCredential, coderCredentialReady, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -151,7 +158,7 @@ test(
     // The resolved zen model is passed through explicitly via --model.
     const modelIdx = capturedArgv.indexOf('--model');
     assert.notEqual(modelIdx, -1);
-    assert.equal(capturedArgv[modelIdx + 1], 'opencode/hy3-free');
+    assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/hy3-free');
   }),
 );
 
@@ -273,7 +280,7 @@ test(
         },
       );
       const modelIdx = capturedArgv.indexOf('--model');
-      assert.equal(capturedArgv[modelIdx + 1], 'opencode/hy3-free');
+      assert.equal(capturedArgv[modelIdx + 1], 'triss-coder-transient/hy3-free');
     },
   ),
 );

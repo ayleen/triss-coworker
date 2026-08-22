@@ -1,5 +1,11 @@
 # OpenCode 2 coder engine plan
 
+> **Superseded for implementation.** Current provider routing, credential
+> modes, protocol-aware proxying, and version compatibility are defined by
+> [`opencode-provider-routing-recovery-plan.md`](opencode-provider-routing-recovery-plan.md).
+> The exact `next-*` pin and unconditional V2 policy described below are
+> historical background only.
+
 Implementation contract for adding OpenCode 2 as a third `triss coder` engine
 without replacing or changing the existing OpenCode 1 engine.
 

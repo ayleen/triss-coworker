@@ -272,7 +272,8 @@ self-hosted endpoints).
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Pin override for the `opencode-ai` npm install |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
-| `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-next-17430`  | Exact pin override for the `@opencode-ai/cli` npm install (opencode2 engine — exact match required) |
+| `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-beta-17793`  | Minimum accepted OpenCode 2 version; install from `@opencode-ai/cli@beta` (unsupported `next/dev/tui-v2` overrides fail closed) |
+| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | Only literal `1` enables OpenCode raw-credential best-effort mode; OpenCode reports credential isolation as unavailable and allows same-UID tools/plugins/shell to read the selected key. Crush continues to require its credential proxy. |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Pin override for the `@phpcraftdream/crush` npm install (crush engine) |
 | `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 
@@ -389,13 +390,23 @@ provider key, Triss audits the pinned version's full file graph: global
 configs from the actual runtime directory to the Git root (or `/` for non-Git
 directories). JSONC and unreadable layers fail closed. Because account/org,
 managed-directory, and macOS MDM settings load after the in-memory overlay,
-Triss also runs `opencode debug config --pure` under the exact sanitized child
-environment with a random canary instead of the real credential. The final
+Triss also validates the final merged config before every OpenCode 1 run under
+the exact sanitized child environment, using a bounded `opencode debug config`
+subprocess and a random canary instead of the real credential. The probe mirrors
+the actual run: an explicit one-shot provider pair uses `--pure` for both probe
+and run, while an ordinary run omits `--pure` for both so its disk-backed
+deny-first bash policy and late managed layers remain visible. The final
 main/small pair and selected provider must still match before the real key is
-injected; the actual one-shot run also uses `--pure`. This includes inherited
-cwd and created or reused isolation worktrees. Concurrent same-user mutation
-between preflight and spawn remains outside the guard's threat model;
-unverified OpenCode versions fail closed.
+injected. This includes inherited cwd and created or reused isolation worktrees.
+Concurrent same-user mutation between preflight and spawn remains outside the
+guard's threat model; unverified OpenCode versions fail closed.
+
+For OpenCode 1, main and small models from the same provider may use different
+audited transports. Triss then creates two transient provider aliases and two
+model-scoped loopback proxy routes that share only the same one-run proxy token;
+each route remains pinned to its own protocol, package, path, and model. OpenCode
+2 validates an explicit small model as belonging to the selected provider but
+does not configure or route it because that beta has no small-model role.
 
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project

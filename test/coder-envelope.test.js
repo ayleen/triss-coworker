@@ -21,7 +21,20 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { createEventFolder, foldEventLine, runCoderRun } from '../src/commands/coder.js';
+import { createEventFolder, foldEventLine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    credentialModeParentEnv: {
+      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    },
+    ...deps,
+  },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -130,7 +143,10 @@ function fakeSpawnReplaying(streamText, { code = 0, signal = null } = {}) {
 
 function withEnv(vars, fn) {
   return async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'triss-envelope-home-'));
     const fullVars = {
+      HOME: tempHome,
+      TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
       ...vars,
     };
@@ -144,6 +160,7 @@ function withEnv(vars, fn) {
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
+      rmSync(tempHome, { recursive: true, force: true });
     }
   };
 }
@@ -184,6 +201,7 @@ test(
       'print hello via a shell echo',
       {},
       {
+        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
         spawn: fakeSpawnReplaying(fixture, { code: 0 }),
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -191,6 +209,7 @@ test(
     );
     const envelope = JSON.parse(capture.text().trim());
     assert.equal(envelope.engine, 'opencode');
+    assert.equal(envelope.credential_mode, 'best_effort_raw');
     assert.equal(typeof envelope.engine_version, 'string');
     assert.equal(envelope.session_id, 'ses_0d7b5c721ffeouI80ItCOxAJ3g');
     assert.equal(envelope.exit_reason, 'end_turn');
@@ -220,7 +239,9 @@ test(
     assert.equal(envelope.usage.cost.total_usd, null);
     assert.equal(envelope.usage.cost.source, 'unknown');
     assert.equal(envelope.usage.cost.complete, false);
-    assert.deepEqual(envelope.warnings, []);
+    assert.deepEqual(envelope.warnings, [
+      'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+    ]);
   }),
 );
 
@@ -746,8 +767,12 @@ test('CODER-EVENT-14: activity first/last timestamps are host-observed and never
 
 // ─── component envelope fields (transition) ──────────────────────────────────
 
-test('CODER-EVENT-15: every safe envelope carries session_slug, result_retention, result_id, execution_capabilities', () => {
-  return withEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+test('CODER-EVENT-15: every safe envelope carries identity, credential_mode, and execution capabilities', () => {
+  return withEnv({
+    ZHIPU_API_KEY: 'zk-fake-test-key',
+    TRISS_USAGE_LOG: '0',
+    TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '0',
+  }, async () => {
     const capture = stdoutCapture();
     await runCoderRun(
       'do something',
@@ -779,6 +804,7 @@ test('CODER-EVENT-15: every safe envelope carries session_slug, result_retention
     assert.equal(envelope.session_slug, 'explicit-slug-1');
     assert.equal(envelope.result_retention, 'none');
     assert.equal(envelope.result_id, null);
+    assert.equal(envelope.credential_mode, 'protected_proxy');
     assert.equal(typeof envelope.execution_capabilities, 'object');
     for (const key of [
       'sandbox',

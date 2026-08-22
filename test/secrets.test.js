@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readEnvFile, setVar, unsetVar, addToGitignore, getEnvFilePath } from '../src/secrets.js';
-import { readGlmConfigSnapshot, readWorkerConfigSnapshot } from '../src/config.js';
+import {
+  readCoderCredentialMode,
+  readGlmConfigSnapshot,
+  readWorkerConfigSnapshot,
+} from '../src/config.js';
 
 function tmpFile() {
   const dir = mkdtempSync(join(tmpdir(), 'triss-test-'));
@@ -197,6 +201,45 @@ test('readGlmConfigSnapshot refreshes edited and deleted GLM file values', () =>
     { coderModel: process.env.TRISS_CODER_MODEL, apiKey: process.env.ZHIPU_API_KEY },
     processEnvBefore,
     'the reloadable reader must not mutate shared process.env',
+  );
+});
+
+test('readCoderCredentialMode is reloadable, strict, and scope-aware', () => {
+  const local = '/project/.triss.env';
+  const global = '/home/.config/triss/.env';
+  const files = [
+    { scope: 'local', path: local, exists: true },
+    { scope: 'global', path: global, exists: true },
+  ];
+  const contents = new Map([
+    [local, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n'],
+    [global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
+  ]);
+  const readFile = (path) => contents.get(path);
+  const resolve = (scope = 'effective', parentEnv = {}) => readCoderCredentialMode({
+    scope,
+    parentEnv,
+    files,
+    readFile,
+  });
+
+  assert.equal(resolve('effective'), 'best_effort_raw', 'local wins at runtime');
+  assert.equal(resolve('local'), 'best_effort_raw', 'local setup merges local over global');
+  assert.equal(resolve('global'), 'protected_proxy', 'global setup ignores the project file');
+
+  contents.set(local, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
+  contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
+  assert.equal(resolve('effective'), 'protected_proxy', 'literal local 0 overrides global 1');
+  assert.equal(resolve('global'), 'best_effort_raw');
+
+  contents.set(local, '');
+  assert.equal(resolve('effective'), 'best_effort_raw', 'deletion falls back to global');
+  contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=true\n');
+  assert.equal(resolve('effective'), 'protected_proxy', 'only literal 1 opts in');
+  assert.equal(
+    resolve('effective', { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' }),
+    'best_effort_raw',
+    'the immutable parent shell snapshot has highest precedence',
   );
 });
 

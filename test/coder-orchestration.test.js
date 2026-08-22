@@ -21,6 +21,7 @@ import {
   isAnonymousSlug,
   isResultId,
 } from '../src/coder-orchestration.js';
+import { resolveCoderCredentialMode } from '../src/coder-providers.js';
 
 // ─── execution capabilities ─────────────────────────────────────────────────
 
@@ -34,9 +35,24 @@ test('execution_capabilities carries the honest tuple for both engines', () => {
 
   const withoutProxy = buildExecutionCapabilities({ engine: 'crush', proxyAvailable: false });
   assert.equal(withoutProxy.credential_isolation, 'unavailable');
+  const raw = buildExecutionCapabilities({ engine: 'opencode2', proxyAvailable: true, credentialMode: 'best_effort_raw' });
+  assert.equal(raw.credential_isolation, 'unavailable');
 
   // No warnings leak into the envelope field.
   assert.equal('warnings' in withProxy, false);
+});
+
+test('Crush keeps its proxy capability when the OpenCode raw-credential flag is enabled', () => {
+  const credentialMode = resolveCoderCredentialMode({
+    TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+  });
+  assert.equal(credentialMode, 'best_effort_raw');
+  const crush = buildExecutionCapabilities({
+    engine: 'crush',
+    proxyAvailable: true,
+    credentialMode,
+  });
+  assert.equal(crush.credential_isolation, 'best_effort');
 });
 
 // ─── run identity ────────────────────────────────────────────────────────────

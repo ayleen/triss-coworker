@@ -5,7 +5,7 @@ import { loadIntegrations, envReadiness, getCoreManifest } from '../integrations
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
 import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
-import { CODER_PROVIDER_CREDENTIALS, coderCredentialReady } from '../coder-providers.js';
+import { CODER_PROVIDER_CREDENTIALS, coderCredentialReady, resolveCoderRuntimeProviderRoute } from '../coder-providers.js';
 
 export async function runStatus(deps = {}) {
   const cfg = getConfig();
@@ -155,6 +155,12 @@ export async function runStatus(deps = {}) {
     // The model a bare opencode-engine run uses (from TRISS_CODER_MODEL). crush
     // ignores it and runs its own GLM atoms, so label it as opencode-scoped.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);
+    const defaultRoute = resolveCoderRuntimeProviderRoute(coder.defaultModel);
+    lines.push(
+      `  canonical provider route      ${defaultRoute
+        ? pc.cyan(`${defaultRoute.provider} → ${defaultRoute.endpoint}${defaultRoute.pathPrefix}`)
+        : pc.yellow('unrecognized model prefix')}`,
+    );
     // opencode (engine #1) — version-checked against the pin.
     const ocMarker = coder.engineVersion !== null ? pc.green('●') : pc.dim('○');
     const ocLabel =
@@ -189,18 +195,20 @@ export async function runStatus(deps = {}) {
       const value = c.exists ? c.path : pc.dim('(not written)');
       lines.push(`  ${marker} crush.json [${c.scope}]           ${value}`);
     }
-    // opencode2 (engine #3) — EXACT-pin check (beta builds are opaque
-    // sequences; any other number is unverified). Same one-shot --version
-    // probe as crush; never starts the V2 service. Config rows are shared
+    // opencode2 (engine #3) — minimum-version plus --version/run --help
+    // capability check. The probes are read-only and never start the V2
+    // service. Config rows are shared
     // with opencode (the V1-compatible opencode.json) — labelled above.
     const oc2 = coder.opencode2;
     if (oc2) {
       const oc2Marker = oc2.found ? pc.green('●') : pc.dim('○');
       const oc2Label = oc2.found
-        ? oc2.satisfiesPin
-          ? `${oc2.version} ${pc.dim('(matches pin)')}`
-          : pc.yellow(`${oc2.version || '(version unknown)'} (pin: ${oc2.pin})`)
-        : pc.dim(`not installed (pin: ${oc2.pin})`);
+        ? (oc2.satisfiesMinimum ?? oc2.satisfiesPin)
+          ? `${oc2.version} ${pc.dim(oc2.serviceProcessCheck === 'unavailable'
+            ? '(compatible; service snapshot unavailable — best effort)'
+            : '(compatible)')}`
+          : pc.yellow(`${oc2.version || '(version unknown)'} (minimum: ${oc2.pin})`)
+        : pc.dim(`not installed (minimum: ${oc2.pin})`);
       lines.push(`  ${oc2Marker} opencode2                    ${oc2Label}`);
     }
     const wtMarker = coder.worktreeCount > 0 ? pc.green('●') : pc.dim('○');

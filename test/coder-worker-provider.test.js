@@ -24,8 +24,9 @@ import {
   normalizeProviderFlag,
   OPENCODE_PIN,
   runCoderInit,
-  runCoderRun,
+  runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
+import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import {
   inspectCoderModelState,
   listProviderModels,
@@ -33,6 +34,12 @@ import {
   planModelChange,
   resolveProviderIntent,
 } from '../src/coder-models.js';
+
+const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
+  prompt,
+  opts,
+  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+);
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -378,6 +385,30 @@ test(
 );
 
 test(
+  'V1 worker init rejects a shell key paired with a repository-controlled worker URL before writing config',
+  withWorkerEnv(async ({ home }) => {
+    const rawKey = process.env.TRISS_WORKER_API_KEY;
+    delete process.env.TRISS_WORKER_BASE_URL;
+    writeFileSync(join(home, '.triss.env'),
+      'TRISS_WORKER_BASE_URL=https://attacker.example/v1\n');
+
+    await assert.rejects(
+      () => runCoderInit({ global: true, provider: 'worker' }, { spawnSync: fakeSpawnSync }),
+      (err) => {
+        assert.match(err.message, /Worker credential provenance check failed.*higher-trust source \(shell/su);
+        assert.doesNotMatch(err.message, new RegExp(rawKey, 'u'));
+        return true;
+      },
+    );
+    assert.equal(
+      existsSync(join(home, '.config', 'opencode', 'opencode.json')),
+      false,
+      'init must reject before publishing worker config',
+    );
+  }),
+);
+
+test(
   'global worker init ignores a divergent project profile and uses global key endpoint and models',
   withWorkerEnv(async ({ home }) => {
     for (const key of [
@@ -580,6 +611,7 @@ test(
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     let childEnv;
+    const output = [];
     await runCoderRun(
       'mechanical task',
       { model: 'triss-worker/deepseek-v4-flash' },
@@ -588,7 +620,7 @@ test(
           childEnv = opts.env;
         }),
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
-        stdoutWrite: () => true,
+        stdoutWrite: (chunk) => output.push(chunk),
       },
     );
     // session acceptance: the child never receives the raw provider credential —
@@ -600,6 +632,18 @@ test(
     for (const key of ['ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']) {
       assert.equal(key in childEnv, false);
     }
+    const envelope = JSON.parse(output.join('').trim());
+    assert.deepEqual({
+      requested_model: envelope.requested_model,
+      requested_provider: envelope.requested_provider,
+      engine_model: envelope.engine_model,
+      engine_provider: envelope.engine_provider,
+    }, {
+      requested_model: 'triss-worker/deepseek-v4-flash',
+      requested_provider: 'worker',
+      engine_model: 'triss-coder-transient/deepseek-v4-flash',
+      engine_provider: 'triss-coder-transient',
+    });
   }),
 );
 
@@ -635,11 +679,12 @@ test(
     // run-scoped loopback proxy — a one-run token and 127.0.0.1 baseURL —
     // so the child config never carries the raw credential.
     const workerCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
-    assert.equal(workerCfg.model, 'triss-worker/deepseek-v4-flash');
-    assert.equal(workerCfg.small_model, 'triss-worker/deepseek-v4-flash');
-    assert.match(workerCfg.provider['triss-worker'].options.apiKey, /^[0-9a-f]{32}$/);
-    assert.notEqual(workerCfg.provider['triss-worker'].options.apiKey, '***');
-    assert.match(workerCfg.provider['triss-worker'].options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\//);
+    assert.equal(workerCfg.model, 'triss-coder-transient/deepseek-v4-flash');
+    assert.equal(workerCfg.small_model, 'triss-coder-transient/deepseek-v4-flash');
+    assert.equal(workerCfg.provider['triss-coder-transient'].options.apiKey, '{env:TRISS_WORKER_API_KEY}');
+    assert.equal(workerCfg.provider['triss-coder-transient'].options.baseURL.startsWith('http://127.0.0.1:'), true);
+    assert.match(childEnv.TRISS_WORKER_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(childEnv.TRISS_WORKER_API_KEY, 'sk-worker-fake');
     assert.equal('ZHIPU_API_KEY' in childEnv, false);
     assert.deepEqual(readFileSync(configPath), before);
   }),
@@ -671,8 +716,10 @@ test(
     );
 
     const glmCfg = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
-    assert.equal(glmCfg.model, 'zai-coding-plan/glm-5.2');
-    assert.equal(glmCfg.small_model, 'zai-coding-plan/glm-5-turbo');
+    assert.equal(glmCfg.model, 'triss-coder-transient/glm-5.2');
+    assert.equal(glmCfg.small_model, 'triss-coder-transient/glm-5-turbo');
+    assert.equal(glmCfg.provider['triss-coder-transient'].options.apiKey, '{env:ZHIPU_API_KEY}');
+    assert.match(glmCfg.provider['triss-coder-transient'].options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\/api\/coding\/paas\/v4$/u);
     // session acceptance: proxy token, never the raw credential.
     assert.match(childEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
     assert.notEqual(childEnv.ZHIPU_API_KEY, 'sk-zai-fake');
@@ -701,7 +748,6 @@ test(
         model: 'moonshotai/kimi-k2.7-code',
         key: 'MOONSHOT_API_KEY',
         value: 'sk-moonshot-fake',
-        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
       {
         provider: 'opencode-go',
@@ -714,7 +760,6 @@ test(
         model: 'kimi-for-coding/k3',
         key: 'KIMI_API_KEY',
         value: 'sk-kimi-fake',
-        rejected: /cannot be pinned to the parent-owned credential proxy/,
       },
     ];
 
@@ -741,10 +786,12 @@ test(
       }
       await run;
 
-      assert.deepEqual(JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT), {
-        model: entry.model,
-        small_model: entry.model,
-      });
+      const overlay = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
+      const route = overlay.provider['triss-coder-transient'];
+      assert.equal(overlay.model, `triss-coder-transient/${entry.model.split('/')[1]}`);
+      assert.equal(overlay.small_model, `triss-coder-transient/${entry.model.split('/')[1]}`);
+      assert.equal(route.options.apiKey, `{env:${entry.key}}`);
+      assert.match(route.options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\//u);
       // session acceptance: proxy token, never the raw credential.
       assert.match(childEnv[entry.key], /^[0-9a-f]{32}$/);
       assert.notEqual(childEnv[entry.key], entry.value);
@@ -900,7 +947,7 @@ test(
 );
 
 test(
-  'one-shot provider run audits final effective config without forwarding credentials',
+  'one-shot provider audits the final transient overlay with --pure and a disposable credential',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     Object.assign(process.env, {
@@ -909,79 +956,26 @@ test(
       MOONSHOT_API_KEY: 'sk-moonshot-must-not-reach-probe',
       KIMI_API_KEY: 'sk-kimi-must-not-reach-probe',
     });
-    const cases = [
-      {
-        name: 'late provider override',
-        effective: {
-          model: 'zai-coding-plan/glm-5.2',
-          small_model: 'zai-coding-plan/glm-5.2',
-          provider: {
-            'zai-coding-plan': {
-              options: { baseURL: 'https://attacker.invalid/v1' },
-            },
-          },
-        },
-        error: /final effective.*provider\["zai-coding-plan"\].*refuses to forward/is,
+    let probeCall;
+    let childEnv;
+    await runCoderRun('transient route', { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home }, {
+      spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
+      spawnSync: fakeSpawnSync,
+      effectiveConfigSpawnSync: (cmd, args, options) => {
+        probeCall = { cmd, args, options };
+        return fakeEffectiveOpenCodeConfig(cmd, args, options);
       },
-      {
-        name: 'late model override',
-        effective: {
-          model: 'exfil/steal-the-key',
-          small_model: 'zai-coding-plan/glm-5.2',
-        },
-        error: /final effective.*model.*exfil\/steal-the-key/is,
-      },
-    ];
-
-    for (const item of cases) {
-      let probeEnv;
-      let spawned = false;
-      await assert.rejects(
-        () => runCoderRun(
-          item.name,
-          { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home },
-          {
-            spawn: () => {
-              spawned = true;
-              throw new Error('must not spawn');
-            },
-            spawnSync: (cmd, args, options) => {
-              if (cmd === 'opencode' && args[0] === '--version') {
-                return { status: 0, stdout: OPENCODE_PIN, stderr: '', error: null };
-              }
-              if (cmd === 'opencode' && args[0] === 'debug' && args[1] === 'config') {
-                probeEnv = options.env;
-                return {
-                  status: 0,
-                  stdout: JSON.stringify(item.effective),
-                  stderr: '',
-                  error: null,
-                };
-              }
-              return { status: 1, stdout: '', stderr: '', error: null };
-            },
-            stdoutWrite: () => true,
-          },
-        ),
-        item.error,
-      );
-      assert.equal(spawned, false);
-      assert.ok(probeEnv, 'the final effective config must be probed');
-      assert.deepEqual(JSON.parse(probeEnv.OPENCODE_CONFIG_CONTENT), {
-        model: 'zai-coding-plan/glm-5.2',
-        small_model: 'zai-coding-plan/glm-5.2',
-      });
-      assert.match(probeEnv.ZHIPU_API_KEY, /^triss-config-audit-[0-9a-f]{32}$/);
-      assert.notEqual(probeEnv.ZHIPU_API_KEY, process.env.ZHIPU_API_KEY);
-      for (const key of [
-        'TRISS_WORKER_API_KEY',
-        'OPENCODE_API_KEY',
-        'MOONSHOT_API_KEY',
-        'KIMI_API_KEY',
-      ]) {
-        assert.equal(key in probeEnv, false, `${key} must not reach the config preflight`);
-      }
-    }
+      stdoutWrite: () => true,
+    });
+    assert.equal(probeCall.cmd, 'opencode');
+    assert.deepEqual(probeCall.args, ['debug', 'config', '--pure']);
+    assert.match(probeCall.options.env.ZHIPU_API_KEY, /^triss-config-audit-/u);
+    assert.notEqual(probeCall.options.env.ZHIPU_API_KEY, process.env.ZHIPU_API_KEY);
+    const overlay = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
+    assert.equal(overlay.model, 'triss-coder-transient/glm-5.2');
+    assert.equal(overlay.provider['triss-coder-transient'].options.apiKey, '{env:ZHIPU_API_KEY}');
+    assert.match(childEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
+    assert.notEqual(childEnv.ZHIPU_API_KEY, process.env.ZHIPU_API_KEY);
   }),
 );
 
@@ -1016,28 +1010,22 @@ test(
 );
 
 test(
-  'one-shot provider run rejects unauditable JSONC before forwarding a credential',
+  'one-shot provider accepts safe JSONC and audits it before forwarding a credential',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     process.env.ZHIPU_API_KEY = 'sk-zai-fake';
     writeFileSync(join(home, 'opencode.jsonc'), '{ /* provider overrides may be hidden here */ }\n');
-    let spawned = false;
-    await assert.rejects(
-      () => runCoderRun(
+    let childEnv;
+    await runCoderRun(
         'task',
         { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home },
         {
-          spawn: () => {
-            spawned = true;
-            throw new Error('must not spawn');
-          },
+          spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
           spawnSync: fakeSpawnSync,
           stdoutWrite: () => true,
         },
-      ),
-      /cannot safely audit.*opencode\.jsonc/i,
     );
-    assert.equal(spawned, false);
+    assert.match(childEnv.ZHIPU_API_KEY, /^[0-9a-f]{32}$/);
   }),
 );
 
@@ -1264,25 +1252,21 @@ test(
 );
 
 test(
-  'worker coder run fails before spawn when the managed provider is missing',
+  'worker coder run uses the transient provider when the managed provider is missing',
   withWorkerEnv(async () => {
-    let spawned = false;
-    await assert.rejects(
-      () => runCoderRun(
+    let childEnv;
+    await runCoderRun(
         'mechanical task',
         { model: 'triss-worker/deepseek-v4-flash' },
         {
-          spawn: () => {
-            spawned = true;
-            throw new Error('must not spawn');
-          },
+          spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
           spawnSync: fakeSpawnSync,
           stdoutWrite: () => true,
         },
-      ),
-      /triss coder init --engine opencode --provider worker --global/i,
     );
-    assert.equal(spawned, false);
+    const overlay = JSON.parse(childEnv.OPENCODE_CONFIG_CONTENT);
+    assert.equal(overlay.model, 'triss-coder-transient/deepseek-v4-flash');
+    assert.match(childEnv.TRISS_WORKER_API_KEY, /^[0-9a-f]{32}$/);
   }),
 );
 
@@ -1305,7 +1289,7 @@ test(
           stdoutWrite: () => true,
         },
       ),
-      /triss coder init --engine opencode --provider worker --global/i,
+      /overrides provider\["triss-worker"\].*refuses to forward/is,
     );
     assert.equal(spawned, false);
   }),

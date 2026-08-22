@@ -133,6 +133,22 @@ test(
 );
 
 test(
+  'runStatus: a historical bare model reports the same canonical Z.AI route as runtime',
+  withTmpKey(async () => {
+    const savedModel = process.env.TRISS_CODER_MODEL;
+    process.env.TRISS_CODER_MODEL = 'deepseek-v4-flash';
+    try {
+      const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({}) }))());
+      assert.match(out, /canonical provider route\s+zai → https:\/\/api\.z\.ai\/api\/paas\/v4/u);
+      assert.doesNotMatch(out, /unrecognized model prefix/u);
+    } finally {
+      if (savedModel === undefined) delete process.env.TRISS_CODER_MODEL;
+      else process.env.TRISS_CODER_MODEL = savedModel;
+    }
+  }),
+);
+
+test(
   'runStatus: shows the crush version with a pin-check label when crush is detected',
   withTmpKey(async () => {
     const dirty = 'crush version v0.0.0-20260704214312-f45bb790a171+dirty';
