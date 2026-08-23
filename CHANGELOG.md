@@ -15,14 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--coder-protect-credentials`, MCP `protectCredentials`) to retain the
   previous fail-closed credential-proxy behavior (`protected_proxy`). Crush
   remains protected by default regardless of the flag.
+  - Over MCP the switch is deliberately forgiving in the SAFE direction:
+    `triss_coder_run` accepts both `protectCredentials` and the
+    `protect_credentials` alias, treats any truthy value as an opt-in, and
+    resolves a disagreement between the two spellings in favor of protection.
   - The new `resolveCoderCredentialMode({ engine, protectCredentials })` in
     `src/coder-providers.js` is the single source of truth; every entry point
     resolves the mode through it and internal helpers only receive the
     already-resolved value (hidden `credentialMode = 'protected_proxy'`
     defaults were removed and now validate).
   - `best_effort_raw` runs skip the credential proxy, keep structural/
-    provider/config-shape checks, permit normal shell policy and discovered
-    plugins/agents/tools, report `execution_capabilities.credential_isolation:
+    provider/config-shape checks, permit the normal V1 allowlist policy and
+    discovered plugins/agents/tools (a missing deny-first wildcard still
+    blocks init in every mode — see below), report
+    `execution_capabilities.credential_isolation:
     "unavailable"`, and warn via the stable
     `TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED` code (text updated to
     describe the default rather than a downgrade).

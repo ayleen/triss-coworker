@@ -499,6 +499,10 @@ test(
     const snake = run.inputSchema.properties.protect_credentials;
     assert.ok(snake, 'the snake alias must be declared so schema-filtering clients forward it');
     assert.equal(snake.type, 'boolean');
+    // Same treatment for the neighboring isolation opt-in.
+    const wtSnake = run.inputSchema.properties.allow_best_effort_caller_worktree;
+    assert.ok(wtSnake, 'allow_best_effort_caller_worktree must be declared so schema-filtering clients forward it');
+    assert.equal(wtSnake.type, 'boolean');
   }),
 );
 
