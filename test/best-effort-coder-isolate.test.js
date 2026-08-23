@@ -378,7 +378,7 @@ test(
       const envelope = JSON.parse(captured.trim());
       assert.deepEqual(envelope.files_changed, ['notes.txt']);
       assert.deepEqual(envelope.warnings, [
-        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.',
       ]);
     });
     try {
@@ -419,7 +419,7 @@ test(
       const envelope2 = JSON.parse(captured2.trim());
       assert.deepEqual(envelope2.files_changed.sort(), ['a.txt', 'b.txt']);
       assert.deepEqual(envelope2.warnings, [
-        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.',
       ]);
     });
     try {
