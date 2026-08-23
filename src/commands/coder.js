@@ -3144,7 +3144,11 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
     return { blocking: true };
   }
   let blocking = false;
-  if (existing?.permission?.bash?.['*'] !== 'deny' && opts.credentialMode !== 'best_effort_raw') {
+  // Deny-first is the ARBITRARY-EXECUTION gate, independent of credential
+  // mode: a missing wildcard deny is unsafe under --auto in every mode (fresh
+  // configs always carry it via opencodeConfigTemplate). Only the explicit
+  // --allow-unsafe-bash opt-out downgrades it to a warning.
+  if (existing?.permission?.bash?.['*'] !== 'deny') {
     // The coder agent runs with --auto (every "ask" permission auto-approved),
     // so WITHOUT a deny-first allowlist it can run arbitrary shell commands.
     // That's the whole safety layer, so a missing policy is BLOCKING by default;

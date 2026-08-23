@@ -29,10 +29,12 @@ test('credential mode resolver: explicit --protect-credentials matrix over engin
       `crush with protectCredentials=${protectCredentials}`,
     );
   }
-  // Only the literal true opts into protection — truthy-but-not-true values
-  // are not an acknowledgement.
-  assert.equal(resolveCoderCredentialMode({ engine: 'opencode', protectCredentials: 'yes' }), 'best_effort_raw');
-  assert.equal(resolveCoderCredentialMode({ engine: 'opencode', protectCredentials: 1 }), 'best_effort_raw');
+  // Any truthy value opts into protection: a plausible affirmative must not
+  // silently resolve to raw credential exposure.
+  for (const truthy of [true, 1, 'true', 'yes']) {
+    assert.equal(resolveCoderCredentialMode({ engine: 'opencode', protectCredentials: truthy }), 'protected_proxy');
+    assert.equal(resolveCoderCredentialMode({ engine: 'opencode2', protectCredentials: truthy }), 'protected_proxy');
+  }
 });
 
 test('credential mode resolver ignores the retired legacy environment variable', () => {

@@ -970,7 +970,7 @@ const CODER_TOOLS = [
         small_model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'With provider, override small_model for this run; defaults to model' },
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
-        protectCredentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2 use best_effort_raw unless set; Crush is always protected.' },
+        protectCredentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2 use best_effort_raw unless set; Crush is always protected. Any truthy value (including protect_credentials) enables protection.' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },

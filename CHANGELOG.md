@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "unavailable"`, and warn via the stable
     `TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED` code (text updated to
     describe the default rather than a downgrade).
+  - **Breaking (crush):** the readable-raw-credential-store preflight is now
+    unconditional for crush. Previously
+    `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` silently bypassed the gate;
+    with the variable retired there is no in-product opt-out — move
+    `ZHIPU_API_KEY` into your shell environment (the store that `triss coder
+    init --engine crush` writes is what trips the gate).
+  - The existing-config deny-first bash-policy audit (`auditExistingConfig`)
+    no longer depends on the credential mode: a missing
+    `permission.bash["*"] = "deny"` blocks init in EVERY mode (override only
+    with `--allow-unsafe-bash`). Previously the check was skipped whenever
+    best_effort_raw was selected.
   - `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` is a deprecated no-op: neither
     `0` nor `1` selects anything. A still-configured value prints a one-time
     migration warning; the key stays in `NON_SECRET_CODER_STORE_KEYS` so a

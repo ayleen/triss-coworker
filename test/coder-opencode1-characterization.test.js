@@ -39,9 +39,6 @@ const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   opts,
   {
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    credentialModeParentEnv: {
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
-    },
     ...deps,
   },
 );
@@ -194,9 +191,6 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('do the thing', {}, {
         disableCredentialProxy: true,
-        credentialModeParentEnv: {
-          TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-        },
         spawn: rec.spawnFn,
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,

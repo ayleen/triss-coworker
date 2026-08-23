@@ -1359,27 +1359,29 @@ test(
 );
 
 test(
-  'runCoderInit --protect-credentials: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy',
+  'runCoderInit: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy — in EVERY credential mode',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
-    // A config with models but NO permission policy — unsafe under --auto when
-    // the credential is protected, so protected init must fail rather than
-    // report success with the safety layer missing. (The default best-effort
-    // init intentionally accepts a normal shell policy.)
+    // A config with models but NO permission policy — unsafe under --auto.
+    // Deny-first is the arbitrary-execution gate, independent of credential
+    // mode: BOTH the default best-effort init and --protect-credentials must
+    // fail rather than report success with the safety layer missing.
     writeFileSync(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free' }) + '\n',
     );
-    await assert.rejects(
-      () =>
-        runCoderInit(
-          { global: true, provider: 'opencode-zen', protectCredentials: true },
-          { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
-        ),
-      /Coder setup incomplete/,
-    );
+    for (const protectCredentials of [undefined, true]) {
+      await assert.rejects(
+        () =>
+          runCoderInit(
+            { global: true, provider: 'opencode-zen', protectCredentials },
+            { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
+          ),
+        /Coder setup incomplete/,
+      );
+    }
     const out = captured.join('');
     assert.match(out, /no deny-first bash policy/);
     assert.match(out, /--allow-unsafe-bash/);
@@ -1388,7 +1390,7 @@ test(
 );
 
 test(
-  'runCoderInit --protect-credentials --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds',
+  'runCoderInit --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1397,10 +1399,10 @@ test(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({ model: 'opencode/deepseek-v4-flash-free', small_model: 'opencode/deepseek-v4-flash-free' }) + '\n',
     );
-    // Explicit opt-in — the protected init completes despite the missing
-    // policy because --allow-unsafe-bash was passed.
+    // Explicit opt-out — init completes despite the missing policy because
+    // --allow-unsafe-bash was passed (works in EVERY credential mode).
     await runCoderInit(
-      { global: true, provider: 'opencode-zen', allowUnsafeBash: true, protectCredentials: true },
+      { global: true, provider: 'opencode-zen', allowUnsafeBash: true },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const out = captured.join('');

@@ -60,9 +60,6 @@ function fakeCoderRunDeps(spawn = fakeSpawnReplayingFixture()) {
   return {
     spawn,
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    credentialModeParentEnv: {
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-    },
   };
 }
 
@@ -513,13 +510,27 @@ test(
     );
     assert.equal(seen[0].protectCredentials, true);
 
+    // Snake-case typo and any truthy value MUST enable protection rather than
+    // silently downgrade to raw credential exposure.
+    await coderRunHandler(
+      { prompt: 'do something', protect_credentials: true },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    assert.equal(seen[1].protectCredentials, true, 'snake alias must enable protection');
+
+    await coderRunHandler(
+      { prompt: 'do something', protectCredentials: 'true' },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    assert.equal(seen[2].protectCredentials, true, 'truthy string must enable protection');
+
     await coderRunHandler(
       { prompt: 'do something' },
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
     // Omitted -> explicitly false so the downstream resolver contract stays
     // boolean-clean over MCP.
-    assert.equal(seen[1].protectCredentials, false);
+    assert.equal(seen[3].protectCredentials, false);
   }),
 );
 

@@ -136,7 +136,11 @@ export function resolveCoderCredentialMode({
 } = {}) {
   if (engine === 'crush') return 'protected_proxy';
 
-  return protectCredentials === true
+  // Truthy on purpose: this switch guards raw-credential exposure, so any
+  // plausible affirmative (true, 'true', 1) must select protection instead of
+  // silently falling through to the insecure default. Only genuinely negative
+  // values (false, undefined, '', 0) resolve to best_effort_raw.
+  return protectCredentials
     ? 'protected_proxy'
     : 'best_effort_raw';
 }

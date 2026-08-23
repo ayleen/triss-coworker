@@ -1077,7 +1077,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // production calls fall through to the real subprocess machinery and the
 // import-time parent snapshot inside runCoderRun.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials } = {},
+  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials, protect_credentials: protectCredentialsSnake } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -1136,7 +1136,9 @@ export async function coderRunHandler(
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
       allowBestEffortCallerWorktree: allowBestEffortCamel ?? allowBestEffortSnake,
-      protectCredentials: protectCredentials === true,
+      // Truthy + snake alias: a plausible typo must not silently downgrade
+      // the run to raw credential exposure.
+      protectCredentials: Boolean(protectCredentials ?? protectCredentialsSnake),
     },
     {
       spawn: deps.spawn,
