@@ -14,7 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -103,6 +103,60 @@ test('loadOrCreateProjectIdentity creates a mode-0600 exclusive record with exac
     const again = await loadOrCreateProjectIdentity(fx.trissRoot, { device: 100, inode: 200 });
     assert.equal(again.created, false);
     assert.equal(again.project_id, result.project_id);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('concurrent FIRST-EVER creations share ONE identity (atomic link publication)', async () => {
+  // The CI race (node 24): two first-ever admissions in one project raced a
+  // writeFile('wx') that exposed an EMPTY file between open and write; the
+  // loser read zero bytes and crashed with an untyped SyntaxError instead of
+  // sharing the winner's id. link() publishes atomically and never clobbers.
+  for (let round = 0; round < 8; round += 1) {
+    const fx = await fixture();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 12 }, () =>
+          loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 })),
+      );
+      const ids = new Set(results.map((r) => r.project_id));
+      assert.equal(ids.size, 1, `every concurrent creator must observe the SAME id (round ${round})`);
+      const creators = results.filter((r) => r.created);
+      assert.equal(creators.length, 1, 'exactly one caller may report created=true');
+      // No temp litter survives.
+      const names = await readdir(fx.trissRoot);
+      assert.equal(names.some((n) => n.includes('.project-identity-v1.tmp.')), false);
+    } finally {
+      await fx.cleanup();
+    }
+  }
+});
+
+test('an EMPTY (never published) identity fails closed typed — never parsed as JSON', async () => {
+  const fx = await fixture();
+  try {
+    // Exactly the bytes a racing legacy writer could leave behind.
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '', { mode: 0o600 });
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }),
+      (err) => err?.code === 'IDENTITY_UNPUBLISHED' && /never published \(empty\)/.test(err.message),
+    );
+    // The stranded empty file is retained untouched (fail closed, no guess).
+    assert.equal(await readFile(join(fx.trissRoot, 'project-identity-v1.json'), 'utf8'), '');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a non-JSON identity reports IDENTITY_INVALID, not a raw SyntaxError', async () => {
+  const fx = await fixture();
+  try {
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '{torn', { mode: 0o600 });
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }),
+      (err) => err?.code === 'IDENTITY_INVALID' && /not valid JSON/.test(err.message),
+    );
   } finally {
     await fx.cleanup();
   }
