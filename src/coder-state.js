@@ -25,6 +25,7 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 import { lstat, link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 
 export const CODER_BRANCH_PREFIX = 'coder-v2/';
@@ -42,9 +43,10 @@ export const STATE_KIND = Object.freeze(['session', 'result']);
 // ─── project identity ────────────────────────────────────────────────────────
 
 /**
- * Load or create `.triss/project-identity-v1.json` through the managed-root
- * discipline (mode 0600, no-follow, 4 KiB cap, exact keys). Returns the
- * canonical record plus the stable project_root_fingerprint.
+ * Load or create `.triss/project-identity-v1.json` with a mode-0600,
+ * last-component no-follow read, a 4 KiB cap, and exact canonical keys.
+ * Callers remain responsible for validating the managed parent root. Returns
+ * the canonical record plus the stable project_root_fingerprint.
  *
  * Concurrent FIRST-EVER creations are safe AND share one identity: the
  * record is published by link()ing an fsynced exclusive temp onto the final
@@ -60,7 +62,37 @@ export const STATE_KIND = Object.freeze(['session', 'result']);
  */
 const IDENTITY_CREATE_ATTEMPTS = 5;
 
-function decodeIdentityRecord(existing) {
+const { O_RDONLY, O_NOFOLLOW } = fsConstants;
+const IDENTITY_DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
+const IDENTITY_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function isCanonicalIdentityTimestamp(value) {
+  if (typeof value !== 'string' || !IDENTITY_TIMESTAMP_RE.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function isCanonicalIdentityDecimal(value) {
+  return typeof value === 'string' && IDENTITY_DECIMAL_RE.test(value);
+}
+
+async function fsyncIdentityParent(path) {
+  let fd;
+  try {
+    fd = await open(path, O_RDONLY);
+    await fd.sync();
+  } catch (err) {
+    // Directory fsync is unsupported on some filesystems. The atomic link is
+    // still the publication boundary; preserve the managed-root convention of
+    // tolerating only the platform-specific unsupported errors.
+    if (!err || !['EINVAL', 'EISDIR', 'ENOTSUP', 'EPERM'].includes(err.code)) throw err;
+  } finally {
+    await fd?.close().catch(() => {});
+  }
+}
+
+/** Decode the canonical project identity record used by runtime and backups. */
+export function decodeProjectIdentityRecord(existing) {
   let record;
   try {
     record = JSON.parse(existing);
@@ -69,11 +101,19 @@ function decodeIdentityRecord(existing) {
     e.code = 'IDENTITY_INVALID';
     throw e;
   }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    const e = new Error('coder-state: invalid project identity (fail closed)');
+    e.code = 'IDENTITY_INVALID';
+    throw e;
+  }
   const keys = Object.keys(record).sort();
   if (
     record.schema_version !== 1 ||
     typeof record.project_id !== 'string' ||
     !/^[0-9a-f]{32}$/.test(record.project_id) ||
+    !isCanonicalIdentityDecimal(record.creation_device) ||
+    !isCanonicalIdentityDecimal(record.creation_inode) ||
+    !isCanonicalIdentityTimestamp(record.created_at) ||
     keys.join(',') !== 'created_at,creation_device,creation_inode,project_id,schema_version'
   ) {
     const e = new Error('coder-state: invalid project identity (fail closed)');
@@ -83,8 +123,22 @@ function decodeIdentityRecord(existing) {
   return record;
 }
 
-export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode, now = () => new Date().toISOString() } = {}) {
+export async function loadOrCreateProjectIdentity(
+  trissRootPath,
+  {
+    device,
+    inode,
+    now = () => new Date().toISOString(),
+    // Test-only seams keep the security boundary real: the default open uses
+    // O_NOFOLLOW and all validation/read operations remain on that descriptor.
+    fs: fsOverrides = {},
+  } = {},
+) {
   const identityPath = join(trissRootPath, 'project-identity-v1.json');
+  const openIdentity = fsOverrides.open || ((path, flags) => open(path, flags));
+  const linkIdentity = fsOverrides.link || link;
+  const removeIdentity = fsOverrides.rm || rm;
+  const syncParent = fsOverrides.fsyncParent || (() => fsyncIdentityParent(trissRootPath));
   let lastError;
 
   for (let attempt = 0; attempt < IDENTITY_CREATE_ATTEMPTS; attempt += 1) {
@@ -92,31 +146,43 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
     let existing;
     let observedEmpty = false;
     try {
-      // Invariant: enforce the documented no-follow + 4 KiB cap on read. A
-      // plain readFile follows symlinks and buffers the whole file first;
-      // here the lstat check rejects non-regular files and the read is
-      // capped by the stated identity bound.
-      const st = await lstat(identityPath);
-      if (!st.isFile()) {
-        const e = new Error('coder-state: project identity is not a regular file (no-follow, fail closed)');
-        e.code = 'IDENTITY_INVALID';
-        throw e;
-      }
-      if (st.size > STATE_LIMITS.identityMaxBytes) {
-        const e = new Error('coder-state: project identity exceeds 4 KiB cap (fail closed)');
-        e.code = 'IDENTITY_OVERSIZE';
-        throw e;
-      }
-      const handle = await open(identityPath, 'r');
+      // Invariant: open the pathname once with O_NOFOLLOW, then validate and
+      // read the SAME descriptor. This removes the lstat -> open TOCTOU window
+      // where a same-UID actor could replace the identity with a symlink.
+      const handle = await openIdentity(identityPath, O_RDONLY | O_NOFOLLOW);
       try {
+        const st = await handle.stat();
+        if (!st.isFile()) {
+          const e = new Error('coder-state: project identity is not a regular file (no-follow, fail closed)');
+          e.code = 'IDENTITY_INVALID';
+          throw e;
+        }
         const buf = Buffer.alloc(STATE_LIMITS.identityMaxBytes + 1);
-        const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-        existing = buf.subarray(0, bytesRead).toString('utf8');
+        let total = 0;
+        while (total < buf.length) {
+          const { bytesRead } = await handle.read(buf, total, buf.length - total, null);
+          if (bytesRead === 0) break;
+          total += bytesRead;
+        }
+        if (total > STATE_LIMITS.identityMaxBytes) {
+          const e = new Error('coder-state: project identity exceeds 4 KiB cap (fail closed)');
+          e.code = 'IDENTITY_OVERSIZE';
+          throw e;
+        }
+        existing = buf.subarray(0, total).toString('utf8');
       } finally {
         await handle.close();
       }
     } catch (err) {
-      if (err && err.code !== 'ENOENT') throw err;
+      if (err && err.code === 'ENOENT') {
+        // First-ever creation path.
+      } else if (err && (err.code === 'ELOOP' || err.code === 'ENOTDIR')) {
+        const e = new Error('coder-state: project identity is not a regular file (no-follow, fail closed)', { cause: err });
+        e.code = 'IDENTITY_INVALID';
+        throw e;
+      } else {
+        throw err;
+      }
     }
 
     if (existing !== undefined) {
@@ -125,20 +191,35 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
       if (existing.trim().length === 0) {
         observedEmpty = true;
       } else {
-        const record = decodeIdentityRecord(existing);
+        const record = decodeProjectIdentityRecord(existing);
         return { ...record, project_root_fingerprint: projectRootFingerprint(record.project_id), created: false };
       }
     }
 
     // ── Publish path: exclusive fsynced temp -> link() (atomic no-clobber). ──
     const projectId = randomBytes(16).toString('hex');
+    let creationDevice = device;
+    let creationInode = inode;
+    if (creationDevice === undefined || creationInode === undefined) {
+      const rootStats = await lstat(trissRootPath);
+      if (!rootStats.isDirectory()) {
+        throw new Error('coder-state: identity parent is not a regular directory (fail closed)');
+      }
+      if (creationDevice === undefined) creationDevice = rootStats.dev;
+      if (creationInode === undefined) creationInode = rootStats.ino;
+    }
     const record = {
       schema_version: 1,
       project_id: projectId,
-      creation_device: String(device),
-      creation_inode: String(inode),
+      creation_device: String(creationDevice),
+      creation_inode: String(creationInode),
       created_at: now(),
     };
+    if (!isCanonicalIdentityDecimal(record.creation_device)
+        || !isCanonicalIdentityDecimal(record.creation_inode)
+        || !isCanonicalIdentityTimestamp(record.created_at)) {
+      throw new Error('coder-state: identity metadata is not canonical (fail closed)');
+    }
     const text = `${JSON.stringify(record)}\n`;
     if (Buffer.byteLength(text, 'utf8') > STATE_LIMITS.identityMaxBytes) {
       throw new Error('coder-state: identity exceeds 4 KiB cap');
@@ -156,9 +237,9 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
       // Atomic first-writer-wins publication: link() NEVER clobbers an
       // existing name, so a racing loser gets EEXIST here and re-reads the
       // winner's complete bytes on the next attempt — never an empty file.
-      await link(tmpPath, identityPath);
+      await linkIdentity(tmpPath, identityPath);
     } catch (err) {
-      await rm(tmpPath, { force: true }).catch(() => {});
+      await removeIdentity(tmpPath, { force: true }).catch(() => {});
       if (err && err.code === 'EEXIST') {
         lastError = observedEmpty
           ? Object.assign(new Error('coder-state: project identity exists but was never published (empty) — retain, fail closed'), { code: 'IDENTITY_UNPUBLISHED' })
@@ -167,7 +248,13 @@ export async function loadOrCreateProjectIdentity(trissRootPath, { device, inode
       }
       throw err;
     }
-    await rm(tmpPath, { force: true }).catch(() => {});
+    try {
+      await syncParent();
+    } finally {
+      // The temporary hard link is not the published pathname; remove it even
+      // when the parent-directory durability check fails.
+      await removeIdentity(tmpPath, { force: true }).catch(() => {});
+    }
     return { ...record, project_root_fingerprint: projectRootFingerprint(projectId), created: true };
   }
 

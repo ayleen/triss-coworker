@@ -23,9 +23,16 @@ import {
   PROJECT_IDENTITY_REL,
   inventoryCoderV2State,
   backupCoderV2State,
+  listPhysicalStateFiles,
   validateCoderV2Backup,
 } from '../src/coder-state-backup.js';
-import { markCoderSessionRunning, markCoderSessionIdle, reserveCoderSession } from '../src/coder-session-transitions.js';
+import {
+  beginCoderSessionDelete,
+  markCoderSessionRunning,
+  markCoderSessionIdle,
+  reserveCoderSession,
+} from '../src/coder-session-transitions.js';
+import { decodeCoderSessionInventory, encodeCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 import { acquireCoderSlotLease } from '../src/coder-lease.js';
 import { openManagedTrissRoot } from '../src/managed-root.js';
 import {
@@ -33,6 +40,9 @@ import {
   reserveV2SessionRow,
   revalidateV2SessionRowBeforeSpawn,
 } from '../src/commands/coder.js';
+import { projectRootFingerprint } from '../src/coder-state.js';
+
+const NOW = '2026-08-24T00:00:00.000Z';
 
 async function fixture() {
   const base = await mkdtemp(join(tmpdir(), 'triss-backup-'));
@@ -297,10 +307,44 @@ async function seedIdleRowWithMapping(base, engine, slug, realId, fingerprint) {
   await writeFile(sessionsPath, JSON.stringify(store), { mode: 0o600 });
 }
 
+async function seedDeletingRow(base, fingerprint, slug = 'deleting-row') {
+  const inventoryDir = join(base, '.triss', 'engine-sessions-v2', 'opencode');
+  await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
+  await reserveCoderSession({
+    inventoryDir,
+    engine: 'opencode',
+    slug,
+    isolationMode: 'non_isolated',
+    lockSlot: 0,
+    projectRootFingerprint: fingerprint,
+    runId: 'run_old',
+    pid: 100,
+    processStartId: 'ps-old',
+    bootId: 'boot-old',
+  });
+  await beginCoderSessionDelete({
+    inventoryDir,
+    engine: 'opencode',
+    slug,
+    runId: 'run_clean',
+    sandboxId: `sbx_${'1'.repeat(32)}`,
+    pid: 101,
+    processStartId: 'ps-clean',
+    bootId: 'boot-clean',
+  });
+}
+
 test('backup carries the durable session mapping and validates row↔mapping consistency', async () => {
   const fx = await fixture();
   try {
-    const fp = 'a'.repeat(64);
+    const fp = projectRootFingerprint('c'.repeat(32));
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: 'c'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: '2026-08-24T00:00:00.000Z',
+    }));
     await seedIdleRowWithMapping(fx.base, 'opencode2', 'beta', 'ses_beta', fp);
 
     await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'c'.repeat(32) });
@@ -556,10 +600,236 @@ test('a source idle row WITHOUT its durable mapping fails the backup closed', as
   }
 });
 
+test('persistent backup identity consistency rejects missing, foreign, fingerprint-mismatched, and malformed identity', async () => {
+  const projectId = 'e'.repeat(32);
+  const foreignId = 'f'.repeat(32);
+  const cases = [
+    {
+      name: 'missing identity',
+      prepare: async (fx) => {},
+      expected: /project identity missing while persistent rows exist/,
+    },
+    {
+      name: 'foreign identity',
+      prepare: async (fx) => writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+        schema_version: 1, project_id: foreignId, creation_device: '1', creation_inode: '2', created_at: NOW,
+      })),
+      expected: /project identity fingerprint mismatch|manifest project_id does not match/,
+    },
+    {
+      name: 'fingerprint mismatch',
+      prepare: async (fx) => writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+        schema_version: 1, project_id: projectId, creation_device: '1', creation_inode: '2', created_at: NOW,
+      })),
+      fingerprint: '0'.repeat(64),
+      expected: /project identity fingerprint mismatch/,
+    },
+    {
+      name: 'malformed identity',
+      prepare: async (fx) => writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), '{malformed'),
+      expected: /project identity invalid/,
+    },
+    {
+      name: 'malformed identity metadata',
+      prepare: async (fx) => writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+        schema_version: 1,
+        project_id: projectId,
+        creation_device: '01',
+        creation_inode: 'not-decimal',
+        created_at: 'not-a-timestamp',
+      })),
+      expected: /project identity invalid/,
+    },
+  ];
+  for (const item of cases) {
+    const fx = await fixture();
+    try {
+      await item.prepare(fx);
+      await seedIdleRowWithMapping(
+        fx.base,
+        'opencode2',
+        `identity-${item.name.replace(/\W+/g, '-')}`,
+        'ses_identity',
+        item.fingerprint || projectRootFingerprint(projectId),
+      );
+      await assert.rejects(
+        () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId }),
+        item.expected,
+        item.name,
+      );
+    } finally {
+      await fx.cleanup();
+    }
+  }
+});
+
+test('deleting rows keep identity ownership checks in source and validator', async () => {
+  const projectId = '3'.repeat(32);
+  const expectedFingerprint = projectRootFingerprint(projectId);
+
+  const source = await fixture();
+  try {
+    await writeFile(join(source.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedDeletingRow(source.base, 'f'.repeat(64));
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: source.base, backupDir: source.backupDir, projectId }),
+      /project identity fingerprint mismatch: opencode\/deleting-row/,
+    );
+  } finally {
+    await source.cleanup();
+  }
+
+  const copied = await fixture();
+  try {
+    await writeFile(join(copied.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedDeletingRow(copied.base, expectedFingerprint);
+    await backupCoderV2State({ projectRoot: copied.base, backupDir: copied.backupDir, projectId });
+
+    const inventoryPath = join(copied.backupDir, 'state', 'engine-sessions-v2', 'opencode', '.inventory.json');
+    const inventory = decodeCoderSessionInventory(await readFile(inventoryPath, 'utf8'));
+    const tampered = inventory.entries.map((row) => ({ ...row, project_root_fingerprint: 'f'.repeat(64) }));
+    const tamperedText = encodeCoderSessionInventory(tampered, inventory.updated_at);
+    await writeFile(inventoryPath, tamperedText);
+
+    const { createHash } = await import('node:crypto');
+    const manifestPath = join(copied.backupDir, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const inventoryEntry = manifest.entries.find((entry) => entry.path === 'engine-sessions-v2/opencode/.inventory.json');
+    inventoryEntry.sha256 = createHash('sha256').update(tamperedText).digest('hex');
+    manifest.sha256 = createHash('sha256')
+      .update(manifest.entries.map((entry) => `${entry.path}\u0000${entry.sha256}`).join('\u0000'))
+      .digest('hex');
+    const manifestText = `${JSON.stringify(manifest)}\n`;
+    await writeFile(manifestPath, manifestText);
+    await writeFile(join(copied.backupDir, 'COMPLETION'), JSON.stringify({
+      schema_version: 1,
+      manifest_sha256: createHash('sha256').update(manifestText).digest('hex'),
+      completed_at: NOW,
+    }) + '\n');
+
+    const validation = await validateCoderV2Backup(copied.backupDir);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.reasons.some((reason) => /project identity fingerprint mismatch: opencode\/deleting-row/.test(reason)));
+  } finally {
+    await copied.cleanup();
+  }
+});
+
+test('backup validation rejects a manifest project_id changed away from the copied identity', async () => {
+  const fx = await fixture();
+  try {
+    const projectId = '1'.repeat(32);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1, project_id: projectId, creation_device: '1', creation_inode: '2', created_at: NOW,
+    }));
+    await seedIdleRowWithMapping(fx.base, 'opencode2', 'manifest-id', 'ses_manifest', projectRootFingerprint(projectId));
+    await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId });
+    const manifestPath = join(fx.backupDir, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.project_id = '2'.repeat(32);
+    const manifestText = `${JSON.stringify(manifest)}\n`;
+    await writeFile(manifestPath, manifestText);
+    const { createHash } = await import('node:crypto');
+    await writeFile(join(fx.backupDir, 'COMPLETION'), JSON.stringify({
+      schema_version: 1,
+      manifest_sha256: createHash('sha256').update(manifestText).digest('hex'),
+      completed_at: NOW,
+    }) + '\n');
+    const validation = await validateCoderV2Backup(fx.backupDir);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.reasons.some((reason) => /manifest project_id does not match/.test(reason)), validation.reasons.join('; '));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('backup validation requires identity and canonical inventories to be listed in the manifest', async () => {
+  const projectId = '4'.repeat(32);
+  const fp = projectRootFingerprint(projectId);
+  const cases = [
+    ['project-identity-v1.json', /project identity is present outside manifest entries|unlisted state entry: project-identity-v1\.json/],
+    ['engine-sessions-v2/opencode/.inventory.json', /unlisted state entry: engine-sessions-v2\/opencode\/.inventory\.json/],
+  ];
+  for (const [omittedPath, expected] of cases) {
+    const fx = await fixture();
+    try {
+      await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+        schema_version: 1,
+        project_id: projectId,
+        creation_device: '1',
+        creation_inode: '2',
+        created_at: NOW,
+      }));
+      await seedIdleRowWithMapping(fx.base, 'opencode', 'manifest-binding', 'ses_binding', fp);
+      await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId });
+
+      const { createHash } = await import('node:crypto');
+      const manifestPath = join(fx.backupDir, 'manifest.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      manifest.entries = manifest.entries.filter((entry) => entry.path !== omittedPath);
+      manifest.sha256 = createHash('sha256')
+        .update(manifest.entries.map((entry) => `${entry.path}\u0000${entry.sha256}`).join('\u0000'))
+        .digest('hex');
+      const manifestText = `${JSON.stringify(manifest)}\n`;
+      await writeFile(manifestPath, manifestText);
+      await writeFile(join(fx.backupDir, 'COMPLETION'), JSON.stringify({
+        schema_version: 1,
+        manifest_sha256: createHash('sha256').update(manifestText).digest('hex'),
+        completed_at: NOW,
+      }) + '\n');
+
+      const validation = await validateCoderV2Backup(fx.backupDir);
+      assert.equal(validation.valid, false, omittedPath);
+      assert.ok(validation.reasons.some((reason) => expected.test(reason)), validation.reasons.join('; '));
+    } finally {
+      await fx.cleanup();
+    }
+  }
+});
+
+test('physical state validation bounds nodes and relative paths', async () => {
+  const fx = await fixture();
+  try {
+    const stateRoot = join(fx.backupDir, 'state');
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(join(stateRoot, 'node.json'), '{}');
+
+    await assert.rejects(
+      () => listPhysicalStateFiles(fx.backupDir, { maxNodes: 0 }),
+      /physical state nodes exceed 0 cap/,
+    );
+    await assert.rejects(
+      () => listPhysicalStateFiles(fx.backupDir, { maxPathBytes: 4 }),
+      /physical state path exceeds 4 bytes/,
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('valid same-slug state in BOTH store engines backs up and validates immediately', async () => {
   const fx = await fixture();
   try {
-    const fp = 'b'.repeat(64);
+    const fp = projectRootFingerprint('d'.repeat(32));
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: 'd'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: '2026-08-24T00:00:00.000Z',
+    }));
     // Same slug in both namespaces is legitimate: mappings are engine-scoped.
     await seedIdleRowWithMapping(fx.base, 'opencode', 'shared', 'ses_oc_shared', fp);
     await seedIdleRowWithMapping(fx.base, 'opencode2', 'shared', 'ses_oc2_shared', fp);

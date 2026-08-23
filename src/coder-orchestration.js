@@ -92,8 +92,8 @@ export const V2_ENUMS = Object.freeze({
  * first-match table + Section 6.2 derivation), HONESTLY under today's
  * capabilities: process supervision is best_effort, so cleanup_status is
  * never `verified`, change evidence cannot claim `changes_present`, and
- * persistent sessions are not eligible (no enforced persistent-state
- * capabilities). The observed files_changed/run_files_changed data is still
+ * persistence is eligible only after the caller confirms the durable idle
+ * transition. The observed files_changed/run_files_changed data is still
  * REPORTED (a real, performed git comparison) while the CLAIMING fields
  * (change_detection/artifact_status/requirement_status) stay conservative —
  * a deliberate, documented deviation from nulling out files_changed, which
@@ -116,6 +116,9 @@ export function deriveV2LifecycleFields({
   // session handle). A requested-but-downgraded claim must never be
   // reported as continuable.
   v2SessionAdmitted = false,
+  // Completion is authoritative for a requested session. Admission only
+  // proves that a row was reserved; it does not prove a resumable idle row.
+  completionOutcome = null,
 }) {
   // process_status / termination_cause (first-match precedence).
   let processStatus;
@@ -161,12 +164,17 @@ export function deriveV2LifecycleFields({
     cleanup_status: cleanupStatus,
     provider_status: providerStatus,
     // Contract (Section 6): the slug is a continuation key ONLY when
-    // session_persistence=persistent — i.e. the v2 claim was actually
-    // ADMITTED. A requested-but-downgraded run reports ephemeral_downgraded;
-    // an unnamed run is plain ephemeral.
+    // session_persistence=persistent — i.e. admission reserved a row and
+    // completion confirmed a durable resumable idle row. A requested-but-
+    // downgraded run reports ephemeral_downgraded; an unnamed run is plain
+    // ephemeral.
     session_persistence: !sessionRequested
       ? 'ephemeral'
-      : v2SessionAdmitted ? 'persistent' : 'ephemeral_downgraded',
+      : !v2SessionAdmitted
+        ? 'ephemeral_downgraded'
+        : completionOutcome === 'persistent'
+          ? 'persistent'
+          : 'ephemeral_downgraded',
     effective_isolation: callerWorktreeDowngrade
       ? 'best_effort_caller_worktree'
       : isolated

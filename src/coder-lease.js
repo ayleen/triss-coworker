@@ -285,6 +285,10 @@ function createRunLease({ parentHandle, maintenance, target, slotLease, lockSlot
       return withCoderSessionOwnerInventory({ parentHandle, prefixContext }, callback);
     },
     async release() {
+      // Idempotent BY CONTRACT: the success path releases the prefix inside
+      // finalizeCoderSessionRow (immediately after the confirmed inventory
+      // transition), while the caller's finally releases it again for every
+      // other path. The second call is a no-op, never an error.
       if (released) return;
       released = true;
       prefixContext.active = false;

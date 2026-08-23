@@ -5267,6 +5267,17 @@ async function runCrushFlow({
     changed: (filesChanged || []).length > 0,
   });
 
+  // Finalization MUST precede lifecycle derivation and envelope assembly.
+  // Admission is not persistence evidence; only a confirmed typed outcome may
+  // authorize session_persistence=persistent.
+  const completionOutcome = await completeV2SessionRow(sessionV2, parsed.session_id);
+  if (completionOutcome === 'retained_for_recovery') {
+    throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+  }
+  if (completionOutcome === 'removed_unusable' && sessionV2) {
+    warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+  }
+
   // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
   // observed crush facts; crush exposes no per-event activity stream, so
   // tool activity is derived from its tool_calls array.
@@ -5286,6 +5297,7 @@ async function runCrushFlow({
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(session),
     v2SessionAdmitted: sessionV2 != null,
+    completionOutcome,
   });
   const finishedAtMs = Date.now();
 
@@ -5342,7 +5354,7 @@ async function runCrushFlow({
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
-  await completeV2SessionRow(sessionV2);
+  return { completionOutcome };
 }
 
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
@@ -5818,9 +5830,21 @@ export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
  *   captured resumed real id to remain durably present.
  * Every mutation is owner-checked inside the held run lease; on any
  * ambiguity the row is retained for recovery, never blindly deleted.
+ *
+ * Completion returns a TYPED outcome the envelope consumes:
+ *   'persistent'             — confirmed resumable idle row (mapping matched)
+ *   'removed_unusable'       — success produced nothing continuable; row removed
+ *   'retained_for_recovery'  — ambiguity/finalization failure; fail closed
+ * A persistent envelope claim is therefore only ever emitted AFTER the
+ * inventory transition is durably confirmed — never before finalization.
  */
 async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
-  if (!sessionV2) return;
+  if (!sessionV2) return mode === 'complete' ? 'removed_unusable' : undefined;
+  // The finalizer owns the run lease for the whole completion/rollback
+  // attempt. Outer engine catches must not invoke abandon a second time after
+  // a fail-closed completion has already released that lease.
+  sessionV2.finalizationAttempted = true;
+  let outcome;
   try {
     const transitions = await import('../coder-session-transitions.js');
     const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
@@ -5835,7 +5859,7 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
       mode === 'complete' ? publishedRealId
       : sessionV2.origin === 'idle_continuation' ? sessionV2.resumedRealId
       : sessionV2.publishedRealId;
-    await sessionV2.runLease.withInventory(async () => {
+    outcome = await sessionV2.runLease.withInventory(async () => {
       const read = await readCoderSessionInventory(sessionV2.inventoryDir);
       if (read.error) throw storeInvalidError(read.error);
       const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
@@ -5851,34 +5875,51 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
         }
         await transitions.beginCoderSessionDelete(sessionV2);
         await transitions.removeCoderSessionRow(sessionV2);
+        return 'removed_unusable';
       };
       if (mode === 'complete') {
         if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
           throw new Error(`row is ${row ? row.state : 'absent'} / not owned by this run`);
         }
         if (!isStoreEngine) {
+          if (typeof publishedRealId !== 'string' || publishedRealId.length === 0) {
+            // Non-store engines (currently Crush) still need a native id to
+            // make the inventory row resumable. An admitted row alone is not
+            // persistence evidence.
+            process.stderr.write(pc.dim('  ⚠ v2 session had no resumable session id — removing the unusable persistent row\n'));
+            return removeUnpublished();
+          }
+          // Crush has no Triss-side slug -> real-id map: the caller slug is
+          // the native get-or-create key passed to the engine. A different
+          // id therefore proves that this run cannot be resumed by the
+          // admitted slug; retain the row for recovery rather than publishing
+          // a false persistent envelope.
+          if (publishedRealId !== sessionV2.slug) {
+            throw new Error(
+              `native Crush session id ${JSON.stringify(publishedRealId)} does not match ` +
+                `the admitted session slug ${JSON.stringify(sessionV2.slug)} (retain, fail closed)`,
+            );
+          }
           await transitions.markCoderSessionIdle(sessionV2);
-          return;
+          return 'persistent';
         }
         if (typeof publishedRealId !== 'string' || publishedRealId.length === 0) {
           // A named run that produced no usable native session id can never
           // be continued: do NOT publish an idle row that would make the
           // next run silently start a fresh conversation.
           process.stderr.write(pc.dim('  ⚠ v2 session had no resumable session id — removing the unusable persistent row\n'));
-          await removeUnpublished();
-          return;
+          return removeUnpublished();
         }
         if (mapping.state === 'matching') {
           await transitions.markCoderSessionIdle(sessionV2);
-          return;
+          return 'persistent';
         }
         if (mapping.state === 'mismatch') {
           throw new Error('session mapping changed during the run (retain, fail closed)');
         }
         // mapping absent: durable publication did not happen despite success.
         process.stderr.write(pc.dim('  ⚠ v2 session mapping was not durably published — removing the unusable persistent row\n'));
-        await removeUnpublished();
-        return;
+        return removeUnpublished();
       }
       // ── abandon (failure path) ──
       const promoteThenIdle = async () => {
@@ -5929,26 +5970,35 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
         throw new Error(`session mapping ${mapping.state} during rollback (retain, fail closed)`);
       }
       await transitions.markCoderSessionIdle(sessionV2);
+      return undefined;
     });
   } catch (err) {
     // Retain / fail closed: a finalization failure never deletes the row
     // blindly — the diagnostic names the retained state for recovery.
     process.stderr.write(pc.dim(`  ⚠ v2 session ${mode === 'complete' ? 'completion' : 'rollback'} retained row for recovery: ${err.message}\n`));
+    outcome = 'retained_for_recovery';
   } finally {
     try {
+      // Idempotent by contract: the confirmed-persistent success path has
+      // already released the prefix; every other path releases it here.
       await sessionV2.runLease?.release();
     } catch {
       /* idempotent best-effort lease release */
     }
   }
+  return outcome;
 }
 
-// Exported for tests: success finalizer (running -> idle + lease release).
+// Exported for tests + production envelope assembly: success finalizer
+// (running -> idle + lease release). Returns the typed completion outcome:
+// 'persistent' ONLY after the idle transition was durably confirmed with a
+// matching durable mapping; 'removed_unusable' when success produced nothing
+// continuable; 'retained_for_recovery' on any ambiguity (fail closed).
 // publishedRealId is the engine session id whose mapping was durably
-// persisted before the envelope was emitted (undefined for engines without
+// persisted before the envelope is assembled (undefined for engines without
 // a versioned store namespace).
 export async function completeV2SessionRow(sessionV2, publishedRealId) {
-  await finalizeV2SessionRow(sessionV2, 'complete', publishedRealId);
+  return finalizeV2SessionRow(sessionV2, 'complete', publishedRealId);
 }
 
 // Exported for tests: provenance/store-aware rollback of a claimed row.
@@ -6484,7 +6534,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
 
   // v2 session lifecycle: lease-integrated admission BEFORE the engine
-  // branch. The claimed row completes to idle after the envelope is emitted.
+  // branch. The claimed row is finalized before the envelope is assembled;
+  // only its typed completion outcome can authorize persistence.
   // Rollback is provenance-aware: a reservation THIS run created is removed
   // on any failure path; a continuation of a previously published idle
   // session returns to idle so the persisted session survives the failure.
@@ -6530,7 +6581,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialMode,
       });
     } catch (err) {
-      await releaseV2SessionRow(sessionV2);
+      if (!sessionV2?.finalizationAttempted) await releaseV2SessionRow(sessionV2);
       throw err;
     } finally {
       await releaseCredentialProxy();
@@ -6898,7 +6949,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const promptTokens2 = tokens2.input_uncached ?? 0;
     const completionTokens2 = tokens2.output_visible ?? 0;
     const ctx2 = currentCall();
-    logUsage({
+    const logUsageFn2 = deps.logUsage || logUsage;
+    logUsageFn2({
       model: modelUsed,
       billing_model: modelUsed,
       billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
@@ -6918,6 +6970,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       isolated: !!isolation,
       changed: (filesChanged2 || []).length > 0,
     });
+    // Finalization MUST precede lifecycle derivation and envelope assembly.
+    // The row is only persistent after the durable mapping and idle transition
+    // have both been confirmed.
+    const completionOutcome = await completeV2SessionRow(sessionV2, result2.sessionRealId);
+    if (completionOutcome === 'retained_for_recovery') {
+      throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+    }
+    if (completionOutcome === 'removed_unusable' && sessionV2) {
+      result2.warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+    }
+
     const lifecycle2 = deriveV2LifecycleFields({
       timedOut: result2.timedOut,
       terminationCause: result2.terminationCause,
@@ -6932,6 +6995,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
       sessionRequested: Boolean(opts.session),
       v2SessionAdmitted: sessionV2 != null,
+      completionOutcome,
     });
   const envelope2 = {
     engine: 'opencode2',
@@ -6978,12 +7042,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
     writeStdout2(JSON.stringify(envelope2) + '\n');
-    // The mapping for this real id was durably persisted above (before the
-    // envelope); the finalizer verifies it before publishing idle.
-    await completeV2SessionRow(sessionV2, result2.sessionRealId);
-    return;
+    return { completionOutcome };
     } catch (err) {
-      await releaseV2SessionRow(sessionV2);
+      if (!sessionV2?.finalizationAttempted) await releaseV2SessionRow(sessionV2);
       throw err;
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
@@ -7220,7 +7281,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const promptTokens = tokens.input_uncached ?? 0;
   const completionTokens = tokens.output_visible ?? 0;
   const ctx = currentCall();
-  logUsage({
+  const logUsageFn = deps.logUsage || logUsage;
+  logUsageFn({
     model: modelUsed,
     billing_model,
     billing_mode,
@@ -7234,6 +7296,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
   });
+
+  // Finalization MUST precede lifecycle derivation and envelope assembly.
+  const completionOutcome = await completeV2SessionRow(sessionV2, result.sessionRealId);
+  if (completionOutcome === 'retained_for_recovery') {
+    throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+  }
+  if (completionOutcome === 'removed_unusable' && sessionV2) {
+    result.warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+  }
 
   // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
   // folded opencode event stream.
@@ -7251,6 +7322,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(opts.session || sessionRealIdV1),
     v2SessionAdmitted: sessionV2 != null,
+    completionOutcome,
   });
   const finishedAtMs = Date.now();
 
@@ -7314,7 +7386,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
-  await completeV2SessionRow(sessionV2, result.sessionRealId);
+  return { completionOutcome };
 }
 
 // ─── coder clean ─────────────────────────────────────────────────────────────

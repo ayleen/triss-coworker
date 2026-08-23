@@ -401,6 +401,46 @@ test(
   }),
 );
 
+test(
+  'crush run path: a native id different from the admitted slug fails closed before stdout',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const envelopeLine = JSON.stringify({
+      session_id: 'foreign-native-id',
+      exit_reason: 'end_turn',
+      final_text: 'done',
+      usage: { delta_tokens: 1, delta_cost_usd: 0 },
+    }) + '\n';
+    const capture = stdoutCapture();
+    await assert.rejects(
+      () => runCoderRun(
+        'do something',
+        {
+          engine: 'crush',
+          isolate: false,
+          session: 'crush-native-key',
+          timeout: 30,
+        },
+        {
+          ...crushRunDeps(envelopeLine),
+          disableCredentialProxy: true,
+          ownerTuple: { pid: 651, processStartId: 'ps-crush', bootId: 'boot-crush' },
+          stdoutWrite: capture.stdoutWrite,
+          logUsage: () => {},
+        },
+      ),
+      /completion retained row for recovery/,
+    );
+    assert.equal(capture.text(), '', 'retained recovery must not emit a clean envelope');
+    const inventory = JSON.parse(readFileSync(
+      join(process.env.TRISS_PROJECT_ROOT, '.triss', 'engine-sessions-v2', 'crush', '.inventory.json'),
+      'utf8',
+    ));
+    assert.equal(inventory.entries.length, 1);
+    assert.equal(inventory.entries[0].state, 'running');
+    assert.equal(inventory.entries[0].pid, 651);
+  }),
+);
+
 // ── Crush: usage.cost (testcase 7) — including a real delta_cost_usd of 0 ──
 
 test(

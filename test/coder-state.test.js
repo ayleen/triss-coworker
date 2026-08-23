@@ -14,7 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, readdir, symlink, open as openFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -182,6 +182,92 @@ test('a tampered identity fails closed instead of guessing', async () => {
   try {
     await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '{"schema_version":2,"project_id":"x"}\n', { mode: 0o600 });
     await assert.rejects(() => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }), /invalid project identity/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity decoder rejects malformed canonical metadata', async () => {
+  const fx = await fixture();
+  try {
+    const base = {
+      schema_version: 1,
+      project_id: 'a'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    };
+    for (const [field, value] of [
+      ['creation_device', 'not-decimal'],
+      ['creation_inode', '01'],
+      ['created_at', 'not-a-timestamp'],
+    ]) {
+      await writeFile(
+        join(fx.trissRoot, 'project-identity-v1.json'),
+        JSON.stringify({ ...base, [field]: value }),
+        { mode: 0o600 },
+      );
+      await assert.rejects(
+        () => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }),
+        (err) => err?.code === 'IDENTITY_INVALID' && /invalid project identity/.test(err.message),
+        field,
+      );
+    }
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity read rejects a pre-existing symlink and a deterministic swap before open', async () => {
+  const fx = await fixture();
+  try {
+    const target = join(fx.base, 'outside-identity.json');
+    await writeFile(target, JSON.stringify({ schema_version: 1, project_id: '9'.repeat(32) }));
+    await symlink(target, join(fx.trissRoot, 'project-identity-v1.json'));
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }),
+      (err) => err?.code === 'IDENTITY_INVALID' && /no-follow/.test(err.message),
+    );
+
+    await rm(join(fx.trissRoot, 'project-identity-v1.json'));
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), JSON.stringify({
+      schema_version: 1,
+      project_id: 'a'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    let swapped = false;
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, {
+        device: 1,
+        inode: 2,
+        fs: {
+          open: async (path, flags) => {
+            if (!swapped) {
+              swapped = true;
+              await rm(path);
+              await symlink(target, path);
+            }
+            return openFile(path, flags);
+          },
+        },
+      }),
+      (err) => err?.code === 'IDENTITY_INVALID' && /no-follow/.test(err.message),
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity reads are bounded at cap+1 bytes', async () => {
+  const fx = await fixture();
+  try {
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), 'x'.repeat(4 * 1024 + 1));
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }),
+      (err) => err?.code === 'IDENTITY_OVERSIZE' && /4 KiB cap/.test(err.message),
+    );
   } finally {
     await fx.cleanup();
   }

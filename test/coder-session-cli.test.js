@@ -618,9 +618,38 @@ test('a successful run without a resumable real id removes the unusable row', as
     await revalidateV2SessionRowBeforeSpawn(session);
     // Stream succeeded but NO event ever carried a sessionID: publishing
     // idle would make the next run silently start a fresh conversation.
-    await completeV2SessionRow(session, null);
+    assert.equal(await completeV2SessionRow(session, null), 'removed_unusable');
     const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
     assert.equal(inv.entries.length, 0, 'an unusable persistent row must be removed');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('Crush completion retains the row when native id differs from its admitted slug', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'crush',
+      slug: 'crush-native-key',
+      isolated: false,
+      ownerTuple: { pid: 65, processStartId: 'ps-crush', bootId: 'boot-crush' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    // Crush receives the slug itself as its native get-or-create key. A
+    // different result id cannot be resumed through this admitted row.
+    assert.equal(
+      await completeV2SessionRow(session, 'foreign-native-id'),
+      'retained_for_recovery',
+    );
+    const inv = await readCoderSessionInventory(fx.crushDir);
+    assert.equal(inv.entries.length, 1, 'mismatch must retain the recovery row');
+    assert.equal(inv.entries[0].state, 'running');
+    assert.equal(inv.entries[0].pid, 65);
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;
@@ -641,7 +670,7 @@ test('completion publishes idle only with the matching durable mapping', async (
     });
     await revalidateV2SessionRowBeforeSpawn(session);
     await writeStoreMapping(fx.base, 'opencode2', 'match-map', 'ses_match');
-    await completeV2SessionRow(session, 'ses_match');
+    assert.equal(await completeV2SessionRow(session, 'ses_match'), 'persistent');
     let inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
     assert.equal(inv.entries[0].state, 'idle');
     assert.equal(inv.entries[0].pid, null);
@@ -665,7 +694,7 @@ test('a mismatched mapping on completion retains the row (fail closed)', async (
     });
     await revalidateV2SessionRowBeforeSpawn(session);
     await writeStoreMapping(fx.base, 'opencode2', 'mis-map', 'ses_other');
-    await completeV2SessionRow(session, 'ses_expected');
+    assert.equal(await completeV2SessionRow(session, 'ses_expected'), 'retained_for_recovery');
     const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
     assert.equal(inv.entries.length, 1, 'ambiguity retains the row');
     assert.equal(inv.entries[0].state, 'running');

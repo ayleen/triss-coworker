@@ -137,6 +137,11 @@ function recordingSpawn(streamText, { code = 0, signal = null } = {}) {
   return { spawnFn, calls };
 }
 
+const NO_SESSION_ID_STREAM = [
+  JSON.stringify({ type: 'step_start', part: { type: 'step-start', id: 'prt_v2_no_id' } }),
+  JSON.stringify({ type: 'text', part: { text: 'done without an id' } }),
+].join('\n') + '\n';
+
 // ─── engine identity & pin ──────────────────────────────────────────────────
 
 test('opencode2 resolves as a valid engine; default stays opencode; order is opencode, opencode2, crush', () => {
@@ -563,6 +568,95 @@ test(
       assert.equal(envelope.final_text, 'hello');
       assert.equal(envelope.usage.usage_status, 'reported');
       assert.equal(envelope.usage.tokens.input_uncached, 3141);
+    },
+  ),
+);
+
+test(
+  'lifecycle V2: no native session id finalizes before stdout and downgrades persistence',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-v2-no-id',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const slug = 'v2-no-session-id';
+      const inventoryPath = join(
+        process.env.TRISS_PROJECT_ROOT,
+        '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json',
+      );
+      const chunks = [];
+      let rowsAtStdout;
+      await runCoderRun('no id', { engine: 'opencode2', session: slug }, {
+        spawn: recordingSpawn(NO_SESSION_ID_STREAM).spawnFn,
+        spawnSync: pinSh(),
+        disableCredentialProxy: true,
+        ownerTuple: { pid: 721, processStartId: 'ps-v2-no-id', bootId: 'boot-v2-no-id' },
+        stdoutWrite: (s) => {
+          rowsAtStdout = JSON.parse(readFileSync(inventoryPath, 'utf8')).entries;
+          chunks.push(s);
+        },
+      });
+      const envelope = JSON.parse(chunks.join('').trim());
+      assert.equal(envelope.session_id, null);
+      assert.equal(envelope.session_persistence, 'ephemeral_downgraded');
+      assert.ok(envelope.warnings.some((w) => /not confirmed/i.test(w)));
+      assert.deepEqual(rowsAtStdout, [], 'finalization must finish before stdout');
+    },
+  ),
+);
+
+test(
+  'lifecycle V2: mapping mismatch and owner mismatch retain the row and emit no envelope',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-v2-mismatch',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const root = process.env.TRISS_PROJECT_ROOT;
+      const ownerTuple = { pid: 722, processStartId: 'ps-v2-mismatch', bootId: 'boot-v2-mismatch' };
+      const runCase = async (slug, mutate) => {
+        const capture = stdoutCapture();
+        await assert.rejects(
+          () => runCoderRun('mismatch', { engine: 'opencode2', session: slug }, {
+            spawn: recordingSpawn(readFixture('opencode2-run-no-tool.ndjson')).spawnFn,
+            spawnSync: pinSh(),
+            disableCredentialProxy: true,
+            ownerTuple,
+            stdoutWrite: capture.stdoutWrite,
+            logUsage: () => mutate(root, slug),
+          }),
+          /completion retained row for recovery/,
+        );
+        assert.equal(capture.text(), '', 'fail-closed finalization must not print an envelope');
+        const inventory = JSON.parse(readFileSync(
+          join(root, '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json'),
+          'utf8',
+        ));
+        assert.equal(inventory.entries.length, 1);
+        assert.equal(inventory.entries[0].state, 'running');
+      };
+
+      await runCase('v2-map-mismatch', (projectRoot, sessionSlug) => {
+        const storePath = join(projectRoot, '.triss', 'sessions.json');
+        const store = JSON.parse(readFileSync(storePath, 'utf8'));
+        store.engines.opencode2[sessionSlug] = 'ses_foreign_v2';
+        writeFileSync(storePath, JSON.stringify(store) + '\n');
+      });
+
+      // Isolate the second ambiguity case from the retained first row and map.
+      rmSync(join(root, '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json'));
+      rmSync(join(root, '.triss', 'sessions.json'));
+
+      await runCase('v2-owner-mismatch', (projectRoot) => {
+        const inventoryPath = join(projectRoot, '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json');
+        const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+        inventory.entries[0].pid = 799;
+        writeFileSync(inventoryPath, JSON.stringify(inventory) + '\n');
+      });
     },
   ),
 );

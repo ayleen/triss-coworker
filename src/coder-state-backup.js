@@ -66,6 +66,7 @@ export const BACKUP_LIMITS = Object.freeze({
 // engine-sessions-v2/<name> is an invalid state and fails closed — a backup
 // must never silently omit persistent sessions.
 import { CODER_SESSION_ENGINES, CODER_SESSION_STORE_ENGINES } from './coder-session-engines.js';
+import { decodeProjectIdentityRecord, projectRootFingerprint } from './coder-state.js';
 
 export const SESSIONS_STORE_REL = 'sessions.json';
 export const PROJECT_IDENTITY_REL = 'project-identity-v1.json';
@@ -131,10 +132,20 @@ async function readPinnedTopLevelFile(absPath, state) {
  * are parsed from pinned texts so a completed backup implies validity:
  *   - every non-deleting persistent row has its durable mapping;
  *   - every durable mapping has a non-deleting row (no orphans);
- *   - sessions.json is present whenever persistent rows exist.
+ *   - sessions.json is present whenever persistent rows exist;
+ *   - project identity is present whenever persistent rows exist and every
+ *     row fingerprint is derived from that identity;
+ *   - the requested/manifest project_id matches the canonical identity.
  * Returns human-readable reasons; an empty list means consistent.
  */
-function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
+function classifyRowMappingConsistency({
+  sessionsStoreText,
+  inventoryTexts,
+  identityText = null,
+  manifestProjectId = null,
+  identityEntryPresent = null,
+  identityPhysicalPresent = null,
+}) {
   const reasons = [];
   let mappings = null;
   if (sessionsStoreText !== null) {
@@ -153,7 +164,6 @@ function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
     const match = INVENTORY_ENTRY_PATH_RE.exec(path);
     if (!match) continue;
     const engine = match[1];
-    if (!CODER_SESSION_STORE_ENGINES.includes(engine)) continue;
     const decoded = decodeCoderSessionInventory(text);
     if (!decoded) {
       reasons.push(`corrupt inventory in backup: ${path}`);
@@ -161,8 +171,43 @@ function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
     }
     rowsByEngine[engine] = decoded.entries;
   }
+
+  let identity = null;
+  if (identityText !== null) {
+    try {
+      identity = decodeProjectIdentityRecord(identityText);
+    } catch (err) {
+      reasons.push(`project identity invalid: ${err.message}`);
+    }
+  }
+  if (identityPhysicalPresent === true && identityEntryPresent === false) {
+    reasons.push('project identity is present outside manifest entries');
+  }
+  if (identityEntryPresent === true && identityPhysicalPresent === false) {
+    reasons.push('project identity manifest entry is missing from backup state');
+  }
+  const persistentRows = Object.values(rowsByEngine)
+    .flat()
+    .filter((row) => row.state !== 'deleting');
+  if (persistentRows.length > 0 && (!identity || identityEntryPresent === false)) {
+    reasons.push('project identity missing while persistent rows exist');
+  }
+  if (identity) {
+    const expectedFingerprint = projectRootFingerprint(identity.project_id);
+    for (const [engine, rows] of Object.entries(rowsByEngine)) {
+      for (const row of rows) {
+        if (row.project_root_fingerprint !== expectedFingerprint) {
+          reasons.push(`project identity fingerprint mismatch: ${engine}/${row.slug}`);
+        }
+      }
+    }
+    if (manifestProjectId !== null && manifestProjectId !== identity.project_id) {
+      reasons.push('manifest project_id does not match project identity');
+    }
+  }
   if (mappings !== null) {
     for (const [engine, rows] of Object.entries(rowsByEngine)) {
+      if (!CODER_SESSION_STORE_ENGINES.includes(engine)) continue;
       for (const row of rows) {
         if (row.state === 'deleting') continue; // mapping already gone by design
         if (!mappings[engine] || !mappings[engine].has(row.slug)) {
@@ -177,7 +222,8 @@ function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
         if (!row) reasons.push(`orphan mapping: ${engine}/${slug}`);
       }
     }
-  } else if (Object.values(rowsByEngine).some((rows) => rows.some((r) => r.state !== 'deleting'))) {
+  } else if (Object.entries(rowsByEngine).some(([engine, rows]) =>
+    CODER_SESSION_STORE_ENGINES.includes(engine) && rows.some((r) => r.state !== 'deleting'))) {
     reasons.push('sessions.json missing from backup while persistent rows exist');
   }
   return reasons;
@@ -190,6 +236,11 @@ function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
  * manifest entry.
  */
 async function readCopiedConsistencyInputs(backupDir, entries) {
+  const manifestPaths = new Set(
+    (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry && typeof entry.path === 'string')
+      .map((entry) => entry.path),
+  );
   let sessionsStoreText;
   try {
     const pinned = await readPinnedTopLevelFile(join(backupDir, 'state', SESSIONS_STORE_REL), { totalBytes: 0 });
@@ -202,11 +253,28 @@ async function readCopiedConsistencyInputs(backupDir, entries) {
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry || typeof entry.path !== 'string') continue;
     const match = INVENTORY_ENTRY_PATH_RE.exec(entry.path);
-    if (!match || !CODER_SESSION_STORE_ENGINES.includes(match[1])) continue;
+    if (!match || !CODER_SESSION_ENGINES.includes(match[1])) continue;
     const pinned = await readPinnedTopLevelFile(join(backupDir, 'state', entry.path), { totalBytes: 0 });
     inventoryTexts.push({ path: entry.path, text: pinned.text });
   }
-  return { sessionsStoreText, inventoryTexts };
+  let identityText = null;
+  let identityPhysicalPresent = false;
+  try {
+    identityText = (await readPinnedTopLevelFile(
+      join(backupDir, 'state', PROJECT_IDENTITY_REL),
+      { totalBytes: 0 },
+    )).text;
+    identityPhysicalPresent = true;
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+  return {
+    sessionsStoreText,
+    inventoryTexts,
+    identityText,
+    identityEntryPresent: manifestPaths.has(PROJECT_IDENTITY_REL),
+    identityPhysicalPresent,
+  };
 }
 
 /**
@@ -214,7 +282,7 @@ async function readCopiedConsistencyInputs(backupDir, entries) {
  * exclusive maintenance + drained session slots (pinned single-open reads;
  * the pathname is never re-resolved between validation and hashing).
  */
-async function readSourceConsistencyInputs(trissRoot) {
+async function readSourceConsistencyInputs(trissRoot, manifestProjectId = null) {
   let sessionsStoreText;
   try {
     const pinned = await readPinnedTopLevelFile(join(trissRoot, SESSIONS_STORE_REL), { totalBytes: 0 });
@@ -224,7 +292,7 @@ async function readSourceConsistencyInputs(trissRoot) {
     sessionsStoreText = null;
   }
   const inventoryTexts = [];
-  for (const engine of CODER_SESSION_STORE_ENGINES) {
+  for (const engine of CODER_SESSION_ENGINES) {
     const rel = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
     try {
       const pinned = await readPinnedTopLevelFile(join(trissRoot, rel), { totalBytes: 0 });
@@ -234,7 +302,18 @@ async function readSourceConsistencyInputs(trissRoot) {
       throw err;
     }
   }
-  return { sessionsStoreText, inventoryTexts };
+  let identityText = null;
+  let identityPhysicalPresent = false;
+  try {
+    identityText = (await readPinnedTopLevelFile(
+      join(trissRoot, PROJECT_IDENTITY_REL),
+      { totalBytes: 0 },
+    )).text;
+    identityPhysicalPresent = true;
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+  return { sessionsStoreText, inventoryTexts, identityText, manifestProjectId, identityPhysicalPresent };
 }
 
 /**
@@ -282,6 +361,12 @@ function canonicalManifest(record) {
   if (keys.join(',') !== [...BACKUP_MANIFEST_KEYS].sort().join(',')) {
     throw new Error('backup: manifest has unknown/missing keys (fail closed)');
   }
+  if (record.schema_version !== 1) {
+    throw new Error('backup: manifest schema_version must be 1');
+  }
+  if (typeof record.project_id !== 'string' || !/^[0-9a-f]{32}$/.test(record.project_id)) {
+    throw new Error('backup: manifest project_id must be 32 lowercase hex');
+  }
   return record;
 }
 
@@ -307,6 +392,64 @@ function decodeManifest(text) {
   } catch {
     return null;
   }
+}
+
+function manifestEntriesSha256(entries) {
+  return createHash('sha256')
+    .update(entries.map((entry) => `${entry.path}\u0000${entry.sha256}`).join('\u0000'))
+    .digest('hex');
+}
+
+/**
+ * Enumerate the copied state tree. The optional limits are an internal test
+ * seam; production validation always uses BACKUP_LIMITS.
+ */
+export async function listPhysicalStateFiles(
+  backupDir,
+  { maxNodes = BACKUP_LIMITS.maxEntries, maxPathBytes = BACKUP_LIMITS.maxPathBytes } = {},
+) {
+  if (!Number.isSafeInteger(maxNodes) || maxNodes < 0) {
+    throw new TypeError('backup: physical state node cap must be a non-negative integer');
+  }
+  if (!Number.isSafeInteger(maxPathBytes) || maxPathBytes < 1) {
+    throw new TypeError('backup: physical state path cap must be a positive integer');
+  }
+  const stateRoot = join(backupDir, 'state');
+  const files = [];
+  let visitedNodes = 0;
+  const walk = async (relativeDir) => {
+    let names;
+    try {
+      names = await readdir(join(stateRoot, relativeDir));
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      throw err;
+    }
+    for (const name of names) {
+      const relative = relativeDir ? `${relativeDir}/${name}` : name;
+      if (Buffer.byteLength(relative, 'utf8') > maxPathBytes) {
+        throw new Error(`backup: physical state path exceeds ${maxPathBytes} bytes: ${relative}`);
+      }
+      visitedNodes += 1;
+      if (visitedNodes > maxNodes) {
+        throw new Error(`backup: physical state nodes exceed ${maxNodes} cap`);
+      }
+      const absolute = join(stateRoot, relative);
+      const entry = await lstat(absolute);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`backup: symlink in state tree (no-follow): ${relative}`);
+      }
+      if (entry.isDirectory()) {
+        await walk(relative);
+      } else if (entry.isFile()) {
+        files.push(relative);
+      } else {
+        throw new Error(`backup: special file in state tree: ${relative}`);
+      }
+    }
+  };
+  await walk('');
+  return files;
 }
 
 function encodeCompletionMarker(record) {
@@ -484,15 +627,10 @@ export async function inventoryCoderV2State(projectRoot) {
   const identityPath = join(trissRoot, PROJECT_IDENTITY_REL);
   try {
     const pinnedIdentity = await readPinnedTopLevelFile(identityPath, state);
-    let parsedIdentity;
     try {
-      parsedIdentity = JSON.parse(pinnedIdentity.text);
+      decodeProjectIdentityRecord(pinnedIdentity.text);
     } catch (err) {
-      throw new Error(`backup: project identity is not valid JSON (${err.message})`, { cause: err });
-    }
-    if (!parsedIdentity || typeof parsedIdentity.project_id !== 'string'
-        || !/^[0-9a-f]{32}$/.test(parsedIdentity.project_id)) {
-      throw new Error('backup: project identity has no valid 32-hex project_id');
+      throw new Error(`backup: project identity invalid (${err.message})`, { cause: err });
     }
     entries.push({ path: PROJECT_IDENTITY_REL, sha256: pinnedIdentity.sha256, size: pinnedIdentity.size });
   } catch (err) {
@@ -592,7 +730,7 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     // without a store) fails the backup BEFORE anything is copied. A
     // formally completed backup of such state would be instantly rejected
     // by validation — completion must never be reachable from it.
-    const sourceInputs = await readSourceConsistencyInputs(trissRoot);
+    const sourceInputs = await readSourceConsistencyInputs(trissRoot, projectId);
     const sourceReasons = classifyRowMappingConsistency(sourceInputs);
     if (sourceReasons.length > 0) {
       throw new Error(
@@ -607,9 +745,7 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     created_at: new Date().toISOString(),
     source_root: projectRoot,
     entries: inventory.entries,
-    sha256: createHash('sha256')
-      .update(inventory.entries.map((e) => `${e.path}\u0000${e.sha256}`).join('\u0000'))
-      .digest('hex'),
+    sha256: manifestEntriesSha256(inventory.entries),
   };
   const manifestText = encodeManifest(manifest);
 
@@ -639,7 +775,10 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
   } catch (err) {
     throw new Error(`backup: copied consistency inputs unreadable (${err.message}) — no completion marker`, { cause: err });
   }
-  const copiedReasons = classifyRowMappingConsistency(copiedInputs);
+  const copiedReasons = classifyRowMappingConsistency({
+    ...copiedInputs,
+    manifestProjectId: projectId,
+  });
   if (copiedReasons.length > 0) {
     throw new Error(
       'backup: copied state failed cross-consistency — ' + copiedReasons.join('; ') +
@@ -742,6 +881,21 @@ export async function validateCoderV2Backup(backupDir) {
       return { valid: false, reasons: [...reasons, `manifest entry size malformed: ${entry.path}`] };
     }
   }
+  const manifestPaths = new Set(manifest.entries.map((entry) => entry.path));
+  if (manifestPaths.size !== manifest.entries.length) {
+    reasons.push('manifest contains duplicate entries');
+  }
+  if (manifest.sha256 !== manifestEntriesSha256(manifest.entries)) {
+    reasons.push('manifest entries hash does not match manifest.sha256');
+  }
+  try {
+    const physicalPaths = await listPhysicalStateFiles(backupDir);
+    for (const path of physicalPaths) {
+      if (!manifestPaths.has(path)) reasons.push(`unlisted state entry: ${path}`);
+    }
+  } catch (err) {
+    reasons.push(`unreadable state tree: ${err.message}`);
+  }
 
   // Verify every backed-up entry exists and hashes match. The aggregate
   // accumulator spans the WHOLE validation, so the 512 MiB total cap holds.
@@ -770,11 +924,13 @@ export async function validateCoderV2Backup(backupDir) {
   let consistencyReasons;
   try {
     const copiedInputs = await readCopiedConsistencyInputs(backupDir, manifest.entries);
-    consistencyReasons = classifyRowMappingConsistency(copiedInputs);
+    consistencyReasons = classifyRowMappingConsistency({
+      ...copiedInputs,
+      manifestProjectId: manifest.project_id,
+    });
   } catch (err) {
     consistencyReasons = [`unreadable inventory in backup: ${err.message}`];
   }
   reasons.push(...consistencyReasons);
   return { valid: reasons.length === 0, reasons };
 }
-
