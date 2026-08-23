@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { beginCoderSessionDelete, markCoderSessionRunning, markCoderSessionIdle, reserveCoderSession } from '../src/coder-session-transitions.js';
 import { processStartIdentity } from '../src/update/cache.js';
-import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
+import { readCoderSessionInventory, RESERVED_BYTES } from '../src/coder-session-inventory-codec.js';
 import { writeResultState } from '../src/coder-result-registry-codec.js';
 import { acquireCoderTargetLease } from '../src/coder-lease.js';
 import { openManagedTrissRoot } from '../src/managed-root.js';
@@ -983,7 +983,7 @@ test('a failed NEW run never adopts a pre-existing mapping (exact-id attribution
     // admission that would have been rejected by the orphan gate in real
     // flow terms — here we verify the FINALIZER independently).
     await writeStoreMapping(fx.base, 'opencode2', 'attr', 'ses_foreign');
-    await reserveCoderSession({
+    const seededRow = await reserveCoderSession({
       inventoryDir: dir,
       engine: 'opencode2',
       slug: 'attr',
@@ -1001,12 +1001,15 @@ test('a failed NEW run never adopts a pre-existing mapping (exact-id attribution
       async withInventory(callback) { return callback(); },
       async release() {}
     };
+    // Production pins the IMMUTABLE incarnation identity at admission; a
+    // different instance id means a different (replacement) session.
     const fakeSession = {
       inventoryDir: dir,
       engine: 'opencode2',
       slug: 'attr',
       runId: 'run_attr',
       sandboxId: `sbx_${'a'.repeat(32)}`,
+      instanceId: seededRow.session_instance_id,
       pid: 77,
       processStartId: 'ps-attr',
       bootId: 'boot-attr',
@@ -1103,6 +1106,90 @@ test('clean ABA guard: a same-slug replacement is never deletable by an older at
     assert.equal(inv.entries[0].isolation_mode, 'isolated');
     const store = await readStore(fx.base);
     assert.equal(store.engines.opencode2['aba'], 'ses_replacement');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean ABA guard survives a frozen clock: identical created_at still cannot swap identity', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    // Two incarnations that coincide on EVERY legacy anchor: slug,
+    // isolation_mode, lock_slot, project fingerprint AND the exact
+    // millisecond created_at (deterministic frozen clock). The immutable
+    // session_instance_id is the ONLY difference — timestamps are metadata,
+    // never identity.
+    const incarnation = (instanceId) => ({
+      engine: 'opencode2',
+      slug: 'frozen',
+      session_instance_id: instanceId,
+      isolation_mode: 'non_isolated',
+      lock_slot: 0,
+      state: 'idle',
+      run_id: null,
+      sandbox_id: null,
+      pid: null,
+      process_start_id: null,
+      boot_id: null,
+      project_root_fingerprint: fingerprint,
+      reserved_bytes: RESERVED_BYTES,
+      deleting_basename: null,
+      session_delete_phase: null,
+      created_at: NOW,
+      updated_at: NOW,
+    });
+    await writeFile(join(dir, '.inventory.json'), JSON.stringify({
+      schema_version: 1,
+      entries: [incarnation('c'.repeat(32))],
+      updated_at: NOW,
+    }) + '\n', { mode: 0o600 });
+
+    const root = await openManagedTrissRoot(fx.base);
+    // Park the clean AFTER its maintenance-scoped discovery but BEFORE the
+    // target lease (required for this non-isolated row).
+    const parkedTarget = await acquireCoderTargetLease({ parentHandle: root });
+    let cleanSettled = false;
+    const cleanP = runCoderSessionClean('frozen', { engine: 'opencode2' })
+      .then(() => { cleanSettled = true; }, (e) => { cleanSettled = true; throw e; });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(cleanSettled, false, 'clean must be parked on the target lease');
+
+    // While parked: incarnation ONE is removed and a byte-identical
+    // EXCEPT-instance-id incarnation TWO is published in its place.
+    const { removeCoderSessionRow } = await import('../src/coder-session-transitions.js');
+    await beginCoderSessionDelete({
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'frozen',
+      runId: 'run_swap_old',
+      sandboxId: `sbx_${'c'.repeat(32)}`,
+      pid: 601,
+      processStartId: 'ps-swap',
+      bootId: 'boot-swap',
+    });
+    await removeCoderSessionRow({ inventoryDir: dir, engine: 'opencode2', slug: 'frozen' });
+    await writeFile(join(dir, '.inventory.json'), JSON.stringify({
+      schema_version: 1,
+      entries: [incarnation('d'.repeat(32))],
+      updated_at: NOW,
+    }) + '\n', { mode: 0o600 });
+
+    // Unpark: the older clean attempt MUST fail closed on instance identity…
+    await parkedTarget.release();
+    await assert.rejects(() => cleanP, /ABA guard/);
+    // …leaving incarnation TWO fully intact (its own instance id, idle).
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1);
+    assert.equal(inv.entries[0].session_instance_id, 'd'.repeat(32));
+    assert.equal(inv.entries[0].state, 'idle');
+    assert.equal(inv.entries[0].created_at, NOW, 'the replacement kept the shared frozen timestamp');
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;

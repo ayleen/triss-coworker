@@ -112,6 +112,10 @@ export function deriveV2LifecycleFields({
   isolated = false,
   callerWorktreeDowngrade = false,
   sessionRequested = false,
+  // Whether the v2 persistent claim was actually ADMITTED (a non-null
+  // session handle). A requested-but-downgraded claim must never be
+  // reported as continuable.
+  v2SessionAdmitted = false,
 }) {
   // process_status / termination_cause (first-match precedence).
   let processStatus;
@@ -156,7 +160,13 @@ export function deriveV2LifecycleFields({
     engine_status: engineStatus,
     cleanup_status: cleanupStatus,
     provider_status: providerStatus,
-    session_persistence: sessionRequested ? 'ephemeral_downgraded' : 'ephemeral',
+    // Contract (Section 6): the slug is a continuation key ONLY when
+    // session_persistence=persistent — i.e. the v2 claim was actually
+    // ADMITTED. A requested-but-downgraded run reports ephemeral_downgraded;
+    // an unnamed run is plain ephemeral.
+    session_persistence: !sessionRequested
+      ? 'ephemeral'
+      : v2SessionAdmitted ? 'persistent' : 'ephemeral_downgraded',
     effective_isolation: callerWorktreeDowngrade
       ? 'best_effort_caller_worktree'
       : isolated

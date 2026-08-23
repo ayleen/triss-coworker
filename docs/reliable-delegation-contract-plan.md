@@ -848,8 +848,14 @@ ordered schema `{schema_version,entries,updated_at}`, canonical compact UTF-8
 JSON plus LF and no extras. Version is integer `1`; timestamp uses the exact
 Section 6.3 grammar; entries are sorted by raw ASCII `engine`, then `slug`, and
 there are at most four. Every entry has exact ordered keys
-`{engine,slug,isolation_mode,lock_slot,state,run_id,sandbox_id,pid,process_start_id,boot_id,project_root_fingerprint,reserved_bytes,deleting_basename,created_at,updated_at}`.
-Common values use the existing grammars, `isolation_mode` is exactly
+`{engine,slug,session_instance_id,isolation_mode,lock_slot,state,run_id,sandbox_id,pid,process_start_id,boot_id,project_root_fingerprint,reserved_bytes,deleting_basename,session_delete_phase,created_at,updated_at}`.
+`session_instance_id` is the row's immutable identity: exactly 128 random
+bits (32 lowercase hex) minted once at the first reservation and carried
+unchanged through every transition, including continuation — it, and never a
+timestamp, is the ownership/ABA anchor for clean, recovery, and run-cycle
+revalidation, because two incarnations of one slug may coincide on
+mode/slot/fingerprint and even the same millisecond `created_at`. Common
+values use the existing grammars, `isolation_mode` is exactly
 `isolated|non_isolated` and must match the mapping/generation owner,
 `lock_slot` is integer `0..3` with the
 shared-same-slug/distinct-live-slug constraints below, `sandbox_id` is `null` or

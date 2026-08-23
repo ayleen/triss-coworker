@@ -5285,6 +5285,7 @@ async function runCrushFlow({
     isolated: !!isolation,
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(session),
+    v2SessionAdmitted: sessionV2 != null,
   });
   const finishedAtMs = Date.now();
 
@@ -5570,14 +5571,18 @@ function pickFreeLockSlot(entries) {
   throw new Error('coder-session: no free lock slot among live session rows');
 }
 
-// True iff the row's complete owner tuple is EXACTLY this run cycle's.
+// True iff the row's complete owner tuple is EXACTLY this run cycle's —
+// including the IMMUTABLE session_instance_id minted at THIS admission. A
+// same-slug replacement row (new incarnation, even with a coinciding
+// millisecond created_at) never matches.
 function rowOwnedByRun(row, sessionV2) {
   return Boolean(row)
     && row.run_id === sessionV2.runId
     && row.sandbox_id === sessionV2.sandboxId
     && row.pid === sessionV2.pid
     && row.process_start_id === sessionV2.processStartId
-    && row.boot_id === sessionV2.bootId;
+    && row.boot_id === sessionV2.bootId
+    && row.session_instance_id === sessionV2.instanceId;
 }
 
 export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }) {
@@ -5756,6 +5761,9 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
     sandboxId: admission.row ? admission.row.sandbox_id : sandboxId,
     origin: admission.origin,
     lockSlot: runLease.lockSlot,
+    // Immutable incarnation identity pinned from the admitted row: every
+    // later owner revalidation compares THIS value, never timestamps.
+    instanceId: admission.row ? admission.row.session_instance_id : null,
     resumedRealId,
     ...owner,
     runLease,
@@ -6486,6 +6494,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       engine,
       slug: opts.session || null,
       isolated: !!isolation,
+      // Test seam (deps.ownerTuple): CLI regression tests force the sanctioned
+      // "owner identity unavailable" downgrade without patching probes.
+      ownerTuple: deps.ownerTuple,
     });
   } catch (err) {
     // Admission runs AFTER setupIsolation: a rejected claim (BUSY,
@@ -6788,11 +6799,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     else if (result2.code === 0) exit_reason2 = 'end_turn';
     else exit_reason2 = 'error';
 
-    if (opts.session && result2.sessionRealId) {
+    if (opts.session && result2.sessionRealId && sessionV2) {
       persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
       // Attribution anchor for the finalizer: only THIS exact id may be
       // recognized as this run's publication during rollback.
       sessionV2.publishedRealId = result2.sessionRealId;
+    } else if (opts.session && result2.sessionRealId && !sessionV2) {
+      // Sanctioned ephemeral downgrade (owner identity unavailable): the run
+      // itself succeeded, but publishing a durable slug mapping here would
+      // create exactly the ORPHAN state (mapping without inventory row) the
+      // admission gate rejects. The native session ends with this run; the
+      // envelope reports session_persistence=ephemeral_downgraded.
+      result2.warnings.push(
+        'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable — this native session is ephemeral and was NOT published for continuation',
+      );
     }
 
     let filesChanged2 = null;
@@ -6911,6 +6931,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       isolated: !!isolation,
       callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
       sessionRequested: Boolean(opts.session),
+      v2SessionAdmitted: sessionV2 != null,
     });
   const envelope2 = {
     engine: 'opencode2',
@@ -7109,10 +7130,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   else if (result.code === 0) exit_reason = 'end_turn';
   else exit_reason = 'error';
 
-  if (opts.session && result.sessionRealId) {
+  if (opts.session && result.sessionRealId && sessionV2) {
     persistSessionMapping(sh, engine, opts.session, result.sessionRealId);
     // Attribution anchor for the finalizer (exact-id rollback recognition).
     sessionV2.publishedRealId = result.sessionRealId;
+  } else if (opts.session && result.sessionRealId && !sessionV2) {
+    // Sanctioned ephemeral downgrade: never publish a resumable mapping
+    // without a persistent claim behind it (orphan-mapping prevention).
+    result.warnings.push(
+      'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable — this native session is ephemeral and was NOT published for continuation',
+    );
   }
 
   // v2 contract: files_changed is [] ONLY for a successfully performed
@@ -7223,6 +7250,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     isolated: !!isolation,
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(opts.session || sessionRealIdV1),
+    v2SessionAdmitted: sessionV2 != null,
   });
   const finishedAtMs = Date.now();
 
@@ -7427,8 +7455,10 @@ export async function runCoderSessionClean(slug, opts = {}) {
   // (backup transaction) can interleave, and every later observation below
   // happens under the same umbrella. ABA defense: the discovery row's EXACT
   // identity is pinned here and byte-revalidated after every lock
-  // re-acquisition — a same-slug REPLACEMENT (new created_at/slot/mode) is
-  // never deletable by an older clean attempt.
+  // re-acquisition — the immutable session_instance_id (128 random bits)
+  // is the primary anchor, so a same-slug REPLACEMENT (even one that
+  // coincides on slot/mode/fingerprint AND millisecond created_at) is never
+  // deletable by an older clean attempt.
   const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
   let target;
   let slotLease;
@@ -7453,6 +7483,11 @@ export async function runCoderSessionClean(slug, opts = {}) {
       throw new Error(`session ${slug} carries a foreign deleting breadcrumb (${snapRow.deleting_basename}) — retain, fail closed`);
     }
     const identity = {
+      // PRIMARY anchor: the immutable 128-bit incarnation identity minted at
+      // this row's reservation. created_at (millisecond precision) is kept
+      // only as a secondary metadata anchor — it can coincide across two
+      // incarnations and must never be the identity.
+      session_instance_id: snapRow.session_instance_id,
       isolation_mode: snapRow.isolation_mode,
       lock_slot: snapRow.lock_slot,
       project_root_fingerprint: snapRow.project_root_fingerprint,
@@ -7463,7 +7498,7 @@ export async function runCoderSessionClean(slug, opts = {}) {
     // deleting breadcrumb are deliberately EXCLUDED: this clean's own
     // breadcrumb transition legitimately changes them between phases.
     const sameRow = (candidate) => Boolean(candidate)
-      && ['isolation_mode', 'lock_slot', 'project_root_fingerprint', 'created_at']
+      && ['session_instance_id', 'isolation_mode', 'lock_slot', 'project_root_fingerprint', 'created_at']
         .every((key) => candidate[key] === identity[key]);
 
     // Normative order under the held maintenance: conditional-target

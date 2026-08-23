@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readFile, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,6 +20,7 @@ import {
   BACKUP_MANIFEST_KEYS,
   BACKUP_COMPLETION_KEYS,
   BACKUP_LIMITS,
+  PROJECT_IDENTITY_REL,
   inventoryCoderV2State,
   backupCoderV2State,
   validateCoderV2Backup,
@@ -438,3 +439,144 @@ test('a backup waits for live runs on assigned slots before snapshotting (run vs
 });
 
 
+
+// ─── Round 4: pinned top-level reads + consistency-gated completion ─────────
+
+test('a sessions.json swapped to an external symlink is rejected without reading the canary', async () => {
+  const fx = await fixture();
+  try {
+    // The canary content is a PERFECTLY VALID store: a path-based readFile
+    // would happily inventory and copy it. Only the pinned O_NOFOLLOW open
+    // refuses — which is exactly what must happen.
+    const canary = join(fx.base, 'canary-secret-store.json');
+    await writeFile(canary, JSON.stringify({ version: 2, engines: { opencode2: { evil: 'ses_external' } } }), { mode: 0o600 });
+    await symlink(canary, join(fx.trissRoot, 'sessions.json'));
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'e'.repeat(32) }),
+      (err) => /no-follow|ELOOP|symlink|too many levels/i.test(err.message),
+    );
+    // Nothing was copied from behind the symlink, and no completion marker.
+    await assert.rejects(() => lstat(join(fx.backupDir, 'state', 'sessions.json')), /ENOENT/);
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a project identity swapped to an external symlink is rejected without reading the canary', async () => {
+  const fx = await fixture();
+  try {
+    const canary = join(fx.base, 'canary-secret-identity.json');
+    await writeFile(canary, JSON.stringify({ project_id: '9'.repeat(32) }), { mode: 0o600 });
+    await symlink(canary, join(fx.trissRoot, PROJECT_IDENTITY_REL));
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'f'.repeat(32) }),
+      (err) => /no-follow|ELOOP|symlink|too many levels/i.test(err.message),
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'state', PROJECT_IDENTITY_REL)), /ENOENT/);
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('an oversized top-level sessions.json stops the backup with no completion marker', async () => {
+  const fx = await fixture();
+  try {
+    // Raw oversize bytes: the pinned reader must stop at the fstat/total
+    // cap BEFORE any parse is attempted.
+    await writeFile(join(fx.trissRoot, 'sessions.json'), 'x'.repeat(BACKUP_LIMITS.maxFileBytes + 1), { mode: 0o600 });
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'a'.repeat(32) }),
+      /-byte cap/,
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('an orphan mapping in the SOURCE fails the backup BEFORE anything is copied', async () => {
+  const fx = await fixture();
+  try {
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(fx.trissRoot, 'sessions.json'),
+      JSON.stringify({ version: 2, engines: { opencode2: { ghost: 'ses_orphan' } } }),
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'b'.repeat(32) }),
+      (err) => {
+        assert.match(err.message, /inconsistent source state/);
+        assert.match(err.message, /orphan mapping: opencode2\/ghost/);
+        return true;
+      },
+    );
+    // The pre-copy gate runs BEFORE the state tree is even created.
+    await assert.rejects(() => lstat(join(fx.backupDir, 'state')), /ENOENT/);
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a source idle row WITHOUT its durable mapping fails the backup closed', async () => {
+  const fx = await fixture();
+  try {
+    // Seed an idle opencode2 row directly; deliberately NO sessions.json.
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), { recursive: true, mode: 0o700 });
+    await reserveCoderSession({
+      inventoryDir: join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'),
+      engine: 'opencode2',
+      slug: 'unmapped',
+      isolationMode: 'non_isolated',
+      lockSlot: 0,
+      projectRootFingerprint: 'a'.repeat(64),
+      runId: 'run-unmapped',
+      pid: 100,
+      processStartId: 'ps-unmapped',
+      bootId: 'boot-unmapped',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'),
+      engine: 'opencode2',
+      slug: 'unmapped',
+      runId: 'run-unmapped', pid: 100, processStartId: 'ps-unmapped', bootId: 'boot-unmapped',
+    });
+    await markCoderSessionIdle({ inventoryDir: join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), engine: 'opencode2', slug: 'unmapped' });
+
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'c'.repeat(32) }),
+      /inconsistent source state.*sessions\.json missing from backup while persistent rows exist/,
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('valid same-slug state in BOTH store engines backs up and validates immediately', async () => {
+  const fx = await fixture();
+  try {
+    const fp = 'b'.repeat(64);
+    // Same slug in both namespaces is legitimate: mappings are engine-scoped.
+    await seedIdleRowWithMapping(fx.base, 'opencode', 'shared', 'ses_oc_shared', fp);
+    await seedIdleRowWithMapping(fx.base, 'opencode2', 'shared', 'ses_oc2_shared', fp);
+
+    const { manifest } = await backupCoderV2State({
+      projectRoot: fx.base,
+      backupDir: fx.backupDir,
+      projectId: 'd'.repeat(32),
+    });
+    const validation = await validateCoderV2Backup(fx.backupDir);
+    assert.deepEqual(validation, { valid: true, reasons: [] });
+    // Both canonical inventories AND one shared store copy are present.
+    const paths = manifest.entries.map((e) => e.path);
+    assert.ok(paths.includes('engine-sessions-v2/opencode/.inventory.json'));
+    assert.ok(paths.includes('engine-sessions-v2/opencode2/.inventory.json'));
+    assert.ok(paths.includes('sessions.json'));
+  } finally {
+    await fx.cleanup();
+  }
+});

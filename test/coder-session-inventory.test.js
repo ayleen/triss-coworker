@@ -49,6 +49,7 @@ function runningEntry(overrides = {}) {
   return {
     engine: 'opencode',
     slug: 'task-a',
+    session_instance_id: '7'.repeat(32),
     isolation_mode: 'isolated',
     lock_slot: 0,
     state: 'running',
@@ -90,6 +91,7 @@ test('a running entry with a complete tuple validates byte-exactly', () => {
   assert.deepEqual(Object.keys(result), [
     'engine',
     'slug',
+    'session_instance_id',
     'isolation_mode',
     'lock_slot',
     'state',
@@ -166,6 +168,30 @@ test('unknown or missing keys fail closed (additionalProperties: false)', () => 
   assert.equal(validateCoderSessionEntry({ ...base, extra: 1 }), null);
   const { run_id: _omit, ...missing } = base;
   assert.equal(validateCoderSessionEntry(missing), null);
+});
+
+test('session_instance_id is required in EVERY state with an exact 32-hex grammar', () => {
+  for (const state of ['reserved', 'running', 'idle', 'deleting']) {
+    const entry = runningEntry({
+      state,
+      ...(state === 'deleting' ? {
+        deleting_basename: '.deleting-opencode-task-a-run-abc123',
+        session_delete_phase: 'store_tombstoned',
+      } : {}),
+      ...(state === 'idle' ? { run_id: null, sandbox_id: null, pid: null, process_start_id: null, boot_id: null } : {}),
+    });
+    assert.notEqual(validateCoderSessionEntry(entry), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: null }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: '' }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'XYZ' }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'g'.repeat(32) }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'a'.repeat(31) }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'A'.repeat(32) }), null, state);
+    // Exactly 128 bits of lowercase hex validates.
+    assert.notEqual(validateCoderSessionEntry({ ...entry, session_instance_id: 'b'.repeat(32) }), null, state);
+    const { session_instance_id: _omitInstance, ...missingInstance } = entry;
+    assert.equal(validateCoderSessionEntry(missingInstance), null, state + ': missing key');
+  }
 });
 
 // ─── encode / decode ─────────────────────────────────────────────────────────

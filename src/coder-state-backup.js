@@ -14,14 +14,18 @@
  *     coder-state-v2/
  *     COMPLETION               mode-0600 completion marker with exact keys
  *
- * The completion marker is written only after the whole copy verified; a cap
- * stop or any failure leaves NO completion marker (backup is not valid).
+ * The completion marker is written only after the whole copy verified AND
+ * the shared cross-consistency rules accepted BOTH the source state and the
+ * copied bytes; a cap stop, any failure, or an inconsistent row↔mapping
+ * relation leaves NO completion marker (backup is not valid).
  *
  * The backup is a CONSISTENT transaction under an EXCLUSIVE maintenance lock:
  * snapshot inventory -> take every assigned session slot lease in stable
- * order -> re-verify the snapshot unchanged -> only then copy. Validation
- * additionally enforces cross-consistency between persisted rows and their
- * durable mappings.
+ * order -> re-verify the snapshot unchanged -> enforce source cross-
+ * consistency -> only then copy -> re-enforce consistency on the copied
+ * pinned bytes -> publish manifest + COMPLETION. Validation runs the SAME
+ * shared rule implementation, so a completed backup and a valid backup
+ * cannot disagree.
  */
 
 import { createHash } from 'node:crypto';
@@ -65,6 +69,173 @@ import { CODER_SESSION_ENGINES, CODER_SESSION_STORE_ENGINES } from './coder-sess
 
 export const SESSIONS_STORE_REL = 'sessions.json';
 export const PROJECT_IDENTITY_REL = 'project-identity-v1.json';
+
+const INVENTORY_ENTRY_PATH_RE = /^engine-sessions-v2\/([^/]+)\/.inventory\.json$/;
+
+/**
+ * Single-open pinned read for top-level state files: O_NOFOLLOW open ->
+ * regular-file/mode validation ON THE OPEN DESCRIPTOR (fstat) -> bounded
+ * cap+1 read from THE SAME descriptor -> text + sha256 of exactly those
+ * pinned bytes. The pathname is never re-resolved between validation,
+ * hashing, and downstream use, so a same-UID swap to a symlink (or any
+ * other pathname race) can neither leak external bytes into a parse nor
+ * bypass the per-file caps. Every byte also feeds the aggregate 512 MiB
+ * accumulator passed in `state`.
+ */
+async function readPinnedTopLevelFile(absPath, state) {
+  let fd;
+  try {
+    fd = await open(absPath, O_RDONLY | O_NOFOLLOW);
+  } catch (err) {
+    if (err && (err.code === 'ELOOP' || err.code === 'ENOTDIR')) {
+      throw new Error(`backup: symlink/special path rejected (no-follow): ${absPath}`, { cause: err });
+    }
+    throw err;
+  }
+  try {
+    const stats = await fd.stat();
+    if (!stats.isFile()) {
+      throw new Error(`backup: special/non-regular file rejected (no-follow): ${absPath}`);
+    }
+    if (stats.size > BACKUP_LIMITS.maxFileBytes) {
+      throw new Error(`backup: file exceeds ${BACKUP_LIMITS.maxFileBytes}-byte cap: ${absPath}`);
+    }
+    const chunk = Buffer.alloc(256 * 1024);
+    const parts = [];
+    const hash = createHash('sha256');
+    let total = 0;
+    while (true) {
+      const { bytesRead } = await fd.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > BACKUP_LIMITS.maxFileBytes) {
+        throw new Error(`backup: file exceeds ${BACKUP_LIMITS.maxFileBytes}-byte cap: ${absPath}`);
+      }
+      state.totalBytes += bytesRead;
+      if (state.totalBytes > BACKUP_LIMITS.maxTotalBytes) {
+        throw new Error('backup: total bytes exceed 512 MiB cap');
+      }
+      hash.update(chunk.subarray(0, bytesRead));
+      parts.push(Buffer.from(chunk.subarray(0, bytesRead)));
+    }
+    return { text: Buffer.concat(parts).toString('utf8'), sha256: hash.digest('hex'), size: total };
+  } finally {
+    await fd.close();
+  }
+}
+
+/**
+ * The ONE cross-consistency rule implementation, shared by the backup
+ * transaction (a SOURCE gate before anything is copied + a copied-bytes
+ * gate BEFORE the COMPLETION marker) and validateCoderV2Backup(). Inputs
+ * are parsed from pinned texts so a completed backup implies validity:
+ *   - every non-deleting persistent row has its durable mapping;
+ *   - every durable mapping has a non-deleting row (no orphans);
+ *   - sessions.json is present whenever persistent rows exist.
+ * Returns human-readable reasons; an empty list means consistent.
+ */
+function classifyRowMappingConsistency({ sessionsStoreText, inventoryTexts }) {
+  const reasons = [];
+  let mappings = null;
+  if (sessionsStoreText !== null) {
+    try {
+      const store = validateSessionsStoreText(sessionsStoreText);
+      mappings = {};
+      for (const [engine, namespace] of Object.entries(store.engines)) {
+        mappings[engine] = new Set(Object.keys(namespace));
+      }
+    } catch (err) {
+      reasons.push(`sessions.json invalid: ${err.message}`);
+    }
+  }
+  const rowsByEngine = {};
+  for (const { path, text } of inventoryTexts) {
+    const match = INVENTORY_ENTRY_PATH_RE.exec(path);
+    if (!match) continue;
+    const engine = match[1];
+    if (!CODER_SESSION_STORE_ENGINES.includes(engine)) continue;
+    const decoded = decodeCoderSessionInventory(text);
+    if (!decoded) {
+      reasons.push(`corrupt inventory in backup: ${path}`);
+      continue;
+    }
+    rowsByEngine[engine] = decoded.entries;
+  }
+  if (mappings !== null) {
+    for (const [engine, rows] of Object.entries(rowsByEngine)) {
+      for (const row of rows) {
+        if (row.state === 'deleting') continue; // mapping already gone by design
+        if (!mappings[engine] || !mappings[engine].has(row.slug)) {
+          reasons.push(`missing mapping: ${engine}/${row.slug}`);
+        }
+      }
+    }
+    for (const [engine, slugs] of Object.entries(mappings)) {
+      const rows = rowsByEngine[engine] || [];
+      for (const slug of slugs) {
+        const row = rows.find((r) => r.slug === slug && r.state !== 'deleting');
+        if (!row) reasons.push(`orphan mapping: ${engine}/${slug}`);
+      }
+    }
+  } else if (Object.values(rowsByEngine).some((rows) => rows.some((r) => r.state !== 'deleting'))) {
+    reasons.push('sessions.json missing from backup while persistent rows exist');
+  }
+  return reasons;
+}
+
+/**
+ * Gather cross-consistency INPUTS by pinned re-read of the COPIED state
+ * tree (also used by validation). sessionsStoreText is null when the store
+ * copy is absent; one inventory text per present canonical store-engine
+ * manifest entry.
+ */
+async function readCopiedConsistencyInputs(backupDir, entries) {
+  let sessionsStoreText;
+  try {
+    const pinned = await readPinnedTopLevelFile(join(backupDir, 'state', SESSIONS_STORE_REL), { totalBytes: 0 });
+    sessionsStoreText = pinned.text;
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+    sessionsStoreText = null;
+  }
+  const inventoryTexts = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry.path !== 'string') continue;
+    const match = INVENTORY_ENTRY_PATH_RE.exec(entry.path);
+    if (!match || !CODER_SESSION_STORE_ENGINES.includes(match[1])) continue;
+    const pinned = await readPinnedTopLevelFile(join(backupDir, 'state', entry.path), { totalBytes: 0 });
+    inventoryTexts.push({ path: entry.path, text: pinned.text });
+  }
+  return { sessionsStoreText, inventoryTexts };
+}
+
+/**
+ * Gather cross-consistency INPUTS from the LIVE source under the held
+ * exclusive maintenance + drained session slots (pinned single-open reads;
+ * the pathname is never re-resolved between validation and hashing).
+ */
+async function readSourceConsistencyInputs(trissRoot) {
+  let sessionsStoreText;
+  try {
+    const pinned = await readPinnedTopLevelFile(join(trissRoot, SESSIONS_STORE_REL), { totalBytes: 0 });
+    sessionsStoreText = pinned.text;
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+    sessionsStoreText = null;
+  }
+  const inventoryTexts = [];
+  for (const engine of CODER_SESSION_STORE_ENGINES) {
+    const rel = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
+    try {
+      const pinned = await readPinnedTopLevelFile(join(trissRoot, rel), { totalBytes: 0 });
+      inventoryTexts.push({ path: rel, text: pinned.text });
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      throw err;
+    }
+  }
+  return { sessionsStoreText, inventoryTexts };
+}
 
 /**
  * Validate the durable session-store text: exact versioned shape
@@ -288,21 +459,16 @@ export async function inventoryCoderV2State(projectRoot) {
   await walk('coder-state-v2');
 
   // The durable session mapping is the continuation authority — a backup
-  // without it would strand every persisted idle session. Validated, hashed,
-  // included as one canonical entry; ABSENT file is fine (no mappings yet).
+  // without it would strand every persisted idle session. Validation AND
+  // hashing consume ONE pinned single-open read (O_NOFOLLOW + fstat on the
+  // open descriptor), so a same-UID swap to a symlink between check and
+  // read can neither leak external bytes into the parse nor dodge the caps.
+  // ABSENT file is fine (no mappings yet).
   const sessionsPath = join(trissRoot, SESSIONS_STORE_REL);
   try {
-    const stats = await lstat(sessionsPath);
-    if (stats.isSymbolicLink()) {
-      throw new Error(`backup: symlink rejected (no-follow): ${sessionsPath}`);
-    }
-    if (!stats.isFile()) {
-      throw new Error(`backup: special file rejected: ${sessionsPath}`);
-    }
-    const text = await readFile(sessionsPath, 'utf8');
-    validateSessionsStoreText(text);
-    const entry = await hashFileNoFollow(sessionsPath, state);
-    entries.push({ path: SESSIONS_STORE_REL, sha256: entry.sha256, size: entry.size });
+    const pinned = await readPinnedTopLevelFile(sessionsPath, state);
+    validateSessionsStoreText(pinned.text);
+    entries.push({ path: SESSIONS_STORE_REL, sha256: pinned.sha256, size: pinned.size });
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       // No store file at all: nothing to include.
@@ -313,20 +479,14 @@ export async function inventoryCoderV2State(projectRoot) {
 
   // The project identity anchors project_root_fingerprint of every row — a
   // restored backup without it would generate a NEW identity and refuse
-  // continuations. Validated (project_id = 32 lowercase hex); absent is fine.
+  // continuations. Same pinned single-open discipline as sessions.json:
+  // validation and hashing see exactly the pinned bytes. Absent is fine.
   const identityPath = join(trissRoot, PROJECT_IDENTITY_REL);
   try {
-    const stats = await lstat(identityPath);
-    if (stats.isSymbolicLink()) {
-      throw new Error(`backup: symlink rejected (no-follow): ${identityPath}`);
-    }
-    if (!stats.isFile()) {
-      throw new Error(`backup: special file rejected: ${identityPath}`);
-    }
-    const identityText = await readFile(identityPath, 'utf8');
+    const pinnedIdentity = await readPinnedTopLevelFile(identityPath, state);
     let parsedIdentity;
     try {
-      parsedIdentity = JSON.parse(identityText);
+      parsedIdentity = JSON.parse(pinnedIdentity.text);
     } catch (err) {
       throw new Error(`backup: project identity is not valid JSON (${err.message})`, { cause: err });
     }
@@ -334,8 +494,7 @@ export async function inventoryCoderV2State(projectRoot) {
         || !/^[0-9a-f]{32}$/.test(parsedIdentity.project_id)) {
       throw new Error('backup: project identity has no valid 32-hex project_id');
     }
-    const identityEntry = await hashFileNoFollow(identityPath, state);
-    entries.push({ path: PROJECT_IDENTITY_REL, sha256: identityEntry.sha256, size: identityEntry.size });
+    entries.push({ path: PROJECT_IDENTITY_REL, sha256: pinnedIdentity.sha256, size: pinnedIdentity.size });
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       // No identity yet: nothing to include.
@@ -427,6 +586,21 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
       }
     }
 
+    // ── Cross-consistency GATE #1 — the SOURCE itself. Under exclusive
+    // maintenance + drained session slots the snapshot is quiescent, so an
+    // inconsistent source (orphan mapping, row without its mapping, rows
+    // without a store) fails the backup BEFORE anything is copied. A
+    // formally completed backup of such state would be instantly rejected
+    // by validation — completion must never be reachable from it.
+    const sourceInputs = await readSourceConsistencyInputs(trissRoot);
+    const sourceReasons = classifyRowMappingConsistency(sourceInputs);
+    if (sourceReasons.length > 0) {
+      throw new Error(
+        'backup: inconsistent source state — ' + sourceReasons.join('; ') +
+        ' (fail closed, no completion marker)',
+      );
+    }
+
     const manifest = {
     schema_version: 1,
     project_id: projectId,
@@ -456,7 +630,25 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     }
   }
 
-  // Manifest first, then the completion marker (the only validity evidence).
+  // ── Cross-consistency GATE #2 — the COPIED pinned bytes. The same shared
+  // rules run over what actually landed in the backup tree; only a copy
+  // that validation would accept earns the completion marker.
+  let copiedInputs;
+  try {
+    copiedInputs = await readCopiedConsistencyInputs(backupDir, inventory.entries);
+  } catch (err) {
+    throw new Error(`backup: copied consistency inputs unreadable (${err.message}) — no completion marker`, { cause: err });
+  }
+  const copiedReasons = classifyRowMappingConsistency(copiedInputs);
+  if (copiedReasons.length > 0) {
+    throw new Error(
+      'backup: copied state failed cross-consistency — ' + copiedReasons.join('; ') +
+      ' (no completion marker)',
+    );
+  }
+
+  // Manifest first, then the completion marker (the only validity evidence):
+  // past BOTH consistency gates and every hash verification.
   await writeFile(join(backupDir, 'manifest.json'), manifestText, { mode: 0o600 });
   const manifestBytes = Buffer.from(manifestText, 'utf8');
   const completion = {
@@ -571,58 +763,18 @@ export async function validateCoderV2Backup(backupDir) {
     }
   }
 
-  // ── Cross-consistency: persisted rows ↔ durable mapping ──
-  const sessionsEntry = manifest.entries.find((e) => e.path === SESSIONS_STORE_REL);
-  let mappings = null;
-  if (sessionsEntry) {
-    try {
-      const storeText = await readFile(join(backupDir, 'state', SESSIONS_STORE_REL), 'utf8');
-      const store = validateSessionsStoreText(storeText);
-      mappings = {};
-      for (const [engine, namespace] of Object.entries(store.engines)) {
-        mappings[engine] = new Set(Object.keys(namespace));
-      }
-    } catch (err) {
-      reasons.push(`sessions.json invalid: ${err.message}`);
-    }
+  // ── Cross-consistency via the SHARED rules ──
+  // The exact same classifyRowMappingConsistency() implementation gates the
+  // backup transaction before the COMPLETION marker is published — a
+  // completed backup and a valid backup can no longer disagree.
+  let consistencyReasons;
+  try {
+    const copiedInputs = await readCopiedConsistencyInputs(backupDir, manifest.entries);
+    consistencyReasons = classifyRowMappingConsistency(copiedInputs);
+  } catch (err) {
+    consistencyReasons = [`unreadable inventory in backup: ${err.message}`];
   }
-  const rowsByEngine = {};
-  for (const entry of manifest.entries) {
-    const match = /^engine-sessions-v2\/([^/]+)\/.inventory\.json$/.exec(entry.path);
-    if (!match) continue;
-    const engine = match[1];
-    if (!CODER_SESSION_STORE_ENGINES.includes(engine)) continue;
-    try {
-      const invText = await readFile(join(backupDir, 'state', entry.path), 'utf8');
-      const decoded = decodeCoderSessionInventory(invText);
-      if (!decoded) {
-        reasons.push(`corrupt inventory in backup: ${entry.path}`);
-        continue;
-      }
-      rowsByEngine[engine] = decoded.entries;
-    } catch {
-      reasons.push(`unreadable inventory in backup: ${entry.path}`);
-    }
-  }
-  if (mappings !== null) {
-    for (const [engine, rows] of Object.entries(rowsByEngine)) {
-      for (const row of rows) {
-        if (row.state === 'deleting') continue; // mapping already gone by design
-        if (!mappings[engine] || !mappings[engine].has(row.slug)) {
-          reasons.push(`missing mapping: ${engine}/${row.slug}`);
-        }
-      }
-    }
-    for (const [engine, slugs] of Object.entries(mappings)) {
-      const rows = rowsByEngine[engine] || [];
-      for (const slug of slugs) {
-        const row = rows.find((r) => r.slug === slug && r.state !== 'deleting');
-        if (!row) reasons.push(`orphan mapping: ${engine}/${slug}`);
-      }
-    }
-  } else if (Object.values(rowsByEngine).some((rows) => rows.some((r) => r.state !== 'deleting'))) {
-    reasons.push('sessions.json missing from backup while persistent rows exist');
-  }
+  reasons.push(...consistencyReasons);
   return { valid: reasons.length === 0, reasons };
 }
 

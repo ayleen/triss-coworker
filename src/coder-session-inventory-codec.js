@@ -8,9 +8,17 @@
  * `{schema_version,entries,updated_at}`, canonical compact UTF-8 JSON plus LF
  * and no extras. Version is integer 1; entries are sorted by raw ASCII
  * `engine`, then `slug`, at most four. Every entry has exact ordered keys
- * {engine,slug,isolation_mode,lock_slot,state,run_id,sandbox_id,pid,
- *  process_start_id,boot_id,project_root_fingerprint,reserved_bytes,
- *  deleting_basename,session_delete_phase,created_at,updated_at}.
+ * {engine,slug,session_instance_id,isolation_mode,lock_slot,state,run_id,
+ *  sandbox_id,pid,process_start_id,boot_id,project_root_fingerprint,
+ *  reserved_bytes,deleting_basename,session_delete_phase,created_at,
+ *  updated_at}.
+ *
+ * session_instance_id is the row's IMMUTABLE identity: 128 random bits
+ * generated exactly once at the first reservation and carried unchanged
+ * through reserved -> running -> idle -> deleting (a continuation NEVER
+ * mints a new one). It — not created_at — is the ABA anchor: two session
+ * incarnations may share slug/mode/slot/fingerprint and even the same
+ * millisecond timestamp, but never an instance id.
  *
  * state is exactly reserved|idle|running|deleting; isolation_mode is exactly
  * isolated|non_isolated; lock_slot is integer 0..3; sandbox_id is null or
@@ -43,6 +51,7 @@ export const RESERVED_BYTES = 133169152; // 63 MiB + 63 MiB + 1 MiB
 const ENTRY_KEYS = [
   'engine',
   'slug',
+  'session_instance_id',
   'isolation_mode',
   'lock_slot',
   'state',
@@ -62,6 +71,8 @@ const ENTRY_KEYS = [
 const SANDBOX_ID_RE = /^sbx_[0-9a-f]{32}$/;
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
+// Immutable per-incarnation identity: exactly 128 random bits, lowercase hex.
+export const SESSION_INSTANCE_ID_RE = /^[0-9a-f]{32}$/;
 
 export function timestampNow() {
   return new Date().toISOString();
@@ -80,6 +91,7 @@ export function validateCoderSessionEntry(raw) {
   const {
     engine,
     slug,
+    session_instance_id: instanceId,
     isolation_mode: isolationMode,
     lock_slot: lockSlot,
     state,
@@ -98,6 +110,9 @@ export function validateCoderSessionEntry(raw) {
 
   if (typeof engine !== 'string' || engine.length === 0 || engine.length > 64) return null;
   if (typeof slug !== 'string' || slug.length === 0 || slug.length > 64) return null;
+  // The instance identity is REQUIRED in every state and immutable across
+  // transitions (timestamps are metadata, never identity).
+  if (typeof instanceId !== 'string' || !SESSION_INSTANCE_ID_RE.test(instanceId)) return null;
   if (!ISOLATION_MODE.includes(isolationMode)) return null;
   if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) return null;
   if (!SESSION_STATE.includes(state)) return null;
@@ -147,6 +162,7 @@ export function validateCoderSessionEntry(raw) {
   return {
     engine,
     slug,
+    session_instance_id: instanceId,
     isolation_mode: isolationMode,
     lock_slot: lockSlot,
     state,

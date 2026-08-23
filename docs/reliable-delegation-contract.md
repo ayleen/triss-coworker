@@ -211,9 +211,13 @@ Ordering is crash-safe: the durable idle -> deleting transition publishes
 FIRST (the deleting row is the recovery breadcrumb), then the engine-owned
 versioned-store mapping is removed while the prefix stays held, then a final
 brief inventory scope removes the row. The discovery snapshot is taken under
-the shared maintenance scope and its EXACT row identity (isolation mode, slot,
-fingerprint, created_at) is re-verified before every mutation — a same-slug
-replacement published while an older clean was parked can never be deleted
+the shared maintenance scope and its EXACT row identity — anchored on the
+immutable `session_instance_id` (128 random bits minted at the first
+reservation and carried unchanged through every transition), with isolation
+mode, slot, fingerprint, and created_at as secondary metadata anchors — is
+re-verified before every mutation: a same-slug replacement published while
+an older clean was parked can never be deleted, even when it coincides on
+every other anchor down to the millisecond timestamp
 (ABA guard; retain, fail closed). A later clean takes the idempotent
 deleting-recovery path and always converges. `triss coder result clean
 <run-id>` removes only a validated retained result artifact, never a
@@ -230,9 +234,13 @@ silently omitting sessions. The durable session mapping (`.triss/sessions.json`,
 validated versioned shape) and the project identity are part of the same
 transaction: backup runs under EXCLUSIVE maintenance, drains every assigned
 session slot lease of live rows in stable order, re-verifies the inventory
-snapshot unchanged, and only then copies — so rows and their mappings are
-never split. Validation enforces the cross-consistency too: every backed-up
-persistent row has its mapping, no orphan mappings, no unknown namespaces.
+snapshot unchanged, enforces the shared cross-consistency rules against the
+SOURCE, and only then copies — so rows and their mappings are never split.
+The SAME rule implementation re-runs over the copied pinned bytes BEFORE the
+completion marker is published; validation uses that one shared
+implementation too, so a completed backup is by construction a valid backup:
+every backed-up persistent row has its mapping, no orphan mappings, no
+unknown namespaces.
 A non-empty `coder-results-v1` root blocks
 rollback with `TRISS_CODER_ROLLBACK_RESULTS_PENDING` until the exact registry
 preflight is satisfied. Quarantine data is never deleted by adopt/reset.
