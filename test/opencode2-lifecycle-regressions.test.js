@@ -244,6 +244,12 @@ test('V2 init on a V1-allowlist config aborts before the credential write', () =
   assert.ok(threw, 'the V1 allowlist must reject V2 init');
   assert.match(threw.message, /not deny-everything.*live-allow-rule \(git status\)/su);
   assert.match(threw.message, /BEFORE any credential or config write/u);
+  // Engine-preserving remediation (regression): both recovery commands keep
+  // --engine opencode2; no retired env acknowledgement and no bare init.
+  assert.match(threw.message, /triss coder init --engine opencode2 --protect-credentials/u);
+  assert.match(threw.message, /triss coder init --engine opencode2` without --protect-credentials/u);
+  assert.doesNotMatch(threw.message, /TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION/u);
+  assert.doesNotMatch(threw.message, /acknowledge/iu);
   // Nothing was written: no env files, no XDG roots, config byte-identical.
   assert.ok(!existsSync(join(home, '.triss.env')), 'no env file was written');
   assert.ok(!existsSync(join(home, '.triss', 'opencode2')), 'no V2 state was written');

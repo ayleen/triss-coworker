@@ -87,14 +87,12 @@ const NON_SECRET_CODER_STORE_KEYS = new Set([
 // Migration warning (compat period before the cleanup release removes the
 // reader): TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION no longer selects anything.
 // '1' is an accepted no-op and '0' must NOT enable protected mode — only the
-// explicit --protect-credentials flag does. Emit at most ONE notice per
-// command invocation (module-scoped guard; each CLI run is its own process).
-let legacyCoderBestEffortEnvWarned = false;
-export function resetLegacyCoderBestEffortEnvWarningForTests() {
-  legacyCoderBestEffortEnvWarned = false;
-}
-function warnLegacyCoderBestEffortEnvOnce() {
-  if (legacyCoderBestEffortEnvWarned) return;
+// explicit --protect-credentials flag does.
+// Deliberately NO module-level guard: this is called exactly ONCE per public
+// command boundary (runCoderRun, runCoderInit, CODER_MANIFEST.postSetup), so
+// every command invocation — including each long-lived MCP server call —
+// warns at most once while repeated invocations still warn again.
+function warnLegacyCoderBestEffortEnv() {
   let legacy;
   try {
     legacy = readLegacyCoderBestEffortEnv({ scope: 'effective' });
@@ -102,7 +100,6 @@ function warnLegacyCoderBestEffortEnvOnce() {
     return;
   }
   if (!legacy) return;
-  legacyCoderBestEffortEnvWarned = true;
   process.stderr.write(
     pc.yellow(
       `  ⚠ ${LEGACY_CODER_BEST_EFFORT_ENV_KEY}=${legacy} is deprecated and ignored — OpenCode/OpenCode2 default to ` +
@@ -881,8 +878,7 @@ async function resolveInitModels(
       if (!isAuditedZenModel(providerModelId(selected))) {
         throw new Error(
           `Coder setup incomplete: protected OpenCode Zen ${label} model "${selected}" lacks audited transport metadata; ` +
-          'use a transport-audited model, or run `triss coder init` without --protect-credentials ' +
-          'to use the default best_effort_raw mode.',
+          'use a transport-audited model, or drop --protect-credentials to select the default best_effort_raw mode.',
         );
       }
     }
@@ -1313,7 +1309,12 @@ export const CODER_MANIFEST = {
     // wizard never computes a mode independently.
     return { envVars, ctx: { engine, provider, scope, path, protectCredentials: wizardOpts.coderProtectCredentials === true } };
   },
-  postSetup: (ctx, deps) => runCoderSetup(ctx, deps),
+  // One migration notice per wizard invocation (the wizard never goes through
+  // runCoderInit/runCoderRun), before the inner setup runs.
+  postSetup: (ctx, deps) => {
+    warnLegacyCoderBestEffortEnv();
+    return runCoderSetup(ctx, deps);
+  },
 };
 
 // ─── agent templates ─────────────────────────────────────────────────────────
@@ -1388,6 +1389,9 @@ export async function runCoderInit(opts = {}, deps = {}) {
   };
   const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
+  // One migration notice per command invocation, BEFORE the engine dispatch,
+  // so crush init is covered too.
+  warnLegacyCoderBestEffortEnv();
   const engine = resolveCoderEngine(opts);
   // OpenCode 2 shares the V1-compatible configuration surface.
   // V2 shares the V1-compatible opencode.json surface: the SAME
@@ -1501,7 +1505,6 @@ export async function runCoderInit(opts = {}, deps = {}) {
       protectCredentials: opts.protectCredentials === true,
     });
     assertCoderCredentialMode(credentialMode);
-    warnLegacyCoderBestEffortEnvOnce();
     await runCoderSetup(
       {
         scope,
@@ -1664,7 +1667,6 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
     protectCredentials: opts.protectCredentials === true,
   });
   assertCoderCredentialMode(credentialMode);
-  warnLegacyCoderBestEffortEnvOnce();
   // The V2 init path owns its complete flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
   //      (plugin + agent gates, shared with the run path).
@@ -1716,9 +1718,9 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
       throw new Error(
         'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
           `effective shell policy is not deny-everything (${policy.reason}${detail}). ${remediation} ` +
-          'Alternatively run `triss coder init` WITHOUT --protect-credentials to configure the default ' +
-          'best-effort mode for this tree, or keep using `--engine opencode` until the V2 beta grows real ' +
-          'credential isolation. See docs/engines/opencode2.md "Troubleshooting".',
+          'Re-run `triss coder init --engine opencode2 --protect-credentials` after fixing the policy, or run ' +
+          '`triss coder init --engine opencode2` without --protect-credentials to configure the default ' +
+          'best-effort mode for this tree. See docs/engines/opencode2.md "Troubleshooting".',
       );
     }
   }
@@ -1890,7 +1892,6 @@ export async function runCoderSetup(input = {}, deps = {}) {
     protectCredentials: input.protectCredentials === true,
   });
   assertCoderCredentialMode(resolvedCredentialMode);
-  warnLegacyCoderBestEffortEnvOnce();
   if (input.engine === 'crush') {
     return runCoderSetupUnlocked({
       ...input,
@@ -3492,6 +3493,10 @@ export function describeCoderStatus(deps = {}) {
       serviceProcessCheck: oc2Detect.capabilities?.serviceProcessCheck || null,
     },
     defaultEngine,
+    // The credential mode a bare run would use RIGHT NOW, resolved through
+    // the same single resolver as runCoderRun — status consumers (CLI and
+    // MCP) must never re-implement the matrix themselves.
+    defaultCredentialMode: resolveCoderCredentialMode({ engine: defaultEngine }),
     defaultModel,
     defaultSmallModel,
   };
@@ -5576,7 +5581,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     protectCredentials: opts.protectCredentials === true,
   });
   assertCoderCredentialMode(credentialMode);
-  warnLegacyCoderBestEffortEnvOnce();
+  warnLegacyCoderBestEffortEnv();
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the

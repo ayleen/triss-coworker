@@ -113,7 +113,8 @@ particular:
   `.opencode/tool`, and `.opencode/tools` custom-tool directories.
 
 The error names the offending source path (never secrets). Remove or disable
-the source for protected mode, or explicitly acknowledge best-effort risk.
+the source for protected mode, or drop --protect-credentials to use the
+default best-effort mode.
 One-shot provider selection is supported by both OpenCode engines; OpenCode 2
 validates a supplied small model but reports that it has no separate small
 role.
@@ -141,7 +142,7 @@ To fully remove V2: `npm uninstall -g @opencode-ai/cli` and delete
 
 | Symptom | Cause / fix |
 |---|---|
-| `live-allow-rule (git status)` / `… not deny-everything` from protected `coder init --engine opencode2` | The existing (typically V1-authored) `opencode.json` carries live bash allow rules — protected V2 cannot run while any exist. Protected init rejects **before writing anything**: remove the allow rules from `opencode.json` (V1 runs lose them too), or use the explicit best-effort acknowledgement if the raw-credential risk is acceptable. |
+| `live-allow-rule (git status)` / `… not deny-everything` from protected `coder init --engine opencode2` | The existing (typically V1-authored) `opencode.json` carries live bash allow rules — protected V2 cannot run while any exist. Protected init rejects **before writing anything**: remove the allow rules from `opencode.json` (V1 runs lose them too), re-run `triss coder init --engine opencode2 --protect-credentials`, or run `triss coder init --engine opencode2` without the flag if the raw-credential risk of the default best-effort mode is acceptable. |
 | V1 `coder run` lost `git status` / `npm test` after a protected V2 init | A fresh **protected** V2 init writes deny-everything into the SHARED `opencode.json` (init prints this warning). Export `TRISS_CODER_ENGINE=opencode2`, or re-run plain `triss coder init` to restore the V1 allowlist. A fresh best-effort V2 init writes the normal V1 allowlist and emits no false degradation warning. |
 | `unsupported plugin source "…"` / `unsupported agent source "…"` / `unsupported custom tool source "…"` | Protected mode (`--protect-credentials`) found an unverified executable source. Remove or disable it (see the path in the error), or drop the flag to use the default best-effort mode; best-effort mode permits normal plugins, agents, and custom tools after the structural/config-shape checks and warns that the selected raw credential is exposed. |
 | `Agent not found: "coder"` on an older Triss build | Older builds injected `--agent coder` into V2 runs; current builds use the engine's built-in primary agent when `--agent` is not passed. Update Triss. |
