@@ -9,12 +9,19 @@
  * Backup layout (bounded):
  *   <backup-dir>/
  *     manifest.json            mode-0600, exact keys
- *     engine-sessions-v2/      no-follow copy of both engine stores
+ *     engine-sessions-v2/      no-follow copy of every canonical engine store
+ *     sessions.json            the durable slug -> realId mapping (continuation authority)
  *     coder-state-v2/
  *     COMPLETION               mode-0600 completion marker with exact keys
  *
  * The completion marker is written only after the whole copy verified; a cap
  * stop or any failure leaves NO completion marker (backup is not valid).
+ *
+ * The backup is a CONSISTENT transaction under an EXCLUSIVE maintenance lock:
+ * snapshot inventory -> take every assigned session slot lease in stable
+ * order -> re-verify the snapshot unchanged -> only then copy. Validation
+ * additionally enforces cross-consistency between persisted rows and their
+ * durable mappings.
  */
 
 import { createHash } from 'node:crypto';
@@ -23,6 +30,13 @@ import { constants as fsConstants } from 'node:fs';
 
 const { O_RDONLY, O_NOFOLLOW } = fsConstants;
 import { join } from 'node:path';
+
+import { acquireCoderMaintenanceLock, acquireCoderSlotLease } from './coder-lease.js';
+import { openManagedTrissRoot } from './managed-root.js';
+import {
+  decodeCoderSessionInventory,
+  INVENTORY_BASENAME,
+} from './coder-session-inventory-codec.js';
 
 export const BACKUP_MANIFEST_KEYS = [
   'schema_version',
@@ -47,7 +61,50 @@ export const BACKUP_LIMITS = Object.freeze({
 // Backup inventories EVERY engine directory that exists; an unrecognized
 // engine-sessions-v2/<name> is an invalid state and fails closed — a backup
 // must never silently omit persistent sessions.
-import { CODER_SESSION_ENGINES } from './coder-session-engines.js';
+import { CODER_SESSION_ENGINES, CODER_SESSION_STORE_ENGINES } from './coder-session-engines.js';
+
+export const SESSIONS_STORE_REL = 'sessions.json';
+export const PROJECT_IDENTITY_REL = 'project-identity-v1.json';
+
+/**
+ * Validate the durable session-store text: exact versioned shape
+ * {version: 2, engines: {<store-engine>: {slug -> realId}}} with ONLY known
+ * store namespaces and string values. Returns the parsed object or throws
+ * (fail closed) — backup/validation must never copy an unrecognized mapping
+ * state silently.
+ */
+export function validateSessionsStoreText(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`backup: sessions.json is not valid JSON (${err.message})`, { cause: err });
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('backup: sessions.json must be an object');
+  }
+  if (parsed.version !== 2) {
+    throw new Error(`backup: sessions.json has unsupported version ${JSON.stringify(parsed.version)}`);
+  }
+  if (!parsed.engines || typeof parsed.engines !== 'object' || Array.isArray(parsed.engines)) {
+    throw new Error('backup: sessions.json is missing the engines object');
+  }
+  for (const key of Object.keys(parsed.engines)) {
+    if (!CODER_SESSION_STORE_ENGINES.includes(key)) {
+      throw new Error('backup: sessions.json has unknown namespace engines.' + key);
+    }
+    const namespace = parsed.engines[key];
+    if (!namespace || typeof namespace !== 'object' || Array.isArray(namespace)) {
+      throw new Error('backup: sessions.json namespace engines.' + key + ' is malformed');
+    }
+    for (const [slug, realId] of Object.entries(namespace)) {
+      if (typeof slug !== 'string' || slug.length === 0 || typeof realId !== 'string' || realId.length === 0) {
+        throw new Error('backup: sessions.json entry engines.' + key + '.' + slug + ' is malformed');
+      }
+    }
+  }
+  return parsed;
+}
 
 function canonicalManifest(record) {
   const keys = Object.keys(record).sort();
@@ -230,6 +287,63 @@ export async function inventoryCoderV2State(projectRoot) {
   }
   await walk('coder-state-v2');
 
+  // The durable session mapping is the continuation authority — a backup
+  // without it would strand every persisted idle session. Validated, hashed,
+  // included as one canonical entry; ABSENT file is fine (no mappings yet).
+  const sessionsPath = join(trissRoot, SESSIONS_STORE_REL);
+  try {
+    const stats = await lstat(sessionsPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`backup: symlink rejected (no-follow): ${sessionsPath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`backup: special file rejected: ${sessionsPath}`);
+    }
+    const text = await readFile(sessionsPath, 'utf8');
+    validateSessionsStoreText(text);
+    const entry = await hashFileNoFollow(sessionsPath, state);
+    entries.push({ path: SESSIONS_STORE_REL, sha256: entry.sha256, size: entry.size });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      // No store file at all: nothing to include.
+    } else {
+      throw err;
+    }
+  }
+
+  // The project identity anchors project_root_fingerprint of every row — a
+  // restored backup without it would generate a NEW identity and refuse
+  // continuations. Validated (project_id = 32 lowercase hex); absent is fine.
+  const identityPath = join(trissRoot, PROJECT_IDENTITY_REL);
+  try {
+    const stats = await lstat(identityPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`backup: symlink rejected (no-follow): ${identityPath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`backup: special file rejected: ${identityPath}`);
+    }
+    const identityText = await readFile(identityPath, 'utf8');
+    let parsedIdentity;
+    try {
+      parsedIdentity = JSON.parse(identityText);
+    } catch (err) {
+      throw new Error(`backup: project identity is not valid JSON (${err.message})`, { cause: err });
+    }
+    if (!parsedIdentity || typeof parsedIdentity.project_id !== 'string'
+        || !/^[0-9a-f]{32}$/.test(parsedIdentity.project_id)) {
+      throw new Error('backup: project identity has no valid 32-hex project_id');
+    }
+    const identityEntry = await hashFileNoFollow(identityPath, state);
+    entries.push({ path: PROJECT_IDENTITY_REL, sha256: identityEntry.sha256, size: identityEntry.size });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      // No identity yet: nothing to include.
+    } else {
+      throw err;
+    }
+  }
+
   entries.sort((a, b) => (a.path < b.path ? -1 : 1));
   return { entries, totalBytes: state.totalBytes };
 }
@@ -271,10 +385,49 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
       await srcFd.close();
     }
   });
-  const inventory = await inventoryCoderV2State(projectRoot);
   const trissRoot = join(projectRoot, '.triss');
 
-  const manifest = {
+  // CONSISTENT TRANSACTION: exclusive maintenance excludes other backup/
+  // maintenance writers; every assigned session slot lease is taken in
+  // stable ascending order so active runs/cleans drain before the copy; a
+  // second inventory snapshot must be IDENTICAL to the first (otherwise the
+  // state moved under us and the attempt is retried, then fails closed).
+  const parentHandle = await openManagedTrissRoot(projectRoot);
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'exclusive' });
+  let inventory;
+  const heldSlots = [];
+  try {
+    const SNAPSHOT_ATTEMPTS = 5;
+    for (let attempt = 1; ; attempt += 1) {
+      const first = await inventoryCoderV2State(projectRoot);
+      // Unique assigned slots of LIVE rows (reserved/running/deleting) in
+      // stable ascending order.
+      const liveSlots = new Set();
+      for (const engine of CODER_SESSION_ENGINES) {
+        const read = await decodeEngineInventory(trissRoot, engine);
+        if (!read) continue;
+        for (const row of read.entries) {
+          if (['reserved', 'running', 'deleting'].includes(row.state)) liveSlots.add(row.lock_slot);
+        }
+      }
+      const wanted = [...liveSlots].sort((a, b) => a - b);
+      for (const slot of wanted) {
+        const handle = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${slot}` });
+        heldSlots.push(handle);
+      }
+      const second = await inventoryCoderV2State(projectRoot);
+      if (JSON.stringify(first.entries) === JSON.stringify(second.entries)) {
+        inventory = second;
+        break;
+      }
+      // State moved between snapshots: drop the leases and retry bounded.
+      while (heldSlots.length) await heldSlots.pop().release();
+      if (attempt >= SNAPSHOT_ATTEMPTS) {
+        throw new Error('backup: state kept changing under the consistent snapshot (fail closed, no completion marker)');
+      }
+    }
+
+    const manifest = {
     schema_version: 1,
     project_id: projectId,
     created_at: new Date().toISOString(),
@@ -312,7 +465,25 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     completed_at: new Date().toISOString(),
   };
   await writeFile(join(backupDir, 'COMPLETION'), encodeCompletionMarker(completion), { mode: 0o600 });
-  return { manifest, completion };
+    return { manifest, completion };
+  } finally {
+    // Reverse order: slots (LIFO) -> exclusive maintenance.
+    while (heldSlots.length) await heldSlots.pop().release();
+    await maintenance.release();
+  }
+}
+
+// Decode one engine canonical inventory; null when the store is absent.
+async function decodeEngineInventory(trissRoot, engine) {
+  try {
+    const text = await readFile(join(trissRoot, 'engine-sessions-v2', engine, INVENTORY_BASENAME), 'utf8');
+    const decoded = decodeCoderSessionInventory(text);
+    if (!decoded) throw new Error(`backup: corrupt canonical inventory for ${engine} (fail closed)`);
+    return decoded;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 /**
@@ -400,5 +571,58 @@ export async function validateCoderV2Backup(backupDir) {
     }
   }
 
+  // ── Cross-consistency: persisted rows ↔ durable mapping ──
+  const sessionsEntry = manifest.entries.find((e) => e.path === SESSIONS_STORE_REL);
+  let mappings = null;
+  if (sessionsEntry) {
+    try {
+      const storeText = await readFile(join(backupDir, 'state', SESSIONS_STORE_REL), 'utf8');
+      const store = validateSessionsStoreText(storeText);
+      mappings = {};
+      for (const [engine, namespace] of Object.entries(store.engines)) {
+        mappings[engine] = new Set(Object.keys(namespace));
+      }
+    } catch (err) {
+      reasons.push(`sessions.json invalid: ${err.message}`);
+    }
+  }
+  const rowsByEngine = {};
+  for (const entry of manifest.entries) {
+    const match = /^engine-sessions-v2\/([^/]+)\/.inventory\.json$/.exec(entry.path);
+    if (!match) continue;
+    const engine = match[1];
+    if (!CODER_SESSION_STORE_ENGINES.includes(engine)) continue;
+    try {
+      const invText = await readFile(join(backupDir, 'state', entry.path), 'utf8');
+      const decoded = decodeCoderSessionInventory(invText);
+      if (!decoded) {
+        reasons.push(`corrupt inventory in backup: ${entry.path}`);
+        continue;
+      }
+      rowsByEngine[engine] = decoded.entries;
+    } catch {
+      reasons.push(`unreadable inventory in backup: ${entry.path}`);
+    }
+  }
+  if (mappings !== null) {
+    for (const [engine, rows] of Object.entries(rowsByEngine)) {
+      for (const row of rows) {
+        if (row.state === 'deleting') continue; // mapping already gone by design
+        if (!mappings[engine] || !mappings[engine].has(row.slug)) {
+          reasons.push(`missing mapping: ${engine}/${row.slug}`);
+        }
+      }
+    }
+    for (const [engine, slugs] of Object.entries(mappings)) {
+      const rows = rowsByEngine[engine] || [];
+      for (const slug of slugs) {
+        const row = rows.find((r) => r.slug === slug && r.state !== 'deleting');
+        if (!row) reasons.push(`orphan mapping: ${engine}/${slug}`);
+      }
+    }
+  } else if (Object.values(rowsByEngine).some((rows) => rows.some((r) => r.state !== 'deleting'))) {
+    reasons.push('sessions.json missing from backup while persistent rows exist');
+  }
   return { valid: reasons.length === 0, reasons };
 }
+

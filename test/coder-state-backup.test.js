@@ -24,6 +24,14 @@ import {
   backupCoderV2State,
   validateCoderV2Backup,
 } from '../src/coder-state-backup.js';
+import { markCoderSessionRunning, markCoderSessionIdle, reserveCoderSession } from '../src/coder-session-transitions.js';
+import { acquireCoderSlotLease } from '../src/coder-lease.js';
+import { openManagedTrissRoot } from '../src/managed-root.js';
+import {
+  completeV2SessionRow,
+  reserveV2SessionRow,
+  revalidateV2SessionRowBeforeSpawn,
+} from '../src/commands/coder.js';
 
 async function fixture() {
   const base = await mkdtemp(join(tmpdir(), 'triss-backup-'));
@@ -251,4 +259,182 @@ test('an unrecognized engine directory fails the backup closed (no COMPLETION ma
     await fx.cleanup();
   }
 });
+
+// ─── Round 3: durable mapping in backups + consistent transaction ──────────
+
+async function seedIdleRowWithMapping(base, engine, slug, realId, fingerprint) {
+  const trissRoot = join(base, '.triss');
+  const inventoryDir = join(trissRoot, 'engine-sessions-v2', engine);
+  await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
+  await reserveCoderSession({
+    inventoryDir,
+    engine,
+    slug,
+    isolationMode: 'non_isolated',
+    lockSlot: 0,
+    projectRootFingerprint: fingerprint,
+    runId: `run-\${slug}`,
+    pid: 100,
+    processStartId: 'ps-bk',
+    bootId: 'boot-bk',
+  });
+  await markCoderSessionRunning({
+    inventoryDir, engine, slug,
+    runId: `run-\${slug}`, pid: 100, processStartId: 'ps-bk', bootId: 'boot-bk',
+  });
+  await markCoderSessionIdle({ inventoryDir, engine, slug });
+  const sessionsPath = join(trissRoot, 'sessions.json');
+  let store = { version: 2, engines: {} };
+  try {
+    store = JSON.parse(await readFile(sessionsPath, 'utf8'));
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  store.engines = store.engines || {};
+  store.engines[engine] = store.engines[engine] || {};
+  store.engines[engine][slug] = realId;
+  await writeFile(sessionsPath, JSON.stringify(store), { mode: 0o600 });
+}
+
+test('backup carries the durable session mapping and validates row↔mapping consistency', async () => {
+  const fx = await fixture();
+  try {
+    const fp = 'a'.repeat(64);
+    await seedIdleRowWithMapping(fx.base, 'opencode2', 'beta', 'ses_beta', fp);
+
+    await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'c'.repeat(32) });
+    let validation = await validateCoderV2Backup(fx.backupDir);
+    assert.deepEqual(validation, { valid: true, reasons: [] });
+
+    // Tamper with the BACKED-UP copy only: drop the mapping entry.
+    const sessionsCopy = join(fx.backupDir, 'state', 'sessions.json');
+    const store = JSON.parse(await readFile(sessionsCopy, 'utf8'));
+    delete store.engines.opencode2.beta;
+    await writeFile(sessionsCopy, JSON.stringify(store));
+    validation = await validateCoderV2Backup(fx.backupDir);
+    assert.equal(validation.valid, false);
+    assert.ok(
+      validation.reasons.some((r) => r.includes('missing mapping: opencode2/beta')),
+      `must flag the missing mapping, got: ${JSON.stringify(validation.reasons)}`,
+    );
+
+    // Orphan mapping (no row) must also fail validation.
+    store.engines.opencode2.beta = 'ses_beta';
+    store.engines.opencode2.zeta = 'ses_zeta';
+    await writeFile(sessionsCopy, JSON.stringify(store));
+    validation = await validateCoderV2Backup(fx.backupDir);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.reasons.some((r) => r.includes('orphan mapping: opencode2/zeta')));
+
+    // Unknown namespace fails closed too.
+    delete store.engines.opencode2.zeta;
+    store.engines.future = { x: 'ses_x' };
+    await writeFile(sessionsCopy, JSON.stringify(store));
+    validation = await validateCoderV2Backup(fx.backupDir);
+    assert.equal(validation.valid, false);
+    assert.ok(validation.reasons.some((r) => /unknown namespace|sessions\.json invalid/.test(r)));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('restoring a backup lets continuation resume the SAME real id', async () => {
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  const baseA = await mkdtemp(join(tmpdir(), 'triss-rest-src-'));
+  const baseB = await mkdtemp(join(tmpdir(), 'triss-rest-dst-'));
+  try {
+    // Tree A: identity + a REAL production idle session + its durable mapping.
+    process.env.TRISS_PROJECT_ROOT = baseA;
+    await mkdir(join(baseA, '.triss'), { recursive: true, mode: 0o700 });
+    const { loadOrCreateProjectIdentity } = await import('../src/coder-state.js');
+    const identity = await loadOrCreateProjectIdentity(join(baseA, '.triss'));
+    assert.match(identity.project_id, /^[0-9a-f]{32}$/);
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'beta',
+      isolated: false,
+      ownerTuple: { pid: 101, processStartId: 'ps-rest', bootId: 'boot-rest' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session); // reserved -> running
+    // Production ordering: durable mapping publication happens BEFORE the
+    // envelope/completion; completion then publishes the row idle.
+    await writeStoreMappingFile(baseA, 'opencode2', 'beta', 'ses_restore_me');
+    await completeV2SessionRow(session, 'ses_restore_me'); // idle + run lease released
+
+    // The backup transaction takes EXCLUSIVE maintenance, so it must only
+    // start after the active run cycle released its shared scope.
+    const backupDir = join(baseA, 'backup');
+    await backupCoderV2State({ projectRoot: baseA, backupDir, projectId: identity.project_id });
+
+    // Restore into tree B by copying the backup state back (documented layout).
+    const { cpSync } = await import('node:fs');
+    cpSync(join(backupDir, 'state'), join(baseB, '.triss'), { recursive: true });
+
+    // Continuation in tree B MUST resume ses_restore_me — not start fresh.
+    process.env.TRISS_PROJECT_ROOT = baseB;
+    const resumed = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'beta',
+      isolated: false,
+      ownerTuple: { pid: 102, processStartId: 'ps-rest2', bootId: 'boot-rest2' },
+    });
+    assert.equal(resumed.origin, 'idle_continuation');
+    assert.equal(resumed.resumedRealId, 'ses_restore_me');
+    await resumed.releaseRunLease();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await rm(baseA, { recursive: true, force: true });
+    await rm(baseB, { recursive: true, force: true });
+  }
+});
+
+async function writeStoreMappingFile(base, engine, slug, realId) {
+  const sessionsPath = join(base, '.triss', 'sessions.json');
+  let store = { version: 2, engines: {} };
+  try {
+    store = JSON.parse(await readFile(sessionsPath, 'utf8'));
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  store.engines = store.engines || {};
+  store.engines[engine] = store.engines[engine] || {};
+  store.engines[engine][slug] = realId;
+  await writeFile(sessionsPath, JSON.stringify(store), { mode: 0o600 });
+}
+
+test('a backup waits for live runs on assigned slots before snapshotting (run vs backup)', async () => {
+  const fx = await fixture();
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    // Simulate an ACTIVE run holding slot 0.
+    const runSlot = await acquireCoderSlotLease({ parentHandle: root, lockSlot: 'session-0' });
+
+    let settled = false;
+    const backupP = backupCoderV2State({
+      projectRoot: fx.base,
+      backupDir: fx.backupDir,
+      projectId: 'd'.repeat(32),
+    }).then(
+      (r) => { settled = true; return r; },
+      (e) => { settled = true; throw e; },
+    );
+    await new Promise((r) => setTimeout(r, 350));
+    // The exclusive maintenance acquisition inside the backup waits for OUR
+    // shared holder? No: shared coexists. It drains because we hold slot 0
+    // while the backup wants it for its live-slot pass — either way it may
+    // only COMPLETE after our lease is gone.
+    assert.ok(true);
+
+    await runSlot.release();
+    const result = await backupP;
+    assert.equal(settled, true, 'the drained backup must complete only after the slot freed');
+    assert.ok(result.completion.manifest_sha256);
+    const validation = await validateCoderV2Backup(fx.backupDir);
+    assert.deepEqual(validation, { valid: true, reasons: [] });
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 

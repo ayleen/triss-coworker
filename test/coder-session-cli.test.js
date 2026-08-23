@@ -589,6 +589,9 @@ test('a failure AFTER the mapping was published keeps the session (row -> idle)'
     // envelope write throws. origin is still new_reservation, but the
     // durable mapping makes this a PUBLISHED session.
     await writeStoreMapping(fx.base, 'opencode2', 'pub-fail', 'ses_published');
+    // Production anchored the publication on the session handle right after
+    // persistSessionMapping — the finalizer recognizes ONLY that exact id.
+    session.publishedRealId = 'ses_published';
     await releaseV2SessionRow(session);
     const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
     assert.equal(inv.entries.length, 1, 'the published session must NOT be deleted');
@@ -904,6 +907,202 @@ test('run + clean of the same slug: active run fails clean fast, published idle 
     assert.equal(inv.entries.length, 0);
     const store = await readStore(fx.base);
     assert.equal(store.engines.opencode2['run-clean'], undefined);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Round 3: orphan-mapping admission gate + exact attribution ────────────
+
+test('an orphan mapping WITHOUT an inventory row blocks a new reservation (byte-identical retain)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await writeStoreMapping(fx.base, 'opencode2', 'foo', 'ses_old_foreign');
+    const before = JSON.stringify(await readStore(fx.base));
+    await assert.rejects(
+      () => reserveV2SessionRow({
+        engine: 'opencode2',
+        slug: 'foo',
+        isolated: false,
+        ownerTuple: { pid: process.pid, processStartId: 'ps-o', bootId: 'boot-o' },
+      }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_STORE_INVALID' && /NO inventory row/.test(err.message),
+    );
+    const after = JSON.stringify(await readStore(fx.base));
+    assert.equal(after, before, 'the orphan mapping must survive byte-identical');
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0, 'no row may be created over an orphan mapping');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a malformed store without any row blocks a new reservation too', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await writeFile(join(fx.base, '.triss', 'sessions.json'), JSON.stringify({ version: 2, engines: { opencode2: 'not-an-object' } }), { mode: 0o600 });
+    const before = JSON.stringify(await readStore(fx.base));
+    await assert.rejects(
+      () => reserveV2SessionRow({
+        engine: 'opencode2',
+        slug: 'bar',
+        isolated: false,
+        ownerTuple: { pid: process.pid, processStartId: 'ps-m', bootId: 'boot-m' },
+      }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_STORE_INVALID',
+    );
+    const after = JSON.stringify(await readStore(fx.base));
+    assert.equal(after, before);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a failed NEW run never adopts a pre-existing mapping (exact-id attribution)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    // Foreign mapping + a row THIS test created directly (simulating the
+    // admission that would have been rejected by the orphan gate in real
+    // flow terms — here we verify the FINALIZER independently).
+    await writeStoreMapping(fx.base, 'opencode2', 'attr', 'ses_foreign');
+    await reserveCoderSession({
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'attr',
+      isolationMode: 'non_isolated',
+      lockSlot: 0,
+      projectRootFingerprint: FP,
+      runId: 'run_attr',
+      sandboxId: `sbx_${'a'.repeat(32)}`,
+      pid: 77,
+      processStartId: 'ps-attr',
+      bootId: 'boot-attr',
+    });
+    // Minimal run-lease stub: the finalizer only needs withInventory/release.
+    const fakeLease = {
+      async withInventory(callback) { return callback(); },
+      async release() {}
+    };
+    const fakeSession = {
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'attr',
+      runId: 'run_attr',
+      sandboxId: `sbx_${'a'.repeat(32)}`,
+      pid: 77,
+      processStartId: 'ps-attr',
+      bootId: 'boot-attr',
+      origin: 'new_reservation',
+      publishedRealId: undefined, // publication NEVER happened
+      resumedRealId: null,
+      runLease: fakeLease,
+      releaseRunLease: () => fakeLease.release(),
+    };
+    await releaseV2SessionRow(fakeSession);
+    // The row is RETAINED (never idle over a foreign mapping)…
+    let inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1);
+    assert.equal(inv.entries[0].state, 'reserved');
+    // …and the foreign mapping is untouched.
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['attr'], 'ses_foreign');
+
+    // Contrast: when THIS run DID publish its exact id before failing, the
+    // matching mapping lets the row survive as idle.
+    const fakePublished = {
+      ...fakeSession,
+      publishedRealId: 'ses_mine',
+    };
+    await writeStoreMapping(fx.base, 'opencode2', 'attr', 'ses_mine');
+    await releaseV2SessionRow(fakePublished);
+    inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1);
+    assert.equal(inv.entries[0].state, 'idle');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+
+test('clean ABA guard: a same-slug replacement is never deletable by an older attempt', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await seedIdleRow(fx, 'opencode2', 'aba', { isolationMode: 'non_isolated', fingerprint });
+    const root = await openManagedTrissRoot(fx.base);
+    // Pause the clean AFTER its maintenance-scoped discovery but BEFORE it
+    // can take the target/slot leases (both are required for a
+    // non-isolated row): holding the target lease parks it deterministically.
+    const parkedTarget = await acquireCoderTargetLease({ parentHandle: root });
+    let cleanSettled = false;
+    const cleanP = runCoderSessionClean('aba', { engine: 'opencode2' })
+      .then(() => { cleanSettled = true; }, (e) => { cleanSettled = true; throw e; });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(cleanSettled, false, 'clean must be parked on the target lease');
+
+    // While it is parked: another actor removes the OLD session and a NEW
+    // run publishes a REPLACEMENT with the same slug (different slot/mode).
+    await beginCoderSessionDelete({
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'aba',
+      runId: 'run_swap_old',
+      sandboxId: `sbx_${'b'.repeat(32)}`,
+      pid: 501,
+      processStartId: 'ps-swap',
+      bootId: 'boot-swap',
+    });
+    // Remove the OLD row entirely (deleting -> removed), freeing the slug.
+    const { removeCoderSessionRow } = await import('../src/coder-session-transitions.js');
+    await removeCoderSessionRow({ inventoryDir: dir, engine: 'opencode2', slug: 'aba' });
+    const replacement = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'aba',
+      isolated: true, // different mode + fresh created_at: a DIFFERENT row
+      ownerTuple: { pid: 502, processStartId: 'ps-new', bootId: 'boot-new' },
+    });
+    assert.ok(replacement);
+    await revalidateV2SessionRowBeforeSpawn(replacement);
+    await writeStoreMapping(fx.base, 'opencode2', 'aba', 'ses_replacement');
+    await completeV2SessionRow(replacement, 'ses_replacement');
+
+    // Unpark the clean, then it must FAIL CLOSED on the ABA guard…
+    await parkedTarget.release();
+    await assert.rejects(
+      () => cleanP,
+      /ABA guard/,
+    );
+    // …and the REPLACEMENT must survive intact (idle, its own identity).
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1);
+    assert.equal(inv.entries[0].state, 'idle');
+    assert.equal(inv.entries[0].isolation_mode, 'isolated');
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['aba'], 'ses_replacement');
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;

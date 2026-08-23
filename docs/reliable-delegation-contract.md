@@ -183,7 +183,13 @@ ephemeral; it must not publish a row that cannot distinguish PID reuse or a
 host reboot. That identity gap is the ONLY sanctioned degradation: every other
 admission failure (busy, incompatible, corrupt store) fails closed.
 The DURABLE engine session-store mapping — not admission-time origin — decides
-whether a row counts as published. Continuation of an existing `idle` session
+whether a row counts as published. A NEW reservation additionally requires an
+ABSENT mapping: a durable \`slug -> realId\` without any inventory row is
+orphaned state and blocks the run (`TRISS_CODER_SESSION_STORE_INVALID`,
+retain, fail closed) instead of being silently adopted. Rollback recognizes
+ONLY this run's own publication (the exact id anchored right after the durable
+persist) — a pre-existing mapping is never attributed to a failed new run.
+Continuation of an existing `idle` session
 requires a present matching mapping BEFORE the idle -> running claim
 (`TRISS_CODER_SESSION_INCOMPATIBLE` otherwise), alongside compatibility
 validation of isolation mode and project ownership. After a successful run,
@@ -204,7 +210,11 @@ for non-isolated rows, the row's STORED assigned slot, brief inventory scopes.
 Ordering is crash-safe: the durable idle -> deleting transition publishes
 FIRST (the deleting row is the recovery breadcrumb), then the engine-owned
 versioned-store mapping is removed while the prefix stays held, then a final
-brief inventory scope removes the row. A later clean takes the idempotent
+brief inventory scope removes the row. The discovery snapshot is taken under
+the shared maintenance scope and its EXACT row identity (isolation mode, slot,
+fingerprint, created_at) is re-verified before every mutation — a same-slug
+replacement published while an older clean was parked can never be deleted
+(ABA guard; retain, fail closed). A later clean takes the idempotent
 deleting-recovery path and always converges. `triss coder result clean
 <run-id>` removes only a validated retained result artifact, never a
 persistent session.
@@ -216,7 +226,14 @@ marker (the only validity evidence), manifest schema
 and exact registry preflight. Backup inventories EVERY canonical engine
 store (one dependency-neutral enum shared with the session surfaces); an
 UNRECOGNIZED `engine-sessions-v2/<name>` fails the backup closed rather than
-silently omitting sessions. A non-empty `coder-results-v1` root blocks
+silently omitting sessions. The durable session mapping (`.triss/sessions.json`,
+validated versioned shape) and the project identity are part of the same
+transaction: backup runs under EXCLUSIVE maintenance, drains every assigned
+session slot lease of live rows in stable order, re-verifies the inventory
+snapshot unchanged, and only then copies — so rows and their mappings are
+never split. Validation enforces the cross-consistency too: every backed-up
+persistent row has its mapping, no orphan mappings, no unknown namespaces.
+A non-empty `coder-results-v1` root blocks
 rollback with `TRISS_CODER_ROLLBACK_RESULTS_PENDING` until the exact registry
 preflight is satisfied. Quarantine data is never deleted by adopt/reset.
 
