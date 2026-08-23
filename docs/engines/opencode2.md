@@ -44,9 +44,10 @@ pins — one config file, both engines. Consequences:
   are removed. Re-running plain `triss coder init` restores the V1 allowlist
   — and makes the tree V2-incompatible again. This tension is inherent to
   the shared-config beta and goes away only with real credential isolation.
-  Explicit best-effort mode (`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`)
-  accepts the raw-credential risk, so a fresh V2 config uses the normal V1
-  allowlist and an existing allow/ask policy remains byte-identical.
+  The default best-effort mode (no `--protect-credentials`) accepts the
+  raw-credential risk, so a fresh V2 config uses the normal V1 allowlist and
+  an existing allow/ask policy remains byte-identical. Protected init
+  (`--protect-credentials`) keeps the deny-everything form.
 - `triss coder model set` / `triss coder models` show a shared-config notice
   when the resolved engine is `opencode2`.
 - Model transactions (`model set`, rollback) ride the same
@@ -83,19 +84,22 @@ engines — the Go reseller's tariffs are not modeled (a
 
 ## Credential modes and executable surfaces
 
-Protected mode is the default. It passes only a run-scoped proxy token to the
-engine and keeps the strict deny-first executable-surface policy. Any
-configured or discovered plugin, agent, or custom-tool source rejects before
-the protected child starts.
-
-Explicit best-effort mode is selected only by the literal environment value
-`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`. It passes only the selected raw
-provider credential, does not start the credential proxy, allows normal shell
-policy and discovered agents/plugins/tools after config parse/shape checks,
-and emits `TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED`. The envelope reports
-`execution_capabilities.credential_isolation: "unavailable"`; same-UID code,
-plugins, tools, and shell commands may read the credential. Endpoint, model,
-package, header, and credential-binding pinning still applies.
+The default for OpenCode/OpenCode2 is `best_effort_raw`: the engine receives
+only the selected raw provider credential, no credential proxy runs, normal
+shell policy and discovered agents/plugins/tools are permitted after config
+parse/shape checks, and the envelope reports
+`execution_capabilities.credential_isolation: "unavailable"` with the
+`TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED` warning (same-UID code,
+plugins, tools, and shell commands may read the credential). Pass
+`--protect-credentials` to select `protected_proxy`: the parent-owned
+loopback proxy hands the engine a one-run token, the strict deny-everything
+executable-surface policy applies, and any configured or discovered plugin,
+agent, or custom-tool source rejects before the child starts — fail closed if
+the proxy or strict gates cannot be enforced. Crush is always protected
+regardless of the flag. The retired environment acknowledgement
+(`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION`) no longer selects anything: a
+stale value only prints a one-time migration warning. Endpoint, model,
+package, header, and credential-binding pinning still applies in BOTH modes.
 
 The structural/config-shape checks apply in both modes. The executable-source
 gate is mode-dependent: protected mode rejects these sources, while
@@ -139,7 +143,7 @@ To fully remove V2: `npm uninstall -g @opencode-ai/cli` and delete
 |---|---|
 | `live-allow-rule (git status)` / `… not deny-everything` from protected `coder init --engine opencode2` | The existing (typically V1-authored) `opencode.json` carries live bash allow rules — protected V2 cannot run while any exist. Protected init rejects **before writing anything**: remove the allow rules from `opencode.json` (V1 runs lose them too), or use the explicit best-effort acknowledgement if the raw-credential risk is acceptable. |
 | V1 `coder run` lost `git status` / `npm test` after a protected V2 init | A fresh **protected** V2 init writes deny-everything into the SHARED `opencode.json` (init prints this warning). Export `TRISS_CODER_ENGINE=opencode2`, or re-run plain `triss coder init` to restore the V1 allowlist. A fresh best-effort V2 init writes the normal V1 allowlist and emits no false degradation warning. |
-| `unsupported plugin source "…"` / `unsupported agent source "…"` / `unsupported custom tool source "…"` | In protected mode, the static preflight found an unverified source. Remove or disable it (see the path in the error), or explicitly opt into `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`; best-effort mode permits normal plugins, agents, and custom tools after the structural/config-shape checks and warns that the selected raw credential is exposed. |
+| `unsupported plugin source "…"` / `unsupported agent source "…"` / `unsupported custom tool source "…"` | Protected mode (`--protect-credentials`) found an unverified executable source. Remove or disable it (see the path in the error), or drop the flag to use the default best-effort mode; best-effort mode permits normal plugins, agents, and custom tools after the structural/config-shape checks and warns that the selected raw credential is exposed. |
 | `Agent not found: "coder"` on an older Triss build | Older builds injected `--agent coder` into V2 runs; current builds use the engine's built-in primary agent when `--agent` is not passed. Update Triss. |
 | `opencode2 not found` | Install the current beta channel: `npm install -g @opencode-ai/cli@beta`. |
 | `below minimum` / `unsupported OpenCode 2 CLI contract` | Remove an obsolete `next-*` override or set a supported beta minimum at or above `0.0.0-beta-17793`; verify that `run --help` exposes the required flags. |

@@ -94,7 +94,7 @@ test(
     const output = [];
     await runCoderRun(
       'do a Go thing',
-      { model: 'opencode-go/deepseek-v4-flash' },
+      { model: 'opencode-go/deepseek-v4-flash', protectCredentials: true },
       {
         spawn: fakeSpawn((_cmd, argv, opts) => {
           capturedArgv = argv;

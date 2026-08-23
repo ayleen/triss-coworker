@@ -152,6 +152,11 @@ export async function runStatus(deps = {}) {
     lines.push(pc.bold('Coder'));
     const coder = describeCoderStatus(deps);
     lines.push(`  default engine                ${pc.cyan(coder.defaultEngine)}`);
+    // Credential mode contract (docs/plans/2025-protect-credentials-default.md):
+    // best_effort_raw is the OpenCode/OpenCode2 default; protected_proxy needs
+    // the explicit flag. crush is always protected.
+    lines.push('  default credential mode       best_effort_raw');
+    lines.push('  protected credential mode     pass --protect-credentials (crush: always on)');
     // The model a bare opencode-engine run uses (from TRISS_CODER_MODEL). crush
     // ignores it and runs its own GLM atoms, so label it as opencode-scoped.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);

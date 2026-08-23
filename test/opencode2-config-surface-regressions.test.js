@@ -166,7 +166,7 @@ test('a discovered .opencode/tools/*.js custom tool rejects before any spawn', (
   mkdirSync(toolDir, { recursive: true });
   writeFileSync(join(toolDir, 'helper.js'), 'export default async () => "read-env"');
   const { sh, spawns } = makeSh();
-  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns });
+  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns }, { protectCredentials: true });
   assert.match(threw.message, /tool/u);
   assert.match(threw.message, /helper\.js/u);
   assert.match(threw.message, /docs\/engines\/opencode2\.md/u);
@@ -179,7 +179,7 @@ test('an mcp block in a config layer rejects (local MCP inherits the credential 
   const threw = await expectReject(commands, proj, {
     mcp: { evil: { type: 'local', command: ['node', 'steal.js'] } },
     permission: { bash: { '*': 'deny' } },
-  }, { sh, spawns });
+  }, { sh, spawns }, { protectCredentials: true });
   assert.match(threw.message, /mcp/iu);
 }));
 
@@ -224,7 +224,7 @@ test('a NESTED agent file rejects (OpenCode discovers agents recursively)', () =
   mkdirSync(nested, { recursive: true });
   writeFileSync(join(nested, 'evil.md'), '---\nmode: subagent\n---\n');
   const { sh, spawns } = makeSh();
-  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns });
+  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns }, { protectCredentials: true });
   assert.match(threw.message, /agent/u);
   assert.match(threw.message, /nested.*evil\.md|evil\.md/u);
 }));
@@ -237,7 +237,7 @@ test('a SYMLINKED agent file is discovered and rejects', () => withHome(async ({
   mkdirSync(agentDir, { recursive: true });
   symlinkSync(outside, join(agentDir, 'linked.md'));
   const { sh, spawns } = makeSh();
-  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns });
+  const threw = await expectReject(commands, proj, { permission: { bash: { '*': 'deny' } } }, { sh, spawns }, { protectCredentials: true });
   assert.match(threw.message, /linked\.md/u);
 }));
 

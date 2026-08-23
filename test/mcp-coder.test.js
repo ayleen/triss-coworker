@@ -488,6 +488,42 @@ test(
 );
 
 test(
+  'triss_coder_run schema exposes protectCredentials with the best_effort_raw default documented',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const tools = await listTools();
+    const run = tools.find((t) => t.name === 'triss_coder_run');
+    assert.ok(run, 'the coder run tool is listed');
+    const prop = run.inputSchema.properties.protectCredentials;
+    assert.ok(prop, 'protectCredentials must be part of the input schema');
+    assert.equal(prop.type, 'boolean');
+    assert.match(prop.description, /best_effort_raw/u);
+  }),
+);
+
+test(
+  'coderRunHandler forwards protectCredentials to runCoderRun (default false)',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const seen = [];
+    const spyRun = async (_prompt, opts) => {
+      seen.push(opts);
+    };
+    await coderRunHandler(
+      { prompt: 'do something', protectCredentials: true },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    assert.equal(seen[0].protectCredentials, true);
+
+    await coderRunHandler(
+      { prompt: 'do something' },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    // Omitted -> explicitly false so the downstream resolver contract stays
+    // boolean-clean over MCP.
+    assert.equal(seen[1].protectCredentials, false);
+  }),
+);
+
+test(
   'coderRunHandler: a BARE crush call (no isolate arg) sandbox-checks the worktree root — crush isolates by default',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     // crush defaults to isolate-ON (its permissions.run config is inert and

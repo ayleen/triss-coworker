@@ -243,7 +243,12 @@ export const VETTED_BASH_ALLOWLIST = Object.freeze([]);
  *
  * @returns {{ rules, unsafe, reason, shellRuleCount }}
  */
-export function computeEffectivePermissionPolicy({ layerDocs, agentDoc, credentialMode = 'protected_proxy' } = {}) {
+// credentialMode is ALWAYS supplied by the caller (already resolved through
+// resolveCoderCredentialMode) — no hidden protected_proxy default.
+export function computeEffectivePermissionPolicy({ layerDocs, agentDoc, credentialMode } = {}) {
+  if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
+    throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
+  }
   const orderedRules = [...BUILTIN_AGENT_BASELINE_RULES];
   for (const doc of layerDocs) {
     if (!doc) continue;
@@ -527,7 +532,7 @@ const V2_DUAL_FORM_PAIRS = Object.freeze([
   ['permission', 'permissions'],
 ]);
 
-export function assertV2DocumentShape(doc, layerPath, { credentialMode = 'protected_proxy' } = {}) {
+export function assertV2DocumentShape(doc, layerPath, { credentialMode } = {}) {
   if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
     throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
   }
@@ -599,8 +604,11 @@ export function assertV2DocumentShape(doc, layerPath, { credentialMode = 'protec
  *
  * @returns {{ sources, layerDocs, contentHashes: Array<{path, sha256}> }}
  */
-export function auditOpenCode2Documents({ cwd, credentialMode = 'protected_proxy' }, deps = {}) {
+export function auditOpenCode2Documents({ cwd, credentialMode }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Documents: cwd is required');
+  if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
+    throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
+  }
   const sources = (deps.enumerate || enumerateOpenCodeSources)({ cwd });
   const layerDocs = [];
   const contentHashes = [];
@@ -654,9 +662,12 @@ export function verifyOpenCode2ContentHashes(contentHashes) {
   }
 }
 
-export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL, credentialMode = 'protected_proxy', allowManagedProviderAbsent = false }, deps = {}) {
+export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL, credentialMode, allowManagedProviderAbsent = false }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Run: cwd is required');
   if (!modelUsed) throw new Error('auditOpenCode2Run: modelUsed is required');
+  if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
+    throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
+  }
 
   const { sources, layerDocs, contentHashes } = auditOpenCode2Documents({ cwd, credentialMode }, deps);
 
@@ -741,7 +752,8 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
         'OpenCode 2 preflight aborted: the effective shell policy has no wildcard deny — every command not ' +
           'matched by a narrower rule falls back to the built-in allow/ask baseline, and --auto would approve ' +
           'it. Add permission.bash {"*": "deny"} to the config. The final ordered policy must end deny for "*" ' +
-          'and allow only vetted commands.',
+          'and allow only vetted commands. Re-run `triss coder init --engine opencode2 --protect-credentials` ' +
+          'or remove `--protect-credentials` to use the default best-effort mode.',
       );
     }
     throw new Error(
@@ -749,7 +761,9 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
         `${policy.reason}${detail}. While the provider credential is in the child environment, ANY ` +
         'allowed shell command can disclose it (env expansion, `npm test` running untrusted JS), so the ' +
         'opencode2 beta allows NO live allow/ask rule — only a wildcard deny (rules shadowed by a later ' +
-        'wildcard deny are dead and fine). Remove the allow/ask rule or shadow it with a later wildcard deny.',
+        'wildcard deny are dead and fine). Remove the allow/ask rule or shadow it with a later wildcard deny. ' +
+        'Re-run `triss coder init --engine opencode2 --protect-credentials` ' +
+        'or remove `--protect-credentials` to use the default best-effort mode.',
     );
   }
 

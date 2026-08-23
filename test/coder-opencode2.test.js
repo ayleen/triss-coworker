@@ -455,7 +455,7 @@ test(
       ].join('\n') + '\n';
       const rec = recordingSpawn(stream, { code: 0 });
       const capture = stdoutCapture();
-      await runCoderRun('x', { engine: 'opencode2' }, {
+      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true }, {
         spawn: rec.spawnFn,
         spawnSync: pinSh(),
         stdoutWrite: capture.stdoutWrite,
@@ -518,7 +518,8 @@ test(
     async () => {
       const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
       const capture = stdoutCapture();
-      await runCoderRun('x', { engine: 'opencode2' }, {
+      // The proxy-token assertions below are PROTECTED-mode behavior.
+      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true }, {
         spawn: rec.spawnFn,
         spawnSync: pinSh(),
         stdoutWrite: capture.stdoutWrite,

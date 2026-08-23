@@ -34,8 +34,9 @@ import { isDeepStrictEqual } from 'node:util';
 import pc from 'picocolors';
 import {
   captureWorkerShellSnapshot,
+  LEGACY_CODER_BEST_EFFORT_ENV_KEY,
   loadEnvFiles,
-  readCoderCredentialMode,
+  readLegacyCoderBestEffortEnv,
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
@@ -46,6 +47,8 @@ import { positiveIntegerOption, positiveNumberOption } from '../option-validatio
 import {
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
+  resolveCoderCredentialMode,
+  assertCoderCredentialMode,
   coderRoutesShareTransport,
   buildCoderTransientProviderOverlay,
   CODER_TRANSIENT_PROVIDER_ALIAS,
@@ -53,8 +56,12 @@ import {
 export { coderCredentialReady } from '../coder-providers.js';
 
 export const CREDENTIAL_ISOLATION_DOWNGRADED_CODE = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED';
+// The CODE stays stable for machine consumers (renaming it is a separate
+// breaking change), but the text now describes the DEFAULT state rather than a
+// downgrade from protected_proxy — best_effort_raw is the default for
+// OpenCode/OpenCode2 since --protect-credentials became opt-in.
 const CREDENTIAL_ISOLATION_DOWNGRADED_WARNING =
-  `${CREDENTIAL_ISOLATION_DOWNGRADED_CODE}: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.`;
+  `${CREDENTIAL_ISOLATION_DOWNGRADED_CODE}: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.`;
 // Known configuration values that may legitimately live beside provider keys
 // in a Triss env store but carry no credential material themselves. Keep this
 // allowlist explicit: unknown assignments still fail closed, while a normal
@@ -77,6 +84,34 @@ const NON_SECRET_CODER_STORE_KEYS = new Set([
   'TRISS_KIMI_BASE_URL',
   'TRISS_REQUEST_TIMEOUT_MS',
 ]);
+// Migration warning (compat period before the cleanup release removes the
+// reader): TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION no longer selects anything.
+// '1' is an accepted no-op and '0' must NOT enable protected mode — only the
+// explicit --protect-credentials flag does. Emit at most ONE notice per
+// command invocation (module-scoped guard; each CLI run is its own process).
+let legacyCoderBestEffortEnvWarned = false;
+export function resetLegacyCoderBestEffortEnvWarningForTests() {
+  legacyCoderBestEffortEnvWarned = false;
+}
+function warnLegacyCoderBestEffortEnvOnce() {
+  if (legacyCoderBestEffortEnvWarned) return;
+  let legacy;
+  try {
+    legacy = readLegacyCoderBestEffortEnv({ scope: 'effective' });
+  } catch {
+    return;
+  }
+  if (!legacy) return;
+  legacyCoderBestEffortEnvWarned = true;
+  process.stderr.write(
+    pc.yellow(
+      `  ⚠ ${LEGACY_CODER_BEST_EFFORT_ENV_KEY}=${legacy} is deprecated and ignored — OpenCode/OpenCode2 default to ` +
+        'best_effort_raw credential handling and --protect-credentials selects protected_proxy. Remove the variable with ' +
+        '`triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION --local` or `--global`.\n',
+    ),
+  );
+}
+
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
 // because both sides only touch the imported bindings inside function
 // bodies (never at module-eval time), so it doesn't matter which module
@@ -845,9 +880,9 @@ async function resolveInitModels(
     for (const [label, selected] of [['main', model], ['small', smallModel]]) {
       if (!isAuditedZenModel(providerModelId(selected))) {
         throw new Error(
-          `Coder setup incomplete: secure OpenCode Zen ${label} model "${selected}" lacks audited transport metadata; ` +
-          'use a transport-audited model or explicitly acknowledge best-effort raw mode with ' +
-          'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.',
+          `Coder setup incomplete: protected OpenCode Zen ${label} model "${selected}" lacks audited transport metadata; ` +
+          'use a transport-audited model, or run `triss coder init` without --protect-credentials ' +
+          'to use the default best_effort_raw mode.',
         );
       }
     }
@@ -1273,7 +1308,10 @@ export const CODER_MANIFEST = {
     const provider = await resolveWizardCoderProvider(wizardOpts, engine, deps);
     const keyEnv = kindKeyEnv(provider);
     const envVars = CODER_MANIFEST.envVars.filter((v) => v.name === keyEnv);
-    return { envVars, ctx: { engine, provider, scope, path } };
+    // Forward --coder-protect-credentials into postSetup so runCoderSetup
+    // resolves the credential mode through the ONE shared resolver — the
+    // wizard never computes a mode independently.
+    return { envVars, ctx: { engine, provider, scope, path, protectCredentials: wizardOpts.coderProtectCredentials === true } };
   },
   postSetup: (ctx, deps) => runCoderSetup(ctx, deps),
 };
@@ -1456,10 +1494,14 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
     // this path and the wizard's postSetup path fail the same way.
-    const credentialMode = opts.credentialMode ?? readCoderCredentialMode({
-      scope,
-      parentEnv: deps.credentialModeParentEnv,
+    // Credential mode comes from ONE resolver over explicit intent — no env
+    // fallback. Tests may inject opts.credentialMode directly.
+    const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
+      engine,
+      protectCredentials: opts.protectCredentials === true,
     });
+    assertCoderCredentialMode(credentialMode);
+    warnLegacyCoderBestEffortEnvOnce();
     await runCoderSetup(
       {
         scope,
@@ -1550,7 +1592,7 @@ function assertWorkerTransportProvenance(workerShellEnv = captureWorkerShellSnap
 // mode rejects configured/discovered executable sources before any credential
 // write or child process; explicit best_effort_raw mode accepts them after the
 // structural/config-shape audit. Errors name the source, never secrets.
-function staticOpenCode2Preflight(cwd, credentialMode = 'protected_proxy') {
+function staticOpenCode2Preflight(cwd, credentialMode) {
   if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
     throw new TypeError(`OpenCode 2 preflight: unsupported credential mode ${JSON.stringify(credentialMode)}`);
   }
@@ -1611,17 +1653,18 @@ function staticOpenCode2Preflight(cwd, credentialMode = 'protected_proxy') {
 }
 
 async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
-  // Scope is part of the acknowledgement boundary. Resolve it before the
-  // mode-dependent preflight: a global setup must ignore a project-local raw
-  // acknowledgement, while local/effective setup keeps local-over-global
-  // precedence. The resolver rereads files and uses the immutable parent
-  // snapshot captured by config.js, so long-lived MCP state cannot leak in.
   let scope = precaptured.scope || resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
-  const credentialMode = opts.credentialMode ?? readCoderCredentialMode({
-    scope,
-    parentEnv: deps.credentialModeParentEnv,
+  // Credential mode is resolved ONCE here from explicit --protect-credentials
+  // intent via the shared resolver (no environment fallback; tests may inject
+  // opts.credentialMode directly). Scope no longer changes the mode — the old
+  // env acknowledgement was the reason it ever did.
+  const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
+    engine: 'opencode2',
+    protectCredentials: opts.protectCredentials === true,
   });
+  assertCoderCredentialMode(credentialMode);
+  warnLegacyCoderBestEffortEnvOnce();
   // The V2 init path owns its complete flow:
   //   1. STATIC PREFLIGHT before any credential write or child process
   //      (plugin + agent gates, shared with the run path).
@@ -1673,8 +1716,9 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
       throw new Error(
         'OpenCode 2 init aborted BEFORE any credential or config write: the existing opencode.json ' +
           `effective shell policy is not deny-everything (${policy.reason}${detail}). ${remediation} ` +
-          'Alternatively keep using `--engine opencode` until the V2 beta grows real credential ' +
-          'isolation. See docs/engines/opencode2.md "Troubleshooting".',
+          'Alternatively run `triss coder init` WITHOUT --protect-credentials to configure the default ' +
+          'best-effort mode for this tree, or keep using `--engine opencode` until the V2 beta grows real ' +
+          'credential isolation. See docs/engines/opencode2.md "Troubleshooting".',
       );
     }
   }
@@ -1836,18 +1880,17 @@ export async function runCoderSetup(input = {}, deps = {}) {
   const resolvedScope = input.scope || 'global';
   const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
   // `config wizard coder` enters through this public boundary after writing
-  // the selected credential to an env file. Resolve the OpenCode credential
-  // mode from a fresh scope-aware snapshot so edits in a long-lived process
-  // and the selected init scope are both honored.
-  // Explicit caller intent (notably runOpenCode2Init) remains authoritative.
-  const resolvedCredentialMode = input.credentialMode ?? (
-    input.engine === 'crush'
-      ? 'protected_proxy'
-      : readCoderCredentialMode({
-          scope: resolvedScope,
-          parentEnv: deps.credentialModeParentEnv,
-        })
-  );
+  // the selected credential to an env file. The mode is resolved by the ONE
+  // shared resolver from explicit intent — the wizard forwards
+  // ctx.protectCredentials (from --coder-protect-credentials), init/run/exec
+  // and MCP forward protectCredentials, and explicit injected
+  // input.credentialMode stays authoritative for tests.
+  const resolvedCredentialMode = input.credentialMode ?? resolveCoderCredentialMode({
+    engine: input.engine,
+    protectCredentials: input.protectCredentials === true,
+  });
+  assertCoderCredentialMode(resolvedCredentialMode);
+  warnLegacyCoderBestEffortEnvOnce();
   if (input.engine === 'crush') {
     return runCoderSetupUnlocked({
       ...input,
@@ -1884,7 +1927,9 @@ async function runCoderSetupUnlocked(
     scope,
     provider,
     engine,
-    credentialMode = 'protected_proxy',
+    // No hidden default: callers must pass the already-resolved mode
+    // (runCoderSetup resolves it via resolveCoderCredentialMode).
+    credentialMode,
     inheritedModels,
     allowUnsafeBash,
     allowUnverified,
@@ -1893,6 +1938,7 @@ async function runCoderSetupUnlocked(
   } = {},
   deps = {},
 ) {
+  assertCoderCredentialMode(credentialMode);
   // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
   // so the provider key is already in process.env by the time this function
   // is reached from that path. But CODER_MANIFEST.postSetup (the
@@ -2473,7 +2519,7 @@ function resolveRuntimeCoderProviderRoute(model, workerSettings, { requireAudite
     const detail = route.unsupportedTransport || 'the model has no audited protocol/package metadata';
     throw new Error(
       `No audited protected OpenCode transport metadata is registered for model "${model}"; ${detail}. ` +
-        'Protected mode refuses to guess Chat Completions. Retry in explicit best_effort_raw mode to use the built-in OpenCode provider, after auditing persistent provider overrides.',
+        'Protected mode refuses to guess Chat Completions. Rerun without --protect-credentials to use the built-in OpenCode provider under the default best_effort_raw mode, after auditing persistent provider overrides.',
     );
   }
   if (route.provider !== 'worker') return route;
@@ -2585,8 +2631,9 @@ function opencodeConfigTemplate(
   model,
   smallModel,
   providerInfo,
-  { engine, credentialMode = 'protected_proxy' } = {},
+  { engine, credentialMode } = {},
 ) {
+  assertCoderCredentialMode(credentialMode);
   const bashPolicy = engine === 'opencode2' && credentialMode !== 'best_effort_raw'
     ? { '*': 'deny' }
     : {
@@ -4977,8 +5024,10 @@ async function runCrushFlow({
   timeoutSec,
   credentialProxy = null,
   sessionV2 = null,
-  credentialMode = 'protected_proxy',
+  // Already resolved by runCoderRun — crush is always protected_proxy.
+  credentialMode,
 }) {
+  assertCoderCredentialMode(credentialMode);
   let crushSpawnStartMs;
   const modelOverride = opts.model || null;
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
@@ -5517,10 +5566,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
-  const credentialMode = readCoderCredentialMode({
-    scope: 'effective',
-    parentEnv: deps.credentialModeParentEnv,
+  // ONE resolver over explicit intent: opts.protectCredentials (CLI / exec /
+  // MCP) selects protected_proxy, everything else resolves through
+  // resolveCoderCredentialMode — best_effort_raw by default for
+  // OpenCode/OpenCode2, always protected_proxy for crush. There is
+  // deliberately NO environment fallback.
+  const credentialMode = resolveCoderCredentialMode({
+    engine,
+    protectCredentials: opts.protectCredentials === true,
   });
+  assertCoderCredentialMode(credentialMode);
+  warnLegacyCoderBestEffortEnvOnce();
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
@@ -5804,12 +5860,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // ─── Credential-store isolation preflight: the loopback token proxy
   // removes the raw key from the child's env/argv/config, but a same-UID
   // child can still READ the raw credential stores (project .triss.env and
-  // global ~/.config/triss/.env) directly. Per the plan (Section 6.5), a
-  // best-effort run is only allowed when the boundary is actually absent: if
-  // any raw store is readable, the run fails closed BEFORE spawn unless the
-  // operator has explicitly acknowledged the best-effort scope via
-  // TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1.
-  if (!deps.allowBestEffortIsolation && credentialMode !== 'best_effort_raw') {
+  // global ~/.config/triss/.env) directly. Protected runs therefore fail
+  // closed BEFORE spawn when any raw store is readable; the default
+  // best_effort_raw mode intentionally skips this gate because the raw
+  // credential itself is already visible to the same-UID child (the run
+  // warns about that instead).
+  if (credentialMode === 'protected_proxy') {
     const readableStores = [];
     const storePaths = new Set([
       ...activeEnvFiles().map(({ path }) => path),
@@ -5842,11 +5898,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
     if (readableStores.length > 0) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      const downgradeHint = engine !== 'crush'
+        ? 'Move the credentials into your shell environment, or rerun without --protect-credentials ' +
+          'to use the default best-effort mode.'
+        : 'Move the credentials into your shell environment — the crush engine always requires ' +
+          'protected credential routing.';
       throw new Error(
         `credential isolation unavailable: the raw credential store(s) ${readableStores.join(', ')} ` +
           `are readable by the same-UID engine child, so the loopback token proxy alone cannot ` +
-          `contain the real key. Move the credentials into your shell environment, or ` +
-          `acknowledge the best-effort scope with TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1`,
+          `contain the real key. ${downgradeHint}`,
       );
     }
   }

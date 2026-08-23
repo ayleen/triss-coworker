@@ -26,14 +26,14 @@ import { resolveCoderCredentialMode } from '../src/coder-providers.js';
 // ─── execution capabilities ─────────────────────────────────────────────────
 
 test('execution_capabilities carries the honest tuple for both engines', () => {
-  const withProxy = buildExecutionCapabilities({ engine: 'opencode', proxyAvailable: true });
+  const withProxy = buildExecutionCapabilities({ engine: 'opencode', proxyAvailable: true, credentialMode: 'protected_proxy' });
   assert.deepEqual(Object.keys(withProxy).sort(), [...EXECUTION_CAPABILITY_KEYS].sort());
   assert.equal(withProxy.sandbox, 'unavailable'); // no enforced sandbox backend
   assert.equal(withProxy.process_supervision, 'best_effort');
   assert.equal(withProxy.locking, 'best_effort');
   assert.equal(withProxy.credential_isolation, 'best_effort');
 
-  const withoutProxy = buildExecutionCapabilities({ engine: 'crush', proxyAvailable: false });
+  const withoutProxy = buildExecutionCapabilities({ engine: 'crush', proxyAvailable: false, credentialMode: 'protected_proxy' });
   assert.equal(withoutProxy.credential_isolation, 'unavailable');
   const raw = buildExecutionCapabilities({ engine: 'opencode2', proxyAvailable: true, credentialMode: 'best_effort_raw' });
   assert.equal(raw.credential_isolation, 'unavailable');
@@ -42,10 +42,8 @@ test('execution_capabilities carries the honest tuple for both engines', () => {
   assert.equal('warnings' in withProxy, false);
 });
 
-test('Crush keeps its proxy capability when the OpenCode raw-credential flag is enabled', () => {
-  const credentialMode = resolveCoderCredentialMode({
-    TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-  });
+test('Crush keeps its proxy capability when the OpenCode raw-credential mode is selected', () => {
+  const credentialMode = resolveCoderCredentialMode({ engine: 'opencode2' });
   assert.equal(credentialMode, 'best_effort_raw');
   const crush = buildExecutionCapabilities({
     engine: 'crush',

@@ -235,7 +235,7 @@ test('V2 init on a V1-allowlist config aborts before the credential write', () =
   let threw = null;
   try {
     await commands.runCoderInit(
-      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true, protectCredentials: true },
       { spawnSync: sh, cwd: home, lock: async () => ({ release() {} }) },
     );
   } catch (err) {
@@ -262,7 +262,7 @@ test('a config with NO permission block gets ADD-the-deny guidance, not remove-t
   let threw = null;
   try {
     await commands.runCoderInit(
-      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true, protectCredentials: true },
       { spawnSync: sh, cwd: home, lock: async () => ({ release() {} }) },
     );
   } catch (err) {
@@ -282,7 +282,7 @@ test('a fresh V2 init warns that plain V1 runs lose the allowlisted commands', (
   rmSync(join(home, '.config', 'opencode', 'opencode.json'));
   const outputs = [];
   await commands.runCoderInit(
-    { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+    { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true, protectCredentials: true },
     {
       spawnSync: makeSh().sh,
       cwd: home,
@@ -303,12 +303,10 @@ test('a fresh V2 init warns that plain V1 runs lose the allowlisted commands', (
 test('a fresh best-effort V2 init writes the V1 allowlist without a degradation warning', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
   rmSync(join(home, '.config', 'opencode', 'opencode.json'));
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   const outputs = [];
   await commands.runCoderInit(
     { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
     {
-      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawnSync: makeSh().sh,
       cwd: home,
       lock: async () => ({ release() {} }),
@@ -336,12 +334,10 @@ test('best-effort V2 init preserves an existing V1 allowlist byte-for-byte', () 
     },
   }, null, 2) + '\n';
   writeFileSync(cfgPath, before);
-  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   const outputs = [];
   await commands.runCoderInit(
     { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
     {
-      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawnSync: makeSh().sh,
       cwd: home,
       lock: async () => ({ release() {} }),

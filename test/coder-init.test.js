@@ -243,7 +243,9 @@ test(
     await assert.rejects(
       () =>
         runCoderSetup(
-          { scope: 'global' },
+          // The missing-deny-first audit is PROTECTED-mode behavior; the
+          // default best-effort init intentionally accepts a normal policy.
+          { scope: 'global', protectCredentials: true },
           { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeFetchNeitherEndpointWorks() },
         ),
       /Coder setup incomplete/,
@@ -1357,13 +1359,15 @@ test(
 );
 
 test(
-  'runCoderInit: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy',
+  'runCoderInit --protect-credentials: BLOCKS (non-zero) on an existing opencode.json with no deny-first bash policy',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
     mkdirSync(cfgDir, { recursive: true });
-    // A config with models but NO permission policy — unsafe under --auto, so
-    // init must fail rather than report success with the safety layer missing.
+    // A config with models but NO permission policy — unsafe under --auto when
+    // the credential is protected, so protected init must fail rather than
+    // report success with the safety layer missing. (The default best-effort
+    // init intentionally accepts a normal shell policy.)
     writeFileSync(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({ model: 'opencode/hy3-free', small_model: 'opencode/hy3-free' }) + '\n',
@@ -1371,7 +1375,7 @@ test(
     await assert.rejects(
       () =>
         runCoderInit(
-          { global: true, provider: 'opencode-zen' },
+          { global: true, provider: 'opencode-zen', protectCredentials: true },
           { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
         ),
       /Coder setup incomplete/,
@@ -1384,7 +1388,7 @@ test(
 );
 
 test(
-  'runCoderInit --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds',
+  'runCoderInit --protect-credentials --allow-unsafe-bash: downgrades the missing deny-first policy to a warning and succeeds',
   withTmpHome(async ({ home, captured }) => {
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     const cfgDir = join(home, '.config', 'opencode');
@@ -1393,9 +1397,10 @@ test(
       join(cfgDir, 'opencode.json'),
       JSON.stringify({ model: 'opencode/deepseek-v4-flash-free', small_model: 'opencode/deepseek-v4-flash-free' }) + '\n',
     );
-    // Explicit opt-in — the run must complete despite the missing policy.
+    // Explicit opt-in — the protected init completes despite the missing
+    // policy because --allow-unsafe-bash was passed.
     await runCoderInit(
-      { global: true, provider: 'opencode-zen', allowUnsafeBash: true },
+      { global: true, provider: 'opencode-zen', allowUnsafeBash: true, protectCredentials: true },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: fakeZenCatalogue() },
     );
     const out = captured.join('');
@@ -1661,7 +1666,7 @@ test(
     const rawCredential = 'sk-zen-fake';
     process.env.OPENCODE_API_KEY = rawCredential;
     await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
+      { global: true, provider: 'opencode-zen', protectCredentials: true },
       { spawnSync: fakeSpawnAlreadyInstalled, fetch: async () => ({ ok: false, status: 500 }) },
     );
     const configured = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
@@ -1684,7 +1689,7 @@ test(
       });
       return child;
     };
-    await runCoderRun('offline fallback protected smoke', { engine: 'opencode' }, {
+    await runCoderRun('offline fallback protected smoke', { engine: 'opencode', protectCredentials: true }, {
       spawn,
       spawnSync: fakeSpawnAlreadyInstalled,
       credentialProxyOptions: {
@@ -1711,13 +1716,13 @@ test(
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     await assert.rejects(
       () => runCoderInit(
-        { global: true, provider: 'opencode-zen' },
+        { global: true, provider: 'opencode-zen', protectCredentials: true },
         {
           spawnSync: fakeSpawnAlreadyInstalled,
           fetch: fakeZenCatalogue(['north-mini-code-free']),
         },
       ),
-      /none of triss's known free OpenCode Zen models|secure OpenCode Zen/u,
+      /none of triss's known free OpenCode Zen models|protected OpenCode Zen/u,
     );
     assert.equal(existsSync(join(home, '.config', 'opencode', 'opencode.json')), false);
   }),
@@ -1732,7 +1737,7 @@ test(
       'TRISS_CODER_MODEL=opencode/north-mini-code-free\nTRISS_CODER_SMALL_MODEL=opencode/north-mini-code-free\n',
     );
     await runCoderInit(
-      { global: true, provider: 'opencode-zen' },
+      { global: true, provider: 'opencode-zen', protectCredentials: true },
       {
         spawnSync: fakeSpawnAlreadyInstalled,
         fetch: fakeZenCatalogue(['north-mini-code-free', 'deepseek-v4-flash-free']),
@@ -1746,31 +1751,21 @@ test(
 );
 
 test(
-  'best_effort_raw Zen init may persist an explicit live unaudited preset',
+  'best_effort_raw Zen init (the default) may persist an explicit live unaudited preset',
   withTmpHome(async ({ home }) => {
-    const previous = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-    process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
     process.env.OPENCODE_API_KEY = 'sk-zen-fake';
     process.env.TRISS_CODER_MODEL = 'opencode/north-mini-code-free';
     process.env.TRISS_CODER_SMALL_MODEL = 'opencode/north-mini-code-free';
-    try {
-      await runCoderInit(
-        { global: true, provider: 'opencode-zen' },
-        {
-          spawnSync: fakeSpawnAlreadyInstalled,
-          fetch: fakeZenCatalogue(['north-mini-code-free']),
-          credentialModeParentEnv: {
-            TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-          },
-        },
-      );
-      const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
-      assert.equal(config.model, 'opencode/north-mini-code-free');
-      assert.equal(config.small_model, 'opencode/north-mini-code-free');
-    } finally {
-      if (previous === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-      else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = previous;
-    }
+    await runCoderInit(
+      { global: true, provider: 'opencode-zen' },
+      {
+        spawnSync: fakeSpawnAlreadyInstalled,
+        fetch: fakeZenCatalogue(['north-mini-code-free']),
+      },
+    );
+    const config = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'));
+    assert.equal(config.model, 'opencode/north-mini-code-free');
+    assert.equal(config.small_model, 'opencode/north-mini-code-free');
   }),
 );
 

@@ -115,11 +115,42 @@ export const CODER_PROVIDER_REGISTRY = freeze({
 export const CODER_PROVIDER_ALIASES = freeze({ glm: 'zai', deepseek: 'worker', kimi: 'moonshot', go: 'opencode-go', zen: 'opencode-zen' });
 
 // Credential mode is intentionally independent from caller-worktree
-// isolation. Only the literal acknowledgement opts into raw best-effort.
-export function resolveCoderCredentialMode(env = process.env) {
-  return env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION === '1'
-    ? 'best_effort_raw'
-    : 'protected_proxy';
+// isolation. This resolver is the SINGLE source of truth for the public
+// contract: every entry point (CLI run/init/exec, config wizard, MCP) resolves
+// the mode HERE from explicit user intent (--protect-credentials), and all
+// internal helpers receive the already-resolved value. There is intentionally
+// NO environment fallback — the retired TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION
+// acknowledgement must never select a mode again (its value is a deprecated
+// no-op; see readLegacyCoderBestEffortEnv in config.js).
+//
+//   | engine    | without the flag | with --protect-credentials        |
+//   |-----------|------------------|-----------------------------------|
+//   | opencode  | best_effort_raw  | protected_proxy                   |
+//   | opencode2 | best_effort_raw  | protected_proxy                   |
+//   | crush     | protected_proxy  | protected_proxy (flag is a no-op) |
+export const CODER_CREDENTIAL_MODES = Object.freeze(['best_effort_raw', 'protected_proxy']);
+
+export function resolveCoderCredentialMode({
+  protectCredentials = false,
+  engine,
+} = {}) {
+  if (engine === 'crush') return 'protected_proxy';
+
+  return protectCredentials === true
+    ? 'protected_proxy'
+    : 'best_effort_raw';
+}
+
+// Internal helpers must never invent a mode. Validate the already-resolved
+// value at the boundary so a forgotten argument fails loudly instead of
+// silently re-enabling a hidden protected_proxy default.
+export function assertCoderCredentialMode(credentialMode) {
+  if (!CODER_CREDENTIAL_MODES.includes(credentialMode)) {
+    throw new TypeError(
+      `unsupported credential mode ${JSON.stringify(credentialMode)} — expected one of: ${CODER_CREDENTIAL_MODES.join(' | ')}. `,
+    );
+  }
+  return credentialMode;
 }
 
 /**

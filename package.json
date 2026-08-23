@@ -35,7 +35,7 @@
   "scripts": {
     "test": "node scripts/check-lockfile-gate.cjs && npm run test:secure-default && npm run test:best-effort",
     "test:secure-default": "node scripts/run-tests.js secure-default",
-    "test:best-effort": "TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1 node --test test/best-effort-*.test.js",
+    "test:best-effort": "node --test test/best-effort-*.test.js",
     "start": "node bin/triss.js",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",

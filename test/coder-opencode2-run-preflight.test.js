@@ -100,7 +100,7 @@ test('coder run --engine opencode2: a configured plugin rejects BEFORE any spawn
   try {
     // opts.cwd (the USER flag) selects the runtime directory the audit
     // walks; deps.cwd is a spawn seam only and must not select the audited tree.
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: home }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: home, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }
@@ -122,7 +122,7 @@ test('coder run --engine opencode2: a discovered .opencode/agent dir rejects BEF
   const { sh, spawns } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: home }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: home, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }

@@ -190,7 +190,7 @@ test('adversarial: native V2 permissions allow-shell rule rejects', () => withHo
   const { sh, spawns } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }
@@ -212,7 +212,7 @@ test('adversarial: V1 string shorthand allow after global deny rejects (bypass A
   const { sh, spawns } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }
@@ -229,7 +229,7 @@ test('invariant: {"*":"allow"} project layer AFTER a global wildcard deny is liv
   const { sh, spawns } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }
@@ -278,7 +278,7 @@ test('invariant: the V1 template allowlist (deny "*" + vetted allows) REJECTS on
   const spawnFake = makeSpawn();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh, spawn: spawnFake.spawnFn });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh, spawn: spawnFake.spawnFn });
   } catch (err) {
     threw = err;
   }
@@ -294,7 +294,7 @@ test('adversarial: clean tree with NO permission rules rejects (deny-first proof
   const { sh, spawns } = makeSh();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh });
   } catch (err) {
     threw = err;
   }

@@ -29,9 +29,6 @@ const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   opts,
   {
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    credentialModeParentEnv: {
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
-    },
     ...deps,
   },
 );
@@ -147,7 +144,8 @@ function withEnv(vars, fn) {
     const fullVars = {
       HOME: tempHome,
       TRISS_PROJECT_ROOT: tempHome,
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      // best_effort_raw is now the DEFAULT credential mode; the retired env
+      // acknowledgement is deliberately not set here anymore.
       ...vars,
     };
     const saved = {};
@@ -201,7 +199,6 @@ test(
       'print hello via a shell echo',
       {},
       {
-        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
         spawn: fakeSpawnReplaying(fixture, { code: 0 }),
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -240,7 +237,7 @@ test(
     assert.equal(envelope.usage.cost.source, 'unknown');
     assert.equal(envelope.usage.cost.complete, false);
     assert.deepEqual(envelope.warnings, [
-      'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+      'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.',
     ]);
   }),
 );
@@ -771,12 +768,13 @@ test('CODER-EVENT-15: every safe envelope carries identity, credential_mode, and
   return withEnv({
     ZHIPU_API_KEY: 'zk-fake-test-key',
     TRISS_USAGE_LOG: '0',
-    TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '0',
   }, async () => {
     const capture = stdoutCapture();
     await runCoderRun(
       'do something',
-      { session: 'explicit-slug-1' },
+      // Explicit --protect-credentials selects protected_proxy; the envelope
+      // must report the mode the run actually used.
+      { session: 'explicit-slug-1', protectCredentials: true },
       {
         spawn: () => {
           const child = new EventEmitter();

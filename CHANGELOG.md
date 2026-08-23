@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SECURITY-SENSITIVE BEHAVIORAL CHANGE** — OpenCode and OpenCode 2 now use
+  `best_effort_raw` credential handling by default. Pass `--protect-credentials`
+  (CLI `coder run`/`coder init`/`exec --code`, wizard
+  `--coder-protect-credentials`, MCP `protectCredentials`) to retain the
+  previous fail-closed credential-proxy behavior (`protected_proxy`). Crush
+  remains protected by default regardless of the flag.
+  - The new `resolveCoderCredentialMode({ engine, protectCredentials })` in
+    `src/coder-providers.js` is the single source of truth; every entry point
+    resolves the mode through it and internal helpers only receive the
+    already-resolved value (hidden `credentialMode = 'protected_proxy'`
+    defaults were removed and now validate).
+  - `best_effort_raw` runs skip the credential proxy, keep structural/
+    provider/config-shape checks, permit normal shell policy and discovered
+    plugins/agents/tools, report `execution_capabilities.credential_isolation:
+    "unavailable"`, and warn via the stable
+    `TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED` code (text updated to
+    describe the default rather than a downgrade).
+  - `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` is a deprecated no-op: neither
+    `0` nor `1` selects anything. A still-configured value prints a one-time
+    migration warning; the key stays in `NON_SECRET_CODER_STORE_KEYS` so a
+    protected raw-store audit does not misclassify it as credential material.
+    Remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION
+    [--local|--global]`. The variable reader itself will be deleted in a
+    separate cleanup release.
+
 ## [0.38.0] — 2026-08-22
 
 ### Added

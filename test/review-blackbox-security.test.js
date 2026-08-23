@@ -73,7 +73,9 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
     await assert.rejects(
       () => runCoderRun(
         'do anything',
-        {},
+        // Proxy fail-closed is PROTECTED-mode behavior; the default
+        // best-effort run intentionally never starts a proxy.
+        { protectCredentials: true },
         {
           spawn: fakeSpawn,
           spawnSync: () => ({ status: 1, stdout: '', error: null }),

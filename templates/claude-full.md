@@ -198,6 +198,10 @@ triss coder run "<task>"
   --small-model <p/m>  # with --provider; defaults to the one-shot main
   --isolate            # run in a disposable git worktree (opencode default OFF, crush default ON)
   --no-isolate         # disable worktree isolation
+  --protect-credentials # route the credential through Triss's parent-owned proxy
+                        # with strict executable-surface gates (OpenCode/OpenCode2;
+                        # default is best-effort raw credential handling; crush is
+                        # always protected)
   --restrict           # crush only: opt into the CLI allowlist (--restrict-run + --allow-bash/--allow-tool)
   --no-restrict        # crush only: keep crush unrestricted (the default)
   --cwd <path>         # working dir (ignored with --isolate)

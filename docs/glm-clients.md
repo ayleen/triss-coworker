@@ -62,10 +62,10 @@ for OpenCode Zen or Go (§3),
 | Provider config | `opencode.json` with a provider-qualified model prefix. Triss writes `provider["triss-worker"]` with `@ai-sdk/openai-compatible`; Zen/Kimi models resolve via OpenCode's built-in providers | shares `opencode.json` with V1 — one config, both opencode engines | `crush.json` `models` block (atoms `glm5_2` / `glm5_turbo`) |
 | Output | ndjson stream that Triss folds into one envelope | ndjson event stream (V2 shape) folded by the same envelope contract | ONE JSON object at end-of-run — trivial last-line parse |
 | Sessions | slug → real `ses_…` id mapped in `.triss/sessions.json` | versioned session map under `engines.opencode2` — V1/V2 slugs never cross-resume | native get-or-create with the caller's arbitrary id — no map |
-| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | protected mode shares the deny-everything policy and rejects unverified plugin/agent/custom-tool sources before spawn; literal `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` selects raw best-effort mode, permits normal shell/plugins/agents/tools after structural checks, and warns that the selected credential is exposed | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
+| Safety model | **deny-first bash allowlist** in `opencode.json` (persistent, enforced) | default best-effort mode permits normal shell/plugins/agents/tools after structural checks and warns that the selected credential is exposed; `--protect-credentials` shares the deny-everything policy and rejects unverified plugin/agent/custom-tool sources before spawn | config `permissions.run` seeded into `crush.json` for forward-compat, but **currently inert** — enforcement is opt-in via `--restrict`, which emits the allowlist as **CLI flags** (`--allow-bash`/`--allow-tool`). See §8 |
 | Isolation default | **OFF** (`opencode.json` policy is the safety layer) | **OFF** (same policy reasoning as V1) | **ON** (the disposable worktree is crush's reliable safety layer — the config allowlist is inert and a denied bash deadlocks to timeout) |
 | Per-call cost | engine-**calculated** from its own model catalogue, so a `0` is equally consistent with "coding plan" and "no rate in the catalogue"; Triss keeps it as `reported_total_usd` and only trusts a zero for a proven subscription/free call | same fold as V1 (`usage_source: opencode2`); per-step `step_finish` coverage — a run without it reports `usage_status: missing` with null counters, never zeros | real `delta_cost_usd` reported — a per-call charge Triss trusts, including an explicit `0` |
-| Sub-agents | opencode agent templates | protected mode rejects unverified agent sources; explicit raw best-effort mode permits normal agents/plugins/tools with a credential-exposure warning (see [opencode2.md](engines/opencode2.md)) | `--agents single` (Triss forces this) |
+| Sub-agents | opencode agent templates | `--protect-credentials` rejects unverified agent sources; the default best-effort mode permits normal agents/plugins/tools with a credential-exposure warning (see [opencode2.md](engines/opencode2.md)) | `--agents single` (Triss forces this) |
 
 **Rule of thumb:** prefer **opencode** for the persistent bash-policy safety
 layer (it actually enforces); reach for **crush** when you want the simpler
@@ -416,8 +416,8 @@ also accepts stdin natively and combines it as `<stdin>\n\n<args>`.)
 ### 5.6 Agent template (opencode / opencode2)
 `--agent <name>` selects an opencode agent template (default `coder`; a
 read-only `researcher` template also ships). crush uses `--agents single`
-to disable sub-agent fan-out. The opencode2 beta's protected mode rejects
-unverified sub-agent or plugin sources before spawn; explicit raw best-effort
+to disable sub-agent fan-out. With --protect-credentials the opencode2 beta rejects
+unverified sub-agent or plugin sources before spawn; the default best-effort
 mode permits them after structural checks and reports the credential-exposure
 warning (see [opencode2.md](engines/opencode2.md)).
 
@@ -490,7 +490,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
 | `TRISS_CODER_OPENCODE_VERSION` | no | Pin a different `opencode-ai` npm version (default `1.18.7`). |
 | `TRISS_CODER_OPENCODE2_VERSION` | no | Minimum accepted OpenCode 2 version (default `0.0.0-beta-17793`; unsupported `next/dev/tui-v2` values fail closed — see [opencode2.md](engines/opencode2.md)). |
-| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | Only literal `1` selects OpenCode raw best-effort mode; same-UID code may read the selected credential and OpenCode reports isolation unavailable. Crush continues to require its credential proxy and reports `best_effort` when that proxy is present. |
+| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | **Deprecated no-op.** OpenCode/OpenCode2 now use `best_effort_raw` by default; `--protect-credentials` selects the parent-owned credential proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. |
 | `TRISS_CODER_CRUSH_VERSION` | no | Pin a different `@phpcraftdream/crush` version (default `0.1.6`). |
 | `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 
@@ -508,12 +508,11 @@ GLM-only subset.
 deny`. Headless runs use `--auto` (auto-approve *ask*; *deny* still blocks).
 The policy travels into isolation worktrees. opencode2 shares this policy in
 protected mode and adds a static plugin/agent/custom-tool preflight that
-rejects unverified executable sources before spawn (see
-[opencode2.md](engines/opencode2.md)). The literal
-`TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` opt-in permits those sources and
-normal shell policy while warning that the selected raw credential is exposed;
-**override only with that explicit acknowledgement, not by editing
-`opencode.json` alone.**
+rejects unverified executable sources before spawn when you pass
+--protect-credentials (see [opencode2.md](engines/opencode2.md)). The DEFAULT
+best-effort mode permits those sources and normal shell policy while warning
+that the selected raw credential is exposed; **select protection explicitly
+with --protect-credentials rather than editing `opencode.json` alone.**
 
 **crush — interim stance (config inert; CLI-flag enforcement; isolate-ON).**
 Live testing (2026-07-06, `docs/crush-restrict-issues.md`) proved crush 0.1.3
