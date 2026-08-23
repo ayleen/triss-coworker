@@ -494,6 +494,11 @@ test(
     assert.ok(prop, 'protectCredentials must be part of the input schema');
     assert.equal(prop.type, 'boolean');
     assert.match(prop.description, /best_effort_raw/u);
+    // The snake alias must be DECLARED so schema-filtering clients forward it
+    // instead of dropping the key before the handler ever sees it.
+    const snake = run.inputSchema.properties.protect_credentials;
+    assert.ok(snake, 'the snake alias must be declared so schema-filtering clients forward it');
+    assert.equal(snake.type, 'boolean');
   }),
 );
 
@@ -524,13 +529,21 @@ test(
     );
     assert.equal(seen[2].protectCredentials, true, 'truthy string must enable protection');
 
+    // OR-merge: if EITHER spelling asserts protection, protection wins —
+    // camel:false + snake:true must not resolve to the unsafe mode.
+    await coderRunHandler(
+      { prompt: 'do something', protectCredentials: false, protect_credentials: true },
+      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
+    );
+    assert.equal(seen[3].protectCredentials, true);
+
     await coderRunHandler(
       { prompt: 'do something' },
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
     // Omitted -> explicitly false so the downstream resolver contract stays
     // boolean-clean over MCP.
-    assert.equal(seen[3].protectCredentials, false);
+    assert.equal(seen[4].protectCredentials, false);
   }),
 );
 

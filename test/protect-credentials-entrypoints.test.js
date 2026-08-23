@@ -168,6 +168,36 @@ test('MCP coderStatusHandler renders mode + MCP-specific remediation for both fa
   assert.match(ocOut, /Protected mode: set protectCredentials: true/u);
 });
 
+test('runCoderRun forwards a RAW protectCredentials value — resolver normalizes it', async (t) => {
+  const restore = withLegacyHome('triss-truthy-');
+  t.after(restore);
+  const { runCoderRun } = await import('../src/commands/coder.js');
+  const { fakeEffectiveOpenCodeConfig } = await import('./_opencode-effective-config.js');
+  // A STRING 'true' as a caller might send over MCP: the narrowing used to
+  // happen at the call sites; now the raw value reaches the resolver.
+  const output = [];
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.pid = 424100;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => {
+      child.stdout.end(JSON.stringify({ type: 'text', sessionID: 'ses_truthy', part: { text: 'ok' } }) + '\n' +
+        JSON.stringify({ type: 'step_finish', sessionID: 'ses_truthy', reason: 'stop' }) + '\n');
+      setImmediate(() => child.emit('close', 0, null));
+    });
+    return child;
+  };
+  await runCoderRun('do work', { protectCredentials: 'true' }, {
+    spawn: spawnFn,
+    spawnSync: () => ({ status: 1, stdout: '', error: null }),
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    stdoutWrite: (s) => output.push(s),
+  });
+  const envelope = JSON.parse(output.join('').trim());
+  assert.equal(envelope.credential_mode, 'protected_proxy');
+});
+
 // ─── migration warning: exactly once PER COMMAND INVOCATION ───────────────────
 
 const LEGACY_LINE = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1';

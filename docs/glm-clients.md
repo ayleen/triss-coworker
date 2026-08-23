@@ -509,9 +509,10 @@ deny`. Headless runs use `--auto` (auto-approve *ask*; *deny* still blocks).
 The policy travels into isolation worktrees. opencode2 shares this policy in
 protected mode and adds a static plugin/agent/custom-tool preflight that
 rejects unverified executable sources before spawn when you pass
---protect-credentials (see [opencode2.md](engines/opencode2.md)). The DEFAULT
-best-effort mode permits those sources and normal shell policy while warning
-that the selected raw credential is exposed; **select protection explicitly
+--protect-credentials (see [opencode2.md](engines/opencode2.md)). The default
+best-effort mode permits those sources and the normal V1 allowlist policy (a
+MISSING deny-first wildcard still blocks init in every mode — see
+--allow-unsafe-bash) while warning that the selected raw credential is exposed; **select protection explicitly
 with --protect-credentials rather than editing `opencode.json` alone.**
 
 **crush — interim stance (config inert; CLI-flag enforcement; isolate-ON).**

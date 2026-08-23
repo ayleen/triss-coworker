@@ -1307,7 +1307,8 @@ export const CODER_MANIFEST = {
     // Forward --coder-protect-credentials into postSetup so runCoderSetup
     // resolves the credential mode through the ONE shared resolver — the
     // wizard never computes a mode independently.
-    return { envVars, ctx: { engine, provider, scope, path, protectCredentials: wizardOpts.coderProtectCredentials === true } };
+    // Raw value on purpose: resolveCoderCredentialMode owns normalization.
+    return { envVars, ctx: { engine, provider, scope, path, protectCredentials: wizardOpts.coderProtectCredentials } };
   },
   // One migration notice per wizard invocation (the wizard never goes through
   // runCoderInit/runCoderRun), before the inner setup runs.
@@ -1502,7 +1503,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // fallback. Tests may inject opts.credentialMode directly.
     const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
       engine,
-      protectCredentials: opts.protectCredentials === true,
+      protectCredentials: opts.protectCredentials,
     });
     assertCoderCredentialMode(credentialMode);
     await runCoderSetup(
@@ -1664,7 +1665,7 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // env acknowledgement was the reason it ever did.
   const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
     engine: 'opencode2',
-    protectCredentials: opts.protectCredentials === true,
+    protectCredentials: opts.protectCredentials,
   });
   assertCoderCredentialMode(credentialMode);
   // The V2 init path owns its complete flow:
@@ -1889,7 +1890,7 @@ export async function runCoderSetup(input = {}, deps = {}) {
   // input.credentialMode stays authoritative for tests.
   const resolvedCredentialMode = input.credentialMode ?? resolveCoderCredentialMode({
     engine: input.engine,
-    protectCredentials: input.protectCredentials === true,
+    protectCredentials: input.protectCredentials,
   });
   assertCoderCredentialMode(resolvedCredentialMode);
   if (input.engine === 'crush') {
@@ -2068,7 +2069,6 @@ async function runCoderSetupUnlocked(
   ) {
     projectWorkerAudit = auditExistingConfig(projectCfg, providerInfo, {
       note: '(project scope — higher precedence than the global config, so it governs runs)',
-      credentialMode,
       allowUnsafeBash,
       expectedWorkerProvider: workerProviderDefinition(providerInfo, model, smallModel),
       workerModels: new Set(providerInfo.workerProfile.models.map((id) => `triss-worker/${id}`)),
@@ -2127,7 +2127,6 @@ async function runCoderSetupUnlocked(
       emitZenStaleIncident(projectCfg, readOpencodeModels(projectCfg), { model, smallModel }, zenAvailable, 'local', deps);
       const otherAudit = projectWorkerAudit || auditExistingConfig(projectCfg, providerInfo, {
           note: '(project scope — higher precedence than the global config, so it governs runs)',
-          credentialMode,
           allowUnsafeBash,
           zenAvailable,
           providerAvailable,
@@ -2916,7 +2915,6 @@ function auditEffectiveOpenCodeConfiguration(
 
 function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
   const audit = auditExistingConfig(path, providerInfo, {
-      credentialMode: opts.credentialMode,
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
@@ -3291,7 +3289,6 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     }
     warnIfProviderMismatch(path, providerInfo);
     return auditExistingConfig(path, providerInfo, {
-      credentialMode: opts.credentialMode,
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
@@ -5582,7 +5579,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // deliberately NO environment fallback.
   const credentialMode = resolveCoderCredentialMode({
     engine,
-    protectCredentials: opts.protectCredentials === true,
+    protectCredentials: opts.protectCredentials,
   });
   assertCoderCredentialMode(credentialMode);
   warnLegacyCoderBestEffortEnv();

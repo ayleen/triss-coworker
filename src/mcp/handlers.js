@@ -1136,9 +1136,10 @@ export async function coderRunHandler(
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
       allowBestEffortCallerWorktree: allowBestEffortCamel ?? allowBestEffortSnake,
-      // Truthy + snake alias: a plausible typo must not silently downgrade
-      // the run to raw credential exposure.
-      protectCredentials: Boolean(protectCredentials ?? protectCredentialsSnake),
+      // OR, not ??: if EITHER spelling asserts protection, protection is on —
+      // a disagreement between the two forms (e.g. a schema-filling client
+      // defaulting camel to false) must never resolve to the unsafe mode.
+      protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
     },
     {
       spawn: deps.spawn,
