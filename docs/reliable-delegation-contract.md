@@ -157,25 +157,44 @@ Lease behavior: maintenance → inventory → slot leases form the fixed lock
 hierarchy; slot leases serialize run/clean cycles on the same
 slot; leases are released in `finally`.
 
-Named production runs reserve their session row before spawning the engine.
+Named production runs reserve their session row before spawning the engine,
+under the admission leases (shared maintenance → held slot lease → exclusive
+inventory); the slot lease stays held for the whole run cycle and is released
+in `finally`. Admission assigns a real free lock slot (0..3) and classifies
+the store atomically: only an `idle` row may continue; a `reserved`/`running`
+row is busy (`TRISS_CODER_SESSION_BUSY`) and a `deleting` row is cleanup in
+progress — none of them degrade to an ephemeral run. Immediately before spawn
+the exact claimed row is revalidated under the same leases; a fresh
+`reserved` row transitions to `running` there, and any foreign owner tuple
+fails closed without mutation.
 The `reserved` and `running` rows carry the complete live owner tuple: run id,
 sandbox id, positive PID, process-start identity, and boot identity. The
-production adapter must collect both identities from the current host and must
-never submit `null` placeholders to the canonical reservation validator. If
-either identity cannot be established, persistent-session admission degrades
-explicitly and the engine run remains ephemeral; it must not publish a row
-that cannot distinguish PID reuse or a host reboot.
+production adapter collects both identities from the current host with fixed
+absolute binaries and a minimal fixed environment — never the parent
+environment — and must never submit `null` placeholders to the canonical
+reservation validator. If either identity cannot be established,
+persistent-session admission degrades explicitly and the engine run remains
+ephemeral; it must not publish a row that cannot distinguish PID reuse or a
+host reboot. That identity gap is the ONLY sanctioned degradation: every other
+admission failure (busy, incompatible, corrupt store) fails closed.
 After a successful envelope is emitted, the row transitions to `idle` and
-clears the owner tuple. Every thrown OpenCode 2 path transitions through
-`deleting` and removes the reservation before returning the error.
-Continuation of an existing `idle` session reuses that row, publishes a fresh
-complete owner tuple as `running` before spawn, and returns it to `idle` after
-success. It must not attempt a duplicate reservation or downgrade a valid idle
-session merely because its `(engine, slug)` already exists.
+clears the owner tuple. Continuation of an existing `idle` session reuses that
+row — after explicit compatibility validation of isolation mode and project
+ownership against the request (`TRISS_CODER_SESSION_INCOMPATIBLE` otherwise) —
+publishes a fresh complete owner tuple as `running` before spawn, and returns
+it to `idle` after success. It must not attempt a duplicate reservation or
+downgrade a valid idle session merely because its `(engine, slug)` already
+exists. Rollback is provenance-aware and never deletes a published session: a
+reservation the failed run itself created is removed through the canonical
+`deleting` transition, while a failed continuation of an existing published
+session returns `running -> idle`. Finalization is owner-checked; on any
+mismatch the row is retained for recovery instead of being mutated.
 
-Cleanup: `triss coder session clean <slug> --engine <opencode|crush>` removes
-only the selected inactive isolated session row; `triss coder result clean
-<run-id>` removes only a validated retained result artifact, never a
+Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush>`
+(one canonical engine enum) forms its own complete clean owner tuple and, under
+the admission leases, performs the canonical idle -> deleting -> remove cycle,
+clearing the engine-owned versioned-store mapping first. `triss coder result
+clean <run-id>` removes only a validated retained result artifact, never a
 persistent session.
 
 Rollback: `triss coder state backup|validate|adopt|reset` implement the

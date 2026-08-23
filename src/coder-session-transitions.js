@@ -33,6 +33,21 @@ import {
 export const SLUG_ALLOCATION_RETRIES = 8;
 export const CODER_SESSION_EXISTS_CODE = 'TRISS_CODER_SESSION_EXISTS';
 
+// Stable typed admission error codes (err.code): a same-slug collision with
+// a live (reserved/running) or cleanup-in-progress (deleting) row must
+// serialize or fail closed — never silently downgrade to an ephemeral run.
+export const CODER_SESSION_BUSY_CODE = 'TRISS_CODER_SESSION_BUSY';
+// Continuation compatibility: isolation mode / project ownership of the
+// persisted idle row do not match the current run request.
+export const CODER_SESSION_INCOMPATIBLE_CODE = 'TRISS_CODER_SESSION_INCOMPATIBLE';
+// The canonical inventory is corrupt or unreadable — retain and fail closed.
+export const CODER_SESSION_STORE_INVALID_CODE = 'TRISS_CODER_SESSION_STORE_INVALID';
+
+// One canonical engine enum for every v2 session surface (CLI validation,
+// help, docs, implementation). opencode2 rows are first-class persistent
+// sessions, so clean must accept them.
+export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
+
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 function validSlug(slug) {
@@ -144,9 +159,12 @@ export async function reserveCoderSession({
 }
 
 /**
- * reserved -> running (after spawn).
+ * reserved -> running (after spawn); idle -> running (continuation claim).
+ * lockSlot optionally re-binds the row to the slot lease acquired for THIS
+ * run cycle (an idle row's stored slot may belong to a different live run by
+ * the time it resumes).
  */
-export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId }) {
+export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, lockSlot }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
   if (read.error) throw new Error(read.error);
@@ -157,11 +175,15 @@ export async function markCoderSessionRunning({ inventoryDir, engine, slug, runI
   if (!ALLOWED_TRANSITIONS[row.state].includes('running')) {
     throw new Error(`coder-session: illegal transition ${row.state} -> running`);
   }
+  if (lockSlot !== undefined && (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3)) {
+    throw new TypeError('coder-session: lockSlot must be 0..3');
+  }
   const next = validateCoderSessionEntry({
     ...row,
     state: 'running',
     run_id: runId,
     sandbox_id: sandboxId ?? row.sandbox_id,
+    ...(lockSlot === undefined ? {} : { lock_slot: lockSlot }),
     pid,
     process_start_id: processStartId,
     boot_id: bootId,

@@ -239,3 +239,41 @@ export async function withCoderSessionOwnerInventory({ parentHandle, prefixConte
     }
   });
 }
+
+// ─── production run cycle ────────────────────────────────────────────────────
+
+/**
+ * Production run-cycle admission lease. Composes the normative hierarchy
+ * shared maintenance -> exclusive slot lease -> exclusive inventory and —
+ * unlike withCoderSlotLease — KEEPS the slot lease held after this call
+ * returns so it serializes the whole run/clean cycle on that slot.
+ *
+ * selectLockSlot runs under shared maintenance BEFORE any slot/inventory
+ * acquisition and must return a free numeric slot 0..3 (it may consult the
+ * inventory snapshot). The admission callback runs under the exclusive
+ * inventory lock and MUST re-verify that the selected slot is still free
+ * among live rows; throw to abort (the slot lease is released and the
+ * whole composition may be retried by the caller).
+ *
+ * Resolves { result, lockSlot, slotLease }. The caller MUST release
+ * slotLease exactly once when the run cycle ends (success, failure, or
+ * throw); release() is idempotent.
+ */
+export async function admitCoderSessionRunWithHeldSlot({ parentHandle, selectLockSlot }, admitCallback) {
+  if (typeof admitCallback !== 'function') throw new TypeError('coder-lease: admitCallback is required');
+  if (typeof selectLockSlot !== 'function') throw new TypeError('coder-lease: selectLockSlot is required');
+  return withCoderMaintenanceLock({ parentHandle, mode: 'shared' }, async () => {
+    const lockSlot = await selectLockSlot();
+    if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) {
+      throw new TypeError(`coder-lease: invalid lockSlot: ${JSON.stringify(lockSlot)}`);
+    }
+    const slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${lockSlot}` });
+    try {
+      const result = await withCoderInventoryLock({ parentHandle }, () => admitCallback());
+      return { result, lockSlot, slotLease };
+    } catch (err) {
+      await slotLease.release();
+      throw err;
+    }
+  });
+}

@@ -90,19 +90,15 @@ async function markerHeldViaFd(fd) {
   return sameProcess ? activeMarkerNonces.has(marker.nonce) : pidAlive(marker.pid);
 }
 
-// Blocking acquisition for exclusive mode: poll until the marker is free
-// (kernel locks block; the best-effort scope mirrors that contract), abort
-// via the signal, then write our own marker. Returns the written nonce.
-async function acquireExclusiveMarker(fd, { signal }) {
-  // If the marker is held, wait (with abort support) for it to clear. All
-  // reads and writes go through the SAME pinned fd: the fixed inode itself
-  // is never unlinked or re-resolved by pathname.
-  while (await markerHeldViaFd(fd)) {
-    if (signal?.aborted) {
-      throw new Error('fixed-kernel-lock: acquisition aborted');
-    }
-    await new Promise((r) => setTimeout(r, 10));
-  }
+// ONE atomic check-and-write attempt under the caller's marker mutex: when
+// the marker is free, write ours; otherwise report "still held" WITHOUT
+// waiting here. The blocking poll lives OUTSIDE the mutex (see
+// acquireFixedKernelLock) — a waiter must never monopolize the in-process
+// marker mutex while it polls, or same-process holders could never reach
+// their own release/next-acquisition (cross-lock deadlock).
+// Returns the written nonce, or null when the marker is still held.
+async function tryAcquireExclusiveMarker(fd) {
+  if (await markerHeldViaFd(fd)) return null;
   const nonce = randomBytes(8).toString('hex');
   await fd.truncate(0);
   await fd.write(`pid=${process.pid};ts=${Date.now()};r=${nonce}`, 'utf8');
@@ -163,28 +159,36 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
   let fd;
   let ownNonce = null;
   try {
-    await withMarkerMutex(async () => {
-      // O_NOFOLLOW: a pre-planted symlink at the lock path fails closed
-      // (ELOOP) instead of truncating an arbitrary same-UID target. The
-      // descriptor pins the inode; every later marker read/write/truncate
-      // goes through THIS fd, never a pathname re-resolution.
-      fd = await open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600);
-      await pinLockFileFd(fd, lockPath);
+    // O_NOFOLLOW: a pre-planted symlink at the lock path fails closed
+    // (ELOOP) instead of truncating an arbitrary same-UID target. The
+    // descriptor pins the inode; every later marker read/write/truncate
+    // goes through THIS fd, never a pathname re-resolution.
+    fd = await open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600);
+    await pinLockFileFd(fd, lockPath);
+    // Blocking waits poll OUTSIDE the marker mutex: each attempt re-enters
+    // the mutex only for one atomic check(-and-write). Holding the mutex
+    // across a poll would starve every other in-process lock operation —
+    // including releases and unrelated fixed locks — and can deadlock a
+    // holder whose next stage needs another fixed lock.
+    for (;;) {
+      if (signal?.aborted) {
+        throw new Error('fixed-kernel-lock: acquisition aborted');
+      }
       if (mode === 'exclusive') {
-        const nonce = await acquireExclusiveMarker(fd, { signal });
-        ownNonce = nonce;
-        activeMarkerNonces.add(nonce);
+        const nonce = await withMarkerMutex(() => tryAcquireExclusiveMarker(fd));
+        if (nonce !== null) {
+          ownNonce = nonce;
+          activeMarkerNonces.add(nonce);
+          break;
+        }
       } else {
         // Shared mode MUST still wait out a live exclusive holder: without
         // this, shared and exclusive scopes could overlap entirely.
-        while (await markerHeldViaFd(fd)) {
-          if (signal?.aborted) {
-            throw new Error('fixed-kernel-lock: acquisition aborted');
-          }
-          await new Promise((r) => setTimeout(r, 10));
-        }
+        const free = await withMarkerMutex(async () => !(await markerHeldViaFd(fd)));
+        if (free) break;
       }
-    });
+      await new Promise((r) => setTimeout(r, 10));
+    }
   } catch (err) {
     if (fd) await fd.close().catch(() => {});
     throw err;

@@ -480,11 +480,14 @@ export function updateProcessIdentity(pid, {
       if (ticks) return `proc:${ticks}`;
     }
   } catch { /* identity unavailable is intentionally ambiguous */ }
-  const result = spawnPs('ps', ['-o', 'lstart=', '-p', String(pid)], {
+  // Fixed absolute binary + minimal fixed environment (same contract as
+  // update/cache.js processStartIdentity): an identity probe must never
+  // forward the parent environment to a PATH-resolved subprocess.
+  const result = spawnPs('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: 1_000,
-    env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+    env: { TZ: 'UTC', LC_ALL: 'C' },
   });
   const started = result.status === 0 ? result.stdout.replace(/\s+/g, ' ').trim() : '';
   return started ? `ps:${started}` : null;

@@ -254,7 +254,9 @@ test('bootstrap lock identity is available for the running process', () => {
   if (identity !== null) assert.match(identity, /^(?:proc|ps):/);
   assert.equal(updateProcessIdentity(process.pid), identity);
   const source = readFileSync(new URL('../scripts/standalone-bootstrap.js', import.meta.url), 'utf8');
-  assert.match(source, /'ps', \['-o', 'lstart=', '-p', String\(pid\)\]/);
+  assert.match(source, /'\/bin\/ps', \['-o', 'lstart=', '-p', String\(pid\)\]/);
+  // The identity probe must not forward the parent environment.
+  assert.doesNotMatch(source, /env: \{ \.\.\.process\.env, TZ: 'UTC'/);
 });
 
 test('bootstrap lock claims an exclusive hard link only after durable marker payload metadata', () => {
