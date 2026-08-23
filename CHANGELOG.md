@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.39.0] — 2026-08-23
 
 ### Changed
 
@@ -107,6 +107,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias and verifies the final merged provider/model projection before any
   credential-bearing child is spawned. Raw best-effort mode remains an
   explicit risk acknowledgement and never claims proxy isolation.
+
+### Artifact integrity (0.39.0)
+
+- `triss-dsh-provider-bundle-0.39.0.tgz` — sha256
+  `ff349193857313d102eb7aba09073254dabc00125ee14c3c533af6eed242401a`,
+  integrity
+  `sha512-Q/a0rcDSXUAiuLp7ODyB7nwaxGIoyg2m4tbcWRekDY5P2vCXfPZ3tjALlRBb+IFzJpuWc0lTjoDjrLDvFJytSg==`
+  (computed with the release npm 10.9.8 via `npm pack`; `npm pack` output is
+  byte-deterministic across the pinned 10.9.8 and 11.6.2 releases).
+- Root `triss-coworker-0.39.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.39.0` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file); registry verification compares the packed
+  artifact against the published tarball byte-for-byte.
 
 ### Artifact integrity (0.38.0)
 
