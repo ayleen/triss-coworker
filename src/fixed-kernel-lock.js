@@ -47,6 +47,46 @@ function withMarkerMutex(fn) {
   return run;
 }
 
+// In-process reader/writer state per pinned lock path. Shared holders
+// coexist with each other; an exclusive holder excludes both readers and
+// other writers. This registry is what makes shared/exclusive REAL inside
+// one process — the file marker alone cannot express a reader count, and
+// without it an exclusive acquire would walk past live shared holders.
+// Cross-process scope stays best-effort and unclaimed (see capability).
+const rwStates = new Map();
+
+function rwStateFor(lockPath) {
+  let state = rwStates.get(lockPath);
+  if (!state) {
+    state = { readers: new Set(), writer: null, waiters: [] };
+    rwStates.set(lockPath, state);
+  }
+  return state;
+}
+
+function notifyStateChange(state) {
+  for (const entry of state.waiters.splice(0)) entry.wake();
+}
+
+// Wait for the next state change on this lock path, with a poll fallback so
+// cross-process transitions (which cannot wake us) are still observed.
+function waitForStateChange(state) {
+  return new Promise((resolve) => {
+    const entry = {
+      wake: () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    };
+    const timer = setTimeout(() => {
+      const idx = state.waiters.indexOf(entry);
+      if (idx !== -1) state.waiters.splice(idx, 1);
+      resolve();
+    }, 25);
+    state.waiters.push(entry);
+  });
+}
+
 function validateMode(mode) {
   if (!FIXED_LOCK_MODES.includes(mode)) {
     throw new TypeError(`fixed-kernel-lock: mode must be shared|exclusive, got ${JSON.stringify(mode)}`);
@@ -154,10 +194,12 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
 
   // The lock file is created once and never unlinked (fixed-inode reuse).
   // Exclusive mode owns it by writing a live PID marker; release clears the
-  // marker. Shared mode only observes the marker. A dead marker (stale PID)
-  // is reclaimed by the next exclusive acquirer.
+  // marker. Shared holders are tracked ONLY in the in-process RW registry
+  // (a file marker cannot express a reader count). A dead cross-process
+  // marker (stale PID) is reclaimed by the next exclusive acquirer.
   let fd;
-  let ownNonce = null;
+  let ownToken = null;
+  const state = rwStateFor(lockPath);
   try {
     // O_NOFOLLOW: a pre-planted symlink at the lock path fails closed
     // (ELOOP) instead of truncating an arbitrary same-UID target. The
@@ -165,29 +207,44 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
     // goes through THIS fd, never a pathname re-resolution.
     fd = await open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600);
     await pinLockFileFd(fd, lockPath);
-    // Blocking waits poll OUTSIDE the marker mutex: each attempt re-enters
-    // the mutex only for one atomic check(-and-write). Holding the mutex
-    // across a poll would starve every other in-process lock operation —
-    // including releases and unrelated fixed locks — and can deadlock a
-    // holder whose next stage needs another fixed lock.
+    // Blocking waits NEVER hold the marker mutex while polling: each attempt
+    // re-enters the mutex for exactly one atomic state check(-and-write),
+    // then waits on the RW-state change notification (with a poll fallback
+    // so cross-process transitions are still observed).
     for (;;) {
       if (signal?.aborted) {
         throw new Error('fixed-kernel-lock: acquisition aborted');
       }
       if (mode === 'exclusive') {
-        const nonce = await withMarkerMutex(() => tryAcquireExclusiveMarker(fd));
+        const nonce = await withMarkerMutex(async () => {
+          // In-process readers/writers exclude us before anything cross-process.
+          if (state.writer !== null || state.readers.size > 0) return null;
+          const written = await tryAcquireExclusiveMarker(fd);
+          if (written === null) return null;
+          state.writer = written;
+          return written;
+        });
         if (nonce !== null) {
-          ownNonce = nonce;
+          ownToken = { kind: 'writer', nonce };
           activeMarkerNonces.add(nonce);
           break;
         }
       } else {
-        // Shared mode MUST still wait out a live exclusive holder: without
-        // this, shared and exclusive scopes could overlap entirely.
-        const free = await withMarkerMutex(async () => !(await markerHeldViaFd(fd)));
-        if (free) break;
+        // Shared MUST wait out an in-process writer AND a live cross-process
+        // exclusive marker — otherwise shared and exclusive could overlap.
+        const readerNonce = await withMarkerMutex(async () => {
+          if (state.writer !== null) return null;
+          if (await markerHeldViaFd(fd)) return null;
+          const nonce = `r_${randomBytes(8).toString('hex')}`;
+          state.readers.add(nonce);
+          return nonce;
+        });
+        if (readerNonce !== null) {
+          ownToken = { kind: 'reader', nonce: readerNonce };
+          break;
+        }
       }
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForStateChange(state);
     }
   } catch (err) {
     if (fd) await fd.close().catch(() => {});
@@ -199,21 +256,28 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
     async release() {
       if (released) return;
       released = true;
-      if (mode === 'exclusive') {
-        // Clear the marker (unlock) but keep the fixed inode; only clear if
-        // the marker is still ours. Read through the SAME pinned fd.
-        try {
-          const marker = parseMarker(await readMarkerViaFd(fd));
-          if (marker && activeMarkerNonces.has(marker.nonce)) {
-            await fd.truncate(0);
-            await fd.sync();
+      await withMarkerMutex(async () => {
+        if (ownToken.kind === 'writer') {
+          // Clear the marker (unlock) but keep the fixed inode; only clear if
+          // the marker is still ours. Read through the SAME pinned fd.
+          try {
+            const marker = parseMarker(await readMarkerViaFd(fd));
+            if (marker && activeMarkerNonces.has(marker.nonce)) {
+              await fd.truncate(0);
+              await fd.sync();
+            }
+          } catch {
+            // Marker already gone — idempotent release.
+          } finally {
+            activeMarkerNonces.delete(ownToken.nonce);
+            state.writer = null;
           }
-        } catch {
-          // Marker already gone — idempotent release.
-        } finally {
-          if (ownNonce) activeMarkerNonces.delete(ownNonce);
+        } else {
+          state.readers.delete(ownToken.nonce);
         }
-      }
+        // Wake every waiter (they re-check the RW state under the mutex).
+        notifyStateChange(state);
+      });
       // Close exactly this open file description. The inode is never
       // unlinked (fixed-inode reuse).
       await fd.close();

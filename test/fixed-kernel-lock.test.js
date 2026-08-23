@@ -122,6 +122,95 @@ test('shared lock observes the marker and works when the file exists', async () 
   }
 });
 
+test('shared held blocks a subsequent exclusive until the shared release', async () => {
+  const fx = await fixture();
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const shared = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' });
+    let done = false;
+    const exclusive = (async () => {
+      const h = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'exclusive' });
+      done = true;
+      await h.release();
+    })();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(done, false, 'exclusive must wait while a shared holder is active');
+    const t0 = Date.now();
+    await shared.release();
+    await exclusive;
+    assert.equal(done, true);
+    assert.ok(Date.now() - t0 < 1000, 'release must wake the waiter promptly');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('two shared holders coexist on one lock path', async () => {
+  const fx = await fixture();
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const [a, b] = await Promise.all([
+      acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' }),
+      acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' }),
+    ]);
+    // Both hold simultaneously; an exclusive must still be blocked.
+    let done = false;
+    const exclusive = (async () => {
+      const h = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'exclusive' });
+      done = true;
+      await h.release();
+    })();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(done, false);
+    await a.release();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(done, false, 'one remaining reader must still block the writer');
+    await b.release();
+    await exclusive;
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('exclusive held blocks a subsequent shared until release', async () => {
+  const fx = await fixture();
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const writer = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'exclusive' });
+    let done = false;
+    const shared = (async () => {
+      const h = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' });
+      done = true;
+      await h.release();
+    })();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(done, false, 'shared must wait while a writer holds the lock');
+    await writer.release();
+    await shared;
+    assert.equal(done, true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('release wakes a blocked waiter without waiting out the poll interval', async () => {
+  const fx = await fixture();
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const writer = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'exclusive' });
+    const waiter = acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' });
+    await new Promise((r) => setTimeout(r, 60));
+    const t0 = Date.now();
+    await writer.release();
+    const handle = await waiter;
+    const waited = Date.now() - t0;
+    await handle.release();
+    assert.ok(waited < 25, `release must wake the waiter promptly (waited ${waited}ms)`);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 // ─── abort, validation, foreign inode ────────────────────────────────────────
 
 test('an already-aborted signal rejects acquisition without returning a handle', async () => {

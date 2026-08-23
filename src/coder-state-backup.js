@@ -43,7 +43,11 @@ export const BACKUP_LIMITS = Object.freeze({
   maxPathBytes: 4096,
 });
 
-const ENGINE_NAMES = ['opencode', 'crush'];
+// Canonical engine enum (dependency-neutral single source of truth).
+// Backup inventories EVERY engine directory that exists; an unrecognized
+// engine-sessions-v2/<name> is an invalid state and fails closed — a backup
+// must never silently omit persistent sessions.
+import { CODER_SESSION_ENGINES } from './coder-session-engines.js';
 
 function canonicalManifest(record) {
   const keys = Object.keys(record).sort();
@@ -205,8 +209,24 @@ export async function inventoryCoderV2State(projectRoot) {
     }
   };
 
-  for (const engine of ENGINE_NAMES) {
-    await walk(`engine-sessions-v2/${engine}`);
+  // Enumerate the engine-sessions-v2 root itself: every PRESENT canonical
+  // engine is inventoried, and any UNRECOGNIZED entry fails closed (a backup
+  // missing real sessions would still produce a COMPLETION marker).
+  let engineDirNames;
+  try {
+    engineDirNames = await readdir(join(trissRoot, 'engine-sessions-v2'));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') engineDirNames = [];
+    else throw err;
+  }
+  for (const name of engineDirNames) {
+    if (!CODER_SESSION_ENGINES.includes(name)) {
+      throw new Error(
+        `backup: unrecognized engine-sessions-v2/${name} — not one of ${CODER_SESSION_ENGINES.join(', ')}; ` +
+          'refusing to produce an incomplete backup (fail closed). Upgrade Triss or remove the directory.',
+      );
+    }
+    await walk(`engine-sessions-v2/${name}`);
   }
   await walk('coder-state-v2');
 

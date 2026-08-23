@@ -243,37 +243,128 @@ export async function withCoderSessionOwnerInventory({ parentHandle, prefixConte
 // ─── production run cycle ────────────────────────────────────────────────────
 
 /**
- * Production run-cycle admission lease. Composes the normative hierarchy
- * shared maintenance -> exclusive slot lease -> exclusive inventory and —
- * unlike withCoderSlotLease — KEEPS the slot lease held after this call
- * returns so it serializes the whole run/clean cycle on that slot.
- *
- * selectLockSlot runs under shared maintenance BEFORE any slot/inventory
- * acquisition and must return a free numeric slot 0..3 (it may consult the
- * inventory snapshot). The admission callback runs under the exclusive
- * inventory lock and MUST re-verify that the selected slot is still free
- * among live rows; throw to abort (the slot lease is released and the
- * whole composition may be retried by the caller).
- *
- * Resolves { result, lockSlot, slotLease }. The caller MUST release
- * slotLease exactly once when the run cycle ends (success, failure, or
- * throw); release() is idempotent.
+ * Handle-form shared maintenance lock (the withCoderMaintenanceLock wrapper
+ * releases at callback end; the run cycle must HOLD maintenance across its
+ * whole lifetime, so it needs the raw handle).
  */
-export async function admitCoderSessionRunWithHeldSlot({ parentHandle, selectLockSlot }, admitCallback) {
-  if (typeof admitCallback !== 'function') throw new TypeError('coder-lease: admitCallback is required');
-  if (typeof selectLockSlot !== 'function') throw new TypeError('coder-lease: selectLockSlot is required');
-  return withCoderMaintenanceLock({ parentHandle, mode: 'shared' }, async () => {
-    const lockSlot = await selectLockSlot();
-    if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) {
-      throw new TypeError(`coder-lease: invalid lockSlot: ${JSON.stringify(lockSlot)}`);
-    }
-    const slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${lockSlot}` });
-    try {
-      const result = await withCoderInventoryLock({ parentHandle }, () => admitCallback());
-      return { result, lockSlot, slotLease };
-    } catch (err) {
+export async function acquireCoderMaintenanceLock({ parentHandle, mode = 'shared', basename = 'maintenance.lock' }) {
+  const { acquireFixedKernelLock } = await import('./fixed-kernel-lock.js');
+  return acquireFixedKernelLock({ parentHandle, basename, mode });
+}
+
+function makeRunLeaseContext(isolationMode, lockSlot) {
+  // Reuse the documented owner-prefix context type so withCoderSessionOwnerInventory
+  // validates our held prefix without any new context vocabulary.
+  const prefixContext = makeContext('heldOwnerLockContext');
+  prefixContext.isolationMode = isolationMode;
+  prefixContext.lockSlot = lockSlot;
+  return prefixContext;
+}
+
+/**
+ * Opaque session RUN lease: ONE shared maintenance scope covering the WHOLE
+ * run cycle (admission -> spawn -> finalization), plus the normative
+ * conditional-target lease for non-isolated runs and the assigned slot
+ * lease. Acquisition order is the documented hierarchy:
+ *   maintenance(shared, HELD) -> conditional-target -> slot -> inventory(brief)
+ * and release() undoes it strictly in reverse. Callers NEVER reacquire
+ * maintenance while holding this lease; pre-spawn revalidation and
+ * finalization take only brief inventory scopes via withInventory().
+ * Exposing the slot after releasing maintenance would invert the hierarchy —
+ * that is exactly what this object exists to prevent.
+ */
+function createRunLease({ parentHandle, maintenance, target, slotLease, lockSlot, isolationMode, admission }) {
+  const prefixContext = makeRunLeaseContext(isolationMode, lockSlot);
+  let released = false;
+  return {
+    lockSlot,
+    admission,
+    prefixContext,
+    async withInventory(callback) {
+      if (released) throw new Error('coder-lease: run lease already released');
+      return withCoderSessionOwnerInventory({ parentHandle, prefixContext }, callback);
+    },
+    async release() {
+      if (released) return;
+      released = true;
+      prefixContext.active = false;
+      // Strict reverse order of acquisition: slot -> target -> maintenance.
       await slotLease.release();
-      throw err;
+      if (target) await target.release();
+      await maintenance.release();
+    },
+  };
+}
+
+const RUN_LEASE_RETRIES = 8;
+
+/**
+ * Acquire the production session RUN lease and perform admission under it.
+ *
+ * selectLockSlot() runs under shared maintenance BEFORE any target/slot
+ * acquisition and returns a candidate free numeric slot 0..3 (it may consult
+ * a plain inventory snapshot; reads take no locks). classifyAndWrite(slot)
+ * then runs under the exclusive inventory lock WITH maintenance +
+ * conditional-target + slot already held; it MUST re-verify the slot against
+ * fresh entries and either perform the canonical admission write or report
+ * { retake: true } when the candidate slot was claimed in the window
+ * (bounded retries re-select from scratch). Any other throw aborts and
+ * releases everything acquired so far.
+ *
+ * Resolves an opaque run lease ({lockSlot, admission, withInventory, release}).
+ * The caller MUST call release() exactly once when the run cycle ends.
+ */
+export async function acquireCoderSessionRunLease({ parentHandle, isolationMode, selectLockSlot, classifyAndWrite }) {
+  if (typeof selectLockSlot !== 'function') throw new TypeError('coder-lease: selectLockSlot is required');
+  if (typeof classifyAndWrite !== 'function') throw new TypeError('coder-lease: classifyAndWrite is required');
+  if (!['isolated', 'non-isolated'].includes(isolationMode)) {
+    throw new TypeError(`coder-lease: invalid isolationMode: ${JSON.stringify(isolationMode)}`);
+  }
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  let target;
+  let slotLease;
+  try {
+    for (let attempt = 0; attempt < RUN_LEASE_RETRIES; attempt += 1) {
+      const lockSlot = await selectLockSlot();
+      if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) {
+        throw new TypeError(`coder-lease: invalid lockSlot: ${JSON.stringify(lockSlot)}`);
+      }
+      // Normative order: conditional-target (non-isolated only), THEN slot.
+      target = isolationMode === 'non-isolated'
+        ? await acquireCoderTargetLease({ parentHandle })
+        : null;
+      try {
+        slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${lockSlot}` });
+        try {
+          const outcome = await withCoderInventoryLock({ parentHandle }, () => classifyAndWrite(lockSlot));
+          if (outcome && outcome.retake) {
+            await slotLease.release();
+            slotLease = null;
+            if (target) { await target.release(); target = null; }
+            continue;
+          }
+          return createRunLease({
+            parentHandle,
+            maintenance,
+            target,
+            slotLease,
+            lockSlot,
+            isolationMode,
+            admission: outcome ? outcome.result : undefined,
+          });
+        } catch (err) {
+          await slotLease.release();
+          slotLease = null;
+          throw err;
+        }
+      } catch (err) {
+        if (target) { await target.release(); target = null; }
+        throw err;
+      }
     }
-  });
+    throw new Error('coder-lease: slot selection retries exhausted under the run lease');
+  } catch (err) {
+    await maintenance.release();
+    throw err;
+  }
 }

@@ -204,3 +204,51 @@ test('an EMPTY coder-results-v1 root does not block the backup', async () => {
     await fx.cleanup();
   }
 });
+
+// ─── opencode2 coverage (PR #85 review round 2) ─────────────────────────────
+
+test('backup inventories the opencode2 store alongside the canonical engines', async () => {
+  const fx = await fixture();
+  try {
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), { recursive: true, mode: 0o700 });
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'crush'), { recursive: true, mode: 0o700 });
+    await writeFile(join(fx.trissRoot, 'engine-sessions-v2', 'opencode', 'a.json'), '{"engine":"opencode"}');
+    await writeFile(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2', 'b.json'), '{"engine":"opencode2"}');
+    await writeFile(join(fx.trissRoot, 'engine-sessions-v2', 'crush', 'c.json'), '{"engine":"crush"}');
+
+    const inventory = await inventoryCoderV2State(fx.base);
+    const paths = inventory.entries.map((e) => e.path);
+    assert.ok(paths.includes('engine-sessions-v2/opencode/a.json'));
+    assert.ok(
+      paths.includes('engine-sessions-v2/opencode2/b.json'),
+      'opencode2 is a first-class persistent engine — backup must include it',
+    );
+    assert.ok(paths.includes('engine-sessions-v2/crush/c.json'));
+
+    // Full backup round-trip validates cleanly with the opencode2 entry.
+    const { manifest } = await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'a'.repeat(32) });
+    const validation = await validateCoderV2Backup(fx.backupDir);
+    assert.deepEqual(validation, { valid: true, reasons: [] });
+    const manifestPaths = manifest.entries.map((e) => e.path);
+    assert.ok(manifestPaths.includes('engine-sessions-v2/opencode2/b.json'));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('an unrecognized engine directory fails the backup closed (no COMPLETION marker)', async () => {
+  const fx = await fixture();
+  try {
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'future-engine'), { recursive: true, mode: 0o700 });
+    await writeFile(join(fx.trissRoot, 'engine-sessions-v2', 'future-engine', 'state.json'), '{}');
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: 'b'.repeat(32) }),
+      /unrecognized engine-sessions-v2\/future-engine/,
+    );
+    // A failed backup must never carry the only validity evidence.
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+

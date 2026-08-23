@@ -43,10 +43,10 @@ export const CODER_SESSION_INCOMPATIBLE_CODE = 'TRISS_CODER_SESSION_INCOMPATIBLE
 // The canonical inventory is corrupt or unreadable — retain and fail closed.
 export const CODER_SESSION_STORE_INVALID_CODE = 'TRISS_CODER_SESSION_STORE_INVALID';
 
-// One canonical engine enum for every v2 session surface (CLI validation,
-// help, docs, implementation). opencode2 rows are first-class persistent
-// sessions, so clean must accept them.
-export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
+// Canonical engine enum: single source of truth lives in the
+// dependency-neutral coder-session-engines.js module (shared with backup,
+// CLI, and the result registry); re-exported here for existing importers.
+export { CODER_SESSION_ENGINES } from './coder-session-engines.js';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 

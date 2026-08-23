@@ -106,18 +106,24 @@ import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
 import { openManagedTrissRoot } from '../managed-root.js';
 import {
-  admitCoderSessionRunWithHeldSlot,
-  withCoderSessionAdmissionLocks,
+  acquireCoderMaintenanceLock,
+  acquireCoderSessionRunLease,
+  acquireCoderSlotLease,
+  acquireCoderTargetLease,
+  withCoderInventoryLock,
 } from '../coder-lease.js';
 // Plain string/number constants: static import keeps the typed admission
 // error codes available to module-level helpers without module-eval coupling.
 import {
   CODER_SESSION_BUSY_CODE,
-  CODER_SESSION_ENGINES,
   CODER_SESSION_INCOMPATIBLE_CODE,
   CODER_SESSION_STORE_INVALID_CODE,
-  SLUG_ALLOCATION_RETRIES,
 } from '../coder-session-transitions.js';
+// Canonical engine enums (dependency-neutral single source of truth).
+import {
+  CODER_SESSION_ENGINES,
+  CODER_SESSION_STORE_ENGINES as SESSION_STORE_ENGINES,
+} from '../coder-session-engines.js';
 import { processStartIdentity } from '../update/cache.js';
 import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
 import {
@@ -3855,7 +3861,6 @@ function readSessionsMap() {
 // V2 read).
 
 const SESSION_STORE_VERSION = 2;
-const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
 
 // Normalize any on-disk shape (legacy flat map OR versioned) into the
 // versioned in-memory shape. Pure: never mutates the argument.
@@ -4110,6 +4115,35 @@ export function removeSessionStoreMapping(engine, slug) {
     return true;
   } finally {
     if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
+  }
+}
+
+/**
+ * Classify the DURABLE engine-owned session-store mapping for one slug —
+ * the lifecycle authority for whether a row may claim to be continuable.
+ * Returns { state, realId }:
+ *   not_applicable  engine keeps no store namespace (crush)
+ *   absent          no mapping for the slug (nothing published)
+ *   matching        slug -> string realId present (== expectedRealId when given)
+ *   mismatch        mapping exists but differs from expectedRealId, or the
+ *                   store is malformed/unreadable (fail closed, retain)
+ */
+function classifySessionStoreMapping(engine, slug, expectedRealId) {
+  if (!SESSION_STORE_ENGINES.includes(engine)) return { state: 'not_applicable', realId: null };
+  try {
+    const namespace = readSessionStore().engines[engine];
+    if (!namespace || !Object.prototype.hasOwnProperty.call(namespace, slug)) {
+      return { state: 'absent', realId: null };
+    }
+    const value = namespace[slug];
+    if (typeof value !== 'string' || value.length === 0) return { state: 'mismatch', realId: null };
+    if (expectedRealId !== undefined && value !== expectedRealId) {
+      return { state: 'mismatch', realId: value };
+    }
+    return { state: 'matching', realId: value };
+  } catch {
+    // A malformed/unreadable store is mismatch by definition: fail closed.
+    return { state: 'mismatch', realId: null };
   }
 }
 
@@ -5498,19 +5532,9 @@ export function currentSessionOwnerTuple(overrides = {}) {
   return { pid, processStartId, bootId };
 }
 
-// Internal retry sentinel: the slot selected before lease acquisition was
-// claimed by a concurrent admission; re-select under the locks (bounded).
-const SLOT_RETAKE_CODE = 'TRISS_CODER_SLOT_RETAKE';
-
 function storeInvalidError(detail) {
   const error = new Error(`coder-session: canonical store unusable — ${detail} (retain, fail closed)`);
   error.code = CODER_SESSION_STORE_INVALID_CODE;
-  return error;
-}
-
-function slotRetakeError() {
-  const error = new Error('coder-session: selected lock slot was claimed concurrently');
-  error.code = SLOT_RETAKE_CODE;
   return error;
 }
 
@@ -5593,133 +5617,145 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
   const requestedIsolationMode = isolated ? 'isolated' : 'non_isolated';
   const parentHandle = await openManagedTrissRoot(projectRoot());
 
-  // Production admission runs under the run-cycle lease (shared maintenance
-  // -> HELD slot lease -> exclusive inventory): two concurrent admissions of
-  // the same slug serialize on the lease and inventory lock, so the loser
-  // observes a live row instead of clobbering it (no lost updates, no
-  // reservation hijack). Bounded retry when our pre-selected slot is claimed
-  // in the window between selection and lease acquisition.
-  let slotRetries = SLUG_ALLOCATION_RETRIES;
-  for (;;) {
-    const slotBox = { selected: null };
-    let outcome;
-    try {
-      outcome = await admitCoderSessionRunWithHeldSlot(
-        {
-          parentHandle,
-          selectLockSlot: async () => {
-            const pre = await readCoderSessionInventory(inventoryDir);
-            if (pre.error) throw storeInvalidError(pre.error);
-            slotBox.selected = pickFreeLockSlot(pre.entries);
-            return slotBox.selected;
-          },
-        },
-        async () => {
-          // Exclusive inventory: classify against FRESH state. Only an idle
-          // row may continue; reserved/running is busy and deleting is
-          // cleanup in progress — none of those states may degrade to "store
-          // unavailable, continue anyway".
-          const read = await readCoderSessionInventory(inventoryDir);
-          if (read.error) throw storeInvalidError(read.error);
-          const liveSlots = new Set(
-            read.entries
-              .filter((e) => ['reserved', 'running', 'deleting'].includes(e.state))
-              .map((e) => e.lock_slot),
-          );
-          // Retake only when a live row claimed our slot in the window
-          // between selection and lease acquisition.
-          if (liveSlots.has(slotBox.selected)) throw slotRetakeError();
-          const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
-          if (!existing) {
-            const row = await reserveCoderSession({
-              inventoryDir,
-              engine,
-              slug,
-              isolationMode: requestedIsolationMode,
-              lockSlot: slotBox.selected,
-              runId,
-              sandboxId,
-              ...owner,
-              projectRootFingerprint: fingerprint,
-            });
-            return { origin: 'new_reservation', row };
-          }
-          if (existing.state !== 'idle') {
-            const error = new Error(
-              `coder-session: ${engine}/${slug} is ${existing.state} — another run owns it or` +
-              ' cleanup is in progress; wait for it to finish, clean it, or choose another slug.',
-            );
-            error.code = CODER_SESSION_BUSY_CODE;
-            throw error;
-          }
-          // Continuation compatibility BEFORE idle -> running: isolation mode
-          // and project ownership are part of session ownership — silently
-          // running an idle row under a different mode would make the
-          // inventory lie about how this spawn actually executes.
-          if (existing.isolation_mode !== requestedIsolationMode) {
-            const error = new Error(
-              `coder-session: ${engine}/${slug} was created isolation_mode=${existing.isolation_mode};` +
-              ` this run requests ${requestedIsolationMode}. Isolation mode is part of session ownership —` +
-              ' clean the session (triss coder session clean ...) or use a different slug.',
-            );
-            error.code = CODER_SESSION_INCOMPATIBLE_CODE;
-            throw error;
-          }
-          if (existing.project_root_fingerprint !== fingerprint) {
-            const error = new Error(
-              `coder-session: ${engine}/${slug} belongs to a different project identity — refusing to continue it`,
-            );
-            error.code = CODER_SESSION_INCOMPATIBLE_CODE;
-            throw error;
-          }
-          const row = await markCoderSessionRunning({
-            inventoryDir,
-            engine,
-            slug,
-            runId,
-            sandboxId,
-            lockSlot: slotBox.selected,
-            ...owner,
-          });
-          return { origin: 'idle_continuation', row };
-        },
+  // Production admission runs under the RUN LEASE: ONE shared maintenance
+  // scope covering the whole cycle, conditional-target lease for
+  // non-isolated runs, assigned slot lease, and brief exclusive inventory
+  // scopes (normative hierarchy; release is strictly reverse). Concurrent
+  // same-slug admissions serialize so the loser observes a live row instead
+  // of clobbering it; non-isolated runs serialize on the target lease.
+  let resumedRealId = null;
+  const runLease = await acquireCoderSessionRunLease({
+    parentHandle,
+    isolationMode: isolated ? 'isolated' : 'non-isolated',
+    selectLockSlot: async () => {
+      // Plain snapshot read (atomic-rename file): selection only — the
+      // authoritative re-check happens under the exclusive inventory lock.
+      const pre = await readCoderSessionInventory(inventoryDir);
+      if (pre.error) throw storeInvalidError(pre.error);
+      return pickFreeLockSlot(pre.entries);
+    },
+    classifyAndWrite: async (lockSlot) => {
+      // Exclusive inventory: classify against FRESH state. Only an idle
+      // row may continue; reserved/running is busy and deleting is cleanup
+      // in progress — none of those states may degrade to "store
+      // unavailable, continue anyway".
+      const read = await readCoderSessionInventory(inventoryDir);
+      if (read.error) throw storeInvalidError(read.error);
+      const liveSlots = new Set(
+        read.entries
+          .filter((e) => ['reserved', 'running', 'deleting'].includes(e.state))
+          .map((e) => e.lock_slot),
       );
-    } catch (err) {
-      if (err?.code === SLOT_RETAKE_CODE && slotRetries > 0) {
-        slotRetries -= 1;
-        continue;
+      if (liveSlots.has(lockSlot)) return { retake: true };
+      const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
+      if (!existing) {
+        const row = await reserveCoderSession({
+          inventoryDir,
+          engine,
+          slug,
+          isolationMode: requestedIsolationMode,
+          lockSlot,
+          runId,
+          sandboxId,
+          ...owner,
+          projectRootFingerprint: fingerprint,
+        });
+        return { result: { origin: 'new_reservation', row } };
       }
-      throw err;
-    }
-    const { result, lockSlot, slotLease } = outcome;
-    return {
-      inventoryDir,
-      engine,
-      slug,
-      runId,
-      sandboxId: result.row.sandbox_id,
-      origin: result.origin,
-      lockSlot,
-      ...owner,
-      releaseRunLease: () => slotLease.release(),
-    };
-  }
+      if (existing.state !== 'idle') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} is ${existing.state} — another run owns it or` +
+          ' cleanup is in progress; wait for it to finish, clean it, or choose another slug.',
+        );
+        error.code = CODER_SESSION_BUSY_CODE;
+        throw error;
+      }
+      // Continuation compatibility BEFORE idle -> running: isolation mode
+      // and project ownership are part of session ownership — silently
+      // running an idle row under a different mode would make the
+      // inventory lie about how this spawn actually executes.
+      if (existing.isolation_mode !== requestedIsolationMode) {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} was created isolation_mode=${existing.isolation_mode};` +
+          ` this run requests ${requestedIsolationMode}. Isolation mode is part of session ownership —` +
+          ' clean the session (triss coder session clean ...) or use a different slug.',
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      if (existing.project_root_fingerprint !== fingerprint) {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} belongs to a different project identity — refusing to continue it`,
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      // A continuation MUST have a durable published mapping: without it the
+      // native conversation does not exist and this run would silently start
+      // a NEW conversation while claiming to resume.
+      const mapping = classifySessionStoreMapping(engine, slug);
+      if (mapping.state === 'absent') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} has NO published session mapping — nothing to continue.` +
+          ' Clean the stale row (triss coder session clean ...) or start a fresh slug.',
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      if (mapping.state === 'mismatch') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} has a malformed/unreadable session mapping — retain, fail closed.`,
+        );
+        error.code = CODER_SESSION_STORE_INVALID_CODE;
+        throw error;
+      }
+      resumedRealId = mapping.realId;
+      const row = await markCoderSessionRunning({
+        inventoryDir,
+        engine,
+        slug,
+        runId,
+        sandboxId,
+        lockSlot,
+        ...owner,
+      });
+      return { result: { origin: 'idle_continuation', row } };
+    },
+  });
+
+  const admission = runLease.admission || {};
+  const sessionV2 = {
+    inventoryDir,
+    engine,
+    slug,
+    runId,
+    sandboxId: admission.row ? admission.row.sandbox_id : sandboxId,
+    origin: admission.origin,
+    lockSlot: runLease.lockSlot,
+    resumedRealId,
+    ...owner,
+    runLease,
+    // Convenience for tests/tools: releasing the run cycle lease releases
+    // slot -> target -> maintenance strictly in reverse acquisition order.
+    releaseRunLease: () => runLease.release(),
+  };
+  return sessionV2;
 }
 
 /**
- * Pre-spawn revalidation under shared maintenance + exclusive inventory: the
- * exact claimed row must still exist and be ours. A fresh reserved row (this
- * run between admission and spawn) transitions reserved -> running HERE; an
- * already running row must carry EXACTLY this run cycle owner tuple —
- * anything else means another writer touched the row and fails closed
- * without mutation.
+ * Pre-spawn revalidation under the HELD run lease (brief exclusive inventory
+ * only — maintenance/target/slot stay held; nothing higher is reacquired):
+ * the exact claimed row must still exist and be ours. A fresh reserved row
+ * (this run between admission and spawn) transitions reserved -> running
+ * HERE; an already running row must carry EXACTLY this run cycle owner
+ * tuple — anything else means another writer touched the row and fails
+ * closed without mutation.
  */
 export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
   if (!sessionV2) return;
   const { markCoderSessionRunning } = await import('../coder-session-transitions.js');
   const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
-  const parentHandle = await openManagedTrissRoot(projectRoot());
-  await withCoderSessionAdmissionLocks({ parentHandle }, async () => {
+  await sessionV2.runLease.withInventory(async () => {
     const read = await readCoderSessionInventory(sessionV2.inventoryDir);
     if (read.error) throw storeInvalidError(read.error);
     const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
@@ -5737,43 +5773,113 @@ export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
 }
 
 /**
- * Single provenance-aware finalizer. mode=complete: success path — every
- * published session returns running -> idle. mode=abandon: failure path —
- * a NEW reservation (origin 'new_reservation') is removed through the
- * canonical deleting transition, while a continuation of a previously
- * published idle session returns running -> idle so the persisted session
- * SURVIVES a failed resume attempt. Every mutation is owner-checked; on any
- * mismatch the row is retained for recovery (never blindly deleted).
+ * Store-state-driven finalizer. The DURABLE session-store mapping — not the
+ * admission-time origin alone — decides whether a row is published:
+ *   complete (success): running -> idle ONLY with a valid engine session id
+ *   AND its durable matching mapping; otherwise the row cannot claim a
+ *   continuable session and is removed through the canonical deleting
+ *   transition (a mapping mismatch retains/fails closed).
+ *   abandon (failure): a reservation WITHOUT a published mapping is removed;
+ *   one WITH a matching published mapping survives as idle (the persisted
+ *   session outlives the failed envelope write); a MISMATCHED mapping
+ *   retains and fails closed. Continuations additionally require their
+ *   captured resumed real id to remain durably present.
+ * Every mutation is owner-checked inside the held run lease; on any
+ * ambiguity the row is retained for recovery, never blindly deleted.
  */
-async function finalizeV2SessionRow(sessionV2, mode) {
+async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
   if (!sessionV2) return;
   try {
     const transitions = await import('../coder-session-transitions.js');
     const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
-    const parentHandle = await openManagedTrissRoot(projectRoot());
-    await withCoderSessionAdmissionLocks({ parentHandle }, async () => {
+    const isStoreEngine = SESSION_STORE_ENGINES.includes(sessionV2.engine);
+    // Expected durable mapping per path: completion verifies EXACTLY the id
+    // this run published; a failed continuation verifies the id captured at
+    // claim time; a failed NEW reservation has no expected id yet — ANY
+    // published mapping proves the session survived (matching), while its
+    // absence means nothing durable references it.
+    const expectedRealId =
+      mode === 'complete' ? publishedRealId
+      : sessionV2.origin === 'idle_continuation' ? sessionV2.resumedRealId
+      : undefined;
+    await sessionV2.runLease.withInventory(async () => {
       const read = await readCoderSessionInventory(sessionV2.inventoryDir);
       if (read.error) throw storeInvalidError(read.error);
       const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
-      if (mode === 'abandon' && sessionV2.origin === 'new_reservation') {
-        // Unpublished reservation: THIS run created the row and never got a
-        // successful envelope — remove it via the canonical deleting
-        // transition carrying this clean attempt's complete owner tuple.
-        if (row && !['reserved', 'running'].includes(row.state)) {
+      const mapping = isStoreEngine
+        ? classifySessionStoreMapping(sessionV2.engine, sessionV2.slug, expectedRealId)
+        : { state: 'not_applicable', realId: null };
+      const removeUnpublished = async () => {
+        if (!['reserved', 'running'].includes(row.state)) {
           throw new Error(`unexpected row state ${row.state} during rollback`);
         }
-        if (row && !rowOwnedByRun(row, sessionV2)) {
+        if (!rowOwnedByRun(row, sessionV2)) {
           throw new Error('row owner tuple mismatch during rollback');
         }
         await transitions.beginCoderSessionDelete(sessionV2);
         await transitions.removeCoderSessionRow(sessionV2);
+      };
+      if (mode === 'complete') {
+        if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
+          throw new Error(`row is ${row ? row.state : 'absent'} / not owned by this run`);
+        }
+        if (!isStoreEngine) {
+          await transitions.markCoderSessionIdle(sessionV2);
+          return;
+        }
+        if (typeof publishedRealId !== 'string' || publishedRealId.length === 0) {
+          // A named run that produced no usable native session id can never
+          // be continued: do NOT publish an idle row that would make the
+          // next run silently start a fresh conversation.
+          process.stderr.write(pc.dim('  ⚠ v2 session had no resumable session id — removing the unusable persistent row\n'));
+          await removeUnpublished();
+          return;
+        }
+        if (mapping.state === 'matching') {
+          await transitions.markCoderSessionIdle(sessionV2);
+          return;
+        }
+        if (mapping.state === 'mismatch') {
+          throw new Error('session mapping changed during the run (retain, fail closed)');
+        }
+        // mapping absent: durable publication did not happen despite success.
+        process.stderr.write(pc.dim('  ⚠ v2 session mapping was not durably published — removing the unusable persistent row\n'));
+        await removeUnpublished();
         return;
       }
-      // Success OR failed continuation of a previously published session:
-      // running -> idle clears only this run's owner tuple. A published row
-      // is never deleted here.
+      // ── abandon (failure path) ──
+      const promoteThenIdle = async () => {
+        const { markCoderSessionRunning } = await import('../coder-session-transitions.js');
+        // A failure before pre-spawn revalidation leaves the row RESERVED;
+        // the canonical table has no reserved -> idle edge, so promote it to
+        // running under OUR tuple exactly like revalidate does, then idle.
+        await markCoderSessionRunning(sessionV2);
+        await transitions.markCoderSessionIdle(sessionV2);
+      };
+      if (sessionV2.origin === 'new_reservation') {
+        // Published BEFORE the failure? Then the persisted session survives:
+        // running -> idle keeps mapping and inventory consistent. Otherwise
+        // THIS run created the row and nothing durable references it —
+        // remove via the canonical deleting transition.
+        if (mapping.state === 'matching' && row && ['running', 'reserved'].includes(row.state) && rowOwnedByRun(row, sessionV2)) {
+          if (row.state === 'running') await transitions.markCoderSessionIdle(sessionV2);
+          else await promoteThenIdle();
+          return;
+        }
+        if (mapping.state === 'mismatch') {
+          throw new Error('session mapping changed during the run (retain, fail closed)');
+        }
+        await removeUnpublished();
+        return;
+      }
+      // Failed continuation: the previously published session SURVIVES the
+      // failure — but its mapping must still be durably present and equal
+      // the id captured at claim time, otherwise retain and fail closed.
       if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
         throw new Error(`row is ${row ? row.state : 'absent'} / not owned by this run`);
+      }
+      if (isStoreEngine && mapping.state !== 'matching') {
+        throw new Error(`session mapping ${mapping.state} during rollback (retain, fail closed)`);
       }
       await transitions.markCoderSessionIdle(sessionV2);
     });
@@ -5783,7 +5889,7 @@ async function finalizeV2SessionRow(sessionV2, mode) {
     process.stderr.write(pc.dim(`  ⚠ v2 session ${mode === 'complete' ? 'completion' : 'rollback'} retained row for recovery: ${err.message}\n`));
   } finally {
     try {
-      await sessionV2.releaseRunLease?.();
+      await sessionV2.runLease?.release();
     } catch {
       /* idempotent best-effort lease release */
     }
@@ -5791,13 +5897,16 @@ async function finalizeV2SessionRow(sessionV2, mode) {
 }
 
 // Exported for tests: success finalizer (running -> idle + lease release).
-export async function completeV2SessionRow(sessionV2) {
-  await finalizeV2SessionRow(sessionV2, 'complete');
+// publishedRealId is the engine session id whose mapping was durably
+// persisted before the envelope was emitted (undefined for engines without
+// a versioned store namespace).
+export async function completeV2SessionRow(sessionV2, publishedRealId) {
+  await finalizeV2SessionRow(sessionV2, 'complete', publishedRealId);
 }
 
-// Exported for tests: provenance-aware rollback of a claimed row.
+// Exported for tests: provenance/store-aware rollback of a claimed row.
 export async function releaseV2SessionRow(sessionV2) {
-  await finalizeV2SessionRow(sessionV2, 'abandon');
+  await finalizeV2SessionRow(sessionV2, 'abandon', undefined);
 }
 
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
@@ -6797,7 +6906,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
     writeStdout2(JSON.stringify(envelope2) + '\n');
-    await completeV2SessionRow(sessionV2);
+    // The mapping for this real id was durably persisted above (before the
+    // envelope); the finalizer verifies it before publishing idle.
+    await completeV2SessionRow(sessionV2, result2.sessionRealId);
     return;
     } catch (err) {
       await releaseV2SessionRow(sessionV2);
@@ -7122,7 +7233,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(JSON.stringify(envelope) + '\n');
-  await completeV2SessionRow(sessionV2);
+  await completeV2SessionRow(sessionV2, result.sessionRealId);
 }
 
 // ─── coder clean ─────────────────────────────────────────────────────────────
@@ -7229,28 +7340,44 @@ export async function runCoderSessionList(opts = {}, deps = {}) {
  * requires the engine flag (one canonical enum shared by CLI validation,
  * help, docs, and this implementation — opencode2 rows are first-class
  * persistent sessions and MUST be cleanable). Forms its own COMPLETE clean
- * owner tuple (run id, sandbox id, live PID + process-start + boot
- * identity), then under the admission leases atomically performs the
- * canonical idle -> deleting -> remove cycle, clearing the engine-owned
- * session-store mapping before the row disappears.
+ * owner tuple (run id, sandbox id, live PID + process-start + boot identity)
+ * and holds the normative clean lease — shared maintenance (whole cycle),
+ * conditional-target for non-isolated rows, the row's STORED assigned slot,
+ * brief exclusive inventory scopes.
+ *
+ * Ordering is crash-safe: the durable idle -> deleting transition publishes
+ * FIRST (the deleting row is the recovery breadcrumb), then the engine-owned
+ * store mapping is removed while the prefix stays held, and only after that
+ * a final brief inventory scope removes the row. A crash at any point leaves
+ * either an intact idle row or a deleting breadcrumb; a later clean takes
+ * the idempotent deleting-recovery path and always converges.
  */
 export async function runCoderSessionClean(slug, opts = {}) {
   if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
     throw new Error(`--engine <${CODER_SESSION_ENGINES.join('|')}> is required for session clean`);
   }
-  const { beginCoderSessionDelete, removeCoderSessionRow, listCoderSessions } =
+  const { beginCoderSessionDelete, removeCoderSessionRow } =
     await import('../coder-session-transitions.js');
   const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
   const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
-  const sessions = await listCoderSessions({ inventoryDir });
-  const row = sessions.find((s) => s.slug === slug);
-  if (!row) {
+  // Snapshot BEFORE any lock: existence/state/slot come from the atomic
+  // inventory read; everything below re-validates under the real locks.
+  const snapshot = await readCoderSessionInventory(inventoryDir);
+  if (snapshot.error) throw new Error(snapshot.error);
+  const snapRow = snapshot.entries.find((s) => s.slug === slug);
+  if (!snapRow) {
     process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
     return;
   }
-  if (row.state !== 'idle') {
-    throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
+  const recovering = snapRow.state === 'deleting';
+  if (!recovering && snapRow.state !== 'idle') {
+    throw new Error(`session ${slug} is not idle (state=${snapRow.state}); only inactive sessions can be cleaned`);
   }
+  if (recovering && typeof snapRow.deleting_basename === 'string'
+      && !snapRow.deleting_basename.startsWith(`.deleting-${opts.engine}-${slug}-`)) {
+    throw new Error(`session ${slug} carries a foreign deleting breadcrumb (${snapRow.deleting_basename}) — retain, fail closed`);
+  }
+
   // The clean action owns its complete owner tuple: the canonical deleting
   // row requires run id + sandbox id + positive PID + process-start identity
   // + boot identity, so a bare {inventoryDir, engine, slug} transition is
@@ -7259,34 +7386,58 @@ export async function runCoderSessionClean(slug, opts = {}) {
   const cleanRunId = `run_${randomBytes(16).toString('hex')}`;
   const cleanSandboxId = `sbx_${randomBytes(16).toString('hex')}`;
   const parentHandle = await openManagedTrissRoot(projectRoot());
-  let removedMapping = false;
-  await withCoderSessionAdmissionLocks({ parentHandle }, async () => {
-    // Re-read under the exclusive inventory lock: only an idle row may be
-    // cleaned, and the state observed above may have changed.
-    const fresh = await readCoderSessionInventory(inventoryDir);
-    if (fresh.error) throw new Error(fresh.error);
-    const freshRow = fresh.entries.find((e) => e.engine === opts.engine && e.slug === slug);
-    if (!freshRow) return;
-    if (freshRow.state !== 'idle') {
-      throw new Error(`session ${slug} is not idle (state=${freshRow.state}); only inactive sessions can be cleaned`);
+  const isolationMode = snapRow.isolation_mode === 'isolated' ? 'isolated' : 'non-isolated';
+
+  // Clean-cycle lease in normative order: maintenance HELD -> conditional
+  // target -> the STORED assigned slot -> brief inventory scopes. Holding the
+  // stored slot serializes against any live run/clean cycle on it.
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  let target = null;
+  let slotLease = null;
+  let removedMapping;
+  try {
+    target = isolationMode === 'non-isolated'
+      ? await acquireCoderTargetLease({ parentHandle })
+      : null;
+    try {
+      slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${snapRow.lock_slot}` });
+      // Brief inventory #1: re-validate and publish the DELETING breadcrumb.
+      await withCoderInventoryLock({ parentHandle }, async () => {
+        const fresh = await readCoderSessionInventory(inventoryDir);
+        if (fresh.error) throw new Error(fresh.error);
+        const freshRow = fresh.entries.find((e) => e.engine === opts.engine && e.slug === slug);
+        if (!freshRow) return;
+        if (freshRow.state === 'deleting') return; // recovery pass: breadcrumb already published
+        if (freshRow.state !== 'idle') {
+          throw new Error(`session ${slug} is not idle (state=${freshRow.state}); only inactive sessions can be cleaned`);
+        }
+        await beginCoderSessionDelete({
+          inventoryDir,
+          engine: opts.engine,
+          slug,
+          runId: cleanRunId,
+          sandboxId: cleanSandboxId,
+          ...ownerTuple,
+        });
+      });
+      // Inventory released; owner prefix STILL held: remove the engine-owned
+      // store artifact only after the deleting state is durably published.
+      removedMapping = removeSessionStoreMapping(opts.engine, slug);
+      // Brief inventory #2: the row goes away last.
+      await withCoderInventoryLock({ parentHandle }, async () => {
+        await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
+      });
+    } finally {
+      await slotLease.release();
     }
-    // Engine-owned session artifact first: the versioned store mapping.
-    removedMapping = removeSessionStoreMapping(opts.engine, slug);
-    await beginCoderSessionDelete({
-      inventoryDir,
-      engine: opts.engine,
-      slug,
-      runId: cleanRunId,
-      sandboxId: cleanSandboxId,
-      ...ownerTuple,
-    });
-    await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
-  });
+  } finally {
+    if (target) await target.release();
+    await maintenance.release();
+  }
   process.stderr.write(
     pc.dim(
       `  · removed v2 session ${slug} (engine ${opts.engine}` +
-        `${removedMapping ? ', store mapping cleared' : ''})\n`,
-    ),
+        `${removedMapping ? ', store mapping cleared' : ''}${recovering ? ', recovered from deleting' : ''})\n`),
   );
 }
 

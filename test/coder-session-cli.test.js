@@ -17,15 +17,19 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { reserveCoderSession, markCoderSessionRunning, markCoderSessionIdle } from '../src/coder-session-transitions.js';
+import { beginCoderSessionDelete, markCoderSessionRunning, markCoderSessionIdle, reserveCoderSession } from '../src/coder-session-transitions.js';
 import { processStartIdentity } from '../src/update/cache.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 import { writeResultState } from '../src/coder-result-registry-codec.js';
+import { acquireCoderTargetLease } from '../src/coder-lease.js';
+import { openManagedTrissRoot } from '../src/managed-root.js';
+import { acquireFixedKernelLock } from '../src/fixed-kernel-lock.js';
 import {
   completeV2SessionRow,
   currentBootIdentity,
   currentSessionOwnerTuple,
   releaseV2SessionRow,
+  removeSessionStoreMapping,
   reserveV2SessionRow,
   revalidateV2SessionRowBeforeSpawn,
   runCoderSessionClean,
@@ -109,9 +113,12 @@ test('production reservation publishes a complete current-process owner tuple', 
     const running = await readCoderSessionInventory(inventoryDir);
     assert.equal(running.entries[0].state, 'running');
     assert.equal(running.entries[0].pid, 321);
-    // Success finalizer: running -> idle AND the held slot lease is released
+    // Production ordering: the engine's real id is durably published BEFORE
+    // the envelope/completion; completion verifies it before going idle.
+    await writeStoreMapping(fx.base, 'opencode2', 'production-owner', 'ses_prod_real');
+    await completeV2SessionRow(session, 'ses_prod_real');
+    // Success finalizer: running -> idle AND the held run lease is released
     // (the next admission in this test must not block on our own marker).
-    await completeV2SessionRow(session);
     const completed = await readCoderSessionInventory(inventoryDir);
     assert.equal(completed.entries[0].state, 'idle');
     assert.equal(completed.entries[0].pid, null);
@@ -253,6 +260,24 @@ async function seedIdleRow(fx, engine, slug, { isolationMode = 'isolated', finge
   await markCoderSessionIdle({ inventoryDir: dir, engine, slug });
 }
 
+async function readStore(base) {
+  const { readFile } = await import('node:fs/promises');
+  try {
+    return JSON.parse(await readFile(join(base, '.triss', 'sessions.json'), 'utf8'));
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { version: 2, engines: {} };
+    throw err;
+  }
+}
+
+async function writeStoreMapping(base, engine, slug, realId) {
+  const store = await readStore(base);
+  store.engines = store.engines || {};
+  store.engines[engine] = store.engines[engine] || {};
+  store.engines[engine][slug] = realId;
+  await writeFile(join(base, '.triss', 'sessions.json'), JSON.stringify(store), { mode: 0o600 });
+}
+
 test('rollback of a NEW reservation removes the row this run created', async () => {
   const fx = await fixture();
   const originalRoot = process.env.TRISS_PROJECT_ROOT;
@@ -359,6 +384,8 @@ test('a same-mode continuation with matching ownership succeeds and rolls back t
   try {
     const fingerprint = await realProjectFingerprint(fx.base);
     await seedIdleRow(fx, 'opencode2', 'same-mode', { isolationMode: 'non_isolated', fingerprint });
+    // A continuation requires the durable published mapping.
+    await writeStoreMapping(fx.base, 'opencode2', 'same-mode', 'ses_resumed_real');
     const resumed = await reserveV2SessionRow({
       engine: 'opencode2',
       slug: 'same-mode',
@@ -366,6 +393,7 @@ test('a same-mode continuation with matching ownership succeeds and rolls back t
       ownerTuple: { pid: 91, processStartId: 'ps-resume', bootId: 'boot-resume' },
     });
     assert.equal(resumed.origin, 'idle_continuation');
+    assert.equal(resumed.resumedRealId, 'ses_resumed_real');
     await releaseV2SessionRow(resumed);
     const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
     const after = await readCoderSessionInventory(dir);
@@ -415,7 +443,8 @@ test('session clean removes an opencode2 row end-to-end and clears only its own 
       ownerTuple: { pid: 71, processStartId: 'ps-e2', bootId: 'boot-e2' },
     });
     await revalidateV2SessionRowBeforeSpawn(session);
-    await completeV2SessionRow(session);
+    await writeStoreMapping(fx.base, 'opencode2', 'e2clean', 'ses_v2realid');
+    await completeV2SessionRow(session, 'ses_v2realid');
     // Same slug in the NEIGHBORING engine plus a versioned-store mapping
     // for both engines: clean must touch ONLY its own engine.
     await seedSession(fx, 'opencode', 'e2clean');
@@ -536,6 +565,345 @@ test('two different slugs admitted concurrently both survive with distinct lock 
     assert.deepEqual(slugs, ['par-a', 'par-b']);
     const slots = new Set(inv.entries.map((e) => e.lock_slot));
     assert.equal(slots.size, 2, 'live rows must hold distinct slots');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Round 2: store-mapping-driven lifecycle ───────────────────────────────
+
+test('a failure AFTER the mapping was published keeps the session (row -> idle)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'pub-fail',
+      isolated: false,
+      ownerTuple: { pid: 61, processStartId: 'ps-pf', bootId: 'boot-pf' },
+    });
+    // The engine finished and persistSessionMapping already ran; THEN the
+    // envelope write throws. origin is still new_reservation, but the
+    // durable mapping makes this a PUBLISHED session.
+    await writeStoreMapping(fx.base, 'opencode2', 'pub-fail', 'ses_published');
+    await releaseV2SessionRow(session);
+    const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries.length, 1, 'the published session must NOT be deleted');
+    assert.equal(inv.entries[0].state, 'idle');
+    assert.equal(inv.entries[0].pid, null);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a successful run without a resumable real id removes the unusable row', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'no-real-id',
+      isolated: false,
+      ownerTuple: { pid: 62, processStartId: 'ps-nr', bootId: 'boot-nr' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    // Stream succeeded but NO event ever carried a sessionID: publishing
+    // idle would make the next run silently start a fresh conversation.
+    await completeV2SessionRow(session, null);
+    const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries.length, 0, 'an unusable persistent row must be removed');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('completion publishes idle only with the matching durable mapping', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'match-map',
+      isolated: false,
+      ownerTuple: { pid: 63, processStartId: 'ps-mm', bootId: 'boot-mm' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    await writeStoreMapping(fx.base, 'opencode2', 'match-map', 'ses_match');
+    await completeV2SessionRow(session, 'ses_match');
+    let inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries[0].state, 'idle');
+    assert.equal(inv.entries[0].pid, null);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a mismatched mapping on completion retains the row (fail closed)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'mis-map',
+      isolated: false,
+      ownerTuple: { pid: 64, processStartId: 'ps-x', bootId: 'boot-x' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    await writeStoreMapping(fx.base, 'opencode2', 'mis-map', 'ses_other');
+    await completeV2SessionRow(session, 'ses_expected');
+    const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries.length, 1, 'ambiguity retains the row');
+    assert.equal(inv.entries[0].state, 'running');
+    assert.equal(inv.entries[0].pid, 64);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a continuation WITHOUT a published mapping is rejected before any claim', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    await seedIdleRow(fx, 'opencode2', 'no-map', { isolationMode: 'non_isolated', fingerprint });
+    await assert.rejects(
+      () => reserveV2SessionRow({
+        engine: 'opencode2',
+        slug: 'no-map',
+        isolated: false,
+        ownerTuple: { pid: process.pid, processStartId: 'ps-c', bootId: 'boot-c' },
+      }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_INCOMPATIBLE' && /NO published session mapping/.test(err.message),
+    );
+    // The idle row is untouched by the rejected claim.
+    const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries[0].state, 'idle');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Round 2: crash-safe clean ordering + lease barriers ───────────────────
+
+test('clean recovers a deleting breadcrumb idempotently (mapping still present)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    await seedIdleRow(fx, 'opencode2', 'rec-a', { isolationMode: 'non_isolated', fingerprint });
+    await writeStoreMapping(fx.base, 'opencode2', 'rec-a', 'ses_rec');
+    // Simulate a crash AFTER idle -> deleting but BEFORE mapping removal.
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await beginCoderSessionDelete({
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'rec-a',
+      runId: 'run_crashtest1',
+      sandboxId: `sbx_${'d'.repeat(32)}`,
+      pid: 555,
+      processStartId: 'ps-crash',
+      bootId: 'boot-crash',
+    });
+    await runCoderSessionClean('rec-a', { engine: 'opencode2' });
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0, 'the recovery pass must converge to removal');
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['rec-a'], undefined, 'mapping cleared by recovery');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean recovers a deleting breadcrumb whose mapping is already gone', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    await seedIdleRow(fx, 'opencode2', 'rec-b', { isolationMode: 'non_isolated', fingerprint });
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await beginCoderSessionDelete({
+      inventoryDir: dir,
+      engine: 'opencode2',
+      slug: 'rec-b',
+      runId: 'run_crashtest2',
+      sandboxId: `sbx_${'e'.repeat(32)}`,
+      pid: 556,
+      processStartId: 'ps-crash',
+      bootId: 'boot-crash',
+    });
+    // Crash AFTER mapping removal, BEFORE row removal.
+    await removeSessionStoreMapping('opencode2', 'rec-b');
+    await runCoderSessionClean('rec-b', { engine: 'opencode2' });
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('cleaning a row frees real capacity for a new named reservation', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    for (const slug of ['cap-a', 'cap-b', 'cap-c']) {
+      await seedIdleRow(fx, 'opencode2', slug, { isolationMode: 'non_isolated', fingerprint });
+    }
+    // Fourth named run fits (capacity 4).
+    const fourth = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'cap-d',
+      isolated: false,
+      ownerTuple: { pid: 71, processStartId: 'ps-cap', bootId: 'boot-cap' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(fourth);
+    // Keep the fourth session PUBLISHED (mapping + idle): capacity stays full.
+    await writeStoreMapping(fx.base, 'opencode2', 'cap-d', 'ses_cap_d');
+    await completeV2SessionRow(fourth, 'ses_cap_d');
+    // Fifth distinct slug MUST hit the hard capacity cap while full.
+    await assert.rejects(
+      () => reserveV2SessionRow({
+        engine: 'opencode2',
+        slug: 'cap-e',
+        isolated: false,
+        ownerTuple: { pid: 72, processStartId: 'ps-cap2', bootId: 'boot-cap2' },
+      }),
+      /exceeds 4 entries|no free lock slot/,
+    );
+    // Cleaning ONE seeded row genuinely frees capacity for the next run.
+    await runCoderSessionClean('cap-a', { engine: 'opencode2' });
+    const fifth = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'cap-f',
+      isolated: false,
+      ownerTuple: { pid: 73, processStartId: 'ps-cap3', bootId: 'boot-cap3' },
+    });
+    assert.ok(fifth);
+    await fifth.releaseRunLease();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Round 2: lease hierarchy barriers ─────────────────────────────────────
+
+test('a non-isolated named run serializes on the conditional-target lease', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const heldTarget = await acquireCoderTargetLease({ parentHandle: root });
+    let settled = false;
+    const run = reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'tgt-barrier',
+      isolated: false, // NON-isolated: must take the target lease and block
+      ownerTuple: { pid: 91, processStartId: 'ps-t', bootId: 'boot-t' },
+    }).then((s) => { settled = true; return s; });
+    await new Promise((r) => setTimeout(r, 350));
+    assert.equal(settled, false, 'a second non-isolated cycle must wait on the target lease');
+    await heldTarget.release();
+    const session = await run;
+    assert.equal(settled, true);
+    await session.releaseRunLease();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('an exclusive maintenance holder blocks a new run without deadlock', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const root = await openManagedTrissRoot(fx.base);
+    const exclusiveMaintenance = await acquireFixedKernelLock({ parentHandle: root, basename: 'maintenance.lock', mode: 'exclusive' });
+    let settled = false;
+    const run = reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'maint-barrier',
+      isolated: false,
+      ownerTuple: { pid: 92, processStartId: 'ps-m', bootId: 'boot-m' },
+    }).then((s) => { settled = true; return s; });
+    await new Promise((r) => setTimeout(r, 350));
+    assert.equal(settled, false, 'shared maintenance must wait for an active exclusive holder');
+    await exclusiveMaintenance.release();
+    const session = await run;
+    assert.equal(settled, true);
+    await session.releaseRunLease();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('run + clean of the same slug: active run fails clean fast, published idle cleans fully', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'run-clean',
+      isolated: false,
+      ownerTuple: { pid: 93, processStartId: 'ps-rc', bootId: 'boot-rc' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session); // row running, run lease HELD
+    // While the live run owns the slug, clean MUST fail closed (never mutate
+    // a running row), and the row must survive untouched.
+    await assert.rejects(
+      () => runCoderSessionClean('run-clean', { engine: 'opencode2' }),
+      /not idle \(state=running\)/,
+    );
+    let inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries.length, 1);
+    assert.equal(inv.entries[0].state, 'running');
+    assert.equal(inv.entries[0].pid, 93);
+
+    // The run completes successfully (durable mapping first, then envelope):
+    // the row is published idle with its slot/target/maintenance released.
+    await writeStoreMapping(fx.base, 'opencode2', 'run-clean', 'ses_run_clean');
+    await completeV2SessionRow(session, 'ses_run_clean');
+    inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries[0].state, 'idle');
+
+    // NOW the same clean converges: deleting breadcrumb -> mapping cleared ->
+    // row removed.
+    await runCoderSessionClean('run-clean', { engine: 'opencode2' });
+    inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries.length, 0);
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['run-clean'], undefined);
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;
