@@ -1107,7 +1107,16 @@ export async function coderRunHandler(
   // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
   // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
-  const allowDowngrade = Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
+  // Both spellings are declared in the schema, so the two can disagree.
+  // This switch WEAKENS isolation, so FALSE is the safe side: any
+  // explicitly false spelling vetoes the downgrade, and an omitted one
+  // defers to the other. (Mirror image of protectCredentials below, whose
+  // safe side is TRUE and which therefore merges with OR.) The value
+  // forwarded to runCoderRun reuses this exact resolution so the sandbox
+  // check and the run can never disagree about the downgrade.
+  const allowDowngrade = allowBestEffortCamel === false || allowBestEffortSnake === false
+    ? false
+    : Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
   const resolvedEngine = resolveCoderEngine({ engine });
   const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
 
@@ -1135,7 +1144,7 @@ export async function coderRunHandler(
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
-      allowBestEffortCallerWorktree: allowBestEffortCamel ?? allowBestEffortSnake,
+      allowBestEffortCallerWorktree: allowDowngrade,
       // OR, not ??: if EITHER spelling asserts protection, protection is on —
       // a disagreement between the two forms (e.g. a schema-filling client
       // defaulting camel to false) must never resolve to the unsafe mode.
