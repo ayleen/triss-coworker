@@ -611,7 +611,7 @@ test(
   'lifecycle V2: mapping mismatch and owner mismatch retain the row and emit no envelope',
   withEnv(
     {
-      ZHIPU_API_KEY: 'zk-v2-mismatch',
+      ZHIPU_API_KEY: 'fixture-provider-value-v2',
       TRISS_USAGE_LOG: '0',
       TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
     },

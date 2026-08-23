@@ -32,7 +32,7 @@ import {
   markCoderSessionIdle,
   reserveCoderSession,
 } from '../src/coder-session-transitions.js';
-import { decodeCoderSessionInventory, encodeCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
+import { decodeCoderSessionInventory, encodeCoderSessionInventory, INVENTORY_BASENAME } from '../src/coder-session-inventory-codec.js';
 import { acquireCoderSlotLease } from '../src/coder-lease.js';
 import { openManagedTrissRoot } from '../src/managed-root.js';
 import {
@@ -88,6 +88,38 @@ test('missing store directories are simply absent, not errors', async () => {
     assert.equal(inventory.entries.length, 0);
   } finally {
     await fx.cleanup();
+  }
+});
+
+test('managed inventory traversal rejects engine and coder-state directory swaps before readdir', async () => {
+  for (const target of ['engine', 'coder-state']) {
+    const fx = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), `triss-backup-inventory-${target}-outside-`));
+    try {
+      const canary = join(outside, 'canary.txt');
+      await writeFile(canary, 'outside-only');
+      const targetPath = target === 'engine'
+        ? join(fx.trissRoot, 'engine-sessions-v2', 'opencode')
+        : join(fx.trissRoot, 'coder-state-v2');
+      let swapped = false;
+      await assert.rejects(
+        () => inventoryCoderV2State(fx.base, {
+          beforeReaddir: async (relative) => {
+            const expected = target === 'engine' ? 'engine-sessions-v2' : 'coder-state-v2';
+            if (relative !== expected || swapped) return;
+            swapped = true;
+            await rm(targetPath, { recursive: true, force: true });
+            await symlink(outside, targetPath);
+          },
+        }),
+        /managed source directory is not a real directory|identity changed|symlink rejected/,
+      );
+      assert.equal(swapped, true);
+      assert.equal(await readFile(canary, 'utf8'), 'outside-only');
+    } finally {
+      await fx.cleanup();
+      await rm(outside, { recursive: true, force: true });
+    }
   }
 });
 
@@ -524,6 +556,169 @@ test('a project identity swapped to an external symlink is rejected without read
   }
 });
 
+test('copy source parent swap fails before outside bytes are copied', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-backup-copy-outside-'));
+  try {
+    const sourceDir = join(fx.trissRoot, 'engine-sessions-v2', 'opencode');
+    const canary = join(outside, 'canary.txt');
+    await writeFile(canary, 'outside-only');
+    await writeFile(join(sourceDir, 'task-a.json'), '{"state":"inside"}');
+    let swapped = false;
+    let copyCalls = 0;
+    await assert.rejects(
+      () => backupCoderV2State({
+        projectRoot: fx.base,
+        backupDir: fx.backupDir,
+        projectId: 'a'.repeat(32),
+        copyFile: async () => { copyCalls += 1; },
+        beforeSourceRead: async (relative) => {
+          if (relative !== 'engine-sessions-v2/opencode/task-a.json' || swapped) return;
+          swapped = true;
+          await rm(sourceDir, { recursive: true, force: true });
+          await symlink(outside, sourceDir);
+        },
+      }),
+      /identity changed|managed source directory is not a real directory|managed source directory disappeared/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(copyCalls, 0);
+    assert.equal(await readFile(canary, 'utf8'), 'outside-only');
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('live-slot inventory lookup rejects an engine symlink before reading the outside canary', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-backup-live-slot-outside-'));
+  try {
+    const projectId = 'b'.repeat(32);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedDeletingRow(fx.base, projectRootFingerprint(projectId));
+    const sourceDir = join(fx.trissRoot, 'engine-sessions-v2', 'opencode');
+    await writeFile(join(outside, INVENTORY_BASENAME), 'outside-canary-bytes');
+    let swapped = false;
+    await assert.rejects(
+      () => backupCoderV2State({
+        projectRoot: fx.base,
+        backupDir: fx.backupDir,
+        projectId,
+        beforeSourceRead: async (relative) => {
+          if (relative !== `engine-sessions-v2/opencode/${INVENTORY_BASENAME}` || swapped) return;
+          swapped = true;
+          await rm(sourceDir, { recursive: true, force: true });
+          await symlink(outside, sourceDir);
+        },
+      }),
+      /managed source directory is not a real directory|identity changed|symlink rejected/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(await readFile(join(outside, INVENTORY_BASENAME), 'utf8'), 'outside-canary-bytes');
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('backup cleanup retries a one-shot slot release and still completes', async () => {
+  const fx = await fixture();
+  try {
+    const projectId = 'c'.repeat(32);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedDeletingRow(fx.base, projectRootFingerprint(projectId));
+    let slotReleases = 0;
+    let maintenanceReleases = 0;
+    const result = await backupCoderV2State({
+      projectRoot: fx.base,
+      backupDir: fx.backupDir,
+      projectId,
+      leaseDependencies: {
+        acquireMaintenance: async () => ({
+          release: async () => { maintenanceReleases += 1; },
+        }),
+        acquireSlot: async () => ({
+          release: async () => {
+            slotReleases += 1;
+            if (slotReleases === 1) throw new Error('one-shot slot release failure');
+          },
+        }),
+      },
+    });
+    assert.ok(result.completion.manifest_sha256);
+    assert.equal(slotReleases, 2);
+    assert.equal(maintenanceReleases, 1);
+    assert.equal((await validateCoderV2Backup(fx.backupDir)).valid, true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('permanent slot and maintenance release failures both get attempted and retain the primary error', async () => {
+  const fx = await fixture();
+  try {
+    const projectId = 'd'.repeat(32);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedDeletingRow(fx.base, projectRootFingerprint(projectId));
+    let slotReleases = 0;
+    let maintenanceReleases = 0;
+    await assert.rejects(
+      () => backupCoderV2State({
+        projectRoot: fx.base,
+        backupDir: fx.backupDir,
+        projectId,
+        copyFile: async () => { throw new Error('primary copy failure'); },
+        leaseDependencies: {
+          acquireMaintenance: async () => ({
+            release: async () => {
+              maintenanceReleases += 1;
+              throw new Error('maintenance release failure');
+            },
+          }),
+          acquireSlot: async () => ({
+            release: async () => {
+              slotReleases += 1;
+              throw new Error('slot release failure');
+            },
+          }),
+        },
+      }),
+      (err) => {
+        assert.ok(err instanceof AggregateError);
+        assert.match(err.message, /backup operation and cleanup failed/);
+        assert.equal(err.cause?.message, 'primary copy failure');
+        return true;
+      },
+    );
+    assert.equal(slotReleases, 2);
+    assert.equal(maintenanceReleases, 2);
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('an oversized top-level sessions.json stops the backup with no completion marker', async () => {
   const fx = await fixture();
   try {
@@ -606,7 +801,7 @@ test('persistent backup identity consistency rejects missing, foreign, fingerpri
   const cases = [
     {
       name: 'missing identity',
-      prepare: async (fx) => {},
+      prepare: async () => {},
       expected: /project identity missing while persistent rows exist/,
     },
     {
@@ -727,6 +922,20 @@ test('deleting rows keep identity ownership checks in source and validator', asy
   }
 });
 
+test('deleting-only source state still requires project identity before copy', async () => {
+  const fx = await fixture();
+  try {
+    await seedDeletingRow(fx.base, projectRootFingerprint('8'.repeat(32)));
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId: '8'.repeat(32) }),
+      /project identity missing while persistent rows exist/,
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('backup validation rejects a manifest project_id changed away from the copied identity', async () => {
   const fx = await fixture();
   try {
@@ -816,6 +1025,66 @@ test('physical state validation bounds nodes and relative paths', async () => {
     );
   } finally {
     await fx.cleanup();
+  }
+});
+
+test('physical walker treats file and directory caps independently at the boundary', async () => {
+  const fx = await fixture();
+  try {
+    const stateRoot = join(fx.backupDir, 'state');
+    await mkdir(join(stateRoot, 'nested'), { recursive: true });
+    await writeFile(join(stateRoot, 'nested', 'one.json'), '{}');
+    await writeFile(join(stateRoot, 'nested', 'two.json'), '{}');
+
+    // Exactly maxFiles files plus exactly maxDirectories descendants and
+    // their combined physical-node count is valid. Production no longer
+    // uses one maxNodes budget that would reject this boundary shape.
+    assert.deepEqual(
+      await listPhysicalStateFiles(fx.backupDir, {
+        maxFiles: 2,
+        maxDirectories: 1,
+        maxPhysicalNodes: 3,
+      }),
+      ['nested/one.json', 'nested/two.json'],
+    );
+    assert.ok(BACKUP_LIMITS.maxPhysicalNodes >= BACKUP_LIMITS.maxEntries);
+    await assert.rejects(
+      () => listPhysicalStateFiles(fx.backupDir, { maxFiles: 1, maxDirectories: 1, maxPhysicalNodes: 3 }),
+      /physical state files exceed 1 cap/,
+    );
+    await assert.rejects(
+      () => listPhysicalStateFiles(fx.backupDir, { maxFiles: 2, maxDirectories: 0, maxPhysicalNodes: 3 }),
+      /physical state directories exceed 0 cap/,
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('physical walker rejects a directory-to-symlink swap before descending', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-backup-outside-'));
+  try {
+    const stateRoot = join(fx.backupDir, 'state');
+    const child = join(stateRoot, 'nested');
+    await mkdir(child, { recursive: true });
+    await writeFile(join(outside, 'canary.txt'), 'outside');
+    let swapped = false;
+    await assert.rejects(
+      () => listPhysicalStateFiles(fx.backupDir, {
+        beforeDescend: async (relative) => {
+          if (relative !== 'nested' || swapped) return;
+          swapped = true;
+          await rm(child, { recursive: true, force: true });
+          await symlink(outside, child);
+        },
+      }),
+      /directory changed before descent|symlink|non-directory/,
+    );
+    assert.equal(await readFile(join(outside, 'canary.txt'), 'utf8'), 'outside');
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
   }
 });
 

@@ -706,6 +706,74 @@ test('a mismatched mapping on completion retains the row (fail closed)', async (
   }
 });
 
+test('completion surfaces an unresolved lease release and never authorizes a clean envelope', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'release-failure',
+      isolated: false,
+      ownerTuple: { pid: 66, processStartId: 'ps-release', bootId: 'boot-release' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    await writeStoreMapping(fx.base, 'opencode2', 'release-failure', 'ses_release');
+    const release = session.runLease.release;
+    session.runLease.release = async () => { throw new Error('injected lease release failure'); };
+    await assert.rejects(
+      () => completeV2SessionRow(session, 'ses_release'),
+      (err) => /run lease release failed/.test(err.message) && /injected lease release failure/.test(err.cause?.message),
+    );
+    const inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(inv.entries[0].state, 'idle');
+    session.runLease.release = release;
+    await release();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('completion retries a one-shot lease release failure and keeps persistent outcome', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'release-retry',
+      isolated: false,
+      ownerTuple: { pid: 67, processStartId: 'ps-release-retry', bootId: 'boot-release-retry' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    await writeStoreMapping(fx.base, 'opencode2', 'release-retry', 'ses_release_retry');
+    const release = session.runLease.release;
+    let attempts = 0;
+    session.runLease.release = async function oneShotRelease() {
+      attempts += 1;
+      if (attempts === 1) throw new Error('injected one-shot lease release failure');
+      return release.call(this);
+    };
+    assert.equal(await completeV2SessionRow(session, 'ses_release_retry'), 'persistent');
+    assert.equal(attempts, 2);
+    session.runLease.release = release;
+
+    const resumed = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'release-retry',
+      isolated: false,
+      ownerTuple: { pid: 68, processStartId: 'ps-release-retry-2', bootId: 'boot-release-retry-2' },
+    });
+    await resumed.releaseRunLease();
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
 test('a continuation WITHOUT a published mapping is rejected before any claim', async () => {
   const fx = await fixture();
   const originalRoot = process.env.TRISS_PROJECT_ROOT;

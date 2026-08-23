@@ -183,6 +183,52 @@ test('characterization: V1 pin surface is opencode-ai@1.18.7 (module constant; e
   assert.equal(OPENCODE_PIN, '1.18.7');
 });
 
+test(
+  'V1 lookup rollback always closes the credential proxy when lease release fails permanently',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'fixture-provider-value-v1',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      let proxy;
+      let releaseCalls = 0;
+      let closeProxy;
+      await assert.rejects(
+        () => runCoderRun('lookup rollback', { engine: 'opencode', session: 'lookup-fails' }, {
+          credentialModeParentEnv: {},
+          spawnSync: () => ({ status: 1, stdout: '', stderr: '' }),
+          startCredentialProxy: async () => {
+            proxy = {
+              closed: new Promise((resolve) => { closeProxy = resolve; }),
+              revoke: () => closeProxy(),
+            };
+            return proxy;
+          },
+          reserveSessionRow: async () => ({ finalizationAttempted: false }),
+          lookupSessionRealId: () => { throw new Error('lookup failed'); },
+          releaseSessionRow: async () => {
+            releaseCalls += 1;
+            throw new Error('permanent rollback release failure');
+          },
+        }),
+        /permanent rollback release failure/,
+      );
+      assert.equal(releaseCalls, 1);
+      assert.ok(proxy, 'the protected run must have started a parent-owned proxy');
+      assert.equal(
+        await Promise.race([
+          proxy.closed.then(() => true),
+          new Promise((resolve) => setTimeout(() => resolve(false), 250)),
+        ]),
+        true,
+        'proxy cleanup must complete before the rollback error returns',
+      );
+    },
+  ),
+);
+
 // ─── exact spawned command line + env allowlist (fake spawn seam) ───────────
 
 test(

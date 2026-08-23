@@ -48,6 +48,10 @@ test('openManagedTrissRoot creates .triss mode 0700 under the project root', asy
     assert.equal(root.path, join(fx.base, '.triss'));
     assert.ok(root.device);
     assert.ok(root.inode);
+    assert.equal(root.projectRoot.path, fx.base);
+    const projectStats = await (await import('node:fs/promises')).stat(fx.base);
+    assert.equal(root.projectRoot.device, projectStats.dev);
+    assert.equal(root.projectRoot.inode, projectStats.ino);
     const stats = await (await import('node:fs/promises')).stat(root.path);
     assert.equal(stats.mode & 0o777, 0o700);
   } finally {

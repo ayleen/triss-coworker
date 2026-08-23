@@ -24,9 +24,17 @@
  */
 
 import { randomBytes, createHash } from 'node:crypto';
-import { lstat, link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import {
+  managedFsync,
+  managedLink,
+  managedRevalidate,
+  managedUnlink,
+  openManagedChildDir,
+  openManagedTrissRoot,
+} from './managed-root.js';
 
 export const CODER_BRANCH_PREFIX = 'coder-v2/';
 export const CODER_RESULT_BRANCH_PREFIX = 'coder-result-v2/';
@@ -76,21 +84,6 @@ function isCanonicalIdentityDecimal(value) {
   return typeof value === 'string' && IDENTITY_DECIMAL_RE.test(value);
 }
 
-async function fsyncIdentityParent(path) {
-  let fd;
-  try {
-    fd = await open(path, O_RDONLY);
-    await fd.sync();
-  } catch (err) {
-    // Directory fsync is unsupported on some filesystems. The atomic link is
-    // still the publication boundary; preserve the managed-root convention of
-    // tolerating only the platform-specific unsupported errors.
-    if (!err || !['EINVAL', 'EISDIR', 'ENOTSUP', 'EPERM'].includes(err.code)) throw err;
-  } finally {
-    await fd?.close().catch(() => {});
-  }
-}
-
 /** Decode the canonical project identity record used by runtime and backups. */
 export function decodeProjectIdentityRecord(existing) {
   let record;
@@ -124,21 +117,46 @@ export function decodeProjectIdentityRecord(existing) {
 }
 
 export async function loadOrCreateProjectIdentity(
-  trissRootPath,
+  trissRootOrHandle,
   {
-    device,
-    inode,
     now = () => new Date().toISOString(),
     // Test-only seams keep the security boundary real: the default open uses
     // O_NOFOLLOW and all validation/read operations remain on that descriptor.
     fs: fsOverrides = {},
   } = {},
 ) {
+  const passedHandle = trissRootOrHandle && typeof trissRootOrHandle === 'object';
+  let trissHandle = passedHandle ? trissRootOrHandle : null;
+  if (!trissHandle) {
+    // Compatibility for pure callers that still provide a path: validate the
+    // project root and `.triss` through the managed-root primitive before any
+    // identity pathname is resolved. Production callers pass the handle
+    // directly and therefore do not repeat this discovery step.
+    const trissRootPath = resolve(String(trissRootOrHandle));
+    trissHandle = await openManagedTrissRoot(dirname(trissRootPath));
+    if (trissHandle.path !== trissRootPath) {
+      throw new Error('coder-state: identity path is not the managed project .triss root');
+    }
+  }
+  if (!trissHandle || typeof trissHandle.path !== 'string') {
+    throw new TypeError('coder-state: validated managed .triss handle is required');
+  }
+  const projectRootHandle = trissHandle.projectRoot;
+  if (!projectRootHandle || typeof projectRootHandle.path !== 'string') {
+    throw new TypeError('coder-state: pinned project-root handle is required');
+  }
+  const trissRootPath = trissHandle.path;
   const identityPath = join(trissRootPath, 'project-identity-v1.json');
   const openIdentity = fsOverrides.open || ((path, flags) => open(path, flags));
-  const linkIdentity = fsOverrides.link || link;
-  const removeIdentity = fsOverrides.rm || rm;
-  const syncParent = fsOverrides.fsyncParent || (() => fsyncIdentityParent(trissRootPath));
+  const linkIdentity = fsOverrides.link || ((from, to) =>
+    managedLink(trissHandle, basename(from), basename(to)));
+  const removeIdentity = fsOverrides.rm || ((path) =>
+    managedUnlink(trissHandle, basename(path)));
+  const syncParent = fsOverrides.fsyncParent || (() => managedFsync(trissHandle));
+  const revalidateParents = async () => {
+    await managedRevalidate(projectRootHandle);
+    await managedRevalidate(trissHandle);
+  };
   let lastError;
 
   for (let attempt = 0; attempt < IDENTITY_CREATE_ATTEMPTS; attempt += 1) {
@@ -149,8 +167,13 @@ export async function loadOrCreateProjectIdentity(
       // Invariant: open the pathname once with O_NOFOLLOW, then validate and
       // read the SAME descriptor. This removes the lstat -> open TOCTOU window
       // where a same-UID actor could replace the identity with a symlink.
+      await revalidateParents();
       const handle = await openIdentity(identityPath, O_RDONLY | O_NOFOLLOW);
       try {
+        // A test/hostile caller may swap `.triss` while the pathname open is
+        // in flight. Do not read the descriptor until the managed parents
+        // still identify the validated tree.
+        await revalidateParents();
         const st = await handle.stat();
         if (!st.isFile()) {
           const e = new Error('coder-state: project identity is not a regular file (no-follow, fail closed)');
@@ -170,6 +193,10 @@ export async function loadOrCreateProjectIdentity(
           throw e;
         }
         existing = buf.subarray(0, total).toString('utf8');
+        // The descriptor pins the identity bytes, but the pathname parents
+        // still anchor which project those bytes belong to. Revalidate after
+        // the bounded read and before decoding/returning the record.
+        await revalidateParents();
       } finally {
         await handle.close();
       }
@@ -198,21 +225,11 @@ export async function loadOrCreateProjectIdentity(
 
     // ── Publish path: exclusive fsynced temp -> link() (atomic no-clobber). ──
     const projectId = randomBytes(16).toString('hex');
-    let creationDevice = device;
-    let creationInode = inode;
-    if (creationDevice === undefined || creationInode === undefined) {
-      const rootStats = await lstat(trissRootPath);
-      if (!rootStats.isDirectory()) {
-        throw new Error('coder-state: identity parent is not a regular directory (fail closed)');
-      }
-      if (creationDevice === undefined) creationDevice = rootStats.dev;
-      if (creationInode === undefined) creationInode = rootStats.ino;
-    }
     const record = {
       schema_version: 1,
       project_id: projectId,
-      creation_device: String(creationDevice),
-      creation_inode: String(creationInode),
+      creation_device: String(projectRootHandle.device),
+      creation_inode: String(projectRootHandle.inode),
       created_at: now(),
     };
     if (!isCanonicalIdentityDecimal(record.creation_device)
@@ -227,6 +244,9 @@ export async function loadOrCreateProjectIdentity(
     const tmpPath = join(trissRootPath, `.project-identity-v1.tmp.${randomBytes(8).toString('hex')}`);
     let tmpFd;
     try {
+      await revalidateParents();
+      await fsOverrides.beforeTemp?.(tmpPath);
+      await revalidateParents();
       tmpFd = await open(tmpPath, 'wx', 0o600);
       await tmpFd.writeFile(text, 'utf8');
       await tmpFd.sync();
@@ -237,7 +257,11 @@ export async function loadOrCreateProjectIdentity(
       // Atomic first-writer-wins publication: link() NEVER clobbers an
       // existing name, so a racing loser gets EEXIST here and re-reads the
       // winner's complete bytes on the next attempt — never an empty file.
+      await revalidateParents();
+      await fsOverrides.beforeLink?.(tmpPath, identityPath);
+      await revalidateParents();
       await linkIdentity(tmpPath, identityPath);
+      await revalidateParents();
     } catch (err) {
       await removeIdentity(tmpPath, { force: true }).catch(() => {});
       if (err && err.code === 'EEXIST') {
@@ -249,7 +273,10 @@ export async function loadOrCreateProjectIdentity(
       throw err;
     }
     try {
+      await revalidateParents();
+      await fsOverrides.beforeFsync?.(trissRootPath);
       await syncParent();
+      await revalidateParents();
     } finally {
       // The temporary hard link is not the published pathname; remove it even
       // when the parent-directory durability check fails.
@@ -442,6 +469,7 @@ export function relocateCoderState({ identity, expectedDevice, newDevice, newIno
  */
 export async function adoptOrQuarantineCoderState({
   trissRootPath,
+  parentHandle,
   oldProjectId,
   newProjectId,
   runId = randomBytes(8).toString('hex'),
@@ -453,9 +481,10 @@ export async function adoptOrQuarantineCoderState({
   if (oldProjectId === newProjectId) {
     throw new Error('coder-state: adopt requires a different project id');
   }
-  const quarantineDir = join(trissRootPath, 'quarantine-v1', `${oldProjectId}-${runId}`);
-  await mkdir(join(trissRootPath, 'quarantine-v1'), { mode: 0o700, recursive: true });
-  await mkdir(quarantineDir, { mode: 0o700 });
+  const managedParent = parentHandle || await openManagedTrissRoot(dirname(resolve(trissRootPath)));
+  const quarantineRootHandle = await openManagedChildDir(managedParent, 'quarantine-v1');
+  const quarantineDirHandle = await openManagedChildDir(quarantineRootHandle, `${oldProjectId}-${runId}`);
+  const quarantineDir = quarantineDirHandle.path;
   // Exact adopt journal inside the quarantine dir (crash-recovery record).
   const journal = {
     schema_version: 1,

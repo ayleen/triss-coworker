@@ -107,12 +107,8 @@ function pidAlive(pid) {
 // is O_NOFOLLOW, so the fd can never be a symlink target).
 async function readMarkerViaFd(fd) {
   const buf = Buffer.alloc(256);
-  try {
-    const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
-    return buf.toString('utf8', 0, bytesRead);
-  } catch {
-    return '';
-  }
+  const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+  return buf.toString('utf8', 0, bytesRead);
 }
 
 function parseMarker(content) {
@@ -123,8 +119,8 @@ function parseMarker(content) {
 
 // True iff the pinned inode's marker is genuinely held (same-process by
 // registry, cross-process by PID liveness).
-async function markerHeldViaFd(fd) {
-  const marker = parseMarker(await readMarkerViaFd(fd));
+async function markerHeldViaFd(fd, readMarker) {
+  const marker = parseMarker(await readMarker(fd));
   if (!marker) return false;
   const sameProcess = marker.pid === process.pid;
   return sameProcess ? activeMarkerNonces.has(marker.nonce) : pidAlive(marker.pid);
@@ -137,8 +133,8 @@ async function markerHeldViaFd(fd) {
 // marker mutex while it polls, or same-process holders could never reach
 // their own release/next-acquisition (cross-lock deadlock).
 // Returns the written nonce, or null when the marker is still held.
-async function tryAcquireExclusiveMarker(fd) {
-  if (await markerHeldViaFd(fd)) return null;
+async function tryAcquireExclusiveMarker(fd, readMarker) {
+  if (await markerHeldViaFd(fd, readMarker)) return null;
   const nonce = randomBytes(8).toString('hex');
   await fd.truncate(0);
   await fd.write(`pid=${process.pid};ts=${Date.now()};r=${nonce}`, 'utf8');
@@ -180,13 +176,23 @@ async function pinLockFileFd(fd, lockPath) {
  * @param {string} opts.basename fixed lock basename (safe segment)
  * @param {'shared'|'exclusive'} opts.mode
  * @param {AbortSignal} [opts.signal] acquisition abort
+ * @param {(fd: import('node:fs/promises').FileHandle) => Promise<void>} [opts.closeFd]
+ * @param {(fd: import('node:fs/promises').FileHandle) => Promise<string>} [opts.readMarker]
  * @returns {Promise<{release: () => Promise<void>}>}
  */
-export async function acquireFixedKernelLock({ parentHandle, basename, mode, signal }) {
+export async function acquireFixedKernelLock({ parentHandle, basename, mode, signal, closeFd, readMarker }) {
   validateMode(mode);
   if (!parentHandle || typeof parentHandle.path !== 'string') {
     throw new TypeError('fixed-kernel-lock: parentHandle is required');
   }
+  if (closeFd !== undefined && typeof closeFd !== 'function') {
+    throw new TypeError('fixed-kernel-lock: closeFd must be a function');
+  }
+  if (readMarker !== undefined && typeof readMarker !== 'function') {
+    throw new TypeError('fixed-kernel-lock: readMarker must be a function');
+  }
+  const closeDescriptor = closeFd || ((descriptor) => descriptor.close());
+  const readMarkerFn = readMarker || readMarkerViaFd;
   const lockPath = await managedTouchPath(parentHandle, basename);
   if (signal?.aborted) {
     throw new Error('fixed-kernel-lock: acquisition aborted');
@@ -219,7 +225,7 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
         const nonce = await withMarkerMutex(async () => {
           // In-process readers/writers exclude us before anything cross-process.
           if (state.writer !== null || state.readers.size > 0) return null;
-          const written = await tryAcquireExclusiveMarker(fd);
+          const written = await tryAcquireExclusiveMarker(fd, readMarkerFn);
           if (written === null) return null;
           state.writer = written;
           return written;
@@ -234,7 +240,7 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
         // exclusive marker — otherwise shared and exclusive could overlap.
         const readerNonce = await withMarkerMutex(async () => {
           if (state.writer !== null) return null;
-          if (await markerHeldViaFd(fd)) return null;
+          if (await markerHeldViaFd(fd, readMarkerFn)) return null;
           const nonce = `r_${randomBytes(8).toString('hex')}`;
           state.readers.add(nonce);
           return nonce;
@@ -251,36 +257,49 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
     throw err;
   }
 
-  let released = false;
+  let markerReleased = false;
+  let fdClosed = false;
+  let releasePromise = null;
+  const releaseMarker = async () => {
+    if (markerReleased) return;
+    await withMarkerMutex(async () => {
+      if (markerReleased) return;
+      if (ownToken.kind === 'writer') {
+        // Clear the marker (unlock) but keep the fixed inode; only clear if
+        // the marker is still ours. Read through the SAME pinned fd. A failed
+        // truncate/sync deliberately leaves the writer state live so a later
+        // release attempt can retry without double-unlocking.
+        const marker = parseMarker(await readMarkerFn(fd));
+        if (marker && activeMarkerNonces.has(marker.nonce)) {
+          await fd.truncate(0);
+          await fd.sync();
+        }
+        activeMarkerNonces.delete(ownToken.nonce);
+        state.writer = null;
+      } else {
+        state.readers.delete(ownToken.nonce);
+      }
+      markerReleased = true;
+      notifyStateChange(state);
+    });
+  };
   return {
     async release() {
-      if (released) return;
-      released = true;
-      await withMarkerMutex(async () => {
-        if (ownToken.kind === 'writer') {
-          // Clear the marker (unlock) but keep the fixed inode; only clear if
-          // the marker is still ours. Read through the SAME pinned fd.
-          try {
-            const marker = parseMarker(await readMarkerViaFd(fd));
-            if (marker && activeMarkerNonces.has(marker.nonce)) {
-              await fd.truncate(0);
-              await fd.sync();
-            }
-          } catch {
-            // Marker already gone — idempotent release.
-          } finally {
-            activeMarkerNonces.delete(ownToken.nonce);
-            state.writer = null;
+      if (!releasePromise) {
+        releasePromise = (async () => {
+          await releaseMarker();
+          if (!fdClosed) {
+            // Close exactly this open file description. The inode is never
+            // unlinked (fixed-inode reuse). A close failure remains retryable.
+            await closeDescriptor(fd);
+            fdClosed = true;
           }
-        } else {
-          state.readers.delete(ownToken.nonce);
-        }
-        // Wake every waiter (they re-check the RW state under the mutex).
-        notifyStateChange(state);
-      });
-      // Close exactly this open file description. The inode is never
-      // unlinked (fixed-inode reuse).
-      await fd.close();
+        })().catch((err) => {
+          releasePromise = null;
+          throw err;
+        });
+      }
+      return releasePromise;
     },
   };
 }

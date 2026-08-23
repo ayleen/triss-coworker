@@ -104,7 +104,7 @@ import {
 } from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
-import { openManagedTrissRoot } from '../managed-root.js';
+import { openManagedChildDir, openManagedTrissRoot } from '../managed-root.js';
 import {
   acquireCoderMaintenanceLock,
   acquireCoderSessionRunLease,
@@ -5555,12 +5555,12 @@ function storeInvalidError(detail) {
 
 // Two FIRST-EVER runs in one project may race the identity file creation
 // (exclusive create); the loser re-opens what the winner wrote — same id.
-async function loadProjectIdentityWithRaceRetry(trissRoot, attempts = 3) {
+async function loadProjectIdentityWithRaceRetry(trissHandle, attempts = 3) {
   const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await loadOrCreateProjectIdentity(trissRoot);
+      return await loadOrCreateProjectIdentity(trissHandle);
     } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
       lastError = err;
@@ -5621,21 +5621,17 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
   const {
     reserveCoderSession,
     markCoderSessionRunning,
-    sessionInventoryPath,
   } = transitions;
   const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
   const { projectRootFingerprint } = await import('../coder-state.js');
-  const { mkdir } = await import('node:fs/promises');
-  const trissRoot = join(projectRoot(), '.triss');
-  const inventoryDir = sessionInventoryPath(trissRoot, engine);
-  await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
-  const identity = await loadProjectIdentityWithRaceRetry(trissRoot);
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryHandle = await openManagedChildDir(parentHandle, 'engine-sessions-v2', engine);
+  const inventoryDir = inventoryHandle.path;
+  const identity = await loadProjectIdentityWithRaceRetry(parentHandle);
   const fingerprint = projectRootFingerprint(identity.project_id);
   const runId = `run_${randomBytes(16).toString('hex')}`;
   const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
   const requestedIsolationMode = isolated ? 'isolated' : 'non_isolated';
-  const parentHandle = await openManagedTrissRoot(projectRoot());
-
   // Production admission runs under the RUN LEASE: ONE shared maintenance
   // scope covering the whole cycle, conditional-target lease for
   // non-isolated runs, assigned slot lease, and brief exclusive inventory
@@ -5845,6 +5841,7 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
   // a fail-closed completion has already released that lease.
   sessionV2.finalizationAttempted = true;
   let outcome;
+  let releaseError;
   try {
     const transitions = await import('../coder-session-transitions.js');
     const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
@@ -5978,13 +5975,40 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
     process.stderr.write(pc.dim(`  ⚠ v2 session ${mode === 'complete' ? 'completion' : 'rollback'} retained row for recovery: ${err.message}\n`));
     outcome = 'retained_for_recovery';
   } finally {
-    try {
-      // Idempotent by contract: the confirmed-persistent success path has
-      // already released the prefix; every other path releases it here.
-      await sessionV2.runLease?.release();
-    } catch {
-      /* idempotent best-effort lease release */
+    const release = sessionV2.runLease?.release;
+    if (typeof release === 'function') {
+      // A run lease retries its unresolved components itself. One immediate
+      // retry here closes a one-shot descriptor/lock failure before deciding
+      // that the completion must fail closed.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await release.call(sessionV2.runLease);
+          releaseError = undefined;
+          break;
+        } catch (err) {
+          releaseError = err;
+          if (attempt === 0) {
+            process.stderr.write(pc.dim(`  ⚠ v2 session lease release failed; retrying: ${err.message}\n`));
+          }
+        }
+      }
+      if (releaseError) {
+        // An unresolved exclusion lifecycle is never a clean success. Keep
+        // the row fail-closed and make the completion outcome non-persistent.
+        process.stderr.write(pc.dim(`  ⚠ v2 session lease release incomplete: ${releaseError.message}\n`));
+        outcome = 'retained_for_recovery';
+      }
     }
+  }
+  if (releaseError) {
+    // Do not collapse an unresolved exclusion-lifecycle failure into the
+    // ordinary typed recovery outcome: callers must observe the release
+    // error itself, while the retained outcome still prevents any envelope.
+    const error = new Error('coder-session: run lease release failed; row retained for recovery', {
+      cause: releaseError,
+    });
+    error.code = 'TRISS_CODER_SESSION_RELEASE_FAILED';
+    throw error;
   }
   return outcome;
 }
@@ -6038,6 +6062,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // that deliberately create a real detached group through a custom spawn
   // must also inject the matching killProcess seam explicitly.
   const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
+  const releaseSessionRow = deps.releaseSessionRow || releaseV2SessionRow;
+  const reserveSessionRow = deps.reserveSessionRow || reserveV2SessionRow;
+  const lookupSession = deps.lookupSessionRealId || lookupSessionRealId;
+  const startCredentialProxy = deps.startCredentialProxy || startCoderCredentialProxy;
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
@@ -6412,7 +6440,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const proxyRequired = engine === 'crush' || protectedRouting;
   if (proxyRequired && !deps.disableCredentialProxy && proxyTarget) {
     try {
-      credentialProxy = await startCoderCredentialProxy({
+      credentialProxy = await startCredentialProxy({
         provider: cred.provider || cred.env,
         model: protectedRouting ? transientModelName(runtimeRoute) : modelUsed,
         smallModel: protectedRouting && engine !== 'opencode2' && !separateSmallTransport
@@ -6436,7 +6464,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // route; both proxies intentionally share the one-run token because
       // the child has one credential environment variable.
       if (separateSmallTransport) {
-        smallCredentialProxy = await startCoderCredentialProxy({
+        smallCredentialProxy = await startCredentialProxy({
           provider: cred.provider || cred.env,
           model: transientModelName(runtimeSmallRoute),
           models: [runtimeSmallRoute.modelId],
@@ -6541,7 +6569,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // session returns to idle so the persisted session survives the failure.
   let sessionV2;
   try {
-    sessionV2 = await reserveV2SessionRow({
+    sessionV2 = await reserveSessionRow({
       engine,
       slug: opts.session || null,
       isolated: !!isolation,
@@ -6581,7 +6609,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialMode,
       });
     } catch (err) {
-      if (!sessionV2?.finalizationAttempted) await releaseV2SessionRow(sessionV2);
+      if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
       throw err;
     } finally {
       await releaseCredentialProxy();
@@ -6598,17 +6626,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // setupIsolation but was never wrapped in the cleanup guard, so
   // `coder run --isolate --session foo` with a corrupted sessions.json
   // stranded a worktree+branch that blocked re-runs until `coder clean`.
-  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSessionRealId(engineName, opts.session) : null);
+  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSession(engineName, opts.session) : null);
   let sessionRealIdV1 = null;
   if (engine !== 'opencode2' && opts.session) {
     try {
-      sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
+      sessionRealIdV1 = lookupSession(engine, opts.session);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       // The claimed v2 row must not outlive a failed lookup — otherwise a
       // corrupted sessions.json would strand a reserved/running row forever.
-      await releaseV2SessionRow(sessionV2);
-      await releaseCredentialProxy();
+      try {
+        await releaseSessionRow(sessionV2);
+      } finally {
+        await releaseCredentialProxy();
+      }
       throw err;
     }
   }
@@ -7044,7 +7075,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     writeStdout2(JSON.stringify(envelope2) + '\n');
     return { completionOutcome };
     } catch (err) {
-      if (!sessionV2?.finalizationAttempted) await releaseV2SessionRow(sessionV2);
+      if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
       throw err;
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
@@ -7157,7 +7188,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
-    await releaseV2SessionRow(sessionV2);
+    await releaseSessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
     if (isolation && isolation.freshlyCreated) {
@@ -7482,7 +7513,12 @@ export async function runCoderSessionList(opts = {}, deps = {}) {
     throw new Error(`--engine must be one of: ${CODER_SESSION_ENGINES.join(', ')}`);
   }
   const { listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine || 'opencode');
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine || 'opencode',
+  )).path;
   const sessions = await listCoderSessions({ inventoryDir });
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
@@ -7512,7 +7548,12 @@ export async function runCoderSessionClean(slug, opts = {}) {
   const { beginCoderSessionDelete, removeCoderSessionRow } =
     await import('../coder-session-transitions.js');
   const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine,
+  )).path;
   // The clean action owns its complete owner tuple: the canonical deleting
   // row requires run id + sandbox id + positive PID + process-start identity
   // + boot identity, so a bare {inventoryDir, engine, slug} transition is
@@ -7520,8 +7561,6 @@ export async function runCoderSessionClean(slug, opts = {}) {
   const ownerTuple = currentSessionOwnerTuple();
   const cleanRunId = `run_${randomBytes(16).toString('hex')}`;
   const cleanSandboxId = `sbx_${randomBytes(16).toString('hex')}`;
-  const parentHandle = await openManagedTrissRoot(projectRoot());
-
   // ONE shared maintenance scope covers DISCOVERY through COMPLETION. Taking
   // it BEFORE the first snapshot means no exclusive-maintenance writer
   // (backup transaction) can interleave, and every later observation below
@@ -7659,13 +7698,14 @@ export async function runCoderStateAdopt(opts = {}) {
   if (!opts.fromProjectId || !/^[0-9a-f]{32}$/.test(opts.fromProjectId)) {
     throw new Error('--from-project-id <32hex> is required for state adopt');
   }
-  const trissRoot = join(projectRoot(), '.triss');
-  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const identity = await loadOrCreateProjectIdentity(parentHandle);
   if (identity.project_id === opts.fromProjectId) {
     throw new Error('adopt requires a DIFFERENT newly generated project id');
   }
   const result = await adoptOrQuarantineCoderState({
-    trissRootPath: trissRoot,
+    trissRootPath: parentHandle.path,
+    parentHandle,
     oldProjectId: opts.fromProjectId,
     newProjectId: identity.project_id,
   });
@@ -7685,18 +7725,19 @@ export async function runCoderStateReset(opts = {}) {
   const { resolve: resolvePath } = await import('node:path');
   const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
   const { randomBytes } = await import('node:crypto');
-  const { mkdir, readdir, rename, rm } = await import('node:fs/promises');
+  const { readdir, rename, rm } = await import('node:fs/promises');
   // --project names the target tree: resetting repo-B from repo-A's cwd must
   // never quarantine repo-A's state. Resolve the EXPLICIT path, not cwd.
-  const trissRoot = join(resolvePath(opts.project), '.triss');
+  const parentHandle = await openManagedTrissRoot(resolvePath(opts.project));
+  const trissRoot = parentHandle.path;
   // A fresh identity is created only after the old one is quarantined;
   // the identity itself is never deleted.
-  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  const identity = await loadOrCreateProjectIdentity(parentHandle);
 
   // Invariant: actually quarantine ALL validated v2 state — every session and
   // result state directory is MOVED (recoverable) under the quarantine
   // root, not merely reported. The identity file itself is never deleted.
-  const quarantineRoot = join(trissRoot, 'quarantine-v1');
+  const quarantineRootHandle = await openManagedChildDir(parentHandle, 'quarantine-v1');
   const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
   let quarantined = 0;
   const stateRoots = ['coder-state-v2', 'engine-sessions-v2', 'coder-results-v1'];
@@ -7708,10 +7749,11 @@ export async function runCoderStateReset(opts = {}) {
     } catch {
       continue; // root absent: nothing to quarantine
     }
+    let batchHandle;
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
-      const dst = join(quarantineRoot, `${root}-${stamp}`, ent.name);
-      await mkdir(join(quarantineRoot, `${root}-${stamp}`), { mode: 0o700, recursive: true });
+      batchHandle ||= await openManagedChildDir(quarantineRootHandle, `${root}-${stamp}`);
+      const dst = join(batchHandle.path, ent.name);
       try {
         await rename(join(src, ent.name), dst);
         quarantined += 1;
@@ -7730,9 +7772,9 @@ export async function runCoderStateReset(opts = {}) {
   // Quarantine the old project-identity-v1.json and create a fresh identity
   const identityFile = join(trissRoot, 'project-identity-v1.json');
   try {
-    await mkdir(join(quarantineRoot, `identity-${stamp}`), { mode: 0o700, recursive: true });
-    await rename(identityFile, join(quarantineRoot, `identity-${stamp}`, 'project-identity-v1.json'));
-    await loadOrCreateProjectIdentity(trissRoot);
+    const identityQuarantine = await openManagedChildDir(quarantineRootHandle, `identity-${stamp}`);
+    await rename(identityFile, join(identityQuarantine.path, 'project-identity-v1.json'));
+    await loadOrCreateProjectIdentity(parentHandle);
   } catch (err) {
     if (err && err.code !== 'ENOENT') throw err;
   }

@@ -261,6 +261,72 @@ function makeRunLeaseContext(isolationMode, lockSlot) {
   return prefixContext;
 }
 
+const RUN_LEASE_RELEASE_ATTEMPTS = 2;
+
+/**
+ * Retryable reverse-order release controller shared by admission cleanup and
+ * the returned run lease. `getComponents` is evaluated for every attempt so
+ * acquisition abort paths can release the handles they acquired so far while
+ * later retry iterations install fresh slot/target handles.
+ */
+function makeRunLeaseReleaseController(getComponents, label = 'coder-lease: run lease') {
+  const releasedHandles = new Set();
+  let releasePromise = null;
+
+  const release = ({ attempts = 1, only, cause } = {}) => {
+    if (!Number.isInteger(attempts) || attempts < 1) {
+      throw new TypeError('coder-lease: release attempts must be a positive integer');
+    }
+    const selected = only ? new Set(only) : null;
+    if (selected && selected.size === 0) return Promise.resolve();
+    if (releasePromise) return releasePromise;
+
+    const run = async () => {
+      const failures = [];
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const pending = getComponents().filter(({ name, handle }) =>
+          handle && (!selected || selected.has(name)) && !releasedHandles.has(handle));
+        if (pending.length === 0) return;
+        for (const { name, handle } of pending) {
+          try {
+            await handle.release();
+            releasedHandles.add(handle);
+          } catch (err) {
+            failures.push({ name, error: err });
+          }
+        }
+      }
+
+      const unresolved = getComponents().filter(({ name, handle }) =>
+        handle && (!selected || selected.has(name)) && !releasedHandles.has(handle));
+      if (unresolved.length === 0) return;
+      const errors = failures.map(({ error }) => error);
+      const aggregate = new AggregateError(
+        errors,
+        `${label} release incomplete`,
+        cause === undefined ? undefined : { cause },
+      );
+      aggregate.components = failures.map(({ name, error }) => ({ name, error }));
+      throw aggregate;
+    };
+
+    const partial = Boolean(selected);
+    releasePromise = run().then(
+      (result) => {
+        if (partial) releasePromise = null;
+        return result;
+      },
+      (err) => {
+        releasePromise = null;
+        throw err;
+      },
+    );
+    return releasePromise;
+  };
+
+  return { release };
+}
+
 /**
  * Opaque session RUN lease: ONE shared maintenance scope covering the WHOLE
  * run cycle (admission -> spawn -> finalization), plus the normative
@@ -275,27 +341,28 @@ function makeRunLeaseContext(isolationMode, lockSlot) {
  */
 function createRunLease({ parentHandle, maintenance, target, slotLease, lockSlot, isolationMode, admission }) {
   const prefixContext = makeRunLeaseContext(isolationMode, lockSlot);
-  let released = false;
+  let releaseStarted = false;
+  const releaseController = makeRunLeaseReleaseController(() => [
+    { name: 'slot', handle: slotLease },
+    { name: 'target', handle: target },
+    { name: 'maintenance', handle: maintenance },
+  ]);
   return {
     lockSlot,
     admission,
     prefixContext,
     async withInventory(callback) {
-      if (released) throw new Error('coder-lease: run lease already released');
+      if (releaseStarted) throw new Error('coder-lease: run lease already released');
       return withCoderSessionOwnerInventory({ parentHandle, prefixContext }, callback);
     },
     async release() {
-      // Idempotent BY CONTRACT: the success path releases the prefix inside
-      // finalizeCoderSessionRow (immediately after the confirmed inventory
-      // transition), while the caller's finally releases it again for every
-      // other path. The second call is a no-op, never an error.
-      if (released) return;
-      released = true;
+      // Idempotent and retryable: concurrent callers share one attempt; a
+      // failed component is retried later while already-released components
+      // are never released twice. Every lower lease is attempted even when a
+      // higher one fails, preserving reverse hierarchy order.
+      releaseStarted = true;
       prefixContext.active = false;
-      // Strict reverse order of acquisition: slot -> target -> maintenance.
-      await slotLease.release();
-      if (target) await target.release();
-      await maintenance.release();
+      return releaseController.release();
     },
   };
 }
@@ -318,36 +385,66 @@ const RUN_LEASE_RETRIES = 8;
  * Resolves an opaque run lease ({lockSlot, admission, withInventory, release}).
  * The caller MUST call release() exactly once when the run cycle ends.
  */
-export async function acquireCoderSessionRunLease({ parentHandle, isolationMode, selectLockSlot, classifyAndWrite }) {
+export async function acquireCoderSessionRunLease({
+  parentHandle,
+  isolationMode,
+  selectLockSlot,
+  classifyAndWrite,
+  dependencies = {},
+}) {
   if (typeof selectLockSlot !== 'function') throw new TypeError('coder-lease: selectLockSlot is required');
   if (typeof classifyAndWrite !== 'function') throw new TypeError('coder-lease: classifyAndWrite is required');
   if (!['isolated', 'non-isolated'].includes(isolationMode)) {
     throw new TypeError(`coder-lease: invalid isolationMode: ${JSON.stringify(isolationMode)}`);
   }
-  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  const acquireMaintenance = dependencies.acquireMaintenance || acquireCoderMaintenanceLock;
+  const acquireTarget = dependencies.acquireTarget || acquireCoderTargetLease;
+  const acquireSlot = dependencies.acquireSlot || acquireCoderSlotLease;
+  const withInventory = dependencies.withInventory || withCoderInventoryLock;
+  const makeLease = dependencies.createRunLease || createRunLease;
+  const maintenance = await acquireMaintenance({ parentHandle, mode: 'shared' });
   let target;
   let slotLease;
+  const releaseAcquired = makeRunLeaseReleaseController(() => [
+    { name: 'slot', handle: slotLease },
+    { name: 'target', handle: target },
+    { name: 'maintenance', handle: maintenance },
+  ]);
+  let lowerCleanupAttempted;
+  let lowerCleanupFailed;
   try {
     for (let attempt = 0; attempt < RUN_LEASE_RETRIES; attempt += 1) {
+      lowerCleanupAttempted = false;
+      lowerCleanupFailed = false;
       const lockSlot = await selectLockSlot();
       if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) {
         throw new TypeError(`coder-lease: invalid lockSlot: ${JSON.stringify(lockSlot)}`);
       }
       // Normative order: conditional-target (non-isolated only), THEN slot.
       target = isolationMode === 'non-isolated'
-        ? await acquireCoderTargetLease({ parentHandle })
+        ? await acquireTarget({ parentHandle })
         : null;
       try {
-        slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${lockSlot}` });
+        slotLease = await acquireSlot({ parentHandle, lockSlot: `session-${lockSlot}` });
         try {
-          const outcome = await withCoderInventoryLock({ parentHandle }, () => classifyAndWrite(lockSlot));
+          const outcome = await withInventory({ parentHandle }, () => classifyAndWrite(lockSlot));
           if (outcome && outcome.retake) {
-            await slotLease.release();
+            lowerCleanupAttempted = true;
+            try {
+              await releaseAcquired.release({
+                attempts: RUN_LEASE_RELEASE_ATTEMPTS,
+                only: ['slot', 'target'],
+                cause: new Error('coder-lease: retake cleanup failed'),
+              });
+            } catch (err) {
+              lowerCleanupFailed = true;
+              throw err;
+            }
             slotLease = null;
-            if (target) { await target.release(); target = null; }
+            target = null;
             continue;
           }
-          return createRunLease({
+          return makeLease({
             parentHandle,
             maintenance,
             target,
@@ -357,18 +454,50 @@ export async function acquireCoderSessionRunLease({ parentHandle, isolationMode,
             admission: outcome ? outcome.result : undefined,
           });
         } catch (err) {
-          await slotLease.release();
+          lowerCleanupAttempted = true;
+          try {
+            await releaseAcquired.release({
+              attempts: RUN_LEASE_RELEASE_ATTEMPTS,
+              only: ['slot', 'target'],
+              cause: err,
+            });
+          } catch (cleanupError) {
+            lowerCleanupFailed = true;
+            throw cleanupError;
+          }
           slotLease = null;
+          target = null;
           throw err;
         }
       } catch (err) {
-        if (target) { await target.release(); target = null; }
+        if (!lowerCleanupAttempted && (target || slotLease)) {
+          lowerCleanupAttempted = true;
+          try {
+            await releaseAcquired.release({
+              attempts: RUN_LEASE_RELEASE_ATTEMPTS,
+              only: ['slot', 'target'],
+              cause: err,
+            });
+          } catch (cleanupError) {
+            lowerCleanupFailed = true;
+            throw cleanupError;
+          }
+          slotLease = null;
+          target = null;
+        }
         throw err;
       }
     }
     throw new Error('coder-lease: slot selection retries exhausted under the run lease');
   } catch (err) {
-    await maintenance.release();
+    // If a lower-level partial cleanup already failed, retain the original
+    // admission/retake cause as the public AggregateError cause instead of
+    // burying it under another cleanup AggregateError.
+    const acquisitionCause = err instanceof AggregateError && err.cause ? err.cause : err;
+    await releaseAcquired.release({
+      attempts: lowerCleanupFailed ? 1 : RUN_LEASE_RELEASE_ATTEMPTS,
+      cause: acquisitionCause,
+    });
     throw err;
   }
 }

@@ -29,7 +29,7 @@
  * pure in the sense that they touch only the managed tree.
  */
 
-import { lstat, mkdir, open, readdir, rename, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rename, rmdir, unlink, link } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 export const MANAGED_ROOT_CAPABILITY = Object.freeze(['enforced', 'best_effort']);
@@ -71,6 +71,15 @@ async function revalidate(handle) {
   return stats;
 }
 
+/**
+ * Revalidate a managed handle at an explicit lifecycle boundary.  The
+ * backend is intentionally path based today, so this is a best-effort guard;
+ * callers must not describe it as an openat/dir-FD guarantee.
+ */
+export async function managedRevalidate(handle) {
+  return revalidate(handle);
+}
+
 function isSafeSegment(segment) {
   return (
     typeof segment === 'string' &&
@@ -91,18 +100,29 @@ function isSafeSegment(segment) {
  */
 export async function openManagedTrissRoot(projectRoot) {
   const rootPath = resolve(String(projectRoot));
-  // The project root itself is validated by the caller; we only demand it
-  // exists as a real directory (no-follow).
-  await pin(rootPath);
+  // Keep the project-root pin: identity metadata is anchored to this
+  // directory, never to `.triss` itself.
+  const projectRootHandle = await pin(rootPath);
 
   const trissPath = join(rootPath, TRISS_DIRNAME);
   try {
     const handle = await pin(trissPath);
-    return handle;
+    await revalidate(projectRootHandle);
+    return Object.freeze({ ...handle, projectRoot: projectRootHandle });
   } catch (err) {
     if (err && err.code === 'ENOENT') {
-      await mkdir(trissPath, { mode: 0o700 });
-      return pin(trissPath);
+      await revalidate(projectRootHandle);
+      try {
+        await mkdir(trissPath, { mode: 0o700 });
+      } catch (createErr) {
+        // Another admission may have created the same managed root between
+        // our pin and mkdir.  Re-pin that entry; a raced symlink or foreign
+        // object still fails closed below.
+        if (!createErr || createErr.code !== 'EEXIST') throw createErr;
+      }
+      await revalidate(projectRootHandle);
+      const handle = await pin(trissPath);
+      return Object.freeze({ ...handle, projectRoot: projectRootHandle });
     }
     throw err;
   }
@@ -124,17 +144,26 @@ export async function openManagedChildDir(handle, ...segments) {
   await revalidate(handle);
   let current = handle;
   for (const segment of segments) {
+    await revalidate(current);
     const nextPath = join(current.path, segment);
     try {
       current = await pin(nextPath);
     } catch (err) {
       if (err && err.code === 'ENOENT') {
-        await mkdir(nextPath, { mode: 0o700 });
+        try {
+          await mkdir(nextPath, { mode: 0o700 });
+        } catch (createErr) {
+          // Parallel callers may legitimately win creation of this same
+          // component.  Pin the winner and retain all no-follow/ownership
+          // checks instead of surfacing a spurious EEXIST.
+          if (!createErr || createErr.code !== 'EEXIST') throw createErr;
+        }
         current = await pin(nextPath);
       } else {
         throw err;
       }
     }
+    await revalidate(current);
   }
   return current;
 }
@@ -150,7 +179,21 @@ export async function managedCreate(handle, basename) {
   await revalidate(handle);
   const targetPath = join(handle.path, basename);
   await mkdir(targetPath, { mode: 0o700 });
+  await revalidate(handle);
   return pin(targetPath);
+}
+
+/**
+ * Link two files within one managed directory.  Both names are constrained
+ * to one safe component and the parent is revalidated around publication.
+ */
+export async function managedLink(handle, from, to) {
+  if (!isSafeSegment(from) || !isSafeSegment(to)) {
+    throw new Error(`managed-root: unsafe link names: ${JSON.stringify({ from, to })}`);
+  }
+  await revalidate(handle);
+  await link(join(handle.path, from), join(handle.path, to));
+  await revalidate(handle);
 }
 
 /**
@@ -212,6 +255,7 @@ export async function managedFsync(handle) {
   try {
     fd = await open(handle.path, 'r');
     await fd.sync();
+    await revalidate(handle);
   } catch (err) {
     // Directory fsync is unsupported on some filesystems; the identity
     // recheck above is the actual guarantee we keep.

@@ -36,7 +36,7 @@ const { O_RDONLY, O_NOFOLLOW } = fsConstants;
 import { join } from 'node:path';
 
 import { acquireCoderMaintenanceLock, acquireCoderSlotLease } from './coder-lease.js';
-import { openManagedTrissRoot } from './managed-root.js';
+import { openManagedChildDir, openManagedTrissRoot, managedRevalidate } from './managed-root.js';
 import {
   decodeCoderSessionInventory,
   INVENTORY_BASENAME,
@@ -56,6 +56,8 @@ export const BACKUP_COMPLETION_KEYS = ['schema_version', 'manifest_sha256', 'com
 export const BACKUP_LIMITS = Object.freeze({
   maxManifestBytes: 64 * 1024,
   maxEntries: 10_000,
+  maxDirectories: 10_000,
+  maxPhysicalNodes: 20_000,
   maxFileBytes: 8 * 1024 * 1024,
   maxTotalBytes: 512 * 1024 * 1024,
   maxPathBytes: 4096,
@@ -186,11 +188,9 @@ function classifyRowMappingConsistency({
   if (identityEntryPresent === true && identityPhysicalPresent === false) {
     reasons.push('project identity manifest entry is missing from backup state');
   }
-  const persistentRows = Object.values(rowsByEngine)
-    .flat()
-    .filter((row) => row.state !== 'deleting');
-  if (persistentRows.length > 0 && (!identity || identityEntryPresent === false)) {
-    reasons.push('project identity missing while persistent rows exist');
+  const ownedRows = Object.values(rowsByEngine).flat();
+  if (ownedRows.length > 0 && (!identity || identityEntryPresent === false)) {
+    reasons.push('project identity missing while persistent rows exist (including deleting recovery rows)');
   }
   if (identity) {
     const expectedFingerprint = projectRootFingerprint(identity.project_id);
@@ -278,40 +278,154 @@ async function readCopiedConsistencyInputs(backupDir, entries) {
 }
 
 /**
+ * Open an already-existing managed descendant without normally creating it.
+ * `openManagedChildDir()` is intentionally create-or-open, so the lstat
+ * preflight keeps a consistency read/copy from creating missing source
+ * directories. A substitution race is still rejected by the managed helper;
+ * this path remains the documented best-effort backend, not dir-FD
+ * enforcement.
+ */
+async function openExistingManagedChildDir(parentHandle, ...segments) {
+  let current = parentHandle;
+  for (const segment of segments) {
+    const candidate = join(current.path, segment);
+    let stats;
+    try {
+      stats = await lstat(candidate);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        const missing = new Error(`backup: managed source directory disappeared: ${candidate}`, { cause: err });
+        missing.code = 'ENOENT';
+        throw missing;
+      }
+      throw err;
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error(`backup: managed source directory is not a real directory: ${candidate}`);
+    }
+    current = await openManagedChildDir(current, segment);
+  }
+  return current;
+}
+
+async function readManagedDirectoryNames(handle, relativeDir, beforeReaddir) {
+  await managedRevalidate(handle);
+  await beforeReaddir?.(relativeDir);
+  // Revalidate after the seam and immediately before the path-based read.
+  // This is the strongest portable Node guard available without openat(2).
+  await managedRevalidate(handle);
+  const names = await readdir(handle.path);
+  await managedRevalidate(handle);
+  return names;
+}
+
+/**
+ * Release a mutable list of opaque lease handles in reverse acquisition order.
+ * Every handle is attempted independently; only unresolved handles are
+ * retried, so one close failure cannot strand lower leases or the outer lock.
+ * The list is mutated to retain unresolved handles for a later cleanup pass.
+ */
+async function releaseHandlesInReverse(handles, {
+  label = 'backup: lease cleanup incomplete',
+  attempts = 2,
+  cause,
+} = {}) {
+  if (!Array.isArray(handles)) throw new TypeError('backup: lease handle list is required');
+  const pending = new Set(handles);
+  const failures = [];
+  for (let attempt = 0; attempt < attempts && pending.size > 0; attempt += 1) {
+    for (const handle of [...handles].reverse()) {
+      if (!pending.has(handle)) continue;
+      try {
+        await handle.release();
+        pending.delete(handle);
+        const index = handles.indexOf(handle);
+        if (index >= 0) handles.splice(index, 1);
+      } catch (err) {
+        failures.push({ handle, error: err });
+      }
+    }
+  }
+  if (pending.size === 0) return;
+  const aggregate = new AggregateError(
+    failures.map(({ error }) => error),
+    label,
+    cause === undefined ? undefined : { cause },
+  );
+  aggregate.components = failures.map(({ handle, error }) => ({ handle, error }));
+  throw aggregate;
+}
+
+function combineCleanupErrors(errors, cause) {
+  if (errors.length === 0) return null;
+  const aggregate = new AggregateError(
+    errors,
+    'backup: lease cleanup failed',
+    cause === undefined ? undefined : { cause },
+  );
+  aggregate.components = errors;
+  return aggregate;
+}
+
+/**
  * Gather cross-consistency INPUTS from the LIVE source under the held
  * exclusive maintenance + drained session slots (pinned single-open reads;
- * the pathname is never re-resolved between validation and hashing).
+ * parent handles are revalidated around every path-based top-level read).
  */
-async function readSourceConsistencyInputs(trissRoot, manifestProjectId = null) {
+async function readSourceConsistencyInputs(parentHandle, manifestProjectId = null, { beforeSourceRead } = {}) {
+  const trissRoot = parentHandle.path;
   let sessionsStoreText;
   try {
+    await managedRevalidate(parentHandle);
+    await beforeSourceRead?.(SESSIONS_STORE_REL);
+    await managedRevalidate(parentHandle);
     const pinned = await readPinnedTopLevelFile(join(trissRoot, SESSIONS_STORE_REL), { totalBytes: 0 });
+    await managedRevalidate(parentHandle);
     sessionsStoreText = pinned.text;
   } catch (err) {
     if (!err || err.code !== 'ENOENT') throw err;
+    await managedRevalidate(parentHandle);
     sessionsStoreText = null;
   }
   const inventoryTexts = [];
+  // The current managed-root API is create-or-open. The root and canonical
+  // engine directories were already opened by inventoryCoderV2State; the
+  // existing-child preflight below avoids creating absent engine dirs during
+  // this consistency read while retaining no-follow/ownership checks.
+  const engineRootHandle = await openExistingManagedChildDir(parentHandle, 'engine-sessions-v2');
   for (const engine of CODER_SESSION_ENGINES) {
     const rel = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
     try {
-      const pinned = await readPinnedTopLevelFile(join(trissRoot, rel), { totalBytes: 0 });
+      const engineHandle = await openExistingManagedChildDir(engineRootHandle, engine);
+      await managedRevalidate(engineHandle);
+      await beforeSourceRead?.(rel);
+      await managedRevalidate(engineHandle);
+      const pinned = await readPinnedTopLevelFile(join(engineHandle.path, INVENTORY_BASENAME), { totalBytes: 0 });
+      await managedRevalidate(engineHandle);
       inventoryTexts.push({ path: rel, text: pinned.text });
     } catch (err) {
-      if (err && err.code === 'ENOENT') continue;
+      if (err && err.code === 'ENOENT') {
+        await managedRevalidate(parentHandle);
+        continue;
+      }
       throw err;
     }
   }
   let identityText = null;
   let identityPhysicalPresent = false;
   try {
+    await managedRevalidate(parentHandle);
+    await beforeSourceRead?.(PROJECT_IDENTITY_REL);
+    await managedRevalidate(parentHandle);
     identityText = (await readPinnedTopLevelFile(
       join(trissRoot, PROJECT_IDENTITY_REL),
       { totalBytes: 0 },
     )).text;
+    await managedRevalidate(parentHandle);
     identityPhysicalPresent = true;
   } catch (err) {
     if (!err || err.code !== 'ENOENT') throw err;
+    await managedRevalidate(parentHandle);
   }
   return { sessionsStoreText, inventoryTexts, identityText, manifestProjectId, identityPhysicalPresent };
 }
@@ -406,21 +520,44 @@ function manifestEntriesSha256(entries) {
  */
 export async function listPhysicalStateFiles(
   backupDir,
-  { maxNodes = BACKUP_LIMITS.maxEntries, maxPathBytes = BACKUP_LIMITS.maxPathBytes } = {},
+  {
+    maxFiles = BACKUP_LIMITS.maxEntries,
+    maxDirectories = BACKUP_LIMITS.maxDirectories,
+    maxPhysicalNodes = BACKUP_LIMITS.maxPhysicalNodes,
+    maxNodes,
+    maxPathBytes = BACKUP_LIMITS.maxPathBytes,
+    beforeDescend,
+  } = {},
 ) {
-  if (!Number.isSafeInteger(maxNodes) || maxNodes < 0) {
-    throw new TypeError('backup: physical state node cap must be a non-negative integer');
+  // Keep maxNodes as a backwards-compatible test seam, but production limits
+  // files and directories independently: 10,000 files plus canonical parent
+  // directories is valid and must not contradict the manifest cap.
+  if (maxNodes !== undefined) maxPhysicalNodes = maxNodes;
+  if (![maxFiles, maxDirectories, maxPhysicalNodes].every((v) => Number.isSafeInteger(v) && v >= 0)) {
+    throw new TypeError('backup: physical state caps must be non-negative integers');
   }
   if (!Number.isSafeInteger(maxPathBytes) || maxPathBytes < 1) {
     throw new TypeError('backup: physical state path cap must be a positive integer');
   }
   const stateRoot = join(backupDir, 'state');
   const files = [];
+  let visitedFiles = 0;
+  let visitedDirectories = 0;
   let visitedNodes = 0;
   const walk = async (relativeDir) => {
+    const directory = join(stateRoot, relativeDir);
+    const before = await lstat(directory);
+    if (!before.isDirectory()) {
+      throw new Error(`backup: state tree directory replaced by non-directory: ${relativeDir || '.'}`);
+    }
+    await beforeDescend?.(relativeDir);
+    const beforeRead = await lstat(directory);
+    if (beforeRead.dev !== before.dev || beforeRead.ino !== before.ino || !beforeRead.isDirectory()) {
+      throw new Error(`backup: state tree directory changed before descent: ${relativeDir || '.'}`);
+    }
     let names;
     try {
-      names = await readdir(join(stateRoot, relativeDir));
+      names = await readdir(directory);
     } catch (err) {
       if (err && err.code === 'ENOENT') return;
       throw err;
@@ -430,18 +567,31 @@ export async function listPhysicalStateFiles(
       if (Buffer.byteLength(relative, 'utf8') > maxPathBytes) {
         throw new Error(`backup: physical state path exceeds ${maxPathBytes} bytes: ${relative}`);
       }
-      visitedNodes += 1;
-      if (visitedNodes > maxNodes) {
-        throw new Error(`backup: physical state nodes exceed ${maxNodes} cap`);
-      }
       const absolute = join(stateRoot, relative);
       const entry = await lstat(absolute);
       if (entry.isSymbolicLink()) {
         throw new Error(`backup: symlink in state tree (no-follow): ${relative}`);
       }
       if (entry.isDirectory()) {
+        visitedDirectories += 1;
+        visitedNodes += 1;
+        if (visitedDirectories > maxDirectories) {
+          throw new Error(`backup: physical state directories exceed ${maxDirectories} cap`);
+        }
+        if (visitedNodes > maxPhysicalNodes) {
+          throw new Error(`backup: physical state nodes exceed ${maxPhysicalNodes} cap`);
+        }
+        await beforeDescend?.(relative);
         await walk(relative);
       } else if (entry.isFile()) {
+        visitedFiles += 1;
+        visitedNodes += 1;
+        if (visitedFiles > maxFiles) {
+          throw new Error(`backup: physical state files exceed ${maxFiles} cap`);
+        }
+        if (visitedNodes > maxPhysicalNodes) {
+          throw new Error(`backup: physical state nodes exceed ${maxPhysicalNodes} cap`);
+        }
         files.push(relative);
       } else {
         throw new Error(`backup: special file in state tree: ${relative}`);
@@ -519,17 +669,27 @@ async function hashFileNoFollow(filePath, state) {
  * TRISS_CODER_ROLLBACK_RESULTS_PENDING and the backup fails before copying:
  * the backup never parses, deletes, or invents a second result codec.
  *
- * @param {string} projectRoot
+ * @param {string|object} projectRootOrHandle
  * @returns {Promise<{entries: Array, totalBytes: number}>}
  */
-export async function inventoryCoderV2State(projectRoot) {
-  const trissRoot = join(projectRoot, '.triss');
+export async function inventoryCoderV2State(projectRootOrHandle, { beforeReaddir, beforeSourceRead } = {}) {
+  const parentHandle = projectRootOrHandle && typeof projectRootOrHandle === 'object'
+    ? projectRootOrHandle
+    : await openManagedTrissRoot(projectRootOrHandle);
+  await managedRevalidate(parentHandle);
+  const trissRoot = parentHandle.path;
+  // These two canonical roots are the only minimal side effect retained from
+  // the current create-or-open managed API; descendant traversal uses the
+  // existing-only helper below and never creates names discovered in a scan.
+  const engineRootHandle = await openManagedChildDir(parentHandle, 'engine-sessions-v2');
+  const coderStateRootHandle = await openManagedChildDir(parentHandle, 'coder-state-v2');
   const entries = [];
   const state = { totalBytes: 0 };
 
   // Conservative temporary guard: a non-empty result root blocks the backup.
   try {
-    const resultNames = await readdir(join(trissRoot, 'coder-results-v1'));
+    const resultHandle = await openExistingManagedChildDir(parentHandle, 'coder-results-v1');
+    const resultNames = await readManagedDirectoryNames(resultHandle, 'coder-results-v1', beforeReaddir);
     if (resultNames.length > 0) {
       const err = new Error(
         'backup: non-empty .triss/coder-results-v1 present — TRISS_CODER_ROLLBACK_RESULTS_PENDING (no result codec yet)',
@@ -546,24 +706,18 @@ export async function inventoryCoderV2State(projectRoot) {
     }
   }
 
-  const walk = async (relDir) => {
-    const abs = join(trissRoot, relDir);
-    let names;
-    try {
-      names = await readdir(abs);
-    } catch (err) {
-      if (err && err.code === 'ENOENT') return;
-      throw err;
-    }
+  const walk = async (directoryHandle, relDir) => {
+    const names = await readManagedDirectoryNames(directoryHandle, relDir, beforeReaddir);
     for (const name of names) {
       const rel = relDir ? `${relDir}/${name}` : name;
-      const absPath = join(trissRoot, rel);
+      const absPath = join(directoryHandle.path, name);
       const stats = await lstat(absPath);
       if (stats.isSymbolicLink()) {
         throw new Error(`backup: symlink rejected (no-follow): ${absPath}`);
       }
       if (stats.isDirectory()) {
-        await walk(rel);
+        const childHandle = await openExistingManagedChildDir(directoryHandle, name);
+        await walk(childHandle, rel);
         continue;
       }
       if (!stats.isFile()) {
@@ -575,7 +729,11 @@ export async function inventoryCoderV2State(projectRoot) {
       if (stats.size > BACKUP_LIMITS.maxFileBytes) {
         throw new Error(`backup: file exceeds ${BACKUP_LIMITS.maxFileBytes}-byte cap: ${absPath}`);
       }
+      await managedRevalidate(directoryHandle);
+      await beforeSourceRead?.(rel);
+      await managedRevalidate(directoryHandle);
       const entry = await hashFileNoFollow(absPath, state);
+      await managedRevalidate(directoryHandle);
       entries.push({ path: rel, sha256: entry.sha256, size: entry.size });
     }
   };
@@ -583,13 +741,11 @@ export async function inventoryCoderV2State(projectRoot) {
   // Enumerate the engine-sessions-v2 root itself: every PRESENT canonical
   // engine is inventoried, and any UNRECOGNIZED entry fails closed (a backup
   // missing real sessions would still produce a COMPLETION marker).
-  let engineDirNames;
-  try {
-    engineDirNames = await readdir(join(trissRoot, 'engine-sessions-v2'));
-  } catch (err) {
-    if (err && err.code === 'ENOENT') engineDirNames = [];
-    else throw err;
-  }
+  const engineDirNames = await readManagedDirectoryNames(
+    engineRootHandle,
+    'engine-sessions-v2',
+    beforeReaddir,
+  );
   for (const name of engineDirNames) {
     if (!CODER_SESSION_ENGINES.includes(name)) {
       throw new Error(
@@ -597,9 +753,10 @@ export async function inventoryCoderV2State(projectRoot) {
           'refusing to produce an incomplete backup (fail closed). Upgrade Triss or remove the directory.',
       );
     }
-    await walk(`engine-sessions-v2/${name}`);
+    const engineHandle = await openExistingManagedChildDir(engineRootHandle, name);
+    await walk(engineHandle, `engine-sessions-v2/${name}`);
   }
-  await walk('coder-state-v2');
+  await walk(coderStateRootHandle, 'coder-state-v2');
 
   // The durable session mapping is the continuation authority — a backup
   // without it would strand every persisted idle session. Validation AND
@@ -609,12 +766,17 @@ export async function inventoryCoderV2State(projectRoot) {
   // ABSENT file is fine (no mappings yet).
   const sessionsPath = join(trissRoot, SESSIONS_STORE_REL);
   try {
+    await managedRevalidate(parentHandle);
+    await beforeSourceRead?.(SESSIONS_STORE_REL);
+    await managedRevalidate(parentHandle);
     const pinned = await readPinnedTopLevelFile(sessionsPath, state);
+    await managedRevalidate(parentHandle);
     validateSessionsStoreText(pinned.text);
     entries.push({ path: SESSIONS_STORE_REL, sha256: pinned.sha256, size: pinned.size });
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       // No store file at all: nothing to include.
+      await managedRevalidate(parentHandle);
     } else {
       throw err;
     }
@@ -626,7 +788,11 @@ export async function inventoryCoderV2State(projectRoot) {
   // validation and hashing see exactly the pinned bytes. Absent is fine.
   const identityPath = join(trissRoot, PROJECT_IDENTITY_REL);
   try {
+    await managedRevalidate(parentHandle);
+    await beforeSourceRead?.(PROJECT_IDENTITY_REL);
+    await managedRevalidate(parentHandle);
     const pinnedIdentity = await readPinnedTopLevelFile(identityPath, state);
+    await managedRevalidate(parentHandle);
     try {
       decodeProjectIdentityRecord(pinnedIdentity.text);
     } catch (err) {
@@ -636,6 +802,7 @@ export async function inventoryCoderV2State(projectRoot) {
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       // No identity yet: nothing to include.
+      await managedRevalidate(parentHandle);
     } else {
       throw err;
     }
@@ -657,7 +824,17 @@ export async function inventoryCoderV2State(projectRoot) {
  * @param {Function} [opts.copyFile] injectable copy (default node fs copyFile)
  * @returns {Promise<{manifest: object, completion: object}>}
  */
-export async function backupCoderV2State({ projectRoot, backupDir, projectId, copyFile }) {
+export async function backupCoderV2State({
+  projectRoot,
+  backupDir,
+  projectId,
+  copyFile,
+  beforeSourceRead,
+  beforeCopy,
+  leaseDependencies = {},
+  parentHandle: suppliedParentHandle,
+  backupHandle,
+}) {
   // Default copy: the SOURCE is opened O_NOFOLLOW and copied through the
   // pinned descriptor (a path-based copyFile would independently re-resolve
   // the source and could follow a swapped symlink). The verify hash below
@@ -682,26 +859,31 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
       await srcFd.close();
     }
   });
-  const trissRoot = join(projectRoot, '.triss');
+  const parentHandle = suppliedParentHandle || await openManagedTrissRoot(projectRoot);
+  await managedRevalidate(parentHandle);
+  const trissRoot = parentHandle.path;
 
   // CONSISTENT TRANSACTION: exclusive maintenance excludes other backup/
   // maintenance writers; every assigned session slot lease is taken in
   // stable ascending order so active runs/cleans drain before the copy; a
   // second inventory snapshot must be IDENTICAL to the first (otherwise the
   // state moved under us and the attempt is retried, then fails closed).
-  const parentHandle = await openManagedTrissRoot(projectRoot);
-  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'exclusive' });
+  const acquireMaintenance = leaseDependencies.acquireMaintenance || acquireCoderMaintenanceLock;
+  const acquireSlot = leaseDependencies.acquireSlot || acquireCoderSlotLease;
+  const maintenance = await acquireMaintenance({ parentHandle, mode: 'exclusive' });
   let inventory;
   const heldSlots = [];
+  let operationResult;
+  let operationError;
   try {
     const SNAPSHOT_ATTEMPTS = 5;
     for (let attempt = 1; ; attempt += 1) {
-      const first = await inventoryCoderV2State(projectRoot);
+      const first = await inventoryCoderV2State(parentHandle);
       // Unique assigned slots of LIVE rows (reserved/running/deleting) in
       // stable ascending order.
       const liveSlots = new Set();
       for (const engine of CODER_SESSION_ENGINES) {
-        const read = await decodeEngineInventory(trissRoot, engine);
+        const read = await decodeEngineInventory(parentHandle, engine, beforeSourceRead);
         if (!read) continue;
         for (const row of read.entries) {
           if (['reserved', 'running', 'deleting'].includes(row.state)) liveSlots.add(row.lock_slot);
@@ -709,16 +891,19 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
       }
       const wanted = [...liveSlots].sort((a, b) => a - b);
       for (const slot of wanted) {
-        const handle = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${slot}` });
+        const handle = await acquireSlot({ parentHandle, lockSlot: `session-${slot}` });
         heldSlots.push(handle);
       }
-      const second = await inventoryCoderV2State(projectRoot);
+      const second = await inventoryCoderV2State(parentHandle);
       if (JSON.stringify(first.entries) === JSON.stringify(second.entries)) {
         inventory = second;
         break;
       }
       // State moved between snapshots: drop the leases and retry bounded.
-      while (heldSlots.length) await heldSlots.pop().release();
+      await releaseHandlesInReverse(heldSlots, {
+        label: 'backup: snapshot retry lease cleanup incomplete',
+        cause: new Error('backup: state changed during snapshot retry'),
+      });
       if (attempt >= SNAPSHOT_ATTEMPTS) {
         throw new Error('backup: state kept changing under the consistent snapshot (fail closed, no completion marker)');
       }
@@ -730,7 +915,7 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     // without a store) fails the backup BEFORE anything is copied. A
     // formally completed backup of such state would be instantly rejected
     // by validation — completion must never be reachable from it.
-    const sourceInputs = await readSourceConsistencyInputs(trissRoot, projectId);
+    const sourceInputs = await readSourceConsistencyInputs(parentHandle, projectId, { beforeSourceRead });
     const sourceReasons = classifyRowMappingConsistency(sourceInputs);
     if (sourceReasons.length > 0) {
       throw new Error(
@@ -750,20 +935,64 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
   const manifestText = encodeManifest(manifest);
 
   // Copy every entry into the backup tree (no-follow, bounded).
-  await mkdir(join(backupDir, 'state'), { recursive: true });
+  let backupStateHandle = null;
+  if (backupHandle) {
+    await managedRevalidate(backupHandle);
+    backupStateHandle = await openManagedChildDir(backupHandle, 'state');
+  } else {
+    await mkdir(join(backupDir, 'state'), { recursive: true });
+  }
   // ONE aggregate accumulator across every verification: seeding each file
   // with a fresh {totalBytes: 0} made the 512 MiB total cap a per-file cap.
   const verifyState = { totalBytes: inventory.totalBytes };
   for (const entry of inventory.entries) {
     const src = join(trissRoot, entry.path);
     const dst = join(backupDir, 'state', entry.path);
-    await mkdir(join(dst, '..'), { recursive: true }).catch(() => {});
+    const sourceSegments = entry.path.split('/');
+    sourceSegments.pop();
+    const sourceParentHandle = sourceSegments.length > 0
+      ? await openExistingManagedChildDir(parentHandle, ...sourceSegments)
+      : parentHandle;
+    if (backupStateHandle) {
+      const parentSegments = entry.path.split('/').slice(0, -1);
+      if (parentSegments.length > 0) await openManagedChildDir(backupStateHandle, ...parentSegments);
+    } else {
+      await mkdir(join(dst, '..'), { recursive: true }).catch(() => {});
+    }
+    await managedRevalidate(parentHandle);
+    await managedRevalidate(sourceParentHandle);
+    await beforeSourceRead?.(entry.path);
+    await beforeCopy?.(entry.path);
+    // The seams intentionally run between two parent checks: a deterministic
+    // intermediate-directory swap fails closed before doCopy can open bytes.
+    await managedRevalidate(parentHandle);
+    await managedRevalidate(sourceParentHandle);
     await doCopy(src, dst);
+    await managedRevalidate(sourceParentHandle);
+    await managedRevalidate(parentHandle);
     // Verify the copied bytes match the source hash.
     const verify = await hashFileNoFollow(dst, verifyState);
     if (verify.sha256 !== entry.sha256) {
       throw new Error(`backup: copy verification failed for ${entry.path} (no completion marker)`);
     }
+  }
+
+  // Run the same bounded structural walker used by validation before the
+  // completion marker is reachable.  This closes the gap where a copied
+  // state tree could contain an extra physical file (or exceed the separate
+  // file/directory/node limits) that is absent from the manifest.
+  const copiedPhysicalPaths = await listPhysicalStateFiles(backupDir);
+  const copiedManifestPaths = new Set(inventory.entries.map((entry) => entry.path));
+  const copiedUnlisted = copiedPhysicalPaths.filter((path) => !copiedManifestPaths.has(path));
+  const copiedPhysicalPathSet = new Set(copiedPhysicalPaths);
+  const copiedMissing = inventory.entries
+    .map((entry) => entry.path)
+    .filter((path) => !copiedPhysicalPathSet.has(path));
+  if (copiedUnlisted.length > 0 || copiedMissing.length > 0) {
+    throw new Error(
+      `backup: copied physical tree differs from manifest (unlisted=${copiedUnlisted.join(',') || 'none'}, ` +
+      `missing=${copiedMissing.join(',') || 'none'}) — no completion marker`,
+    );
   }
 
   // ── Cross-consistency GATE #2 — the COPIED pinned bytes. The same shared
@@ -796,18 +1025,53 @@ export async function backupCoderV2State({ projectRoot, backupDir, projectId, co
     completed_at: new Date().toISOString(),
   };
   await writeFile(join(backupDir, 'COMPLETION'), encodeCompletionMarker(completion), { mode: 0o600 });
-    return { manifest, completion };
-  } finally {
-    // Reverse order: slots (LIFO) -> exclusive maintenance.
-    while (heldSlots.length) await heldSlots.pop().release();
-    await maintenance.release();
+    operationResult = { manifest, completion };
+  } catch (err) {
+    operationError = err;
   }
+
+  const cleanupErrors = [];
+  // Reverse order: all slots (LIFO), then the exclusive maintenance lease.
+  try {
+    await releaseHandlesInReverse(heldSlots, {
+      label: 'backup: slot lease cleanup incomplete',
+      cause: operationError,
+    });
+  } catch (err) {
+    cleanupErrors.push(err);
+  }
+  try {
+    const maintenanceHandles = [maintenance];
+    await releaseHandlesInReverse(maintenanceHandles, {
+      label: 'backup: maintenance lease cleanup incomplete',
+      cause: operationError,
+    });
+  } catch (err) {
+    cleanupErrors.push(err);
+  }
+  const cleanupError = combineCleanupErrors(cleanupErrors, operationError);
+  if (operationError && cleanupError) {
+    throw new AggregateError([operationError, cleanupError], 'backup operation and cleanup failed', { cause: operationError });
+  }
+  if (operationError) throw operationError;
+  if (cleanupError) throw cleanupError;
+  return operationResult;
 }
 
 // Decode one engine canonical inventory; null when the store is absent.
-async function decodeEngineInventory(trissRoot, engine) {
+async function decodeEngineInventory(parentHandle, engine, beforeSourceRead) {
   try {
-    const text = await readFile(join(trissRoot, 'engine-sessions-v2', engine, INVENTORY_BASENAME), 'utf8');
+    const engineHandle = await openExistingManagedChildDir(parentHandle, 'engine-sessions-v2', engine);
+    const relative = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
+    await managedRevalidate(engineHandle);
+    await beforeSourceRead?.(relative);
+    await managedRevalidate(engineHandle);
+    const pinned = await readPinnedTopLevelFile(
+      join(engineHandle.path, INVENTORY_BASENAME),
+      { totalBytes: 0 },
+    );
+    await managedRevalidate(engineHandle);
+    const text = pinned.text;
     const decoded = decodeCoderSessionInventory(text);
     if (!decoded) throw new Error(`backup: corrupt canonical inventory for ${engine} (fail closed)`);
     return decoded;
