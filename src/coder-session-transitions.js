@@ -31,6 +31,7 @@ import {
 } from './coder-session-inventory-codec.js';
 
 export const SLUG_ALLOCATION_RETRIES = 8;
+export const CODER_SESSION_EXISTS_CODE = 'TRISS_CODER_SESSION_EXISTS';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -38,13 +39,13 @@ function validSlug(slug) {
   return typeof slug === 'string' && SLUG_RE.test(slug);
 }
 
-// State table: reserved -> running -> idle (normal lifecycle); any of
-// reserved|running|idle -> deleting (clean); deleting is terminal until the
-// row is removed by clean completion.
+// State table: reserved -> running -> idle (normal lifecycle), idle -> running
+// (continuation); any of reserved|running|idle -> deleting (clean); deleting
+// is terminal until the row is removed by clean completion.
 const ALLOWED_TRANSITIONS = {
   reserved: ['running', 'deleting'],
   running: ['idle', 'deleting'],
-  idle: ['deleting'],
+  idle: ['running', 'deleting'],
   deleting: [],
 };
 
@@ -109,7 +110,9 @@ export async function reserveCoderSession({
 
   const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
   if (existing) {
-    throw new Error(`coder-session: engine/slug already reserved: ${engine}/${slug}`);
+    const error = new Error(`coder-session: engine/slug already reserved: ${engine}/${slug}`);
+    error.code = CODER_SESSION_EXISTS_CODE;
+    throw error;
   }
 
   const now = timestampNow();
@@ -143,7 +146,7 @@ export async function reserveCoderSession({
 /**
  * reserved -> running (after spawn).
  */
-export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, pid, processStartId, bootId }) {
+export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
   if (read.error) throw new Error(read.error);
@@ -158,6 +161,7 @@ export async function markCoderSessionRunning({ inventoryDir, engine, slug, runI
     ...row,
     state: 'running',
     run_id: runId,
+    sandbox_id: sandboxId ?? row.sandbox_id,
     pid,
     process_start_id: processStartId,
     boot_id: bootId,

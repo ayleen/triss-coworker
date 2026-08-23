@@ -157,6 +157,22 @@ Lease behavior: maintenance → inventory → slot leases form the fixed lock
 hierarchy; slot leases serialize run/clean cycles on the same
 slot; leases are released in `finally`.
 
+Named production runs reserve their session row before spawning the engine.
+The `reserved` and `running` rows carry the complete live owner tuple: run id,
+sandbox id, positive PID, process-start identity, and boot identity. The
+production adapter must collect both identities from the current host and must
+never submit `null` placeholders to the canonical reservation validator. If
+either identity cannot be established, persistent-session admission degrades
+explicitly and the engine run remains ephemeral; it must not publish a row
+that cannot distinguish PID reuse or a host reboot.
+After a successful envelope is emitted, the row transitions to `idle` and
+clears the owner tuple. Every thrown OpenCode 2 path transitions through
+`deleting` and removes the reservation before returning the error.
+Continuation of an existing `idle` session reuses that row, publishes a fresh
+complete owner tuple as `running` before spawn, and returns it to `idle` after
+success. It must not attempt a duplicate reservation or downgrade a valid idle
+session merely because its `(engine, slug)` already exists.
+
 Cleanup: `triss coder session clean <slug> --engine <opencode|crush>` removes
 only the selected inactive isolated session row; `triss coder result clean
 <run-id>` removes only a validated retained result artifact, never a

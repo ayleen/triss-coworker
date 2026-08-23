@@ -21,6 +21,9 @@ import { reserveCoderSession, markCoderSessionRunning, markCoderSessionIdle } fr
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 import { writeResultState } from '../src/coder-result-registry-codec.js';
 import {
+  currentBootIdentity,
+  currentSessionOwnerTuple,
+  reserveV2SessionRow,
   runCoderSessionClean,
   runCoderResultClean,
 } from '../src/commands/coder.js';
@@ -71,6 +74,79 @@ async function seedSession(fx, engine, slug, { idle = true } = {}) {
     await markCoderSessionIdle({ inventoryDir: dir, engine, slug });
   }
 }
+
+test('production reservation publishes a complete current-process owner tuple', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'production-owner',
+      isolated: false,
+      ownerTuple: {
+        pid: 321,
+        processStartId: 'ps-production',
+        bootId: 'boot-production',
+      },
+    });
+    assert.ok(session);
+    const inventoryDir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    const inventory = await readCoderSessionInventory(inventoryDir);
+    assert.equal(inventory.entries.length, 1);
+    assert.equal(inventory.entries[0].state, 'running');
+    assert.equal(inventory.entries[0].pid, 321);
+    assert.equal(inventory.entries[0].process_start_id, 'ps-production');
+    assert.equal(inventory.entries[0].boot_id, 'boot-production');
+    await markCoderSessionIdle({ inventoryDir, engine: 'opencode2', slug: 'production-owner' });
+    const resumed = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'production-owner',
+      isolated: false,
+      ownerTuple: {
+        pid: 654,
+        processStartId: 'ps-resumed',
+        bootId: 'boot-resumed',
+      },
+    });
+    assert.ok(resumed);
+    const resumedInventory = await readCoderSessionInventory(inventoryDir);
+    assert.equal(resumedInventory.entries.length, 1);
+    assert.equal(resumedInventory.entries[0].state, 'running');
+    assert.equal(resumedInventory.entries[0].pid, 654);
+    assert.equal(resumedInventory.entries[0].process_start_id, 'ps-resumed');
+    assert.equal(resumedInventory.entries[0].boot_id, 'boot-resumed');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('current owner helpers produce stable host identities and reject missing evidence', () => {
+  assert.equal(
+    currentBootIdentity({
+      platform: 'linux',
+      readFile: () => '12345678-1234-1234-1234-123456789abc\n',
+    }),
+    'linux:12345678-1234-1234-1234-123456789abc',
+  );
+  assert.equal(
+    currentBootIdentity({
+      platform: 'darwin',
+      spawnSync: () => ({ status: 0, stdout: '{ sec = 12345, usec = 67 } Mon Aug 1' }),
+    }),
+    'darwin:12345:67',
+  );
+  assert.deepEqual(
+    currentSessionOwnerTuple({ pid: 12, processStartId: 'ps-12', bootId: 'boot-12' }),
+    { pid: 12, processStartId: 'ps-12', bootId: 'boot-12' },
+  );
+  assert.throws(
+    () => currentSessionOwnerTuple({ pid: 12, processStartId: '', bootId: 'boot-12' }),
+    /owner identity is unavailable/,
+  );
+});
 
 // runCoderSessionList/runCoderSessionClean use projectRoot() from the triss
 // environment; the session run functions take explicit inventoryDir, so we

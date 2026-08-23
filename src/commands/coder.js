@@ -104,6 +104,7 @@ import {
 } from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
+import { processStartIdentity } from '../update/cache.js';
 import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
 import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
@@ -5411,7 +5412,48 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
 // warning — the legacy .triss/sessions.json map stays authoritative for
 // continuation until persistent sessions become eligibility-enforced.
 
-async function reserveV2SessionRow({ engine, slug, isolated }) {
+export function currentBootIdentity({
+  platform = process.platform,
+  readFile = readFileSync,
+  spawnSync = nodeSpawnSync,
+} = {}) {
+  if (platform === 'linux') {
+    try {
+      const value = readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
+      return /^[0-9a-f-]{36}$/.test(value) ? `linux:${value}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (platform === 'darwin') {
+    try {
+      const result = spawnSync('sysctl', ['-n', 'kern.boottime'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1_000,
+        env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+      });
+      if (result.status !== 0) return null;
+      const match = /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout || '');
+      return match ? `darwin:${match[1]}:${match[2]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function currentSessionOwnerTuple(overrides = {}) {
+  const pid = overrides.pid ?? process.pid;
+  const processStartId = overrides.processStartId ?? processStartIdentity(pid);
+  const bootId = overrides.bootId ?? currentBootIdentity();
+  if (!Number.isInteger(pid) || pid <= 0 || !processStartId || !bootId) {
+    throw new Error('coder-session: current process owner identity is unavailable');
+  }
+  return { pid, processStartId, bootId };
+}
+
+export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5420,7 +5462,7 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     return null;
   }
   try {
-    const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
+    const { CODER_SESSION_EXISTS_CODE, reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
       await import('../coder-session-transitions.js');
     const { loadOrCreateProjectIdentity, projectRootFingerprint } =
       await import('../coder-state.js');
@@ -5431,29 +5473,50 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     const identity = await loadOrCreateProjectIdentity(trissRoot);
     const fingerprint = projectRootFingerprint(identity.project_id);
     const runId = `run_${randomBytes(16).toString('hex')}`;
-    await reserveCoderSession({
+    const owner = currentSessionOwnerTuple(ownerTuple);
+    const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
+    let row;
+    try {
+      row = await reserveCoderSession({
+        inventoryDir,
+        engine,
+        slug,
+        isolationMode: isolated ? 'isolated' : 'non_isolated',
+        lockSlot: 0,
+        runId,
+        sandboxId,
+        ...owner,
+        projectRootFingerprint: fingerprint,
+      });
+    } catch (err) {
+      if (err?.code !== CODER_SESSION_EXISTS_CODE) throw err;
+      row = await markCoderSessionRunning({
+        inventoryDir,
+        engine,
+        slug,
+        runId,
+        sandboxId,
+        ...owner,
+      });
+    }
+    if (row.state === 'reserved') {
+      row = await markCoderSessionRunning({
+        inventoryDir,
+        engine,
+        slug,
+        runId,
+        sandboxId,
+        ...owner,
+      });
+    }
+    return {
       inventoryDir,
       engine,
       slug,
-      isolationMode: isolated ? 'isolated' : 'non_isolated',
-      lockSlot: 0,
       runId,
-      pid: process.pid,
-      // Explicit nulls: undefined owner-tuple fields fail canonical validation.
-      processStartId: null,
-      bootId: null,
-      projectRootFingerprint: fingerprint,
-    });
-    await markCoderSessionRunning({
-      inventoryDir,
-      engine,
-      slug,
-      runId,
-      pid: process.pid,
-      processStartId: null,
-      bootId: null,
-    });
-    return { inventoryDir, engine, slug };
+      sandboxId: row.sandbox_id,
+      ...owner,
+    };
   } catch (err) {
     process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
     return null;
@@ -6465,7 +6528,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
     writeStdout2(JSON.stringify(envelope2) + '\n');
+    await completeV2SessionRow(sessionV2);
     return;
+    } catch (err) {
+      await abandonV2SessionRow(sessionV2);
+      throw err;
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
       // failure, preflight rejection, post-run compatibility failure, or

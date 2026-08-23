@@ -128,7 +128,10 @@ test('a duplicate engine/slug reservation fails closed', async () => {
   const fx = await fixture();
   try {
     await reserve(fx, 'task-a');
-    await assert.rejects(() => reserve(fx, 'task-a'), /already reserved/);
+    await assert.rejects(
+      () => reserve(fx, 'task-a'),
+      (error) => error?.code === 'TRISS_CODER_SESSION_EXISTS' && /already reserved/.test(error.message),
+    );
   } finally {
     await fx.cleanup();
   }
@@ -174,7 +177,7 @@ test('reserved -> running -> idle transitions write canonical rows', async () =>
   }
 });
 
-test('illegal transitions fail closed (idle cannot go running; deleting is terminal)', async () => {
+test('an idle session resumes with a fresh owner tuple', async () => {
   const fx = await fixture();
   try {
     await reserve(fx);
@@ -188,19 +191,19 @@ test('illegal transitions fail closed (idle cannot go running; deleting is termi
       bootId: 'boot-1',
     });
     await markCoderSessionIdle({ inventoryDir: fx.inventoryDir, engine: 'opencode', slug: 'task-a' });
-    await assert.rejects(
-      () =>
-        markCoderSessionRunning({
-          inventoryDir: fx.inventoryDir,
-          engine: 'opencode',
-          slug: 'task-a',
-          runId: 'run-x',
-          pid: 1,
-          processStartId: 'p',
-          bootId: 'b',
-        }),
-      /illegal transition idle -> running/,
-    );
+    const resumed = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      runId: 'run-x',
+      sandboxId: `sbx_${'c'.repeat(32)}`,
+      pid: 1,
+      processStartId: 'p',
+      bootId: 'b',
+    });
+    assert.equal(resumed.state, 'running');
+    assert.equal(resumed.run_id, 'run-x');
+    assert.equal(resumed.sandbox_id, `sbx_${'c'.repeat(32)}`);
   } finally {
     await fx.cleanup();
   }

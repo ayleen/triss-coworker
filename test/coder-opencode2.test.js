@@ -595,6 +595,16 @@ test(
         // versioned, engine-namespaced store
         assert.equal(raw.version, 2);
         assert.equal(raw.engines.opencode2.beta, 'ses_ffee9d054ffeNR4h3krJcPcg1j');
+        const inventory = JSON.parse(readFileSync(
+          join(dir, '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json'),
+          'utf8',
+        ));
+        assert.equal(inventory.entries.length, 1);
+        assert.equal(inventory.entries[0].slug, 'beta');
+        assert.equal(inventory.entries[0].state, 'idle');
+        assert.equal(inventory.entries[0].pid, null);
+        assert.equal(inventory.entries[0].process_start_id, null);
+        assert.equal(inventory.entries[0].boot_id, null);
         // second run resumes by real id
         const rec2 = recordingSpawn(stream);
         await runCoderRun('again', { engine: 'opencode2', session: 'beta' }, {
