@@ -22,6 +22,10 @@ if (files.length === 0) {
 }
 
 const env = { ...process.env };
+// The retired TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION acknowledgement is a
+// no-op since --protect-credentials became the only protected-mode switch;
+// deleting it here keeps a developer's shell export from printing the
+// migration warning (or suggesting otherwise) inside the suite.
 delete env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
 const result = spawnSync(process.execPath, ['--test', ...files], {
   env,

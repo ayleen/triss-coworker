@@ -35,10 +35,16 @@ import {
 } from '../src/coder-providers.js';
 
 const DOWNGRADE_WARNING =
-  'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.';
+  'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.';
+// Ambient credential-mode INTENT for the scenarios below.
+// withMatrixEnvironment flips it for the duration of one callback so every
+// runCoderRun call resolves through the SAME explicit-option contract as
+// production (--protect-credentials). There is deliberately no environment
+// fallback to assert against anymore.
+let matrixProtectCredentials = false;
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
-  opts,
+  { protectCredentials: matrixProtectCredentials, ...opts },
   { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
 );
 const CREDENTIAL_ENVS = [
@@ -212,7 +218,7 @@ function makeV2AllowlistFixture(home) {
   return project;
 }
 
-async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } = {}) {
+async function withMatrixEnvironment(home, routeCase, fn, { protectCredentials = false } = {}) {
   const names = [
     'HOME',
     'TRISS_PROJECT_ROOT',
@@ -226,13 +232,9 @@ async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } 
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
-  // Exercise the reloadable file source rather than mutating process.env
-  // after config.js has captured the real parent shell environment.
+  // The retired acknowledgement is deleted, never written: credential mode is
+  // selected ONLY by the explicit --protect-credentials intent below.
   delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-  writeFileSync(
-    join(home, '.triss.env'),
-    `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${bestEffort ? '1' : '0'}\n`,
-  );
   process.env.TRISS_USAGE_LOG = '0';
   delete process.env.TRISS_CODER_MODEL;
   delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -242,9 +244,12 @@ async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } 
       ? routeCase.credential
       : `unrelated-${env}`;
   }
+  const previousIntent = matrixProtectCredentials;
+  matrixProtectCredentials = protectCredentials;
   try {
     await fn();
   } finally {
+    matrixProtectCredentials = previousIntent;
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
@@ -252,19 +257,20 @@ async function withMatrixEnvironment(home, routeCase, fn, { bestEffort = true } 
   }
 }
 
-test('runtime credential mode reloads file edits and deletions between calls in one process', async () => {
+test('legacy TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION never selects the credential mode', async () => {
   const home = makeIsolatedHome();
   const routeCase = CASES.find(({ kind }) => kind === 'opencode-go');
   const envPath = join(home, '.triss.env');
   try {
     await withMatrixEnvironment(home, routeCase, async () => {
-      const run = async (label) => {
-        const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_reload_${label}`));
+      const run = async (label, opts = {}) => {
+        const { calls, spawnFn } = recordingSpawn(SUCCESS_STREAM(`ses_legacy_${label}`));
         const output = [];
         await runCoderRun(label, {
           engine: 'opencode',
           provider: routeCase.provider,
           model: routeCase.model,
+          ...opts,
         }, {
           spawn: spawnFn,
           spawnSync: recordingSpawnSync,
@@ -283,30 +289,26 @@ test('runtime credential mode reloads file edits and deletions between calls in 
         };
       };
 
+      // Legacy '1' in the reloadable file store is an accepted no-op: the raw
+      // default comes from the resolver, not from the variable.
       writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
-      const rawFirst = await run('raw-first');
-      assert.equal(rawFirst.envelope.credential_mode, 'best_effort_raw');
-      assert.equal(rawFirst.envelope.execution_capabilities.credential_isolation, 'unavailable');
-      assert.equal(rawFirst.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+      const rawRun = await run('legacy-one');
+      assert.equal(rawRun.envelope.credential_mode, 'best_effort_raw');
+      assert.equal(rawRun.envelope.execution_capabilities.credential_isolation, 'unavailable');
+      assert.equal(rawRun.child.options.env.OPENCODE_API_KEY, routeCase.credential);
 
+      // Legacy '0' must NOT enable protected mode either — only the explicit
+      // flag does. (The variable itself is a known non-secret store key, so it
+      // must not trip the protected raw-store preflight here.)
       writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
-      const protectedAfterEdit = await run('protected-after-edit');
-      assert.equal(protectedAfterEdit.envelope.credential_mode, 'protected_proxy');
-      assert.equal(protectedAfterEdit.envelope.execution_capabilities.credential_isolation, 'best_effort');
-      assert.notEqual(protectedAfterEdit.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+      const stillRaw = await run('legacy-zero');
+      assert.equal(stillRaw.envelope.credential_mode, 'best_effort_raw');
 
-      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
-      await run('raw-before-delete');
-      writeFileSync(envPath, '');
-      const protectedAfterDelete = await run('protected-after-delete');
-      assert.equal(protectedAfterDelete.envelope.credential_mode, 'protected_proxy');
-      assert.notEqual(protectedAfterDelete.child.options.env.OPENCODE_API_KEY, routeCase.credential);
-
-      writeFileSync(envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
-      const rawAfterAdd = await run('raw-after-add');
-      assert.equal(rawAfterAdd.envelope.credential_mode, 'best_effort_raw');
-      assert.equal(rawAfterAdd.child.options.env.OPENCODE_API_KEY, routeCase.credential);
-    }, { bestEffort: false });
+      const protectedRun = await run('flag-protected', { protectCredentials: true });
+      assert.equal(protectedRun.envelope.credential_mode, 'protected_proxy');
+      assert.equal(protectedRun.envelope.execution_capabilities.credential_isolation, 'best_effort');
+      assert.notEqual(protectedRun.child.options.env.OPENCODE_API_KEY, routeCase.credential);
+    });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -468,7 +470,7 @@ test('opencode2 protected fixture: the same V1 allowlist plus agent/tool rejects
       assert.ok(threw);
       assert.equal(calls.length, 0, 'protected mode must reject before any child spawn');
       assert.match(threw.message, /custom tool|agent|deny-everything|allow\/ask/iu);
-    }, { bestEffort: false });
+    }, { protectCredentials: true });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -652,7 +654,7 @@ test('V1 persisted cross-scope small roles are discarded before runtime route re
       preserveSmall: true,
     },
   ];
-  for (const mode of ['protected', 'best_effort_raw']) {
+  for (const [mode, protectCredentials] of [['protected', true], ['best_effort_raw', false]]) {
     for (const row of cases) {
       await t.test(`${mode}: ${row.name}`, async () => {
         const home = makeIsolatedHome();
@@ -684,7 +686,7 @@ test('V1 persisted cross-scope small roles are discarded before runtime route re
             if (row.credentialEnv !== 'TRISS_WORKER_API_KEY') {
               assert.equal(child.options.env.TRISS_WORKER_API_KEY, undefined);
             }
-          }, { bestEffort: mode === 'best_effort_raw' });
+          }, { protectCredentials });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -715,7 +717,7 @@ test('protected unknown Zen/Go models fail before spawn on both engines', async 
               /audited protected OpenCode transport metadata|refuses to guess Chat/iu,
             );
             assert.equal(calls.length, 0);
-          }, { bestEffort: false });
+          }, { protectCredentials: true });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -795,7 +797,7 @@ test('protected V1 distinct transports use two scoped loopback routes and one pr
         },
         stdoutWrite: () => {},
       });
-    }, { bestEffort: false });
+    }, { protectCredentials: true });
     assert.equal(loopbackError, null, loopbackError?.stack);
     assert.deepEqual(upstreamCalls.map(({ url }) => url).sort(), [
       'https://opencode.ai/zen/go/v1/chat/completions',
@@ -868,7 +870,7 @@ test('protected Go grok-4.5 reaches the exact Responses loopback/upstream path',
         },
         stdoutWrite: () => {},
       });
-    }, { bestEffort: false });
+    }, { protectCredentials: true });
     assert.equal(loopbackError, null, loopbackError?.stack);
     assert.deepEqual(upstreamCalls, [{
       url: 'https://opencode.ai/zen/go/v1/responses',
@@ -903,7 +905,7 @@ test('protected V1 falls back from an unaudited persisted same-provider small mo
       assert.equal(config.model, 'triss-coder-transient/deepseek-v4-flash-free');
       assert.equal(config.small_model, 'triss-coder-transient/deepseek-v4-flash-free');
       assert.equal(config.provider[CODER_TRANSIENT_PROVIDER_ALIAS].models['gemini-3-flash'], undefined);
-    }, { bestEffort: false });
+    }, { protectCredentials: true });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -980,7 +982,7 @@ test('protected V2 routes only main and rejects the validated-unused small model
         requested: 'opencode-go/muse-spark-1.2-contributor',
         used: false,
       });
-    }, { bestEffort: false });
+    }, { protectCredentials: true });
     assert.equal(loopbackError, null, loopbackError?.stack);
     assert.deepEqual(upstreamModels, ['deepseek-v4-flash']);
   } finally {

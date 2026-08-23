@@ -218,7 +218,7 @@ test(
     let capturedEnv = null;
     await runCoderRun(
       'do a zen thing',
-      { model: 'opencode/hy3-free' },
+      { model: 'opencode/hy3-free', protectCredentials: true },
       {
         spawn: fakeSpawn((_cmd, _argv, opts) => {
           capturedEnv = opts.env;
@@ -244,7 +244,7 @@ test(
     let capturedEnv = null;
     await runCoderRun(
       'do a glm thing',
-      { model: 'zai-coding-plan/glm-5.2' },
+      { model: 'zai-coding-plan/glm-5.2', protectCredentials: true },
       {
         spawn: fakeSpawn((_cmd, _argv, opts) => {
           capturedEnv = opts.env;

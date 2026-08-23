@@ -87,6 +87,13 @@ function parsePositiveNumber(value) {
   }
 }
 
+// Shared help text for the credential-mode flag (`coder init` and `coder run`;
+// `triss exec --code` forwards it under its own shorter description).
+const PROTECT_HELP =
+  'Use the parent-owned credential proxy and strict executable-surface gates.\n' +
+  'Fails closed when protected credential isolation cannot be enforced.\n' +
+  'OpenCode/OpenCode2 only; Crush is always protected.';
+
 const program = new Command();
 program
   .name('triss')
@@ -203,6 +210,7 @@ program
   .option('--isolate', 'forward coder isolation')
   .option('--no-isolate', 'disable coder isolation')
   .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
+  .option('--protect-credentials', 'forward coder protected credential mode (parent-owned credential proxy; OpenCode/OpenCode2 only — crush is always protected)')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')
@@ -293,6 +301,7 @@ config
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
   .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, or crush). `coder init` uses --engine')
   .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
+  .option('--coder-protect-credentials', 'coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials')
   .action(wrap(runWizard));
 
 config
@@ -350,6 +359,7 @@ coder
   .option('--provider <name>', 'opencode engine model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
+  .option('--protect-credentials', PROTECT_HELP)
   .action(wrap(runCoderInit));
 
 coder
@@ -369,6 +379,7 @@ coder
   .option('--cwd <path>', 'working directory (ignored with --isolate)')
   .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
   .option('--allow-best-effort-caller-worktree', 'allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)')
+  .option('--protect-credentials', PROTECT_HELP)
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));

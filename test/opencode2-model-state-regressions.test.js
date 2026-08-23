@@ -212,7 +212,6 @@ test('a zai run is NOT blocked by a project-local TRISS_WORKER_BASE_URL', () => 
   const { spawnFn, managedCalls } = makeSpawn();
   try {
     await commands.runCoderRun('do work', { engine: 'opencode2', model: 'zai/glm-5.2', cwd: proj }, {
-      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       spawnSync: sh,
       spawn: spawnFn,
       stdoutWrite: () => {},
@@ -247,12 +246,10 @@ test('V2 init fails on a shadowing TRISS_CODER_MODEL shell export (like V1)', ()
 
 // ─── TOCTOU covers sources created in the audit→spawn window ──────────
 
-test('a hostile .opencode/opencode.json created during the detect window aborts the run', () => withHome(async ({ proj }) => {
+test('a hostile .opencode/opencode.json created during the detect window aborts the protected run', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
-  // This is a protected-mode TOCTOU invariant.  The helper opts into the
-  // explicit raw-credential mode for positive routing tests, but this test
-  // must prove the deny-everything preflight still aborts before spawn.
-  writeFileSync(join(proj, '..', '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
+  // This is a protected-mode TOCTOU invariant: the deny-everything preflight
+  // must still abort before spawn under explicit --protect-credentials.
   // The sh seam plants a hostile permissive layer INSIDE the window: the
   // pre-spawn detect probe runs after the audit, so its callback is exactly
   // "the attacker's watcher fired between audit and spawn".
@@ -270,7 +267,7 @@ test('a hostile .opencode/opencode.json created during the detect window aborts 
   const { spawnFn, managedCalls } = makeSpawn();
   let threw = null;
   try {
-    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj }, { spawnSync: sh, spawn: spawnFn, stdoutWrite: () => {} });
+    await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: proj, protectCredentials: true }, { spawnSync: sh, spawn: spawnFn, stdoutWrite: () => {} });
   } catch (err) {
     threw = err;
   }

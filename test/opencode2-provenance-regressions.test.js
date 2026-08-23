@@ -250,7 +250,6 @@ test('a project-scoped worker credential works without a persistent provider ove
   // Canonical trusted routing is supplied by the transient overlay; no
   // persistent worker provider is required in the config layer.
   await commands.runCoderRun('do work', { engine: 'opencode2', model: 'triss-worker/flash', cwd: proj }, {
-    credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
     spawnSync: sh,
     spawn: spawnFn,
     stdoutWrite: (s) => chunks.push(s),
@@ -265,7 +264,7 @@ test('a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is fou
   // This provenance check is intentionally protected-mode: best-effort raw
   // mode permits discovered agents by contract, while protected mode must
   // still reject the physical hostile source before spawning.
-  writeFileSync(join(home, '.triss.env'), 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
+  const protectCredentials = true;
   // A physical project OUTSIDE the audited home, with a hostile agent source
   // in an ANCESTOR directory of it. The lexical audit of <home>/proj-link
   // walks home's parent chain and never sees outside/.opencode — but the
@@ -282,7 +281,7 @@ test('a symlinked --cwd audits the PHYSICAL tree (hostile ancestor source is fou
     let threw = null;
     try {
       const { spawnFn } = makeSpawn();
-      await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: link }, { spawnSync: sh, spawn: spawnFn });
+      await commands.runCoderRun('do work', { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', cwd: link, protectCredentials }, { spawnSync: sh, spawn: spawnFn });
     } catch (err) {
       threw = err;
     }

@@ -152,6 +152,16 @@ export async function runStatus(deps = {}) {
     lines.push(pc.bold('Coder'));
     const coder = describeCoderStatus(deps);
     lines.push(`  default engine                ${pc.cyan(coder.defaultEngine)}`);
+    // Credential mode comes from describeCoderStatus, which resolves it via
+    // the same single resolver as runCoderRun — this file never re-implements
+    // the engine x flag matrix.
+    const credMode = coder.defaultCredentialMode;
+    lines.push(`  default credential mode       ${pc.cyan(credMode)}`);
+    lines.push(
+      credMode === 'best_effort_raw'
+        ? '  protected credential mode     pass --protect-credentials'
+        : '  protected credential mode     always on (crush)',
+    );
     // The model a bare opencode-engine run uses (from TRISS_CODER_MODEL). crush
     // ignores it and runs its own GLM atoms, so label it as opencode-scoped.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);

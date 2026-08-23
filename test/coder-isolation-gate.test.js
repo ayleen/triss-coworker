@@ -1,13 +1,16 @@
 /**
- * coder-isolation-gate.test.js — security regression: a best-effort coder run is
- * refused BEFORE spawn whenever a raw credential store is readable by the
- * same-UID engine child, unless the operator explicitly acknowledged the
- * best-effort scope.
+ * coder-isolation-gate.test.js — security regression: a PROTECTED (--protect-
+ * credentials) coder run is refused BEFORE spawn whenever a raw credential
+ * store is readable by the same-UID engine child. The default best_effort_raw
+ * mode intentionally skips this gate (the raw credential itself is already
+ * visible to the same-UID child), and the retired
+ * TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION variable can neither enable nor
+ * rescue either mode.
  *
  * All tests are hermetic and run against isolated temporary environments.
  * Verifies both the fail-closed rejection of credential/unknown assignments
- * and the pass-through for empty/comment stores, known non-secret coder
- * settings, or explicit operator acknowledgments.
+ * and the pass-through for empty/comment stores and known non-secret coder
+ * settings.
  */
 
 import test from 'node:test';
@@ -108,10 +111,10 @@ function writeCanonicalGlobalStore(dir, content) {
   return path;
 }
 
-test('ISOLATION-GATE-01: a readable raw credential store refuses the run before spawn', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
+test('ISOLATION-GATE-01: a readable raw credential store refuses the protected run before spawn', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
   let spawned = false;
   try {
-    await runCoderRun('do something', {}, {
+    await runCoderRun('do something', { protectCredentials: true }, {
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();
@@ -122,7 +125,7 @@ test('ISOLATION-GATE-01: a readable raw credential store refuses the run before 
     assert.fail('the run must refuse');
   } catch (err) {
     assert.match(err.message, /raw credential store/);
-    assert.match(err.message, /TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION/);
+    assert.match(err.message, /--protect-credentials/);
   }
   assert.equal(spawned, false, 'the engine must never spawn');
 }));
@@ -132,7 +135,7 @@ for (const credentialKey of CREDENTIAL_KEYS) {
     const globalPath = writeCanonicalGlobalStore(dir, `${credentialKey}=secret-value\n`);
     let spawned = false;
     await assert.rejects(
-      () => runCoderRun('do something', {}, {
+      () => runCoderRun('do something', { protectCredentials: true }, {
         spawn: () => {
           spawned = true;
           return fakeSpawnReplaying('')();
@@ -155,7 +158,7 @@ test('ISOLATION-GATE-global-writer: the canonical setup writer and run gate use 
   setVar(globalPath, 'ZHIPU_API_KEY', 'zk-saved-by-setup');
   let spawned = false;
   await assert.rejects(
-    () => runCoderRun('do something', {}, {
+    () => runCoderRun('do something', { protectCredentials: true }, {
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();
@@ -172,11 +175,10 @@ test('ISOLATION-GATE-global-writer: the canonical setup writer and run gate use 
   assert.equal(spawned, false, 'the engine must never spawn');
 }));
 
-test('ISOLATION-GATE-02: the operator ack (deps.allowBestEffortIsolation) allows the run', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
+test('ISOLATION-GATE-02: the default best_effort_raw mode skips the store gate entirely', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
-      allowBestEffortIsolation: true,
       disableCredentialProxy: true,
       spawn: () => {
         spawned = true;
@@ -188,32 +190,32 @@ test('ISOLATION-GATE-02: the operator ack (deps.allowBestEffortIsolation) allows
   } catch (err) {
     assert.doesNotMatch(err.message, /raw credential store/);
   }
-  assert.equal(spawned, true, 'the engine spawns under the acknowledged best-effort scope');
+  assert.equal(spawned, true, 'the engine spawns under the default best-effort mode');
 }));
 
-test('ISOLATION-GATE-03: the env ack (TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1) allows the run', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
+test('ISOLATION-GATE-03: the retired env ack cannot rescue or select a mode', () => withIsolatedStore('ZHIPU_API_KEY=zk-secret-key\n', async () => {
+  // Legacy '1' is an accepted no-op: it must NOT bypass the protected store
+  // gate when --protect-credentials is passed (only dropping the flag does).
   process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   let spawned = false;
-  try {
-    await runCoderRun('do something', {}, {
-      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+  await assert.rejects(
+    () => runCoderRun('do something', { protectCredentials: true }, {
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();
       },
       spawnSync: () => ({ status: 1, stdout: '', error: null }),
       stdoutWrite: () => true,
-    });
-  } catch (err) {
-    assert.doesNotMatch(err.message, /raw credential store/);
-  }
-  assert.equal(spawned, true, 'the engine spawns under env-acknowledged best-effort scope');
+    }),
+    /raw credential store/,
+  );
+  assert.equal(spawned, false, 'the legacy variable must not weaken protected mode');
 }));
 
-test('ISOLATION-GATE-04: an empty (0-byte) or comment-only .triss.env does not refuse the run', () => withIsolatedStore('# comment only\n\n', async () => {
+test('ISOLATION-GATE-04: an empty (0-byte) or comment-only .triss.env does not refuse the protected run', () => withIsolatedStore('# comment only\n\n', async () => {
   let spawned = false;
   try {
-    await runCoderRun('do something', {}, {
+    await runCoderRun('do something', { protectCredentials: true }, {
       disableCredentialProxy: true,
       spawn: () => {
         spawned = true;
@@ -228,10 +230,10 @@ test('ISOLATION-GATE-04: an empty (0-byte) or comment-only .triss.env does not r
   assert.equal(spawned, true, 'empty store does not block execution');
 }));
 
-test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in .triss.env refuses before spawn', () => withIsolatedStore('GLM_CUSTOM_CREDENTIAL=secret-token\n', async () => {
+test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in .triss.env refuses the protected run before spawn', () => withIsolatedStore('GLM_CUSTOM_CREDENTIAL=secret-token\n', async () => {
   let spawned = false;
   try {
-    await runCoderRun('do something', {}, {
+    await runCoderRun('do something', { protectCredentials: true }, {
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();
@@ -242,7 +244,7 @@ test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in
     assert.fail('the run must refuse');
   } catch (err) {
     assert.match(err.message, /raw credential store/);
-    assert.match(err.message, /TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION/);
+    assert.match(err.message, /--protect-credentials/);
   }
   assert.equal(spawned, false, 'arbitrary non-empty key refuses fail-closed');
 }));
@@ -258,7 +260,7 @@ for (const [label, content] of [
     writeCanonicalGlobalStore(dir, content);
     let spawned = false;
     try {
-      await runCoderRun('do something', {}, {
+      await runCoderRun('do something', { protectCredentials: true }, {
         disableCredentialProxy: true,
         spawn: () => {
           spawned = true;
@@ -287,7 +289,7 @@ for (const [label, extra] of [
     );
     let spawned = false;
     await assert.rejects(
-      () => runCoderRun('do something', {}, {
+      () => runCoderRun('do something', { protectCredentials: true }, {
         spawn: () => {
           spawned = true;
           return fakeSpawnReplaying('')();
@@ -301,12 +303,13 @@ for (const [label, extra] of [
   }));
 }
 
-test('ISOLATION-GATE-global-raw-ack: the explicit raw acknowledgement allows a canonical global credential store', () => withIsolatedStore(null, async ({ dir }) => {
+test('ISOLATION-GATE-global-raw-ack: the retired acknowledgement is a no-op under the raw default', () => withIsolatedStore(null, async ({ dir }) => {
   writeCanonicalGlobalStore(dir, 'ZHIPU_API_KEY=zk-secret-key\n');
+  process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = '1';
   let spawned = false;
   try {
     await runCoderRun('do something', {}, {
-      credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
+      disableCredentialProxy: true,
       spawn: () => {
         spawned = true;
         return fakeSpawnReplaying('')();
@@ -317,7 +320,7 @@ test('ISOLATION-GATE-global-raw-ack: the explicit raw acknowledgement allows a c
   } catch (err) {
     assert.doesNotMatch(err.message, /raw credential store/);
   }
-  assert.equal(spawned, true, 'the engine spawns under the acknowledged raw mode');
+  assert.equal(spawned, true, 'the engine spawns under the default raw mode (legacy variable ignored)');
 }));
 
 test('ISOLATION-GATE-shell-only: a shell credential with empty canonical stores passes the store gate in protected mode', () => withIsolatedStore('', async ({ dir }) => {

@@ -137,9 +137,14 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
   `effective_isolation: "best_effort_caller_worktree"`, and is advisory-only
   (`files_changed: null`, `worktree: null`, edits may reach the caller
   worktree).
-- Unavailable credential isolation ALWAYS blocks before spawn to protect the
-  real provider key. Triss intentionally rejects every coder run when the
-  credential proxy is unavailable.
+- Credential handling is mode-based: OpenCode/OpenCode2 default to
+  `best_effort_raw` (the envelope reports `credential_isolation` as
+  `unavailable` and warns that same-UID code may read the selected raw
+  credential); `--protect-credentials` (`protectCredentials: true` over MCP)
+  selects the protected proxy mode, where unavailable credential isolation
+  ALWAYS blocks before spawn to protect the real provider key - Triss
+  intentionally rejects such a run when the credential proxy is unavailable.
+  Crush is always protected.
 - A best-effort envelope is advisory-only: `null` change lists, no
   explicit-expectation success, no persistent session.
 - The credential proxy is a loopback one-run-token proxy;

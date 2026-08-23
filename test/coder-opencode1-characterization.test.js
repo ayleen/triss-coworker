@@ -39,9 +39,6 @@ const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   opts,
   {
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    credentialModeParentEnv: {
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
-    },
     ...deps,
   },
 );
@@ -194,9 +191,6 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('do the thing', {}, {
         disableCredentialProxy: true,
-        credentialModeParentEnv: {
-          TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-        },
         spawn: rec.spawnFn,
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: capture.stdoutWrite,
@@ -406,9 +400,6 @@ test(
       const capture = stdoutCapture();
       await runCoderRun('x', {}, {
         disableCredentialProxy: true,
-        credentialModeParentEnv: {
-          TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-        },
         spawn: rec.spawnFn,
         // version probe fails -> engineVersion falls back to the pin string
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
@@ -423,7 +414,7 @@ test(
       assert.equal(envelope.usage.tokens.output_visible, 7);
       assert.equal(envelope.usage.tokens.input_total, 14);
       assert.deepEqual(envelope.warnings, [
-        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw passes the selected raw provider credential to a same-UID engine child; repository code, plugins, tools, and shell commands may read or print it.',
+        'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: best_effort_raw credential mode is active by default; the selected raw provider credential may be read by same-UID engine code, plugins, tools, or shell commands. Pass --protect-credentials to enable protected_proxy.',
       ]);
     },
   ),

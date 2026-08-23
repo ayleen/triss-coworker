@@ -5,7 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.39.0] — 2026-08-23
+
+### Changed
+
+- **SECURITY-SENSITIVE BEHAVIORAL CHANGE** — OpenCode and OpenCode 2 now use
+  `best_effort_raw` credential handling by default. Pass `--protect-credentials`
+  (CLI `coder run`/`coder init`/`exec --code`, wizard
+  `--coder-protect-credentials`, MCP `protectCredentials`) to retain the
+  previous fail-closed credential-proxy behavior (`protected_proxy`). Crush
+  remains protected by default regardless of the flag.
+  - Over MCP the switch is deliberately forgiving in the SAFE direction:
+    `triss_coder_run` accepts both `protectCredentials` and the
+    `protect_credentials` alias, treats any truthy value as an opt-in, and
+    resolves a disagreement between the two spellings in favor of protection.
+  - The new `resolveCoderCredentialMode({ engine, protectCredentials })` in
+    `src/coder-providers.js` is the single source of truth; every entry point
+    resolves the mode through it and internal helpers only receive the
+    already-resolved value (hidden `credentialMode = 'protected_proxy'`
+    defaults were removed and now validate).
+  - `best_effort_raw` runs skip the credential proxy, keep structural/
+    provider/config-shape checks, permit the normal V1 allowlist policy and
+    discovered plugins/agents/tools (a missing deny-first wildcard still
+    blocks init in every mode — see below), report
+    `execution_capabilities.credential_isolation:
+    "unavailable"`, and warn via the stable
+    `TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED` code (text updated to
+    describe the default rather than a downgrade).
+  - **Breaking (crush):** the readable-raw-credential-store preflight is now
+    unconditional for crush. Previously
+    `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1` silently bypassed the gate;
+    with the variable retired there is no in-product opt-out — move
+    `ZHIPU_API_KEY` into your shell environment (the store that `triss coder
+    init --engine crush` writes is what trips the gate).
+  - The existing-config deny-first bash-policy audit (`auditExistingConfig`)
+    no longer depends on the credential mode: a missing
+    `permission.bash["*"] = "deny"` blocks init in EVERY mode (override only
+    with `--allow-unsafe-bash`). Previously the check was skipped whenever
+    best_effort_raw was selected.
+  - `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` is a deprecated no-op: neither
+    `0` nor `1` selects anything. A still-configured value prints a one-time
+    migration warning; the key stays in `NON_SECRET_CODER_STORE_KEYS` so a
+    protected raw-store audit does not misclassify it as credential material.
+    Remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION
+    [--local|--global]`. The variable reader itself will be deleted in a
+    separate cleanup release.
 
 ## [0.38.0] — 2026-08-22
 
@@ -63,6 +107,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias and verifies the final merged provider/model projection before any
   credential-bearing child is spawned. Raw best-effort mode remains an
   explicit risk acknowledgement and never claims proxy isolation.
+
+### Artifact integrity (0.39.0)
+
+- `triss-dsh-provider-bundle-0.39.0.tgz` — sha256
+  `ff349193857313d102eb7aba09073254dabc00125ee14c3c533af6eed242401a`,
+  integrity
+  `sha512-Q/a0rcDSXUAiuLp7ODyB7nwaxGIoyg2m4tbcWRekDY5P2vCXfPZ3tjALlRBb+IFzJpuWc0lTjoDjrLDvFJytSg==`
+  (computed with the release npm 10.9.8 via `npm pack`; `npm pack` output is
+  byte-deterministic across the pinned 10.9.8 and 11.6.2 releases).
+- Root `triss-coworker-0.39.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.39.0` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file); registry verification compares the packed
+  artifact against the published tarball byte-for-byte.
 
 ### Artifact integrity (0.38.0)
 

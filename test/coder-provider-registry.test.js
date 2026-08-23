@@ -1,19 +1,72 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CODER_CREDENTIAL_MODES,
   CODER_PROVIDER_REGISTRY,
   CODER_TRANSIENT_PROVIDER_ALIAS,
+  assertCoderCredentialMode,
   buildCoderTransientProviderOverlay,
   resolveCoderCredentialMode,
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
 } from '../src/coder-providers.js';
 
-test('credential mode requires the literal one acknowledgement and is not caller-worktree isolation', () => {
-  assert.equal(resolveCoderCredentialMode({}), 'protected_proxy');
-  assert.equal(resolveCoderCredentialMode({ TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' }), 'best_effort_raw');
-  for (const value of ['true', 'yes', 'on', '01', 1, true]) {
-    assert.equal(resolveCoderCredentialMode({ TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: value }), 'protected_proxy');
+test('credential mode resolver: explicit --protect-credentials matrix over engines', () => {
+  // Default (no options): OpenCode/OpenCode2 are best_effort_raw; crush is
+  // ALWAYS protected regardless of the flag.
+  for (const engine of ['opencode', 'opencode2']) {
+    assert.equal(resolveCoderCredentialMode({ engine }), 'best_effort_raw', engine);
+    assert.equal(
+      resolveCoderCredentialMode({ engine, protectCredentials: true }),
+      'protected_proxy',
+      engine,
+    );
+  }
+  for (const protectCredentials of [false, true, undefined]) {
+    assert.equal(
+      resolveCoderCredentialMode({ engine: 'crush', protectCredentials }),
+      'protected_proxy',
+      `crush with protectCredentials=${protectCredentials}`,
+    );
+  }
+  // Any truthy value opts into protection: a plausible affirmative must not
+  // silently resolve to raw credential exposure.
+  for (const truthy of [true, 1, 'true', 'yes']) {
+    assert.equal(resolveCoderCredentialMode({ engine: 'opencode', protectCredentials: truthy }), 'protected_proxy');
+    assert.equal(resolveCoderCredentialMode({ engine: 'opencode2', protectCredentials: truthy }), 'protected_proxy');
+  }
+});
+
+test('credential mode resolver ignores the retired legacy environment variable', () => {
+  // The env contract is GONE: the resolver takes options only, so a stale
+  // process.env value can never select a mode again. unset/0/1 all leave the
+  // same result for every engine.
+  const saved = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  try {
+    for (const legacy of [undefined, '', '0', '1']) {
+      if (legacy === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+      else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = legacy;
+      for (const engine of ['opencode', 'opencode2', 'crush']) {
+        assert.equal(resolveCoderCredentialMode({ engine }), engine === 'crush' ? 'protected_proxy' : 'best_effort_raw');
+        assert.equal(
+          resolveCoderCredentialMode({ engine, protectCredentials: true }),
+          'protected_proxy',
+        );
+      }
+    }
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved;
+  }
+});
+
+test('credential modes are the closed best_effort_raw | protected_proxy set and validate fail-closed', () => {
+  assert.deepEqual([...CODER_CREDENTIAL_MODES], ['best_effort_raw', 'protected_proxy']);
+  for (const mode of CODER_CREDENTIAL_MODES) {
+    assert.equal(assertCoderCredentialMode(mode), mode);
+  }
+  for (const bad of [undefined, null, '', 'raw', 'PROTECTED_PROXY', true]) {
+    assert.throws(() => assertCoderCredentialMode(bad), /unsupported credential mode/u);
   }
 });
 

@@ -32,9 +32,6 @@ const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   opts,
   {
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    credentialModeParentEnv: {
-      TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
-    },
     ...deps,
   },
 );

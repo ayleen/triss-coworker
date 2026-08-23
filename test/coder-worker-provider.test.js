@@ -614,7 +614,7 @@ test(
     const output = [];
     await runCoderRun(
       'mechanical task',
-      { model: 'triss-worker/deepseek-v4-flash' },
+      { model: 'triss-worker/deepseek-v4-flash', protectCredentials: true },
       {
         spawn: fakeSpawn((_cmd, _argv, opts) => {
           childEnv = opts.env;
@@ -665,6 +665,7 @@ test(
       {
         provider: 'worker',
         model: 'triss-worker/deepseek-v4-flash',
+        protectCredentials: true,
       },
       {
         spawn: fakeSpawn((_cmd, _argv, opts) => {
@@ -705,6 +706,7 @@ test(
         provider: 'zai',
         model: 'zai-coding-plan/glm-5.2',
         smallModel: 'zai-coding-plan/glm-5-turbo',
+        protectCredentials: true,
       },
       {
         spawn: fakeSpawn((_cmd, _argv, opts) => {
@@ -767,7 +769,7 @@ test(
       let childEnv;
       const run = runCoderRun(
         'mechanical task',
-        { provider: entry.provider, model: entry.model },
+        { provider: entry.provider, model: entry.model, protectCredentials: true },
         {
           spawn: fakeSpawn((_cmd, _argv, opts) => {
             childEnv = opts.env;
@@ -958,7 +960,7 @@ test(
     });
     let probeCall;
     let childEnv;
-    await runCoderRun('transient route', { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home }, {
+    await runCoderRun('transient route', { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home , protectCredentials: true }, {
       spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
       spawnSync: fakeSpawnSync,
       effectiveConfigSpawnSync: (cmd, args, options) => {
@@ -1018,7 +1020,7 @@ test(
     let childEnv;
     await runCoderRun(
         'task',
-        { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home },
+        { provider: 'zai', model: 'zai-coding-plan/glm-5.2', cwd: home , protectCredentials: true },
         {
           spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
           spawnSync: fakeSpawnSync,
@@ -1257,7 +1259,7 @@ test(
     let childEnv;
     await runCoderRun(
         'mechanical task',
-        { model: 'triss-worker/deepseek-v4-flash' },
+        { model: 'triss-worker/deepseek-v4-flash' , protectCredentials: true },
         {
           spawn: fakeSpawn((_cmd, _argv, opts) => { childEnv = opts.env; }),
           spawnSync: fakeSpawnSync,
