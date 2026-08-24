@@ -6061,10 +6061,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
-  const credentialMode = readCoderCredentialMode({
+  // Production callers omit this dependency and retain the normal effective
+  // environment/config precedence. Tests may inject the already-resolved
+  // mode to characterize one routing branch without depending on ambient
+  // process environment shared by the full test runner.
+  const credentialMode = deps.credentialMode ?? readCoderCredentialMode({
     scope: 'effective',
     parentEnv: deps.credentialModeParentEnv,
   });
+  if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
+    throw new TypeError(`unsupported credential mode ${JSON.stringify(credentialMode)}`);
+  }
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the

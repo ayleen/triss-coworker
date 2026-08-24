@@ -197,10 +197,9 @@ test(
       let closeProxy;
       await assert.rejects(
         () => runCoderRun('lookup rollback', { engine: 'opencode', session: 'lookup-fails' }, {
-          // Pin protected mode explicitly; the characterization must not
-          // inherit a runner/global best-effort acknowledgement from another
-          // test or from the parent process environment.
-          credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '0' },
+          // Pin the already-resolved mode; the characterization must not
+          // inherit a runner/global acknowledgement from another test.
+          credentialMode: 'protected_proxy',
           spawnSync: () => ({ status: 1, stdout: '', stderr: '' }),
           startCredentialProxy: async () => {
             proxy = {
