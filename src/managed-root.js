@@ -18,6 +18,8 @@
  * API:
  *   openManagedTrissRoot(projectRoot)        -> root handle
  *   openManagedChildDir(handle, ...segments) -> child directory handle
+ *   openManagedExistingChildDir(handle, ...segments) -> existing child handle
+ *   listManagedChildNames(handle)            -> revalidated child names
  *   managedCreate(handle, basename)          -> created dir handle (0700)
  *   managedRename(handle, from, to)          -> revalidated rename
  *   managedUnlink(handle, basename)          -> revalidated unlink
@@ -66,7 +68,27 @@ function assertIdentity(handle, stats) {
 }
 
 async function revalidate(handle) {
-  const stats = await lstat(handle.path);
+  let stats;
+  try {
+    stats = await lstat(handle.path);
+  } catch (err) {
+    // A path-based managed handle can disappear between the two checks of a
+    // same-UID replacement. Normalize that race to the same fail-closed
+    // identity diagnostic as a successful substitution; callers must never
+    // mistake a raw ENOENT/ENOTDIR for a safe revalidation.
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'ELOOP')) {
+      throw new Error(`managed-root: identity changed (substitution/race): ${handle.path}`, { cause: err });
+    }
+    throw err;
+  }
+  if (stats.isSymbolicLink()) {
+    // A previously pinned directory becoming a symlink is an identity
+    // substitution, not a normal discovery-time symlink diagnostic.
+    throw new Error(`managed-root: identity changed (substitution/race): ${handle.path}`);
+  }
+  if ((!handle.allowFile && !stats.isDirectory()) || (handle.allowFile && !stats.isFile())) {
+    throw new Error(`managed-root: identity changed (substitution/race; type changed): ${handle.path}`);
+  }
   assertIdentity(handle, stats);
   return stats;
 }
@@ -166,6 +188,55 @@ export async function openManagedChildDir(handle, ...segments) {
     await revalidate(current);
   }
   return current;
+}
+
+/**
+ * Open an already-existing descendant without creating any component.
+ *
+ * This is deliberately separate from openManagedChildDir(): read-only
+ * inventory/backup scans must never turn a discovery race into mkdir. Each
+ * component is pinned and revalidated, so a removal or substitution after
+ * discovery fails closed instead of recreating or following the replacement.
+ */
+export async function openManagedExistingChildDir(handle, ...segments) {
+  if (!handle || typeof handle.path !== 'string') {
+    throw new TypeError('managed-root: handle is required');
+  }
+  for (const segment of segments) {
+    if (!isSafeSegment(segment)) {
+      throw new Error(`managed-root: unsafe segment: ${JSON.stringify(segment)}`);
+    }
+  }
+  await revalidate(handle);
+  let current = handle;
+  for (const segment of segments) {
+    await revalidate(current);
+    current = await pin(join(current.path, segment));
+    await revalidate(current);
+  }
+  return current;
+}
+
+/**
+ * List one managed directory with identity checks both before and after the
+ * read. The optional hook is test-only orchestration for deterministic race
+ * coverage; production callers omit it.
+ */
+export async function listManagedChildNames(handle, { beforeRead } = {}) {
+  await revalidate(handle);
+  await beforeRead?.();
+  await revalidate(handle);
+  let names;
+  try {
+    names = await readdir(handle.path);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'ELOOP')) {
+      throw new Error(`managed-root: directory identity changed (substitution/race): ${handle.path}`, { cause: err });
+    }
+    throw err;
+  }
+  await revalidate(handle);
+  return names;
 }
 
 /**

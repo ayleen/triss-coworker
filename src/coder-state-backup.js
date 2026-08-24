@@ -33,10 +33,15 @@ import { lstat, mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/
 import { constants as fsConstants } from 'node:fs';
 
 const { O_RDONLY, O_NOFOLLOW } = fsConstants;
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { acquireCoderMaintenanceLock, acquireCoderSlotLease } from './coder-lease.js';
-import { openManagedChildDir, openManagedTrissRoot, managedRevalidate } from './managed-root.js';
+import {
+  openManagedChildDir,
+  openManagedExistingChildDir,
+  openManagedTrissRoot,
+  managedRevalidate,
+} from './managed-root.js';
 import {
   decodeCoderSessionInventory,
   INVENTORY_BASENAME,
@@ -68,7 +73,10 @@ export const BACKUP_LIMITS = Object.freeze({
 // engine-sessions-v2/<name> is an invalid state and fails closed — a backup
 // must never silently omit persistent sessions.
 import { CODER_SESSION_ENGINES, CODER_SESSION_STORE_ENGINES } from './coder-session-engines.js';
-import { validateProjectCoderSessionSlots } from './coder-session-slots.js';
+import {
+  readProjectCoderSessionInventories,
+  validateProjectCoderSessionSlots,
+} from './coder-session-slots.js';
 import { decodeProjectIdentityRecord, projectRootFingerprint } from './coder-state.js';
 
 export const SESSIONS_STORE_REL = 'sessions.json';
@@ -287,44 +295,21 @@ async function readCopiedConsistencyInputs(backupDir, entries) {
   };
 }
 
-/**
- * Open an already-existing managed descendant without normally creating it.
- * `openManagedChildDir()` is intentionally create-or-open, so the lstat
- * preflight keeps a consistency read/copy from creating missing source
- * directories. A substitution race is still rejected by the managed helper;
- * this path remains the documented best-effort backend, not dir-FD
- * enforcement.
- */
-async function openExistingManagedChildDir(parentHandle, ...segments) {
-  let current = parentHandle;
-  for (const segment of segments) {
-    const candidate = join(current.path, segment);
-    let stats;
-    try {
-      stats = await lstat(candidate);
-    } catch (err) {
-      if (err && err.code === 'ENOENT') {
-        const missing = new Error(`backup: managed source directory disappeared: ${candidate}`, { cause: err });
-        missing.code = 'ENOENT';
-        throw missing;
-      }
-      throw err;
-    }
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error(`backup: managed source directory is not a real directory: ${candidate}`);
-    }
-    current = await openManagedChildDir(current, segment);
-  }
-  return current;
-}
-
 async function readManagedDirectoryNames(handle, relativeDir, beforeReaddir) {
   await managedRevalidate(handle);
   await beforeReaddir?.(relativeDir);
   // Revalidate after the seam and immediately before the path-based read.
   // This is the strongest portable Node guard available without openat(2).
   await managedRevalidate(handle);
-  const names = await readdir(handle.path);
+  let names;
+  try {
+    names = await readdir(handle.path);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'ELOOP')) {
+      throw new Error(`backup: managed source directory identity changed or disappeared: ${handle.path}`, { cause: err });
+    }
+    throw err;
+  }
   await managedRevalidate(handle);
   return names;
 }
@@ -398,15 +383,13 @@ async function readSourceConsistencyInputs(parentHandle, manifestProjectId = nul
     sessionsStoreText = null;
   }
   const inventoryTexts = [];
-  // The current managed-root API is create-or-open. The root and canonical
-  // engine directories were already opened by inventoryCoderV2State; the
-  // existing-child preflight below avoids creating absent engine dirs during
-  // this consistency read while retaining no-follow/ownership checks.
-  const engineRootHandle = await openExistingManagedChildDir(parentHandle, 'engine-sessions-v2');
+  // The root was opened by inventoryCoderV2State; this read uses the shared
+  // non-creating helper so an absent engine cannot be recreated by a race.
+  const engineRootHandle = await openManagedExistingChildDir(parentHandle, 'engine-sessions-v2');
   for (const engine of CODER_SESSION_ENGINES) {
     const rel = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
     try {
-      const engineHandle = await openExistingManagedChildDir(engineRootHandle, engine);
+      const engineHandle = await openManagedExistingChildDir(engineRootHandle, engine);
       await managedRevalidate(engineHandle);
       await beforeSourceRead?.(rel);
       await managedRevalidate(engineHandle);
@@ -698,7 +681,7 @@ export async function inventoryCoderV2State(projectRootOrHandle, { beforeReaddir
 
   // Conservative temporary guard: a non-empty result root blocks the backup.
   try {
-    const resultHandle = await openExistingManagedChildDir(parentHandle, 'coder-results-v1');
+    const resultHandle = await openManagedExistingChildDir(parentHandle, 'coder-results-v1');
     const resultNames = await readManagedDirectoryNames(resultHandle, 'coder-results-v1', beforeReaddir);
     if (resultNames.length > 0) {
       const err = new Error(
@@ -726,7 +709,7 @@ export async function inventoryCoderV2State(projectRootOrHandle, { beforeReaddir
         throw new Error(`backup: symlink rejected (no-follow): ${absPath}`);
       }
       if (stats.isDirectory()) {
-        const childHandle = await openExistingManagedChildDir(directoryHandle, name);
+        const childHandle = await openManagedExistingChildDir(directoryHandle, name);
         await walk(childHandle, rel);
         continue;
       }
@@ -763,7 +746,7 @@ export async function inventoryCoderV2State(projectRootOrHandle, { beforeReaddir
           'refusing to produce an incomplete backup (fail closed). Upgrade Triss or remove the directory.',
       );
     }
-    const engineHandle = await openExistingManagedChildDir(engineRootHandle, name);
+    const engineHandle = await openManagedExistingChildDir(engineRootHandle, name);
     await walk(engineHandle, `engine-sessions-v2/${name}`);
   }
   await walk(coderStateRootHandle, 'coder-state-v2');
@@ -850,7 +833,21 @@ export async function backupCoderV2State({
   // the source and could follow a swapped symlink). The verify hash below
   // re-reads the pinned destination the same way.
   const doCopy = copyFile || (async (src, dst) => {
-    const srcFd = await open(src, O_RDONLY | O_NOFOLLOW);
+    let srcFd;
+    try {
+      srcFd = await open(src, O_RDONLY | O_NOFOLLOW);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        throw new Error(`backup: managed source directory identity changed or disappeared: ${dirname(src)}`, { cause: err });
+      }
+      if (err && err.code === 'ENOTDIR') {
+        throw new Error(`backup: managed source directory identity changed or disappeared: ${dirname(src)}`, { cause: err });
+      }
+      if (err && err.code === 'ELOOP') {
+        throw new Error(`backup: symlink rejected (no-follow): ${src}`, { cause: err });
+      }
+      throw err;
+    }
     try {
       const srcStats = await srcFd.stat();
       if (!srcStats.isFile()) throw new Error(`backup: non-regular source rejected: ${src}`);
@@ -889,14 +886,21 @@ export async function backupCoderV2State({
     const SNAPSHOT_ATTEMPTS = 5;
     for (let attempt = 1; ; attempt += 1) {
       const first = await inventoryCoderV2State(parentHandle);
+      const firstProjectInventories = await readProjectCoderSessionInventories(parentHandle, {
+        includePresence: true,
+        beforeInventoryRead: async (engine) => {
+          await beforeSourceRead?.(`engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`);
+        },
+      });
       // Unique assigned slots of LIVE rows (reserved/running/deleting) in
-      // stable ascending order.
+      // stable ascending order, from the same robust project snapshot used
+      // to validate every canonical engine.
       const liveSlots = new Set();
-      for (const engine of CODER_SESSION_ENGINES) {
-        const read = await decodeEngineInventory(parentHandle, engine, beforeSourceRead);
-        if (!read) continue;
-        for (const row of read.entries) {
-          if (['reserved', 'running', 'deleting'].includes(row.state)) liveSlots.add(row.lock_slot);
+      for (const inventory of firstProjectInventories) {
+        for (const row of inventory.entries) {
+          if (['reserved', 'running', 'deleting'].includes(row.state)) {
+            liveSlots.add(row.lock_slot);
+          }
         }
       }
       const wanted = [...liveSlots].sort((a, b) => a - b);
@@ -905,7 +909,20 @@ export async function backupCoderV2State({
         heldSlots.push(handle);
       }
       const second = await inventoryCoderV2State(parentHandle);
-      if (JSON.stringify(first.entries) === JSON.stringify(second.entries)) {
+      const secondProjectInventories = await readProjectCoderSessionInventories(parentHandle, {
+        includePresence: true,
+        beforeInventoryRead: async (engine) => {
+          await beforeSourceRead?.(`engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`);
+        },
+      });
+      const firstProjectText = JSON.stringify(firstProjectInventories);
+      const secondProjectText = JSON.stringify(secondProjectInventories);
+      const firstPresent = firstProjectInventories.filter((item) => item.inventory_present).map((item) => item.engine);
+      const secondPresent = secondProjectInventories.filter((item) => item.inventory_present).map((item) => item.engine);
+      if (firstPresent.some((engine) => !secondPresent.includes(engine))) {
+        throw new Error('backup: canonical inventory disappeared during snapshot (fail closed, no completion marker)');
+      }
+      if (JSON.stringify(first.entries) === JSON.stringify(second.entries) && firstProjectText === secondProjectText) {
         inventory = second;
         break;
       }
@@ -961,7 +978,7 @@ export async function backupCoderV2State({
     const sourceSegments = entry.path.split('/');
     sourceSegments.pop();
     const sourceParentHandle = sourceSegments.length > 0
-      ? await openExistingManagedChildDir(parentHandle, ...sourceSegments)
+      ? await openManagedExistingChildDir(parentHandle, ...sourceSegments)
       : parentHandle;
     if (backupStateHandle) {
       const parentSegments = entry.path.split('/').slice(0, -1);
@@ -1066,29 +1083,6 @@ export async function backupCoderV2State({
   if (operationError) throw operationError;
   if (cleanupError) throw cleanupError;
   return operationResult;
-}
-
-// Decode one engine canonical inventory; null when the store is absent.
-async function decodeEngineInventory(parentHandle, engine, beforeSourceRead) {
-  try {
-    const engineHandle = await openExistingManagedChildDir(parentHandle, 'engine-sessions-v2', engine);
-    const relative = `engine-sessions-v2/${engine}/${INVENTORY_BASENAME}`;
-    await managedRevalidate(engineHandle);
-    await beforeSourceRead?.(relative);
-    await managedRevalidate(engineHandle);
-    const pinned = await readPinnedTopLevelFile(
-      join(engineHandle.path, INVENTORY_BASENAME),
-      { totalBytes: 0 },
-    );
-    await managedRevalidate(engineHandle);
-    const text = pinned.text;
-    const decoded = decodeCoderSessionInventory(text);
-    if (!decoded) throw new Error(`backup: corrupt canonical inventory for ${engine} (fail closed)`);
-    return decoded;
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return null;
-    throw err;
-  }
 }
 
 /**

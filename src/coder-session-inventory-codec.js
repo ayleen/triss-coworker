@@ -250,16 +250,19 @@ export function decodeCoderSessionInventory(text) {
 }
 
 /**
- * Read the canonical inventory from disk (mode-0600, no-follow). Returns
- * { entries } or { error } on corrupt content (fail closed).
+ * Read the canonical inventory from disk (mode-0600, no-follow). Existing
+ * callers retain the historical { entries } / { error } shape. Callers that
+ * pass reportMissing=true additionally receive missing:true/false so a
+ * snapshot can distinguish an absent file from one that disappeared after it
+ * was observed.
  */
-export async function readCoderSessionInventory(inventoryDir) {
+export async function readCoderSessionInventory(inventoryDir, { reportMissing = false } = {}) {
   const path = join(inventoryDir, INVENTORY_BASENAME);
   let fd;
   try {
     fd = await open(path, O_RDONLY | O_NOFOLLOW);
   } catch (err) {
-    if (err && err.code === 'ENOENT') return { entries: [] };
+    if (err && err.code === 'ENOENT') return reportMissing ? { entries: [], missing: true } : { entries: [] };
     throw err;
   }
   try {
@@ -275,15 +278,19 @@ export async function readCoderSessionInventory(inventoryDir) {
       if (bytesRead === 0) break;
       total += bytesRead;
       if (total > INVENTORY_MAX_BYTES) {
-        return { error: 'inventory: corrupt canonical inventory (fail closed)' };
+        return reportMissing
+          ? { error: 'inventory: corrupt canonical inventory (fail closed)', missing: false }
+          : { error: 'inventory: corrupt canonical inventory (fail closed)' };
       }
       parts.push(Buffer.from(chunk.subarray(0, bytesRead)));
     }
     const decoded = decodeCoderSessionInventory(Buffer.concat(parts).toString('utf8'));
     if (decoded === null) {
-      return { error: 'inventory: corrupt canonical inventory (fail closed)' };
+      return reportMissing
+        ? { error: 'inventory: corrupt canonical inventory (fail closed)', missing: false }
+        : { error: 'inventory: corrupt canonical inventory (fail closed)' };
     }
-    return { entries: decoded.entries };
+    return reportMissing ? { entries: decoded.entries, missing: false } : { entries: decoded.entries };
   } finally {
     await fd.close();
   }

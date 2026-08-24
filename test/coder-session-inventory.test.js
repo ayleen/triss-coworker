@@ -266,6 +266,10 @@ test('readCoderSessionInventory returns empty entries when absent and fails clos
   const fx = await fixture();
   try {
     assert.deepEqual(await readCoderSessionInventory(fx.inventoryDir), { entries: [] });
+    assert.deepEqual(
+      await readCoderSessionInventory(fx.inventoryDir, { reportMissing: true }),
+      { entries: [], missing: true },
+    );
     await writeFile(join(fx.inventoryDir, '.inventory.json'), 'BROKEN\n', { mode: 0o600 });
     const read = await readCoderSessionInventory(fx.inventoryDir);
     assert.match(read.error, /corrupt/);

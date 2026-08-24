@@ -631,6 +631,36 @@ test('live-slot inventory lookup rejects an engine symlink before reading the ou
   }
 });
 
+test('backup fails closed when an inventoried canonical inventory disappears before the live-slot snapshot', async () => {
+  const fx = await fixture();
+  try {
+    const inventoryPath = join(fx.trissRoot, 'engine-sessions-v2', 'opencode', INVENTORY_BASENAME);
+    await writeFile(
+      inventoryPath,
+      '{"schema_version":1,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n',
+      { mode: 0o600 },
+    );
+    let removed = false;
+    await assert.rejects(
+      () => backupCoderV2State({
+        projectRoot: fx.base,
+        backupDir: fx.backupDir,
+        projectId: 'b'.repeat(32),
+        beforeSourceRead: async (relative) => {
+          if (relative !== `engine-sessions-v2/opencode/${INVENTORY_BASENAME}` || removed) return;
+          removed = true;
+          await rm(inventoryPath, { force: true });
+        },
+      }),
+      /presence changed|disappeared|identity changed|ENOENT/,
+    );
+    assert.equal(removed, true);
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('backup cleanup retries a one-shot slot release and still completes', async () => {
   const fx = await fixture();
   try {

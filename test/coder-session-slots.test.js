@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +11,7 @@ import {
   validateProjectCoderSessionCleanupSlot,
   validateProjectCoderSessionSlots,
 } from '../src/coder-session-slots.js';
-import { openManagedTrissRoot } from '../src/managed-root.js';
+import { openManagedExistingChildDir, openManagedTrissRoot } from '../src/managed-root.js';
 
 function row(slug, lock_slot, state = 'running', engine = 'opencode') {
   return { slug, lock_slot, state, engine };
@@ -117,5 +117,101 @@ test('project inventory reader rejects an engine symlink before reading outside 
   } finally {
     await rm(base, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('project inventory snapshot requires an existing engine-sessions root', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-session-slots-root-missing-'));
+  try {
+    await mkdir(join(base, '.triss'), { recursive: true });
+    const parentHandle = await openManagedTrissRoot(base);
+    await assert.rejects(
+      () => readProjectCoderSessionInventories(parentHandle),
+      /ENOENT|identity changed|engine-sessions-v2/,
+    );
+    await assert.rejects(
+      () => readdir(join(base, '.triss', 'engine-sessions-v2')),
+      /ENOENT/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('project inventory snapshot treats absent canonical engine roots as empty without creating them', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-session-slots-empty-'));
+  try {
+    await mkdir(join(base, '.triss', 'engine-sessions-v2'), { recursive: true });
+    const parentHandle = await openManagedTrissRoot(base);
+    const snapshot = await readProjectCoderSessionInventories(parentHandle);
+    assert.deepEqual(snapshot, [
+      { engine: 'opencode', entries: [] },
+      { engine: 'opencode2', entries: [] },
+      { engine: 'crush', entries: [] },
+    ]);
+    assert.deepEqual(await readdir(join(base, '.triss', 'engine-sessions-v2')), []);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('existing managed child never recreates a component removed before open', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-session-slots-race-'));
+  try {
+    await mkdir(join(base, '.triss', 'engine-sessions-v2', 'opencode'), { recursive: true });
+    const parentHandle = await openManagedTrissRoot(base);
+    await rm(join(base, '.triss', 'engine-sessions-v2', 'opencode'), { recursive: true, force: true });
+    await assert.rejects(
+      () => openManagedExistingChildDir(parentHandle, 'engine-sessions-v2', 'opencode'),
+      /ENOENT|identity changed/,
+    );
+    await assert.rejects(
+      () => readdir(join(base, '.triss', 'engine-sessions-v2', 'opencode')),
+      /ENOENT/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('project snapshot fails closed when a listed engine disappears before open', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-session-slots-engine-race-'));
+  try {
+    const engineDir = join(base, '.triss', 'engine-sessions-v2', 'opencode');
+    await mkdir(engineDir, { recursive: true });
+    const parentHandle = await openManagedTrissRoot(base);
+    await assert.rejects(
+      () => readProjectCoderSessionInventories(parentHandle, {
+        beforeEngineOpen: async () => rm(engineDir, { recursive: true, force: true }),
+      }),
+      /ENOENT|identity changed|disappeared/,
+    );
+    await assert.rejects(() => readdir(engineDir), /ENOENT/);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('project snapshot fails closed when an observed inventory disappears during read', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-session-slots-inventory-race-'));
+  try {
+    const engineDir = join(base, '.triss', 'engine-sessions-v2', 'opencode');
+    const inventoryPath = join(engineDir, '.inventory.json');
+    await mkdir(engineDir, { recursive: true });
+    await writeFile(
+      inventoryPath,
+      '{"schema_version":1,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n',
+      { mode: 0o600 },
+    );
+    const parentHandle = await openManagedTrissRoot(base);
+    await assert.rejects(
+      () => readProjectCoderSessionInventories(parentHandle, {
+        beforeInventoryRead: async () => rm(inventoryPath, { force: true }),
+      }),
+      /presence changed|ENOENT|identity changed/,
+    );
+    await assert.rejects(() => readdir(inventoryPath), /ENOENT/);
+  } finally {
+    await rm(base, { recursive: true, force: true });
   }
 });

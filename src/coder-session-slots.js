@@ -6,9 +6,15 @@
  * module so admission and backup cannot accidentally apply different rules.
  */
 
-import { readCoderSessionInventory } from './coder-session-inventory-codec.js';
+import { INVENTORY_BASENAME, readCoderSessionInventory } from './coder-session-inventory-codec.js';
 import { CODER_SESSION_ENGINES } from './coder-session-engines.js';
-import { openManagedChildDir, managedRevalidate } from './managed-root.js';
+import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  listManagedChildNames,
+  openManagedExistingChildDir,
+  managedRevalidate,
+} from './managed-root.js';
 
 export const LIVE_SESSION_STATES = Object.freeze(['reserved', 'running', 'deleting']);
 
@@ -130,24 +136,86 @@ export function resolveProjectCoderSessionSlot({ inventories, slug, candidateSlo
   return { slot, retake: candidateSlot !== slot };
 }
 
-/** Read all canonical engine inventories for one project-wide snapshot. */
-export async function readProjectCoderSessionInventories(parentHandle) {
+async function inventoryFilePresent(engineHandle) {
+  const path = join(engineHandle.path, INVENTORY_BASENAME);
+  try {
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink()) throw new Error(`managed-root: symlink rejected: ${path}`);
+    if (!stats.isFile()) throw new Error(`managed-root: not a regular file: ${path}`);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+function sameNames(left, right) {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+/**
+ * Read all canonical engine inventories for one project-wide snapshot.
+ * `engine-sessions-v2` itself must already exist: production admission and
+ * cleanup create it before entering the inventory mutex, and disappearance
+ * after that point is corruption/race, never an empty project.
+ */
+export async function readProjectCoderSessionInventories(
+  parentHandle,
+  { beforeEngineOpen, beforeInventoryRead, beforeRelist, includePresence = false } = {},
+) {
   if (!parentHandle || typeof parentHandle.path !== 'string') {
     throw new TypeError('session slots: validated parentHandle is required');
   }
-  const engineRootHandle = await openManagedChildDir(parentHandle, 'engine-sessions-v2');
+  const engineRootHandle = await openManagedExistingChildDir(parentHandle, 'engine-sessions-v2');
+  const listedNames = (await listManagedChildNames(engineRootHandle)).sort();
+  const unknown = listedNames.filter((name) => !CODER_SESSION_ENGINES.includes(name));
+  if (unknown.length > 0) {
+    throw new Error(`session slots: unknown canonical engine directory: ${unknown.join(', ')}`);
+  }
   const inventories = [];
-  for (const engine of CODER_SESSION_ENGINES) {
-    const engineHandle = await openManagedChildDir(engineRootHandle, engine);
+  await beforeEngineOpen?.(listedNames);
+  for (const engine of listedNames) {
+    const engineHandle = await openManagedExistingChildDir(engineRootHandle, engine);
+    if (!engineHandle) {
+      throw new Error(`session slots: listed engine disappeared before open: ${engine}`);
+    }
     await managedRevalidate(engineHandle);
-    const read = await readCoderSessionInventory(engineHandle.path);
+    const presentBefore = await inventoryFilePresent(engineHandle);
+    await beforeInventoryRead?.(engine, presentBefore);
+    // The test seam models a same-UID substitution between discovery and the
+    // actual codec open. Revalidate the parent directory after it so a
+    // swapped engine path cannot be followed by the inventory reader.
     await managedRevalidate(engineHandle);
+    const read = await readCoderSessionInventory(engineHandle.path, { reportMissing: true });
+    if (read.missing !== !presentBefore) {
+      throw new Error(`session slots: ${engine} inventory presence changed during read`);
+    }
+    const presentAfter = await inventoryFilePresent(engineHandle);
+    if (presentAfter !== presentBefore) {
+      throw new Error(`session slots: ${engine} inventory presence changed during snapshot`);
+    }
+    await managedRevalidate(engineHandle);
+    await managedRevalidate(parentHandle);
     if (read.error) {
       const error = new Error(`session slots: ${engine} inventory unusable — ${read.error}`);
       error.code = 'TRISS_CODER_SESSION_STORE_INVALID';
       throw error;
     }
-    inventories.push({ engine, entries: read.entries });
+    inventories.push({
+      engine,
+      entries: read.entries,
+      ...(includePresence ? { inventory_present: presentBefore } : {}),
+    });
   }
-  return inventories;
+  await beforeRelist?.();
+  const finalNames = (await listManagedChildNames(engineRootHandle)).sort();
+  if (!sameNames(listedNames, finalNames)) {
+    throw new Error('session slots: canonical engine set changed during snapshot');
+  }
+  const byEngine = new Map(inventories.map((inventory) => [inventory.engine, inventory]));
+  return CODER_SESSION_ENGINES.map((engine) => byEngine.get(engine) || {
+    engine,
+    entries: [],
+    ...(includePresence ? { inventory_present: false } : {}),
+  });
 }
