@@ -56,6 +56,7 @@
     "src/coder-session-engines.js",
     "src/coder-session-inventory-codec.js",
     "src/coder-session-owner-adapter.js",
+    "src/coder-session-slots.js",
     "src/coder-session-store.js",
     "src/coder-session-transitions.js",
     "src/coder-state-backup.js",

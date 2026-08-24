@@ -12,6 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile, readFile, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1115,6 +1116,105 @@ test('valid same-slug state in BOTH store engines backs up and validates immedia
     assert.ok(paths.includes('engine-sessions-v2/opencode/.inventory.json'));
     assert.ok(paths.includes('engine-sessions-v2/opencode2/.inventory.json'));
     assert.ok(paths.includes('sessions.json'));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('backup rejects a handcrafted cross-engine distinct-live-slug slot collision', async () => {
+  const fx = await fixture();
+  try {
+    const projectId = 'e'.repeat(32);
+    const fp = projectRootFingerprint(projectId);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedIdleRowWithMapping(fx.base, 'opencode', 'collision-a', 'ses_collision_a', fp);
+    await seedIdleRowWithMapping(fx.base, 'opencode2', 'collision-b', 'ses_collision_b', fp);
+    await markCoderSessionRunning({
+      inventoryDir: join(fx.trissRoot, 'engine-sessions-v2', 'opencode'),
+      engine: 'opencode', slug: 'collision-a', runId: 'run-collision-a',
+      sandboxId: 'sbx_' + 'a'.repeat(32), pid: 101, processStartId: 'ps-a', bootId: 'boot-a',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'),
+      engine: 'opencode2', slug: 'collision-b', runId: 'run-collision-b',
+      sandboxId: 'sbx_' + 'b'.repeat(32), pid: 102, processStartId: 'ps-b', bootId: 'boot-b',
+    });
+    await assert.rejects(
+      () => backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId }),
+      /project-wide slot invariant.*distinct live slugs share lock slot/,
+    );
+    await assert.rejects(() => lstat(join(fx.backupDir, 'COMPLETION')), /ENOENT/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('backup validator rejects a rehashed copied cross-engine distinct-live collision', async () => {
+  const fx = await fixture();
+  try {
+    const projectId = 'f'.repeat(32);
+    const fp = projectRootFingerprint(projectId);
+    await writeFile(join(fx.trissRoot, PROJECT_IDENTITY_REL), JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    await seedIdleRowWithMapping(fx.base, 'opencode', 'validator-a', 'ses_validator_a', fp);
+    await seedIdleRowWithMapping(fx.base, 'opencode2', 'validator-b', 'ses_validator_b', fp);
+    await backupCoderV2State({ projectRoot: fx.base, backupDir: fx.backupDir, projectId });
+
+    const copiedInventories = [
+      ['opencode', 'd', 103],
+      ['opencode2', 'c', 104],
+    ];
+    const copiedByPath = new Map();
+    for (const [engine, marker, pid] of copiedInventories) {
+      const inventoryPath = join(fx.backupDir, 'state', 'engine-sessions-v2', engine, INVENTORY_BASENAME);
+      const inventoryText = await readFile(inventoryPath, 'utf8');
+      const inventory = decodeCoderSessionInventory(inventoryText);
+      const row = inventory.entries[0];
+      const liveRow = {
+        ...row,
+        state: 'running',
+        run_id: `run_validator_collision_${engine}`,
+        sandbox_id: 'sbx_' + marker.repeat(32),
+        pid,
+        process_start_id: `ps-validator-${engine}`,
+        boot_id: `boot-validator-${engine}`,
+      };
+      const copiedText = encodeCoderSessionInventory([liveRow], inventory.updated_at);
+      await writeFile(inventoryPath, copiedText, { mode: 0o600 });
+      copiedByPath.set(`engine-sessions-v2/${engine}/.inventory.json`, copiedText);
+    }
+    const manifestPath = join(fx.backupDir, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    for (const entry of manifest.entries) {
+      const copiedText = copiedByPath.get(entry.path);
+      if (!copiedText) continue;
+      entry.sha256 = createHash('sha256').update(copiedText, 'utf8').digest('hex');
+      entry.size = Buffer.byteLength(copiedText, 'utf8');
+    }
+    manifest.sha256 = createHash('sha256')
+      .update(manifest.entries.map((candidate) => `${candidate.path}\u0000${candidate.sha256}`).join('\u0000'), 'utf8')
+      .digest('hex');
+    const manifestText = `${JSON.stringify(manifest)}\n`;
+    await writeFile(manifestPath, manifestText, { mode: 0o600 });
+    const completionPath = join(fx.backupDir, 'COMPLETION');
+    const completion = JSON.parse(await readFile(completionPath, 'utf8'));
+    completion.manifest_sha256 = createHash('sha256').update(manifestText, 'utf8').digest('hex');
+    await writeFile(completionPath, `${JSON.stringify(completion)}\n`, { mode: 0o600 });
+
+    const validation = await validateCoderV2Backup(fx.backupDir);
+    assert.equal(validation.valid, false);
+    assert.match(validation.reasons.join('; '), /distinct live slugs share lock slot/);
   } finally {
     await fx.cleanup();
   }

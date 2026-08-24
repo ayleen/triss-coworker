@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -271,5 +271,26 @@ test('readCoderSessionInventory returns empty entries when absent and fails clos
     assert.match(read.error, /corrupt/);
   } finally {
     await fx.cleanup();
+  }
+});
+
+test('readCoderSessionInventory pins the final file and enforces the byte cap', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-inventory-outside-'));
+  try {
+    const valid = encodeCoderSessionInventory([], NOW);
+    await writeFile(join(outside, '.inventory.json'), valid, { mode: 0o600 });
+    await symlink(join(outside, '.inventory.json'), join(fx.inventoryDir, '.inventory.json'));
+    await assert.rejects(
+      () => readCoderSessionInventory(fx.inventoryDir),
+      /ELOOP|too many symbolic links|symlink/i,
+    );
+    await rm(join(fx.inventoryDir, '.inventory.json'), { force: true });
+    await writeFile(join(fx.inventoryDir, '.inventory.json'), 'x'.repeat(INVENTORY_MAX_BYTES + 1), { mode: 0o600 });
+    const oversized = await readCoderSessionInventory(fx.inventoryDir);
+    assert.match(oversized.error, /corrupt/);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
   }
 });

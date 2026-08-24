@@ -28,7 +28,8 @@
  * admission, recovery, store mutation, or process-owner adapter.
  */
 
-import { open, readFile, rename } from 'node:fs/promises';
+import { open, rename } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -71,6 +72,7 @@ const ENTRY_KEYS = [
 const SANDBOX_ID_RE = /^sbx_[0-9a-f]{32}$/;
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
+const { O_RDONLY, O_NOFOLLOW } = fsConstants;
 // Immutable per-incarnation identity: exactly 128 random bits, lowercase hex.
 export const SESSION_INSTANCE_ID_RE = /^[0-9a-f]{32}$/;
 
@@ -253,18 +255,38 @@ export function decodeCoderSessionInventory(text) {
  */
 export async function readCoderSessionInventory(inventoryDir) {
   const path = join(inventoryDir, INVENTORY_BASENAME);
-  let text;
+  let fd;
   try {
-    text = await readFile(path, 'utf8');
+    fd = await open(path, O_RDONLY | O_NOFOLLOW);
   } catch (err) {
     if (err && err.code === 'ENOENT') return { entries: [] };
     throw err;
   }
-  const decoded = decodeCoderSessionInventory(text);
-  if (decoded === null) {
-    return { error: 'inventory: corrupt canonical inventory (fail closed)' };
+  try {
+    const stats = await fd.stat();
+    if (!stats.isFile()) {
+      throw new Error(`inventory: canonical path is not a regular file: ${path}`);
+    }
+    const parts = [];
+    let total = 0;
+    const chunk = Buffer.alloc(16 * 1024);
+    while (true) {
+      const { bytesRead } = await fd.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > INVENTORY_MAX_BYTES) {
+        return { error: 'inventory: corrupt canonical inventory (fail closed)' };
+      }
+      parts.push(Buffer.from(chunk.subarray(0, bytesRead)));
+    }
+    const decoded = decodeCoderSessionInventory(Buffer.concat(parts).toString('utf8'));
+    if (decoded === null) {
+      return { error: 'inventory: corrupt canonical inventory (fail closed)' };
+    }
+    return { entries: decoded.entries };
+  } finally {
+    await fd.close();
   }
-  return { entries: decoded.entries };
 }
 
 /**

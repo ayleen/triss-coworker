@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +21,7 @@ import { beginCoderSessionDelete, markCoderSessionRunning, markCoderSessionIdle,
 import { processStartIdentity } from '../src/update/cache.js';
 import { readCoderSessionInventory, RESERVED_BYTES } from '../src/coder-session-inventory-codec.js';
 import { writeResultState } from '../src/coder-result-registry-codec.js';
-import { acquireCoderTargetLease } from '../src/coder-lease.js';
+import { acquireCoderSlotLease, acquireCoderTargetLease } from '../src/coder-lease.js';
 import { openManagedTrissRoot } from '../src/managed-root.js';
 import { acquireFixedKernelLock } from '../src/fixed-kernel-lock.js';
 import {
@@ -565,6 +565,261 @@ test('two different slugs admitted concurrently both survive with distinct lock 
     assert.deepEqual(slugs, ['par-a', 'par-b']);
     const slots = new Set(inv.entries.map((e) => e.lock_slot));
     assert.equal(slots.size, 2, 'live rows must hold distinct slots');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('different slugs admitted concurrently across opencode and opencode2 use project-wide distinct slots', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const outcomes = await Promise.allSettled([
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode', slug: 'cross-a', isolated: false,
+        ownerTuple: { pid: 85, processStartId: 'ps-ca', bootId: 'boot-ca' },
+      })),
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode2', slug: 'cross-b', isolated: false,
+        ownerTuple: { pid: 86, processStartId: 'ps-cb', bootId: 'boot-cb' },
+      })),
+    ]);
+    for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+    const a = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode'));
+    const b = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.deepEqual(new Set([a.entries[0].lock_slot, b.entries[0].lock_slot]), new Set([0, 1]));
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('different slugs admitted across opencode and crush use project-wide distinct slots', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const outcomes = await Promise.allSettled([
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode', slug: 'cross-crush-a', isolated: false,
+        ownerTuple: { pid: 87, processStartId: 'ps-cca', bootId: 'boot-cca' },
+      })),
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'crush', slug: 'cross-crush-b', isolated: false,
+        ownerTuple: { pid: 88, processStartId: 'ps-ccb', bootId: 'boot-ccb' },
+      })),
+    ]);
+    for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+    const a = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode'));
+    const b = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'crush'));
+    assert.deepEqual(new Set([a.entries[0].lock_slot, b.entries[0].lock_slot]), new Set([0, 1]));
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('same slug admitted in two engines reuses one project-wide slot', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const outcomes = await Promise.allSettled([
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode', slug: 'cross-shared', isolated: false,
+        ownerTuple: { pid: 89, processStartId: 'ps-csa', bootId: 'boot-csa' },
+      })),
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode2', slug: 'cross-shared', isolated: false,
+        ownerTuple: { pid: 90, processStartId: 'ps-csb', bootId: 'boot-csb' },
+      })),
+    ]);
+    for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+    const a = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode'));
+    const b = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    assert.equal(a.entries[0].lock_slot, b.entries[0].lock_slot);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('cross-engine race for the last project-wide slot has one winner and bounded capacity loser', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    for (const [index, slug] of ['last-0', 'last-1', 'last-2'].entries()) {
+      const seeded = await reserveV2SessionRow({
+        engine: 'opencode2', slug, isolated: false,
+        ownerTuple: { pid: 91 + index, processStartId: `ps-last-${index}`, bootId: `boot-last-${index}` },
+      });
+      await seeded.releaseRunLease();
+    }
+    const outcomes = await Promise.allSettled([
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'opencode', slug: 'last-a', isolated: false,
+        ownerTuple: { pid: 95, processStartId: 'ps-last-a', bootId: 'boot-last-a' },
+      })),
+      autoReleaseLease(reserveV2SessionRow({
+        engine: 'crush', slug: 'last-b', isolated: false,
+        ownerTuple: { pid: 96, processStartId: 'ps-last-b', bootId: 'boot-last-b' },
+      })),
+    ]);
+    assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    assert.match(rejected.reason?.message || '', /no free lock slot|capacity/i);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean waits for a same-slot live row in another engine to finish, then removes idle target', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  let heldSlot;
+  try {
+    const opencodeDir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode');
+    const opencode2Dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(opencode2Dir, { recursive: true, mode: 0o700 });
+    await reserveCoderSession({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-wait', isolationMode: 'non_isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-clean-wait', pid: 201,
+      processStartId: 'ps-clean-wait', bootId: 'boot-clean-wait',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-wait', runId: 'run-clean-wait',
+      pid: 201, processStartId: 'ps-clean-wait', bootId: 'boot-clean-wait',
+    });
+    await markCoderSessionIdle({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-wait' });
+    await reserveCoderSession({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'other-live', isolationMode: 'non_isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-other-live', pid: 202,
+      processStartId: 'ps-other-live', bootId: 'boot-other-live',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'other-live', runId: 'run-other-live',
+      pid: 202, processStartId: 'ps-other-live', bootId: 'boot-other-live',
+    });
+    const parentHandle = await openManagedTrissRoot(fx.base);
+    heldSlot = await acquireCoderSlotLease({ parentHandle, lockSlot: 'session-0' });
+    const cleanPromise = runCoderSessionClean('clean-wait', { engine: 'opencode' }, {
+      currentSessionOwnerTuple: () => ({ pid: 203, processStartId: 'ps-cleaner', bootId: 'boot-cleaner' }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await markCoderSessionIdle({ inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'other-live' });
+    await heldSlot.release();
+    heldSlot = null;
+    await cleanPromise;
+    assert.equal((await readCoderSessionInventory(opencodeDir)).entries.length, 0);
+    assert.equal((await readCoderSessionInventory(opencode2Dir)).entries[0].state, 'idle');
+  } finally {
+    if (heldSlot) await heldSlot.release().catch(() => {});
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean rejects a stale cross-engine live collision after physical lease and retains rows', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const opencodeDir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode');
+    const opencode2Dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(opencode2Dir, { recursive: true, mode: 0o700 });
+    await reserveCoderSession({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-stale', isolationMode: 'isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-clean-stale', pid: 204,
+      processStartId: 'ps-clean-stale', bootId: 'boot-clean-stale',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-stale', runId: 'run-clean-stale',
+      pid: 204, processStartId: 'ps-clean-stale', bootId: 'boot-clean-stale',
+    });
+    await markCoderSessionIdle({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'clean-stale' });
+    await reserveCoderSession({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'stale-live', isolationMode: 'isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-stale-live', pid: 205,
+      processStartId: 'ps-stale-live', bootId: 'boot-stale-live',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'stale-live', runId: 'run-stale-live',
+      pid: 205, processStartId: 'ps-stale-live', bootId: 'boot-stale-live',
+    });
+    await writeFile(join(fx.base, '.triss', 'sessions.json'), JSON.stringify({
+      version: 2,
+      engines: {
+        opencode: { 'clean-stale': 'real-clean-stale' },
+        opencode2: { 'stale-live': 'real-stale-live' },
+      },
+    }), { mode: 0o600 });
+    await assert.rejects(
+      () => runCoderSessionClean('clean-stale', { engine: 'opencode' }, {
+        currentSessionOwnerTuple: () => ({ pid: 206, processStartId: 'ps-cleaner-stale', bootId: 'boot-cleaner-stale' }),
+      }),
+      /project-wide slot conflict/,
+    );
+    assert.equal((await readCoderSessionInventory(opencodeDir)).entries[0].state, 'idle');
+    assert.equal((await readCoderSessionInventory(opencode2Dir)).entries[0].state, 'running');
+    const retainedStore = JSON.parse(await readFile(join(fx.base, '.triss', 'sessions.json'), 'utf8'));
+    assert.equal(retainedStore.engines.opencode['clean-stale'], 'real-clean-stale');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('deleting recovery rejects a stale cross-engine live collision and retains row plus mapping', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const opencodeDir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode');
+    const opencode2Dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(opencode2Dir, { recursive: true, mode: 0o700 });
+    await reserveCoderSession({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'recover-stale', isolationMode: 'isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-recover-old', pid: 207,
+      processStartId: 'ps-recover-old', bootId: 'boot-recover-old',
+    });
+    await beginCoderSessionDelete({
+      inventoryDir: opencodeDir, engine: 'opencode', slug: 'recover-stale', runId: 'run-recover-delete',
+      sandboxId: 'sbx_' + 'e'.repeat(32), pid: 208, processStartId: 'ps-recover-delete',
+      bootId: 'boot-recover-delete',
+    });
+    await reserveCoderSession({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'recover-live', isolationMode: 'isolated',
+      lockSlot: 0, projectRootFingerprint: FP, runId: 'run-recover-live', pid: 209,
+      processStartId: 'ps-recover-live', bootId: 'boot-recover-live',
+    });
+    await markCoderSessionRunning({
+      inventoryDir: opencode2Dir, engine: 'opencode2', slug: 'recover-live', runId: 'run-recover-live',
+      pid: 209, processStartId: 'ps-recover-live', bootId: 'boot-recover-live',
+    });
+    await writeFile(join(fx.base, '.triss', 'sessions.json'), JSON.stringify({
+      version: 2, engines: { opencode: { 'recover-stale': 'real-recover-stale' }, opencode2: {} },
+    }), { mode: 0o600 });
+    await assert.rejects(
+      () => runCoderSessionClean('recover-stale', { engine: 'opencode' }, {
+        currentSessionOwnerTuple: () => ({ pid: 210, processStartId: 'ps-recover-cleaner', bootId: 'boot-recover-cleaner' }),
+      }),
+      /project-wide slot conflict/,
+    );
+    assert.equal((await readCoderSessionInventory(opencodeDir)).entries[0].state, 'deleting');
+    const retainedStore = JSON.parse(await readFile(join(fx.base, '.triss', 'sessions.json'), 'utf8'));
+    assert.equal(retainedStore.engines.opencode['recover-stale'], 'real-recover-stale');
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;

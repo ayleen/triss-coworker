@@ -68,6 +68,7 @@ export const BACKUP_LIMITS = Object.freeze({
 // engine-sessions-v2/<name> is an invalid state and fails closed — a backup
 // must never silently omit persistent sessions.
 import { CODER_SESSION_ENGINES, CODER_SESSION_STORE_ENGINES } from './coder-session-engines.js';
+import { validateProjectCoderSessionSlots } from './coder-session-slots.js';
 import { decodeProjectIdentityRecord, projectRootFingerprint } from './coder-state.js';
 
 export const SESSIONS_STORE_REL = 'sessions.json';
@@ -172,6 +173,15 @@ function classifyRowMappingConsistency({
       continue;
     }
     rowsByEngine[engine] = decoded.entries;
+  }
+
+  // lock_slot is a project-wide resource even though inventories are stored
+  // per engine.  Apply the same projection used by admission so both source
+  // and copied-backup validation reject handcrafted cross-engine collisions.
+  for (const reason of validateProjectCoderSessionSlots(
+    Object.entries(rowsByEngine).map(([engine, entries]) => ({ engine, entries })),
+  )) {
+    reasons.push(`project-wide slot invariant: ${reason}`);
   }
 
   let identity = null;

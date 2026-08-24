@@ -124,6 +124,11 @@ import {
   CODER_SESSION_ENGINES,
   CODER_SESSION_STORE_ENGINES as SESSION_STORE_ENGINES,
 } from '../coder-session-engines.js';
+import {
+  readProjectCoderSessionInventories,
+  resolveProjectCoderSessionSlot,
+  validateProjectCoderSessionCleanupSlot,
+} from '../coder-session-slots.js';
 import { processStartIdentity } from '../update/cache.js';
 import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
 import {
@@ -5569,20 +5574,6 @@ async function loadProjectIdentityWithRaceRetry(trissHandle, attempts = 3) {
   throw lastError;
 }
 
-// Lowest lock slot not held by a live (reserved/running) or cleanup
-// (deleting) row. Idle rows hold no live run, so their stored slot is free.
-function pickFreeLockSlot(entries) {
-  const liveSlots = new Set(
-    entries
-      .filter((e) => ['reserved', 'running', 'deleting'].includes(e.state))
-      .map((e) => e.lock_slot),
-  );
-  for (const slot of [0, 1, 2, 3]) {
-    if (!liveSlots.has(slot)) return slot;
-  }
-  throw new Error('coder-session: no free lock slot among live session rows');
-}
-
 // True iff the row's complete owner tuple is EXACTLY this run cycle's —
 // including the IMMUTABLE session_instance_id minted at THIS admission. A
 // same-slug replacement row (new incarnation, even with a coinciding
@@ -5622,7 +5613,6 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
     reserveCoderSession,
     markCoderSessionRunning,
   } = transitions;
-  const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
   const { projectRootFingerprint } = await import('../coder-state.js');
   const parentHandle = await openManagedTrissRoot(projectRoot());
   const inventoryHandle = await openManagedChildDir(parentHandle, 'engine-sessions-v2', engine);
@@ -5643,25 +5633,27 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
     parentHandle,
     isolationMode: isolated ? 'isolated' : 'non-isolated',
     selectLockSlot: async () => {
-      // Plain snapshot read (atomic-rename file): selection only — the
-      // authoritative re-check happens under the exclusive inventory lock.
-      const pre = await readCoderSessionInventory(inventoryDir);
-      if (pre.error) throw storeInvalidError(pre.error);
-      return pickFreeLockSlot(pre.entries);
+      // Project-wide snapshot under a brief exclusive inventory scope:
+      // selection only — the authoritative re-check below happens after the
+      // target/slot leases are acquired, under another fresh scope.
+      return withCoderInventoryLock({ parentHandle }, async () => {
+        const inventories = await readProjectCoderSessionInventories(parentHandle);
+        return resolveProjectCoderSessionSlot({ inventories, slug }).slot;
+      });
     },
     classifyAndWrite: async (lockSlot) => {
-      // Exclusive inventory: classify against FRESH state. Only an idle
-      // row may continue; reserved/running is busy and deleting is cleanup
-      // in progress — none of those states may degrade to "store
-      // unavailable, continue anyway".
-      const read = await readCoderSessionInventory(inventoryDir);
-      if (read.error) throw storeInvalidError(read.error);
-      const liveSlots = new Set(
-        read.entries
-          .filter((e) => ['reserved', 'running', 'deleting'].includes(e.state))
-          .map((e) => e.lock_slot),
-      );
-      if (liveSlots.has(lockSlot)) return { retake: true };
+      // Exclusive inventory: classify against a FRESH project-wide state.
+      // The same resolver used for initial selection revalidates the exact
+      // candidate, so a cross-engine claim causes a bounded retake.
+      const inventories = await readProjectCoderSessionInventories(parentHandle);
+      const resolved = resolveProjectCoderSessionSlot({
+        inventories,
+        slug,
+        candidateSlot: lockSlot,
+      });
+      if (resolved.retake) return { retake: true };
+      const current = inventories.find((inventory) => inventory.engine === engine);
+      const read = { entries: current?.entries || [] };
       const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
       if (!existing) {
         // A NEW reservation must never silently adopt an ORPHAN durable
@@ -7541,7 +7533,7 @@ export async function runCoderSessionList(opts = {}, deps = {}) {
  * either an intact idle row or a deleting breadcrumb; a later clean takes
  * the idempotent deleting-recovery path and always converges.
  */
-export async function runCoderSessionClean(slug, opts = {}) {
+export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
   if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
     throw new Error(`--engine <${CODER_SESSION_ENGINES.join('|')}> is required for session clean`);
   }
@@ -7558,7 +7550,7 @@ export async function runCoderSessionClean(slug, opts = {}) {
   // row requires run id + sandbox id + positive PID + process-start identity
   // + boot identity, so a bare {inventoryDir, engine, slug} transition is
   // invalid and would fail closed.
-  const ownerTuple = currentSessionOwnerTuple();
+  const ownerTuple = (deps.currentSessionOwnerTuple || currentSessionOwnerTuple)();
   const cleanRunId = `run_${randomBytes(16).toString('hex')}`;
   const cleanSandboxId = `sbx_${randomBytes(16).toString('hex')}`;
   // ONE shared maintenance scope covers DISCOVERY through COMPLETION. Taking
@@ -7576,10 +7568,15 @@ export async function runCoderSessionClean(slug, opts = {}) {
   let removedMapping;
   let recovering = false;
   try {
-    // Discovery snapshot (plain read; exclusive writers are excluded by our
-    // maintenance scope).
-    const snapshot = await readCoderSessionInventory(inventoryDir);
-    if (snapshot.error) throw new Error(snapshot.error);
+    // Discovery snapshot under the brief exclusive inventory scope.  The
+    // stored slot is project-wide metadata, so clean/recovery must inspect
+    // every canonical engine before acquiring a destructive slot lease.
+    let snapshot;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const inventories = await readProjectCoderSessionInventories(parentHandle);
+      const current = inventories.find((inventory) => inventory.engine === opts.engine);
+      snapshot = { entries: current?.entries || [] };
+    });
     const snapRow = snapshot.entries.find((s) => s.slug === slug);
     if (!snapRow) {
       process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
@@ -7622,6 +7619,17 @@ export async function runCoderSessionClean(slug, opts = {}) {
     // Brief inventory #1: EXACT row revalidation, then publish the DELETING
     // breadcrumb with this attempt's complete clean owner tuple.
     await withCoderInventoryLock({ parentHandle }, async () => {
+      const freshInventories = await readProjectCoderSessionInventories(parentHandle);
+      const slotReasons = validateProjectCoderSessionCleanupSlot({
+        inventories: freshInventories,
+        engine: opts.engine,
+        slug,
+      });
+      if (slotReasons.length > 0) {
+        throw new Error(
+          `session ${slug} has a project-wide slot conflict — ${slotReasons.join('; ')}; retain, fail closed`,
+        );
+      }
       const fresh = await readCoderSessionInventory(inventoryDir);
       if (fresh.error) throw new Error(fresh.error);
       const freshRow = fresh.entries.find((e) => e.engine === opts.engine && e.slug === slug);
