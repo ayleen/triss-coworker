@@ -82,6 +82,42 @@ test('idle row may transiently share a slot with a live distinct slug', () => {
   }), { slot: 0, retake: false });
 });
 
+test('candidate continuation rejects a live distinct owner after taking the physical slot lease', () => {
+  for (const liveState of ['running', 'deleting', 'reserved']) {
+    const state = inventories(
+      row('A', 0, 'idle', 'opencode'),
+      row('B', 0, liveState, 'opencode2'),
+    );
+    // Initial selection preserves A's durable continuation slot and therefore
+    // waits for B; it must not auto-rebind A to another slot.
+    assert.deepEqual(resolveProjectCoderSessionSlot({ inventories: state, slug: 'A' }), {
+      slot: 0,
+      retake: false,
+    });
+    assert.throws(
+      () => resolveProjectCoderSessionSlot({ inventories: state, slug: 'A', candidateSlot: 0 }),
+      (error) => error?.code === 'TRISS_CODER_SESSION_SLOT_INVALID'
+        && new RegExp(`candidate slot 0 for A conflicts with live opencode2/B`).test(error.message),
+    );
+  }
+  const stale = inventories(
+    row('A', 0, 'idle', 'opencode'),
+    row('B', 0, 'running', 'opencode2'),
+  );
+  assert.deepEqual(resolveProjectCoderSessionSlot({ inventories: stale, slug: 'A', candidateSlot: 1 }), {
+    slot: 0,
+    retake: true,
+  });
+  const sameSlug = inventories(
+    row('A', 0, 'idle', 'opencode'),
+    row('A', 0, 'running', 'opencode2'),
+  );
+  assert.deepEqual(resolveProjectCoderSessionSlot({ inventories: sameSlug, slug: 'A', candidateSlot: 0 }), {
+    slot: 0,
+    retake: false,
+  });
+});
+
 test('clean/recovery rejects an idle stored slot colliding with another engine live slug', () => {
   const state = inventories(
     row('A', 0, 'idle', 'opencode'),

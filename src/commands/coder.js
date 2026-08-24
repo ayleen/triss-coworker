@@ -5643,7 +5643,7 @@ function rowOwnedByRun(row, sessionV2) {
     && row.session_instance_id === sessionV2.instanceId;
 }
 
-export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }) {
+export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple, dependencies = {} }) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5687,6 +5687,7 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple }
   const runLease = await acquireCoderSessionRunLease({
     parentHandle,
     isolationMode: isolated ? 'isolated' : 'non-isolated',
+    dependencies,
     selectLockSlot: async () => {
       // Project-wide snapshot under a brief exclusive inventory scope:
       // selection only — the authoritative re-check below happens after the

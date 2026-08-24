@@ -133,7 +133,30 @@ export function resolveProjectCoderSessionSlot({ inventories, slug, candidateSlo
   if (!Number.isInteger(candidateSlot) || candidateSlot < 0 || candidateSlot > 3) {
     throw new TypeError('session slots: candidateSlot must be 0..3');
   }
-  return { slot, retake: candidateSlot !== slot };
+  // A different candidate is stale relative to the canonical slot.  Let the
+  // lease layer release it and retake from a fresh project-wide selection;
+  // only an exact candidate match is authoritative enough for the conflict
+  // check below.
+  if (candidateSlot !== slot) return { slot, retake: true };
+  // An idle row may legitimately retain a slot currently used by another
+  // live slug: idle rows do not consume execution capacity.  That is only a
+  // transient state while the other owner is active, though.  Once the
+  // physical candidate lease has been acquired, a continuation must not
+  // promote the idle row to live on top of that owner.  Keep this check in
+  // candidate mode so the initial resolver still selects the durable slot
+  // and waits for the real owner to finish.
+  const conflictingLive = sameSlug.length > 0
+    ? projection.liveRows.find((row) => row.slug !== slug && row.lock_slot === slot)
+    : null;
+  if (conflictingLive) {
+    const error = new Error(
+      `session slots: candidate slot ${slot} for ${slug} conflicts with live ` +
+      `${conflictingLive._inventory_engine}/${conflictingLive.slug} — retain, fail closed`,
+    );
+    error.code = 'TRISS_CODER_SESSION_SLOT_INVALID';
+    throw error;
+  }
+  return { slot, retake: false };
 }
 
 async function inventoryFilePresent(engineHandle) {
