@@ -1181,15 +1181,15 @@ export async function coderStatusHandler() {
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — from TRISS_CODER_MODEL, used by a bare opencode-engine run (crush ignores it and uses its own GLM atoms)`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${
-          status.engineVersion === status.pin ? ' (matches pin)' : ` (pin ${status.pin})`
+          status.meetsMinimum ? ' (meets minimum)' : ` (minimum ${status.minimumVersion})`
         }`
-      : `Engine: opencode not installed (pin ${status.pin})`,
+      : `Engine: opencode not installed (minimum ${status.minimumVersion})`,
     ...status.configs.map((c) => `opencode.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
     status.crush.found
       ? `Engine: crush ${status.crush.version}${
-          status.crush.satisfiesPin ? ' (matches pin)' : ` (pin ${status.crush.pin})`
+          status.crush.meetsMinimum ? ' (meets minimum)' : ` (minimum ${status.crush.minimumVersion})`
         }`
-      : `Engine: crush not installed (pin ${status.crush.pin})`,
+      : `Engine: crush not installed (minimum ${status.crush.minimumVersion})`,
     ...status.crush.configs.map((c) => `crush.json [${c.scope}]: ${c.exists ? c.path : 'not written'}`),
     `Worktrees (.triss/wt): ${status.worktreeCount} live`,
   ];

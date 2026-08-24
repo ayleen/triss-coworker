@@ -163,6 +163,7 @@ import {
 } from '../coder-session-slots.js';
 import { processStartIdentity } from '../update/cache.js';
 import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
+import { compareStableVersions, parseStableVersion } from '../version.js';
 import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
   isTransientOpenCodeReadError,
@@ -190,10 +191,14 @@ import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashe
 // source set.
 import { enumerateOpenCodeSources, parseOpenCodeDocument } from '../opencode-config.js';
 
-// Pinned opencode-ai version, overridable for testing/upgrades.
+// Minimum supported opencode-ai version, overridable for testing/upgrades.
 // 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
-// changes; 1.18.4 specifically improved Kimi model handling.
-export const OPENCODE_PIN = '1.18.7';
+// changes; 1.18.4 specifically improved Kimi model handling. Newer stable
+// releases are accepted after the semantic minimum check. OPENCODE_PIN is a
+// compatibility export retained for callers that have not renamed the field.
+export const OPENCODE_MIN_VERSION_DEFAULT = '1.18.7';
+export const OPENCODE_PIN = OPENCODE_MIN_VERSION_DEFAULT;
+export const OPENCODE_INVALID_MINIMUM_CODE = 'TRISS_CODER_OPENCODE_MINIMUM_INVALID';
 // The default assumes a `zai-coding-plan` subscription key, not a pay-as-you-go
 // `zai` key:
 // `zai/glm-*` fails with "Insufficient balance or no resource package" on
@@ -1186,7 +1191,26 @@ const CODER_BRANCH_PREFIX = 'coder/';
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 function opencodeVersionPin() {
-  return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_PIN;
+  return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_MIN_VERSION_DEFAULT;
+}
+
+export function opencodeVersionMeetsMinimum(installedVersion, minimumVersion = opencodeVersionPin()) {
+  const installed = parseStableVersion(typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion);
+  const minimum = parseStableVersion(minimumVersion);
+  return Boolean(installed && minimum && compareStableVersions(installed, minimum) >= 0);
+}
+
+export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin()) {
+  const parsed = parseStableVersion(minimumVersion);
+  if (!parsed) {
+    const error = new Error(
+      `Invalid OpenCode minimum version "${String(minimumVersion)}"; ` +
+        'set TRISS_CODER_OPENCODE_VERSION to a canonical stable x.y.z version. No installation was attempted.',
+    );
+    error.code = OPENCODE_INVALID_MINIMUM_CODE;
+    throw error;
+  }
+  return parsed;
 }
 
 function coderModel() {
@@ -1481,14 +1505,15 @@ export async function runCoderInit(opts = {}, deps = {}) {
     const sh = deps.spawnSync || nodeSpawnSync;
     const det = crushEngine.detect(sh);
     if (det.found && det.version) {
-      // Version mismatch is NON-FATAL: warn yellow, keep going. The install
-      // hint below already carries the pin for an `npm install -g` upgrade.
+      // A below-minimum or malformed version is NON-FATAL here: init keeps
+      // its historical advisory behavior, while the detector remains the
+      // authoritative compatibility result for status and managed runs.
       if (det.satisfiesPin) {
-        process.stderr.write(pc.green(`  ✓ crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
+        process.stderr.write(pc.green(`  ✓ crush ${det.version} (meets minimum ${crushEngine.CRUSH_PIN})\n`));
       } else {
         process.stderr.write(
           pc.yellow(
-            `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
+            `  ⚠ crush ${det.version} found, minimum supported version is ${crushEngine.CRUSH_PIN} ` +
               '(not auto-upgrading — permissions.run still seeds into crush.json)\n',
           ),
         );
@@ -2254,24 +2279,25 @@ function detectOpencodeVersion(sh) {
 
 async function ensureEngine(sh, confirmInstall) {
   const pin = opencodeVersionPin();
+  assertOpencodeMinimumVersion(pin);
   const version = detectOpencodeVersion(sh);
   if (version !== null) {
-    if (version && version === pin) {
-      process.stderr.write(pc.green(`  ✓ opencode ${version} (matches pin)\n`));
+    if (version && opencodeVersionMeetsMinimum(version, pin)) {
+      process.stderr.write(pc.green(`  ✓ opencode ${version} (meets minimum ${pin})\n`));
     } else if (version) {
       process.stderr.write(
-        pc.yellow(`  ⚠ opencode ${version} found, pinned version is ${pin} (not auto-upgrading)\n`),
+        pc.yellow(`  ⚠ opencode ${version} found, minimum supported version is ${pin} (not auto-upgrading)\n`),
       );
     } else {
       process.stderr.write(
-        pc.yellow(`  ⚠ opencode found (version unknown), pinned version is ${pin} (not auto-upgrading)\n`),
+        pc.yellow(`  ⚠ opencode found (version unknown), minimum supported version is ${pin} (not auto-upgrading)\n`),
       );
     }
     return;
   }
 
   const installCmd = `npm install -g opencode-ai@${pin}`;
-  process.stderr.write(pc.dim(`  · opencode not found (pinned version: ${pin})\n`));
+  process.stderr.write(pc.dim(`  · opencode not found (minimum supported version: ${pin})\n`));
 
   // Non-interactive shell (CI, pipe): never install unattended — throw so
   // the caller sees a clear, actionable error (same shape as the
@@ -3501,13 +3527,17 @@ export function describeCoderStatus(deps = {}) {
   const defaultSmallModel = coderSmallModel();
   return {
     pin,
+    minimumVersion: pin,
     engineVersion,
+    meetsMinimum: opencodeVersionMeetsMinimum(engineVersion, pin),
     configs,
     worktreeCount,
     crush: {
       found: crushDetect.found,
       version: crushDetect.version,
       satisfiesPin: crushDetect.satisfiesPin,
+      meetsMinimum: crushDetect.meetsMinimum ?? crushDetect.satisfiesPin,
+      minimumVersion: crushDetect.minimumVersion ?? crushEngine.CRUSH_PIN,
       pin: crushEngine.CRUSH_PIN,
       configs: crushConfigs,
     },
@@ -5149,18 +5179,18 @@ async function runCrushFlow({
       : deps.proxy || null,
   );
 
-  // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
-  // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow
-  // and the run continues (the restrict-run policy still applies via crush.json).
+  // Version detect: crush 0.1.3+ reports a clean semver, so detect() parses
+  // it and returns the installed >= minimum result. A mismatch remains an
+  // advisory here for compatibility with the existing Crush run path.
   const det = crushEngine.detect(sh);
   const engineVersion = det.version || crushEngine.CRUSH_PIN;
   if (det.found && det.version) {
     if (det.satisfiesPin) {
-      process.stderr.write(pc.dim(`  · crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
+      process.stderr.write(pc.dim(`  · crush ${det.version} (meets minimum ${crushEngine.CRUSH_PIN})\n`));
     } else {
       process.stderr.write(
         pc.yellow(
-          `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
+          `  ⚠ crush ${det.version} found, minimum supported version is ${crushEngine.CRUSH_PIN} ` +
             '(not auto-upgrading)\n',
         ),
       );
@@ -6296,13 +6326,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     process.stderr.write(pc.yellow(`  ⚠ ${rawCredentialWarning}\n`));
   }
   const detectedOpencodeVersion = engine === 'opencode' ? detectOpencodeVersion(sh) : null;
-  if (engine === 'opencode' && oneShotProvider && detectedOpencodeVersion !== OPENCODE_PIN) {
+  if (engine === 'opencode' && oneShotProvider) {
+    assertOpencodeMinimumVersion(opencodeVersionPin());
+  }
+  if (engine === 'opencode' && oneShotProvider && !opencodeVersionMeetsMinimum(detectedOpencodeVersion)) {
     const found = detectedOpencodeVersion === null
       ? 'not installed'
       : detectedOpencodeVersion || 'version unknown';
     throw new Error(
-      `One-shot provider credential auditing is verified only for opencode ${OPENCODE_PIN}; ` +
-        `found ${found}. Run \`npm install -g opencode-ai@${OPENCODE_PIN}\` and retry.`,
+      `One-shot provider credential auditing requires opencode >= ${opencodeVersionPin()}; ` +
+        `found ${found}. Run \`npm install -g opencode-ai@${opencodeVersionPin()}\` and retry.`,
     );
   }
 

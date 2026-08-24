@@ -28,7 +28,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  OPENCODE_INVALID_MINIMUM_CODE,
+  OPENCODE_MIN_VERSION_DEFAULT,
   OPENCODE_PIN,
+  assertOpencodeMinimumVersion,
+  opencodeVersionMeetsMinimum,
   resolveCoderEngine,
   runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
@@ -179,6 +183,68 @@ test('characterization: unknown engine error lists opencode, opencode2, crush (P
 test('characterization: V1 pin surface is opencode-ai@1.18.7 (module constant; env override path exercised via TRISS_CODER_OPENCODE_VERSION in status tests)', () => {
   assert.equal(OPENCODE_PIN, '1.18.7');
 });
+
+test('OpenCode V1 version gate accepts the minimum and newer stable versions only', () => {
+  assert.equal(OPENCODE_MIN_VERSION_DEFAULT, '1.18.7');
+  assert.equal(opencodeVersionMeetsMinimum('1.18.6'), false);
+  assert.equal(opencodeVersionMeetsMinimum('1.18.7'), true);
+  assert.equal(opencodeVersionMeetsMinimum('1.19.0'), true);
+  assert.equal(opencodeVersionMeetsMinimum('garbage'), false);
+  assert.equal(opencodeVersionMeetsMinimum('1.18.7-beta.1'), false);
+  assert.equal(opencodeVersionMeetsMinimum('1.18.7', ' 1.18.7 '), false);
+  assert.equal(opencodeVersionMeetsMinimum('1.18.7', 'bad-minimum'), false);
+});
+
+test('OpenCode V1 invalid minimum fails closed without an unsafe install suggestion', () => {
+  for (const minimum of ['bad-minimum', ' 1.18.7 ']) {
+    assert.throws(
+      () => assertOpencodeMinimumVersion(minimum),
+      (error) => {
+        assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
+        assert.match(error.message, /canonical stable x\.y\.z/);
+        assert.doesNotMatch(error.message, /npm install/);
+        assert.doesNotMatch(error.message, /@bad-minimum/);
+        return true;
+      },
+    );
+  }
+});
+
+test(
+  'V1 one-shot invalid minimum rejects before spawn and never suggests @bad-minimum',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-invalid-minimum',
+      ZHIPU_API_KEY: 'zk-invalid-minimum',
+      TRISS_CODER_OPENCODE_VERSION: 'bad-minimum',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      let spawnCalls = 0;
+      await assert.rejects(
+        () => runCoderRun(
+          'invalid minimum',
+          { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+          {
+            disableCredentialProxy: true,
+            spawn: () => {
+              spawnCalls += 1;
+              throw new Error('engine spawn must not be reached');
+            },
+            spawnSync: () => ({ status: 0, stdout: '1.19.0', error: null }),
+          },
+        ),
+        (error) => {
+          assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
+          assert.doesNotMatch(error.message, /npm install/);
+          assert.doesNotMatch(error.message, /@bad-minimum/);
+          return true;
+        },
+      );
+      assert.equal(spawnCalls, 0);
+    },
+  ),
+);
 
 test(
   'V1 lookup rollback always closes the credential proxy when lease release fails permanently',
@@ -410,11 +476,13 @@ test(
         {
           disableCredentialProxy: true,
           spawn: rec.spawnFn,
-          // one-shot provider runs demand the exact V1 pin via
+          // one-shot provider runs demand the supported V1 minimum via
           // detectOpencodeVersion; the fake binary reports it.
           spawnSync: (c, a) => {
             if (c === 'opencode' && a[0] === '--version') {
-              return { status: 0, stdout: OPENCODE_PIN, error: null };
+              // A newer stable release must pass the protected one-shot gate;
+              // this is the production-shaped regression for >= semantics.
+              return { status: 0, stdout: '1.19.0', error: null };
             }
             return { status: 1, stdout: '', error: null };
           },

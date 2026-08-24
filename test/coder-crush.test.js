@@ -170,7 +170,7 @@ test('buildCrushSpawnEnv: omits allowlist keys that are unset on the base env', 
 // crush ≥0.1.3 reports a clean `crush version v0.1.3`. detectCrush parses the
 // vX.Y.Z out and returns {found, version, satisfiesPin}; it must NOT throw on
 // a +dirty suffix, garbage, or a newer version. Version mismatch is NON-FATAL
-// (caller warns) — detect just reports satisfiesPin:false.
+// to the init/run advisory surfaces — detect reports the minimum result.
 
 // A fake spawnSync that returns `stdout` for `crush --version`.
 function versionSh(stdout) {
@@ -182,17 +182,19 @@ function versionSh(stdout) {
   };
 }
 
-test('detectCrush: clean `crush version v0.1.6` (== pin) -> found true, version "0.1.6" (bare), satisfiesPin true', () => {
+test('detectCrush: clean `crush version v0.1.6` (== minimum) -> found true, version "0.1.6" (bare), satisfiesPin true', () => {
   const det = detectCrush(versionSh('crush version v0.1.6\n'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.6');
+  assert.equal(det.meetsMinimum, true);
   assert.equal(det.satisfiesPin, true);
 });
 
-test('detectCrush: a version below the pin (v0.1.3) -> found true, satisfiesPin false (NON-FATAL — caller warns)', () => {
+test('detectCrush: a version below the minimum (v0.1.3) -> found true, satisfiesPin false', () => {
   const det = detectCrush(versionSh('crush version v0.1.3'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.3');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
@@ -200,27 +202,30 @@ test('detectCrush: a NEWER version (v0.2.0) -> found true, satisfiesPin true', (
   const det = detectCrush(versionSh('crush version v0.2.0'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.2.0');
+  assert.equal(det.meetsMinimum, true);
   assert.equal(det.satisfiesPin, true);
 });
 
-test('detectCrush: an OLDER version (v0.1.2) -> found true, satisfiesPin false (NON-FATAL — caller warns)', () => {
+test('detectCrush: an OLDER version (v0.1.2) -> found true, satisfiesPin false', () => {
   const det = detectCrush(versionSh('crush version v0.1.2'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.2');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
-test('detectCrush: a +dirty suffix (pre-0.1.3 dev build) does not throw, parses the numeric core', () => {
+test('detectCrush: a prerelease/dirty build does not satisfy the stable minimum', () => {
   const det = detectCrush(versionSh('crush version v0.0.0-20260704214312-f45bb790a171+dirty\n'));
   assert.equal(det.found, true);
-  // The placeholder 0.0.0 numeric core is parsed; it's below the pin.
-  assert.equal(det.version, '0.0.0');
+  assert.equal(det.version, 'crush version v0.0.0-20260704214312-f45bb790a171+dirty');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
 test('detectCrush: a garbage version string does not throw; found stays true, version is the raw string', () => {
   const det = detectCrush(versionSh('totally not a version string'));
   assert.equal(det.found, true);
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
   // No semver parseable -> version is the raw trimmed stdout (for diagnostics).
   assert.equal(det.version, 'totally not a version string');
@@ -237,37 +242,59 @@ test('detectCrush: crush missing (non-zero exit / spawn error) -> found false, v
   }
 });
 
-// ─── detectCrush: unparseable pin (Task 5b) ───────────────────────────────────
-//
-// When TRISS_CODER_CRUSH_VERSION itself doesn't parse to semver (e.g. "latest"),
-// detectCrush SKIPS the comparison and treats the installed version as
-// satisfying the pin — instead of a perpetual satisfiesPin:false yellow warning
-// at every init/run/status.
+// ─── detectCrush: malformed minimum override fails closed ────────────────────
 
-test('detectCrush: a non-semver pin (TRISS_CODER_CRUSH_VERSION=latest) -> satisfiesPin TRUE (comparison skipped)', () => {
+test('detectCrush: malformed configured minimums all fail closed', () => {
   const saved = process.env.TRISS_CODER_CRUSH_VERSION;
-  process.env.TRISS_CODER_CRUSH_VERSION = 'latest';
   try {
-    // Even an OLDER installed version is treated as satisfied when the pin
-    // itself is unparseable — the comparison is skipped, not failed.
-    const det = detectCrush(versionSh('crush version v0.1.2'));
-    assert.equal(det.found, true);
-    assert.equal(det.version, '0.1.2');
-    assert.equal(det.satisfiesPin, true, 'unparseable pin must skip the comparison (treat as satisfied)');
+    for (const minimum of [
+      '0.1.6.1',
+      'prefix-0.1.6',
+      '0.1.6-rc.1',
+      '0.1.6+build',
+      ' 0.1.6 ',
+      '9007199254740992.0.0',
+      'garbage',
+    ]) {
+      process.env.TRISS_CODER_CRUSH_VERSION = minimum;
+      const det = detectCrush(versionSh('crush version v0.1.6'));
+      assert.equal(det.found, true, minimum);
+      assert.equal(det.meetsMinimum, false, minimum);
+      assert.equal(det.satisfiesPin, false, minimum);
+    }
   } finally {
     if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
     else process.env.TRISS_CODER_CRUSH_VERSION = saved;
   }
 });
 
-test('detectCrush: a non-semver pin still reports found:true + the parsed version for a clean install', () => {
+test('detectCrush: unsafe numeric components fail closed for both installed and configured versions', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '9007199254740992.0.0';
+    const unsafeMinimum = detectCrush(versionSh('crush version v9007199254740993.0.0'));
+    assert.equal(unsafeMinimum.meetsMinimum, false);
+    assert.equal(unsafeMinimum.satisfiesPin, false);
+
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.0.0';
+    const unsafeInstalled = detectCrush(versionSh('crush version v9007199254740993.0.0'));
+    assert.equal(unsafeInstalled.meetsMinimum, false);
+    assert.equal(unsafeInstalled.satisfiesPin, false);
+    assert.equal(unsafeInstalled.version, 'crush version v9007199254740993.0.0');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a malformed minimum still reports found:true + raw installed diagnostics', () => {
   const saved = process.env.TRISS_CODER_CRUSH_VERSION;
   process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
   try {
     const det = detectCrush(versionSh('crush version v0.1.3'));
     assert.equal(det.found, true);
     assert.equal(det.version, '0.1.3');
-    assert.equal(det.satisfiesPin, true);
+    assert.equal(det.satisfiesPin, false);
   } finally {
     if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
     else process.env.TRISS_CODER_CRUSH_VERSION = saved;

@@ -11,13 +11,13 @@
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
-// Pin the npm package version. The semver-parse fix landed in 0.1.3 (crush
+// Minimum supported npm package version. The semver-parse fix landed in 0.1.3 (crush
 // ≥0.1.3 reports a clean `crush version vX.Y.Z`), so detect() parses the semver
 // and compares against this pin (installed >= pin). The pin tracks the latest
 // version verified live against the triss adapter (envelope shape, ZHIPU→ZAI
 // env bridge, --restrict-run CLI-flag enforcement, worktree isolation — all
 // re-verified on 0.1.6, 2026-07-15). The pin also drives installHint().
-const CRUSH_PIN_DEFAULT = '0.1.6';
+const CRUSH_MIN_VERSION_DEFAULT = '0.1.6';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
 // and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>
@@ -30,19 +30,37 @@ const CRUSH_LARGE_ATOM = 'glm5_2';
 const CRUSH_SMALL_ATOM = 'glm5_turbo';
 
 export function crushVersionPin() {
-  return process.env.TRISS_CODER_CRUSH_VERSION || CRUSH_PIN_DEFAULT;
+  return process.env.TRISS_CODER_CRUSH_VERSION || CRUSH_MIN_VERSION_DEFAULT;
 }
 
-// Parse a `vX.Y.Z` semver out of arbitrary text (the crush --version stdout).
-// Returns {major, minor, patch} or null when no semver is parseable. Tolerates
-// a leading `v`, surrounding noise (`crush version v0.1.3`), and a `+dirty` /
-// `-pre` suffix (the suffix is ignored — only the numeric core is captured).
-// NEVER throws: garbage in -> null out.
-function parseSemver(text) {
+const CANONICAL_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+function versionFromMatch(match) {
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  if (!parts.every(Number.isSafeInteger)) return null;
+  return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+
+// Configured minimums are policy, not command output. They must be one
+// canonical stable x.y.z value: prefixes, partial versions, extra components,
+// prereleases, build metadata, and arbitrary suffixes all fail closed.
+function parseMinimumVersion(text) {
   if (text == null) return null;
-  const m = /v?(\d+)\.(\d+)\.(\d+)/.exec(String(text));
-  if (!m) return null;
-  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+  const m = CANONICAL_VERSION.exec(String(text));
+  return versionFromMatch(m);
+}
+
+// Installed Crush output has a small, documented wrapper (`crush version
+// vX.Y.Z`). Accept that wrapper and a bare stable version for test/tool
+// compatibility, but never strip a prerelease/build suffix and call it stable.
+function parseInstalledVersion(text) {
+  if (text == null) return null;
+  const value = String(text).trim();
+  const wrapped = /^crush\s+version\s+v?(.+)$/.exec(value);
+  const candidate = wrapped ? wrapped[1] : value.replace(/^v/, '');
+  const m = CANONICAL_VERSION.exec(candidate);
+  return versionFromMatch(m);
 }
 
 // a >= b (lexicographic on major/minor/patch). Both inputs must be parsed.
@@ -54,12 +72,12 @@ function semverGte(a, b) {
 
 // detect(): spawnSync('crush', ['--version']) — NEVER shell:true. crush 0.1.3+
 // reports a clean `crush version v0.1.3`; earlier builds reported a dirty dev
-// string like `v0.0.0-20260704...+dirty`. We parse the
-// `vX.Y.Z` semver out of whatever it prints and return {found, version,
-// satisfiesPin}: `version` is the bare `0.1.3` (or the raw string when no
-// semver is parseable, for diagnostics); `satisfiesPin` is parsed >= pin.
-// NEVER throws — a `+dirty` suffix, garbage, or a NEWER version all yield a
-// usable result (newer is still found:true, satisfiesPin:true). Version
+// string like `v0.0.0-20260704...+dirty`. We accept only a canonical stable
+// version from that output and return {found, version, satisfiesPin}:
+// `version` is the bare `0.1.3` (or raw output when no stable version parses,
+// for diagnostics); `satisfiesPin` is parsed >= minimum. NEVER throws — a
+// prerelease, garbage, or a NEWER version remains a usable detection result
+// (newer is still found:true, satisfiesPin:true). Version
 // mismatch is NON-FATAL: callers warn at most, never abort (the installHint
 // command still carries the pin for `npm install`). `sh` defaults to real
 // spawnSync and is injectable for tests.
@@ -69,21 +87,20 @@ export function detectCrush(sh = nodeSpawnSync) {
     return { found: false, version: null, satisfiesPin: false };
   }
   const out = String(r.stdout || '').trim();
-  const parsed = parseSemver(out);
+  const parsed = parseInstalledVersion(out);
   const version = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : out || null;
-  const pin = parseSemver(crushVersionPin());
-  // If the configured pin doesn't itself parse to semver (e.g. someone set
-  // TRISS_CODER_CRUSH_VERSION=latest), SKIP the comparison entirely and treat
-  // the installed version as satisfying the pin. Otherwise a non-semver pin
-  // would yield a perpetual satisfiesPin:false and a yellow warning at every
-  // init/run/status call for no actionable reason. The install hint still
-  // carries the raw pin string for `npm install`.
-  const satisfiesPin = !parsed
-    ? false // nothing parseable from the installed binary
-    : !pin
-      ? true // pin unparseable -> comparison skipped (treat as satisfied)
-      : semverGte(parsed, pin);
-  return { found: true, version, satisfiesPin };
+  const minimum = parseMinimumVersion(crushVersionPin());
+  // Both sides must be canonical enough to compare. An invalid installed
+  // version or invalid minimum override is incompatible; never bypass the
+  // floor by treating an unparseable minimum as "latest".
+  const meetsMinimum = Boolean(parsed && minimum && semverGte(parsed, minimum));
+  return {
+    found: true,
+    version,
+    minimumVersion: crushVersionPin(),
+    meetsMinimum,
+    satisfiesPin: meetsMinimum,
+  };
 }
 
 export function installHintCrush() {
@@ -377,7 +394,7 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
 export const crush = {
   id: 'crush',
   binaryName: 'crush',
-  // Pin drives installHint() AND the satisfiesPin comparison in detect()
+  // Minimum drives installHint() AND the satisfiesPin compatibility alias in detect()
   // (crush ≥0.1.3 reports a clean semver — see detectCrush).
   get CRUSH_PIN() {
     return crushVersionPin();

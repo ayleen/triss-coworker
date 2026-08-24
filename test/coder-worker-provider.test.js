@@ -1106,7 +1106,7 @@ test(
 );
 
 test(
-  'one-shot provider run rejects an unverified OpenCode version before isolation or spawn',
+  'one-shot provider run rejects a below-minimum OpenCode version before isolation or spawn',
   withWorkerEnv(async ({ home }) => {
     writeManagedWorkerConfig(home);
     process.env.ZHIPU_API_KEY = 'sk-zai-fake';
@@ -1121,12 +1121,12 @@ test(
             throw new Error('must not spawn');
           },
           spawnSync: (cmd, args) => cmd === 'opencode' && args[0] === '--version'
-            ? { status: 0, stdout: '9.9.9', error: null }
+            ? { status: 0, stdout: '1.18.6', error: null }
             : { status: 1, stdout: '', error: null },
           stdoutWrite: () => true,
         },
       ),
-      /credential auditing is verified only for opencode 1\.18\.7; found 9\.9\.9/i,
+      /one-shot provider credential auditing requires opencode >= 1\.18\.7; found 1\.18\.6/i,
     );
     assert.equal(spawned, false);
   }),

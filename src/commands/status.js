@@ -171,34 +171,34 @@ export async function runStatus(deps = {}) {
         ? pc.cyan(`${defaultRoute.provider} → ${defaultRoute.endpoint}${defaultRoute.pathPrefix}`)
         : pc.yellow('unrecognized model prefix')}`,
     );
-    // opencode (engine #1) — version-checked against the pin.
+    // opencode (engine #1) — version-checked against the minimum.
     const ocMarker = coder.engineVersion !== null ? pc.green('●') : pc.dim('○');
     const ocLabel =
       coder.engineVersion !== null
         ? coder.engineVersion === ''
-          ? `(version unknown) (pin: ${coder.pin})`
-          : coder.engineVersion === coder.pin
-            ? `${coder.engineVersion} (matches pin)`
-            : pc.yellow(`${coder.engineVersion} (pin: ${coder.pin})`)
-        : pc.dim(`not installed (pin: ${coder.pin})`);
+          ? `(version unknown) (minimum: ${coder.minimumVersion})`
+          : coder.meetsMinimum
+            ? `${coder.engineVersion} (meets minimum)`
+            : pc.yellow(`${coder.engineVersion} (minimum: ${coder.minimumVersion})`)
+        : pc.dim(`not installed (minimum: ${coder.minimumVersion})`);
     lines.push(`  ${ocMarker} opencode                      ${ocLabel}`);
     for (const c of coder.configs) {
       const marker = c.exists ? pc.green('●') : pc.dim('○');
       const value = c.exists ? c.path : pc.dim('(not written)');
       lines.push(`  ${marker} opencode.json [${c.scope}]        ${value}`);
     }
-    // crush (engine #2) — version-checked against the pin (crush ≥0.1.3
-    // reports a clean semver, parsed by detect()). A below-pin build is shown
+    // crush (engine #2) — version-checked against the minimum (crush ≥0.1.3
+    // reports a clean semver, parsed by detect()). A below-minimum build is shown
     // yellow like opencode; a missing/garbage version falls back to a dim
     // "(version unknown)" note. crush.json presence is a best-effort file
     // check. Never hard-fails — opencode-only users see a clean ○ "not
     // installed" line.
     const crushMarker = coder.crush.found ? pc.green('●') : pc.dim('○');
     const crushLabel = coder.crush.found
-      ? coder.crush.satisfiesPin
-        ? `${coder.crush.version} ${pc.dim('(matches pin)')}`
-        : pc.yellow(`${coder.crush.version || '(version unknown)'} (pin: ${coder.crush.pin})`)
-      : pc.dim(`not installed (pin: ${coder.crush.pin})`);
+      ? (coder.crush.meetsMinimum ?? coder.crush.satisfiesPin)
+        ? `${coder.crush.version} ${pc.dim('(meets minimum)')}`
+        : pc.yellow(`${coder.crush.version || '(version unknown)'} (minimum: ${coder.crush.minimumVersion})`)
+      : pc.dim(`not installed (minimum: ${coder.crush.minimumVersion})`);
     lines.push(`  ${crushMarker} crush                        ${crushLabel}`);
     for (const c of coder.crush.configs) {
       const marker = c.exists ? pc.green('●') : pc.dim('○');

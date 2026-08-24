@@ -47,13 +47,15 @@ The MCP `triss_coder_run` tool exposes the same operation through `provider`,
 For an explicit provider run, Triss supplies an in-memory
 `OPENCODE_CONFIG_CONTENT` overlay containing only the selected `model` and
 `small_model`. No temporary or persistent config file is published. The
-overlay is not assumed to have final precedence: OpenCode 1.18.7 can merge
+overlay is not assumed to have final precedence: supported OpenCode versions at
+or above the configured stable minimum can merge
 account/organization, managed-directory, and macOS MDM configuration after it.
 
 The overlay must not define or replace providers. OpenCode deep-merges provider
 objects, which could retain untrusted lower-precedence options such as custom
-headers. Before forwarding any selected credential, Triss audits the pinned
-OpenCode version's global `config.json` and `opencode.json(c)`, the legacy
+headers. Before forwarding any selected credential, Triss requires a valid
+installed OpenCode version at or above the configured stable minimum and audits
+its global `config.json` and `opencode.json(c)`, the legacy
 `~/.opencode/opencode.json(c)` source, and direct config ancestors from the
 actual runtime directory to its Git root (or filesystem root outside Git).
 Built-in providers reject any persistent block for the selected provider id;
@@ -100,10 +102,12 @@ a reused worktree is preserved for inspection. Failure cases are:
 - missing selected-provider credential;
 - missing, stale, or conflicting managed worker provider;
 - selected-provider overrides or unauditable JSONC in effective config layers;
-- an installed OpenCode version other than the audited pin.
+- a missing, malformed, or below-minimum installed OpenCode version.
 
 Errors name the invalid flags and include the exact worker init recovery
-command when applicable. No failure writes model pins or OpenCode config.
+command when applicable. A malformed minimum fails closed without suggesting
+installation of an invalid version. No failure writes model pins or OpenCode
+config.
 
 ## TDD and acceptance
 
