@@ -156,7 +156,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     writeFileSync(cfg, JSON.stringify({ model: 'zai/glm-4.7', plugin: ['./evil.js'] }));
     let threw = null;
     try {
-      await runInit(commands, home);
+      await runInit(commands, home, { protectCredentials: true });
     } catch (err) {
       threw = err;
     }
@@ -175,7 +175,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     writeFileSync(join(plugDir, 'local.js'), 'module.exports = {}');
     let threw = null;
     try {
-      await runInit(commands, home);
+      await runInit(commands, home, { protectCredentials: true });
     } catch (err) {
       threw = err;
     }
@@ -191,7 +191,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     writeFileSync(cfg, JSON.stringify({ model: 'zai/glm-4.7', agent: { custom: { model: 'zai/glm-4.7' } } }));
     let threw = null;
     try {
-      await runInit(commands, home);
+      await runInit(commands, home, { protectCredentials: true });
     } catch (err) {
       threw = err;
     }
@@ -207,7 +207,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     writeFileSync(join(agentDir, 'helper.txt'), 'name: helper');
     let threw = null;
     try {
-      await runInit(commands, home);
+      await runInit(commands, home, { protectCredentials: true });
     } catch (err) {
       threw = err;
     }
@@ -232,35 +232,27 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     }
   }));
 
-  await t.test('credential-mode setup respects global/local scope and immutable shell precedence', async (scopeTest) => {
+  await t.test('credential-mode init follows the explicit flag, never the retired env values', async (scopeTest) => {
     const cases = [
       {
-        name: 'local 1 is ignored by global setup',
-        local: '1',
-        global: undefined,
-        opts: { global: true },
+        name: '--protect-credentials writes deny-everything despite legacy file acknowledgements',
+        legacyLocal: '1',
+        legacyGlobal: '1',
+        opts: { global: true, protectCredentials: true },
         raw: false,
       },
       {
-        name: 'global 1 wins for global setup despite local 0',
-        local: '0',
-        global: '1',
+        name: 'the default best-effort init keeps the V1 allowlist despite legacy file zeros',
+        legacyLocal: '0',
+        legacyGlobal: '0',
         opts: { global: true },
         raw: true,
       },
       {
-        name: 'local 0 overrides global 1 for local setup',
-        local: '0',
-        global: '1',
+        name: 'a local-scope default best-effort init also keeps the allowlist',
+        legacyLocal: '0',
+        legacyGlobal: '1',
         opts: { local: true },
-        raw: false,
-      },
-      {
-        name: 'shell 1 wins over protected file values',
-        local: '0',
-        global: '0',
-        opts: { global: true },
-        parentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
         raw: true,
       },
     ];
@@ -270,20 +262,15 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
         const commands = await loadCommands();
         const localEnv = join(home, '.triss.env');
         const globalEnv = join(home, '.config', 'triss', '.env');
-        writeFileSync(localEnv, row.local === undefined
-          ? ''
-          : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.local}\n`);
+        // The retired acknowledgement may still sit in the stores during the
+        // compat window — it must never change what init writes.
+        writeFileSync(localEnv, `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.legacyLocal}\n`);
         mkdirSync(dirname(globalEnv), { recursive: true });
-        writeFileSync(globalEnv, row.global === undefined
-          ? ''
-          : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.global}\n`);
+        writeFileSync(globalEnv, `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.legacyGlobal}\n`);
 
-        const setupDeps = row.parentEnv
-          ? { credentialModeParentEnv: row.parentEnv }
-          : {};
         await commands.runCoderInit(
           { engine: 'opencode2', provider: 'opencode-go', yes: true, ...row.opts },
-          { ...baseDeps(home), ...setupDeps },
+          baseDeps(home),
         );
 
         const configPath = row.opts.local

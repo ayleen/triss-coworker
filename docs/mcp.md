@@ -469,7 +469,14 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `effective_isolation: best_effort_caller_worktree`, advisory-only
   `files_changed: null`/`worktree: null`, edits may reach the caller
   worktree; user-remediable slug/branch conflicts containing
-  `already exists` still fail closed even with the opt-in)
+  `already exists` still fail closed even with the opt-in) and
+  `protectCredentials` (boolean, default FALSE — OpenCode/OpenCode2 runs use
+  best_effort_raw credential handling by default; passing TRUE selects the
+  parent-owned credential proxy with strict executable-surface gates and
+  fails closed when protected credential isolation cannot be enforced;
+  Crush is always protected regardless; the alias `protect_credentials` and
+  any truthy value are accepted, and if the two spellings disagree protection
+  wins)
   minus `--stdin`, which is meaningless over MCP (the prompt is a normal
   tool argument). There is intentionally no `expectation` *input* field:
   the strict expectation gate is still a designed contract and is not

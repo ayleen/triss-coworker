@@ -24,6 +24,7 @@ const ROUTE_OPTION_SUPPORT = {
   isolate: new Set(['coder']),
   noIsolate: new Set(['coder']),
   allowBestEffortCallerWorktree: new Set(['coder']),
+  protectCredentials: new Set(['coder']),
   restrict: new Set(['coder']),
   noRestrict: new Set(['coder']),
   cwd: new Set(['coder']),
@@ -200,7 +201,7 @@ function reviewOptions(input) {
 
 function coderOptions(input) {
   const names = [
-    'engine', 'provider', 'model', 'smallModel', 'isolate', 'noIsolate', 'allowBestEffortCallerWorktree', 'restrict',
+    'engine', 'provider', 'model', 'smallModel', 'isolate', 'noIsolate', 'allowBestEffortCallerWorktree', 'protectCredentials', 'restrict',
     'noRestrict', 'session', 'continue', 'agent', 'cwd', 'timeout', 'stdin',
     // Crush supports a real per-run token cap. runCoderRun rejects this option
     // for OpenCode, whose CLI exposes no equivalent, instead of ignoring it.

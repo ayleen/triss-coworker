@@ -386,31 +386,34 @@ test('WIZ-08: explicit Zen selector never requires ZHIPU, keeps it absent, reach
     'must not surface a generic missing-ZHIPU failure');
 });
 
-test('WIZ-10: config wizard resolves V2 credential mode from the scoped env after loading it', async () => {
+test('WIZ-10: config wizard V2 policy follows --coder-protect-credentials, never the retired env value', async () => {
   const saved = {
-    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
     model: process.env.TRISS_CODER_MODEL,
     small: process.env.TRISS_CODER_SMALL_MODEL,
   };
   try {
-    for (const bestEffort of [false, true]) {
-      const zenKey = `sk-wizard-v2-${bestEffort ? 'raw' : 'protected'}`;
+    for (const protectCredentials of [false, true]) {
+      const zenKey = `sk-wizard-v2-${protectCredentials ? 'protected' : 'raw'}`;
       const fakeFetch = fakeZenFetch(zenKey, ['deepseek-v4-flash-free']);
       let fx;
       try {
         fx = await setupCoderFixture({ opencode: zenKey, writeConfig: false });
         const { setVar } = await import('../src/secrets.js');
-        if (bestEffort) {
-          setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', '1');
-        }
-        delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+        // A stale legacy acknowledgement sits in the store during the compat
+        // window; it must never change what the wizard writes.
+        setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', '1');
         delete process.env.TRISS_CODER_MODEL;
         delete process.env.TRISS_CODER_SMALL_MODEL;
 
         const { runWizard } = await import('../src/commands/config.js');
         await runWizard(
           'coder',
-          { global: true, coderEngine: 'opencode2', coderProvider: 'opencode-zen' },
+          {
+            global: true,
+            coderEngine: 'opencode2',
+            coderProvider: 'opencode-zen',
+            coderProtectCredentials: protectCredentials,
+          },
           depsBag(fakeFetch),
         );
 
@@ -421,16 +424,14 @@ test('WIZ-10: config wizard resolves V2 credential mode from the scoped env afte
         assert.equal(config.permission.bash['*'], 'deny');
         assert.equal(
           config.permission.bash['git status'],
-          bestEffort ? 'allow' : undefined,
-          `wizard V2 policy must reflect ${bestEffort ? 'best_effort_raw' : 'protected_proxy'}`,
+          protectCredentials ? undefined : 'allow',
+          `wizard V2 policy must reflect ${protectCredentials ? 'protected_proxy' : 'best_effort_raw'}`,
         );
       } finally {
         if (fx) fx.restore();
       }
     }
   } finally {
-    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
     if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
     else process.env.TRISS_CODER_MODEL = saved.model;
     if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -440,13 +441,12 @@ test('WIZ-10: config wizard resolves V2 credential mode from the scoped env afte
 
 test('WIZ-11: config wizard Zen model selection matches protected and best-effort init semantics', async () => {
   const saved = {
-    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
     model: process.env.TRISS_CODER_MODEL,
     small: process.env.TRISS_CODER_SMALL_MODEL,
   };
   try {
-    for (const bestEffort of [false, true]) {
-      const zenKey = `sk-wizard-zen-${bestEffort ? 'raw' : 'protected'}`;
+    for (const protectCredentials of [false, true]) {
+      const zenKey = `sk-wizard-zen-${protectCredentials ? 'protected' : 'raw'}`;
       const fakeFetch = fakeZenFetch(zenKey, [
         'north-mini-code-free',
         'deepseek-v4-flash-free',
@@ -457,17 +457,18 @@ test('WIZ-11: config wizard Zen model selection matches protected and best-effor
         const { setVar } = await import('../src/secrets.js');
         setVar(fx.envPath, 'TRISS_CODER_MODEL', 'opencode/north-mini-code-free');
         setVar(fx.envPath, 'TRISS_CODER_SMALL_MODEL', 'opencode/north-mini-code-free');
-        if (bestEffort) {
-          setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', '1');
-        }
-        delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
         delete process.env.TRISS_CODER_MODEL;
         delete process.env.TRISS_CODER_SMALL_MODEL;
 
         const { runWizard } = await import('../src/commands/config.js');
         await runWizard(
           'coder',
-          { global: true, coderEngine: 'opencode', coderProvider: 'opencode-zen' },
+          {
+            global: true,
+            coderEngine: 'opencode',
+            coderProvider: 'opencode-zen',
+            coderProtectCredentials: protectCredentials,
+          },
           depsBag(fakeFetch),
         );
 
@@ -475,9 +476,11 @@ test('WIZ-11: config wizard Zen model selection matches protected and best-effor
           join(fx.home, '.config', 'opencode', 'opencode.json'),
           'utf8',
         ));
-        const expected = bestEffort
-          ? 'opencode/north-mini-code-free'
-          : 'opencode/deepseek-v4-flash-free';
+        // Protected mode replaces a live-only unaudited preset with an audited
+        // fallback; the default best-effort mode may persist it.
+        const expected = protectCredentials
+          ? 'opencode/deepseek-v4-flash-free'
+          : 'opencode/north-mini-code-free';
         assert.equal(config.model, expected);
         assert.equal(config.small_model, expected);
       } finally {
@@ -485,8 +488,6 @@ test('WIZ-11: config wizard Zen model selection matches protected and best-effor
       }
     }
   } finally {
-    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
     if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
     else process.env.TRISS_CODER_MODEL = saved.model;
     if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
@@ -494,40 +495,31 @@ test('WIZ-11: config wizard Zen model selection matches protected and best-effor
   }
 });
 
-test('WIZ-12: config wizard credential mode respects requested scope and shell precedence', async (t) => {
+test('WIZ-12: config wizard credential mode follows --coder-protect-credentials in every scope', async (t) => {
   const saved = {
-    mode: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
     model: process.env.TRISS_CODER_MODEL,
     small: process.env.TRISS_CODER_SMALL_MODEL,
   };
   const cases = [
     {
-      name: 'local 1 is ignored by global wizard setup',
-      local: '1',
-      global: undefined,
-      opts: { global: true },
+      name: '--coder-protect-credentials writes deny-everything for global setup despite legacy file values',
+      legacyLocal: '1',
+      legacyGlobal: '1',
+      opts: { global: true, coderProtectCredentials: true },
       raw: false,
     },
     {
-      name: 'global 1 wins for global wizard setup despite local 0',
-      local: '0',
-      global: '1',
+      name: 'the default best-effort wizard keeps the allowlist despite legacy file zeros',
+      legacyLocal: '0',
+      legacyGlobal: '0',
       opts: { global: true },
       raw: true,
     },
     {
-      name: 'local 0 overrides global 1 for local wizard setup',
-      local: '0',
-      global: '1',
+      name: 'a local-scope default best-effort wizard also keeps the allowlist',
+      legacyLocal: '0',
+      legacyGlobal: '1',
       opts: { local: true },
-      raw: false,
-    },
-    {
-      name: 'shell 1 wins over protected wizard files',
-      local: '0',
-      global: '0',
-      opts: { global: true },
-      parentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
       raw: true,
     },
   ];
@@ -541,16 +533,13 @@ test('WIZ-12: config wizard credential mode respects requested scope and shell p
         try {
           fx = await setupCoderFixture({ opencode: zenKey, writeConfig: false });
           const { setVar } = await import('../src/secrets.js');
-          if (row.global !== undefined) {
-            setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', row.global);
-          }
+          // Legacy acknowledgements may still sit in both stores during the
+          // compat window; they must never change what the wizard writes.
+          setVar(fx.envPath, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION', row.legacyGlobal);
           writeFileSync(
             join(dirname(fx.opencodeJsonPath), '.triss.env'),
-            row.local === undefined
-              ? ''
-              : `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.local}\n`,
+            `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=${row.legacyLocal}\n`,
           );
-          delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
           delete process.env.TRISS_CODER_MODEL;
           delete process.env.TRISS_CODER_SMALL_MODEL;
 
@@ -558,10 +547,7 @@ test('WIZ-12: config wizard credential mode respects requested scope and shell p
           await runWizard(
             'coder',
             { ...row.opts, coderEngine: 'opencode2', coderProvider: 'opencode-zen' },
-            {
-              ...depsBag(fakeFetch),
-              ...(row.parentEnv ? { credentialModeParentEnv: row.parentEnv } : {}),
-            },
+            depsBag(fakeFetch),
           );
 
           const configPath = row.opts.local
@@ -576,8 +562,6 @@ test('WIZ-12: config wizard credential mode respects requested scope and shell p
       });
     }
   } finally {
-    if (saved.mode === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
-    else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = saved.mode;
     if (saved.model === undefined) delete process.env.TRISS_CODER_MODEL;
     else process.env.TRISS_CODER_MODEL = saved.model;
     if (saved.small === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;

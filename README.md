@@ -972,7 +972,7 @@ Not every engine speaks every provider:
 | Engine     | Providers served                                  |
 | ---------- | ------------------------------------------------- |
 | `opencode` | Triss worker, Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot, Kimi for Coding |
-| `opencode2` | Same canonical provider routing as V1 (transient `OPENCODE_CONFIG_CONTENT` overlay; protected proxy by default; explicit literal-1 `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` enables raw best-effort with an honest downgrade warning; see [docs/engines/opencode2.md](docs/engines/opencode2.md)) |
+| `opencode2` | Same canonical provider routing as V1 (transient `OPENCODE_CONFIG_CONTENT` overlay; `best_effort_raw` credential handling by default — pass `--protect-credentials` for the parent-owned credential proxy and strict executable-surface gates; see [docs/engines/opencode2.md](docs/engines/opencode2.md)) |
 | `crush`    | Z.AI GLM (coding-plan only)                       |
 
 `triss coder init` drives setup in that order — **engine, then provider,

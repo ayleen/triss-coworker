@@ -181,7 +181,6 @@ test('X1 effective config: a managed layer cannot redirect the run-scoped V1 pro
     engine: 'opencode',
     model: 'zai-coding-plan/glm-5.2',
     deps: {
-      credentialModeParentEnv: {},
       credentialProxyOptions: {
         fetchImpl: async () => {
           upstreamRequests += 1;
@@ -232,7 +231,6 @@ for (const engine of ['opencode', 'opencode2']) {
         proj,
         engine,
         model: 'triss-worker/flash',
-        deps: { credentialModeParentEnv: {} },
         cfg: { permission: { bash: { '*': 'deny' } } },
       });
       assert.ok(threw, 'the mixed-provenance profile must reject');
@@ -258,9 +256,6 @@ for (const engine of ['opencode', 'opencode2']) {
       proj,
       engine,
       model: 'triss-worker/flash',
-      deps: {
-        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
-      },
       cfg: { permission: { bash: { '*': 'deny' } } },
     });
     assert.ok(threw, 'the decoy-key mixed-provenance profile must reject');
@@ -279,7 +274,6 @@ test('X1: global worker key + project URL rejects by provenance before the prote
     proj,
     engine: 'opencode',
     model: 'triss-worker/flash',
-    deps: { credentialModeParentEnv: {} },
     cfg: { permission: { bash: { '*': 'deny' } } },
   });
   assert.ok(threw);
@@ -312,9 +306,6 @@ for (const [label, setup] of [
       proj,
       engine: 'opencode',
       model: 'triss-worker/flash',
-      deps: {
-        credentialModeParentEnv: { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' },
-      },
       cfg: { permission: { bash: { '*': 'deny' } } },
     });
     assert.equal(threw, null, `consistent profile must run, got: ${threw && threw.message}`);
@@ -335,11 +326,6 @@ test('X1 negative: global-file key + project key AND URL stays consistent (proje
   const { threw, managedCalls } = await runExpect(commands, {
     proj,
     model: 'triss-worker/flash',
-    deps: {
-      credentialModeParentEnv: {
-        TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-      },
-    },
     cfg: {
       permission: { bash: { '*': 'deny' } },
     },
@@ -419,7 +405,7 @@ test('X3: an agent block with its own allow rule fails the permission gate at au
       },
     }));
     assert.throws(
-      () => auditOpenCode2Run({ cwd: dir, modelUsed: 'opencode-go/deepseek-v4-flash', agentName: 'helper' }),
+      () => auditOpenCode2Run({ cwd: dir, modelUsed: 'opencode-go/deepseek-v4-flash', agentName: 'helper', credentialMode: 'protected_proxy' }),
       /deny-everything|live-|policy/iu,
       'the agent block allow rule must fail the permission gate',
     );
@@ -480,12 +466,11 @@ test('X5: object-form lsp (names a local server process) still rejects', () => w
 test('X5: "experimental" rejects as unmodelled', () => withHome(async ({ proj }) => {
   const commands = await loadCommands();
   // This regression is specifically the protected fail-closed gate; the
-  // surrounding cross-review harness enables best-effort for its credential-
-  // provenance cases.
-  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
+  // surrounding cross-review harness runs in the default best-effort mode.
   const { threw } = await runExpect(commands, {
     proj,
     model: 'opencode-go/deepseek-v4-flash',
+    opts: { protectCredentials: true },
     cfg: {
       experimental: { anything: true },
       permission: { bash: { '*': 'deny' } },
@@ -499,7 +484,6 @@ test('X5: "experimental" rejects as unmodelled', () => withHome(async ({ proj })
 
 test('X6: V2 init with an mcp config rejects before any credential file is written', () => withHome(async ({ home }) => {
   const commands = await loadCommands();
-  delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   const cfg = join(home, '.config', 'opencode', 'opencode.json');
   writeFileSync(cfg, JSON.stringify({
     model: 'opencode-go/deepseek-v4-flash',
@@ -510,7 +494,7 @@ test('X6: V2 init with an mcp config rejects before any credential file is writt
   let threw = null;
   try {
     await commands.runCoderInit(
-      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
+      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true, protectCredentials: true },
       { spawnSync: sh, cwd: home, lock: async () => ({ release() {} }), fetch: async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: 'deepseek-v4-flash' }] }) }) },
     );
   } catch (err) {

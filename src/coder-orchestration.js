@@ -22,6 +22,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { resolveCoderSandbox } from './coder-sandbox.js';
+import { assertCoderCredentialMode } from './coder-providers.js';
 
 export const EXECUTION_CAPABILITY_KEYS = Object.freeze([
   'sandbox',
@@ -41,8 +42,11 @@ export const EXECUTION_CAPABILITY_KEYS = Object.freeze([
 export function buildExecutionCapabilities({
   engine = 'opencode',
   proxyAvailable = false,
-  credentialMode = 'protected_proxy',
+  // Already resolved by the caller via resolveCoderCredentialMode — no hidden
+  // default that could silently re-enable protected_proxy semantics.
+  credentialMode,
 } = {}) {
+  assertCoderCredentialMode(credentialMode);
   const caps = resolveCoderSandbox({
     engine,
     // Raw best-effort deliberately cannot inherit the proxy capability for

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readEnvFile, setVar, unsetVar, addToGitignore, getEnvFilePath } from '../src/secrets.js';
 import {
-  readCoderCredentialMode,
+  readLegacyCoderBestEffortEnv,
   readGlmConfigSnapshot,
   readWorkerConfigSnapshot,
 } from '../src/config.js';
@@ -204,7 +204,10 @@ test('readGlmConfigSnapshot refreshes edited and deleted GLM file values', () =>
   );
 });
 
-test('readCoderCredentialMode is reloadable, strict, and scope-aware', () => {
+test('readLegacyCoderBestEffortEnv is reloadable, scope-aware, and returns the raw value', () => {
+  // The retired acknowledgement no longer selects anything; the reader exists
+  // only so a command can emit a one-time migration warning. It must still be
+  // a correct scope-aware, reloadable snapshot of the raw stored value.
   const local = '/project/.triss.env';
   const global = '/home/.config/triss/.env';
   const files = [
@@ -216,29 +219,29 @@ test('readCoderCredentialMode is reloadable, strict, and scope-aware', () => {
     [global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
   ]);
   const readFile = (path) => contents.get(path);
-  const resolve = (scope = 'effective', parentEnv = {}) => readCoderCredentialMode({
+  const resolve = (scope = 'effective', parentEnv = {}) => readLegacyCoderBestEffortEnv({
     scope,
     parentEnv,
     files,
     readFile,
   });
 
-  assert.equal(resolve('effective'), 'best_effort_raw', 'local wins at runtime');
-  assert.equal(resolve('local'), 'best_effort_raw', 'local setup merges local over global');
-  assert.equal(resolve('global'), 'protected_proxy', 'global setup ignores the project file');
+  assert.equal(resolve('effective'), '1', 'local wins at runtime');
+  assert.equal(resolve('local'), '1', 'local setup merges local over global');
+  assert.equal(resolve('global'), '0', 'global setup ignores the project file');
 
   contents.set(local, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
   contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
-  assert.equal(resolve('effective'), 'protected_proxy', 'literal local 0 overrides global 1');
-  assert.equal(resolve('global'), 'best_effort_raw');
+  assert.equal(resolve('effective'), '0', 'literal local 0 overrides global 1');
+  assert.equal(resolve('global'), '1');
 
   contents.set(local, '');
-  assert.equal(resolve('effective'), 'best_effort_raw', 'deletion falls back to global');
+  assert.equal(resolve('effective'), '1', 'deletion falls back to global');
   contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=true\n');
-  assert.equal(resolve('effective'), 'protected_proxy', 'only literal 1 opts in');
+  assert.equal(resolve('effective'), 'true', 'the raw stored value is returned verbatim');
   assert.equal(
     resolve('effective', { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' }),
-    'best_effort_raw',
+    '1',
     'the immutable parent shell snapshot has highest precedence',
   );
 });

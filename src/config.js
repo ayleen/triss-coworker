@@ -1,10 +1,10 @@
 import dotenv from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles } from './secrets.js';
-import { resolveCoderCredentialMode } from './coder-providers.js';
 
 // Every reloadable setting served by the snapshot below — provider values plus
-// the best-effort credential-mode acknowledgement.
+// the DEPRECATED legacy credential-mode acknowledgement (read solely to emit a
+// one-time migration warning; it never selects behavior anymore).
 const PROVIDER_ENV_KEYS = [
   'TRISS_CODER_MODEL',
   'TRISS_REQUEST_TIMEOUT_MS',
@@ -106,15 +106,21 @@ export function readWorkerConfigSnapshot({ scope = 'effective', ...seams } = {})
   };
 }
 
-// Resolve the credential-isolation acknowledgement from an immutable parent
-// environment plus a fresh read of the requested file scope. This must not use
-// process.env after loadEnvFiles(): dotenv only fills missing keys, so a value
-// loaded during an earlier MCP call would otherwise survive file edits and
-// deletions for the lifetime of the server.
-export function readCoderCredentialMode({ scope = 'effective', ...seams } = {}) {
-  const key = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION';
+export const LEGACY_CODER_BEST_EFFORT_ENV_KEY = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION';
+
+// DEPRECATED migration reader. Credential handling no longer depends on this
+// variable at all: --protect-credentials selects protected_proxy and the
+// default is best_effort_raw regardless of what the old acknowledgement said
+// ('1' is an accepted no-op; '0' must NOT enable protected mode). This exists
+// only so a command can detect a still-configured legacy value and emit a
+// one-time migration warning before the variable is removed in a cleanup
+// release. Same snapshot rules as before: an immutable parent environment
+// plus a fresh read of the requested file scope — never process.env after
+// loadEnvFiles().
+export function readLegacyCoderBestEffortEnv({ scope = 'effective', ...seams } = {}) {
+  const key = LEGACY_CODER_BEST_EFFORT_ENV_KEY;
   const { pick } = readProviderEnvSnapshot({ ...seams, scope, keys: [key] });
-  return resolveCoderCredentialMode({ [key]: pick(key) });
+  return pick(key);
 }
 
 // Node timers clamp values above 2^31 - 1 ms, so reject those alongside

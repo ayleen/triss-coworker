@@ -302,6 +302,55 @@ test('coder route forwards the common --max-tokens to runCoderRun under its expe
   assert.equal('maxTokens' in without, false);
 });
 
+test('coder route forwards --protect-credentials; ask/review/chat reject it', async () => {
+  let captured;
+  await runExecWithDeps(
+    { task: 'implement the parser module', code: true, protectCredentials: true },
+    {
+      stdout: () => {},
+      stderr: () => {},
+      runCoderRun: async (prompt, opts) => { captured = opts; },
+    },
+  );
+  assert.equal(captured.protectCredentials, true, 'the coder route must forward the flag untouched');
+
+  const deps = { stdout: () => {}, stderr: () => {} };
+  await assert.rejects(
+    () => runExecWithDeps({ task: 'summarize this', paths: ['README.md'], protectCredentials: true }, deps),
+    /--protect-credentials is not supported by the ask route/,
+  );
+  await assert.rejects(
+    () => runExecWithDeps({ pr: '12', protectCredentials: true }, deps),
+    /--protect-credentials is not supported by the review route/,
+  );
+  await assert.rejects(
+    () => runExecWithDeps({ task: 'hello there friend', chat: true, protectCredentials: true }, deps),
+    /--protect-credentials is not supported by the chat route/,
+  );
+});
+
+test('exec --explain reports unsupported --protect-credentials on non-coder routes without executing', async () => {
+  const cases = [
+    { input: { task: 'summarize this', paths: ['README.md'], protectCredentials: true, explain: true }, route: 'ask' },
+    { input: { pr: '12', protectCredentials: true, explain: true }, route: 'review' },
+    { input: { task: 'hello there friend', chat: true, protectCredentials: true, explain: true }, route: 'chat' },
+  ];
+  for (const { input } of cases) {
+    const result = await runExecWithDeps(input, { stdout: () => {} });
+    // Explain mode captures the validation failure instead of throwing.
+    assert.equal(result.route, null, JSON.stringify(input));
+    assert.match(result.reason, /--protect-credentials/);
+    assert.match(result.reason, /not supported by the/);
+  }
+
+  // The coder route explains cleanly WITH the flag (explain never executes).
+  const ok = await runExecWithDeps(
+    { task: 'implement it', code: true, protectCredentials: true, explain: true },
+    { stdout: () => {}, stderr: () => {} },
+  );
+  assert.equal(ok.route, 'coder');
+});
+
 test('exec coder token caps are real for Crush and rejected for OpenCode instead of ignored', async () => {
   const { buildCrushRunArgv } = await import('../src/coder-engines/crush.js');
   const argv = buildCrushRunArgv({ prompt: 'fix it', maxTokens: 12_345 });

@@ -1077,7 +1077,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // production calls fall through to the real subprocess machinery and the
 // import-time parent snapshot inside runCoderRun.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel } = {},
+  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials, protect_credentials: protectCredentialsSnake } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -1107,7 +1107,16 @@ export async function coderRunHandler(
   // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
   // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
-  const allowDowngrade = Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
+  // Both spellings are declared in the schema, so the two can disagree.
+  // This switch WEAKENS isolation, so FALSE is the safe side: any
+  // explicitly false spelling vetoes the downgrade, and an omitted one
+  // defers to the other. (Mirror image of protectCredentials below, whose
+  // safe side is TRUE and which therefore merges with OR.) The value
+  // forwarded to runCoderRun reuses this exact resolution so the sandbox
+  // check and the run can never disagree about the downgrade.
+  const allowDowngrade = allowBestEffortCamel === false || allowBestEffortSnake === false
+    ? false
+    : Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
   const resolvedEngine = resolveCoderEngine({ engine });
   const effectiveIsolate = isolate === undefined ? resolvedEngine === 'crush' : !!isolate;
 
@@ -1135,13 +1144,16 @@ export async function coderRunHandler(
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
-      allowBestEffortCallerWorktree: allowBestEffortCamel ?? allowBestEffortSnake,
+      allowBestEffortCallerWorktree: allowDowngrade,
+      // OR, not ??: if EITHER spelling asserts protection, protection is on —
+      // a disagreement between the two forms (e.g. a schema-filling client
+      // defaulting camel to false) must never resolve to the unsafe mode.
+      protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
     },
     {
       spawn: deps.spawn,
       spawnSync: deps.spawnSync,
       effectiveConfigSpawnSync: deps.effectiveConfigSpawnSync,
-      credentialModeParentEnv: deps.credentialModeParentEnv,
       abortSignal: deps.signal,
       stdoutWrite: (s) => { envelope += s; },
     },
@@ -1160,6 +1172,12 @@ export async function coderStatusHandler() {
     `MOONSHOT_API_KEY: ${process.env.MOONSHOT_API_KEY ? 'configured' : 'not set'} (optional — unlocks Moonshot Kimi models like moonshotai/kimi-k2.7-code on the opencode engine)`,
     `KIMI_API_KEY: ${process.env.KIMI_API_KEY ? 'configured' : 'not set'} (optional — unlocks Kimi for Coding subscription models like kimi-for-coding/k3 on the opencode engine)`,
     `Default engine: ${status.defaultEngine}`,
+    `Default credential mode: ${status.defaultCredentialMode}`,
+    // MCP-specific remediation: an MCP client passes the boolean input, not
+    // the CLI flag. Crush never accepts raw credentials.
+    status.defaultCredentialMode === 'best_effort_raw'
+      ? 'Protected mode: set protectCredentials: true'
+      : 'Protected mode: always on (crush is always protected)',
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — from TRISS_CODER_MODEL, used by a bare opencode-engine run (crush ignores it and uses its own GLM atoms)`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${
