@@ -17,6 +17,9 @@
  *   tolerant enumeration survives an EACCES config candidate.
  *   rollback of an opencode2 manifest reports engine opencode2.
  *   ensureOpenCode2RuntimeDirs reports the directories it created.
+ *   an explicit-session opencode2 success completes its reserved v2 row
+ *         to exactly one idle inventory row; preflight/spawn/no-parseable
+ *         failures leave the inventory EMPTY with NO rollback warning.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +30,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
+import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 const loadConfig = async () => import('../src/opencode-config.js');
@@ -43,6 +50,7 @@ const withHome = async (fn) => {
     SMALL: process.env.TRISS_CODER_SMALL_MODEL,
     KEY: process.env.OPENCODE_API_KEY,
     ISOLATION: process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION,
+    USAGE: process.env.TRISS_USAGE_LOG,
   };
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = home;
@@ -52,6 +60,7 @@ const withHome = async (fn) => {
     delete process.env.TRISS_CODER_SMALL_MODEL;
     delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
   process.env.OPENCODE_API_KEY = 'sk-fake';
+  process.env.TRISS_USAGE_LOG = '0';
   const cfgDir = join(home, '.config', 'opencode');
   mkdirSync(cfgDir, { recursive: true });
   writeFileSync(join(cfgDir, 'opencode.json'), JSON.stringify({
@@ -74,6 +83,8 @@ const withHome = async (fn) => {
     else process.env.TRISS_CODER_SMALL_MODEL = snap.SMALL;
     if (snap.ISOLATION === undefined) delete process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
     else process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION = snap.ISOLATION;
+    if (snap.USAGE === undefined) delete process.env.TRISS_USAGE_LOG;
+    else process.env.TRISS_USAGE_LOG = snap.USAGE;
     process.env.OPENCODE_API_KEY = snap.KEY;
     rmSync(home, { recursive: true, force: true });
   }
@@ -401,3 +412,176 @@ test('ensureOpenCode2RuntimeDirs returns the created directories', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ─── v2 session-row lifecycle across the opencode2 run branch ─────────
+//
+// reserveV2SessionRow publishes the row BEFORE the engine branch, so every
+// opencode2 outcome must land the row correctly: success -> exactly one
+// idle inventory row; any branch failure (preflight gate, spawn failure,
+// no parseable output) -> EMPTY inventory with NO "v2 session rollback
+// failed" warning — the warning disappears only when rollback succeeded.
+
+const OC2_IDLE_STREAM = [
+  JSON.stringify({ type: 'step_start', sessionID: 'ses_oc2_idle' }),
+  JSON.stringify({ type: 'text', sessionID: 'ses_oc2_idle', part: { text: 'done' } }),
+  JSON.stringify({
+    type: 'step_finish',
+    reason: 'stop',
+    part: {
+      type: 'step-finish',
+      reason: 'stop',
+      cost: 0,
+      tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+    },
+  }),
+].join('\n') + '\n';
+
+function oc2Spawn(streamText, { code = 0, failSpawn = false } = {}) {
+  return () => {
+    if (failSpawn) throw new Error('binary vanished mid-admission');
+    const child = new EventEmitter();
+    child.pid = 556777;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    queueMicrotask(() => {
+      if (streamText) child.stdout.write(streamText);
+      child.stdout.end();
+      child.stderr.end('');
+      child.emit('close', code, null);
+    });
+    return child;
+  };
+}
+
+// abandonV2SessionRow degrades its own failures to a dim stderr warning;
+// capture stderr so tests can prove the warning is ABSENT exactly when the
+// rollback succeeded (and never hidden any other way).
+function captureStderrWrites() {
+  const chunks = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  };
+  return {
+    text: () => chunks.join(''),
+    restore: () => {
+      process.stderr.write = original;
+    },
+  };
+}
+
+test('an explicit-session opencode2 success completes to exactly one idle v2 row', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  const { sh } = makeSh();
+  const cap = [];
+  let threw = null;
+  const stderr = captureStderrWrites();
+  try {
+    await commands.runCoderRun(
+      'do work',
+      { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', session: 'oc2idle', cwd: proj },
+      {
+        spawnSync: sh,
+        spawn: oc2Spawn(OC2_IDLE_STREAM),
+        stdoutWrite: (s) => {
+          cap.push(s);
+          return true;
+        },
+      },
+    );
+  } catch (err) {
+    threw = err;
+  } finally {
+    stderr.restore();
+  }
+  assert.ok(!threw, `the run must succeed, got: ${threw && threw.message}`);
+  assert.equal(JSON.parse(cap.join('').trim()).engine, 'opencode2', 'the envelope was written');
+  const inventory = await readCoderSessionInventory(sessionInventoryPath(join(home, '.triss'), 'opencode2'));
+  assert.equal(inventory.entries.length, 1, 'exactly one row for the explicit session');
+  assert.equal(inventory.entries[0].slug, 'oc2idle');
+  assert.equal(inventory.entries[0].state, 'idle', 'success completes reserved->running->idle');
+}));
+
+test('an opencode2 preflight failure leaves the v2 inventory empty without a rollback warning', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  // `which opencode2` fails -> the minimum-version gate rejects BEFORE spawn
+  // (the reservation above the branch has already published the row).
+  const sh = () => ({ status: 1, stdout: '', stderr: '', error: null });
+  const stderr = captureStderrWrites();
+  try {
+    await assert.rejects(
+      () =>
+        commands.runCoderRun(
+          'do work',
+          { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', session: 'oc2pre', cwd: proj },
+          { spawnSync: sh, spawn: oc2Spawn(OC2_IDLE_STREAM), stdoutWrite: () => true },
+        ),
+      /does not satisfy the minimum/,
+    );
+    assert.doesNotMatch(stderr.text(), /v2 session rollback failed/, 'a clean rollback never warns');
+    const after = await readCoderSessionInventory(sessionInventoryPath(join(home, '.triss'), 'opencode2'));
+    assert.deepEqual(after.entries, [], 'no stranded row after the preflight rejection');
+  } finally {
+    stderr.restore();
+  }
+}));
+
+test('an opencode2 spawn failure leaves the v2 inventory empty without a rollback warning', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  const { sh } = makeSh();
+  const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'opencode2');
+  const stderr = captureStderrWrites();
+  try {
+    await assert.rejects(
+      () =>
+        commands.runCoderRun(
+          'do work',
+          { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', session: 'oc2spawnfail', cwd: proj },
+          { spawnSync: sh, spawn: oc2Spawn(null, { failSpawn: true }), stdoutWrite: () => true },
+        ),
+      /Failed to spawn opencode2/,
+    );
+    assert.doesNotMatch(stderr.text(), /v2 session rollback failed/, 'a clean rollback never warns');
+    const after = await readCoderSessionInventory(inventoryDir);
+    assert.deepEqual(after.entries, [], 'no stranded row after the spawn failure');
+  } finally {
+    stderr.restore();
+  }
+}));
+
+test('an opencode2 run with no parseable output empties the v2 inventory without a rollback warning', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  const { sh } = makeSh();
+  const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'opencode2');
+  let midRunSnapshot = null;
+  const spawnWithProbe = () => {
+    // Snapshot the inventory exactly while the run is live to prove the
+    // reserved/running row existed and is removed afterwards. The read is
+    // STARTED synchronously at spawn; awaiting the captured Promise after
+    // the run observes that live-run state with no .then assignment race.
+    midRunSnapshot = readCoderSessionInventory(inventoryDir);
+    return oc2Spawn('', { code: 1 })();
+  };
+  const stderr = captureStderrWrites();
+  try {
+    await assert.rejects(
+      () =>
+        commands.runCoderRun(
+          'do work',
+          { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', session: 'oc2noparse', cwd: proj },
+          { spawnSync: sh, spawn: spawnWithProbe, stdoutWrite: () => true },
+        ),
+      /produced no parseable output/,
+    );
+    assert.doesNotMatch(stderr.text(), /v2 session rollback failed/, 'a clean rollback never warns');
+  } finally {
+    stderr.restore();
+  }
+  const midRunEntries = (await midRunSnapshot).entries;
+  assert.ok(Array.isArray(midRunEntries), 'the engine ran AFTER reservation');
+  assert.equal(midRunEntries.length, 1, 'exactly one row exists while the run is live');
+  assert.equal(midRunEntries[0].state, 'running');
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.deepEqual(after.entries, [], 'no stranded row after the no-parseable failure');
+}));

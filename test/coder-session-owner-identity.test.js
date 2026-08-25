@@ -8,14 +8,18 @@
  * currentBootIdentity (Linux /proc boot_id + Darwin kern.boottime probe),
  * currentSessionOwnerTuple rejection of unavailable evidence, a REAL
  * reserveV2SessionRow admission persisting non-empty canonical identities,
- * and the complete owner/run tuple contract: a failed/spawn-aborted run
+ * the complete owner/run tuple contract: a failed/spawn-aborted run
  * removes its reserved/running row WITHOUT a rollback warning while a
- * successful completion still lands idle.
+ * successful completion still lands idle, a forced reserved->running
+ * transition failure abandons the published row (no stranded inventory),
+ * and a fail-closed V1 session-store lookup abandons the row reserved
+ * before it.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -165,6 +169,52 @@ test('production reservation persists one non-empty canonical owner tuple for bo
   }
 });
 
+// ─── partial reservation transition (reserved published, running lost) ───────
+//
+// reserveV2SessionRow publishes the `reserved` row BEFORE the
+// reserved->running transition, so a markCoderSessionRunning failure used to
+// lose the handle and strand the row behind a generic degradation warning.
+// The complete handle is now built immediately after reserve succeeds (with
+// reserved.sandbox_id + the exact owner/run tuple) and a failing transition
+// best-effort abandons THAT handle before degrading. The narrow injectable
+// seam (deps.markCoderSessionRunning) makes the failure deterministic while
+// reserve itself stays REAL.
+
+test('a forced reserved->running failure abandons the exact reserved row with no stranded inventory', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-owner-identity-'));
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = base;
+  const stderr = captureStderr();
+  try {
+    const result = await reserveV2SessionRow(
+      { engine: 'opencode', slug: 'markfail', isolated: false },
+      {
+        markCoderSessionRunning: async () => {
+          throw new Error('forced mark failure');
+        },
+      },
+    );
+    assert.equal(result, null, 'admission degrades to null after the transition failure');
+    // The ORIGINAL transition error surfaces through the existing warning,
+    // and — because rollback SUCCEEDED — no rollback warning appears.
+    assert.match(stderr.text(), /v2 session store unavailable: forced mark failure/);
+    assert.doesNotMatch(
+      stderr.text(),
+      /v2 session rollback failed/,
+      'a successful abandon must never warn',
+    );
+    const inventory = await readCoderSessionInventory(
+      sessionInventoryPath(join(base, '.triss'), 'opencode'),
+    );
+    assert.deepEqual(inventory.entries, [], 'no stranded reserved row');
+  } finally {
+    stderr.restore();
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 // ─── failed-run rollback (real runCoderRun lifecycle) ────────────────────────
 //
 // Regression for the rollback bug exposed by the owner-identity repair:
@@ -278,4 +328,43 @@ test('a successful run completes its v2 row to idle', withRunEnv(async (base) =>
   const inventory = await readCoderSessionInventory(sessionInventoryPath(join(base, '.triss'), 'opencode'));
   assert.equal(inventory.entries.length, 1, 'successful completion keeps exactly one row');
   assert.equal(inventory.entries[0].state, 'idle');
+}));
+
+// ─── V1 lookup failure after reservation ─────────────────────────────────────
+//
+// The row is reserved BEFORE `lookupSessionRealId` reads sessions.json. A
+// fail-closed store read (malformed/unsupported shape) used to throw past
+// the freshly reserved row; it must abandon that exact row first, so a
+// corrupted store never strands running inventory behind a rollback
+// warning.
+
+test('a malformed legacy sessions.json fails the lookup closed and empties the v2 inventory', withRunEnv(async (base) => {
+  mkdirSync(join(base, '.triss'), { recursive: true });
+  // Legacy flat map with a non-string value -> normalizeSessionStore throws
+  // fail-closed when the explicit-session lookup reads it.
+  writeFileSync(join(base, '.triss', 'sessions.json'), JSON.stringify({ legacy: 42 }));
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'lookup-proof' }, {
+          spawn: () => {
+            throw new Error('must not spawn');
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: () => true,
+        }),
+      /malformed legacy entry/,
+    );
+  } finally {
+    stderr.restore();
+  }
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session rollback failed/,
+    'a successful abandon must never warn',
+  );
+  const after = await readCoderSessionInventory(sessionInventoryPath(join(base, '.triss'), 'opencode'));
+  assert.deepEqual(after.entries, [], 'the fail-closed lookup must abandon its reserved row');
 }));

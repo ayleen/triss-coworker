@@ -5513,7 +5513,7 @@ export function currentSessionOwnerTuple(overrides = {}) {
   return { pid, processStartId, bootId };
 }
 
-export async function reserveV2SessionRow({ engine, slug, isolated }) {
+export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps = {}) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5527,8 +5527,13 @@ export async function reserveV2SessionRow({ engine, slug, isolated }) {
     // or canonical validation rejects the row. Unavailable host identity
     // throws here and degrades through the catch below.
     const owner = currentSessionOwnerTuple();
-    const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
-      await import('../coder-session-transitions.js');
+    const transitions = await import('../coder-session-transitions.js');
+    // Narrow injectable seam (tests only): forcing the reserved->running
+    // transition to fail deterministically. Everything else always uses the
+    // real module — no broader abstraction.
+    const markCoderSessionRunning =
+      deps.markCoderSessionRunning || transitions.markCoderSessionRunning;
+    const { reserveCoderSession, sessionInventoryPath } = transitions;
     const { loadOrCreateProjectIdentity, projectRootFingerprint } =
       await import('../coder-state.js');
     const { mkdir } = await import('node:fs/promises');
@@ -5550,21 +5555,13 @@ export async function reserveV2SessionRow({ engine, slug, isolated }) {
       bootId: owner.bootId,
       projectRootFingerprint: fingerprint,
     });
-    await markCoderSessionRunning({
-      inventoryDir,
-      engine,
-      slug,
-      runId,
-      pid: owner.pid,
-      processStartId: owner.processStartId,
-      bootId: owner.bootId,
-    });
-    // Return the EXACT complete owner/run tuple created during reservation:
-    // sandboxId is the canonical reserved row's value (never a second random
-    // one), because abandon's beginCoderSessionDelete transition re-validates
-    // all five fields against the persisted row — an incomplete tuple fails
-    // canonical validation and strands a running row with a rollback warning.
-    return {
+    // The COMPLETE handle exists the moment reserve succeeds: between the
+    // reserved and running transitions the row is already published on disk,
+    // so a markCoderSessionRunning failure must be able to abandon this
+    // EXACT tuple — sandbox_id from the canonical reserved row plus the same
+    // owner/run evidence — instead of losing the handle and stranding the
+    // row behind a generic warning.
+    const handle = {
       inventoryDir,
       engine,
       slug,
@@ -5574,6 +5571,29 @@ export async function reserveV2SessionRow({ engine, slug, isolated }) {
       processStartId: owner.processStartId,
       bootId: owner.bootId,
     };
+    try {
+      await markCoderSessionRunning({
+        inventoryDir,
+        engine,
+        slug,
+        runId,
+        pid: owner.pid,
+        processStartId: owner.processStartId,
+        bootId: owner.bootId,
+      });
+    } catch (err) {
+      // Best-effort rollback of the stranded `reserved` row (abandon
+      // degrades its own failures to a stderr warning), then rethrow so the
+      // caller degrades through the existing warning/null contract below.
+      await abandonV2SessionRow(handle);
+      throw err;
+    }
+    // Return the EXACT complete owner/run tuple created during reservation:
+    // sandboxId is the canonical reserved row's value (never a second random
+    // one), because abandon's beginCoderSessionDelete transition re-validates
+    // all five fields against the persisted row — an incomplete tuple fails
+    // canonical validation and strands a running row with a rollback warning.
+    return handle;
   } catch (err) {
     process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
     return null;
@@ -6186,6 +6206,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      // The row was already reserved above, so a fail-closed store read must
+      // also delete it — otherwise every corrupted sessions.json run would
+      // strand a running v2 row behind a rollback warning.
+      await abandonV2SessionRow(sessionV2);
       await releaseCredentialProxy();
       throw err;
     }
@@ -6599,7 +6623,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
     writeStdout2(JSON.stringify(envelope2) + '\n');
+    await completeV2SessionRow(sessionV2);
     return;
+    } catch (err) {
+      // Any failure inside the V2 branch (the session/--continue rejection,
+      // preflight gates, spawn failure, no-parseable output, post-run
+      // compatibility checks, envelope assembly) deletes the freshly
+      // reserved row — same contract as the crush branch above. abandon
+      // degrades its OWN failures to a stderr warning; this rethrow keeps
+      // the original terminal error.
+      await abandonV2SessionRow(sessionV2);
+      throw err;
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
       // failure, preflight rejection, post-run compatibility failure, or
