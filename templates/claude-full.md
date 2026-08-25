@@ -216,8 +216,9 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 `--provider` uses an in-memory main/small overlay and never changes `.env` or
 `opencode.json`. Register the worker once with `triss coder init --provider
 worker`; then GLM and worker can be selected per run while both credentials
-remain configured. On this one-shot path, Triss audits the pinned OpenCode
-version's complete file graph, validates the final merged config with `debug
+remain configured. On this one-shot path, Triss verifies the installed OpenCode
+build meets the effective minimum (>= `1.18.22`) and audits its complete file
+graph, validates the final merged config with `debug
 config --pure` using a random canary instead of the real key, and runs OpenCode
 with external plugins disabled. Late overrides and unauditable config fail
 closed.
@@ -227,7 +228,7 @@ closed.
 ```json
 {
   "engine": "opencode",
-  "engine_version": "1.18.7",
+  "engine_version": "1.18.22",
   "session_id": "ses_0d7b5c721ffeouI80ItCOxAJ3g",
   "exit_reason": "end_turn | error | timeout | killed",
   "final_text": "...",
@@ -314,9 +315,10 @@ provider), `OPENCODE_API_KEY` (optional — shared by `opencode/*` Zen and `open
 `kimi-for-coding/*` Kimi models),
 `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
 (model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
-`TRISS_CODER_OPENCODE_VERSION` (installation pin override, default `1.18.7`;
-below-floor values are rejected and one-shot provider runs require the exact
-audited build),
+`TRISS_CODER_OPENCODE_VERSION` (installation minimum override, default/immutable
+floor `1.18.22`; below-floor or malformed values are rejected, a valid higher
+value raises the effective minimum, and one-shot provider runs are authorized
+when the installed version is >= that effective minimum),
 `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
 (crush pin override, hard floor `0.1.6` — raise-only), `TRISS_CODER_CRUSH_RESTRICT`
 (crush only — set `1` to opt INTO the CLI allowlist; default unset/OFF).

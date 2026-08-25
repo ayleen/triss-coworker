@@ -55,7 +55,7 @@ for OpenCode Zen or Go (§3),
 |---|---|---|---|
 | Select via | default, or `--engine opencode` | `--engine opencode2` / `TRISS_CODER_ENGINE=opencode2` | `--engine crush` / `TRISS_CODER_ENGINE=crush` |
 | Status | stable | beta — see [opencode2.md](engines/opencode2.md) | stable |
-| npm package | `opencode-ai` (minimum `1.18.7`) | `@opencode-ai/cli@beta` (minimum `0.0.0-beta-17793` plus capability probe) | `@phpcraftdream/crush` (minimum `0.1.6`) |
+| npm package | `opencode-ai` (supported floor `1.18.22`) | `@opencode-ai/cli@beta` (minimum `0.0.0-beta-17793` plus capability probe) | `@phpcraftdream/crush` (minimum `0.1.6`) |
 | Minimum version env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_OPENCODE2_VERSION` (minimum floor; `>= 0.0.0-beta-17793` plus capability probe) | `TRISS_CODER_CRUSH_VERSION` |
 | Key it reads | `TRISS_WORKER_API_KEY` for `triss-worker/…`; `ZHIPU_API_KEY` for GLM; shared `OPENCODE_API_KEY` for `opencode/…` Zen and `opencode-go/…` Go models; `MOONSHOT_API_KEY` for `moonshotai/…`; `KIMI_API_KEY` for `kimi-for-coding/…` | same keys as opencode (shared config surface) | `ZAI_API_KEY` (Triss bridges from `ZHIPU_API_KEY`; crush ≥0.1.1 also reads `ZHIPU_API_KEY` natively) |
 | Providers | Triss worker (`triss-worker/…`, OpenAI-compatible), Z.AI GLM, OpenCode Zen (`opencode/…`; [opencode-zen.md](engines/opencode-zen.md)), OpenCode Go (`opencode-go/…`; [opencode-go.md](engines/opencode-go.md)), Moonshot Kimi, and Kimi for Coding | provider routing as resolved for V1 (fixture-gated per route; see [opencode2.md](engines/opencode2.md)) | Z.AI GLM only |
@@ -488,7 +488,7 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush`. |
 | `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
-| `TRISS_CODER_OPENCODE_VERSION` | no | Installation/preference minimum for the `opencode-ai` npm package (default `1.18.7`). Below-floor and malformed values are rejected with a typed error. Never authorizes credentials: one-shot provider runs require the exact audited build (`1.18.7`) — unaudited newer releases fail closed before spawn. |
+| `TRISS_CODER_OPENCODE_VERSION` | no | Installation/preference minimum for the `opencode-ai` npm package (default/immutable floor `1.18.22`). Below-floor and malformed values are rejected with a typed error; a valid higher value raises the effective minimum. One-shot provider runs are authorized when the installed version is >= the effective minimum — newer releases (e.g. `1.19.0`, `2.0.0`) pass under the default. |
 | `TRISS_CODER_OPENCODE2_VERSION` | no | Minimum accepted OpenCode 2 version (default `0.0.0-beta-17793`; unsupported `next/dev/tui-v2` values fail closed — see [opencode2.md](engines/opencode2.md)). |
 | `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | **Deprecated no-op.** OpenCode/OpenCode2 now use `best_effort_raw` by default; `--protect-credentials` selects the parent-owned credential proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. |
 | `TRISS_CODER_CRUSH_VERSION` | no | Minimum accepted `@phpcraftdream/crush` version (hard floor `0.1.6`). Raise-only: values below the floor clamp up to it; malformed values fail closed. |

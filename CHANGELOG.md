@@ -30,32 +30,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     sanitized environment — PATH plus deterministic locale/TZ only. Provider,
     cloud, GitHub/AWS, and arbitrary parent credentials are never inherited by
     a probe; the protected execution path is unchanged.
-- **Status accuracy — OpenCode minimum-policy drift fixed.** A new shared
-  non-throwing resolver (`resolveOpencodeVersionPolicy`) backs
-  `assertOpencodeMinimumVersion`, init, run, and `triss status`. A below-floor
-  or malformed `TRISS_CODER_OPENCODE_VERSION` renders as invalid configuration
-  with the effective floor (`1.18.7`) in status and can never show
-  `meetsMinimum=true`; the exact-audited one-shot credential gate
-  (`opencode 1.18.7`) is unchanged.
-- **SECURITY FIX — engine version gates can no longer be weakened by
-  configuration.** `TRISS_CODER_OPENCODE_VERSION` is now strictly an
-  installation/preference minimum; credential authorization is Triss-owned and
-  immutable.
-  - Configuring an OpenCode minimum below the supported floor (`1.18.7`) — or
-    any malformed value, including whitespace-padded ones — fails closed with
-    the existing typed `TRISS_CODER_OPENCODE_MINIMUM_INVALID` error instead of
-    lowering the floor.
-  - One-shot provider runs (`--provider …`) now require the **exact audited
-    build** (`opencode 1.18.7`) before any credential leaves the parent
-    process. The previous unbounded "installed ≥ configured minimum" check
-    admitted arbitrary unaudited future releases (e.g. `1.19.0`, `2.0.0`);
-    semver ordering is not compatibility evidence, so those are now rejected
-    before isolation and spawn until re-audited.
-  - Crush's supported floor is no longer lowerable: a
-    `TRISS_CODER_CRUSH_VERSION` below `0.1.6` clamps up to the floor (so
-    `0.1.4` stays unsupported), malformed values still fail closed, and
-    legitimate higher configured minimums are preserved. Install hints always
-    target at least the floor.
+- **OpenCode supported floor raised to `1.18.22`; exact-audited-build
+  credential gate removed (owner policy decision).** Triss supports OpenCode
+  versions >= `1.18.22`, and that floor is immutable: a
+  `TRISS_CODER_OPENCODE_VERSION` below it — or any malformed value — fails
+  closed with the typed `TRISS_CODER_OPENCODE_MINIMUM_INVALID` error instead
+  of lowering the bar. A valid higher configured minimum raises the effective
+  runtime/install minimum; it never lowers the floor.
+  - Credential-bearing one-shot provider runs (`--provider …`) are authorized
+    when the installed version is >= the effective minimum. Under the default
+    minimum, compatible newer releases (`1.19.0`, `2.0.0`) are accepted and
+    `1.18.21` and lower are rejected before isolation, proxy setup, session
+    reservation, and spawn. The previous exact-match gate against the audited
+    build (`1.18.7`) is removed with no alias: authorization flows through the
+    one shared resolver (`resolveOpencodeVersionPolicy`) that also backs init,
+    run, and status.
+  - Status accuracy: a below-floor or malformed
+    `TRISS_CODER_OPENCODE_VERSION` renders as invalid configuration with the
+    effective floor (`1.18.22`) in `triss status` and can never show
+    `meetsMinimum=true`.
+- **Crush's supported floor is no longer lowerable:** a
+  `TRISS_CODER_CRUSH_VERSION` below `0.1.6` clamps up to the floor (so
+  `0.1.4` stays unsupported), malformed values still fail closed, and
+  legitimate higher configured minimums are preserved. Install hints always
+  target at least the floor.
 
 ## [0.39.0] — 2026-08-23
 

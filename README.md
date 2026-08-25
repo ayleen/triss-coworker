@@ -883,8 +883,9 @@ triss coder run "hard task" \
 never rewrites `.env` or `opencode.json`. `--small-model` is available only
 with `--provider`; when omitted it equals the one-shot main model. The worker
 run still validates the previously registered env-backed provider before the
-key is forwarded. During a one-shot provider run, Triss first audits every
-file-backed source loaded by the pinned OpenCode version: global `config.json`
+key is forwarded. During a one-shot provider run, Triss first verifies the
+installed OpenCode build meets the effective minimum (>= `1.18.22`), then
+audits every file-backed source it loads: global `config.json`
 and `opencode.json(c)`, `~/.opencode/opencode.json(c)`, and runtime-directory
 ancestors up to the Git root (or `/` outside Git). It then asks OpenCode for the
 final merged config under the exact sanitized child environment, with a random

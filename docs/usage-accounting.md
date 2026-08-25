@@ -457,7 +457,12 @@ never participates in price selection.
 These are the pinned-runtime and provider facts the contract above rests on.
 Re-verify them when the pin moves — API and engine contracts do change.
 
-### OpenCode 1.18.7 (pinned)
+### OpenCode 1.18.7 (facts verified here; supported floor now 1.18.22)
+
+The normalization below was verified live against `opencode-ai@1.18.7`. The
+immutable supported floor has since moved to `1.18.22` (any installed release
+>= the effective minimum is admitted), and these facts are assumed to hold
+until re-verified against a newer build.
 
 Normalization of a provider `usage` object into the `tokens` shape Triss parses:
 

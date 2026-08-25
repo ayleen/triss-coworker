@@ -222,6 +222,70 @@ test(
   }),
 );
 
+test(
+  'resolveCrushVersionPolicy: a MALFORMED minimum is the PRIMARY reason regardless of binary state (diagnostics preserved)',
+  withSavedEnv(ENV_KEYS, () => {
+    process.env.TRISS_CODER_CRUSH_VERSION = 'garbage';
+    const cases = [
+      {
+        label: 'compatible installed',
+        sh: versionSh('crush version v0.2.0\n'),
+        found: true,
+        installedVersion: '0.2.0',
+      },
+      {
+        label: 'missing binary',
+        sh: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+        found: false,
+        installedVersion: null,
+      },
+      {
+        label: 'unparsable installed',
+        sh: versionSh('totally not a version'),
+        found: true,
+        installedVersion: 'totally not a version',
+      },
+      {
+        label: 'below-floor installed',
+        sh: versionSh('crush version v0.1.5\n'),
+        found: true,
+        installedVersion: '0.1.5',
+      },
+    ];
+    for (const c of cases) {
+      const p = resolveCrushVersionPolicy(c.sh);
+      assert.deepEqual(
+        {
+          reason: p.reason,
+          configValid: p.configValid,
+          compatible: p.compatible,
+          found: p.found,
+          installedVersion: p.installedVersion,
+          effectiveMinimum: p.effectiveMinimum,
+        },
+        {
+          reason: 'invalid_configured_minimum',
+          configValid: false,
+          compatible: false,
+          found: c.found,
+          installedVersion: c.installedVersion,
+          effectiveMinimum: '0.1.6',
+        },
+        c.label,
+      );
+      // The assertion stays TYPED for every binary state — never a plain
+      // "crush not found"/"upgrade" error that would bury the config fault.
+      try {
+        assertCrushVersionPolicy(p);
+        assert.fail(`must throw (${c.label})`);
+      } catch (err) {
+        assert.equal(err.code, CRUSH_INVALID_MINIMUM_CODE, c.label);
+        assert.match(err.message, /Invalid Crush minimum version "garbage"/, c.label);
+      }
+    }
+  }),
+);
+
 test('assertCrushVersionPolicy throws the narrow typed error for a malformed configured minimum', () => {
   const policy = {
     found: true,
@@ -250,27 +314,27 @@ test('assertCrushVersionPolicy returns the policy unchanged when compatible', ()
 // ─── 3. OpenCode status drift: ONE resolver + adapter assert ──────────────────
 
 test(
-  'resolveOpencodeVersionPolicy: below-floor and malformed configs are invalid with effective floor 1.18.7',
+  `resolveOpencodeVersionPolicy: below-floor and malformed configs are invalid with effective floor ${OPENCODE_SUPPORTED_FLOOR}`,
   withSavedEnv(ENV_KEYS, () => {
     // Configured 1.0.0 (below floor): invalid configuration, never compatible.
-    let p = resolveOpencodeVersionPolicy('1.19.9', '1.0.0');
+    let p = resolveOpencodeVersionPolicy('2.0.5', '1.0.0');
     assert.equal(p.configValid, false);
     assert.equal(p.reason, 'below_supported_floor');
     assert.equal(p.effectiveMinimum, OPENCODE_SUPPORTED_FLOOR);
     assert.equal(p.installedCompatible, false, 'never meetsMinimum=true on invalid config');
 
     // Malformed: same fail-closed shape.
-    p = resolveOpencodeVersionPolicy('1.18.7', 'latest');
+    p = resolveOpencodeVersionPolicy(OPENCODE_SUPPORTED_FLOOR, 'latest');
     assert.equal(p.configValid, false);
     assert.equal(p.reason, 'invalid_configured_minimum');
     assert.equal(p.effectiveMinimum, OPENCODE_SUPPORTED_FLOOR);
     assert.equal(p.installedCompatible, false);
 
     // Exact floor with the exact installed build: compatible.
-    p = resolveOpencodeVersionPolicy('1.18.7', OPENCODE_SUPPORTED_FLOOR);
+    p = resolveOpencodeVersionPolicy(OPENCODE_SUPPORTED_FLOOR, OPENCODE_SUPPORTED_FLOOR);
     assert.deepEqual(
       { configValid: p.configValid, reason: p.reason, installedCompatible: p.installedCompatible, effectiveMinimum: p.effectiveMinimum },
-      { configValid: true, reason: 'compatible', installedCompatible: true, effectiveMinimum: '1.18.7' },
+      { configValid: true, reason: 'compatible', installedCompatible: true, effectiveMinimum: OPENCODE_SUPPORTED_FLOOR },
     );
 
     // A VALID raised minimum is honored against the installed version.
@@ -283,9 +347,30 @@ test(
     assert.equal(p.reason, 'compatible');
 
     // Unknown/missing install stays honest.
-    p = resolveOpencodeVersionPolicy(null, '1.18.7');
+    p = resolveOpencodeVersionPolicy(null, OPENCODE_SUPPORTED_FLOOR);
     assert.equal(p.reason, 'version_unknown');
     assert.equal(p.installedCompatible, false);
+  }),
+);
+
+test(
+  `resolveOpencodeVersionPolicy DEFAULT minimum (${OPENCODE_SUPPORTED_FLOOR}): 1.18.21 rejects; floor/newer stable/newer major accept`,
+  withSavedEnv(ENV_KEYS, () => {
+    delete process.env.TRISS_CODER_OPENCODE_VERSION;
+    const expect = (installed, compatible) => {
+      const p = resolveOpencodeVersionPolicy(installed);
+      assert.deepEqual(
+        { configValid: p.configValid, reason: p.reason, installedCompatible: p.installedCompatible, effectiveMinimum: p.effectiveMinimum },
+        compatible
+          ? { configValid: true, reason: 'compatible', installedCompatible: true, effectiveMinimum: OPENCODE_SUPPORTED_FLOOR }
+          : { configValid: true, reason: 'below_minimum', installedCompatible: false, effectiveMinimum: OPENCODE_SUPPORTED_FLOOR },
+        String(installed),
+      );
+    };
+    expect('1.18.21', false);          // one patch below the immutable floor
+    expect(OPENCODE_SUPPORTED_FLOOR, true);
+    expect('1.19.0', true);            // newer stable
+    expect('2.0.0', true);             // newer major
   }),
 );
 
@@ -306,7 +391,7 @@ test(
     const parsed = assertOpencodeMinimumVersion(OPENCODE_SUPPORTED_FLOOR);
     assert.equal(parsed.major, 1);
     assert.equal(parsed.minor, 18);
-    assert.equal(parsed.patch, 7);
+    assert.equal(parsed.patch, 22);
     assert.doesNotThrow(() => assertOpencodeMinimumVersion('2.0.0'));
   }),
 );
@@ -331,7 +416,7 @@ test(
     let s = describeCoderStatus({ spawnSync: fakeSh });
     assert.equal(s.meetsMinimum, false);
     assert.equal(s.configValid, false);
-    assert.equal(s.effectiveMinimum, '1.18.7');
+    assert.equal(s.effectiveMinimum, OPENCODE_SUPPORTED_FLOOR);
     assert.equal(s.reason, 'below_supported_floor');
 
     // Crush: 0.1.5 found vs default floor 0.1.6 -> incompatible with an
@@ -360,7 +445,7 @@ test(
     // Compatible crush reports green across all compatibility aliases.
     const okSh = (cmd, args) => {
       if (cmd === 'opencode' && args[0] === '--version') {
-        return { status: 0, stdout: '1.18.7\n', stderr: '', error: null };
+        return { status: 0, stdout: `${OPENCODE_SUPPORTED_FLOOR}\n`, stderr: '', error: null };
       }
       if (cmd === 'crush' && args[0] === '--version') {
         return { status: 0, stdout: 'crush version v0.2.0\n', stderr: '', error: null };
@@ -372,6 +457,41 @@ test(
     assert.equal(s.meetsMinimum, true);
     assert.equal(s.crush.meetsMinimum, true);
     assert.equal(s.crush.satisfiesPin, true);
+  }),
+);
+
+test(
+  'describeCoderStatus: a malformed crush minimum reports invalid_configured_minimum regardless of installed state',
+  withSavedEnv(ENV_KEYS, () => {
+    delete process.env.TRISS_CODER_OPENCODE_VERSION;
+    process.env.TRISS_CODER_CRUSH_VERSION = 'garbage';
+    // Status must reflect the CONFIG fault for every binary state — never
+    // swap it for a probe-derived reason.
+    const states = [
+      ['compatible installed', 'crush version v0.2.0\n'],
+      ['missing binary', null],
+      ['unparsable installed', 'crush version vnot-a-semver\n'],
+      ['below-floor installed', 'crush version v0.1.5\n'],
+    ];
+    for (const [label, crushOut] of states) {
+      const sh = (cmd, args) => {
+        if (cmd === 'crush' && args[0] === '--version') {
+          return crushOut == null
+            ? { status: 1, stdout: '', stderr: '', error: null }
+            : { status: 0, stdout: crushOut, stderr: '', error: null };
+        }
+        if (cmd === 'opencode' && args[0] === '--version') {
+          return { status: 0, stdout: `${OPENCODE_SUPPORTED_FLOOR}\n`, stderr: '', error: null };
+        }
+        return { status: 1, stdout: '', stderr: '', error: null };
+      };
+      const s = describeCoderStatus({ spawnSync: sh });
+      assert.equal(s.crush.configValid, false, label);
+      assert.equal(s.crush.reason, 'invalid_configured_minimum', label);
+      assert.equal(s.crush.meetsMinimum, false, label);
+      assert.equal(s.crush.satisfiesPin, false, label);
+      assert.equal(s.crush.effectiveMinimum, '0.1.6', label);
+    }
   }),
 );
 
@@ -456,7 +576,7 @@ function effectRecorders() {
   };
 }
 
-async function assertRejected({ installed, configured }, matchers) {
+async function assertRejected({ installed, configured }, matchers, expectedCode = null) {
   const sh = probeSh(installed);
   if (configured === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
   else process.env.TRISS_CODER_CRUSH_VERSION = configured;
@@ -477,6 +597,7 @@ async function assertRejected({ installed, configured }, matchers) {
     err = caught;
   }
   assert.ok(err, `installed=${installed} configured=${configured} must be rejected`);
+  if (expectedCode !== null) assert.equal(err.code, expectedCode);
   for (const m of matchers) assert.match(err.message, m);
   // NO side effect may have been reached: no engine spawn, no credential
   // proxy, no session reservation, and no isolation worktree (the recorded
@@ -562,6 +683,39 @@ test(
     await assertRejected(
       { installed: 'crush version v0.1.6\n', configured: '0.2.0' },
       [/crush 0\.1\.6 found/, /minimum supported version is 0\.2\.0/],
+    );
+  }),
+);
+
+test(
+  'matrix 3b: malformed minimum + MISSING binary => TYPED reject, zero side effects',
+  withIsolatedRun(makeIsolatedRoot(), async () => {
+    await assertRejected(
+      { installed: null, configured: 'not-a-version' },
+      [/Invalid Crush minimum version "not-a-version"/],
+      CRUSH_INVALID_MINIMUM_CODE,
+    );
+  }),
+);
+
+test(
+  'matrix 3c: malformed minimum + UNPARSABLE installed version => TYPED reject, zero side effects',
+  withIsolatedRun(makeIsolatedRoot(), async () => {
+    await assertRejected(
+      { installed: 'crush version dev-dirty\n', configured: 'HEAD' },
+      [/Invalid Crush minimum version "HEAD"/],
+      CRUSH_INVALID_MINIMUM_CODE,
+    );
+  }),
+);
+
+test(
+  'matrix 3d: malformed minimum + BELOW-FLOOR installed version => TYPED reject (config wins), zero side effects',
+  withIsolatedRun(makeIsolatedRoot(), async () => {
+    await assertRejected(
+      { installed: 'crush version v0.1.5\n', configured: 'not-a-version' },
+      [/Invalid Crush minimum version "not-a-version"/],
+      CRUSH_INVALID_MINIMUM_CODE,
     );
   }),
 );

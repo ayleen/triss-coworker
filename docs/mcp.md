@@ -505,8 +505,9 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    worktree is its reliable safety layer). `provider` selects a complete
    one-shot OpenCode provider pair and requires `model`; `small_model` is
    optional and defaults to `model`. This in-memory selection never rewrites
-   persistent config. For this one-shot path, Triss audits the pinned OpenCode
-   version's complete file graph, then validates the final merged config with
+   persistent config. For this one-shot path, Triss verifies the installed
+   OpenCode build meets the effective minimum (>= `1.18.22`) and audits its
+   complete file graph, then validates the final merged config with
    `debug config --pure` under the sanitized child environment and a random
    canary instead of the real key. Late provider/model overrides, unauditable
    JSONC, and unknown effective config fail closed; the actual run also uses

@@ -270,7 +270,7 @@ self-hosted endpoints).
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
-| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Installation/preference minimum for `opencode-ai`. Values below the supported floor (`1.18.7`) or malformed values are rejected with a typed error. Never authorizes credentials: one-shot provider runs require the exact audited build (`1.18.7`) — unaudited newer releases fail closed before spawn |
+| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.22`          | Installation/preference minimum for `opencode-ai`. Values below the immutable supported floor (`1.18.22`) or malformed values are rejected with a typed error; a valid higher value raises the effective minimum. Credential-bearing one-shot provider runs are authorized when the installed version is >= the effective minimum — newer releases (e.g. `1.19.0`, `2.0.0`) pass under the default |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-beta-17793`  | Minimum accepted OpenCode 2 version; install from `@opencode-ai/cli@beta` (unsupported `next/dev/tui-v2` overrides fail closed) |
 | `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | **Deprecated no-op.** OpenCode/OpenCode2 default to `best_effort_raw`; `--protect-credentials` selects the protected proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. Crush always requires its credential proxy regardless. |
@@ -385,9 +385,12 @@ the engine and role.
 default. An explicit `--provider` run temporarily overrides this role through
 an in-memory OpenCode config (`--small-model`, or the one-shot main model when
 omitted); no file or model pin is rewritten. Before forwarding the selected
-provider key, Triss requires the installed OpenCode version to be the exact
-audited build (currently `1.18.7`; unaudited newer releases fail closed), then
-audits that version's full file graph:
+provider key, Triss requires the installed OpenCode version to satisfy the
+effective minimum — the immutable supported floor (`1.18.22`) or any valid
+higher `TRISS_CODER_OPENCODE_VERSION`; a malformed or below-floor configured
+minimum fails closed with a typed error and never lowers the bar. Compatible
+newer releases (`1.19.0`, `2.0.0`, …) are authorized under the default
+minimum. Triss then audits that install's full file graph:
 global `config.json` and `opencode.json(c)`, `~/.opencode/opencode.json(c)`, and direct
 configs from the actual runtime directory to the Git root (or `/` for non-Git
 directories). JSONC and unreadable layers fail closed. Because account/org,
@@ -401,7 +404,7 @@ deny-first bash policy and late managed layers remain visible. The final
 main/small pair and selected provider must still match before the real key is
 injected. This includes inherited cwd and created or reused isolation worktrees.
 Concurrent same-user mutation between preflight and spawn remains outside the
-guard's threat model; unverified OpenCode versions fail closed.
+guard's threat model; any preflight failure fails closed before spawn.
 
 For OpenCode 1, main and small models from the same provider may use different
 audited transports. Triss then creates two transient provider aliases and two

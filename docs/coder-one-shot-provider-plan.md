@@ -47,15 +47,32 @@ The MCP `triss_coder_run` tool exposes the same operation through `provider`,
 For an explicit provider run, Triss supplies an in-memory
 `OPENCODE_CONFIG_CONTENT` overlay containing only the selected `model` and
 `small_model`. No temporary or persistent config file is published. The
-overlay is not assumed to have final precedence: supported OpenCode versions at
-or above the configured stable minimum can merge
-account/organization, managed-directory, and macOS MDM configuration after it.
+overlay is not assumed to have final precedence: the installed OpenCode build can
+merge account/organization, managed-directory, and macOS MDM configuration
+after it.
 
 The overlay must not define or replace providers. OpenCode deep-merges provider
 objects, which could retain untrusted lower-precedence options such as custom
-headers. Before forwarding any selected credential, Triss requires a valid
-installed OpenCode version at or above the configured stable minimum and audits
-its global `config.json` and `opencode.json(c)`, the legacy
+headers. Credential authorization rests on two separate gates:
+
+1. **Configuration gate.** `TRISS_CODER_OPENCODE_VERSION` is an installation
+   preference only — it selects which release `triss coder init` installs and
+   never authorizes a credential by itself. It must parse as a canonical stable
+   x.y.z value and may never sit below the immutable supported floor;
+   malformed or below-floor values fail closed with the typed
+   `TRISS_CODER_OPENCODE_MINIMUM_INVALID` error instead of weakening policy.
+2. **Authorization gate.** A credential-bearing one-shot run is authorized
+   when the installed binary satisfies the effective minimum: the immutable
+   supported floor (`1.18.22`) or any valid higher configured
+   `TRISS_CODER_OPENCODE_VERSION`. A valid higher configured minimum raises
+   the effective runtime/install minimum; it can never lower the floor. Under
+   the default minimum, compatible newer releases — including `1.19.0` and
+   `2.0.0` — are authorized; an installed version below the effective minimum,
+   a missing install, or an unparsable version string fails closed before
+   isolation and spawn.
+
+Once the installed build is admitted by these gates, Triss audits its global `config.json`
+and `opencode.json(c)`, the legacy
 `~/.opencode/opencode.json(c)` source, and direct config ancestors from the
 actual runtime directory to its Git root (or filesystem root outside Git).
 Built-in providers reject any persistent block for the selected provider id;
@@ -70,9 +87,9 @@ verified. The final merged main model, small model, and selected-provider block
 must match. The actual one-shot `opencode run` also receives `--pure`, disabling
 external plugins in both phases. Any probe failure or unknown final shape is
 fail-closed. This remains a pre-spawn check; concurrent same-user mutation
-between preflight and spawn is outside the guard's threat model. Unverified
-OpenCode versions fail closed so changed discovery rules cannot silently bypass
-the audit. The runtime directory is explicit `--cwd`, inherited `process.cwd()`,
+between preflight and spawn is outside the guard's threat model. OpenCode
+versions not admitted by the two gates above fail closed so changed discovery
+rules cannot silently bypass the audit. The runtime directory is explicit `--cwd`, inherited `process.cwd()`,
 or the created/reused isolation worktree. The Triss worker
 therefore retains its existing setup prerequisite:
 `triss coder init --engine opencode --provider worker --global|--local`
@@ -85,6 +102,10 @@ main/small pair to be worker models.
 Only the credential required by the explicit main model is forwarded. The
 selected provider must equal the provider implied by both model prefixes, so a
 flag cannot relabel a model to obtain a different credential.
+
+The user-facing variable contract (`TRISS_CODER_OPENCODE_VERSION`) lives in
+`docs/configuration.md` and `.env.example`; this plan records only the
+security-relevant gate separation above, not a second copy of the policy text.
 
 ## Failure contract
 
@@ -102,7 +123,14 @@ a reused worktree is preserved for inspection. Failure cases are:
 - missing selected-provider credential;
 - missing, stale, or conflicting managed worker provider;
 - selected-provider overrides or unauditable JSONC in effective config layers;
-- a missing, malformed, or below-minimum installed OpenCode version.
+- an invalid configured installation minimum: `TRISS_CODER_OPENCODE_VERSION`
+  malformed or below the immutable supported floor (`1.18.22`) — typed
+  `TRISS_CODER_OPENCODE_MINIMUM_INVALID`, never lowering the floor;
+- a missing OpenCode install, or an installed version that cannot be parsed;
+- an installed version below the effective minimum: the immutable supported
+  floor (`1.18.22`) by default — e.g. `1.18.21` — or a valid higher configured
+  minimum. Compatible newer releases (`1.19.0`, `2.0.0`) are authorized under
+  the default minimum.
 
 Errors name the invalid flags and include the exact worker init recovery
 command when applicable. A malformed minimum fails closed without suggesting

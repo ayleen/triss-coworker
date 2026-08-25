@@ -129,6 +129,10 @@ export function buildCrushProbeEnv(baseEnv = process.env) {
 //   - 'below_configured_minimum'    installed < a VALID stricter override
 //   - 'invalid_configured_minimum'  TRISS_CODER_CRUSH_VERSION malformed
 //
+// PRECEDENCE: an invalid configured minimum is the PRIMARY reason regardless
+// of binary state — missing, version_unknown, below_floor, and
+// below_configured_minimum never overwrite it (found/installedVersion stay
+// collected as diagnostics).
 // Raise-only semantics are preserved exactly: unset -> effective 0.1.6;
 // configured 0.1.4 clamps UP to 0.1.6; configured 0.2.0 -> effective 0.2.0;
 // malformed -> fail closed (compatible=false; `effectiveMinimum` degrades to
@@ -151,7 +155,11 @@ export function resolveCrushVersionPolicy(sh = nodeSpawnSync) {
     supportedFloor: CRUSH_SUPPORTED_FLOOR,
     effectiveMinimum,
     compatible: false,
-    reason: 'missing',
+    // PRIMARY verdict first: a MALFORMED configured minimum is THE reason no
+    // matter what the probe reports below. missing / version_unknown /
+    // below_floor / below_configured_minimum may only classify a VALID
+    // configuration, so they can never overwrite an invalid one.
+    reason: configValid ? 'missing' : 'invalid_configured_minimum',
   };
   let r;
   try {
@@ -160,7 +168,7 @@ export function resolveCrushVersionPolicy(sh = nodeSpawnSync) {
     r = null; // a throwing spawnSync seam is equivalent to a failed probe
   }
   if (!r || r.error || r.status !== 0) {
-    return base;
+    return base; // 'missing', or the primary invalid-config reason already set
   }
   const out = String(r.stdout || '').trim();
   const parsed = parseInstalledVersion(out);
@@ -170,13 +178,17 @@ export function resolveCrushVersionPolicy(sh = nodeSpawnSync) {
   base.installedVersion = parsed
     ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
     : (out || null);
-  if (!parsed) base.reason = 'version_unknown';
-  else if (!configValid) base.reason = 'invalid_configured_minimum';
-  else if (!semverGte(parsed, floor)) base.reason = 'below_floor';
-  else if (
-    !configuredUnset && !semverGte(parsed, configuredParsed)
-  ) base.reason = 'below_configured_minimum';
-  else base.reason = 'compatible';
+  // Probe-derived classification refines a VALID configuration only; an
+  // invalid one keeps its primary reason above while found/installedVersion
+  // stay diagnostic.
+  if (configValid) {
+    if (!parsed) base.reason = 'version_unknown';
+    else if (!semverGte(parsed, floor)) base.reason = 'below_floor';
+    else if (
+      !configuredUnset && !semverGte(parsed, configuredParsed)
+    ) base.reason = 'below_configured_minimum';
+    else base.reason = 'compatible';
+  }
   base.compatible = base.reason === 'compatible';
   return base;
 }

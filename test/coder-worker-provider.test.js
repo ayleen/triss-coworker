@@ -23,6 +23,7 @@ import {
   coderModelCredential,
   normalizeProviderFlag,
   OPENCODE_PIN,
+  OPENCODE_SUPPORTED_FLOOR,
   runCoderInit,
   runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
@@ -1121,12 +1122,14 @@ test(
             throw new Error('must not spawn');
           },
           spawnSync: (cmd, args) => cmd === 'opencode' && args[0] === '--version'
-            ? { status: 0, stdout: '1.18.6', error: null }
+            ? { status: 0, stdout: '1.18.21', error: null }
             : { status: 1, stdout: '', error: null },
           stdoutWrite: () => true,
         },
       ),
-      /One-shot provider credential auditing requires exactly opencode 1\.18\.7[\s\S]*found 1\.18\.6/,
+      new RegExp(
+        `One-shot provider runs require opencode >= ${OPENCODE_SUPPORTED_FLOOR.replace(/\./gu, '\\.')}[\\s\\S]*found 1\\.18\\.21`,
+      ),
     );
     assert.equal(spawned, false);
   }),

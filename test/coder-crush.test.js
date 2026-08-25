@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -909,6 +910,57 @@ test(
         },
       );
       assert.doesNotMatch(captured(), /set default models/);
+    } finally {
+      delete process.env.TRISS_CODER_CRUSH_VERSION;
+    }
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: malformed minimum + MISSING binary fails TYPED before the install path — no config/model write',
+  withTmpCrushHome(async () => {
+    process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
+    try {
+      // Every command fails -> crush is absent (and npm unreachable too).
+      const calls = [];
+      const sh = (cmd, argv) => {
+        calls.push({ cmd, argv });
+        return { status: 1, stdout: '', stderr: '', error: null };
+      };
+      const snapshot = (root) => {
+        const files = [];
+        const walk = (dir) => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const p = join(dir, entry.name);
+            if (entry.isDirectory()) walk(p);
+            else files.push(p);
+          }
+        };
+        if (existsSync(root)) walk(root);
+        return files.sort();
+      };
+      const before = snapshot(process.env.HOME);
+      await assert.rejects(
+        () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+        (err) => {
+          assert.equal(err.code, CRUSH_INVALID_MINIMUM_CODE);
+          assert.match(err.message, /Invalid Crush minimum version "HEAD"/);
+          return true;
+        },
+      );
+      // ONLY the read-only `--version` probe ran: no `crush models use`
+      // (models write), no `npm` (install path), nothing else side-effectful.
+      for (const call of calls) {
+        const isProbe = call.cmd === 'crush' && call.argv[0] === '--version';
+        assert.ok(
+          isProbe,
+          `no side-effectful command may run before the typed rejection: ${call.cmd} ${call.argv.join(' ')}`,
+        );
+      }
+      // And the filesystem is byte-for-byte untouched: no crush.json
+      // (permissions/models surface) appeared anywhere under HOME.
+      assert.deepEqual(snapshot(process.env.HOME), before);
+      assert.equal(existsSync(join(process.env.HOME, '.local', 'share', 'crush', 'crush.json')), false);
     } finally {
       delete process.env.TRISS_CODER_CRUSH_VERSION;
     }
