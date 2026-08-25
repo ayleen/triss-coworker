@@ -20,7 +20,7 @@
  * admission, recovery, store mutation, or process-owner adapter.
  */
 
-import { open, readFile, rename } from 'node:fs/promises';
+import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -251,25 +251,53 @@ export async function readCoderSessionInventory(inventoryDir) {
   return { entries: decoded.entries };
 }
 
+// Narrow injectable filesystem seam (deterministic tests only). Production
+// always uses the real node:fs/promises functions — omitting the seam never
+// changes behavior.
+const defaultInventoryFs = { open, rename, unlink };
+
 /**
- * Atomically publish the inventory: exclusive same-directory temp (mode
- * 0600) -> write -> fsync -> rename. Returns the updated_at.
+ * Fsync the parent inventoryDir as a directory. Per contract this step is
+ * REQUIRED: a directory-fsync failure after rename must surface to the
+ * caller, never silently claim success.
  */
-export async function writeCoderSessionInventory(inventoryDir, entries, updatedAt = timestampNow()) {
+async function fsyncDirectory(dirPath, fsImpl) {
+  const dirFd = await fsImpl.open(dirPath, 'r');
+  try {
+    await dirFd.sync();
+  } finally {
+    await dirFd.close();
+  }
+}
+
+/**
+ * Crash-durably publish the inventory. Exact order: exclusive same-directory
+ * temp (mode 0600) -> write -> file fsync -> close -> rename -> open the
+ * parent inventoryDir as a directory -> directory fsync -> close -> return.
+ * The directory fsync makes the renamed entry durable, so a failure there
+ * propagates (the temp is already consumed by rename and is not removed).
+ * Every earlier failure closes the file descriptor and removes the temp.
+ * Returns the updated_at.
+ */
+export async function writeCoderSessionInventory(inventoryDir, entries, updatedAt = timestampNow(), fsImpl = defaultInventoryFs) {
   const text = encodeCoderSessionInventory(entries, updatedAt);
   const tmpPath = join(inventoryDir, `.inventory.tmp.${randomBytes(8).toString('hex')}`);
   const targetPath = join(inventoryDir, INVENTORY_BASENAME);
   let fd;
+  let renamed = false;
   try {
-    fd = await open(tmpPath, 'wx', 0o600);
+    fd = await fsImpl.open(tmpPath, 'wx', 0o600);
     await fd.writeFile(text, 'utf8');
     await fd.sync();
     await fd.close();
     fd = undefined;
-    await rename(tmpPath, targetPath);
+    await fsImpl.rename(tmpPath, targetPath);
+    renamed = true; // rename consumed the temp
+    await fsyncDirectory(inventoryDir, fsImpl);
+    return updatedAt;
   } catch (err) {
     if (fd) await fd.close().catch(() => {});
+    if (!renamed) await fsImpl.unlink(tmpPath).catch(() => {});
     throw err;
   }
-  return updatedAt;
 }

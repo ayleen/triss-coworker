@@ -34,7 +34,11 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
-import { sessionInventoryPath } from '../src/coder-session-transitions.js';
+import {
+  markCoderSessionRunning,
+  reserveCoderSession,
+  sessionInventoryPath,
+} from '../src/coder-session-transitions.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 const loadConfig = async () => import('../src/opencode-config.js');
@@ -584,4 +588,167 @@ test('an opencode2 run with no parseable output empties the v2 inventory without
   assert.equal(midRunEntries[0].state, 'running');
   const after = await readCoderSessionInventory(inventoryDir);
   assert.deepEqual(after.entries, [], 'no stranded row after the no-parseable failure');
+}));
+
+test('a live same-slug v2 row prevents the opencode2 spawn entirely', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  const { sh } = makeSh();
+  // Seed a LIVE (running) row for the exact slug this run will request, as
+  // another concurrent run would have published it.
+  const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'opencode2');
+  mkdirSync(inventoryDir, { recursive: true, mode: 0o700 });
+  const reserved = await reserveCoderSession({
+    inventoryDir,
+    engine: 'opencode2',
+    slug: 'oc2busy',
+    isolationMode: 'non_isolated',
+    lockSlot: 0,
+    projectRootFingerprint: 'f'.repeat(64),
+    runId: 'run-live',
+    sandboxId: `sbx_${'b'.repeat(32)}`,
+    pid: 4242,
+    processStartId: 'ps-live',
+    bootId: 'boot-live',
+  });
+  await markCoderSessionRunning({
+    inventoryDir,
+    engine: 'opencode2',
+    slug: 'oc2busy',
+    runId: reserved.run_id,
+    sandboxId: reserved.sandbox_id,
+    pid: reserved.pid,
+    processStartId: reserved.process_start_id,
+    bootId: reserved.boot_id,
+  });
+
+  let spawnCalls = 0;
+  const stderr = captureStderrWrites();
+  let threw = null;
+  try {
+    await commands.runCoderRun(
+      'do work',
+      { engine: 'opencode2', model: 'opencode-go/deepseek-v4-flash', session: 'oc2busy', cwd: proj },
+      {
+        spawnSync: sh,
+        spawn: (...args) => {
+          spawnCalls += 1;
+          return oc2Spawn(OC2_IDLE_STREAM)(...args);
+        },
+        stdoutWrite: () => true,
+      },
+    );
+  } catch (err) {
+    threw = err;
+  } finally {
+    stderr.restore();
+  }
+  // The typed busy refusal propagates — it is NOT degraded to the
+  // "v2 session store unavailable" warning/null contract.
+  assert.ok(threw, `the run must reject on a live same-slug row, got success`);
+  assert.equal(threw.code, 'CODER_SESSION_BUSY');
+  assert.match(threw.message, /already live \(state=running\)/);
+  assert.doesNotMatch(stderr.text(), /v2 session store unavailable/, 'busy is a refusal, not a store degradation');
+  assert.equal(spawnCalls, 0, 'no engine process may spawn over another run\'s live session');
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.equal(after.entries.length, 1);
+  assert.equal(after.entries[0].state, 'running', 'the live row survives untouched');
+}));
+
+// ─── continuation republishes running ownership across same-slug runs ─
+//
+// claimCoderSession admits-or-continues: a fresh slug publishes reserved ->
+// running BEFORE the engine branch, while an IDLE row left by a completed
+// run continues atomically straight to running under the new run's freshly
+// minted identity (origin 'continued'). A failed continuation must RESTORE
+// the inherited row to idle — never delete a session this run did not
+// create — and none of the three outcomes may degrade into the
+// store-unavailable warning, collide with the stale "already reserved"
+// reservation path, or strand a rollback-failed warning.
+
+test('OpenCode2 continuation republishes running ownership and preserves idle on failure', () => withHome(async ({ home, proj }) => {
+  const commands = await loadCommands();
+  const { sh } = makeSh();
+  const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'opencode2');
+  const runOpts = {
+    engine: 'opencode2',
+    model: 'opencode-go/deepseek-v4-flash',
+    session: 'oc2-cont',
+    cwd: proj,
+  };
+  const stderr = captureStderrWrites();
+  try {
+    // Run 1 — fresh admission: the row is RUNNING with the first run's
+    // identity by the time the engine spawns, then completes to idle.
+    let firstSpawnSnapshot = null;
+    await commands.runCoderRun('do work', runOpts, {
+      spawnSync: sh,
+      spawn: (...args) => {
+        // STARTED synchronously at spawn; awaiting the captured Promise after
+        // the run observes that live-run state with no .then assignment race
+        // (same pattern as the no-parseable test above).
+        firstSpawnSnapshot = readCoderSessionInventory(inventoryDir);
+        return oc2Spawn(OC2_IDLE_STREAM)(...args);
+      },
+      stdoutWrite: () => true,
+    });
+    const firstLiveEntries = (await firstSpawnSnapshot).entries;
+    assert.equal(firstLiveEntries.length, 1, 'exactly one row exists while the first run is live');
+    assert.equal(firstLiveEntries[0].slug, 'oc2-cont');
+    assert.equal(firstLiveEntries[0].state, 'running');
+    const firstRunId = firstLiveEntries[0].run_id;
+    const firstSandboxId = firstLiveEntries[0].sandbox_id;
+    assert.ok(firstRunId && firstSandboxId, 'the fresh admission published its owner identity before spawn');
+    const afterFirst = await readCoderSessionInventory(inventoryDir);
+    assert.equal(afterFirst.entries.length, 1);
+    assert.equal(afterFirst.entries[0].slug, 'oc2-cont');
+    assert.equal(afterFirst.entries[0].state, 'idle', 'the first success completes reserved->running->idle');
+
+    // Run 2 — SAME slug: the idle row continues atomically to running under
+    // THIS run's fresh identity (origin 'continued'), then completes again.
+    let secondSpawnSnapshot = null;
+    await commands.runCoderRun('do work again', runOpts, {
+      spawnSync: sh,
+      spawn: (...args) => {
+        secondSpawnSnapshot = readCoderSessionInventory(inventoryDir);
+        return oc2Spawn(OC2_IDLE_STREAM)(...args);
+      },
+      stdoutWrite: () => true,
+    });
+    const continued = (await secondSpawnSnapshot).entries;
+    assert.equal(continued.length, 1, 'continuation reuses the SAME single row — no duplicate');
+    assert.equal(continued[0].slug, 'oc2-cont');
+    assert.equal(continued[0].state, 'running', 'the idle row was republished straight to running');
+    assert.notEqual(continued[0].run_id, firstRunId, 'a FRESH run_id replaces the completed run\'s');
+    assert.notEqual(continued[0].sandbox_id, firstSandboxId, 'a FRESH sandbox_id replaces the completed run\'s');
+    for (const field of ['run_id', 'sandbox_id', 'pid', 'process_start_id', 'boot_id']) {
+      assert.ok(continued[0][field], `the continued running row carries a non-null ${field}`);
+    }
+    const afterSecond = await readCoderSessionInventory(inventoryDir);
+    assert.equal(afterSecond.entries.length, 1);
+    assert.equal(afterSecond.entries[0].state, 'idle', 'the continued success completes back to idle');
+
+    // Run 3 — SAME slug, engine exits 1 with nothing parseable: the run
+    // rejects and the inherited row is RESTORED to idle (origin 'continued'
+    // rolls back to idle instead of deleting the pre-existing session).
+    await assert.rejects(
+      () =>
+        commands.runCoderRun('do work once more', runOpts, {
+          spawnSync: sh,
+          spawn: oc2Spawn('', { code: 1 }),
+          stdoutWrite: () => true,
+        }),
+      /no parseable output/,
+    );
+    const afterThird = await readCoderSessionInventory(inventoryDir);
+    assert.equal(afterThird.entries.length, 1, 'the failed continuation strands NO extra row');
+    assert.equal(afterThird.entries[0].slug, 'oc2-cont');
+    assert.equal(afterThird.entries[0].state, 'idle', 'a continued session is preserved as idle on failure');
+  } finally {
+    stderr.restore();
+  }
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session store unavailable|already reserved|v2 session rollback failed/u,
+    'admission, continuation, and failed continuation all stay clean across every run',
+  );
 }));

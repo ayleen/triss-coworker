@@ -5522,10 +5522,10 @@ export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps 
     return null;
   }
   try {
-    // ONE owner tuple for the whole admission cycle: the reserve and running
-    // transitions must claim IDENTICAL (pid, processStartId, bootId) evidence
-    // or canonical validation rejects the row. Unavailable host identity
-    // throws here and degrades through the catch below.
+    // ONE owner tuple for the whole admission cycle: the claim and any
+    // follow-up transition must carry IDENTICAL (pid, processStartId, bootId)
+    // evidence or canonical validation rejects the row. Unavailable host
+    // identity throws here and degrades through the catch below.
     const owner = currentSessionOwnerTuple();
     const transitions = await import('../coder-session-transitions.js');
     // Narrow injectable seam (tests only): forcing the reserved->running
@@ -5533,7 +5533,7 @@ export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps 
     // real module — no broader abstraction.
     const markCoderSessionRunning =
       deps.markCoderSessionRunning || transitions.markCoderSessionRunning;
-    const { reserveCoderSession, sessionInventoryPath } = transitions;
+    const { claimCoderSession, sessionInventoryPath } = transitions;
     const { loadOrCreateProjectIdentity, projectRootFingerprint } =
       await import('../coder-state.js');
     const { mkdir } = await import('node:fs/promises');
@@ -5542,59 +5542,70 @@ export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps 
     await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
     const identity = await loadOrCreateProjectIdentity(trissRoot);
     const fingerprint = projectRootFingerprint(identity.project_id);
+    // ONE fresh admission tuple per run attempt: a brand-new slug publishes
+    // its reserved row (origin 'new'), while an idle row from a completed
+    // earlier run continues atomically straight to running with THIS run's
+    // fresh run/sandbox identity (origin 'continued'). Live rows owned by
+    // another run reject here and degrade through the catch below.
     const runId = `run_${randomBytes(16).toString('hex')}`;
-    const reserved = await reserveCoderSession({
+    const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
+    const claim = await claimCoderSession({
       inventoryDir,
       engine,
       slug,
       isolationMode: isolated ? 'isolated' : 'non_isolated',
       lockSlot: 0,
+      projectRootFingerprint: fingerprint,
       runId,
+      sandboxId,
       pid: owner.pid,
       processStartId: owner.processStartId,
       bootId: owner.bootId,
-      projectRootFingerprint: fingerprint,
     });
-    // The COMPLETE handle exists the moment reserve succeeds: between the
-    // reserved and running transitions the row is already published on disk,
-    // so a markCoderSessionRunning failure must be able to abandon this
-    // EXACT tuple — sandbox_id from the canonical reserved row plus the same
-    // owner/run evidence — instead of losing the handle and stranding the
-    // row behind a generic warning.
+    // The COMPLETE handle exists the moment the claim succeeds: it carries the
+    // origin plus the EXACT persisted tuple from the canonical claimed row
+    // (never a second random one), because every later transition re-validates
+    // all five fields against the persisted row — an incomplete or stale tuple
+    // fails the exact-owner check and strands the row behind a warning.
     const handle = {
       inventoryDir,
       engine,
       slug,
-      runId,
-      sandboxId: reserved.sandbox_id,
-      pid: owner.pid,
-      processStartId: owner.processStartId,
-      bootId: owner.bootId,
+      origin: claim.origin,
+      runId: claim.row.run_id,
+      sandboxId: claim.row.sandbox_id,
+      pid: claim.row.pid,
+      processStartId: claim.row.process_start_id,
+      bootId: claim.row.boot_id,
     };
-    try {
-      await markCoderSessionRunning({
-        inventoryDir,
-        engine,
-        slug,
-        runId,
-        pid: owner.pid,
-        processStartId: owner.processStartId,
-        bootId: owner.bootId,
-      });
-    } catch (err) {
-      // Best-effort rollback of the stranded `reserved` row (abandon
-      // degrades its own failures to a stderr warning), then rethrow so the
-      // caller degrades through the existing warning/null contract below.
-      await abandonV2SessionRow(handle);
-      throw err;
+    if (claim.origin === 'new') {
+      // Only a NEWLY claimed row needs the reserved->running second
+      // transition; a continued row left the claim already running.
+      try {
+        await markCoderSessionRunning({
+          inventoryDir,
+          engine,
+          slug,
+          runId: handle.runId,
+          sandboxId: handle.sandboxId,
+          pid: handle.pid,
+          processStartId: handle.processStartId,
+          bootId: handle.bootId,
+        });
+      } catch (err) {
+        // Best-effort rollback of the stranded `reserved` row (abandon
+        // degrades its own failures to a stderr warning), then rethrow so the
+        // caller degrades through the existing warning/null contract below.
+        await abandonV2SessionRow(handle);
+        throw err;
+      }
     }
-    // Return the EXACT complete owner/run tuple created during reservation:
-    // sandboxId is the canonical reserved row's value (never a second random
-    // one), because abandon's beginCoderSessionDelete transition re-validates
-    // all five fields against the persisted row — an incomplete tuple fails
-    // canonical validation and strands a running row with a rollback warning.
     return handle;
   } catch (err) {
+    // A BUSY claim is not a store degradation: another live run owns this
+    // engine/slug, so surface its typed refusal to the caller instead of
+    // degrading to a warning and spawning a second process over that session.
+    if (err && err.code === 'CODER_SESSION_BUSY') throw err;
     process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
     return null;
   }
@@ -5604,6 +5615,8 @@ async function completeV2SessionRow(sessionV2) {
   if (!sessionV2) return;
   try {
     const { markCoderSessionIdle } = await import('../coder-session-transitions.js');
+    // Both origins return to idle on success; the handle carries the EXACT
+    // running tuple so the owner check passes.
     await markCoderSessionIdle(sessionV2);
   } catch (err) {
     process.stderr.write(pc.dim(`  ⚠ v2 session completion failed: ${err.message}\n`));
@@ -5613,13 +5626,20 @@ async function completeV2SessionRow(sessionV2) {
 async function abandonV2SessionRow(sessionV2) {
   if (!sessionV2) return;
   try {
-    const { beginCoderSessionDelete, removeCoderSessionRow } =
-      await import('../coder-session-transitions.js');
-    // sessionV2 must carry the complete reservation owner/run tuple (runId,
-    // sandboxId, pid, processStartId, bootId): the deleting transition's
-    // canonical validation requires all five non-null.
-    await beginCoderSessionDelete(sessionV2);
-    await removeCoderSessionRow(sessionV2);
+    const transitions = await import('../coder-session-transitions.js');
+    // sessionV2 must carry the complete owner/run tuple (runId, sandboxId,
+    // pid, processStartId, bootId): the deleting/idle transitions' exact-owner
+    // checks require all five to match the persisted row.
+    if (sessionV2.origin === 'continued') {
+      // The session predates this run: after process cleanup RESTORE it to
+      // idle so future runs can still continue it. Deleting it would destroy
+      // a session this run never created.
+      await transitions.markCoderSessionIdle(sessionV2);
+    } else {
+      // A row this run created is deleted outright.
+      await transitions.beginCoderSessionDelete(sessionV2);
+      await transitions.removeCoderSessionRow(sessionV2);
+    }
   } catch (err) {
     process.stderr.write(pc.dim(`  ⚠ v2 session rollback failed: ${err.message}\n`));
   }
@@ -7036,6 +7056,22 @@ export async function runCoderClean(opts = {}, deps = {}) {
 
 // ─── v2 session CLI (shared contract) ──────────────────────────────────
 
+// The exact engine set the v2 session CLI accepts — nothing else.
+export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
+
+/**
+ * Validate the --engine flag for the session list/clean surface: exactly
+ * opencode|opencode2|crush. Read-only list may omit --engine (defaults to
+ * opencode); clean is an owning mutation and must name its engine explicitly.
+ */
+function requireSessionEngine(rawEngine, subcommand) {
+  const engine = rawEngine || (subcommand === 'list' ? 'opencode' : undefined);
+  if (!CODER_SESSION_ENGINES.includes(engine)) {
+    throw new Error(`--engine <opencode|opencode2|crush> is required for session ${subcommand}`);
+  }
+  return engine;
+}
+
 /**
  * `triss coder session list [--engine <name>]`: serialize the bounded
  * component inventory projection. Exits 0 only for a complete canonical
@@ -7043,40 +7079,44 @@ export async function runCoderClean(opts = {}, deps = {}) {
  * partial JSON.
  */
 export async function runCoderSessionList(opts = {}, deps = {}) {
+  const engine = requireSessionEngine(opts.engine, 'list');
   const { listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine || 'opencode');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
   const sessions = await listCoderSessions({ inventoryDir });
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
 }
 
 /**
- * `triss coder session clean <slug> --engine <opencode|crush>`: requires the
- * engine flag; validates ownership and removes only the selected engine's
- * inactive isolated session row.
+ * `triss coder session clean <slug> --engine <opencode|opencode2|crush>`:
+ * requires the engine flag and removes only the selected engine's idle row,
+ * atomically: clean rereads the row under the inventory mutex, transitions it
+ * to deleting with a fresh clean-owner tuple, then removes it using that
+ * exact deleting tuple. A concurrent continuation that won the race leaves
+ * the row running; clean rejects and preserves it.
  */
 export async function runCoderSessionClean(slug, opts = {}) {
-  if (!opts.engine || !['opencode', 'crush'].includes(opts.engine)) {
-    throw new Error('--engine <opencode|crush> is required for session clean');
-  }
-  const { removeCoderSessionRow, listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
-  const sessions = await listCoderSessions({ inventoryDir });
-  const row = sessions.find((s) => s.slug === slug);
-  if (!row) {
-    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
+  const engine = requireSessionEngine(opts.engine, 'clean');
+  const { cleanIdleCoderSession } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
+  // Clean is itself an owning action: it installs its own fresh owner tuple
+  // (never reuses a run's identity) as the deleting row's exact owner.
+  const owner = currentSessionOwnerTuple();
+  const result = await cleanIdleCoderSession({
+    inventoryDir,
+    engine,
+    slug,
+    runId: `run_${randomBytes(16).toString('hex')}`,
+    sandboxId: `sbx_${randomBytes(16).toString('hex')}`,
+    pid: owner.pid,
+    processStartId: owner.processStartId,
+    bootId: owner.bootId,
+  });
+  if (!result.removed) {
+    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${engine}\n`));
     return;
   }
-  if (row.state !== 'idle') {
-    throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
-  }
-  // The state machine requires reserved/running/idle -> deleting BEFORE a
-  // row can be removed; skipping the transition made every idle clean fail
-  // with 'row must be deleting before removal'.
-  const { beginCoderSessionDelete } = await import('../coder-session-transitions.js');
-  await beginCoderSessionDelete({ inventoryDir, engine: opts.engine, slug });
-  await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
-  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${opts.engine})\n`));
+  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${engine})\n`));
 }
 
 /**

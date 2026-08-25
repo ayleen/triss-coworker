@@ -368,3 +368,90 @@ test('a malformed legacy sessions.json fails the lookup closed and empties the v
   const after = await readCoderSessionInventory(sessionInventoryPath(join(base, '.triss'), 'opencode'));
   assert.deepEqual(after.entries, [], 'the fail-closed lookup must abandon its reserved row');
 }));
+
+// ─── V1 continuation republishes running ownership ───────────────────────────
+//
+// Re-running the same OpenCode (V1-style) slug must reserve a FRESH canonical
+// row each time — a new run_id/sandbox_id and a complete owner tuple visible
+// while the run is live — and a subsequent failed attempt must remove ONLY its
+// own row, preserving the completed run's idle row behind it.
+
+test('OpenCode V1 continuation republishes running ownership and preserves idle on failure', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  const successStream =
+    JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
+    JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n';
+  const stderr = captureStderr();
+  try {
+    let firstSnapshot = null;
+    await runCoderRun('do something', { session: 'v1-cont' }, {
+      spawn: () => {
+        // Reservation happens BEFORE spawn — snapshot the live running row.
+        firstSnapshot = readCoderSessionInventory(inventoryDir);
+        return spawnReplaying(successStream)();
+      },
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+      stdoutWrite: () => true,
+    });
+    const firstLive = await firstSnapshot;
+    assert.equal(firstLive.entries.length, 1, 'exactly one row exists while the first run is live');
+    assert.equal(firstLive.entries[0].state, 'running');
+    const firstRunId = firstLive.entries[0].run_id;
+    const firstSandboxId = firstLive.entries[0].sandbox_id;
+    const afterFirst = await readCoderSessionInventory(inventoryDir);
+    assert.equal(afterFirst.entries.length, 1);
+    assert.equal(afterFirst.entries[0].state, 'idle', 'the first run must complete to idle');
+
+    let secondSnapshot = null;
+    await runCoderRun('do something', { session: 'v1-cont' }, {
+      spawn: () => {
+        secondSnapshot = readCoderSessionInventory(inventoryDir);
+        return spawnReplaying(successStream)();
+      },
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+      stdoutWrite: () => true,
+    });
+    const secondLive = await secondSnapshot;
+    assert.equal(secondLive.entries.length, 1, 'exactly one row exists while the rerun is live');
+    assert.equal(secondLive.entries[0].state, 'running');
+    const secondRow = secondLive.entries[0];
+    assert.notEqual(secondRow.run_id, firstRunId, 'a continuation must publish a fresh run_id');
+    assert.notEqual(secondRow.sandbox_id, firstSandboxId, 'a continuation must publish a fresh sandbox_id');
+    for (const field of ['pid', 'process_start_id', 'boot_id']) {
+      assert.ok(
+        secondRow[field] !== null && secondRow[field] !== undefined,
+        `owner tuple field ${field} must be non-null`,
+      );
+    }
+    const afterSecond = await readCoderSessionInventory(inventoryDir);
+    assert.equal(afterSecond.entries.length, 1);
+    assert.equal(afterSecond.entries[0].state, 'idle', 'the rerun must complete to idle');
+    assert.doesNotMatch(
+      stderr.text(),
+      /v2 session store unavailable|already reserved|v2 session rollback failed/,
+      `clean continuations must never warn, got: ${stderr.text()}`,
+    );
+
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'v1-cont' }, {
+          spawn: spawnReplaying('', { code: 1 }), // zero parseable output -> throw
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: () => true,
+        }),
+      /no parseable output/,
+    );
+    const afterThird = await readCoderSessionInventory(inventoryDir);
+    assert.equal(
+      afterThird.entries.length,
+      1,
+      'the failed attempt must remove only its own row',
+    );
+    assert.equal(afterThird.entries[0].state, 'idle', 'the completed run stays idle');
+  } finally {
+    stderr.restore();
+  }
+}));
