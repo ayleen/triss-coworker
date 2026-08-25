@@ -6,14 +6,16 @@
  *
  * Covers the v2 session CLI contract of docs/reliable-delegation-contract-plan.md
  * (transition): per-engine inventory list/clean, the mandatory engine flag,
- * idle-only clean, retained-result list/clean validation, and legacy-map
+ * idle-only clean plus MEDIUM-3 orphan reclaim (--recover-live for
+ * live-looking owners), retained-result list/clean validation, and legacy-map
  * immunity (the shared .triss/sessions.json map never selects or cleans a v2
  * session).
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,7 +26,9 @@ import { writeResultState } from '../src/coder-result-registry-codec.js';
 import { acquireCoderSlotLease, acquireCoderTargetLease } from '../src/coder-lease.js';
 import { openManagedTrissRoot } from '../src/managed-root.js';
 import { acquireFixedKernelLock } from '../src/fixed-kernel-lock.js';
+import { runCoderStateBackup, runCoderStateValidate } from '../src/commands/coder-state-backup.js';
 import {
+  classifyRecordedSessionOwner,
   completeV2SessionRow,
   currentBootIdentity,
   currentSessionOwnerTuple,
@@ -32,8 +36,9 @@ import {
   removeSessionStoreMapping,
   reserveV2SessionRow,
   revalidateV2SessionRowBeforeSpawn,
-  runCoderSessionClean,
   runCoderResultClean,
+  runCoderSessionClean,
+  runCoderSessionMigrate,
 } from '../src/commands/coder.js';
 
 const FP = 'f'.repeat(64);
@@ -1325,23 +1330,33 @@ test('run + clean of the same slug: active run fails clean fast, published idle 
   const originalRoot = process.env.TRISS_PROJECT_ROOT;
   process.env.TRISS_PROJECT_ROOT = fx.base;
   try {
+    // MEDIUM-3: a genuinely LIVE owner is represented by THIS test process's
+    // real tuple (a fabricated dead boot id/pid would now classify as an
+    // ORPHAN and be auto-reclaimed instead of exercising the fail-closed
+    // path). The classifier probes are seeded from the STORED row so the
+    // expectation never depends on host probe quirks.
     const session = await reserveV2SessionRow({
       engine: 'opencode2',
       slug: 'run-clean',
       isolated: false,
-      ownerTuple: { pid: 93, processStartId: 'ps-rc', bootId: 'boot-rc' },
+      ownerTuple: { pid: process.pid },
     });
     await revalidateV2SessionRowBeforeSpawn(session); // row running, run lease HELD
-    // While the live run owns the slug, clean MUST fail closed (never mutate
-    // a running row), and the row must survive untouched.
-    await assert.rejects(
-      () => runCoderSessionClean('run-clean', { engine: 'opencode2' }),
-      /not idle \(state=running\)/,
-    );
     let inv = await readCoderSessionInventory(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2'));
+    const liveOwnerDeps = {
+      currentBootIdentity: () => inv.entries[0].boot_id,
+      pidAlive: (pid) => pid === inv.entries[0].pid,
+      processStartIdentity: () => inv.entries[0].process_start_id,
+    };
+    // While the live run owns the slug, clean MUST fail closed (never mutate
+    // a running row), name the live evidence, and point at --recover-live.
+    await assert.rejects(
+      () => runCoderSessionClean('run-clean', { engine: 'opencode2' }, liveOwnerDeps),
+      /not idle \(state=running\)[\s\S]*appears LIVE[\s\S]*--recover-live/,
+    );
     assert.equal(inv.entries.length, 1);
     assert.equal(inv.entries[0].state, 'running');
-    assert.equal(inv.entries[0].pid, 93);
+    assert.equal(inv.entries[0].pid, process.pid);
 
     // The run completes successfully (durable mapping first, then envelope):
     // the row is published idle with its slot/target/maintenance released.
@@ -1357,6 +1372,399 @@ test('run + clean of the same slug: active run fails clean fast, published idle 
     assert.equal(inv.entries.length, 0);
     const store = await readStore(fx.base);
     assert.equal(store.engines.opencode2['run-clean'], undefined);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── MEDIUM-3: orphan reclaim + --recover-live ─────────────────────────────
+
+test('owner liveness classifier: foreign boot, dead pid, reused pid, live, unknown', () => {
+  const row = (over = {}) => ({ pid: 500, process_start_id: 'ps-x', boot_id: 'boot-b', ...over });
+  const deps = (over = {}) => ({
+    currentBootIdentity: () => 'boot-b',
+    pidAlive: () => true,
+    processStartIdentity: () => 'ps-x',
+    ...over,
+  });
+  assert.deepEqual(classifyRecordedSessionOwner(row(), deps()), { status: 'live' });
+  assert.equal(
+    classifyRecordedSessionOwner(row({ boot_id: 'boot-old' }), deps()).status,
+    'orphan',
+    'a previous-boot owner is provably gone',
+  );
+  assert.equal(
+    classifyRecordedSessionOwner(row(), deps({ pidAlive: () => false })).status,
+    'orphan',
+    'a dead pid is provably gone',
+  );
+  assert.equal(
+    classifyRecordedSessionOwner(row(), deps({ processStartIdentity: () => 'ps-other-program' })).status,
+    'orphan',
+    'a reused pid is provably gone',
+  );
+  assert.equal(
+    classifyRecordedSessionOwner(row(), deps({ currentBootIdentity: () => null })).status,
+    'unknown',
+    'an unavailable boot probe cannot prove anything',
+  );
+  assert.equal(classifyRecordedSessionOwner(row({ pid: null }), deps()).status, 'unknown');
+  assert.equal(
+    classifyRecordedSessionOwner(row(), deps({
+      pidAlive: () => { throw new Error('probe boom'); },
+    })).status,
+    'unknown',
+    'a failing liveness probe degrades to unknown, never to orphan',
+  );
+});
+
+async function seedRunningRow(fx, engine, slug, { state = 'running', fingerprint = FP } = {}) {
+  const dir = join(fx.base, '.triss', 'engine-sessions-v2', engine);
+  await mkdir(dir, { mode: 0o700, recursive: true });
+  const tuple = {
+    runId: `run-${slug}`,
+    pid: 400 + slug.length,
+    processStartId: `ps-${slug}`,
+    bootId: `boot-${slug}`,
+  };
+  await reserveCoderSession({
+    inventoryDir: dir, engine, slug, isolationMode: 'isolated',
+    lockSlot: 0, projectRootFingerprint: fingerprint, ...tuple,
+  });
+  if (state === 'running') {
+    await markCoderSessionRunning({ inventoryDir: dir, engine, slug, ...tuple });
+  }
+  return { dir, tuple };
+}
+
+test('clean reclaims a running ORPHAN (dead recorded pid) through the full pipeline', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir, tuple } = await seedRunningRow(fx, 'opencode2', 'orphdead');
+    await writeStoreMapping(fx.base, 'opencode2', 'orphdead', 'ses_orph_dead');
+    await runCoderSessionClean('orphdead', { engine: 'opencode2' }, {
+      currentBootIdentity: () => tuple.bootId,       // SAME boot as the row…
+      pidAlive: (pid) => pid !== tuple.pid,          // …but the recorded pid is DEAD
+      processStartIdentity: () => tuple.processStartId,
+    });
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0, 'the orphaned row must be fully removed');
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['orphdead'], undefined, 'the mapping must be cleared too');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean also reclaims an orphaned RESERVED row (crash before spawn)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir } = await seedRunningRow(fx, 'opencode2', 'orphres', { state: 'reserved' });
+    await runCoderSessionClean('orphres', { engine: 'opencode2' }, {
+      currentBootIdentity: () => 'boot-from-another-age', // foreign boot id
+      pidAlive: () => true,
+      processStartIdentity: () => 'ps-orphres',
+    });
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 0);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('clean reclaims a running ORPHAN whose pid was reused by another process', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir, tuple } = await seedRunningRow(fx, 'opencode2', 'orphreuse');
+    await writeStoreMapping(fx.base, 'opencode2', 'orphreuse', 'ses_orph_reuse');
+    await runCoderSessionClean('orphreuse', { engine: 'opencode2' }, {
+      currentBootIdentity: () => tuple.bootId,         // same boot
+      pidAlive: () => true,                            // pid EXISTS but…
+      processStartIdentity: () => 'ps-now-a-browser',  // …a DIFFERENT program owns it
+    });
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 0);
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['orphreuse'], undefined);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a LIVE-looking running owner fails closed unless --recover-live attests', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir, tuple } = await seedRunningRow(fx, 'opencode2', 'livey');
+    await writeStoreMapping(fx.base, 'opencode2', 'livey', 'ses_livey');
+    const liveDeps = {
+      currentBootIdentity: () => tuple.bootId,
+      pidAlive: () => true,
+      processStartIdentity: () => tuple.processStartId, // matches the row: genuinely live
+    };
+    await assert.rejects(
+      () => runCoderSessionClean('livey', { engine: 'opencode2' }, liveDeps),
+      /not idle \(state=running\)[\s\S]*appears LIVE[\s\S]*--recover-live/,
+    );
+    let inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1, 'the live row must survive untouched');
+    assert.equal(inv.entries[0].state, 'running');
+    let store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['livey'], 'ses_livey', 'the mapping must survive');
+
+    // Explicit operator attestation overrides: same probes, forced recovery.
+    await runCoderSessionClean('livey', { engine: 'opencode2', recoverLive: true }, liveDeps);
+    inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0);
+    store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['livey'], undefined);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('an UNPROVABLE owner fails closed; --recover-live is the only override', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir } = await seedRunningRow(fx, 'opencode2', 'foggy');
+    const blindDeps = {
+      currentBootIdentity: () => null, // boot probe unavailable
+      pidAlive: () => { throw new Error('no probes here'); },
+      processStartIdentity: () => null,
+    };
+    await assert.rejects(
+      () => runCoderSessionClean('foggy', { engine: 'opencode2' }, blindDeps),
+      /could not be proven dead[\s\S]*--recover-live/,
+    );
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 1);
+
+    await runCoderSessionClean('foggy', { engine: 'opencode2', recoverLive: true }, blindDeps);
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 0);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Orphan-mapping recovery through session clean ──────────────────────────
+
+test('session clean removes an orphan mapping with no inventory row; admission recovers', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await writeStoreMapping(fx.base, 'opencode2', 'orphmap', 'ses_dangling');
+    // The exact state the admission gate rejects new reservations with:
+    await assert.rejects(
+      () => reserveV2SessionRow({
+        engine: 'opencode2',
+        slug: 'orphmap',
+        isolated: false,
+        ownerTuple: { pid: process.pid },
+      }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_STORE_INVALID'
+        && /NO inventory row[\s\S]*triss coder session clean orphmap/.test(err.message),
+    );
+    // `session clean` is the sanctioned recovery tool for that state.
+    await runCoderSessionClean('orphmap', { engine: 'opencode2' });
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['orphmap'], undefined, 'the orphan mapping must be gone');
+    // Admission recovers: the slug is brand-new admissible again.
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'orphmap',
+      isolated: false,
+      ownerTuple: { pid: process.pid },
+    });
+    assert.equal(session.origin, 'new_reservation');
+    await releaseV2SessionRow(session);
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 0);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('an UNREADABLE store blocks orphan-mapping clean recovery (fail closed)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await writeFile(
+      join(fx.base, '.triss', 'sessions.json'),
+      JSON.stringify({ version: 2, engines: { opencode2: 'not-an-object' } }),
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      () => runCoderSessionClean('ghost', { engine: 'opencode2' }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_STORE_INVALID',
+    );
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+// ─── Released v0.39.0 schema-1 migration (`triss coder session migrate`) ────
+
+// A byte-realistic released-v0.39.0 engine inventory: schema_version 1,
+// exactly the 16 released keys per row (no session_instance_id).
+async function seedLegacyInventory(base, engine, entries, { updatedAt = NOW } = {}) {
+  const dir = join(base, '.triss', 'engine-sessions-v2', engine);
+  await mkdir(dir, { mode: 0o700, recursive: true });
+  const text = JSON.stringify({ schema_version: 1, entries, updated_at: updatedAt }) + '\n';
+  await writeFile(join(dir, '.inventory.json'), text, { mode: 0o600 });
+  return { dir, text };
+}
+
+const legacyIdleEntry = (slug, over = {}) => ({
+  engine: 'opencode2',
+  slug,
+  isolation_mode: 'isolated',
+  lock_slot: 1,
+  state: 'idle',
+  run_id: null,
+  sandbox_id: null,
+  pid: null,
+  process_start_id: null,
+  boot_id: null,
+  project_root_fingerprint: FP,
+  reserved_bytes: RESERVED_BYTES,
+  deleting_basename: null,
+  session_delete_phase: null,
+  created_at: NOW,
+  updated_at: NOW,
+  ...over,
+});
+
+test('migrate upgrades a realistic v0.39.0 idle inventory to canonical and preserves the original', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir, text: legacyText } = await seedLegacyInventory(fx.base, 'opencode2', [
+      legacyIdleEntry('old-one', { lock_slot: 0 }),
+      legacyIdleEntry('old-two', { lock_slot: 3 }),
+    ]);
+    // Normal readers detect the legacy document with the typed actionable
+    // error — never a generic corruption diagnostic, never auto-mutation.
+    const beforeRead = await readCoderSessionInventory(dir);
+    assert.equal(beforeRead.code, 'TRISS_CODER_SESSION_LEGACY_SCHEMA');
+    assert.match(beforeRead.error, /triss coder session migrate/);
+
+    await runCoderSessionMigrate({ engine: 'opencode2' });
+
+    const after = await readCoderSessionInventory(dir);
+    assert.equal(after.error, undefined);
+    assert.equal(after.entries.length, 2);
+    // Both rows survive with freshly minted immutable identities.
+    const ids = new Set(after.entries.map((e) => e.session_instance_id));
+    assert.equal(ids.size, 2);
+    for (const id of ids) assert.match(id, /^[0-9a-f]{32}$/);
+    const one = after.entries.find((e) => e.slug === 'old-one');
+    assert.equal(one.state, 'idle');
+    assert.equal(one.lock_slot, 0);
+    // Every other field is carried over unchanged.
+    assert.deepEqual(
+      { ...one, session_instance_id: null },
+      { ...legacyIdleEntry('old-one', { lock_slot: 0 }), session_instance_id: null },
+    );
+    // The ORIGINAL v0.39.0 bytes are preserved verbatim under quarantine.
+    const qRoot = join(fx.base, '.triss', 'quarantine-v1');
+    const batches = (await readdir(qRoot)).filter((n) => n.startsWith('inventory-schema1-opencode2-'));
+    assert.equal(batches.length, 1);
+    const preserved = await readFile(join(qRoot, batches[0], '.inventory.json'), 'utf8');
+    assert.equal(preserved, legacyText);
+    // Idempotent: a second migrate is a no-op on the canonical document.
+    await runCoderSessionMigrate({ engine: 'opencode2' });
+    const again = await readCoderSessionInventory(dir);
+    assert.deepEqual(again.entries.map((e) => e.session_instance_id), [...ids]);
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('migrate fails closed without partial migration on live legacy rows', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const { dir, text: legacyText } = await seedLegacyInventory(fx.base, 'opencode2', [
+      legacyIdleEntry('awake', {
+        state: 'running',
+        run_id: 'run_awake',
+        sandbox_id: `sbx_${'7'.repeat(32)}`,
+        pid: 419,
+        process_start_id: 'ps-legacy-live',
+        boot_id: 'boot-legacy-live',
+      }),
+      legacyIdleEntry('sleepy'),
+    ]);
+    await assert.rejects(
+      () => runCoderSessionMigrate({ engine: 'opencode2' }),
+      (err) => err?.code === 'TRISS_CODER_SESSION_LEGACY_SCHEMA'
+        && /non-idle rows \(opencode2\/awake:running\)[\s\S]*No partial migration/.test(err.message),
+    );
+    // NOTHING changed: same legacy bytes, no canonical rewrite, no quarantine.
+    const raw = await readFile(join(dir, '.inventory.json'), 'utf8');
+    assert.equal(raw, legacyText);
+    const qRoot = join(fx.base, '.triss', 'quarantine-v1');
+    let batches = [];
+    try {
+      batches = (await readdir(qRoot)).filter((n) => n.startsWith('inventory-schema1-'));
+    } catch { /* quarantine root absent entirely */ }
+    assert.equal(batches.length, 0, 'no preservation batch may exist for a refused migration');
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('migrate reports absent inventories as nothing-to-do and migrates crush rows too', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    await mkdir(join(fx.base, '.triss', 'engine-sessions-v2', 'crush'), { mode: 0o700, recursive: true });
+    // Absent opencode2 inventory: graceful no-op.
+    await runCoderSessionMigrate({ engine: 'opencode2' });
+    assert.equal(existsSync(join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2', '.inventory.json')), false);
+    // Crush (no store namespace) migrates the same way — identity minting is
+    // store-agnostic.
+    await seedLegacyInventory(fx.base, 'crush', [legacyIdleEntry('crush-old', { engine: 'crush' })]);
+    await runCoderSessionMigrate({ engine: 'crush' });
+    const crushInv = await readCoderSessionInventory(
+      join(fx.base, '.triss', 'engine-sessions-v2', 'crush'),
+    );
+    assert.equal(crushInv.entries.length, 1);
+    assert.match(crushInv.entries[0].session_instance_id, /^[0-9a-f]{32}$/);
   } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;
@@ -1497,6 +1905,101 @@ test('a failed NEW run never adopts a pre-existing mapping (exact-id attribution
 });
 
 
+// ─── Idle-continuation removal: owned mapping goes with the row ─────────────
+
+test('a continuation completing without a confirmed native id removes its OWNED mapping and row', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await seedIdleRow(fx, 'opencode2', 'cont-gone', { isolationMode: 'non_isolated', fingerprint });
+    await writeStoreMapping(fx.base, 'opencode2', 'cont-gone', 'ses_owned_tail');
+
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'cont-gone',
+      isolated: false,
+      ownerTuple: { pid: 71, processStartId: 'ps-cg', bootId: 'boot-cg' },
+    });
+    assert.equal(session.origin, 'idle_continuation');
+    assert.equal(session.resumedRealId, 'ses_owned_tail');
+    await revalidateV2SessionRowBeforeSpawn(session);
+    // Completion confirmed NO native session id: publishing idle would orphan
+    // the old conversation tail, so the canonical crash-safe order (deleting
+    // breadcrumb -> OWNED store mapping -> row) removes all of this
+    // continuation's state.
+    assert.equal(await completeV2SessionRow(session, null), 'removed_unusable');
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 0, 'the unusable continuation row must be removed');
+    const store = await readStore(fx.base);
+    assert.equal(store.engines.opencode2['cont-gone'], undefined, 'the OWNED mapping must go with the row');
+
+    // Slug reuse: nothing dangling — a brand-new reservation is admissible
+    // again and gets a FRESH immutable incarnation identity.
+    const fresh = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'cont-gone',
+      isolated: false,
+      ownerTuple: { pid: 72, processStartId: 'ps-cg2', bootId: 'boot-cg2' },
+    });
+    assert.equal(fresh.origin, 'new_reservation');
+    assert.notEqual(fresh.instanceId, session.instanceId);
+    await releaseV2SessionRow(fresh);
+    assert.equal((await readCoderSessionInventory(dir)).entries.length, 0);
+
+    // Backup gate: row and mapping were removed TOGETHER, so the durable v2
+    // state stays internally consistent — a real rollback backup must create
+    // AND validate cleanly.
+    await runCoderStateBackup({ project: fx.base, backup: 'gate-cont-gone' });
+    await runCoderStateValidate({ project: fx.base, backup: 'gate-cont-gone' });
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
+test('a continuation removal never deletes a foreign/mismatched mapping (retained_for_recovery)', async () => {
+  const fx = await fixture();
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = fx.base;
+  try {
+    const fingerprint = await realProjectFingerprint(fx.base);
+    const dir = join(fx.base, '.triss', 'engine-sessions-v2', 'opencode2');
+    await mkdir(dir, { mode: 0o700, recursive: true });
+    await seedIdleRow(fx, 'opencode2', 'cont-fgn', { isolationMode: 'non_isolated', fingerprint });
+    await writeStoreMapping(fx.base, 'opencode2', 'cont-fgn', 'ses_claimed_tail');
+
+    const session = await reserveV2SessionRow({
+      engine: 'opencode2',
+      slug: 'cont-fgn',
+      isolated: false,
+      ownerTuple: { pid: 73, processStartId: 'ps-cf', bootId: 'boot-cf' },
+    });
+    await revalidateV2SessionRowBeforeSpawn(session);
+    // Another actor replaces the durable mapping while the run is in flight:
+    // the id on disk is no longer attributable to THIS continuation.
+    await writeStoreMapping(fx.base, 'opencode2', 'cont-fgn', 'ses_foreign_now');
+    assert.equal(await completeV2SessionRow(session, null), 'retained_for_recovery');
+    const inv = await readCoderSessionInventory(dir);
+    assert.equal(inv.entries.length, 1, 'ambiguity retains the row');
+    assert.equal(inv.entries[0].state, 'running');
+    const store = await readStore(fx.base);
+    assert.equal(
+      store.engines.opencode2['cont-fgn'],
+      'ses_foreign_now',
+      'the foreign conversation tail must be preserved for recovery',
+    );
+  } finally {
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await fx.cleanup();
+  }
+});
+
 test('clean ABA guard: a same-slug replacement is never deletable by an older attempt', async () => {
   const fx = await fixture();
   const originalRoot = process.env.TRISS_PROJECT_ROOT;
@@ -1596,7 +2099,7 @@ test('clean ABA guard survives a frozen clock: identical created_at still cannot
       updated_at: NOW,
     });
     await writeFile(join(dir, '.inventory.json'), JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       entries: [incarnation('c'.repeat(32))],
       updated_at: NOW,
     }) + '\n', { mode: 0o600 });
@@ -1626,7 +2129,7 @@ test('clean ABA guard survives a frozen clock: identical created_at still cannot
     });
     await removeCoderSessionRow({ inventoryDir: dir, engine: 'opencode2', slug: 'frozen' });
     await writeFile(join(dir, '.inventory.json'), JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       entries: [incarnation('d'.repeat(32))],
       updated_at: NOW,
     }) + '\n', { mode: 0o600 });
@@ -1689,7 +2192,6 @@ test('a legacy shared .triss/sessions.json map never selects a v2 session', asyn
 test('session clean requires the engine flag and rejects non-idle sessions', async () => {
   const fx = await fixture();
   try {
-    await seedSession(fx, 'opencode', 'task-a', { idle: false }); // still running
     await assert.rejects(
       () => runCoderSessionClean('task-a', {}),
       (err) => err?.message === '--engine <opencode|opencode2|crush> is required for session clean',
@@ -1699,13 +2201,38 @@ test('session clean requires the engine flag and rejects non-idle sessions', asy
       () => runCoderSessionClean('task-a', { engine: 'gemini' }),
       /--engine <opencode\|opencode2\|crush> is required/,
     );
-    // Engine flag present but the row is not idle: rejected.
+    // Engine flag present but the row is not idle: rejected. MEDIUM-3 makes
+    // only PROVABLY-dead owners auto-reclaimable, so this fail-closed case
+    // must record THIS process's real owner tuple (genuinely live) — a
+    // fabricated dead tuple would now classify as an orphan and be reclaimed.
     const originalRoot = process.env.TRISS_PROJECT_ROOT;
     process.env.TRISS_PROJECT_ROOT = fx.base;
     try {
+      const liveTuple = currentSessionOwnerTuple();
+      await reserveCoderSession({
+        inventoryDir: fx.inventoryDir,
+        engine: 'opencode',
+        slug: 'task-a',
+        isolationMode: 'isolated',
+        lockSlot: 0,
+        projectRootFingerprint: FP,
+        runId: 'run-live',
+        pid: liveTuple.pid,
+        processStartId: liveTuple.processStartId,
+        bootId: liveTuple.bootId,
+      });
+      await markCoderSessionRunning({
+        inventoryDir: fx.inventoryDir,
+        engine: 'opencode',
+        slug: 'task-a',
+        runId: 'run-live',
+        pid: liveTuple.pid,
+        processStartId: liveTuple.processStartId,
+        bootId: liveTuple.bootId,
+      });
       await assert.rejects(
         () => runCoderSessionClean('task-a', { engine: 'opencode' }),
-        /not idle/,
+        /not idle \(state=running\)[\s\S]*appears LIVE[\s\S]*--recover-live/,
       );
     } finally {
       if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;

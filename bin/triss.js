@@ -46,6 +46,7 @@ import {
   runCoderClean,
   runCoderSessionList,
   runCoderSessionClean,
+  runCoderSessionMigrate,
   runCoderStateAdopt,
   runCoderStateReset,
   runCoderResultList,
@@ -472,7 +473,9 @@ coderState
 // `coder session` group (v2 session CLI contract).
 const coderSession = coder
   .command('session')
-  .description('List or clean v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)');
+  .description(
+    'List, clean, or migrate v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)',
+  );
 
 coderSession
   .command('list')
@@ -482,9 +485,29 @@ coderSession
 
 coderSession
   .command('clean <slug>')
-  .description('Remove a selected inactive v2 isolated session/workspace transaction and its engine-owned store mapping')
+  .description(
+    'Remove a selected inactive v2 isolated session/workspace transaction and its engine-owned store mapping'
+    + ' (a row whose recorded owner provably died is reclaimed automatically;'
+    + ' --recover-live attests a still-live-looking owner is gone)',
+  )
   .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, or crush (MANDATORY)')
+  .option(
+    '--recover-live',
+    'force-clean a reserved/running session whose owner process may still appear live'
+    + ' (you attest the owner is really gone)',
+  )
   .action((slug, opts) => wrap(runCoderSessionClean)(slug, opts));
+
+coderSession
+  .command('migrate')
+  .description(
+    'One-shot upgrade of a released v0.39.0 (schema_version 1) engine inventory to the canonical'
+    + ' schema: fully-idle documents gain freshly minted immutable session instance ids and the'
+    + ' original document is preserved under .triss/quarantine-v1/. An inventory with any'
+    + ' reserved/running/deleting legacy row fails closed without partial migration',
+  )
+  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, or crush (MANDATORY)')
+  .action((opts) => wrap(runCoderSessionMigrate)(opts));
 
 // `coder result` group (retained-result CLI contract).
 const coderResult = coder

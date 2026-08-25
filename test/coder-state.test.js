@@ -15,6 +15,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile, readFile, stat, readdir, symlink, open as openFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -597,4 +598,47 @@ test('cleanOwnedCoderState keeps foreign and tampered records, never deletes the
 test('branch prefixes are the exact contract constants', () => {
   assert.equal(CODER_BRANCH_PREFIX, 'coder-v2/');
   assert.equal(CODER_RESULT_BRANCH_PREFIX, 'coder-result-v2/');
+});
+
+// ─── state reset quarantines the shared sessions.json map ────────────────────
+
+test('state reset quarantines .triss/sessions.json together with the v2 state roots', async () => {
+  const fx = await fixture();
+  try {
+    const { runCoderStateReset } = await import('../src/commands/coder.js');
+    // Seed every v2-owned durable artifact: state root, engine inventory
+    // store, results root — and the shared slug -> native-id map.
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), { recursive: true });
+    await mkdir(join(fx.trissRoot, 'coder-results-v1', 'runs'), { recursive: true });
+    const sessionsStore = JSON.stringify({
+      version: 2,
+      engines: { opencode2: { taska: 'ses_live' } },
+    }) + '\n';
+    await writeFile(join(fx.trissRoot, 'sessions.json'), sessionsStore, { mode: 0o600 });
+    const identityBefore = (await loadOrCreateProjectIdentity(await openManagedTrissRoot(fx.base))).project_id;
+
+    await runCoderStateReset({ project: fx.base });
+
+    // The map is GONE from the live tree…
+    let absent = false;
+    try {
+      await stat(join(fx.trissRoot, 'sessions.json'));
+    } catch (err) {
+      absent = err?.code === 'ENOENT';
+    }
+    assert.ok(absent, 'sessions.json must not survive reset in place');
+    // …and is RECOVERABLE under quarantine-v1/sessions-<stamp>/ verbatim.
+    const qRoot = join(fx.trissRoot, 'quarantine-v1');
+    const batches = (await readdir(qRoot)).filter((n) => n.startsWith('sessions-'));
+    assert.equal(batches.length, 1);
+    const preserved = await readFile(join(qRoot, batches[0], 'sessions.json'), 'utf8');
+    assert.equal(preserved, sessionsStore);
+    // The v2 state roots were emptied by the same reset.
+    assert.equal(existsSync(join(fx.trissRoot, 'engine-sessions-v2')), false);
+    // A fresh identity exists afterwards; the old one was never reused.
+    const identityAfter = (await loadOrCreateProjectIdentity(await openManagedTrissRoot(fx.base))).project_id;
+    assert.notEqual(identityAfter, identityBefore);
+  } finally {
+    await fx.cleanup();
+  }
 });

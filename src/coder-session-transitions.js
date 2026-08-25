@@ -33,6 +33,15 @@ import {
 export const SLUG_ALLOCATION_RETRIES = 8;
 export const CODER_SESSION_EXISTS_CODE = 'TRISS_CODER_SESSION_EXISTS';
 
+// Rethrow a codec read result as an Error, preserving any TYPED reader code
+// (err.code — e.g. TRISS_CODER_SESSION_LEGACY_SCHEMA for a v0.39.0 schema-1
+// inventory) alongside the historical message text.
+function inventoryReadError(read) {
+  const error = new Error(read.error);
+  if (read.code) error.code = read.code;
+  return error;
+}
+
 // Stable typed admission error codes (err.code): a same-slug collision with
 // a live (reserved/running) or cleanup-in-progress (deleting) row must
 // serialize or fail closed — never silently downgrade to an ephemeral run.
@@ -124,7 +133,7 @@ export async function reserveCoderSession({
   }
 
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
 
   const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
   if (existing) {
@@ -176,7 +185,7 @@ export async function reserveCoderSession({
 export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, lockSlot }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
   if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
 
@@ -211,7 +220,7 @@ export async function markCoderSessionRunning({ inventoryDir, engine, slug, runI
 export async function markCoderSessionIdle({ inventoryDir, engine, slug }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
   if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
   const row = read.entries[idx];
@@ -244,7 +253,7 @@ export async function markCoderSessionIdle({ inventoryDir, engine, slug }) {
 export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, deletePhase = 'store_tombstoned' }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
   if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
   const row = read.entries[idx];
@@ -278,7 +287,7 @@ export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runI
  */
 export async function reconcileCoderSessionInventory({ inventoryDir }) {
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   const result = [];
   for (const row of read.entries) {
     if (!SESSION_STATE.includes(row.state)) {
@@ -301,7 +310,7 @@ export async function reconcileCoderSessionInventory({ inventoryDir }) {
  */
 export async function listCoderSessions({ inventoryDir }) {
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   return read.entries.map((row) => ({
     engine: row.engine,
     slug: row.slug,
@@ -317,7 +326,7 @@ export async function listCoderSessions({ inventoryDir }) {
 export async function removeCoderSessionRow({ inventoryDir, engine, slug }) {
   const now = timestampNow();
   const read = await readCoderSessionInventory(inventoryDir);
-  if (read.error) throw new Error(read.error);
+  if (read.error) throw inventoryReadError(read);
   const row = read.entries.find((e) => e.engine === engine && e.slug === slug);
   if (row && row.state !== 'deleting') {
     throw new Error(`coder-session: row must be deleting before removal, got ${row.state}`);

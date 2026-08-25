@@ -4517,6 +4517,12 @@ function setupIsolation(sh, slug) {
 // status --porcelain default listing skips gitignored seed files, so a
 // freshly-seeded-but-untouched worktree still reads as clean here).
 function cleanupAbandonedIsolation(sh, isolation) {
+  // Reentrancy guard: the outer opencode2 catch now ALSO invokes cleanup on
+  // any unwind after setupIsolation. An inner catch may already have run it;
+  // probing (or worse, force-removing) the same worktree twice is at best
+  // noise and at worst unsafe, so only the first attempt per isolation acts.
+  if (!isolation || isolation.abandonedCleanupAttempted) return;
+  isolation.abandonedCleanupAttempted = true;
   const status = sh('git', ['-C', isolation.wtPath, 'status', '--porcelain']);
   const clean = status && !status.error && status.status === 0 && String(status.stdout || '').trim() === '';
   if (!clean) {
@@ -5791,9 +5797,11 @@ export function currentSessionOwnerTuple(overrides = {}) {
   return { pid, processStartId, bootId };
 }
 
-function storeInvalidError(detail) {
+function storeInvalidError(detail, code) {
   const error = new Error(`coder-session: canonical store unusable — ${detail} (retain, fail closed)`);
-  error.code = CODER_SESSION_STORE_INVALID_CODE;
+  // A typed reader code (e.g. TRISS_CODER_SESSION_LEGACY_SCHEMA for a
+  // released v0.39.0 schema-1 inventory) must survive the rewrap.
+  error.code = code || CODER_SESSION_STORE_INVALID_CODE;
   return error;
 }
 
@@ -5912,7 +5920,8 @@ export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple, 
           if (orphan.state !== 'absent') {
             const error = new Error(
               `coder-session: ${engine}/${slug} has a durable session mapping but NO inventory row — ` +
-                'orphaned state; restore from backup or repair manually. Retain, fail closed.',
+                'orphaned state; recover with `triss coder session clean ' + slug + ' --engine ' + engine +
+                '` or restore from backup. Retain, fail closed.',
             );
             error.code = CODER_SESSION_STORE_INVALID_CODE;
             throw error;
@@ -6029,7 +6038,7 @@ export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
   const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
   await sessionV2.runLease.withInventory(async () => {
     const read = await readCoderSessionInventory(sessionV2.inventoryDir);
-    if (read.error) throw storeInvalidError(read.error);
+    if (read.error) throw storeInvalidError(read.error, read.code);
     const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
     if (row && row.state === 'reserved' && rowOwnedByRun(row, sessionV2)) {
       await markCoderSessionRunning(sessionV2);
@@ -6051,6 +6060,14 @@ export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
  *   AND its durable matching mapping; otherwise the row cannot claim a
  *   continuable session and is removed through the canonical deleting
  *   transition (a mapping mismatch retains/fails closed).
+ *   Removal of an unusable row is ownership-aware: an idle CONTINUATION
+ *   whose completion yields no confirmed native session id removes its OWN
+ *   durable mapping (the exact resumedRealId captured at claim time)
+ *   together with the row, in canonical deleting breadcrumb -> store
+ *   mapping -> row order — the old conversation tail is never retained as
+ *   an orphan. A NEW reservation removes a mapping only when it matches the
+ *   id THIS run durably published. An ABSENT mapping is harmless; a
+ *   MISMATCHED/FOREIGN mapping is retained_for_recovery and never deleted.
  *   abandon (failure): a reservation WITHOUT a published mapping is removed;
  *   one WITH a matching published mapping survives as idle (the persisted
  *   session outlives the failed envelope write); a MISMATCHED mapping
@@ -6090,7 +6107,7 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
       : sessionV2.publishedRealId;
     outcome = await sessionV2.runLease.withInventory(async () => {
       const read = await readCoderSessionInventory(sessionV2.inventoryDir);
-      if (read.error) throw storeInvalidError(read.error);
+      if (read.error) throw storeInvalidError(read.error, read.code);
       const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
       const mapping = isStoreEngine
         ? classifySessionStoreMapping(sessionV2.engine, sessionV2.slug, expectedRealId)
@@ -6102,7 +6119,45 @@ async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
         if (!rowOwnedByRun(row, sessionV2)) {
           throw new Error('row owner tuple mismatch during rollback');
         }
+        // Store engines: decide mapping ownership BEFORE the deleting
+        // breadcrumb so a foreign/mismatched durable state is never mutated.
+        // The only mapping this run may remove is the one it legitimately
+        // owns: the id captured at claim time for an idle continuation
+        // (resumedRealId), else the id THIS run published (publishedRealId).
+        // An ABSENT mapping is harmless; anything present that is not ours
+        // is retained_for_recovery and never deleted — removing an unusable
+        // row must never take somebody else's conversation tail with it.
+        let ownedMapping = false;
+        if (isStoreEngine) {
+          const liveMapping = classifySessionStoreMapping(sessionV2.engine, sessionV2.slug);
+          if (liveMapping.unreadable) {
+            throw storeInvalidError(liveMapping.cause?.message ?? 'session store unreadable');
+          }
+          if (liveMapping.state === 'matching' || liveMapping.state === 'mismatch') {
+            const ownedRealId = sessionV2.origin === 'idle_continuation'
+              ? sessionV2.resumedRealId
+              : sessionV2.publishedRealId;
+            if (
+              liveMapping.state === 'mismatch'
+              || ownedRealId === undefined
+              || ownedRealId === null
+              || liveMapping.realId !== ownedRealId
+            ) {
+              throw new Error(
+                'durable session mapping cannot be attributed to this run/continuation — retain, fail closed',
+              );
+            }
+            ownedMapping = true;
+          }
+          // absent: nothing durably published, no store touch needed.
+        }
+        // Canonical crash-safe order: the deleting breadcrumb publishes
+        // FIRST, then the OWNED store mapping goes away while the prefix is
+        // still held, then the row itself is removed last.
         await transitions.beginCoderSessionDelete(sessionV2);
+        if (ownedMapping) {
+          removeSessionStoreMapping(sessionV2.engine, sessionV2.slug);
+        }
         await transitions.removeCoderSessionRow(sessionV2);
         return 'removed_unusable';
       };
@@ -7192,6 +7247,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (changes.filesChanged.length === 0) {
         try {
           gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+          // Intentional teardown, not an abandonment: stop the outer opencode2
+          // catch from probing the already-removed worktree on a later error.
+          isolation.freshlyCreated = false;
           if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
             const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
             if (!branchDeleted) {
@@ -7360,6 +7418,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     writeStdout2(JSON.stringify(envelope2) + '\n');
     return { completionOutcome };
     } catch (err) {
+      // Match the inner catches and the V1 path: any failure AFTER
+      // setupIsolation created a fresh worktree — usage logging, store
+      // finalization, envelope assembly/write — must not strand
+      // .triss/wt/<slug> + its branch. cleanupAbandonedIsolation is
+      // reentrancy-guarded, so unwinds that already ran an inner cleanup are
+      // not touched twice, and a dirty/deliverable worktree is always kept.
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
       throw err;
     } finally {
@@ -7825,6 +7890,16 @@ export async function runCoderSessionList(opts = {}, deps = {}) {
  * a final brief inventory scope removes the row. A crash at any point leaves
  * either an intact idle row or a deleting breadcrumb; a later clean takes
  * the idempotent deleting-recovery path and always converges.
+ *
+ * Orphan recovery (MEDIUM-3): a crashed run used to brick its slug forever
+ * (every later admission fails TRISS_CODER_SESSION_BUSY and clean refused a
+ * non-idle row). Now a reserved|running row whose recorded owner is PROVABLY
+ * gone from this host (previous boot id, dead pid, or a pid reused by a
+ * different process-start identity) is classified as an ORPHAN and reclaimed
+ * automatically through this same pipeline. A row whose owner still appears
+ * live — or whose liveness cannot be proven on this host — still fails
+ * closed unless the operator passes --recover-live to attest the owner is
+ * really gone.
  */
 export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
   if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
@@ -7860,6 +7935,10 @@ export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
   let slotLease;
   let removedMapping;
   let recovering = false;
+  // Set when this clean crossed the non-idle state gate: either an automatic
+  // ORPHAN reclaim (owner provably dead) or an explicit --recover-live
+  // attestation. Surfaced in the completion line for operator audit.
+  let reclaimedNote = null;
   try {
     // Discovery snapshot under the brief exclusive inventory scope.  The
     // stored slot is project-wide metadata, so clean/recovery must inspect
@@ -7872,12 +7951,61 @@ export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
     });
     const snapRow = snapshot.entries.find((s) => s.slug === slug);
     if (!snapRow) {
+      // Orphan-mapping recovery: a durable store mapping WITHOUT an inventory
+      // row is exactly the state new-reservation admission rejects (retain,
+      // fail closed) — `session clean` is its sanctioned recovery tool. A
+      // readable mapping (matching value or malformed value in a readable
+      // store) is removed; an UNREADABLE store still fails closed on its real
+      // corruption diagnostic, never on a guess.
+      const mapping = classifySessionStoreMapping(opts.engine, slug);
+      if (mapping.unreadable) {
+        throw storeInvalidError(mapping.cause?.message ?? 'session store unreadable');
+      }
+      if (mapping.state !== 'absent' && mapping.state !== 'not_applicable') {
+        removeSessionStoreMapping(opts.engine, slug);
+        process.stderr.write(pc.yellow(
+          `  ⚠ removed the orphaned ${opts.engine} store mapping for ${slug}` +
+          ' (no inventory row) — the slug is admissible again\n',
+        ));
+        return;
+      }
       process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
       return;
     }
     recovering = snapRow.state === 'deleting';
     if (!recovering && snapRow.state !== 'idle') {
-      throw new Error(`session ${slug} is not idle (state=${snapRow.state}); only inactive sessions can be cleaned`);
+      // MEDIUM-3: reserved|running rows are no longer unconditionally
+      // uncleanable. The recorded owner tuple decides:
+      //   orphan  -> reclaim automatically (crashed run; the slug was
+      //              otherwise bricked forever);
+      //   live/unknown -> fail closed UNLESS --recover-live attests the
+      //              operator knows the owner is really gone.
+      const liveness = classifyRecordedSessionOwner(snapRow, deps);
+      if (liveness.status === 'orphan') {
+        reclaimedNote = `orphaned owner reclaimed (${liveness.reason})`;
+        process.stderr.write(pc.yellow(
+          `  ⚠ v2 session ${slug} is ${snapRow.state} but its recorded owner is gone` +
+          ` (${liveness.reason}) — reclaiming the orphaned row\n`,
+        ));
+      } else if (opts.recoverLive === true) {
+        reclaimedNote = liveness.status === 'live'
+          ? `recovered via --recover-live over a LIVE-looking owner (pid ${snapRow.pid})`
+          : `recovered via --recover-live (owner unprovable: ${liveness.reason})`;
+        process.stderr.write(pc.yellow(
+          `  ⚠ recovering v2 session ${slug} per --recover-live: its recorded owner ` +
+          (liveness.status === 'live'
+            ? `appears live (pid ${snapRow.pid}, matching process-start)`
+            : `could not be proven dead (${liveness.reason})`) + '\n',
+        ));
+      } else {
+        throw new Error(
+          `session ${slug} is not idle (state=${snapRow.state}); its recorded owner ` +
+          (liveness.status === 'live'
+            ? `appears LIVE on this host (pid ${snapRow.pid}, matching process-start)`
+            : `could not be proven dead (${liveness.reason})`) +
+          '; pass --recover-live only if you attest that owner is really gone',
+        );
+      }
     }
     if (recovering && typeof snapRow.deleting_basename === 'string'
         && !snapRow.deleting_basename.startsWith(`.deleting-${opts.engine}-${slug}-`)) {
@@ -7980,13 +8108,215 @@ export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
   process.stderr.write(
     pc.dim(
       `  · removed v2 session ${slug} (engine ${opts.engine}` +
-        `${removedMapping ? ', store mapping cleared' : ''}${recovering ? ', recovered from deleting' : ''})\n`),
+        `${removedMapping ? ', store mapping cleared' : ''}${recovering ? ', recovered from deleting' : ''}` +
+        `${reclaimedNote ? `, ${reclaimedNote}` : ''})\n`),
   );
 }
 
 // isolation_mode (row form) -> lease wrapper form ('isolated'|'non-isolated').
 function isolationModeFor(rowMode) {
   return rowMode === 'isolated' ? 'isolated' : 'non-isolated';
+}
+
+/**
+ * Classify whether a NON-IDLE row's recorded owner can still be alive on
+ * THIS host (MEDIUM-3 orphan recovery evidence):
+ *
+ *   - 'orphan'  — the owner is PROVABLY gone: the row was written under a
+ *                 different boot identity, its pid no longer exists, or the
+ *                 pid exists but carries a DIFFERENT process-start identity
+ *                 (pid reuse by an unrelated program);
+ *   - 'live'    — same boot id, pid alive with a MATCHING process-start id;
+ *   - 'unknown' — the evidence is unavailable (incomplete recorded tuple,
+ *                 boot probe failure, liveness/start probes unusable).
+ *
+ * Only 'orphan' authorizes an automatic reclaim; 'live' and 'unknown' fail
+ * closed unless the operator explicitly attests with --recover-live.
+ */
+export function classifyRecordedSessionOwner(row, deps = {}) {
+  const currentBoot = deps.currentBootIdentity || currentBootIdentity;
+  const pidAlive = deps.pidAlive || ((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      // EPERM means the process EXISTS but is owned by someone else — it is
+      // alive for our purposes; every other errno (ESRCH et al.) is not.
+      return error?.code === 'EPERM';
+    }
+  });
+  const startIdentity = deps.processStartIdentity || processStartIdentity;
+
+  if (!Number.isInteger(row.pid) || row.pid <= 0
+      || typeof row.boot_id !== 'string' || row.boot_id.length === 0) {
+    return { status: 'unknown', reason: 'incomplete recorded owner tuple' };
+  }
+  const boot = currentBoot();
+  if (!boot) {
+    return { status: 'unknown', reason: 'host boot identity is unavailable' };
+  }
+  if (row.boot_id !== boot) {
+    return { status: 'orphan', reason: `recorded owner ran under a previous boot (${row.boot_id})` };
+  }
+  let alive;
+  try {
+    alive = pidAlive(row.pid) === true;
+  } catch {
+    return { status: 'unknown', reason: `liveness probe for pid ${row.pid} failed` };
+  }
+  if (!alive) {
+    return { status: 'orphan', reason: `recorded pid ${row.pid} is no longer alive` };
+  }
+  const start = startIdentity(row.pid);
+  if (!start) {
+    return { status: 'unknown', reason: `process-start identity for pid ${row.pid} is unavailable` };
+  }
+  if (start !== row.process_start_id) {
+    return { status: 'orphan', reason: `pid ${row.pid} was reused by another process (process-start mismatch)` };
+  }
+  return { status: 'live' };
+}
+
+/**
+ * `triss coder session migrate --engine <opencode|opencode2|crush>`: the ONE
+ * sanctioned consumer of a released v0.39.0 (schema_version 1) inventory
+ * document (PR #85 review HIGH-2). Normal readers never auto-mutate a legacy
+ * document — they return the typed TRISS_CODER_SESSION_LEGACY_SCHEMA error —
+ * so this explicit command is the only path that upgrades it:
+ *
+ *   - Runs under the canonical exclusion hierarchy: shared MAINTENANCE,
+ *     brief exclusive INVENTORY scopes, and every assigned SLOT lease.
+ *   - Migrates ONLY fully-idle documents: an idle row carries no owner tuple,
+ *     so minting a fresh 128-bit session_instance_id cannot split any
+ *     existing owner/row pairing (the ABA identity did not exist yet).
+ *   - A document containing ANY reserved|running|deleting row FAILS CLOSED
+ *     without partial migration — those owners' semantics cannot be trusted
+ *     without identities; resolve them first (`session clean`, optionally
+ *     --recover-live).
+ *   - The ORIGINAL schema-1 bytes are preserved verbatim under
+ *     `.triss/quarantine-v1/inventory-schema1-<engine>-<stamp>/` BEFORE the
+ *     canonical document is atomically published (crash-safe: any
+ *     interruption leaves either the untouched legacy file or the migrated
+ *     file plus its preserved original).
+ *   - Idempotent: absent or already-canonical inventories are reported and
+ *     left untouched.
+ */
+export async function runCoderSessionMigrate(opts = {}, _deps = {}) {
+  if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
+    throw new Error(`--engine <${CODER_SESSION_ENGINES.join('|')}> is required for session migrate`);
+  }
+  const codec = await import('../coder-session-inventory-codec.js');
+  const {
+    readRawCoderSessionInventory,
+    decodeCoderSessionInventory,
+    decodeLegacyCoderSessionInventory,
+    writeCoderSessionInventory,
+    CODER_SESSION_LEGACY_SCHEMA_CODE,
+  } = codec;
+  const { reconcileCoderSessionInventory } = await import('../coder-session-transitions.js');
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine,
+  )).path;
+  // Shared maintenance covers DISCOVERY through PUBLICATION: no exclusive
+  // writer (backup transaction) may interleave while identities are minted.
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  const slotLeases = [];
+  let migrated = 0;
+  try {
+    // Discovery under a brief exclusive inventory scope: pin the EXACT raw
+    // bytes this decision is made on (byte-level ABA anchor).
+    let discovered = null;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const raw = await readRawCoderSessionInventory(inventoryDir);
+      if (raw.error) throw new Error(raw.error);
+      if (raw.absent) return;
+      discovered = raw.text;
+    });
+    if (discovered === null) {
+      process.stderr.write(pc.dim(
+        `  · no ${opts.engine} v2 session inventory — nothing to migrate\n`,
+      ));
+      return;
+    }
+    if (decodeCoderSessionInventory(discovered) !== null) {
+      process.stderr.write(pc.dim(
+        `  · ${opts.engine} v2 session inventory is already canonical (schema_version `
+          + `${codec.INVENTORY_SCHEMA_VERSION}) — nothing to migrate\n`,
+      ));
+      return;
+    }
+    const legacy = decodeLegacyCoderSessionInventory(discovered);
+    if (legacy === null) {
+      throw new Error('inventory: corrupt canonical inventory (fail closed)');
+    }
+    // Only fully-idle documents migrate: minting identities for a row whose
+    // owner may still be alive would let two incarnations claim one slug.
+    const liveRows = legacy.entries.filter((e) => e.state !== 'idle');
+    if (liveRows.length > 0) {
+      const error = new Error(
+        'inventory: legacy schema_version 1 has non-idle rows (' +
+          liveRows.map((r) => `${r.engine}/${r.slug}:${r.state}`).join(', ') +
+          ') — possibly-live owners cannot be migrated by minting identities;' +
+          ' resolve them first (`triss coder session clean <slug> --engine ' + opts.engine +
+          '`, --recover-live if you attest the owner is gone). No partial migration.',
+      );
+      error.code = CODER_SESSION_LEGACY_SCHEMA_CODE;
+      throw error;
+    }
+    // Hold EVERY assigned slot lease while identities are rewritten, in
+    // stable slot order (normative hierarchy: below maintenance, above the
+    // exclusive inventory mutation).
+    for (const slot of [...new Set(legacy.entries.map((e) => e.lock_slot))].sort((a, b) => a - b)) {
+      slotLeases.push(await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${slot}` }));
+    }
+    // Publication under a second brief exclusive inventory scope: the exact
+    // discovered bytes must still be on disk (no writer slipped in between),
+    // then quarantine-preserve the original and atomically publish canonical.
+    let quarantinedTo = null;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const raw = await readRawCoderSessionInventory(inventoryDir);
+      // Absent, unreadable, or byte-different: somebody touched the document
+      // after discovery — never publish over an unverified state.
+      if (raw.absent || raw.error || raw.text !== discovered) {
+        throw new Error('inventory changed while migrate was starting — retain, fail closed');
+      }
+      // Preserve the ORIGINAL v0.39.0 bytes FIRST (crash before the publish
+      // below leaves the legacy file untouched and simply retryable).
+      const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
+      const batch = await openManagedChildDir(
+        await openManagedChildDir(parentHandle, 'quarantine-v1'),
+        `inventory-schema1-${opts.engine}-${stamp}`,
+      );
+      const { writeFile: writeFileAsync } = await import('node:fs/promises');
+      const preservePath = join(batch.path, '.inventory.json');
+      await writeFileAsync(preservePath, discovered, { mode: 0o600 });
+      quarantinedTo = preservePath;
+      // Canonical publication: mint a fresh immutable 128-bit instance id
+      // for every idle legacy row (validated + sorted by the encoder).
+      const canonicalEntries = legacy.entries.map((row) => ({
+        ...row,
+        session_instance_id: randomBytes(16).toString('hex'),
+      }));
+      await writeCoderSessionInventory(inventoryDir, canonicalEntries);
+      // Real coherence use of the reconciliation helper: every published row
+      // must satisfy the admission/recovery state table post-migration.
+      await reconcileCoderSessionInventory({ inventoryDir });
+      migrated = canonicalEntries.length;
+    });
+    process.stderr.write(pc.green(
+      `  ✓ migrated ${migrated} idle legacy row(s) (${opts.engine}) to canonical schema ` +
+        `(${codec.INVENTORY_SCHEMA_VERSION}); original preserved at ${quarantinedTo}\n`,
+    ));
+  } finally {
+    // Strict reverse order: slot leases -> maintenance.
+    for (let i = slotLeases.length - 1; i >= 0; i -= 1) {
+      await slotLeases[i].release();
+    }
+    await maintenance.release();
+  }
 }
 
 /**
@@ -8068,6 +8398,18 @@ export async function runCoderStateReset(opts = {}) {
     } catch {
       /* non-fatal */
     }
+  }
+
+  // The shared slug -> native-session map (.triss/sessions.json) is durable
+  // v2-owned continuation state too: reset must QUARANTINE it (recoverable),
+  // never delete or leave it behind — a stale map would make every cleaned
+  // slug's mapping dangle (and re-trigger the orphan-mapping admission gate).
+  try {
+    const sessionsQuarantine = await openManagedChildDir(quarantineRootHandle, `sessions-${stamp}`);
+    await rename(join(trissRoot, 'sessions.json'), join(sessionsQuarantine.path, 'sessions.json'));
+    quarantined += 1;
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
   }
 
   // Quarantine the old project-identity-v1.json and create a fresh identity

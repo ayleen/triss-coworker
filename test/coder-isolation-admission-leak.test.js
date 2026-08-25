@@ -237,3 +237,150 @@ test('admission STORE_INVALID (orphan mapping) leaves no worktree behind', () =>
     expectedMessage: /NO inventory row/,
   });
 });
+
+// ─── PR #85 round: the OUTER opencode2 catch also guards late failures ──────
+
+// A run whose engine SUCCEEDED but whose usage logging threw AFTER
+// setupIsolation created a fresh, deliverable (dirty) worktree: the outer
+// catch must unwind it through cleanupAbandonedIsolation EXACTLY ONCE — and
+// a dirty worktree is kept for inspection, never force-removed.
+test('a thrown logUsage after isolation triggers exactly one guarded cleanup; dirty worktree kept', async () => {
+  const commands = await loadCommands();
+  await withHome(async ({ proj }) => {
+    writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
+      model: 'opencode-go/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+    }));
+    const fakeBin = makeFakeBinary();
+    const log = [];
+    const sh = (cmd, args) => {
+      const a = args || [];
+      log.push(`${cmd} ${a.join(' ')}`);
+      if (cmd === 'which' && a[0] === 'opencode2') {
+        return { status: 0, stdout: `${fakeBin}\n`, stderr: '' };
+      }
+      if (a[0] === 'run' && a[1] === '--help') {
+        return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+      }
+      if (a[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
+        return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
+      }
+      if (cmd === 'git') {
+        if (a.includes('--verify') && a.some((x) => String(x).startsWith('refs/heads/'))) {
+          return { status: 1, stdout: '', stderr: '' };
+        }
+        if (a.includes('--show-toplevel')) return { status: 0, stdout: `${proj}\n`, stderr: '' };
+        if (a.includes('status') && a.includes('--porcelain')) {
+          return { status: 0, stdout: ' M src/changed.ts\n', stderr: '' }; // DIRTY
+        }
+        // Deliverable diff: one staged change survives computeWorktreeChanges.
+        if (a.includes('diff')) return { status: 0, stdout: 'src/changed.ts\n', stderr: '' };
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'not found' };
+    };
+    const spawnFn = spawnRecorder().spawnFn;
+
+    let threw = null;
+    try {
+      await commands.runCoderRun('do work', {
+        engine: 'opencode2',
+        model: 'opencode-go/deepseek-v4-flash',
+        cwd: proj,
+        isolate: true,
+        session: 'late-usage-boom',
+      }, {
+        spawnSync: sh,
+        spawn: spawnFn,
+        effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+        logUsage: () => { throw new Error('usage log exploded'); },
+      });
+    } catch (err) {
+      threw = err;
+    }
+
+    assert.ok(threw, 'the logUsage failure must propagate');
+    assert.match(threw.message, /usage log exploded/);
+    const wtPath = join(proj, '.triss', 'wt', 'late-usage-boom');
+    const probes = log.filter((l) => l.includes(wtPath) && l.includes('status --porcelain'));
+    assert.equal(
+      probes.length,
+      1,
+      `exactly ONE guarded cleanup attempt may probe the worktree, got ${probes.length}`,
+    );
+    assert.equal(
+      log.some((l) => l.includes('worktree') && l.includes('remove')),
+      false,
+      'a dirty (deliverable) worktree must be KEPT for inspection, never force-removed',
+    );
+  });
+});
+
+// An EMPTY freshly-created worktree is torn down intentionally right after the
+// engine succeeded. A LATER envelope-write failure must NOT probe or remove
+// anything again: the intentional teardown already disarmed the guard.
+test('an envelope write failure after intentional teardown performs no second cleanup', async () => {
+  const commands = await loadCommands();
+  await withHome(async ({ proj }) => {
+    writeFileSync(join(proj, 'opencode.json'), JSON.stringify({
+      model: 'opencode-go/deepseek-v4-flash',
+      permission: { bash: { '*': 'deny' } },
+    }));
+    const fakeBin = makeFakeBinary();
+    const log = [];
+    const sh = (cmd, args) => {
+      const a = args || [];
+      log.push(`${cmd} ${a.join(' ')}`);
+      if (cmd === 'which' && a[0] === 'opencode2') {
+        return { status: 0, stdout: `${fakeBin}\n`, stderr: '' };
+      }
+      if (a[0] === 'run' && a[1] === '--help') {
+        return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+      }
+      if (a[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
+        return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
+      }
+      if (cmd === 'git') {
+        if (a.includes('--verify') && a.some((x) => String(x).startsWith('refs/heads/'))) {
+          return { status: 1, stdout: '', stderr: '' };
+        }
+        if (a.includes('--show-toplevel')) return { status: 0, stdout: `${proj}\n`, stderr: '' };
+        if (a.includes('diff')) return { status: 0, stdout: '', stderr: '' }; // empty changes
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'not found' };
+    };
+    const spawnFn = spawnRecorder().spawnFn;
+
+    let threw = null;
+    try {
+      await commands.runCoderRun('do work', {
+        engine: 'opencode2',
+        model: 'opencode-go/deepseek-v4-flash',
+        cwd: proj,
+        isolate: true,
+        session: 'late-envelope-boom',
+      }, {
+        spawnSync: sh,
+        spawn: spawnFn,
+        effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+        stdoutWrite: () => { throw new Error('envelope write exploded'); },
+      });
+    } catch (err) {
+      threw = err;
+    }
+
+    assert.ok(threw, 'the envelope failure must propagate');
+    assert.match(threw.message, /envelope write exploded/);
+    assert.equal(
+      log.filter((l) => l.includes('worktree') && l.includes('remove')).length,
+      1,
+      'the worktree is removed EXACTLY once (intentional teardown), never twice',
+    );
+    assert.equal(
+      log.some((l) => l.includes('status --porcelain')),
+      false,
+      'no abandoned-cleanup probe may run after an intentional teardown',
+    );
+  });
+});

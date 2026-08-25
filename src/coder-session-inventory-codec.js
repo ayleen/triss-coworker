@@ -6,12 +6,29 @@
  * (docs/reliable-delegation-contract-plan.md). The atomic mode-0600,
  * no-follow, 64 KiB-capped `.inventory.json` has exact ordered schema
  * `{schema_version,entries,updated_at}`, canonical compact UTF-8 JSON plus LF
- * and no extras. Version is integer 1; entries are sorted by raw ASCII
+ * and no extras. Version is integer 2; entries are sorted by raw ASCII
  * `engine`, then `slug`, at most four. Every entry has exact ordered keys
  * {engine,slug,session_instance_id,isolation_mode,lock_slot,state,run_id,
  *  sandbox_id,pid,process_start_id,boot_id,project_root_fingerprint,
  *  reserved_bytes,deleting_basename,session_delete_phase,created_at,
  *  updated_at}.
+ *
+ * ─── Schema history / legacy contract (PR #85 review HIGH-2) ────────────────
+ * Released v0.39.0 wrote `schema_version: 1` entries WITHOUT
+ * `session_instance_id` (16 ordered keys — this list minus the identity).
+ * Canonical readers require schema 2: `session_instance_id` is REQUIRED in
+ * every state. A schema-1 document is LEGACY, never corrupt-by-default:
+ *   - Normal readers NEVER auto-mutate on read. They return the typed
+ *     `TRISS_CODER_SESSION_LEGACY_SCHEMA` error carrying an actionable
+ *     `triss coder session migrate` hint.
+ *   - Schema-1 IDLE rows may MIGRATE by minting a fresh 128-bit instance id:
+ *     an idle row carries no live owner tuple, so minting cannot split an
+ *     existing owner/row pairing (the ABA anchor did not exist yet).
+ *   - Schema-1 reserved/running/deleting rows QUARANTINE + FAIL CLOSED:
+ *     their ownership semantics cannot be trusted without an incarnation
+ *     identity, so they are moved aside atomically and never rewritten.
+ * The one-shot `triss coder session migrate` command is the only sanctioned
+ * schema-1 consumer.
  *
  * session_instance_id is the row's IMMUTABLE identity: 128 random bits
  * generated exactly once at the first reservation and carried unchanged
@@ -33,7 +50,13 @@ import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-export const INVENTORY_SCHEMA_VERSION = 1;
+export const INVENTORY_SCHEMA_VERSION = 2;
+// Released v0.39.0 on-disk version: same document envelope, 16-key entries
+// (no session_instance_id). Recognized ONLY to fail closed with a typed,
+// actionable error or to serve the explicit one-shot migration.
+export const INVENTORY_LEGACY_SCHEMA_VERSION = 1;
+// Typed reader error code (err.code) for a legacy schema-1 inventory.
+export const CODER_SESSION_LEGACY_SCHEMA_CODE = 'TRISS_CODER_SESSION_LEGACY_SCHEMA';
 export const INVENTORY_MAX_ENTRIES = 4;
 export const INVENTORY_MAX_BYTES = 64 * 1024;
 export const INVENTORY_BASENAME = '.inventory.json';
@@ -69,6 +92,10 @@ const ENTRY_KEYS = [
   'updated_at',
 ];
 
+// Released v0.39.0 (schema 1) entry shape: exactly ENTRY_KEYS minus the
+// session_instance_id identity, in the same relative order.
+const LEGACY_ENTRY_KEYS = ENTRY_KEYS.filter((key) => key !== 'session_instance_id');
+
 const SANDBOX_ID_RE = /^sbx_[0-9a-f]{32}$/;
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
@@ -81,19 +108,23 @@ export function timestampNow() {
 }
 
 /**
- * Validate one inventory entry. Returns the canonical entry (a shallow copy
- * with keys in exact order) or null on any schema violation.
+ * Shared entry-shape validator. `requireInstanceId` selects the canonical
+ * schema-2 shape (instance id REQUIRED) vs the released v0.39.0 schema-1
+ * legacy shape (16 keys, no identity field — the migration mints one).
+ * Returns the canonical 17-key entry (a shallow copy with keys in exact
+ * order; session_instance_id is null for legacy input) or null on any
+ * schema violation. All other rules are IDENTICAL for both schemas.
  */
-export function validateCoderSessionEntry(raw) {
+function validateSessionEntryShape(raw, requireInstanceId) {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const expectedKeys = requireInstanceId ? ENTRY_KEYS : LEGACY_ENTRY_KEYS;
   const keys = Object.keys(raw);
-  if (keys.length !== ENTRY_KEYS.length || keys.some((k, i) => k !== ENTRY_KEYS[i])) {
+  if (keys.length !== expectedKeys.length || keys.some((k, i) => k !== expectedKeys[i])) {
     return null;
   }
   const {
     engine,
     slug,
-    session_instance_id: instanceId,
     isolation_mode: isolationMode,
     lock_slot: lockSlot,
     state,
@@ -112,9 +143,14 @@ export function validateCoderSessionEntry(raw) {
 
   if (typeof engine !== 'string' || engine.length === 0 || engine.length > 64) return null;
   if (typeof slug !== 'string' || slug.length === 0 || slug.length > 64) return null;
-  // The instance identity is REQUIRED in every state and immutable across
-  // transitions (timestamps are metadata, never identity).
-  if (typeof instanceId !== 'string' || !SESSION_INSTANCE_ID_RE.test(instanceId)) return null;
+  // The instance identity is REQUIRED in every state of the canonical
+  // schema and immutable across transitions (timestamps are metadata, never
+  // identity). The legacy v0.39.0 schema had no such field; its rows carry
+  // null here and only the explicit migration may mint an identity.
+  const instanceId = requireInstanceId ? raw.session_instance_id : null;
+  if (requireInstanceId) {
+    if (typeof instanceId !== 'string' || !SESSION_INSTANCE_ID_RE.test(instanceId)) return null;
+  }
   if (!ISOLATION_MODE.includes(isolationMode)) return null;
   if (!Number.isInteger(lockSlot) || lockSlot < 0 || lockSlot > 3) return null;
   if (!SESSION_STATE.includes(state)) return null;
@@ -183,6 +219,26 @@ export function validateCoderSessionEntry(raw) {
 }
 
 /**
+ * Validate one CANONICAL (schema 2) inventory entry. Returns the canonical
+ * entry (a shallow copy with keys in exact order) or null on any schema
+ * violation.
+ */
+export function validateCoderSessionEntry(raw) {
+  return validateSessionEntryShape(raw, true);
+}
+
+/**
+ * Validate one LEGACY v0.39.0 (schema 1) inventory entry: the identical
+ * rule set minus the absent session_instance_id field. Returns the row in
+ * canonical key order with `session_instance_id: null`, or null on any
+ * violation. Only the explicit one-shot migration consumes this; readers
+ * never rewrite a legacy document.
+ */
+export function validateLegacyCoderSessionEntry(raw) {
+  return validateSessionEntryShape(raw, false);
+}
+
+/**
  * Encode a canonical inventory document. Entries validated, sorted by raw
  * ASCII engine then slug, at most four.
  */
@@ -217,8 +273,10 @@ export function encodeCoderSessionInventory(entries, updatedAt = timestampNow())
 }
 
 /**
- * Decode a full inventory document. Returns { entries } or null on any
- * schema violation, oversize payload, or bad entry.
+ * Decode a full CANONICAL (schema 2) inventory document. Returns
+ * { schema_version, entries, updated_at } or null on any schema violation,
+ * oversize payload, bad entry — or a NON-canonical schema version (legacy
+ * documents are detected separately, never silently decoded here).
  */
 export function decodeCoderSessionInventory(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > INVENTORY_MAX_BYTES) return null;
@@ -250,25 +308,61 @@ export function decodeCoderSessionInventory(text) {
 }
 
 /**
- * Read the canonical inventory from disk (mode-0600, no-follow). Existing
- * callers retain the historical { entries } / { error } shape. Callers that
- * pass reportMissing=true additionally receive missing:true/false so a
- * snapshot can distinguish an absent file from one that disappeared after it
- * was observed.
+ * Detect a LEGACY v0.39.0 (schema 1) inventory document and decode it under
+ * the legacy rules: exact document envelope, every entry validated by the
+ * shared shape minus session_instance_id. Returns
+ * { schema_version: 1, entries, updated_at } with rows in canonical key
+ * order (session_instance_id: null), or null when the text is not a valid
+ * legacy document. Pure validation only — never mutated by readers.
  */
-export async function readCoderSessionInventory(inventoryDir, { reportMissing = false } = {}) {
+export function decodeLegacyCoderSessionInventory(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > INVENTORY_MAX_BYTES) return null;
+  if (!text.endsWith('\n')) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  if (parsed.schema_version !== INVENTORY_LEGACY_SCHEMA_VERSION) return null;
+  if (!Array.isArray(parsed.entries)) return null;
+  if (parsed.entries.length > INVENTORY_MAX_ENTRIES) return null;
+  const keys = Object.keys(parsed).sort();
+  if (keys.join(',') !== 'entries,schema_version,updated_at') return null;
+  if (typeof parsed.updated_at !== 'string' || !TIMESTAMP_RE.test(parsed.updated_at)) return null;
+  const entries = parsed.entries.map(validateLegacyCoderSessionEntry);
+  if (entries.some((e) => e === null)) return null;
+  for (let i = 1; i < entries.length; i += 1) {
+    const prev = entries[i - 1];
+    const cur = entries[i];
+    const prevKey = `${prev.engine}\u0000${prev.slug}`;
+    const curKey = `${cur.engine}\u0000${cur.slug}`;
+    if (prevKey >= curKey) return null;
+  }
+  return { schema_version: parsed.schema_version, entries, updated_at: parsed.updated_at };
+}
+
+/**
+ * Pinned single-open bounded read of the RAW canonical inventory text:
+ * O_NOFOLLOW open -> regular-file check on the descriptor -> cap-plus-one
+ * read from THE SAME descriptor. Returns { absent: true } for ENOENT,
+ * { text } otherwise; oversize reads fail closed with an error field so a
+ * caller can distinguish corruption from absence.
+ */
+export async function readRawCoderSessionInventory(inventoryDir) {
   const path = join(inventoryDir, INVENTORY_BASENAME);
   let fd;
   try {
     fd = await open(path, O_RDONLY | O_NOFOLLOW);
   } catch (err) {
-    if (err && err.code === 'ENOENT') return reportMissing ? { entries: [], missing: true } : { entries: [] };
+    if (err && err.code === 'ENOENT') return { absent: true };
     throw err;
   }
   try {
     const stats = await fd.stat();
     if (!stats.isFile()) {
-      throw new Error(`inventory: canonical path is not a regular file: ${path}`);
+      return { error: `inventory: canonical path is not a regular file: ${path}` };
     }
     const parts = [];
     let total = 0;
@@ -278,22 +372,47 @@ export async function readCoderSessionInventory(inventoryDir, { reportMissing = 
       if (bytesRead === 0) break;
       total += bytesRead;
       if (total > INVENTORY_MAX_BYTES) {
-        return reportMissing
-          ? { error: 'inventory: corrupt canonical inventory (fail closed)', missing: false }
-          : { error: 'inventory: corrupt canonical inventory (fail closed)' };
+        return { error: 'inventory: corrupt canonical inventory (fail closed)' };
       }
       parts.push(Buffer.from(chunk.subarray(0, bytesRead)));
     }
-    const decoded = decodeCoderSessionInventory(Buffer.concat(parts).toString('utf8'));
-    if (decoded === null) {
-      return reportMissing
-        ? { error: 'inventory: corrupt canonical inventory (fail closed)', missing: false }
-        : { error: 'inventory: corrupt canonical inventory (fail closed)' };
-    }
-    return reportMissing ? { entries: decoded.entries, missing: false } : { entries: decoded.entries };
+    return { text: Buffer.concat(parts).toString('utf8') };
   } finally {
     await fd.close();
   }
+}
+
+/**
+ * Read the canonical inventory from disk (mode-0600, no-follow). Existing
+ * callers retain the historical { entries } / { error } shape. Callers that
+ * pass reportMissing=true additionally receive missing:true/false so a
+ * snapshot can distinguish an absent file from one that disappeared after it
+ * was observed.
+ *
+ * A valid LEGACY v0.39.0 (schema 1) document is NEVER auto-mutated and
+ * never decoded as canonical: the returned error object carries the typed
+ * CODER_SESSION_LEGACY_SCHEMA_CODE plus the migration hint, so callers can
+ * surface an actionable failure instead of a generic corruption diagnostic.
+ */
+export async function readCoderSessionInventory(inventoryDir, { reportMissing = false } = {}) {
+  const raw = await readRawCoderSessionInventory(inventoryDir);
+  if (raw.absent) return reportMissing ? { entries: [], missing: true } : { entries: [] };
+  if (raw.error) {
+    return reportMissing ? { error: raw.error, missing: false } : { error: raw.error };
+  }
+  const decoded = decodeCoderSessionInventory(raw.text);
+  if (decoded === null) {
+    if (decodeLegacyCoderSessionInventory(raw.text) !== null) {
+      const error =
+        'inventory: legacy schema_version 1 (released v0.39.0) is not readable by this version — ' +
+        'run `triss coder session migrate` to upgrade in place (typed code ' +
+        `${CODER_SESSION_LEGACY_SCHEMA_CODE})`;
+      return reportMissing ? { error, code: CODER_SESSION_LEGACY_SCHEMA_CODE, missing: false } : { error, code: CODER_SESSION_LEGACY_SCHEMA_CODE };
+    }
+    const error = 'inventory: corrupt canonical inventory (fail closed)';
+    return reportMissing ? { error, missing: false } : { error };
+  }
+  return reportMissing ? { entries: decoded.entries, missing: false } : { entries: decoded.entries };
 }
 
 /**

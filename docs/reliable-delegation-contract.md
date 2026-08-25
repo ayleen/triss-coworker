@@ -224,9 +224,37 @@ re-verified before every mutation: a same-slug replacement published while
 an older clean was parked can never be deleted, even when it coincides on
 every other anchor down to the millisecond timestamp
 (ABA guard; retain, fail closed). A later clean takes the idempotent
-deleting-recovery path and always converges. `triss coder result clean
+deleting-recovery path and always converges. An interrupted run no longer
+bricks its slug forever: a `reserved|running` row whose recorded owner tuple
+is provably absent from this host (a previous boot id, a dead pid, or a pid
+reused by a different process-start identity) is classified as an ORPHAN and
+`session clean` reclaims it through the same crash-safe deleting pipeline;
+a row whose owner still appears live, or whose liveness cannot be proven on
+this host (probe failure), still fails closed unless the operator explicitly
+passes `--recover-live` to attest the recorded owner is really gone. The
+same command is the recovery tool for an ORPHAN MAPPING: a durable
+`sessions.json` entry with no inventory row (the exact state new-reservation
+admission rejects) is removed by `session clean`, making the slug
+admissible again; an unreadable store still fails closed. `triss coder state
+reset` quarantines the shared `sessions.json` map together with the v2 state
+roots instead of leaving stale mappings behind.
+`triss coder result clean
 <run-id>` removes only a validated retained result artifact, never a
 persistent session.
+
+Legacy inventories: released v0.39.0 wrote `schema_version: 1` rows WITHOUT
+the immutable `session_instance_id` identity. Canonical readers never
+auto-mutate such a document — they fail closed with the typed
+`TRISS_CODER_SESSION_LEGACY_SCHEMA` error pointing at the one sanctioned
+upgrade path: `triss coder session migrate --engine <name>` runs under the
+canonical maintenance/inventory/slot leases, migrates ONLY fully-idle legacy
+documents by minting fresh 128-bit identities (an idle row carries no owner
+tuple, so minting cannot split an owner/row pairing), preserves the original
+bytes verbatim under `.triss/quarantine-v1/`, and publishes the canonical
+document atomically. A legacy document containing any
+reserved|running|deleting row fails closed without partial migration —
+resolve possibly-live owners first (`session clean`, `--recover-live` if you
+attest they are gone).
 
 Rollback: `triss coder state backup|validate|adopt|reset` implement the
 Section 15 rollback contract — bounded no-follow backup with a completion

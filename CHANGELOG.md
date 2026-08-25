@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **v2 session-state recovery/migration consistency (PR #85).**
+  - `triss coder session migrate --engine <name>`: one-shot upgrade of a
+    released v0.39.0 (`schema_version: 1`) engine inventory to the canonical
+    identity-carrying schema. Runs under the canonical maintenance, slot,
+    and exclusive-inventory leases; migrates ONLY fully-idle documents by
+    minting fresh immutable `session_instance_id`s; preserves the original
+    bytes verbatim under `.triss/quarantine-v1/` before the atomic
+    publication; is idempotent on absent or already-canonical inventories.
+    Any reserved|running|deleting legacy row fails the migration closed with
+    no partial rewrite — normal readers surface such documents as the typed,
+    actionable `TRISS_CODER_SESSION_LEGACY_SCHEMA` error instead of generic
+    corruption.
+  - Orphan reclaim for interrupted runs: a `reserved|running` row whose
+    recorded owner is provably gone from this host (previous boot id, dead
+    pid, pid reused by a different process-start identity) is reclaimed by
+    `triss coder session clean` automatically through the crash-safe
+    deleting pipeline; a live-looking or unprovable owner still fails closed
+    unless the operator passes the new `--recover-live` attestation flag.
+  - `session clean` now also removes an ORPHAN store mapping (durable
+    `sessions.json` entry with no inventory row) — the sanctioned recovery
+    for the state new-reservation admission rejects — and `triss coder state
+    reset` quarantines the shared `sessions.json` map together with the v2
+    state roots instead of leaving stale mappings behind.
+  - The OpenCode2 outer run guard now also cleans freshly-created isolation
+    worktrees on late failures (thrown usage logging, envelope assembly or
+    write), with a reentrancy guard so an already-cleaned or intentionally
+    torn-down worktree is never probed or removed twice; dirty/deliverable
+    worktrees are always kept.
+
 ### Changed
 
 - **SECURITY FIX — the Crush runtime version gate is now authoritative, and
