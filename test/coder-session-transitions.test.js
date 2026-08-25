@@ -180,6 +180,23 @@ test('invalid slugs, isolation modes, and lock slots fail closed', async () => {
 
 // ─── admission claims ────────────────────────────────────────────────────────
 
+test('claiming an absent slug publishes a reserved row and reports origin new', async () => {
+  const fx = await fixture();
+  try {
+    const { row, origin } = await claim(fx, 'fresh-slug');
+    assert.equal(origin, 'new');
+    assert.equal(row.state, 'reserved');
+    assert.equal(row.run_id, 'run-1');
+    assert.equal(row.pid, 200);
+    assert.match(row.sandbox_id, /^sbx_[0-9a-f]{32}$/);
+    const read = await readCoderSessionInventory(fx.inventoryDir);
+    assert.equal(read.entries.length, 1);
+    assert.deepEqual(read.entries[0], row);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('claiming an idle row continues straight to running with the fresh owner tuple', async () => {
   const fx = await fixture();
   try {
@@ -238,6 +255,109 @@ test('claiming a live row rejects with the CODER_SESSION_BUSY code and leaves it
   }
 });
 
+test('a mismatched isolation-mode claim fails typed and leaves the idle row byte-identical', async () => {
+  const fx = await fixture();
+  try {
+    const first = await reserve(fx); // reserved isolated
+    const running = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(first),
+    });
+    await markCoderSessionIdle({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(running),
+    });
+    const before = await readCoderSessionInventory(fx.inventoryDir);
+    await assert.rejects(
+      () => claim(fx, 'task-a', { isolationMode: 'non_isolated' }),
+      (err) =>
+        err.code === 'CODER_SESSION_ISOLATION_MISMATCH' &&
+        /isolation_mode=isolated, refusing non_isolated/.test(err.message),
+    );
+    const after = await readCoderSessionInventory(fx.inventoryDir);
+    assert.deepEqual(after, before, 'the refused claim never mutated the row');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a non_isolated idle row refuses an isolated claim typed and byte-identical', async () => {
+  const fx = await fixture();
+  try {
+    // Reverse direction of the mismatch above: row bound to non_isolated,
+    // claim arrives as isolated. The provenance guard is symmetric.
+    const first = await reserve(fx, 'task-a', { isolationMode: 'non_isolated' });
+    const running = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(first),
+    });
+    await markCoderSessionIdle({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(running),
+    });
+    const before = await readCoderSessionInventory(fx.inventoryDir);
+    await assert.rejects(
+      () => claim(fx, 'task-a'), // default claim isolationMode is 'isolated'
+      (err) =>
+        err.code === 'CODER_SESSION_ISOLATION_MISMATCH' &&
+        /isolation_mode=non_isolated, refusing isolated/.test(err.message),
+    );
+    const after = await readCoderSessionInventory(fx.inventoryDir);
+    assert.deepEqual(after, before, 'the refused claim never mutated the idle row');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a mismatched project-fingerprint claim fails typed and takes precedence over busy', async () => {
+  const fx = await fixture();
+  try {
+    const foreignFp = 'e'.repeat(64);
+    // Live (reserved) row owned by run-0: the mismatched claim must surface
+    // the PERMANENT provenance refusal, not the transient busy code, and it
+    // must never mutate the live row.
+    const reserved = await reserve(fx);
+    await assert.rejects(
+      () => claim(fx, 'task-a', { projectRootFingerprint: foreignFp }),
+      (err) =>
+        err.code === 'CODER_SESSION_FINGERPRINT_MISMATCH' &&
+        err.message.includes(foreignFp) &&
+        err.message.includes(FP),
+    );
+    // The same refusal guards an IDLE row: without it a cross-project slug
+    // collision would silently continue another context's session.
+    const running = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(reserved),
+    });
+    await markCoderSessionIdle({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(running),
+    });
+    const before = await readCoderSessionInventory(fx.inventoryDir);
+    await assert.rejects(
+      () => claim(fx, 'task-a', { projectRootFingerprint: foreignFp }),
+      (err) => err.code === 'CODER_SESSION_FINGERPRINT_MISMATCH',
+    );
+    const after = await readCoderSessionInventory(fx.inventoryDir);
+    assert.deepEqual(after, before, 'the refused continuation left the idle row untouched');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('cleanIdleCoderSession behind a continuation claim rejects not-idle and preserves running', async () => {
   const fx = await fixture();
   try {
@@ -275,6 +395,56 @@ test('cleanIdleCoderSession behind a continuation claim rejects not-idle and pre
     assert.equal(read.entries.length, 1, 'the rejected clean removed nothing');
     assert.equal(read.entries[0].state, 'running');
     assert.deepEqual(tupleOf(read.entries[0]), tupleOf(claimed.row), 'the claiming run keeps its running row');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('cleanIdleCoderSession atomically removes an idle row; absent rows report removed false', async () => {
+  const fx = await fixture();
+  try {
+    // Absent slug: a no-op, never an error.
+    assert.deepEqual(
+      await cleanIdleCoderSession({
+        inventoryDir: fx.inventoryDir,
+        engine: 'opencode',
+        slug: 'ghost',
+        runId: 'run-clean',
+        sandboxId: `sbx_${'c'.repeat(32)}`,
+        pid: 300,
+        processStartId: 'ps-2',
+        bootId: 'boot-2',
+      }),
+      { removed: false },
+    );
+    const first = await reserve(fx);
+    const running = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(first),
+    });
+    await markCoderSessionIdle({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(running),
+    });
+    const result = await cleanIdleCoderSession({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      runId: 'run-clean',
+      sandboxId: `sbx_${'c'.repeat(32)}`,
+      pid: 300,
+      processStartId: 'ps-2',
+      bootId: 'boot-2',
+    });
+    assert.deepEqual(result, { removed: true });
+    const read = await readCoderSessionInventory(fx.inventoryDir);
+    assert.equal(read.entries.length, 0, 'the idle row is fully removed');
+    // The mutex was released with the transition, leaving no lock artifact.
+    assert.equal(existsSync(join(fx.inventoryDir, INVENTORY_LOCK_BASENAME)), false);
   } finally {
     await fx.cleanup();
   }
@@ -343,6 +513,65 @@ test('illegal transitions fail closed (idle cannot go running; deleting is termi
         }),
       /illegal transition idle -> running/,
     );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('every mutating transition demands the EXACT current owner tuple', async () => {
+  const fx = await fixture();
+  try {
+    const reserved = await reserve(fx);
+    // An INCOMPLETE tuple fails closed with TypeError before any store read.
+    await assert.rejects(
+      () =>
+        markCoderSessionRunning({
+          inventoryDir: fx.inventoryDir,
+          engine: 'opencode',
+          slug: 'task-a',
+          runId: reserved.run_id,
+          sandboxId: reserved.sandbox_id,
+          pid: reserved.pid,
+        }),
+      TypeError,
+    );
+    // A COMPLETE but WRONG tuple (another run's pid behind the same row
+    // identity) fails the exact-owner check with the typed code.
+    await assert.rejects(
+      () =>
+        markCoderSessionRunning({
+          inventoryDir: fx.inventoryDir,
+          engine: 'opencode',
+          slug: 'task-a',
+          ...tupleOf(reserved),
+          pid: 999999,
+        }),
+      (err) => err.code === 'CODER_SESSION_OWNER_MISMATCH' && /owner tuple mismatch/.test(err.message),
+    );
+    const stillReserved = await readCoderSessionInventory(fx.inventoryDir);
+    assert.equal(stillReserved.entries[0].state, 'reserved', 'the refused mutation left the row reserved');
+
+    // The same guard protects running -> idle: only the OWNING run completes.
+    const running = await markCoderSessionRunning({
+      inventoryDir: fx.inventoryDir,
+      engine: 'opencode',
+      slug: 'task-a',
+      ...tupleOf(reserved),
+    });
+    await assert.rejects(
+      () =>
+        markCoderSessionIdle({
+          inventoryDir: fx.inventoryDir,
+          engine: 'opencode',
+          slug: 'task-a',
+          ...tupleOf(running),
+          runId: 'run-thief',
+        }),
+      (err) => err.code === 'CODER_SESSION_OWNER_MISMATCH',
+    );
+    const after = await readCoderSessionInventory(fx.inventoryDir);
+    assert.equal(after.entries[0].state, 'running', 'a foreign completion never idles the row');
+    assert.deepEqual(tupleOf(after.entries[0]), tupleOf(running), 'the owner tuple survived unchanged');
   } finally {
     await fx.cleanup();
   }

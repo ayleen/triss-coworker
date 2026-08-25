@@ -34,6 +34,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
+import { loadOrCreateProjectIdentity, projectRootFingerprint } from '../src/coder-state.js';
 import {
   markCoderSessionRunning,
   reserveCoderSession,
@@ -594,16 +595,22 @@ test('a live same-slug v2 row prevents the opencode2 spawn entirely', () => with
   const commands = await loadCommands();
   const { sh } = makeSh();
   // Seed a LIVE (running) row for the exact slug this run will request, as
-  // another concurrent run would have published it.
+  // another concurrent run would have published it. The row must carry the
+  // REAL project fingerprint for this home — the same one the run derives
+  // from .triss/project-identity-v1.json — because provenance is checked
+  // BEFORE the busy refusal: a fake fingerprint would mis-route this test
+  // to CODER_SESSION_FINGERPRINT_MISMATCH instead of CODER_SESSION_BUSY.
   const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'opencode2');
   mkdirSync(inventoryDir, { recursive: true, mode: 0o700 });
+  const identity = await loadOrCreateProjectIdentity(join(home, '.triss'));
+  const realFingerprint = projectRootFingerprint(identity.project_id);
   const reserved = await reserveCoderSession({
     inventoryDir,
     engine: 'opencode2',
     slug: 'oc2busy',
     isolationMode: 'non_isolated',
     lockSlot: 0,
-    projectRootFingerprint: 'f'.repeat(64),
+    projectRootFingerprint: realFingerprint,
     runId: 'run-live',
     sandboxId: `sbx_${'b'.repeat(32)}`,
     pid: 4242,

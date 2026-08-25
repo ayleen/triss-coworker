@@ -248,9 +248,9 @@ Lease behavior: maintenance → inventory → slot leases form the fixed lock
 hierarchy; slot leases serialize run/clean cycles on the same
 slot; leases are released in `finally`.
 
-Cleanup: `triss coder session clean <slug> --engine <opencode|crush>` removes
-only the selected inactive isolated session row; `triss coder result clean
-<run-id>` removes only a validated retained result artifact, never a
+Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush>`
+removes only the selected inactive isolated session row; `triss coder result
+clean <run-id>` removes only a validated retained result artifact, never a
 persistent session.
 
 Rollback: `triss coder state backup|validate|adopt|reset` implement the

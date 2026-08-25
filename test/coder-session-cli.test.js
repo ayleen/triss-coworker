@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -245,4 +245,21 @@ test('result-state records persist and list under the runs root', async () => {
   } finally {
     await fx.cleanup();
   }
+});
+
+// ─── public contract grammar ─────────────────────────────────────────────────
+
+// Semantic guard for the published contract: its Cleanup line must carry the
+// exact closed three-engine grammar the CLI enforces above, never the stale
+// two-engine form.
+test('public contract Cleanup line carries the exact three-engine clean grammar', async () => {
+  const contract = await readFile(new URL('../docs/reliable-delegation-contract.md', import.meta.url), 'utf8');
+  assert.ok(
+    contract.includes('--engine <opencode|opencode2|crush>'),
+    'public contract must document --engine <opencode|opencode2|crush>',
+  );
+  const cleanupLine = contract.split('\n').find((line) => line.startsWith('Cleanup:'));
+  assert.ok(cleanupLine, 'contract must contain a Cleanup line');
+  assert.match(cleanupLine, /--engine <opencode\|opencode2\|crush>/);
+  assert.ok(!cleanupLine.includes('<opencode|crush>'), 'stale two-engine grammar must not remain in the Cleanup line');
 });

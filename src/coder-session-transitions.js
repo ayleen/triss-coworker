@@ -13,7 +13,12 @@
  *                                         no row -> reserved (origin 'new');
  *                                         idle row -> straight to running
  *                                         (origin 'continued'); live/deleting
- *                                         rows reject
+ *                                         rows reject; an existing row bound
+ *                                         to another isolation_mode or
+ *                                         project fingerprint rejects TYPED
+ *                                         (CODER_SESSION_ISOLATION_MISMATCH /
+ *                                         CODER_SESSION_FINGERPRINT_MISMATCH)
+ *                                         and is left byte-identical
  *   reserveCoderSession()               — install a reserved row (admission)
  *   markCoderSessionRunning()           — reserved -> running
  *   markCoderSessionIdle()              — running -> idle
@@ -28,6 +33,18 @@
  * shared acquireCoderMutationLock O_EXCL/dead-PID-reclaim primitive with a
  * bounded ASYNC LOCK_HELD retry/backoff). Read-only list/reconcile never
  * take the mutex.
+ *
+ * Typed failure codes (fail closed — callers must never guess store state):
+ *   CODER_SESSION_LOCK_TIMEOUT      mutex still LOCK_HELD after the bounded
+ *                                   retry schedule is exhausted (cause +
+ *                                   lockPath preserved)
+ *   CODER_SESSION_STORE_INVALID     canonical inventory read reported a
+ *                                   corrupt document in a mutating transition
+ *   CODER_SESSION_STORE_IO          inventory publication failed before its
+ *                                   rename (from writeCoderSessionInventory)
+ *   CODER_SESSION_DURABILITY_UNKNOWN publication rename succeeded but
+ *                                   durability is unproven; carries
+ *                                   publicationMayHaveOccurred=true
  *
  * Non-goals: process-journal reconciliation or real generation inspection.
  */
@@ -63,18 +80,44 @@ function delay(ms) {
 }
 
 /**
+ * Typed corrupt-store failure for MUTATING transitions: the canonical
+ * inventory exists but cannot be decoded, so no state inference is lawful.
+ * Read-only projections keep their plain fail-closed error.
+ */
+function corruptStoreError(inventoryDir, detail) {
+  const err = new Error(
+    `coder-session: canonical session inventory is unreadable (fail closed): ${detail}`,
+  );
+  err.code = 'CODER_SESSION_STORE_INVALID';
+  err.inventoryDir = inventoryDir;
+  return err;
+}
+
+/**
  * Acquire the mutex handle, retrying LOCK_HELD on the bounded backoff
  * schedule. ASYNC sleeps only — same-process Promise.all contention yields
  * to the event loop instead of blocking it. Every other error fails closed
- * immediately. Returns the acquired handle directly, so there is never a
- * placeholder assignment to read past.
+ * immediately; LOCK_HELD that survives the whole schedule becomes a typed
+ * CODER_SESSION_LOCK_TIMEOUT (cause + lock path preserved) so admission can
+ * distinguish "still busy" from every other failure. Returns the acquired
+ * handle directly, so there is never a placeholder assignment to read past.
  */
 async function acquireWithRetry(acquire, lockPath, retryMs) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return acquire(lockPath);
     } catch (err) {
-      if (!err || err.code !== 'LOCK_HELD' || attempt >= retryMs.length) throw err;
+      if (!err || err.code !== 'LOCK_HELD') throw err;
+      if (attempt >= retryMs.length) {
+        const timeout = new Error(
+          `coder-session: engine session-inventory mutex still held after ` +
+            `${retryMs.length} bounded retries: ${lockPath}`,
+          { cause: err },
+        );
+        timeout.code = 'CODER_SESSION_LOCK_TIMEOUT';
+        timeout.lockPath = lockPath;
+        throw timeout;
+      }
       await delay(retryMs[attempt]);
     }
   }
@@ -197,6 +240,8 @@ export async function allocateCoderSessionSlug({ isCollision }) {
  * @param {(lockPath: string) => object} [opts.acquireLock] narrow test seam:
  *   lock factory override (production default is the shared O_EXCL primitive)
  * @param {number[]} [opts.lockRetryMs] bounded LOCK_HELD backoff schedule
+ * @param {object} [opts.inventoryFs] narrow test seam: filesystem impl for
+ *   durable publication (production default is node:fs/promises)
  * @returns {Promise<object>} the reserved row
  */
 export async function reserveCoderSession({
@@ -213,6 +258,7 @@ export async function reserveCoderSession({
   bootId,
   acquireLock,
   lockRetryMs,
+  inventoryFs,
 }) {
   if (!validSlug(slug)) throw new Error(`coder-session: invalid slug: ${JSON.stringify(slug)}`);
   if (!['isolated', 'non_isolated'].includes(isolationMode)) {
@@ -226,7 +272,7 @@ export async function reserveCoderSession({
   // runs under the engine inventory mutex; nothing trusts pre-lock state.
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
 
     const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
     if (existing) {
@@ -257,7 +303,7 @@ export async function reserveCoderSession({
     if (row === null) {
       throw new Error('coder-session: reservation row failed canonical validation');
     }
-    await writeCoderSessionInventory(inventoryDir, [...read.entries, row], now);
+    await writeCoderSessionInventory(inventoryDir, [...read.entries, row], now, inventoryFs);
     return row;
   });
 }
@@ -274,6 +320,13 @@ export async function reserveCoderSession({
  *                        transition is needed or legal);
  *   - any live/deleting state (reserved|running|deleting) -> reject: another
  *                        run already owns this session.
+ *   - an existing row in ANY state whose stored isolation_mode or
+ *                        project_root_fingerprint differs from the request ->
+ *                        typed CODER_SESSION_ISOLATION_MISMATCH /
+ *                        CODER_SESSION_FINGERPRINT_MISMATCH with the row left
+ *                        byte-identical: a slug collision across projects or
+ *                        isolation regimes must never continue (or report as
+ *                        merely busy) another context's session.
  * The origin decision and any mutation share one critical section, so a
  * concurrent clean can never interleave between the existence check and the
  * published outcome.
@@ -295,6 +348,7 @@ export async function claimCoderSession({
   bootId,
   acquireLock,
   lockRetryMs,
+  inventoryFs,
 }) {
   if (!validSlug(slug)) throw new Error(`coder-session: invalid slug: ${JSON.stringify(slug)}`);
   if (!['isolated', 'non_isolated'].includes(isolationMode)) {
@@ -307,7 +361,7 @@ export async function claimCoderSession({
 
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
 
     // No row yet: plain admission — publish the reserved row.
@@ -336,11 +390,34 @@ export async function claimCoderSession({
       if (row === null) {
         throw new Error('coder-session: reservation row failed canonical validation');
       }
-      await writeCoderSessionInventory(inventoryDir, [...read.entries, row], now);
+      await writeCoderSessionInventory(inventoryDir, [...read.entries, row], now, inventoryFs);
       return { row, origin: 'new' };
     }
 
     const existing = read.entries[idx];
+
+    // Provenance binding, checked for EVERY existing state and BEFORE the
+    // busy rejection: a request whose isolation regime or project fingerprint
+    // differs from the stored row can never lawfully continue (or later
+    // claim) this session, so reporting the transient busy code would be
+    // misleading. Both refusals are typed and never mutate the row.
+    if (existing.isolation_mode !== isolationMode) {
+      const err = new Error(
+        `coder-session: engine/slug ${engine}/${slug} was reserved with ` +
+          `isolation_mode=${existing.isolation_mode}, refusing ${isolationMode}`,
+      );
+      err.code = 'CODER_SESSION_ISOLATION_MISMATCH';
+      throw err;
+    }
+    if (existing.project_root_fingerprint !== projectRootFingerprint) {
+      const err = new Error(
+        `coder-session: engine/slug ${engine}/${slug} is bound to ` +
+          `project_root_fingerprint ${existing.project_root_fingerprint}, ` +
+          `refusing ${projectRootFingerprint}`,
+      );
+      err.code = 'CODER_SESSION_FINGERPRINT_MISMATCH';
+      throw err;
+    }
 
     // Idle row from a completed earlier run: continue it atomically — the
     // row goes straight to running under THIS critical section with the
@@ -362,7 +439,7 @@ export async function claimCoderSession({
       }
       const entries = [...read.entries];
       entries[idx] = next;
-      await writeCoderSessionInventory(inventoryDir, entries, now);
+      await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
       return { row: next, origin: 'continued' };
     }
 
@@ -380,16 +457,16 @@ export async function claimCoderSession({
 
 /**
  * reserved -> running (after spawn). Serialized under the engine inventory
- * mutex (optional acquireLock/lockRetryMs are narrow test seams). The caller
- * must present the row's EXACT current owner tuple — only the run that
- * reserved the row may mark it running.
+ * mutex (optional acquireLock/lockRetryMs/inventoryFs are narrow test seams).
+ * The caller must present the row's EXACT current owner tuple — only the run
+ * that reserved the row may mark it running.
  */
-export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs }) {
+export async function markCoderSessionRunning({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs, inventoryFs }) {
   requireOwnerTuple({ runId, sandboxId, pid, processStartId, bootId }, 'markCoderSessionRunning');
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const now = timestampNow();
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
     if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
 
@@ -410,23 +487,24 @@ export async function markCoderSessionRunning({ inventoryDir, engine, slug, runI
     if (next === null) throw new Error('coder-session: running row failed canonical validation');
     const entries = [...read.entries];
     entries[idx] = next;
-    await writeCoderSessionInventory(inventoryDir, entries, now);
+    await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
     return next;
   });
 }
 
 /**
  * running -> idle (normal completion; complete published store). Serialized
- * under the engine inventory mutex (optional acquireLock/lockRetryMs are
- * narrow test seams). The caller must present the row's EXACT current owner
- * tuple — one run can never complete (or otherwise mutate) another run's row.
+ * under the engine inventory mutex (optional acquireLock/lockRetryMs/
+ * inventoryFs are narrow test seams). The caller must present the row's EXACT
+ * current owner tuple — one run can never complete (or otherwise mutate)
+ * another run's row.
  */
-export async function markCoderSessionIdle({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs }) {
+export async function markCoderSessionIdle({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs, inventoryFs }) {
   requireOwnerTuple({ runId, sandboxId, pid, processStartId, bootId }, 'markCoderSessionIdle');
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const now = timestampNow();
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
     if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
     const row = read.entries[idx];
@@ -447,7 +525,7 @@ export async function markCoderSessionIdle({ inventoryDir, engine, slug, runId, 
     if (next === null) throw new Error('coder-session: idle row failed canonical validation');
     const entries = [...read.entries];
     entries[idx] = next;
-    await writeCoderSessionInventory(inventoryDir, entries, now);
+    await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
     return next;
   });
 }
@@ -460,14 +538,14 @@ export async function markCoderSessionIdle({ inventoryDir, engine, slug, runId, 
  * another run's session. An IDLE row carries no tuple (all fields null), so
  * the fresh clean-owner tuple is installed as the deleting row's owner.
  * Serialized under the engine inventory mutex (optional acquireLock/
- * lockRetryMs are narrow test seams).
+ * lockRetryMs/inventoryFs are narrow test seams).
  */
-export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, deletePhase = 'store_tombstoned', acquireLock, lockRetryMs }) {
+export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, deletePhase = 'store_tombstoned', acquireLock, lockRetryMs, inventoryFs }) {
   requireOwnerTuple({ runId, sandboxId, pid, processStartId, bootId }, 'beginCoderSessionDelete');
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const now = timestampNow();
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
     if (idx === -1) throw new Error(`coder-session: unknown row: ${engine}/${slug}`);
     const row = read.entries[idx];
@@ -493,7 +571,7 @@ export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runI
     if (next === null) throw new Error('coder-session: deleting row failed canonical validation');
     const entries = [...read.entries];
     entries[idx] = next;
-    await writeCoderSessionInventory(inventoryDir, entries, now);
+    await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
     return next;
   });
 }
@@ -544,22 +622,22 @@ export async function listCoderSessions({ inventoryDir }) {
  * must present the EXACT deleting tuple (the one beginCoderSessionDelete /
  * cleanIdleCoderSession installed) — deleting->remove is owner-checked so a
  * stale cleaner can never remove a row another action now owns. Serialized
- * under the engine inventory mutex (optional acquireLock/lockRetryMs are
- * narrow test seams).
+ * under the engine inventory mutex (optional acquireLock/lockRetryMs/
+ * inventoryFs are narrow test seams).
  */
-export async function removeCoderSessionRow({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs }) {
+export async function removeCoderSessionRow({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, acquireLock, lockRetryMs, inventoryFs }) {
   requireOwnerTuple({ runId, sandboxId, pid, processStartId, bootId }, 'removeCoderSessionRow');
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     const now = timestampNow();
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const row = read.entries.find((e) => e.engine === engine && e.slug === slug);
     if (row && row.state !== 'deleting') {
       throw new Error(`coder-session: row must be deleting before removal, got ${row.state}`);
     }
     if (row) assertExactOwnerTuple(row, { runId, sandboxId, pid, processStartId, bootId });
     const entries = read.entries.filter((e) => !(e.engine === engine && e.slug === slug));
-    await writeCoderSessionInventory(inventoryDir, entries, now);
+    await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
     return { removed: row !== undefined };
   });
 }
@@ -579,12 +657,12 @@ export async function removeCoderSessionRow({ inventoryDir, engine, slug, runId,
  *
  * @returns {Promise<{removed: boolean}>} removed=false when no row exists
  */
-export async function cleanIdleCoderSession({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, deletePhase = 'store_tombstoned', acquireLock, lockRetryMs }) {
+export async function cleanIdleCoderSession({ inventoryDir, engine, slug, runId, sandboxId, pid, processStartId, bootId, deletePhase = 'store_tombstoned', acquireLock, lockRetryMs, inventoryFs }) {
   requireOwnerTuple({ runId, sandboxId, pid, processStartId, bootId }, 'cleanIdleCoderSession');
   return withCoderInventoryMutex(inventoryDir, { acquireLock, lockRetryMs }, async () => {
     // Fresh read under THIS critical section: pre-lock state is untrustworthy.
     const read = await readCoderSessionInventory(inventoryDir);
-    if (read.error) throw new Error(read.error);
+    if (read.error) throw corruptStoreError(inventoryDir, read.error);
     const idx = read.entries.findIndex((e) => e.engine === engine && e.slug === slug);
     if (idx === -1) return { removed: false };
     const row = read.entries[idx];
@@ -610,11 +688,11 @@ export async function cleanIdleCoderSession({ inventoryDir, engine, slug, runId,
     if (deleting === null) throw new Error('coder-session: deleting row failed canonical validation');
     const entries = [...read.entries];
     entries[idx] = deleting;
-    await writeCoderSessionInventory(inventoryDir, entries, now);
+    await writeCoderSessionInventory(inventoryDir, entries, now, inventoryFs);
     // Same-critical-section removal guarded by the EXACT deleting tuple.
     assertExactOwnerTuple(deleting, { runId, sandboxId, pid, processStartId, bootId });
     const remaining = read.entries.filter((e) => !(e.engine === engine && e.slug === slug));
-    await writeCoderSessionInventory(inventoryDir, remaining, timestampNow());
+    await writeCoderSessionInventory(inventoryDir, remaining, timestampNow(), inventoryFs);
     return { removed: true };
   });
 }

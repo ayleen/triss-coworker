@@ -14,19 +14,43 @@
  * transition failure abandons the published row (no stranded inventory),
  * and a fail-closed V1 session-store lookup abandons the row reserved
  * before it.
+ *
+ * Explicit-session admission is fail-closed end to end: a mutex held
+ * through the whole bounded retry schedule rejects CODER_SESSION_LOCK_TIMEOUT,
+ * a corrupt canonical inventory rejects CODER_SESSION_STORE_INVALID (store
+ * left byte-identical), and a parent-directory fsync failure AFTER a
+ * successful rename rejects CODER_SESSION_DURABILITY_UNKNOWN with
+ * publicationMayHaveOccurred=true while the published reserved row stays
+ * recoverable — all three BEFORE spawn and never degraded to the
+ * warning/null contract.
+ *
+ * Finalization seam (deps.sessionFinalization): the SAME narrow
+ * acquireLock/lockRetryMs/inventoryFs mutex seams are forwarded into the
+ * SUCCESS-path running->idle completion, proving a finalization failure
+ * withholds the success envelope, stays typed (never fed into abandon),
+ * and leaves the row exactly as the failed transition left it — plus that
+ * a rollback colliding with a genuinely held lock throws the aggregate
+ * preserving both errors.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm, open as fsOpen, readdir as fsReaddir, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
-import { sessionInventoryPath } from '../src/coder-session-transitions.js';
+import {
+  INVENTORY_BASENAME,
+  readCoderSessionInventory,
+} from '../src/coder-session-inventory-codec.js';
+import {
+  INVENTORY_LOCK_BASENAME,
+  sessionInventoryPath,
+} from '../src/coder-session-transitions.js';
+import { acquireCoderMutationLock } from '../src/coder-lock.js';
 import {
   currentBootIdentity,
   currentSessionOwnerTuple,
@@ -209,6 +233,66 @@ test('a forced reserved->running failure abandons the exact reserved row with no
     assert.deepEqual(inventory.entries, [], 'no stranded reserved row');
   } finally {
     stderr.restore();
+    if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = originalRoot;
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+// ─── admission code policy: closed stable-code allowlist ─────────────────────
+//
+// reserveV2SessionRow propagates ONLY the closed STABLE_SESSION_ADMISSION_CODES
+// allowlist unchanged; a bare system code (e.g. EACCES) must wrap as
+// CODER_SESSION_ADMISSION_FAILED with the original error preserved as cause.
+// Driven through the same narrow deps.claimCoderSession seam as above while
+// everything else stays REAL.
+
+test('admission wraps bare system codes but lets allowlisted stable codes propagate unchanged', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'triss-owner-identity-'));
+  const originalRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = base;
+  try {
+    // A bare system code must NOT leak through unclassified.
+    await assert.rejects(
+      () =>
+        reserveV2SessionRow(
+          { engine: 'opencode', slug: 'wrap-proof', isolated: false },
+          {
+            claimCoderSession: async () => {
+              const err = new Error('permission denied');
+              err.code = 'EACCES';
+              throw err;
+            },
+          },
+        ),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_ADMISSION_FAILED');
+        assert.match(err.message, /coder session admission failed/);
+        assert.equal(err.cause?.code, 'EACCES', 'the original system error stays attached as cause');
+        return true;
+      },
+    );
+    // An allowlisted stable code keeps its exact code and message.
+    await assert.rejects(
+      () =>
+        reserveV2SessionRow(
+          { engine: 'opencode', slug: 'stable-proof', isolated: false },
+          {
+            claimCoderSession: async () => {
+              const err = new Error('forced busy refusal');
+              err.code = 'CODER_SESSION_BUSY';
+              throw err;
+            },
+          },
+        ),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_BUSY');
+        assert.match(err.message, /forced busy refusal/);
+        assert.equal(err.cause, undefined, 'allowlisted codes pass through unwrapped');
+        return true;
+      },
+    );
+  } finally {
     if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = originalRoot;
     await rm(base, { recursive: true, force: true });
@@ -454,4 +538,418 @@ test('OpenCode V1 continuation republishes running ownership and preserves idle 
   } finally {
     stderr.restore();
   }
+}));
+
+// ─── explicit-session admission fails closed before spawn ────────────────────
+//
+// reserveV2SessionRow's admission policy degrades to warning/null ONLY for a
+// verified rollback (sessionRollbackVerified). Every typed store refusal —
+// mutex still held after the bounded retry schedule, a corrupt canonical
+// inventory, or durability unknown after a successful rename — must THROW
+// out of runCoderRun with its stable code BEFORE the engine spawn, and must
+// never surface as the dim degradation warning. Spawn counters prove the
+// pre-spawn boundary; the inventory proves each refusal's exact store
+// semantics.
+
+test('a mutex held through the whole retry schedule rejects CODER_SESSION_LOCK_TIMEOUT before spawn', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  const lockPath = join(inventoryDir, INVENTORY_LOCK_BASENAME);
+  const lockAttempts = [];
+  let spawnCalls = 0;
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'lock-timeout-proof' }, {
+          spawn: () => {
+            spawnCalls += 1;
+            return spawnReplaying('', { code: 1 })();
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: () => true,
+          sessionAdmission: {
+            acquireLock: (path) => {
+              lockAttempts.push(path);
+              const err = new Error('forced lock contention');
+              err.code = 'LOCK_HELD';
+              throw err;
+            },
+            lockRetryMs: [0],
+          },
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_LOCK_TIMEOUT');
+        assert.match(err.message, /mutex still held/);
+        assert.equal(err.lockPath, lockPath, 'the timeout must name the exact mutex path');
+        assert.equal(err.cause?.code, 'LOCK_HELD', 'the LOCK_HELD cause must be preserved');
+        return true;
+      },
+    );
+  } finally {
+    stderr.restore();
+  }
+  // [0] => initial attempt + exactly ONE bounded retry, then the typed timeout.
+  assert.deepEqual(lockAttempts, [lockPath, lockPath]);
+  assert.equal(spawnCalls, 0, 'a held mutex must reject admission BEFORE spawn');
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session store unavailable|v2 session rollback failed/,
+    `typed lock timeouts must throw, never degrade to the warning/null contract, got: ${stderr.text()}`,
+  );
+}));
+
+test('a corrupt canonical .inventory.json rejects CODER_SESSION_STORE_INVALID before spawn and stays byte-identical', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  mkdirSync(inventoryDir, { recursive: true });
+  const corruptText = '{"schema_version":1,"entries":broken\n';
+  writeFileSync(join(inventoryDir, INVENTORY_BASENAME), corruptText);
+  let spawnCalls = 0;
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'store-invalid-proof' }, {
+          spawn: () => {
+            spawnCalls += 1;
+            return spawnReplaying('', { code: 1 })();
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: () => true,
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_STORE_INVALID');
+        assert.match(err.message, /unreadable \(fail closed\)/);
+        assert.equal(err.inventoryDir, inventoryDir);
+        return true;
+      },
+    );
+  } finally {
+    stderr.restore();
+  }
+  assert.equal(spawnCalls, 0, 'a corrupt store must reject admission BEFORE spawn');
+  // Fail closed means NO mutation: an undecodable document is never deleted,
+  // overwritten, or "repaired" by a rollback that cannot know the state.
+  assert.equal(
+    readFileSync(join(inventoryDir, INVENTORY_BASENAME), 'utf8'),
+    corruptText,
+    'the corrupt document must be left byte-identical',
+  );
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session store unavailable|v2 session rollback failed/,
+    `typed store refusals must throw, never degrade to the warning/null contract, got: ${stderr.text()}`,
+  );
+}));
+
+test('a parent-directory fsync failure AFTER rename rejects CODER_SESSION_DURABILITY_UNKNOWN and keeps the published reserved row recoverable', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  let directoryFsyncAttempts = 0;
+  // Real temp-file open/write/fsync/close and real rename/unlink; ONLY the
+  // open of the exact inventoryDir for the parent fsync gets a wrapper whose
+  // sync() throws while close() still closes the REAL directory handle.
+  const inventoryFs = {
+    open: async (path, flags, mode) => {
+      const real = await fsOpen(path, flags, mode);
+      if (flags === 'r' && path === inventoryDir) {
+        directoryFsyncAttempts += 1;
+        return {
+          sync: () => {
+            throw new Error('forced directory fsync failure');
+          },
+          close: () => real.close(),
+        };
+      }
+      return real;
+    },
+    rename: (...args) => fsRename(...args),
+    unlink: (...args) => fsUnlink(...args),
+  };
+  let spawnCalls = 0;
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'durability-proof' }, {
+          spawn: () => {
+            spawnCalls += 1;
+            return spawnReplaying('', { code: 1 })();
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: () => true,
+          sessionAdmission: { inventoryFs },
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_DURABILITY_UNKNOWN');
+        assert.equal(
+          err.publicationMayHaveOccurred,
+          true,
+          'post-rename failures must carry publicationMayHaveOccurred=true',
+        );
+        assert.equal(err.inventoryDir, inventoryDir);
+        assert.match(err.message, /rename succeeded but durability is unknown/);
+        assert.equal(err.cause?.message, 'forced directory fsync failure');
+        return true;
+      },
+    );
+  } finally {
+    stderr.restore();
+  }
+  // Exactly one publication was attempted (the claim); mark-running never ran.
+  assert.equal(directoryFsyncAttempts, 1, 'only the claim publication may reach the directory fsync');
+  assert.equal(spawnCalls, 0, 'durability-unknown must reject admission BEFORE spawn');
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session store unavailable|v2 session rollback failed/,
+    `durability-unknown must throw, never degrade to the warning/null contract, got: ${stderr.text()}`,
+  );
+  // Rename already succeeded: the reserved row IS (or may be) published, so
+  // no rollback may assume absence — it must remain visible for recovery.
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.equal(after.entries.length, 1, 'the published row must survive for recovery');
+  assert.equal(after.entries[0].engine, 'opencode');
+  assert.equal(after.entries[0].slug, 'durability-proof');
+  assert.equal(after.entries[0].state, 'reserved', 'the recoverable row stays exactly as published');
+  // The rename consumed the staged temp; only the canonical document remains.
+  const remaining = await fsReaddir(inventoryDir);
+  assert.deepEqual(remaining.sort(), ['.inventory.json'], 'no leftover temp files beside the published document');
+}));
+
+// ─── finalization seam: success-path completion failures (deps.sessionFinalization) ───
+//
+// completeV2SessionRow forwards acquireLock/lockRetryMs/inventoryFs into the
+// REAL markCoderSessionIdle with the exact handle, so a success-path
+// completion failure is exercised through production code, not mocks: the
+// typed CODER_SESSION_FINALIZATION_FAILED error must reach the caller with
+// its cause preserved, the success envelope must never reach stdout
+// (finalization happens BEFORE stdout), the error stays out of ordinary
+// abandon, and the row remains exactly as the failed transition left it.
+
+test('a mutex held through finalization rejects CODER_SESSION_FINALIZATION_FAILED and keeps the row running', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  const lockPath = join(inventoryDir, INVENTORY_LOCK_BASENAME);
+  const streamText =
+    JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
+    JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n';
+  const lockAttempts = [];
+  const stdoutChunks = [];
+  let spawnCalls = 0;
+  let capturedHandle = null;
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'final-lock-proof' }, {
+          spawn: () => {
+            spawnCalls += 1;
+            return spawnReplaying(streamText, { code: 0 })(); // engine SUCCEEDS
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: (s) => {
+            stdoutChunks.push(String(s));
+            return true;
+          },
+          sessionFinalization: {
+            acquireLock: (path) => {
+              lockAttempts.push(path);
+              const err = new Error('forced finalization lock contention');
+              err.code = 'LOCK_HELD';
+              throw err;
+            },
+            lockRetryMs: [0],
+          },
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_FINALIZATION_FAILED');
+        assert.match(err.message, /v2 session finalization failed for opencode\/final-lock-proof/);
+        assert.equal(err.cause?.code, 'CODER_SESSION_LOCK_TIMEOUT', 'the store failure stays attached as cause');
+        assert.equal(err.cause?.lockPath, lockPath);
+        assert.equal(err.cause?.cause?.code, 'LOCK_HELD', 'the LOCK_HELD cause must be preserved');
+        // The exact non-secret lifecycle handle rides along for recovery.
+        capturedHandle = err.coderSessionHandle;
+        assert.deepEqual(
+          {
+            inventoryDir: err.coderSessionHandle?.inventoryDir,
+            engine: err.coderSessionHandle?.engine,
+            slug: err.coderSessionHandle?.slug,
+          },
+          { inventoryDir, engine: 'opencode', slug: 'final-lock-proof' },
+        );
+        return true;
+      },
+    );
+  } finally {
+    stderr.restore();
+  }
+  // [0] => initial attempt + exactly ONE bounded retry, then the typed timeout.
+  assert.deepEqual(lockAttempts, [lockPath, lockPath], 'the seam must reach the real mark-idle transition');
+  assert.equal(spawnCalls, 1, 'the engine itself ran successfully');
+  assert.equal(
+    stdoutChunks.join(''),
+    '',
+    'finalization runs BEFORE stdout: no success envelope may be emitted',
+  );
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session store unavailable|v2 session rollback failed/,
+    `typed finalization failures must throw, never degrade or abandon, got: ${stderr.text()}`,
+  );
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.equal(after.entries.length, 1, 'exactly one row exists');
+  const row = after.entries[0];
+  assert.equal(row.state, 'running', 'the row remains exactly as the failed transition left it');
+  assert.equal(row.slug, 'final-lock-proof');
+  assert.ok(row.run_id && row.pid, 'the running row still claims its live owner tuple');
+  // The attached handle is the EXACT persisted owner tuple, so recovery can
+  // lawfully act on the stranded row.
+  assert.deepEqual(
+    {
+      runId: capturedHandle?.runId,
+      sandboxId: capturedHandle?.sandboxId,
+      pid: capturedHandle?.pid,
+      processStartId: capturedHandle?.processStartId,
+      bootId: capturedHandle?.bootId,
+    },
+    {
+      runId: row.run_id,
+      sandboxId: row.sandbox_id,
+      pid: row.pid,
+      processStartId: row.process_start_id,
+      bootId: row.boot_id,
+    },
+  );
+}));
+
+test('a durability-unknown idle publication publishes the idle row yet fails the run without success stdout', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  const streamText =
+    JSON.stringify({ type: 'text', part: { text: 'done' } }) + '\n' +
+    JSON.stringify({ type: 'step_finish', reason: 'stop' }) + '\n';
+  let directoryFsyncAttempts = 0;
+  // Wraps ONLY the finalization write: open of the exact inventoryDir as a
+  // directory returns a handle whose sync() throws while close() still
+  // closes the REAL directory handle; everything else delegates to the real
+  // fs (temp-file write/fsync/rename all genuinely happen).
+  const inventoryFs = {
+    open: async (path, flags, mode) => {
+      const real = await fsOpen(path, flags, mode);
+      if (flags === 'r' && path === inventoryDir) {
+        directoryFsyncAttempts += 1;
+        return {
+          sync: () => {
+            throw new Error('forced directory fsync failure');
+          },
+          close: () => real.close(),
+        };
+      }
+      return real;
+    },
+    rename: (...args) => fsRename(...args),
+    unlink: (...args) => fsUnlink(...args),
+  };
+  const stdoutChunks = [];
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'final-durability-proof' }, {
+          spawn: spawnReplaying(streamText, { code: 0 }), // engine SUCCEEDS
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: (s) => {
+            stdoutChunks.push(String(s));
+            return true;
+          },
+          sessionFinalization: { inventoryFs },
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_FINALIZATION_FAILED');
+        assert.equal(err.cause?.code, 'CODER_SESSION_DURABILITY_UNKNOWN');
+        assert.equal(
+          err.cause?.publicationMayHaveOccurred,
+          true,
+          'post-rename failures must carry publicationMayHaveOccurred=true',
+        );
+        assert.equal(err.cause?.inventoryDir, inventoryDir);
+        assert.match(err.cause?.message, /rename succeeded but durability is unknown/);
+        assert.equal(err.cause?.cause?.message, 'forced directory fsync failure');
+        return true;
+      },
+    );
+  } finally {
+    stderr.restore();
+  }
+  assert.equal(directoryFsyncAttempts, 1, 'only the idle publication reached the wrapped directory fsync');
+  assert.equal(stdoutChunks.join(''), '', 'the run must fail because durability was unconfirmed — no success stdout');
+  assert.doesNotMatch(
+    stderr.text(),
+    /v2 session rollback failed/,
+    'typed finalization failures stay out of abandon — no rollback warning',
+  );
+  // The rename ALREADY succeeded: the published idle row is real and must be
+  // readable from disk even though the command correctly failed.
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.equal(after.entries.length, 1, 'the published row survives');
+  assert.equal(after.entries[0].engine, 'opencode');
+  assert.equal(after.entries[0].slug, 'final-durability-proof');
+  assert.equal(after.entries[0].state, 'idle', 'the idle rename landed before the fsync failed');
+}));
+
+test('rollback contending with a genuinely held lock throws CODER_SESSION_ROLLBACK_FAILED preserving both errors', withRunEnv(async (base) => {
+  const inventoryDir = sessionInventoryPath(join(base, '.triss'), 'opencode');
+  const lockPath = join(inventoryDir, INVENTORY_LOCK_BASENAME);
+  const stdoutChunks = [];
+  let lock = null;
+  const stderr = captureStderr();
+  try {
+    await assert.rejects(
+      () =>
+        runCoderRun('do something', { session: 'rollback-lock-proof' }, {
+          spawn: () => {
+            // Reservation happened BEFORE spawn — grab the REAL inventory
+            // mutex now so the post-failure rollback exhausts its whole
+            // bounded retry schedule against a genuinely held lock.
+            lock = acquireCoderMutationLock('engine-sessions', 'inventory', { lockPath });
+            return spawnReplaying('', { code: 1 })(); // zero parseable output -> throw
+          },
+          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          stdoutWrite: (s) => {
+            stdoutChunks.push(String(s));
+            return true;
+          },
+        }),
+      (err) => {
+        assert.equal(err.code, 'CODER_SESSION_ROLLBACK_FAILED');
+        assert.ok(err instanceof AggregateError, 'both errors are preserved in an AggregateError');
+        assert.equal(err.errors.length, 2, 'engine error AND rollback error stay reachable');
+        assert.match(
+          err.engineError?.message,
+          /produced no parseable output/,
+          'errors[0] is still the ORIGINAL engine failure',
+        );
+        assert.equal(err.rollbackError?.code, 'CODER_SESSION_LOCK_TIMEOUT');
+        assert.equal(err.rollbackError?.lockPath, lockPath);
+        assert.equal(err.rollbackError?.cause?.code, 'LOCK_HELD');
+        assert.equal(err.coderSessionHandle?.slug, 'rollback-lock-proof');
+        return true;
+      },
+    );
+  } finally {
+    if (lock) lock.release();
+    stderr.restore();
+  }
+  assert.equal(stdoutChunks.join(''), '', 'a doubly-failed run emits no success stdout');
+  // The delete transition died on the mutex BEFORE mutating anything: the
+  // live row keeps claiming the slug until explicit recovery/reconcile.
+  const after = await readCoderSessionInventory(inventoryDir);
+  assert.equal(after.entries.length, 1, 'the stranded row survives for explicit recovery');
+  assert.equal(after.entries[0].slug, 'rollback-lock-proof');
+  assert.ok(
+    after.entries[0].state === 'running' || after.entries[0].state === 'reserved',
+    `the row remains running/reserved for recovery, got ${after.entries[0].state}`,
+  );
 }));
