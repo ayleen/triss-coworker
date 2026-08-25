@@ -12,14 +12,15 @@ import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
 // Hard supported floor for the npm package. The semver-parse fix landed in
-// 0.1.3 (crush ≥0.1.3 reports a clean `crush version vX.Y.Z`), so detect()
-// parses the semver and compares it against the effective minimum (installed
-// >= effective minimum, with the floor clamped underneath — see
-// effectiveAdmissionMinimum). 0.1.6 is the oldest release verified live
-// against the triss adapter (envelope shape, ZHIPU→ZAI env bridge,
-// --restrict-run CLI-flag enforcement, worktree isolation — all re-verified on
-// 0.1.6, 2026-07-15). TRISS_CODER_CRUSH_VERSION may RAISE the minimum but can
-// never lower it below this value; the floor also drives installHint().
+// 0.1.3 (crush ≥0.1.3 reports a clean `crush version vX.Y.Z`), so the shared
+// version-policy resolver (resolveCrushVersionPolicy) parses the semver and
+// compares it against the effective minimum (installed >= effective minimum,
+// with the floor clamped underneath — see resolveCrushMinimumConfig). 0.1.6 is
+// the oldest release verified live against the triss adapter (envelope shape,
+// ZHIPU→ZAI env bridge, --restrict-run CLI-flag enforcement, worktree
+// isolation — all re-verified on 0.1.6, 2026-07-15).
+// TRISS_CODER_CRUSH_VERSION may RAISE the minimum but can never lower it below
+// this value; the floor also drives installHint().
 const CRUSH_SUPPORTED_FLOOR = '0.1.6';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
@@ -32,16 +33,37 @@ const CRUSH_SUPPORTED_FLOOR = '0.1.6';
 const CRUSH_LARGE_ATOM = 'glm5_2';
 const CRUSH_SMALL_ATOM = 'glm5_turbo';
 
+// Configured-minimum policy, read from TRISS_CODER_CRUSH_VERSION ONLY (no
+// probing). THE single source both crushVersionPin() (display/install advice)
+// and resolveCrushVersionPolicy() (admission) consult, so display and
+// enforcement cannot drift:
+//   - unset ('' or undefined counts as unset) -> the hard floor;
+//   - a value BELOW the floor clamps UP to the floor — an installation
+//     preference must never resurrect unsupported releases
+//     (TRISS_CODER_CRUSH_VERSION=0.1.4 must not make 0.1.4 supported);
+//   - a MALFORMED value fails closed: configValid=false and NOTHING is
+//     admitted (admission), while the DISPLAY degrades to the floor so install
+//     advice stays actionable. Never reinterpreting garbage as "latest" or
+//     silently as the floor.
+function resolveCrushMinimumConfig() {
+  const floor = parseMinimumVersion(CRUSH_SUPPORTED_FLOOR);
+  const configuredRaw = process.env.TRISS_CODER_CRUSH_VERSION;
+  const configuredUnset = configuredRaw == null || configuredRaw === '';
+  const configuredParsed = parseMinimumVersion(configuredRaw);
+  const configValid = configuredUnset || Boolean(configuredParsed);
+  const effectiveParsed =
+    !configuredUnset && configValid && semverGte(configuredParsed, floor)
+      ? configuredParsed
+      : floor;
+  return { configuredRaw, configuredUnset, configuredParsed, configValid, floor, effectiveParsed };
+}
+
 // The effective minimum version TEXT: the configured override when it is a
 // legal (canonical, >= floor) value, otherwise the hard floor itself. Used for
-// display and install hints. A configured value BELOW the floor clamps UP to
-// the floor — an installation preference must never resurrect unsupported
-// releases — and a malformed override degrades to the floor here so install
-// advice stays actionable. Detection independently fails closed on the same
-// malformed input (see effectiveAdmissionMinimum).
+// display and install hints.
 export function crushVersionPin() {
-  const minimum = effectiveAdmissionMinimum();
-  return minimum ? `${minimum.major}.${minimum.minor}.${minimum.patch}` : CRUSH_SUPPORTED_FLOOR;
+  const { effectiveParsed } = resolveCrushMinimumConfig();
+  return `${effectiveParsed.major}.${effectiveParsed.minor}.${effectiveParsed.patch}`;
 }
 
 const CANONICAL_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -81,54 +103,139 @@ function semverGte(a, b) {
   return a.patch >= b.patch;
 }
 
-// The admission minimum detect() enforces. Unset -> the hard floor. A
-// configured value that parses but sits BELOW the floor clamps UP to the
-// floor: TRISS_CODER_CRUSH_VERSION=0.1.4 must not make 0.1.4 supported. A
-// MALFORMED configured value returns null so NOTHING is admitted — fail
-// closed, never reinterpreting garbage as "latest" or silently as the floor.
-// Only an exact '' env value counts as unset (matching the historical `||`
-// fallback); whitespace-only values stay malformed on purpose.
-function effectiveAdmissionMinimum() {
-  const floor = parseMinimumVersion(CRUSH_SUPPORTED_FLOOR);
-  const configured = process.env.TRISS_CODER_CRUSH_VERSION;
-  if (configured == null || configured === '') return floor;
-  const parsed = parseMinimumVersion(configured);
-  if (!parsed) return null;
-  return semverGte(parsed, floor) ? parsed : floor;
+// The shared read-only PROBE environment. Every read-only crush binary probe
+// (`crush --version`) receives an explicit minimal sanitized environment:
+// PATH plus only deterministic locale/TZ variables actually needed to format
+// output. Provider/API/cloud/GitHub/AWS credentials and arbitrary parent env
+// are NEVER inherited by a probe (same posture as detectOpencodeVersion's
+// allowlist and detectOpenCode2's probeEnv). This is NOT the protected
+// execution path — buildSpawnEnv owns the credential-bearing run env.
+export function buildCrushProbeEnv(baseEnv = process.env) {
+  const env = {};
+  for (const key of ['PATH', 'LANG', 'LC_ALL', 'TZ']) {
+    if (baseEnv[key] != null) env[key] = baseEnv[key];
+  }
+  return env;
 }
 
-// detect(): spawnSync('crush', ['--version']) — NEVER shell:true. crush 0.1.3+
-// reports a clean `crush version v0.1.3`; earlier builds reported a dirty dev
-// string like `v0.0.0-20260704...+dirty`. We accept only a canonical stable
-// version from that output and return {found, version, satisfiesPin}:
-// `version` is the bare `0.1.3` (or raw output when no stable version parses,
-// for diagnostics); `satisfiesPin` is parsed >= the effective admission
-// minimum (configured override, floored at CRUSH_SUPPORTED_FLOOR — see
-// effectiveAdmissionMinimum). NEVER throws — a prerelease, garbage, or a
-// NEWER version remains a usable detection result (newer is still found:true,
-// satisfiesPin:true). Version mismatch is NON-FATAL: callers warn at most,
-// never abort (the installHint command still carries the pin for `npm
-// install`). `sh` defaults to real spawnSync and is injectable for tests.
-export function detectCrush(sh = nodeSpawnSync) {
-  const r = sh('crush', ['--version']);
+// resolveCrushVersionPolicy: THE one shared Crush version-policy resolver.
+// Non-throwing; probes `crush --version` ONCE through the sanitized probe env
+// and classifies the result into an explicit reason instead of leaving callers
+// to interpret satisfyPin booleans:
+//   - 'compatible'                  installed >= effective minimum
+//   - 'missing'                     binary absent / probe failed
+//   - 'version_unknown'             found but no stable x.y.z parses
+//   - 'below_floor'                 installed < immutable floor 0.1.6
+//   - 'below_configured_minimum'    installed < a VALID stricter override
+//   - 'invalid_configured_minimum'  TRISS_CODER_CRUSH_VERSION malformed
+//
+// Raise-only semantics are preserved exactly: unset -> effective 0.1.6;
+// configured 0.1.4 clamps UP to 0.1.6; configured 0.2.0 -> effective 0.2.0;
+// malformed -> fail closed (compatible=false; `effectiveMinimum` degrades to
+// the floor TEXT so advice stays actionable while nothing is admitted).
+// Runtime (runCoderRun) treats this as AUTHORITATIVE — see
+// assertCrushVersionPolicy. `sh` is injectable for tests.
+export function resolveCrushVersionPolicy(sh = nodeSpawnSync) {
+  const { configuredRaw, configuredUnset, configuredParsed, configValid, floor, effectiveParsed } =
+    resolveCrushMinimumConfig();
+  // Effective minimum TEXT: a valid raised override, otherwise the hard floor
+  // itself. When the configured value is MALFORMED nothing is admissible; the
+  // display still degrades to the floor so install advice stays actionable.
+  const effectiveMinimum = `${effectiveParsed.major}.${effectiveParsed.minor}.${effectiveParsed.patch}`;
+
+  const base = {
+    found: false,
+    installedVersion: null,
+    configuredMinimum: configuredUnset ? null : String(configuredRaw),
+    configValid,
+    supportedFloor: CRUSH_SUPPORTED_FLOOR,
+    effectiveMinimum,
+    compatible: false,
+    reason: 'missing',
+  };
+  let r;
+  try {
+    r = sh('crush', ['--version'], { env: buildCrushProbeEnv() });
+  } catch {
+    r = null; // a throwing spawnSync seam is equivalent to a failed probe
+  }
   if (!r || r.error || r.status !== 0) {
-    return { found: false, version: null, satisfiesPin: false };
+    return base;
   }
   const out = String(r.stdout || '').trim();
   const parsed = parseInstalledVersion(out);
-  const version = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : out || null;
-  const minimum = effectiveAdmissionMinimum();
-  // Both sides must be canonical enough to compare, and the configured
-  // override cannot pull the admission minimum below the hard floor. An
-  // invalid installed version or an invalid minimum override is incompatible;
-  // never bypass the floor by treating an unparseable minimum as "latest".
-  const meetsMinimum = Boolean(parsed && minimum && semverGte(parsed, minimum));
+  base.found = true;
+  // Bare `x.y.z` when a stable version parses; the RAW output otherwise (for
+  // diagnostics — never strip a prerelease suffix and call it stable).
+  base.installedVersion = parsed
+    ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
+    : (out || null);
+  if (!parsed) base.reason = 'version_unknown';
+  else if (!configValid) base.reason = 'invalid_configured_minimum';
+  else if (!semverGte(parsed, floor)) base.reason = 'below_floor';
+  else if (
+    !configuredUnset && !semverGte(parsed, configuredParsed)
+  ) base.reason = 'below_configured_minimum';
+  else base.reason = 'compatible';
+  base.compatible = base.reason === 'compatible';
+  return base;
+}
+
+// Narrow typed code for a MALFORMED TRISS_CODER_CRUSH_VERSION — mirrors
+// OPENCODE_INVALID_MINIMUM_CODE. Below-minimum installs stay plain Errors
+// (matching the OpenCode one-shot path); only broken CONFIGURATION is typed.
+export const CRUSH_INVALID_MINIMUM_CODE = 'TRISS_CODER_CRUSH_MINIMUM_INVALID';
+
+// assertCrushVersionPolicy: throwing adapter over resolveCrushVersionPolicy.
+// Takes the RESOLVED policy (never re-probes) and throws a fail-closed error
+// for every incompatible state, so runCoderRun can gate BEFORE isolation,
+// credential proxy setup, or session reservation and make spawnCrush
+// unreachable for an incompatible binary. Returns the policy when compatible.
+export function assertCrushVersionPolicy(policy) {
+  if (policy.compatible) return policy;
+  const eff = policy.effectiveMinimum;
+  const installCmd = `npm install -g @phpcraftdream/crush@${eff}`;
+  if (policy.reason === 'invalid_configured_minimum') {
+    const error = new Error(
+      `Invalid Crush minimum version "${String(policy.configuredMinimum)}" ` +
+        '(is not a canonical stable x.y.z version); ' +
+        `set TRISS_CODER_CRUSH_VERSION to a canonical stable x.y.z version >= ${policy.supportedFloor}. ` +
+        'No engine was started.',
+    );
+    error.code = CRUSH_INVALID_MINIMUM_CODE;
+    throw error;
+  }
+  if (policy.reason === 'missing') {
+    throw new Error(`crush not found — run manually: ${installCmd}`);
+  }
+  if (policy.reason === 'version_unknown') {
+    throw new Error(
+      `crush version could not be determined (${JSON.stringify(policy.installedVersion)}) — ` +
+        `minimum supported version is ${eff}. Reinstall: ${installCmd}`,
+    );
+  }
+  throw new Error(
+    `crush ${policy.installedVersion} found, minimum supported version is ${eff} — upgrade: ${installCmd}`,
+  );
+}
+
+// detect(): spawnSync('crush', ['--version'], sanitized-env) — NEVER shell:true,
+// NEVER inheriting credentials (see buildCrushProbeEnv). crush ≥0.1.3 reports
+// a clean `crush version v0.1.3`; earlier builds reported a dirty dev string.
+// This is now a thin READ-ONLY projection over resolveCrushVersionPolicy (one
+// shared policy source): {found, version, minimumVersion, meetsMinimum,
+// satisfiesPin} where meetsMinimum/satisfiesPin == policy.compatible. NEVER
+// throws — detection stays total for status/init surfaces; RUNTIME enforcement
+// happens via assertCrushVersionPolicy in runCoderRun. `sh` remains injectable
+// for tests.
+export function detectCrush(sh = nodeSpawnSync) {
+  const p = resolveCrushVersionPolicy(sh);
   return {
-    found: true,
-    version,
-    minimumVersion: crushVersionPin(),
-    meetsMinimum,
-    satisfiesPin: meetsMinimum,
+    found: p.found,
+    version: p.installedVersion,
+    minimumVersion: p.effectiveMinimum,
+    meetsMinimum: p.compatible,
+    satisfiesPin: p.compatible,
   };
 }
 
@@ -423,15 +530,23 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
 export const crush = {
   id: 'crush',
   binaryName: 'crush',
-  // Hard supported floor drives installHint() AND the satisfiesPin
-  // compatibility alias in detect() (crush ≥0.1.3 reports a clean semver — see
-  // detectCrush). TRISS_CODER_CRUSH_VERSION may raise the effective minimum,
-  // never lower it.
+  // Hard supported floor drives installHint() AND the shared version-policy
+  // resolver (resolveCrushVersionPolicy). TRISS_CODER_CRUSH_VERSION may raise
+  // the effective minimum, never lower it; runtime admission is enforced by
+  // assertCrushVersionPolicy in runCoderRun — detection alone is advisory.
   get CRUSH_PIN() {
     return crushVersionPin();
   },
   detect: detectCrush,
   installHint: installHintCrush,
+  // THE shared version policy: non-throwing resolver + throwing assertion.
+  // Runtime callers (runCoderRun/runCoderInit in src/commands/coder.js) must
+  // resolve + assert through these instead of interpreting detect()'s
+  // satisfiesPin boolean themselves.
+  resolveVersionPolicy: resolveCrushVersionPolicy,
+  assertVersionPolicy: assertCrushVersionPolicy,
+  buildProbeEnv: buildCrushProbeEnv,
+  CRUSH_INVALID_MINIMUM_CODE,
   buildRunArgv: buildCrushRunArgv,
   buildSpawnEnv: buildCrushSpawnEnv,
   parseEnvelope: parseCrushEnvelope,

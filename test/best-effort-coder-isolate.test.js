@@ -1099,7 +1099,13 @@ test('successful OpenCode and Crush runs accept ESRCH from the real signal when 
         { engine, isolate: false },
         {
           spawn: spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+          // The runtime crush version-policy gate probes `crush --version`
+          // before any side effect; report a compatible build so this test
+          // exercises the signal/ESRCH flow it targets.
+          spawnSync: (cmd, argv) =>
+            (cmd === 'crush' && argv[0] === '--version'
+              ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+              : { status: 1, stdout: '', stderr: '', error: null }),
           stdoutWrite: (value) => { captured += value; },
           killProcess,
           pollMs: 0,
@@ -1258,7 +1264,12 @@ test('exit before the deadline disarms timeout and external signals while close 
         { engine, isolate: false, timeout: 0.04 },
         {
           spawn: spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+          // Compatible `crush --version` probe answer for the runtime policy
+          // gate (opencode leg keeps the failing fake it always had).
+          spawnSync: (cmd, argv) =>
+            (cmd === 'crush' && argv[0] === '--version'
+              ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+              : { status: 1, stdout: '', stderr: '', error: null }),
           stdoutWrite: (value) => { captured += value; },
           killProcess,
           pollMs: 0,
@@ -1530,7 +1541,13 @@ test('runCoderRun forwards AbortSignal to Crush and waits for its process group 
     let captured = '';
     const promise = runCoderRun('cancel crush', { engine: 'crush', isolate: false, timeout: 30 }, {
       spawn: () => child,
-      spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+      // The runtime crush version-policy gate probes `crush --version` before
+      // any side effect; report a compatible build so this test exercises the
+      // cancel/kill flow it targets.
+      spawnSync: (cmd, argv) =>
+        (cmd === 'crush' && argv[0] === '--version'
+          ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+          : { status: 1, stdout: '', stderr: '', error: null }),
       stdoutWrite: (value) => { captured += value; },
       abortSignal: controller.signal,
       killProcess,
@@ -1589,7 +1606,11 @@ test('runCoderRun cleans residual Crush descendants and never negates a degenera
 
       await runCoderRun('finish crush', { engine: 'crush', isolate: false, timeout: 30 }, {
         spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+        // Compatible `crush --version` probe answer for the runtime policy gate.
+        spawnSync: (cmd, argv) =>
+          (cmd === 'crush' && argv[0] === '--version'
+            ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+            : { status: 1, stdout: '', stderr: '', error: null }),
         stdoutWrite: noopStdout(),
         killProcess,
         processGroupPollMs: 1,

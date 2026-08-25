@@ -146,7 +146,13 @@ test('a successful proxied run hands the child the token, never the raw key', as
       {
         spawn: fakeSpawn,
         spawnSync: (cmd, args, opts) => {
-          // Real spawnSync for git, faked for engine probes.
+          // Real spawnSync for git, faked for engine probes. The runtime
+          // version-policy gate probes `crush --version` before any side
+          // effect; report a compatible build so the proxied run reaches the
+          // child-env assertion this test targets.
+          if (cmd === 'crush' && args[0] === '--version') {
+            return { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null };
+          }
           if (cmd === 'crush') return { status: 1, stdout: '', error: null };
           try {
             const stdout = execFileSync(cmd, args, { ...opts, cwd: opts?.cwd || scratch, encoding: 'buffer' });

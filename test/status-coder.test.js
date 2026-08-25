@@ -86,9 +86,13 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-status-nokey-')));
   const origCwd = process.cwd();
   const origHome = process.env.HOME;
-  const origKey = process.env.ZHIPU_API_KEY;
+  // The block gates on coderCredentialReady() — ANY of the five provider
+  // keys enables coder — so the test must clear them ALL, not just
+  // ZHIPU_API_KEY, to stay hermetic against a developer's exported keys.
+  const savedKeys = ['TRISS_WORKER_API_KEY', 'ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']
+    .map((name) => [name, process.env[name]]);
   process.env.HOME = dir;
-  delete process.env.ZHIPU_API_KEY;
+  for (const [name] of savedKeys) delete process.env[name];
   process.chdir(dir);
   try {
     const out = stripAnsi(await captureStdout(runStatus)());
@@ -100,8 +104,10 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
   } finally {
     process.chdir(origCwd);
     process.env.HOME = origHome;
-    if (origKey === undefined) delete process.env.ZHIPU_API_KEY;
-    else process.env.ZHIPU_API_KEY = origKey;
+    for (const [name, value] of savedKeys) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

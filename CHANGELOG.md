@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SECURITY FIX — the Crush runtime version gate is now authoritative, and
+  read-only Crush probes no longer inherit credentials.** The run path
+  previously treated a below-minimum `crush` as a warning and spawned anyway.
+  - `triss coder run --engine crush` now probes and asserts the shared
+    version policy BEFORE any side effect — an incompatible binary makes
+    engine spawn unreachable: no isolation worktree, no credential proxy, no
+    session reservation. Distinct failure reasons: missing binary,
+    unparsable installed version, installed below the immutable floor
+    (`0.1.6`), installed below a valid stricter
+    `TRISS_CODER_CRUSH_VERSION`, and malformed configured minimum (typed
+    `TRISS_CODER_CRUSH_MINIMUM_INVALID`). Raise-only semantics are preserved
+    (`0.1.4` config ⇒ effective `0.1.6`; `0.2.0` config ⇒ effective
+    `0.2.0`).
+  - `triss coder init --engine crush` no longer treats a found-but-
+    incompatible Crush as ready: it offers/installs the effective minimum via
+    the existing install-confirmation interaction (failing closed in
+    non-interactive shells) and skips the model-role write until compatible.
+  - Every read-only Crush probe (`crush --version`) now receives a minimal
+    sanitized environment — PATH plus deterministic locale/TZ only. Provider,
+    cloud, GitHub/AWS, and arbitrary parent credentials are never inherited by
+    a probe; the protected execution path is unchanged.
+- **Status accuracy — OpenCode minimum-policy drift fixed.** A new shared
+  non-throwing resolver (`resolveOpencodeVersionPolicy`) backs
+  `assertOpencodeMinimumVersion`, init, run, and `triss status`. A below-floor
+  or malformed `TRISS_CODER_OPENCODE_VERSION` renders as invalid configuration
+  with the effective floor (`1.18.7`) in status and can never show
+  `meetsMinimum=true`; the exact-audited one-shot credential gate
+  (`opencode 1.18.7`) is unchanged.
 - **SECURITY FIX — engine version gates can no longer be weakened by
   configuration.** `TRISS_CODER_OPENCODE_VERSION` is now strictly an
   installation/preference minimum; credential authorization is Triss-owned and

@@ -274,7 +274,7 @@ self-hosted endpoints).
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-beta-17793`  | Minimum accepted OpenCode 2 version; install from `@opencode-ai/cli@beta` (unsupported `next/dev/tui-v2` overrides fail closed) |
 | `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | **Deprecated no-op.** OpenCode/OpenCode2 default to `best_effort_raw`; `--protect-credentials` selects the protected proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. Crush always requires its credential proxy regardless. |
-| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Minimum accepted `@phpcraftdream/crush` version. Raise-only: values below the hard floor (`0.1.6`) clamp up to it and malformed values fail closed, so an unsupported release is never admitted |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Minimum accepted `@phpcraftdream/crush` version. Raise-only: values below the hard floor (`0.1.6`) clamp up to it and malformed values fail closed, so an unsupported release is never admitted. Enforced at run time: `coder run --engine crush` refuses to spawn (before any worktree/proxy/session side effect) when the installed release is incompatible; init offers the effective-minimum install instead of treating it as ready |
 | `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 
 ### Review limits

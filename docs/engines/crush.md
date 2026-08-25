@@ -11,6 +11,16 @@ Crush requires a POSIX host (macOS/Linux), `ZHIPU_API_KEY`, and an
 lower it: below-floor values clamp up to the floor and malformed values fail
 closed, so an unsupported release is never admitted.
 
+The version check is enforced, not advisory: `triss coder run --engine crush`
+probes the installed binary (through a minimal sanitized environment — PATH
+plus deterministic locale/TZ only; no provider/cloud/GitHub credentials are
+inherited by a probe) and refuses to start before any isolation worktree,
+credential proxy, or session is created when the installed release is missing,
+unparsable, or below the effective minimum. `triss coder init --engine crush`
+offers to install the effective minimum for a found-but-incompatible binary
+(and fails closed in non-interactive shells); it never runs the model-role
+write against an incompatible build.
+
 ```bash
 triss coder init --engine crush --provider glm
 triss coder run --engine crush "Describe the task"

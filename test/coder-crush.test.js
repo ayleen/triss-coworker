@@ -34,6 +34,7 @@ import {
   mergeCrushPermissionsRun,
   CRUSH_ALLOW_BASH_PATTERNS,
   CRUSH_ALLOW_TOOLS,
+  CRUSH_INVALID_MINIMUM_CODE,
 } from '../src/coder-engines/crush.js';
 import { resolveCoderEngine, DEFAULT_CODER_ENGINE, runCoderInit, resolveCrushRestrict } from '../src/commands/coder.js';
 
@@ -757,17 +758,62 @@ function withTmpCrushHome(fn) {
   };
 }
 
-// Fake spawnSync that reports crush PRESENT (--version ok) and records every
-// call. `modelsResponse` is the spawnSync result returned for `crush models ...`.
+// Fake spawnSync that reports crush PRESENT at a COMPATIBLE version
+// (--version ok, >= 0.1.6 floor) and records every call. `modelsResponse` is
+// the spawnSync result returned for `crush models ...`. Tests targeting the
+// version-policy gate itself use their own fakes; this one exists so the
+// models-pinning/seeding tests exercise the READY path.
 function crushPresentSh(modelsResponse) {
   const calls = [];
   const sh = (cmd, argv) => {
     calls.push({ cmd, argv });
     if (cmd === 'crush' && argv[0] === '--version') {
-      return { status: 0, stdout: 'crush version v0.0.0-test', stderr: '', error: null };
+      return { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null };
     }
     if (cmd === 'crush' && argv[0] === 'models') {
       return typeof modelsResponse === 'function' ? modelsResponse(argv) : modelsResponse;
+    }
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+  sh.calls = calls;
+  return sh;
+}
+
+// Like crushPresentSh but with an explicit --version stdout, so tests can pin
+// the detected version (compatible or not) independently of the models reply.
+function crushPresentShAt(versionStdout, modelsResponse = { status: 0, stdout: '', stderr: '', error: null }) {
+  const calls = [];
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: versionStdout, stderr: '', error: null };
+    }
+    if (cmd === 'crush' && argv[0] === 'models') return modelsResponse;
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+  sh.calls = calls;
+  return sh;
+}
+
+// A crush binary that UPGRADES after a successful `npm install -g`: reports
+// `from` before the install and `to` after. npm probes/installs succeed.
+function upgradableCrushSh({ from, to }) {
+  const calls = [];
+  let installed = false;
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: installed ? to : from, stderr: '', error: null };
+    }
+    if (cmd === 'npm' && argv[0] === '--version') {
+      return { status: 0, stdout: '10.9.9', stderr: '', error: null };
+    }
+    if (cmd === 'npm' && argv[0] === 'install') {
+      installed = true;
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    if (cmd === 'crush' && argv[0] === 'models') {
+      return { status: 0, stdout: '', stderr: '', error: null };
     }
     return { status: 1, stdout: '', stderr: '', error: null };
   };
@@ -826,6 +872,108 @@ test(
     assert.equal(modelsCall, undefined, 'crush models use must NOT be invoked when crush is absent');
     assert.match(captured(), /crush not found/);
     assert.match(captured(), /npm install -g @phpcraftdream\/crush/);
+  }),
+);
+
+// ─── version-policy gate at init ───────────────────────────────────────────────
+//
+// A found-but-incompatible crush is NEVER treated as ready. Init follows
+// ensureEngine's install/upgrade interaction (deps.confirmInstall seam) for
+// the EFFECTIVE minimum and fails closed with the shared typed policy error
+// for a malformed TRISS_CODER_CRUSH_VERSION.
+
+test(
+  'runCoderInit --engine crush: found-but-below-floor crush is rejected in non-interactive mode — no models write',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = crushPresentShAt('crush version v0.1.5\n');
+    await assert.rejects(
+      () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+      /crush 0\.1\.5 found, minimum supported version is 0\.1\.6/,
+    );
+    assert.doesNotMatch(captured(), /set default models/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: a malformed configured minimum fails with the TYPED policy error before any write',
+  withTmpCrushHome(async ({ captured }) => {
+    process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
+    try {
+      const sh = crushPresentShAt('crush version v0.1.6\n');
+      await assert.rejects(
+        () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+        (err) => {
+          assert.equal(err.code, CRUSH_INVALID_MINIMUM_CODE);
+          assert.match(err.message, /Invalid Crush minimum version "HEAD"/);
+          return true;
+        },
+      );
+      assert.doesNotMatch(captured(), /set default models/);
+    } finally {
+      delete process.env.TRISS_CODER_CRUSH_VERSION;
+    }
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: declining the effective-minimum install skips the models write but still seeds permissions.run',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = crushPresentShAt('crush version v0.1.5\n');
+    let confirmations = 0;
+    await runCoderInit({ global: true, engine: 'crush' }, {
+      spawnSync: sh,
+      confirmInstall: async () => {
+        confirmations += 1;
+        return false;
+      },
+    });
+
+    assert.equal(confirmations, 1, 'the effective-minimum install offer must be made once');
+    const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
+    assert.equal(modelsCall, undefined, 'incompatible crush must NOT get a models write');
+    assert.match(captured(), /skipped — install manually later: npm install -g @phpcraftdream\/crush@0\.1\.6/);
+    // permissions.run still seeds (forward-compat gesture, same as absent).
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(config.permissions.run.restrict, true);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: accepting the install upgrades to the effective minimum and then runs the models write',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = upgradableCrushSh({ from: 'crush version v0.1.5\n', to: 'crush version v0.1.6\n' });
+    await runCoderInit({ global: true, engine: 'crush' }, {
+      spawnSync: sh,
+      confirmInstall: async () => true,
+    });
+
+    assert.match(captured(), /✓ crush 0\.1\.6 installed/);
+    const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
+    assert.ok(modelsCall, 'models write must run once the binary meets the minimum');
+    assert.match(captured(), /set default models: glm5_2 \(large\) \/ glm5_turbo \(small\)/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: accepted install but npm unavailable fails with an actionable manual command',
+  withTmpCrushHome(async () => {
+    const calls = [];
+    const sh = (cmd, argv) => {
+      calls.push({ cmd, argv });
+      if (cmd === 'crush' && argv[0] === '--version') {
+        return { status: 0, stdout: 'crush version v0.1.5\n', stderr: '', error: null };
+      }
+      if (cmd === 'npm') return { status: 1, stdout: '', stderr: '', error: null };
+      return { status: 1, stdout: '', stderr: '', error: null };
+    };
+    await assert.rejects(
+      () => runCoderInit({ global: true, engine: 'crush' }, {
+        spawnSync: sh,
+        confirmInstall: async () => true,
+      }),
+      /npm not found — install Node\.js\/npm, then run manually: npm install -g @phpcraftdream\/crush@0\.1\.6/,
+    );
   }),
 );
 

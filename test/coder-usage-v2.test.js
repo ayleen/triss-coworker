@@ -160,7 +160,13 @@ function goneProcessGroup() {
 function crushRunDeps(envelopeLine) {
   return {
     spawn: fakeCrushSpawn(envelopeLine),
-    spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+    // The runtime crush version-policy gate probes `crush --version` before
+    // any side effect; report a compatible build so these tests exercise the
+    // usage/cost accounting they target.
+    spawnSync: (cmd, argv) =>
+      (cmd === 'crush' && argv[0] === '--version'
+        ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+        : { status: 1, stdout: '', stderr: '', error: null }),
     stdoutWrite: () => true,
     killProcess: goneProcessGroup(),
     processGroupPollMs: 1,

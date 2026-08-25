@@ -1238,14 +1238,64 @@ export function opencodeVersionIsAudited(installedVersion) {
   return Boolean(installed && compareStableVersions(installed, OPENCODE_AUDITED_VERSION) === 0);
 }
 
-export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin()) {
-  const parsed = parseStableVersion(minimumVersion);
+// resolveOpencodeVersionPolicy: THE shared OpenCode minimum-version policy
+// resolver. Non-throwing; classifies a configured minimum + an installed
+// version into explicit fields so assert/init/run/status cannot diverge:
+//   - configuredMinimum: the raw configured value (TRISS_CODER_OPENCODE_VERSION)
+//   - supportedFloor:    the immutable OPENCODE_SUPPORTED_FLOOR
+//   - configValid:       false for malformed values AND values below the floor
+//   - effectiveMinimum:  the configured value when valid, else the floor TEXT
+//     (a below-floor/malformed config never lowers the bar — status shows the
+//     effective floor 1.18.7 while installedCompatible stays false)
+//   - installedCompatible: parsed installed >= effective minimum. Deliberately
+//     false whenever configValid is false ("never meetsMinimum=true" on broken
+//     policy) and also false when nothing parseable was installed.
+//   - reason: 'compatible' | 'version_unknown' | 'below_minimum' |
+//             'invalid_configured_minimum' | 'below_supported_floor'
+// This is the INSTALLATION/preference surface only — credential authorization
+// remains the exact audited-build match in opencodeVersionIsAudited.
+export function resolveOpencodeVersionPolicy(installedVersion, minimumVersion = opencodeVersionPin()) {
   const floor = parseStableVersion(OPENCODE_SUPPORTED_FLOOR);
+  const configuredParsed = parseStableVersion(minimumVersion);
+  const configValid = Boolean(configuredParsed && floor && compareStableVersions(configuredParsed, floor) >= 0);
+  const effectiveMinimum = configValid
+    ? `${configuredParsed.major}.${configuredParsed.minor}.${configuredParsed.patch}`
+    : OPENCODE_SUPPORTED_FLOOR;
+  const installedParsed = parseStableVersion(
+    typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion,
+  );
+  let installedCompatible = false;
+  let reason;
+  if (!configValid) {
+    reason = configuredParsed ? 'below_supported_floor' : 'invalid_configured_minimum';
+  } else if (!installedParsed) {
+    // detectOpencodeVersion returns null (not installed) or '' (installed but
+    // printed nothing usable); both mean there is nothing compatible to claim.
+    reason = 'version_unknown';
+  } else if (compareStableVersions(installedParsed, configuredParsed) >= 0) {
+    reason = 'compatible';
+    installedCompatible = true;
+  } else {
+    reason = 'below_minimum';
+  }
+  return {
+    configuredMinimum: minimumVersion,
+    supportedFloor: OPENCODE_SUPPORTED_FLOOR,
+    configValid,
+    effectiveMinimum,
+    installedCompatible,
+    reason,
+  };
+}
+
+export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin()) {
+  // Throwing adapter over the ONE resolver so run/init/status share policy.
+  const policy = resolveOpencodeVersionPolicy(null, minimumVersion);
   // One stable typed code for both policy violations: an unparseable value,
   // and a canonical value BELOW the immutable supported floor. Configuring a
   // lower minimum must fail closed rather than weaken Triss's floor.
-  if (!parsed || !floor || compareStableVersions(parsed, floor) < 0) {
-    const reason = parsed
+  if (!policy.configValid) {
+    const reason = policy.reason === 'below_supported_floor'
       ? `is below the supported floor ${OPENCODE_SUPPORTED_FLOOR}`
       : 'is not a canonical stable x.y.z version';
     const error = new Error(
@@ -1256,7 +1306,7 @@ export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin
     error.code = OPENCODE_INVALID_MINIMUM_CODE;
     throw error;
   }
-  return parsed;
+  return parseStableVersion(minimumVersion);
 }
 
 function coderModel() {
@@ -1541,43 +1591,100 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // default model atoms (glm5_2 / glm5_turbo) via `crush models use` so
     // --role smart/fast resolve to GLM deterministically; (2) seed the
     // permissions.run policy (restrict + read-only allow_bash) into crush.json
-    // as a FORWARD-COMPAT gesture — crush 0.1.3 currently IGNORES this block
+    // as a FORWARD-COMPAT gesture — verified crush releases IGNORE this block
     // (docs/engines/crush.md), so it does NOT make crush restricted by
     // itself; the working allowlist is enforced via CLI flags at run time when
     // --restrict is on (see buildCrushRunArgv). The adapter bridges
     // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
     // crush.json here.
+    //
+    // Version policy comes from THE shared resolver/assertion (same source as
+    // runCoderRun): a found-but-incompatible crush is NEVER treated as ready —
+    // no green check, no `crush models use`. A malformed configured minimum
+    // fails closed with the typed policy error. A found-but-below-minimum
+    // binary follows ensureEngine's install/upgrade interaction: offer/install
+    // the EFFECTIVE minimum when normal init is allowed (interactive), fail
+    // with the policy error when it cannot proceed.
     process.stderr.write('\n' + pc.bold('── coder (crush engine) ──') + '\n');
     const sh = deps.spawnSync || nodeSpawnSync;
-    const det = crushEngine.detect(sh);
-    if (det.found && det.version) {
-      // A below-minimum or malformed version is NON-FATAL here: init keeps
-      // its historical advisory behavior, while the detector remains the
-      // authoritative compatibility result for status and managed runs.
-      if (det.satisfiesPin) {
-        process.stderr.write(pc.green(`  ✓ crush ${det.version} (meets minimum ${crushEngine.CRUSH_PIN})\n`));
-      } else {
-        process.stderr.write(
-          pc.yellow(
-            `  ⚠ crush ${det.version} found, minimum supported version is ${crushEngine.CRUSH_PIN} ` +
-              '(not auto-upgrading — permissions.run still seeds into crush.json)\n',
-          ),
-        );
-      }
-    } else {
+    const policy = crushEngine.resolveVersionPolicy(sh);
+    let crushReady = false;
+    if (!policy.found) {
       process.stderr.write(
         pc.yellow(`  ⚠ crush not found — install: ${crushEngine.installHint()}\n`),
       );
+    } else if (policy.compatible) {
+      process.stderr.write(
+        pc.green(`  ✓ crush ${policy.installedVersion} (meets minimum ${policy.effectiveMinimum})\n`),
+      );
+      crushReady = true;
+    } else {
+      const eff = policy.effectiveMinimum;
+      const upgradeCmd = `npm install -g @phpcraftdream/crush@${eff}`;
+      if (policy.reason === 'version_unknown') {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ crush version could not be determined (${JSON.stringify(policy.installedVersion)}), ` +
+              `minimum supported version is ${eff}\n`,
+          ),
+        );
+      } else {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ crush ${policy.installedVersion} found, minimum supported version is ${eff}\n`,
+          ),
+        );
+      }
+      // A malformed configured minimum can never be fixed by installing:
+      // fail closed first with the SAME typed error a run would raise.
+      if (policy.reason === 'invalid_configured_minimum') {
+        throw crushEngine.assertVersionPolicy(policy);
+      }
+      // Offer/install the effective minimum following ensureEngine's existing
+      // interaction pattern. Non-interactive shells cannot confirm an install:
+      // fail closed with the shared policy error. An injected
+      // deps.confirmInstall (the established test seam) bypasses only the TTY
+      // probe, never the policy itself.
+      let proceed;
+      if (deps.confirmInstall) {
+        proceed = await deps.confirmInstall();
+      } else if (!process.stdin.isTTY) {
+        throw crushEngine.assertVersionPolicy(policy);
+      } else {
+        proceed = await yesNo(`  Install @phpcraftdream/crush@${eff} globally via npm?`, true);
+      }
+      if (!proceed) {
+        process.stderr.write(pc.dim(`  · skipped — install manually later: ${upgradeCmd}\n`));
+      } else {
+        const npmCheck = sh('npm', ['--version']);
+        if (!npmCheck || npmCheck.error || npmCheck.status !== 0) {
+          throw new Error(`npm not found — install Node.js/npm, then run manually: ${upgradeCmd}`);
+        }
+        const install = sh('npm', ['install', '-g', `@phpcraftdream/crush@${eff}`], { stdio: 'inherit' });
+        if (!install || install.error || install.status !== 0) {
+          throw new Error(`Failed to install @phpcraftdream/crush@${eff} — run manually: ${upgradeCmd}`);
+        }
+        const after = crushEngine.resolveVersionPolicy(sh);
+        if (after.compatible) {
+          process.stderr.write(pc.green(`  ✓ crush ${after.installedVersion} installed\n`));
+          crushReady = true;
+        } else {
+          process.stderr.write(
+            pc.yellow('  ⚠ install finished but crush still does not meet the minimum\n'),
+          );
+        }
+      }
     }
     const hint = crushEngine.crushDefaultModelsHint();
     process.stderr.write(
       pc.dim(`  · default models: ${hint.large} (large) / ${hint.small} (small)\n`),
     );
-    // Only attempt the models write when crush is actually present; otherwise
-    // the install hint above is the actionable line and `models use` would just
-    // fail with ENOENT. Non-fatal: a non-zero exit returns {ok:false} and is
-    // surfaced yellow, never thrown (init still exits 0).
-    if (det.found) {
+    // Only run the models write when the installed binary is actually READY
+    // (present AND meets the effective minimum); otherwise the advisory above
+    // is the actionable line and treating an incompatible build as ready would
+    // be exactly the drift this gate removes. Non-fatal: a non-zero exit
+    // returns {ok:false} and is surfaced yellow, never thrown (init exits 0).
+    if (crushReady) {
       const res = crushEngine.configureCrushModels({ scope, sh });
       process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
       // Seed permissions.run AFTER `crush models use` has written the models
@@ -1585,9 +1692,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
       // (warned) when crush.json already has a user-set permissions.run.
       seedCrushPermissions(scope);
     } else {
-      // crush binary absent: still seed permissions.run into crush.json if we
-      // can, so the policy is in place the moment the user installs crush.
-      // (crush.json may not exist yet — seedCrushPermissions creates it.)
+      // crush absent or still incompatible: still seed permissions.run into
+      // crush.json if we can, so the policy is in place the moment a
+      // compatible crush lands. (crush.json may not exist yet —
+      // seedCrushPermissions creates it.)
       seedCrushPermissions(scope);
     }
   }
@@ -3548,10 +3656,11 @@ export function describeCoderStatus(deps = {}) {
   } catch {
     worktreeCount = 0;
   }
-  // Crush detection is presence-only (crush
-  // --version reports a dirty dev string; see docs/engines/crush.md); crush.json
-  // presence is a best-effort file check, never parsed deeply. Never throws.
-  const crushDetect = crushEngine.detect(sh);
+  // Crush detection goes through the ONE shared policy resolver (same source
+  // runCoderRun asserts against) so status can never claim readiness that a
+  // run would reject. Read-only; never throws.
+  const crushPolicy = crushEngine.resolveVersionPolicy(sh);
+  const ocPolicy = resolveOpencodeVersionPolicy(engineVersion, pin);
   const crushConfigs = ['global', 'local'].map((scope) => {
     const path = crushConfigPath(scope);
     return { scope, path, exists: existsSync(path) };
@@ -3575,16 +3684,31 @@ export function describeCoderStatus(deps = {}) {
     pin,
     minimumVersion: pin,
     engineVersion,
-    meetsMinimum: opencodeVersionMeetsMinimum(engineVersion, pin),
+    // Real policy state (ONE resolver, shared with assert/init/run): a
+    // below-floor or malformed TRISS_CODER_OPENCODE_VERSION is INVALID
+    // configuration — status shows the effective floor 1.18.7 and NEVER
+    // meetsMinimum=true for it.
+    meetsMinimum: ocPolicy.installedCompatible,
+    configValid: ocPolicy.configValid,
+    configuredMinimum: ocPolicy.configuredMinimum,
+    supportedFloor: ocPolicy.supportedFloor,
+    effectiveMinimum: ocPolicy.effectiveMinimum,
+    reason: ocPolicy.reason,
     configs,
     worktreeCount,
     crush: {
-      found: crushDetect.found,
-      version: crushDetect.version,
-      satisfiesPin: crushDetect.satisfiesPin,
-      meetsMinimum: crushDetect.meetsMinimum ?? crushDetect.satisfiesPin,
-      minimumVersion: crushDetect.minimumVersion ?? crushEngine.CRUSH_PIN,
-      pin: crushEngine.CRUSH_PIN,
+      found: crushPolicy.found,
+      version: crushPolicy.installedVersion,
+      // Compatibility fields stay coherent with the shared policy verdict.
+      satisfiesPin: crushPolicy.compatible,
+      meetsMinimum: crushPolicy.compatible,
+      minimumVersion: crushPolicy.effectiveMinimum,
+      pin: crushPolicy.effectiveMinimum,
+      supportedFloor: crushPolicy.supportedFloor,
+      configuredMinimum: crushPolicy.configuredMinimum,
+      configValid: crushPolicy.configValid,
+      effectiveMinimum: crushPolicy.effectiveMinimum,
+      reason: crushPolicy.reason,
       configs: crushConfigs,
     },
     opencode2: {
@@ -5190,6 +5314,10 @@ async function runCrushFlow({
   sessionV2 = null,
   // Already resolved by runCoderRun — crush is always protected_proxy.
   credentialMode,
+  // Resolved AND asserted by runCoderRun BEFORE isolation/proxy/session side
+  // effects. REQUIRED for a spawn to be reachable; the fallback re-resolve
+  // only covers direct internal callers (tests).
+  crushPolicy = null,
 }) {
   assertCoderCredentialMode(credentialMode);
   let crushSpawnStartMs;
@@ -5225,23 +5353,13 @@ async function runCrushFlow({
       : deps.proxy || null,
   );
 
-  // Version detect: crush 0.1.3+ reports a clean semver, so detect() parses
-  // it and returns the installed >= minimum result. A mismatch remains an
-  // advisory here for compatibility with the existing Crush run path.
-  const det = crushEngine.detect(sh);
-  const engineVersion = det.version || crushEngine.CRUSH_PIN;
-  if (det.found && det.version) {
-    if (det.satisfiesPin) {
-      process.stderr.write(pc.dim(`  · crush ${det.version} (meets minimum ${crushEngine.CRUSH_PIN})\n`));
-    } else {
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ crush ${det.version} found, minimum supported version is ${crushEngine.CRUSH_PIN} ` +
-            '(not auto-upgrading)\n',
-        ),
-      );
-    }
-  }
+  // Version policy was ASSERTED upstream (runCoderRun) before any side effect:
+  // only a compatible binary reaches this point, so this is a read-only echo of
+  // the shared resolver for the envelope's engine_version — never an
+  // independent admission decision and never a warning-and-continue path. The
+  // "(meets minimum …)" line was already printed by the runCoderRun gate.
+  const policy = crushPolicy || crushEngine.resolveVersionPolicy(sh);
+  const engineVersion = policy.installedVersion || crushEngine.CRUSH_PIN;
 
   process.stderr.write(
     pc.dim(
@@ -6393,6 +6511,26 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
+  // Crush runtime version policy is AUTHORITATIVE: probe + assert BEFORE
+  // isolation/worktree creation, credential proxy setup, session reservation,
+  // or ANY other side effect — an incompatible binary must make spawnCrush
+  // unreachable. One shared resolver/assertion (src/coder-engines/crush.js);
+  // runCrushFlow no longer interprets satisfiesPin itself.
+  let crushPolicy = null;
+  if (engine === 'crush') {
+    try {
+      crushPolicy = crushEngine.assertVersionPolicy(crushEngine.resolveVersionPolicy(sh));
+    } catch (err) {
+      process.stderr.write(pc.yellow(`  ⚠ ${err.message}\n`));
+      throw err;
+    }
+    if (crushPolicy.installedVersion) {
+      process.stderr.write(
+        pc.dim(`  · crush ${crushPolicy.installedVersion} (meets minimum ${crushPolicy.effectiveMinimum})\n`),
+      );
+    }
+  }
+
   const slug = resolveSlug(opts, isolate);
 
   let isolation = null;
@@ -6755,6 +6893,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialProxy,
         sessionV2,
         credentialMode,
+        // Resolved + asserted in runCoderRun BEFORE any side effect; runCrushFlow
+        // only echoes it. An incompatible version never reaches this flow.
+        crushPolicy,
       });
     } catch (err) {
       if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
