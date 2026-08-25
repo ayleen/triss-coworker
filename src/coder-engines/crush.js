@@ -11,13 +11,16 @@
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
-// Minimum supported npm package version. The semver-parse fix landed in 0.1.3 (crush
-// ≥0.1.3 reports a clean `crush version vX.Y.Z`), so detect() parses the semver
-// and compares against this pin (installed >= pin). The pin tracks the latest
-// version verified live against the triss adapter (envelope shape, ZHIPU→ZAI
-// env bridge, --restrict-run CLI-flag enforcement, worktree isolation — all
-// re-verified on 0.1.6, 2026-07-15). The pin also drives installHint().
-const CRUSH_MIN_VERSION_DEFAULT = '0.1.6';
+// Hard supported floor for the npm package. The semver-parse fix landed in
+// 0.1.3 (crush ≥0.1.3 reports a clean `crush version vX.Y.Z`), so detect()
+// parses the semver and compares it against the effective minimum (installed
+// >= effective minimum, with the floor clamped underneath — see
+// effectiveAdmissionMinimum). 0.1.6 is the oldest release verified live
+// against the triss adapter (envelope shape, ZHIPU→ZAI env bridge,
+// --restrict-run CLI-flag enforcement, worktree isolation — all re-verified on
+// 0.1.6, 2026-07-15). TRISS_CODER_CRUSH_VERSION may RAISE the minimum but can
+// never lower it below this value; the floor also drives installHint().
+const CRUSH_SUPPORTED_FLOOR = '0.1.6';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
 // and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>
@@ -29,8 +32,16 @@ const CRUSH_MIN_VERSION_DEFAULT = '0.1.6';
 const CRUSH_LARGE_ATOM = 'glm5_2';
 const CRUSH_SMALL_ATOM = 'glm5_turbo';
 
+// The effective minimum version TEXT: the configured override when it is a
+// legal (canonical, >= floor) value, otherwise the hard floor itself. Used for
+// display and install hints. A configured value BELOW the floor clamps UP to
+// the floor — an installation preference must never resurrect unsupported
+// releases — and a malformed override degrades to the floor here so install
+// advice stays actionable. Detection independently fails closed on the same
+// malformed input (see effectiveAdmissionMinimum).
 export function crushVersionPin() {
-  return process.env.TRISS_CODER_CRUSH_VERSION || CRUSH_MIN_VERSION_DEFAULT;
+  const minimum = effectiveAdmissionMinimum();
+  return minimum ? `${minimum.major}.${minimum.minor}.${minimum.patch}` : CRUSH_SUPPORTED_FLOOR;
 }
 
 const CANONICAL_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -70,17 +81,34 @@ function semverGte(a, b) {
   return a.patch >= b.patch;
 }
 
+// The admission minimum detect() enforces. Unset -> the hard floor. A
+// configured value that parses but sits BELOW the floor clamps UP to the
+// floor: TRISS_CODER_CRUSH_VERSION=0.1.4 must not make 0.1.4 supported. A
+// MALFORMED configured value returns null so NOTHING is admitted — fail
+// closed, never reinterpreting garbage as "latest" or silently as the floor.
+// Only an exact '' env value counts as unset (matching the historical `||`
+// fallback); whitespace-only values stay malformed on purpose.
+function effectiveAdmissionMinimum() {
+  const floor = parseMinimumVersion(CRUSH_SUPPORTED_FLOOR);
+  const configured = process.env.TRISS_CODER_CRUSH_VERSION;
+  if (configured == null || configured === '') return floor;
+  const parsed = parseMinimumVersion(configured);
+  if (!parsed) return null;
+  return semverGte(parsed, floor) ? parsed : floor;
+}
+
 // detect(): spawnSync('crush', ['--version']) — NEVER shell:true. crush 0.1.3+
 // reports a clean `crush version v0.1.3`; earlier builds reported a dirty dev
 // string like `v0.0.0-20260704...+dirty`. We accept only a canonical stable
 // version from that output and return {found, version, satisfiesPin}:
 // `version` is the bare `0.1.3` (or raw output when no stable version parses,
-// for diagnostics); `satisfiesPin` is parsed >= minimum. NEVER throws — a
-// prerelease, garbage, or a NEWER version remains a usable detection result
-// (newer is still found:true, satisfiesPin:true). Version
-// mismatch is NON-FATAL: callers warn at most, never abort (the installHint
-// command still carries the pin for `npm install`). `sh` defaults to real
-// spawnSync and is injectable for tests.
+// for diagnostics); `satisfiesPin` is parsed >= the effective admission
+// minimum (configured override, floored at CRUSH_SUPPORTED_FLOOR — see
+// effectiveAdmissionMinimum). NEVER throws — a prerelease, garbage, or a
+// NEWER version remains a usable detection result (newer is still found:true,
+// satisfiesPin:true). Version mismatch is NON-FATAL: callers warn at most,
+// never abort (the installHint command still carries the pin for `npm
+// install`). `sh` defaults to real spawnSync and is injectable for tests.
 export function detectCrush(sh = nodeSpawnSync) {
   const r = sh('crush', ['--version']);
   if (!r || r.error || r.status !== 0) {
@@ -89,10 +117,11 @@ export function detectCrush(sh = nodeSpawnSync) {
   const out = String(r.stdout || '').trim();
   const parsed = parseInstalledVersion(out);
   const version = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : out || null;
-  const minimum = parseMinimumVersion(crushVersionPin());
-  // Both sides must be canonical enough to compare. An invalid installed
-  // version or invalid minimum override is incompatible; never bypass the
-  // floor by treating an unparseable minimum as "latest".
+  const minimum = effectiveAdmissionMinimum();
+  // Both sides must be canonical enough to compare, and the configured
+  // override cannot pull the admission minimum below the hard floor. An
+  // invalid installed version or an invalid minimum override is incompatible;
+  // never bypass the floor by treating an unparseable minimum as "latest".
   const meetsMinimum = Boolean(parsed && minimum && semverGte(parsed, minimum));
   return {
     found: true,
@@ -394,8 +423,10 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
 export const crush = {
   id: 'crush',
   binaryName: 'crush',
-  // Minimum drives installHint() AND the satisfiesPin compatibility alias in detect()
-  // (crush ≥0.1.3 reports a clean semver — see detectCrush).
+  // Hard supported floor drives installHint() AND the satisfiesPin
+  // compatibility alias in detect() (crush ≥0.1.3 reports a clean semver — see
+  // detectCrush). TRISS_CODER_CRUSH_VERSION may raise the effective minimum,
+  // never lower it.
   get CRUSH_PIN() {
     return crushVersionPin();
   },

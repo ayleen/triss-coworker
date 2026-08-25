@@ -191,14 +191,31 @@ import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashe
 // source set.
 import { enumerateOpenCodeSources, parseOpenCodeDocument } from '../opencode-config.js';
 
-// Minimum supported opencode-ai version, overridable for testing/upgrades.
-// 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
-// changes; 1.18.4 specifically improved Kimi model handling. Newer stable
-// releases are accepted after the semantic minimum check. OPENCODE_PIN is a
-// compatibility export retained for callers that have not renamed the field.
+// Installation/preference minimum for `opencode-ai`, overridable via
+// TRISS_CODER_OPENCODE_VERSION (see opencodeVersionPin()). 1.18.7
+// (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI changes;
+// 1.18.4 specifically improved Kimi model handling. Drives install
+// suggestions and the installation presence check ONLY — never credential
+// authorization. OPENCODE_PIN is a compatibility export retained for callers
+// that have not renamed the field.
 export const OPENCODE_MIN_VERSION_DEFAULT = '1.18.7';
 export const OPENCODE_PIN = OPENCODE_MIN_VERSION_DEFAULT;
 export const OPENCODE_INVALID_MINIMUM_CODE = 'TRISS_CODER_OPENCODE_MINIMUM_INVALID';
+// Triss-owned IMMUTABLE credential-security policy. Neither value is
+// configurable, so a user-supplied minimum can never weaken them:
+//   - OPENCODE_SUPPORTED_FLOOR: the oldest opencode-ai release Triss
+//     supports at all. A configured TRISS_CODER_OPENCODE_VERSION below this
+//     floor is invalid policy and fails with OPENCODE_INVALID_MINIMUM_CODE
+//     instead of lowering the bar (assertOpencodeMinimumVersion).
+//   - OPENCODE_AUDITED_VERSION: the ONE exact build whose one-shot provider
+//     credential path Triss verified end-to-end (config audit → --pure
+//     protected overlay → sanitized spawn env; see
+//     docs/opencode-provider-routing-recovery-plan.md). Semver ordering is
+//     NOT compatibility evidence, so unaudited newer releases (1.19.0,
+//     2.0.0, ...) are rejected before engine spawn until re-audited,
+//     regardless of the configured installation minimum.
+export const OPENCODE_SUPPORTED_FLOOR = '1.18.7';
+export const OPENCODE_AUDITED_VERSION = '1.18.7';
 // The default assumes a `zai-coding-plan` subscription key, not a pay-as-you-go
 // `zai` key:
 // `zai/glm-*` fails with "Insufficient balance or no resource package" on
@@ -1190,22 +1207,51 @@ const CODER_BRANCH_PREFIX = 'coder/';
 // compliant with this pattern by construction.
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+// User-configured INSTALLATION minimum (TRISS_CODER_OPENCODE_VERSION). This
+// is an installation/preference surface only: it selects what `triss coder
+// init` suggests installing and what ensureEngine treats as installed-well-
+// enough. It never authorizes forwarding provider credentials — that is the
+// exact audited-build match in opencodeVersionIsAudited.
 function opencodeVersionPin() {
   return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_MIN_VERSION_DEFAULT;
 }
 
+// Pure range comparator over a minimum (default: the configured installation
+// pin). Answers "is this installed version usable as an install target?" —
+// nothing else. It stays intentionally a `>=` check because installation
+// targets are a preference; credential authorization deliberately does NOT
+// use this function (`>=` would admit arbitrary unaudited future releases).
 export function opencodeVersionMeetsMinimum(installedVersion, minimumVersion = opencodeVersionPin()) {
   const installed = parseStableVersion(typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion);
   const minimum = parseStableVersion(minimumVersion);
   return Boolean(installed && minimum && compareStableVersions(installed, minimum) >= 0);
 }
 
+// Credential authorization for the one-shot provider path: an EXACT match
+// against the immutable audited build, never a range. Only the audited binary
+// may receive a provider credential; unaudited builds fail closed before the
+// engine spawns. Input mirrors detectOpencodeVersion output (already-trimmed
+// stdout); whitespace/garbage parses to null (parseStableVersion is strict)
+// and rejects.
+export function opencodeVersionIsAudited(installedVersion) {
+  const installed = parseStableVersion(typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion);
+  return Boolean(installed && compareStableVersions(installed, OPENCODE_AUDITED_VERSION) === 0);
+}
+
 export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin()) {
   const parsed = parseStableVersion(minimumVersion);
-  if (!parsed) {
+  const floor = parseStableVersion(OPENCODE_SUPPORTED_FLOOR);
+  // One stable typed code for both policy violations: an unparseable value,
+  // and a canonical value BELOW the immutable supported floor. Configuring a
+  // lower minimum must fail closed rather than weaken Triss's floor.
+  if (!parsed || !floor || compareStableVersions(parsed, floor) < 0) {
+    const reason = parsed
+      ? `is below the supported floor ${OPENCODE_SUPPORTED_FLOOR}`
+      : 'is not a canonical stable x.y.z version';
     const error = new Error(
-      `Invalid OpenCode minimum version "${String(minimumVersion)}"; ` +
-        'set TRISS_CODER_OPENCODE_VERSION to a canonical stable x.y.z version. No installation was attempted.',
+      `Invalid OpenCode minimum version "${String(minimumVersion)}" (${reason}); ` +
+        `set TRISS_CODER_OPENCODE_VERSION to a canonical stable x.y.z version >= ${OPENCODE_SUPPORTED_FLOOR}. ` +
+        'No installation was attempted.',
     );
     error.code = OPENCODE_INVALID_MINIMUM_CODE;
     throw error;
@@ -6327,16 +6373,24 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
   const detectedOpencodeVersion = engine === 'opencode' ? detectOpencodeVersion(sh) : null;
   if (engine === 'opencode' && oneShotProvider) {
+    // Validate the CONFIGURED installation minimum first: malformed values AND
+    // values below the immutable supported floor fail closed with the typed
+    // configuration error instead of weakening policy.
     assertOpencodeMinimumVersion(opencodeVersionPin());
-  }
-  if (engine === 'opencode' && oneShotProvider && !opencodeVersionMeetsMinimum(detectedOpencodeVersion)) {
-    const found = detectedOpencodeVersion === null
-      ? 'not installed'
-      : detectedOpencodeVersion || 'version unknown';
-    throw new Error(
-      `One-shot provider credential auditing requires opencode >= ${opencodeVersionPin()}; ` +
-        `found ${found}. Run \`npm install -g opencode-ai@${opencodeVersionPin()}\` and retry.`,
-    );
+    // Authorization is Triss-owned and EXACT: forwarding a provider credential
+    // to the engine requires the audited build itself — not merely "some
+    // version >= a minimum". Unaudited releases (e.g. 1.19.0, 2.0.0) are
+    // rejected BEFORE isolation and spawn, whatever the user configured.
+    if (!opencodeVersionIsAudited(detectedOpencodeVersion)) {
+      const found = detectedOpencodeVersion === null
+        ? 'not installed'
+        : detectedOpencodeVersion || 'version unknown';
+      throw new Error(
+        `One-shot provider credential auditing requires exactly opencode ${OPENCODE_AUDITED_VERSION} ` +
+          `(the audited build; found ${found}, which is not audited). ` +
+          `Run \`npm install -g opencode-ai@${OPENCODE_AUDITED_VERSION}\` and retry.`,
+      );
+    }
   }
 
   const slug = resolveSlug(opts, isolate);

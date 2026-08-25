@@ -26,6 +26,7 @@ import {
   buildCrushRunArgv,
   buildCrushSpawnEnv,
   detectCrush,
+  installHintCrush,
   parseCrushEnvelope,
   mapCrushExitReason,
   configureCrushModels,
@@ -295,6 +296,85 @@ test('detectCrush: a malformed minimum still reports found:true + raw installed 
     assert.equal(det.found, true);
     assert.equal(det.version, '0.1.3');
     assert.equal(det.satisfiesPin, false);
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+// ─── detectCrush: the hard supported floor cannot be lowered ──────────────────
+
+test('detectCrush: a configured minimum below the floor cannot admit an unsupported release', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    for (const [configured, installed] of [
+      ['0.1.4', '0.1.4'],
+      ['0.1.5', '0.1.5'],
+      ['0.0.9', '0.1.5'],
+    ]) {
+      process.env.TRISS_CODER_CRUSH_VERSION = configured;
+      const det = detectCrush(versionSh(`crush version v${installed}`));
+      assert.equal(det.found, true, configured);
+      assert.equal(det.meetsMinimum, false, `${configured} must not admit ${installed}`);
+      assert.equal(det.satisfiesPin, false);
+      // The enforced minimum surfaces as the floored value, not the override.
+      assert.equal(det.minimumVersion, '0.1.6');
+    }
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a below-floor configured minimum clamps UP to the floor for admission', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.1.4';
+    const det = detectCrush(versionSh('crush version v0.1.6'));
+    assert.equal(det.found, true);
+    // The floor itself stays supported even when someone asks for a lower pin.
+    assert.equal(det.meetsMinimum, true);
+    assert.equal(det.satisfiesPin, true);
+    assert.equal(det.minimumVersion, '0.1.6');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a higher configured minimum is preserved (raise-only override)', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.2.0';
+    const older = detectCrush(versionSh('crush version v0.1.6'));
+    assert.equal(older.meetsMinimum, false);
+    assert.equal(older.satisfiesPin, false);
+    assert.equal(older.minimumVersion, '0.2.0');
+
+    const newer = detectCrush(versionSh('crush version v0.2.0'));
+    assert.equal(newer.meetsMinimum, true);
+    assert.equal(newer.satisfiesPin, true);
+    assert.equal(newer.minimumVersion, '0.2.0');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('installHintCrush: below-floor and malformed overrides cannot move the install target off the floor', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    assert.equal(installHintCrush(), 'npm install -g @phpcraftdream/crush@0.1.6');
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.2.0';
+    assert.equal(installHintCrush(), 'npm install -g @phpcraftdream/crush@0.2.0');
+    for (const bad of ['0.1.4', 'garbage', ' 0.1.6 ']) {
+      process.env.TRISS_CODER_CRUSH_VERSION = bad;
+      assert.equal(
+        installHintCrush(),
+        'npm install -g @phpcraftdream/crush@0.1.6',
+        `${bad} must not become an install target`,
+      );
+    }
   } finally {
     if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
     else process.env.TRISS_CODER_CRUSH_VERSION = saved;

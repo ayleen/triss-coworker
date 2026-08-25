@@ -270,11 +270,11 @@ self-hosted endpoints).
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
 | `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
 | `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
-| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Minimum accepted `opencode-ai` version; installed versions at or above it are accepted |
+| `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.7`           | Installation/preference minimum for `opencode-ai`. Values below the supported floor (`1.18.7`) or malformed values are rejected with a typed error. Never authorizes credentials: one-shot provider runs require the exact audited build (`1.18.7`) — unaudited newer releases fail closed before spawn |
 | `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-beta-17793`  | Minimum accepted OpenCode 2 version; install from `@opencode-ai/cli@beta` (unsupported `next/dev/tui-v2` overrides fail closed) |
 | `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | **Deprecated no-op.** OpenCode/OpenCode2 default to `best_effort_raw`; `--protect-credentials` selects the protected proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. Crush always requires its credential proxy regardless. |
-| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Minimum accepted `@phpcraftdream/crush` version; installed versions at or above it are accepted |
+| `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Minimum accepted `@phpcraftdream/crush` version. Raise-only: values below the hard floor (`0.1.6`) clamp up to it and malformed values fail closed, so an unsupported release is never admitted |
 | `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 
 ### Review limits
@@ -385,8 +385,9 @@ the engine and role.
 default. An explicit `--provider` run temporarily overrides this role through
 an in-memory OpenCode config (`--small-model`, or the one-shot main model when
 omitted); no file or model pin is rewritten. Before forwarding the selected
-provider key, Triss requires an installed OpenCode version at or above the
-configured stable minimum, then audits that supported version's full file graph:
+provider key, Triss requires the installed OpenCode version to be the exact
+audited build (currently `1.18.7`; unaudited newer releases fail closed), then
+audits that version's full file graph:
 global `config.json` and `opencode.json(c)`, `~/.opencode/opencode.json(c)`, and direct
 configs from the actual runtime directory to the Git root (or `/` for non-Git
 directories). JSONC and unreadable layers fail closed. Because account/org,

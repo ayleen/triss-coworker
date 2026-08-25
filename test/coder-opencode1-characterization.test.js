@@ -28,10 +28,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  OPENCODE_AUDITED_VERSION,
   OPENCODE_INVALID_MINIMUM_CODE,
   OPENCODE_MIN_VERSION_DEFAULT,
   OPENCODE_PIN,
+  OPENCODE_SUPPORTED_FLOOR,
   assertOpencodeMinimumVersion,
+  opencodeVersionIsAudited,
   opencodeVersionMeetsMinimum,
   resolveCoderEngine,
   runCoderRun as runCoderRunProduction,
@@ -182,32 +185,62 @@ test('characterization: unknown engine error lists opencode, opencode2, crush (P
 
 test('characterization: V1 pin surface is opencode-ai@1.18.7 (module constant; env override path exercised via TRISS_CODER_OPENCODE_VERSION in status tests)', () => {
   assert.equal(OPENCODE_PIN, '1.18.7');
+  // The immutable Triss-owned policy constants share the audited floor today.
+  assert.equal(OPENCODE_SUPPORTED_FLOOR, '1.18.7');
+  assert.equal(OPENCODE_AUDITED_VERSION, '1.18.7');
 });
 
-test('OpenCode V1 version gate accepts the minimum and newer stable versions only', () => {
+test('OpenCode V1 credential authorization accepts ONLY the exact audited build (never a range)', () => {
+  // Semver ordering is not compatibility evidence: unaudited newer releases
+  // must fail closed exactly like older ones.
+  assert.equal(opencodeVersionIsAudited('1.18.7'), true);
+  assert.equal(opencodeVersionIsAudited('1.18.6'), false);
+  assert.equal(opencodeVersionIsAudited('1.19.0'), false);
+  assert.equal(opencodeVersionIsAudited('2.0.0'), false);
+  assert.equal(opencodeVersionIsAudited('1.18.7-beta.1'), false);
+  assert.equal(opencodeVersionIsAudited('garbage'), false);
+  assert.equal(opencodeVersionIsAudited(''), false);
+  assert.equal(opencodeVersionIsAudited(null), false);
+});
+
+test('OpenCode V1 installation comparator stays a pure range check over the configured pin', () => {
+  // Installation-target concern only; it never authorizes credentials
+  // (see opencodeVersionIsAudited for that exact-match gate).
   assert.equal(OPENCODE_MIN_VERSION_DEFAULT, '1.18.7');
   assert.equal(opencodeVersionMeetsMinimum('1.18.6'), false);
   assert.equal(opencodeVersionMeetsMinimum('1.18.7'), true);
-  assert.equal(opencodeVersionMeetsMinimum('1.19.0'), true);
   assert.equal(opencodeVersionMeetsMinimum('garbage'), false);
   assert.equal(opencodeVersionMeetsMinimum('1.18.7-beta.1'), false);
   assert.equal(opencodeVersionMeetsMinimum('1.18.7', ' 1.18.7 '), false);
   assert.equal(opencodeVersionMeetsMinimum('1.18.7', 'bad-minimum'), false);
 });
 
-test('OpenCode V1 invalid minimum fails closed without an unsafe install suggestion', () => {
-  for (const minimum of ['bad-minimum', ' 1.18.7 ']) {
+test('OpenCode V1 invalid or below-floor minimum fails closed without an unsafe install suggestion', () => {
+  const cases = [
+    // Malformed / whitespace values keep their existing typed rejection.
+    { minimum: 'bad-minimum', reason: null },
+    { minimum: ' 1.18.7 ', reason: null },
+    // Canonical values BELOW the immutable supported floor are policy
+    // violations too: they must never weaken the floor.
+    { minimum: '1.18.6', reason: `below the supported floor ${OPENCODE_SUPPORTED_FLOOR}` },
+    { minimum: '1.0.0', reason: `below the supported floor ${OPENCODE_SUPPORTED_FLOOR}` },
+  ];
+  for (const { minimum, reason } of cases) {
     assert.throws(
       () => assertOpencodeMinimumVersion(minimum),
       (error) => {
         assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
         assert.match(error.message, /canonical stable x\.y\.z/);
+        if (reason) assert.match(error.message, new RegExp(reason.replace(/\./gu, '\\.')));
         assert.doesNotMatch(error.message, /npm install/);
         assert.doesNotMatch(error.message, /@bad-minimum/);
         return true;
       },
     );
   }
+  // The floor itself and anything above it remain valid configuration.
+  assertOpencodeMinimumVersion(OPENCODE_SUPPORTED_FLOOR);
+  assertOpencodeMinimumVersion('2.0.0');
 });
 
 test(
@@ -242,6 +275,189 @@ test(
         },
       );
       assert.equal(spawnCalls, 0);
+    },
+  ),
+);
+
+test(
+  'V1 one-shot rejects a below-floor configured minimum even when the installed build is the audited one',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-below-floor',
+      ZHIPU_API_KEY: 'zk-below-floor',
+      TRISS_CODER_OPENCODE_VERSION: '1.16.0',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      let spawnCalls = 0;
+      await assert.rejects(
+        () => runCoderRun(
+          'below floor',
+          { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+          {
+            disableCredentialProxy: true,
+            spawn: () => {
+              spawnCalls += 1;
+              throw new Error('engine spawn must not be reached');
+            },
+            // The installed binary IS the audited build — the configured
+            // below-floor minimum still fails closed first.
+            spawnSync: () => ({ status: 0, stdout: OPENCODE_PIN, error: null }),
+          },
+        ),
+        (error) => {
+          assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
+          assert.match(error.message, /below the supported floor 1\.18\.7/);
+          return true;
+        },
+      );
+      assert.equal(spawnCalls, 0);
+    },
+  ),
+);
+
+test(
+  'V1 one-shot rejects before spawn when the configured minimum is below floor and the install is older too',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-old-pair',
+      ZHIPU_API_KEY: 'zk-old-pair',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      for (const [configuredMinimum, installed] of [['1.18.6', '1.18.6'], ['1.0.0', '1.18.0']]) {
+        process.env.TRISS_CODER_OPENCODE_VERSION = configuredMinimum;
+        let spawnCalls = 0;
+        await assert.rejects(
+          () => runCoderRun(
+            `old pair ${configuredMinimum}`,
+            { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+            {
+              disableCredentialProxy: true,
+              spawn: () => {
+                spawnCalls += 1;
+                throw new Error('engine spawn must not be reached');
+              },
+              spawnSync: (c, a) => (c === 'opencode' && a[0] === '--version'
+                ? { status: 0, stdout: installed, error: null }
+                : { status: 1, stdout: '', error: null }),
+            },
+          ),
+          (error) => {
+            assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
+            assert.match(error.message, /canonical stable x\.y\.z/);
+            return true;
+          },
+        );
+        assert.equal(spawnCalls, 0, `${configuredMinimum} + ${installed} must reject before spawn`);
+      }
+    },
+  ),
+);
+
+test(
+  'V1 one-shot whitespace-configured minimum keeps the typed rejection at run level',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-ws-minimum',
+      ZHIPU_API_KEY: 'zk-ws-minimum',
+      TRISS_CODER_OPENCODE_VERSION: ' 1.18.7 ',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      let spawnCalls = 0;
+      await assert.rejects(
+        () => runCoderRun(
+          'whitespace minimum',
+          { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+          {
+            disableCredentialProxy: true,
+            spawn: () => {
+              spawnCalls += 1;
+              throw new Error('engine spawn must not be reached');
+            },
+            spawnSync: () => ({ status: 0, stdout: OPENCODE_PIN, error: null }),
+          },
+        ),
+        (error) => {
+          assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
+          return true;
+        },
+      );
+      assert.equal(spawnCalls, 0);
+    },
+  ),
+);
+
+test(
+  'V1 one-shot rejects unaudited newer builds (default minimum) before isolation and spawn',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-unaudited',
+      ZHIPU_API_KEY: 'zk-unaudited',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      delete process.env.TRISS_CODER_OPENCODE_VERSION;
+      const spawnCallCounts = [];
+      for (const installed of ['1.19.0', '2.0.0']) {
+        let spawnCalls = 0;
+        await assert.rejects(
+          () => runCoderRun(
+            `unaudited ${installed}`,
+            { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+            {
+              disableCredentialProxy: true,
+              spawn: () => {
+                spawnCalls += 1;
+                throw new Error('engine spawn must not be reached');
+              },
+              spawnSync: (c, a) => (c === 'opencode' && a[0] === '--version'
+                ? { status: 0, stdout: installed, error: null }
+                : { status: 1, stdout: '', error: null }),
+            },
+          ),
+          (error) => {
+            // The gate fires BEFORE any worktree/isolation machinery: a
+            // rejected version must leave no side effects behind.
+            assert.doesNotMatch(error.message, /worktree/i);
+            assert.match(error.message, new RegExp(`requires exactly opencode ${OPENCODE_AUDITED_VERSION}`));
+            assert.match(error.message, new RegExp(`found ${installed}, which is not audited`));
+            return true;
+          },
+        );
+        spawnCallCounts.push(spawnCalls);
+      }
+      assert.deepEqual(spawnCallCounts, [0, 0]);
+    },
+  ),
+);
+
+test(
+  'V1 one-shot succeeds when the installed build is exactly the audited version',
+  withEnv(
+    {
+      OPENCODE_API_KEY: 'sk-zen-audited-exact',
+      ZHIPU_API_KEY: 'zk-audited-exact',
+      TRISS_USAGE_LOG: '0',
+    },
+    async () => {
+      delete process.env.TRISS_CODER_OPENCODE_VERSION;
+      const rec = recordingSpawn(MINIMAL_SUCCESS_STREAM);
+      await runCoderRun(
+        'audited exact',
+        { provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free' },
+        {
+          disableCredentialProxy: true,
+          spawn: rec.spawnFn,
+          spawnSync: (c, a) => (c === 'opencode' && a[0] === '--version'
+            ? { status: 0, stdout: OPENCODE_AUDITED_VERSION, error: null }
+            : { status: 1, stdout: '', error: null }),
+          stdoutWrite: () => true,
+        },
+      );
+      assert.equal(rec.calls.length, 1);
+      assert.ok(rec.calls[0].argv.includes('--pure'), 'audited one-shot run reaches spawn with --pure');
     },
   ),
 );
@@ -476,13 +692,13 @@ test(
         {
           disableCredentialProxy: true,
           spawn: rec.spawnFn,
-          // one-shot provider runs demand the supported V1 minimum via
-          // detectOpencodeVersion; the fake binary reports it.
+          // one-shot provider runs demand the AUDITED V1 build via
+          // detectOpencodeVersion; the fake binary reports exactly it.
           spawnSync: (c, a) => {
             if (c === 'opencode' && a[0] === '--version') {
-              // A newer stable release must pass the protected one-shot gate;
-              // this is the production-shaped regression for >= semantics.
-              return { status: 0, stdout: '1.19.0', error: null };
+              // Authorization is an exact audited-build match: only the
+              // audited version passes the protected one-shot gate.
+              return { status: 0, stdout: OPENCODE_AUDITED_VERSION, error: null };
             }
             return { status: 1, stdout: '', error: null };
           },

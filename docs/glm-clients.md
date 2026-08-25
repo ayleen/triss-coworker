@@ -488,10 +488,10 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 | `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush`. |
 | `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
 | `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
-| `TRISS_CODER_OPENCODE_VERSION` | no | Set the minimum accepted `opencode-ai` npm version (default `1.18.7`). Installed versions at or above it are accepted. |
+| `TRISS_CODER_OPENCODE_VERSION` | no | Installation/preference minimum for the `opencode-ai` npm package (default `1.18.7`). Below-floor and malformed values are rejected with a typed error. Never authorizes credentials: one-shot provider runs require the exact audited build (`1.18.7`) — unaudited newer releases fail closed before spawn. |
 | `TRISS_CODER_OPENCODE2_VERSION` | no | Minimum accepted OpenCode 2 version (default `0.0.0-beta-17793`; unsupported `next/dev/tui-v2` values fail closed — see [opencode2.md](engines/opencode2.md)). |
 | `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | **Deprecated no-op.** OpenCode/OpenCode2 now use `best_effort_raw` by default; `--protect-credentials` selects the parent-owned credential proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. |
-| `TRISS_CODER_CRUSH_VERSION` | no | Set the minimum accepted `@phpcraftdream/crush` version (default `0.1.6`). Installed versions at or above it are accepted. |
+| `TRISS_CODER_CRUSH_VERSION` | no | Minimum accepted `@phpcraftdream/crush` version (hard floor `0.1.6`). Raise-only: values below the floor clamp up to it; malformed values fail closed. |
 | `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 
 All are documented in `.env.example`; this table is the authoritative

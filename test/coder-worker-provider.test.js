@@ -1126,7 +1126,7 @@ test(
           stdoutWrite: () => true,
         },
       ),
-      /one-shot provider credential auditing requires opencode >= 1\.18\.7; found 1\.18\.6/i,
+      /One-shot provider credential auditing requires exactly opencode 1\.18\.7[\s\S]*found 1\.18\.6/,
     );
     assert.equal(spawned, false);
   }),

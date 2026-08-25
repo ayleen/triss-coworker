@@ -312,9 +312,11 @@ Env: `ZHIPU_API_KEY` (required for the default GLM provider;
 `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other
 providers), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
-`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
-`1.18.7`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
+`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (installation pin
+override, default `1.18.7`; below-floor values are rejected and one-shot
+provider runs require the exact audited build), `TRISS_CODER_ENGINE` (default
+`opencode`), `TRISS_CODER_CRUSH_VERSION`
+(crush pin override, hard floor `0.1.6` — raise-only), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
 set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **SECURITY FIX — engine version gates can no longer be weakened by
+  configuration.** `TRISS_CODER_OPENCODE_VERSION` is now strictly an
+  installation/preference minimum; credential authorization is Triss-owned and
+  immutable.
+  - Configuring an OpenCode minimum below the supported floor (`1.18.7`) — or
+    any malformed value, including whitespace-padded ones — fails closed with
+    the existing typed `TRISS_CODER_OPENCODE_MINIMUM_INVALID` error instead of
+    lowering the floor.
+  - One-shot provider runs (`--provider …`) now require the **exact audited
+    build** (`opencode 1.18.7`) before any credential leaves the parent
+    process. The previous unbounded "installed ≥ configured minimum" check
+    admitted arbitrary unaudited future releases (e.g. `1.19.0`, `2.0.0`);
+    semver ordering is not compatibility evidence, so those are now rejected
+    before isolation and spawn until re-audited.
+  - Crush's supported floor is no longer lowerable: a
+    `TRISS_CODER_CRUSH_VERSION` below `0.1.6` clamps up to the floor (so
+    `0.1.4` stays unsupported), malformed values still fail closed, and
+    legitimate higher configured minimums are preserved. Install hints always
+    target at least the floor.
+
 ## [0.39.0] — 2026-08-23
 
 ### Changed

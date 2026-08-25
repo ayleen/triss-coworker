@@ -5,9 +5,11 @@ Status: experimental. Crush is an optional Z.AI coding engine for
 
 ## Setup
 
-Crush requires a POSIX host (macOS or Linux), `ZHIPU_API_KEY`, and an
-`@phpcraftdream/crush` installation at or above Triss's minimum supported
-version.
+Crush requires a POSIX host (macOS/Linux), `ZHIPU_API_KEY`, and an
+`@phpcraftdream/crush` installation at or above Triss's hard supported floor
+(`0.1.6`). `TRISS_CODER_CRUSH_VERSION` may raise that minimum but can never
+lower it: below-floor values clamp up to the floor and malformed values fail
+closed, so an unsupported release is never admitted.
 
 ```bash
 triss coder init --engine crush --provider glm
