@@ -281,7 +281,8 @@ On OpenCode, `--provider` + provider-qualified `--model` switches the complete
 provider pair for this run without changing persistent config; `--small-model`
 is optional and defaults to the one-shot main. Worker must first be registered
 once with `triss coder init --provider worker`. On this one-shot path, Triss
-audits the pinned OpenCode version's complete file graph, validates the final
+verifies the installed OpenCode build meets the effective minimum (>= `1.18.22`)
+and audits its complete file graph, validates the final
 merged config with `debug config --pure` using a random canary instead of the
 real key, and runs OpenCode with external plugins disabled. Late overrides and
 unauditable config fail closed.
@@ -312,9 +313,13 @@ Env: `ZHIPU_API_KEY` (required for the default GLM provider;
 `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other
 providers), `TRISS_CODER_MODEL` /
 `TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
-`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (pin override, default
-`1.18.7`), `TRISS_CODER_ENGINE` (default `opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, default `0.1.6`), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
+`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (installation minimum
+override, default/immutable floor `1.18.22`; below-floor or malformed values are
+rejected, a valid higher value raises the effective minimum, and one-shot
+provider runs are authorized when the installed version is >= that effective
+minimum), `TRISS_CODER_ENGINE` (default
+`opencode`), `TRISS_CODER_CRUSH_VERSION`
+(crush pin override, hard floor `0.1.6` — raise-only), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
 set `1` to opt INTO the CLI allowlist; default unset/OFF).
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on

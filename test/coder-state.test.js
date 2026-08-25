@@ -14,7 +14,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, readdir, symlink, open as openFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -32,6 +33,7 @@ import {
   adoptOrQuarantineCoderState,
   cleanOwnedCoderState,
 } from '../src/coder-state.js';
+import { openManagedTrissRoot } from '../src/managed-root.js';
 
 const NOW = '2026-08-13T10:00:00.000Z';
 
@@ -72,11 +74,13 @@ function sessionRecord(overrides = {}) {
 test('loadOrCreateProjectIdentity creates a mode-0600 exclusive record with exact keys', async () => {
   const fx = await fixture();
   try {
-    const result = await loadOrCreateProjectIdentity(fx.trissRoot, { device: 100, inode: 200, now: () => NOW });
+    const managed = await openManagedTrissRoot(fx.base);
+    const projectStats = await stat(fx.base);
+    const result = await loadOrCreateProjectIdentity(managed, { now: () => NOW });
     assert.equal(result.created, true);
     assert.match(result.project_id, /^[0-9a-f]{32}$/);
-    assert.equal(result.creation_device, '100');
-    assert.equal(result.creation_inode, '200');
+    assert.equal(result.creation_device, String(projectStats.dev));
+    assert.equal(result.creation_inode, String(projectStats.ino));
     assert.equal(result.created_at, NOW);
     assert.deepEqual(Object.keys(result).sort(), [
       'created',
@@ -100,9 +104,78 @@ test('loadOrCreateProjectIdentity creates a mode-0600 exclusive record with exac
     assert.equal(stats.mode & 0o777, 0o600);
 
     // Loading again returns the same record without recreating.
-    const again = await loadOrCreateProjectIdentity(fx.trissRoot, { device: 100, inode: 200 });
+    const again = await loadOrCreateProjectIdentity(managed);
     assert.equal(again.created, false);
     assert.equal(again.project_id, result.project_id);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity creation metadata is pinned to the project directory, not .triss', async () => {
+  const fx = await fixture();
+  try {
+    const managed = await openManagedTrissRoot(fx.base);
+    const result = await loadOrCreateProjectIdentity(managed);
+    const projectStats = await stat(fx.base);
+    const trissStats = await stat(fx.trissRoot);
+    assert.equal(result.creation_device, String(projectStats.dev));
+    assert.equal(result.creation_inode, String(projectStats.ino));
+    assert.notEqual(result.creation_inode, String(trissStats.ino));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('concurrent FIRST-EVER creations share ONE identity (atomic link publication)', async () => {
+  // The CI race (node 24): two first-ever admissions in one project raced a
+  // writeFile('wx') that exposed an EMPTY file between open and write; the
+  // loser read zero bytes and crashed with an untyped SyntaxError instead of
+  // sharing the winner's id. link() publishes atomically and never clobbers.
+  for (let round = 0; round < 8; round += 1) {
+    const fx = await fixture();
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 12 }, () =>
+          loadOrCreateProjectIdentity(fx.trissRoot)),
+      );
+      const ids = new Set(results.map((r) => r.project_id));
+      assert.equal(ids.size, 1, `every concurrent creator must observe the SAME id (round ${round})`);
+      const creators = results.filter((r) => r.created);
+      assert.equal(creators.length, 1, 'exactly one caller may report created=true');
+      // No temp litter survives.
+      const names = await readdir(fx.trissRoot);
+      assert.equal(names.some((n) => n.includes('.project-identity-v1.tmp.')), false);
+    } finally {
+      await fx.cleanup();
+    }
+  }
+});
+
+test('an EMPTY (never published) identity fails closed typed — never parsed as JSON', async () => {
+  const fx = await fixture();
+  try {
+    // Exactly the bytes a racing legacy writer could leave behind.
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '', { mode: 0o600 });
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot),
+      (err) => err?.code === 'IDENTITY_UNPUBLISHED' && /never published \(empty\)/.test(err.message),
+    );
+    // The stranded empty file is retained untouched (fail closed, no guess).
+    assert.equal(await readFile(join(fx.trissRoot, 'project-identity-v1.json'), 'utf8'), '');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a non-JSON identity reports IDENTITY_INVALID, not a raw SyntaxError', async () => {
+  const fx = await fixture();
+  try {
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '{torn', { mode: 0o600 });
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot),
+      (err) => err?.code === 'IDENTITY_INVALID' && /not valid JSON/.test(err.message),
+    );
   } finally {
     await fx.cleanup();
   }
@@ -127,11 +200,221 @@ test('a tampered identity fails closed instead of guessing', async () => {
   const fx = await fixture();
   try {
     await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), '{"schema_version":2,"project_id":"x"}\n', { mode: 0o600 });
-    await assert.rejects(() => loadOrCreateProjectIdentity(fx.trissRoot, { device: 1, inode: 2 }), /invalid project identity/);
+    await assert.rejects(() => loadOrCreateProjectIdentity(fx.trissRoot), /invalid project identity/);
   } finally {
     await fx.cleanup();
   }
 });
+
+test('identity decoder rejects malformed canonical metadata', async () => {
+  const fx = await fixture();
+  try {
+    const base = {
+      schema_version: 1,
+      project_id: 'a'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    };
+    for (const [field, value] of [
+      ['creation_device', 'not-decimal'],
+      ['creation_inode', '01'],
+      ['created_at', 'not-a-timestamp'],
+    ]) {
+      await writeFile(
+        join(fx.trissRoot, 'project-identity-v1.json'),
+        JSON.stringify({ ...base, [field]: value }),
+        { mode: 0o600 },
+      );
+      await assert.rejects(
+        () => loadOrCreateProjectIdentity(fx.trissRoot),
+        (err) => err?.code === 'IDENTITY_INVALID' && /invalid project identity/.test(err.message),
+        field,
+      );
+    }
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity read rejects a pre-existing symlink and a deterministic swap before open', async () => {
+  const fx = await fixture();
+  try {
+    const target = join(fx.base, 'outside-identity.json');
+    await writeFile(target, JSON.stringify({ schema_version: 1, project_id: '9'.repeat(32) }));
+    await symlink(target, join(fx.trissRoot, 'project-identity-v1.json'));
+    await assert.rejects(
+        () => loadOrCreateProjectIdentity(fx.trissRoot),
+      (err) => err?.code === 'IDENTITY_INVALID' && /no-follow/.test(err.message),
+    );
+
+    await rm(join(fx.trissRoot, 'project-identity-v1.json'));
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), JSON.stringify({
+      schema_version: 1,
+      project_id: 'a'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    let swapped = false;
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, {
+        fs: {
+          open: async (path, flags) => {
+            if (!swapped) {
+              swapped = true;
+              await rm(path);
+              await symlink(target, path);
+            }
+            return openFile(path, flags);
+          },
+        },
+      }),
+      (err) => err?.code === 'IDENTITY_INVALID' && /no-follow/.test(err.message),
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('identity reads are bounded at cap+1 bytes', async () => {
+  const fx = await fixture();
+  try {
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), 'x'.repeat(4 * 1024 + 1));
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot),
+      (err) => err?.code === 'IDENTITY_OVERSIZE' && /4 KiB cap/.test(err.message),
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('managed identity lifecycle rejects a pre-existing .triss symlink without touching outside', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-identity-outside-'));
+  try {
+    const canary = join(outside, 'canary.txt');
+    await writeFile(canary, 'untouched');
+    await rm(fx.trissRoot, { recursive: true, force: true });
+    await symlink(outside, fx.trissRoot);
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot),
+      /managed-root: symlink rejected/,
+    );
+    assert.equal(await readFile(canary, 'utf8'), 'untouched');
+    assert.deepEqual(await readdir(outside), ['canary.txt']);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('managed identity lifecycle revalidates after injected parent swap before identity open', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-identity-open-race-'));
+  try {
+    const canary = join(outside, 'canary.txt');
+    await writeFile(canary, 'untouched');
+    let swapped = false;
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, {
+        fs: {
+          open: async (path, flags) => {
+            if (!swapped) {
+              swapped = true;
+              await rm(fx.trissRoot, { recursive: true, force: true });
+              await symlink(outside, fx.trissRoot);
+            }
+            return openFile(path, flags);
+          },
+        },
+      }),
+      /identity changed|symlink rejected/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(await readFile(canary, 'utf8'), 'untouched');
+    assert.deepEqual(await readdir(outside), ['canary.txt']);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('managed identity lifecycle revalidates after bounded read before decode', async () => {
+  const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-identity-read-race-'));
+  try {
+    const canary = join(outside, 'canary.txt');
+    await writeFile(canary, 'untouched');
+    await writeFile(join(fx.trissRoot, 'project-identity-v1.json'), JSON.stringify({
+      schema_version: 1,
+      project_id: 'a'.repeat(32),
+      creation_device: '1',
+      creation_inode: '2',
+      created_at: NOW,
+    }));
+    let swapped = false;
+    await assert.rejects(
+      () => loadOrCreateProjectIdentity(fx.trissRoot, {
+        fs: {
+          open: async (path, flags) => {
+            const fd = await openFile(path, flags);
+            return {
+              stat: (...args) => fd.stat(...args),
+              read: async (...args) => {
+                if (!swapped) {
+                  swapped = true;
+                  await rm(fx.trissRoot, { recursive: true, force: true });
+                  await symlink(outside, fx.trissRoot);
+                }
+                return fd.read(...args);
+              },
+              close: (...args) => fd.close(...args),
+            };
+          },
+        },
+      }),
+      /identity changed|symlink rejected/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(await readFile(canary, 'utf8'), 'untouched');
+    assert.deepEqual(await readdir(outside), ['canary.txt']);
+  } finally {
+    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+for (const stage of ['beforeTemp', 'beforeLink']) {
+  test(`managed identity lifecycle revalidates parent swap ${stage}`, async () => {
+    const fx = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), `triss-identity-${stage}-`));
+    try {
+      const canary = join(outside, 'canary.txt');
+      await writeFile(canary, 'untouched');
+      let swapped = false;
+      await assert.rejects(
+        () => loadOrCreateProjectIdentity(fx.trissRoot, {
+          fs: {
+            [stage]: async () => {
+              swapped = true;
+              await rm(fx.trissRoot, { recursive: true, force: true });
+              await symlink(outside, fx.trissRoot);
+            },
+          },
+        }),
+        /identity changed|symlink rejected/,
+      );
+      assert.equal(swapped, true);
+      assert.equal(await readFile(canary, 'utf8'), 'untouched');
+      assert.deepEqual(await readdir(outside), ['canary.txt']);
+    } finally {
+      await fx.cleanup();
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+}
 
 // ─── state schema and atomic writes ──────────────────────────────────────────
 
@@ -315,4 +598,47 @@ test('cleanOwnedCoderState keeps foreign and tampered records, never deletes the
 test('branch prefixes are the exact contract constants', () => {
   assert.equal(CODER_BRANCH_PREFIX, 'coder-v2/');
   assert.equal(CODER_RESULT_BRANCH_PREFIX, 'coder-result-v2/');
+});
+
+// ─── state reset quarantines the shared sessions.json map ────────────────────
+
+test('state reset quarantines .triss/sessions.json together with the v2 state roots', async () => {
+  const fx = await fixture();
+  try {
+    const { runCoderStateReset } = await import('../src/commands/coder.js');
+    // Seed every v2-owned durable artifact: state root, engine inventory
+    // store, results root — and the shared slug -> native-id map.
+    await mkdir(join(fx.trissRoot, 'engine-sessions-v2', 'opencode2'), { recursive: true });
+    await mkdir(join(fx.trissRoot, 'coder-results-v1', 'runs'), { recursive: true });
+    const sessionsStore = JSON.stringify({
+      version: 2,
+      engines: { opencode2: { taska: 'ses_live' } },
+    }) + '\n';
+    await writeFile(join(fx.trissRoot, 'sessions.json'), sessionsStore, { mode: 0o600 });
+    const identityBefore = (await loadOrCreateProjectIdentity(await openManagedTrissRoot(fx.base))).project_id;
+
+    await runCoderStateReset({ project: fx.base });
+
+    // The map is GONE from the live tree…
+    let absent = false;
+    try {
+      await stat(join(fx.trissRoot, 'sessions.json'));
+    } catch (err) {
+      absent = err?.code === 'ENOENT';
+    }
+    assert.ok(absent, 'sessions.json must not survive reset in place');
+    // …and is RECOVERABLE under quarantine-v1/sessions-<stamp>/ verbatim.
+    const qRoot = join(fx.trissRoot, 'quarantine-v1');
+    const batches = (await readdir(qRoot)).filter((n) => n.startsWith('sessions-'));
+    assert.equal(batches.length, 1);
+    const preserved = await readFile(join(qRoot, batches[0], 'sessions.json'), 'utf8');
+    assert.equal(preserved, sessionsStore);
+    // The v2 state roots were emptied by the same reset.
+    assert.equal(existsSync(join(fx.trissRoot, 'engine-sessions-v2')), false);
+    // A fresh identity exists afterwards; the old one was never reused.
+    const identityAfter = (await loadOrCreateProjectIdentity(await openManagedTrissRoot(fx.base))).project_id;
+    assert.notEqual(identityAfter, identityBefore);
+  } finally {
+    await fx.cleanup();
+  }
 });

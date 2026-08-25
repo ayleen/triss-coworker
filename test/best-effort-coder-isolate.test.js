@@ -26,11 +26,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 
-import {
-  OPENCODE_PIN,
-  recoverCoderSessionAfterUnverifiedCleanup,
-  runCoderRun as runCoderRunProduction,
-} from '../src/commands/coder.js';
+import { OPENCODE_PIN, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
 import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 import { stripAnsi } from './_ansi.js';
@@ -1020,294 +1016,84 @@ test('runCoderRun escalates to SIGKILL and waits for residual OpenCode process-g
   }
 });
 
-test(
-  'runCoderRun fails closed when a residual OpenCode process group remains after SIGKILL ' +
-    '(explicit session keeps its v2 row running until verified recovery)',
-  async () => {
-    const repoRoot = initRepo();
-    const slug = 'residual-hold';
-    const inventoryDir = sessionInventoryPath(join(repoRoot, '.triss'), 'opencode');
-    const run = withIsolatedRun(repoRoot, async () => {
-      const child = new EventEmitter();
-      child.pid = 828282;
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      const calls = [];
-      const killProcess = (pid, signal) => {
-        calls.push([pid, signal]);
-        return true; // every existence probe reports the group STILL alive
-      };
-      const spawnFn = () => {
-        setImmediate(() => {
-          child.stdout.end(FIXTURE);
-          child.stderr.end('');
-          child.emit('close', 0, null);
-        });
-        return child;
-      };
-
-      let captured = '';
-      let failure = null;
-      await runCoderRun('finish unsafely', { session: slug, isolate: false }, {
-        spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
-        stdoutWrite: (value) => { captured += value; },
-        killProcess,
-        pollMs: 0,
-        residualTermGraceMs: 1,
-        residualKillWaitMs: 1,
-        processGroupPollMs: 1,
-      }).catch((err) => { failure = err; });
-      assert.ok(failure, 'an unverified cleanup must fail the run');
-      assert.match(failure.message, /remained alive after SIGKILL; refusing to report completion/);
-      // Typed structural marker so callers branch on code + proof flag
-      // instead of parsing the message.
-      assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
-      assert.equal(failure.cleanupVerified, false);
-      assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGTERM'));
-      assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGKILL'));
-      assert.equal(captured, '', 'a failed cleanup must not emit a completion envelope');
-
-      // The v2 row this run created stays EXACTLY as claimed (running), and
-      // the error carries the exact non-secret lifecycle handle for it.
-      const live = await readCoderSessionInventory(inventoryDir);
-      assert.equal(live.entries.length, 1, 'exactly the explicit-session row must exist');
-      const liveRow = live.entries[0];
-      assert.equal(liveRow.state, 'running', 'unverified cleanup must leave the row running');
-      assert.deepEqual(failure.coderSessionHandle, {
-        inventoryDir,
-        engine: 'opencode',
-        slug,
-        origin: 'new',
-        runId: liveRow.run_id,
-        sandboxId: liveRow.sandbox_id,
-        pid: liveRow.pid,
-        processStartId: liveRow.process_start_id,
-        bootId: liveRow.boot_id,
+test('unverified OpenCode cleanup retains the running session row and blocks same-slug spawn', async () => {
+  const repoRoot = initRepo();
+  const slug = 'residual-hold';
+  const inventoryDir = sessionInventoryPath(join(repoRoot, '.triss'), 'opencode');
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 828282;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const calls = [];
+    const killProcess = (pid, signal) => {
+      calls.push([pid, signal]);
+      return true;
+    };
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(FIXTURE);
+        child.stderr.end('');
+        child.emit('close', 0, null);
       });
+      return child;
+    };
 
-      // A second run with the SAME slug is refused BEFORE spawning: the
-      // unproven-dead group may still own the session.
-      let secondSpawnCalls = 0;
-      await assert.rejects(
-        () => runCoderRun('retry the same slug', { session: slug, isolate: false }, {
-          spawn: () => {
-            secondSpawnCalls += 1;
-            throw new Error('must not spawn while the running row claims the slug');
-          },
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
-          stdoutWrite: noopStdout(),
-        }),
-        { code: 'CODER_SESSION_BUSY' },
-      );
-      assert.equal(secondSpawnCalls, 0, 'the busy refusal must happen before spawn');
-
-      // Recovery fails closed without proof the group is gone...
-      await assert.rejects(
-        () => recoverCoderSessionAfterUnverifiedCleanup({ handle: failure.coderSessionHandle }),
-        /cleanupVerified=true is required/,
-      );
-
-      // ...and removes this run's OWN row ('new' origin) once cleanup is
-      // presented as verified.
-      const recovery = await recoverCoderSessionAfterUnverifiedCleanup({
-        cleanupVerified: true,
-        handle: failure.coderSessionHandle,
-      });
-      assert.deepEqual(recovery, { recovered: true, action: 'removed', engine: 'opencode', slug });
-      const afterRecovery = await readCoderSessionInventory(inventoryDir);
-      assert.deepEqual(afterRecovery.entries, [], 'verified recovery must remove the new-origin row');
+    let captured = '';
+    let failure;
+    await runCoderRun('finish unsafely', { session: slug, isolate: false }, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      killProcess,
+      pollMs: 0,
+      residualTermGraceMs: 1,
+      residualKillWaitMs: 1,
+      processGroupPollMs: 1,
+    }).catch((error) => {
+      failure = error;
     });
-    try {
-      await run();
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  },
-);
 
-test(
-  'runCoderRun fails closed when a residual Crush process group remains after SIGKILL ' +
-    '(explicit session keeps its v2 row running until verified recovery)',
-  async () => {
-    const repoRoot = initRepo();
-    const slug = 'crush-residual-hold';
-    const inventoryDir = sessionInventoryPath(join(repoRoot, '.triss'), 'crush');
-    const run = withIsolatedRun(repoRoot, async () => {
-      const child = new EventEmitter();
-      child.pid = 868686;
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      const killProcess = (_pid, _signal) => true; // group always reports alive
-      const spawnFn = () => {
-        setImmediate(() => {
-          child.stdout.end(JSON.stringify({
-            session_id: `crush-${slug}`,
-            exit_reason: 'end_turn',
-            final_text: 'done',
-            usage: { delta_tokens: 1 },
-          }) + '\n');
-          child.stderr.end('');
-          child.emit('close', 0, null);
-        });
-        return child;
-      };
+    assert.ok(failure);
+    assert.match(failure.message, /remained alive after SIGKILL; refusing to report completion/);
+    assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
+    assert.equal(failure.cleanupVerified, false);
+    assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGTERM'));
+    assert.ok(calls.some(([pid, signal]) => pid === -828282 && signal === 'SIGKILL'));
+    assert.equal(captured, '', 'a failed cleanup must not emit a completion envelope');
 
-      let captured = '';
-      let failure = null;
-      await runCoderRun(
-        'finish unsafely',
-        { engine: 'crush', isolate: false, session: slug },
-        {
-          spawn: spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
-          stdoutWrite: (value) => { captured += value; },
-          killProcess,
-          residualTermGraceMs: 1,
-          residualKillWaitMs: 1,
-          processGroupPollMs: 1,
+    const inventory = await readCoderSessionInventory(inventoryDir);
+    assert.equal(inventory.entries.length, 1);
+    const row = inventory.entries[0];
+    assert.equal(row.state, 'running');
+    assert.equal(failure.coderSessionHandle.inventoryDir, inventoryDir);
+    assert.equal(failure.coderSessionHandle.engine, 'opencode');
+    assert.equal(failure.coderSessionHandle.slug, slug);
+    assert.equal(failure.coderSessionHandle.origin, 'new_reservation');
+    assert.equal(failure.coderSessionHandle.instanceId, row.session_instance_id);
+    assert.equal(failure.coderSessionHandle.runId, row.run_id);
+    assert.equal(failure.coderSessionHandle.sandboxId, row.sandbox_id);
+
+    let secondSpawnCalls = 0;
+    await assert.rejects(
+      () => runCoderRun('retry same slug', { session: slug, isolate: false }, {
+        spawn: () => {
+          secondSpawnCalls += 1;
+          throw new Error('must not spawn while retained row is running');
         },
-      ).catch((err) => { failure = err; });
-      assert.ok(failure, 'an unverified cleanup must fail the crush run');
-      assert.match(
-        failure.message,
-        /Crush process group 868686 remained alive after SIGKILL; refusing to report completion/,
-      );
-      assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
-      assert.equal(failure.cleanupVerified, false);
-      assert.equal(captured, '', 'a failed cleanup must not emit a completion envelope');
-
-      const live = await readCoderSessionInventory(inventoryDir);
-      assert.equal(live.entries.length, 1, 'exactly the explicit-session row must exist');
-      const liveRow = live.entries[0];
-      assert.equal(liveRow.state, 'running', 'unverified cleanup must leave the row running');
-      assert.deepEqual(failure.coderSessionHandle, {
-        inventoryDir,
-        engine: 'crush',
-        slug,
-        origin: 'new',
-        runId: liveRow.run_id,
-        sandboxId: liveRow.sandbox_id,
-        pid: liveRow.pid,
-        processStartId: liveRow.process_start_id,
-        bootId: liveRow.boot_id,
-      });
-
-      // Second same-slug run is refused before spawn (busy row stays busy).
-      let secondSpawnCalls = 0;
-      await assert.rejects(
-        () => runCoderRun('retry the same slug', { engine: 'crush', isolate: false, session: slug }, {
-          spawn: () => {
-            secondSpawnCalls += 1;
-            throw new Error('must not spawn while the running row claims the slug');
-          },
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
-          stdoutWrite: noopStdout(),
-        }),
-        { code: 'CODER_SESSION_BUSY' },
-      );
-      assert.equal(secondSpawnCalls, 0, 'the busy refusal must happen before spawn');
-
-      await assert.rejects(
-        () => recoverCoderSessionAfterUnverifiedCleanup({ handle: failure.coderSessionHandle }),
-        /cleanupVerified=true is required/,
-      );
-      const recovery = await recoverCoderSessionAfterUnverifiedCleanup({
-        cleanupVerified: true,
-        handle: failure.coderSessionHandle,
-      });
-      assert.deepEqual(recovery, { recovered: true, action: 'removed', engine: 'crush', slug });
-      const afterRecovery = await readCoderSessionInventory(inventoryDir);
-      assert.deepEqual(afterRecovery.entries, [], 'verified recovery must remove the new-origin row');
-    });
-    try {
-      await run();
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  },
-);
-
-// The recovery helper is engine-agnostic, so one engine covers the
-// continuation origin: a row inherited from an earlier completed run must be
-// RESTORED to idle by verified recovery — never deleted.
-test(
-  'verified recovery after unverified cleanup restores an already-idle continued session to idle instead of removing it',
-  async () => {
-    const repoRoot = initRepo();
-    const slug = 'continue-after-unverified';
-    const inventoryDir = sessionInventoryPath(join(repoRoot, '.triss'), 'opencode');
-    const run = withIsolatedRun(repoRoot, async () => {
-      // Turn 1 completes cleanly: the row exists and ends idle.
-      await runCoderRun('first turn', { session: slug, isolate: false }, {
-        spawn: fakeEngineWriting(null),
         spawnSync: () => ({ status: 1, stdout: '', error: null }),
         stdoutWrite: noopStdout(),
-      });
-      const afterFirst = await readCoderSessionInventory(inventoryDir);
-      assert.equal(afterFirst.entries.length, 1);
-      assert.equal(afterFirst.entries[0].state, 'idle');
-
-      // Turn 2 on the SAME slug dies with an UNVERIFIED process-group cleanup.
-      const child = new EventEmitter();
-      child.pid = 878787;
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      const killProcess = (_pid, _signal) => true; // group always reports alive
-      const spawnFn = () => {
-        setImmediate(() => {
-          child.stdout.end(FIXTURE);
-          child.stderr.end('');
-          child.emit('close', 0, null);
-        });
-        return child;
-      };
-      let failure = null;
-      await runCoderRun('second turn', { session: slug, isolate: false }, {
-        spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
-        stdoutWrite: noopStdout(),
-        killProcess,
-        pollMs: 0,
-        residualTermGraceMs: 1,
-        residualKillWaitMs: 1,
-        processGroupPollMs: 1,
-      }).catch((err) => { failure = err; });
-      assert.ok(failure, 'the unverified-cleanup turn must fail');
-      assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
-      // The session predates this run -> recovery must NOT delete it.
-      assert.equal(failure.coderSessionHandle.origin, 'continued');
-
-      const during = await readCoderSessionInventory(inventoryDir);
-      assert.equal(during.entries.length, 1);
-      assert.equal(during.entries[0].state, 'running');
-
-      const recovery = await recoverCoderSessionAfterUnverifiedCleanup({
-        cleanupVerified: true,
-        handle: failure.coderSessionHandle,
-      });
-      assert.deepEqual(recovery, {
-        recovered: true,
-        action: 'restored_idle',
-        engine: 'opencode',
-        slug,
-      });
-      const afterRecovery = await readCoderSessionInventory(inventoryDir);
-      assert.equal(afterRecovery.entries.length, 1, 'the inherited row must be kept');
-      assert.equal(afterRecovery.entries[0].state, 'idle');
-      assert.equal(
-        afterRecovery.entries[0].created_at,
-        afterFirst.entries[0].created_at,
-        'restoring idle must preserve the original session identity',
-      );
-    });
-    try {
-      await run();
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  },
-);
+      }),
+      { code: 'TRISS_CODER_SESSION_BUSY' },
+    );
+    assert.equal(secondSpawnCalls, 0);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
 
 test('successful OpenCode and Crush runs accept ESRCH from the real signal when signal-0 probes are EPERM-denied', async () => {
   for (const engine of ['opencode', 'crush']) {
@@ -1348,7 +1134,13 @@ test('successful OpenCode and Crush runs accept ESRCH from the real signal when 
         { engine, isolate: false },
         {
           spawn: spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+          // The runtime crush version-policy gate probes `crush --version`
+          // before any side effect; report a compatible build so this test
+          // exercises the signal/ESRCH flow it targets.
+          spawnSync: (cmd, argv) =>
+            (cmd === 'crush' && argv[0] === '--version'
+              ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+              : { status: 1, stdout: '', stderr: '', error: null }),
           stdoutWrite: (value) => { captured += value; },
           killProcess,
           pollMs: 0,
@@ -1507,7 +1299,12 @@ test('exit before the deadline disarms timeout and external signals while close 
         { engine, isolate: false, timeout: 0.04 },
         {
           spawn: spawnFn,
-          spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+          // Compatible `crush --version` probe answer for the runtime policy
+          // gate (opencode leg keeps the failing fake it always had).
+          spawnSync: (cmd, argv) =>
+            (cmd === 'crush' && argv[0] === '--version'
+              ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+              : { status: 1, stdout: '', stderr: '', error: null }),
           stdoutWrite: (value) => { captured += value; },
           killProcess,
           pollMs: 0,
@@ -1589,7 +1386,6 @@ test('runCoderRun abort signal terminates the detached OpenCode process group', 
 test('runCoderRun does not return while a cancelled child or descendant can still write', async () => {
   const repoRoot = initRepo();
   const writePath = join(repoRoot, 'cancelled-run-writes.log');
-  let ownedGroupPid = null;
   const run = withIsolatedRun(repoRoot, async () => {
     const controller = new AbortController();
     const fixtureBase64 = Buffer.from(FIXTURE).toString('base64');
@@ -1607,6 +1403,7 @@ test('runCoderRun does not return while a cancelled child or descendant can stil
       "process.on('SIGTERM', () => process.exit(0));",
       "setInterval(() => {}, 1000);",
     ].join('');
+    let ownedGroupPid = null;
     const spawnFn = (_cmd, _argv, opts) => {
       const child = spawn(process.execPath, ['-e', parentScript], {
         ...opts,
@@ -1640,38 +1437,16 @@ test('runCoderRun does not return while a cancelled child or descendant can stil
     const beforeCancellation = readFileSync(writePath, 'utf8');
     assert.ok(beforeCancellation.trim().split('\n').length >= 2, 'the descendant must have written repeatedly before cancellation');
     controller.abort();
-    // Real macOS signaling may now FAIL CLOSED: the run rejects with the
-    // typed CODER_PROCESS_GROUP_STILL_ALIVE / cleanupVerified=false error
-    // instead of resolving a killed envelope. Capture whichever outcome
-    // occurs — the no-post-settlement-write invariant below is asserted
-    // identically in BOTH branches.
-    const failure = await promise.then(
-      () => null,
-      (err) => err,
-    );
+    await promise;
 
     const afterRun = readFileSync(writePath, 'utf8');
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(readFileSync(writePath, 'utf8'), afterRun, 'no child or descendant writes after run settlement');
-
-    if (failure !== null) {
-      // Typed fail-closed branch: no completion envelope may have been
-      // emitted, and the refusal must carry the exact typed fields.
-      assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
-      assert.equal(failure.cleanupVerified, false);
-      assert.equal(captured, '', 'a failed cancellation must not emit a completion envelope');
-    } else {
-      assert.equal(JSON.parse(captured.trim()).exit_reason, 'killed');
-    }
+    assert.equal(readFileSync(writePath, 'utf8'), afterRun, 'no child or descendant writes after run completion');
+    assert.equal(JSON.parse(captured.trim()).exit_reason, 'killed');
   });
   try {
     await run();
   } finally {
-    // The typed branch can settle while the group is (or was recently)
-    // alive; never leave a spinning writer behind the removed repo dir.
-    if (ownedGroupPid !== null) {
-      try { process.kill(-ownedGroupPid, 'SIGKILL'); } catch {}
-    }
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
@@ -1801,7 +1576,13 @@ test('runCoderRun forwards AbortSignal to Crush and waits for its process group 
     let captured = '';
     const promise = runCoderRun('cancel crush', { engine: 'crush', isolate: false, timeout: 30 }, {
       spawn: () => child,
-      spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+      // The runtime crush version-policy gate probes `crush --version` before
+      // any side effect; report a compatible build so this test exercises the
+      // cancel/kill flow it targets.
+      spawnSync: (cmd, argv) =>
+        (cmd === 'crush' && argv[0] === '--version'
+          ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+          : { status: 1, stdout: '', stderr: '', error: null }),
       stdoutWrite: (value) => { captured += value; },
       abortSignal: controller.signal,
       killProcess,
@@ -1860,7 +1641,11 @@ test('runCoderRun cleans residual Crush descendants and never negates a degenera
 
       await runCoderRun('finish crush', { engine: 'crush', isolate: false, timeout: 30 }, {
         spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+        // Compatible `crush --version` probe answer for the runtime policy gate.
+        spawnSync: (cmd, argv) =>
+          (cmd === 'crush' && argv[0] === '--version'
+            ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+            : { status: 1, stdout: '', stderr: '', error: null }),
         stdoutWrite: noopStdout(),
         killProcess,
         processGroupPollMs: 1,
@@ -1872,6 +1657,69 @@ test('runCoderRun cleans residual Crush descendants and never negates a degenera
         assert.deepEqual(calls, []);
       }
     }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('unverified Crush cleanup retains the running session row', async () => {
+  const repoRoot = initRepo();
+  const slug = 'crush-residual-hold';
+  const inventoryDir = sessionInventoryPath(join(repoRoot, '.triss'), 'crush');
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 868686;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(`${JSON.stringify({
+          session_id: `crush-${slug}`,
+          exit_reason: 'end_turn',
+          final_text: 'done',
+          usage: { delta_tokens: 1 },
+        })}\n`);
+        child.stderr.end('');
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+
+    let captured = '';
+    let failure;
+    await runCoderRun(
+      'finish unsafely',
+      { engine: 'crush', isolate: false, session: slug },
+      {
+        spawn: spawnFn,
+        spawnSync: (cmd, argv) =>
+          (cmd === 'crush' && argv[0] === '--version'
+            ? { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null }
+            : { status: 1, stdout: '', stderr: '', error: null }),
+        stdoutWrite: (value) => { captured += value; },
+        killProcess: () => true,
+        residualTermGraceMs: 1,
+        residualKillWaitMs: 1,
+        processGroupPollMs: 1,
+      },
+    ).catch((error) => {
+      failure = error;
+    });
+
+    assert.ok(failure);
+    assert.match(failure.message, /Crush process group 868686 remained alive after SIGKILL/);
+    assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
+    assert.equal(failure.cleanupVerified, false);
+    assert.equal(captured, '');
+    const inventory = await readCoderSessionInventory(inventoryDir);
+    assert.equal(inventory.entries.length, 1);
+    assert.equal(inventory.entries[0].state, 'running');
+    assert.equal(failure.coderSessionHandle.engine, 'crush');
+    assert.equal(failure.coderSessionHandle.slug, slug);
+    assert.equal(failure.coderSessionHandle.runId, inventory.entries[0].run_id);
   });
   try {
     await run();

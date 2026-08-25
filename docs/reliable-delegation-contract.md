@@ -244,20 +244,123 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
 mode 0600, capped reads (cap + 1 pre-read), atomic
 temp/fsync/rename publication, exact ordered keys, fail-closed validation.
 
-Lease behavior: maintenance → inventory → slot leases form the fixed lock
-hierarchy; slot leases serialize run/clean cycles on the same
-slot; leases are released in `finally`.
+Lease behavior: maintenance → conditional-target → slot → inventory forms the
+fixed lock hierarchy; slot leases serialize run/clean cycles on the same slot;
+leases are released in `finally`. A production session run cycle holds ONE
+shared maintenance scope for its WHOLE lifetime together with the
+conditional-target lease (non-isolated rows) and the assigned slot lease;
+pre-spawn revalidation and finalization take ONLY brief exclusive inventory
+scopes under that held prefix (via `withCoderSessionOwnerInventory`) and never
+reacquire maintenance. Release is strictly reverse-order. Shared/exclusive
+semantics are enforced in-process by the fixed lock primitive (readers coexist,
+writers exclude); cross-process scope stays honestly best-effort.
+
+Named production runs reserve their session row before spawning the engine
+under that run lease. Admission assigns a real free lock slot (0..3) and
+classifies the store atomically: only an `idle` row may continue; a
+`reserved`/`running` row is busy (`TRISS_CODER_SESSION_BUSY`) and a
+`deleting` row is cleanup in progress — none of them degrade to an ephemeral
+run. Immediately before spawn the exact claimed row is revalidated under the
+held prefix; a fresh `reserved` row transitions to `running` there, and any
+foreign owner tuple fails closed without mutation.
+The `reserved` and `running` rows carry the complete live owner tuple: run id,
+sandbox id, positive PID, process-start identity, and boot identity. The
+production adapter collects both identities from the current host with fixed
+absolute binaries and a minimal fixed environment — never the parent
+environment — and must never submit `null` placeholders to the canonical
+reservation validator. If either identity cannot be established,
+persistent-session admission degrades explicitly and the engine run remains
+ephemeral; it must not publish a row that cannot distinguish PID reuse or a
+host reboot. That identity gap is the ONLY sanctioned degradation: every other
+admission failure (busy, incompatible, corrupt store) fails closed.
+The DURABLE engine session-store mapping — not admission-time origin — decides
+whether a row counts as published. A NEW reservation additionally requires an
+ABSENT mapping: a durable \`slug -> realId\` without any inventory row is
+orphaned state and blocks the run (`TRISS_CODER_SESSION_STORE_INVALID`,
+retain, fail closed) instead of being silently adopted. Rollback recognizes
+ONLY this run's own publication (the exact id anchored right after the durable
+persist) — a pre-existing mapping is never attributed to a failed new run.
+Continuation of an existing `idle` session
+requires a present matching mapping BEFORE the idle -> running claim
+(`TRISS_CODER_SESSION_INCOMPATIBLE` otherwise), alongside compatibility
+validation of isolation mode and project ownership. After a successful run,
+the row transitions to `idle` only when a valid engine session id was produced
+AND its mapping is durably published and matching; otherwise the unusable row
+is removed instead of advertising a continuation that would silently start a
+fresh conversation. Rollback on failure keeps inventory and store consistent:
+a reservation WITHOUT a published mapping is removed through the canonical
+`deleting` transition; one WITH a matching published mapping (published
+before the failure, e.g. the envelope write threw) survives as `idle`; a
+MISMATCHED mapping retains and fails closed. Finalization is owner-checked; on
+any ambiguity the row is retained for recovery instead of being mutated.
 
 Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush>`
-removes only the selected inactive isolated session row; `triss coder result
-clean <run-id>` removes only a validated retained result artifact, never a
+(one canonical engine enum) forms its own complete clean owner tuple and takes
+the normative clean lease — shared maintenance (whole cycle), conditional-target
+for non-isolated rows, the row's STORED assigned slot, brief inventory scopes.
+Ordering is crash-safe: the durable idle -> deleting transition publishes
+FIRST (the deleting row is the recovery breadcrumb), then the engine-owned
+versioned-store mapping is removed while the prefix stays held, then a final
+brief inventory scope removes the row. The discovery snapshot is taken under
+the shared maintenance scope and its EXACT row identity — anchored on the
+immutable `session_instance_id` (128 random bits minted at the first
+reservation and carried unchanged through every transition), with isolation
+mode, slot, fingerprint, and created_at as secondary metadata anchors — is
+re-verified before every mutation: a same-slug replacement published while
+an older clean was parked can never be deleted, even when it coincides on
+every other anchor down to the millisecond timestamp
+(ABA guard; retain, fail closed). A later clean takes the idempotent
+deleting-recovery path and always converges. An interrupted run no longer
+bricks its slug forever: a `reserved|running` row whose recorded owner tuple
+is provably absent from this host (a previous boot id, a dead pid, or a pid
+reused by a different process-start identity) is classified as an ORPHAN and
+`session clean` reclaims it through the same crash-safe deleting pipeline;
+a row whose owner still appears live, or whose liveness cannot be proven on
+this host (probe failure), still fails closed unless the operator explicitly
+passes `--recover-live` to attest the recorded owner is really gone. The
+same command is the recovery tool for an ORPHAN MAPPING: a durable
+`sessions.json` entry with no inventory row (the exact state new-reservation
+admission rejects) is removed by `session clean`, making the slug
+admissible again; an unreadable store still fails closed. `triss coder state
+reset` quarantines the shared `sessions.json` map together with the v2 state
+roots instead of leaving stale mappings behind.
+`triss coder result clean
+<run-id>` removes only a validated retained result artifact, never a
 persistent session.
+
+Legacy inventories: released v0.39.0 wrote `schema_version: 1` rows WITHOUT
+the immutable `session_instance_id` identity. Canonical readers never
+auto-mutate such a document — they fail closed with the typed
+`TRISS_CODER_SESSION_LEGACY_SCHEMA` error pointing at the one sanctioned
+upgrade path: `triss coder session migrate --engine <name>` runs under the
+canonical maintenance/inventory/slot leases, migrates ONLY fully-idle legacy
+documents by minting fresh 128-bit identities (an idle row carries no owner
+tuple, so minting cannot split an owner/row pairing), preserves the original
+bytes verbatim under `.triss/quarantine-v1/`, and publishes the canonical
+document atomically. A legacy document containing any
+reserved|running|deleting row fails closed without partial migration —
+resolve possibly-live owners first (`session clean`, `--recover-live` if you
+attest they are gone).
 
 Rollback: `triss coder state backup|validate|adopt|reset` implement the
 Section 15 rollback contract — bounded no-follow backup with a completion
 marker (the only validity evidence), manifest schema
 `{schema_version, project_id, created_at, source_root, entries, sha256}`,
-and exact registry preflight. A non-empty `coder-results-v1` root blocks
+and exact registry preflight. Backup inventories EVERY canonical engine
+store (one dependency-neutral enum shared with the session surfaces); an
+UNRECOGNIZED `engine-sessions-v2/<name>` fails the backup closed rather than
+silently omitting sessions. The durable session mapping (`.triss/sessions.json`,
+validated versioned shape) and the project identity are part of the same
+transaction: backup runs under EXCLUSIVE maintenance, drains every assigned
+session slot lease of live rows in stable order, re-verifies the inventory
+snapshot unchanged, enforces the shared cross-consistency rules against the
+SOURCE, and only then copies — so rows and their mappings are never split.
+The SAME rule implementation re-runs over the copied pinned bytes BEFORE the
+completion marker is published; validation uses that one shared
+implementation too, so a completed backup is by construction a valid backup:
+every backed-up persistent row has its mapping, no orphan mappings, no
+unknown namespaces.
+A non-empty `coder-results-v1` root blocks
 rollback with `TRISS_CODER_ROLLBACK_RESULTS_PENDING` until the exact registry
 preflight is satisfied. Quarantine data is never deleted by adopt/reset.
 

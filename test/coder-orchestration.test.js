@@ -20,6 +20,7 @@ import {
   allocateRunIdentity,
   isAnonymousSlug,
   isResultId,
+  deriveV2LifecycleFields,
 } from '../src/coder-orchestration.js';
 import { resolveCoderCredentialMode } from '../src/coder-providers.js';
 
@@ -100,4 +101,13 @@ test('the anonymous and result-id grammars are exact', () => {
   assert.equal(isResultId('run-'.concat('b'.repeat(32))), true);
   assert.equal(isResultId('run-x'), false);
   assert.equal(isResultId(null), false);
+});
+
+test('session persistence is authorized only by confirmed completion outcome', () => {
+  const base = { sessionRequested: true, v2SessionAdmitted: true };
+  assert.equal(deriveV2LifecycleFields({ ...base, completionOutcome: 'persistent' }).session_persistence, 'persistent');
+  assert.equal(deriveV2LifecycleFields({ ...base, completionOutcome: 'removed_unusable' }).session_persistence, 'ephemeral_downgraded');
+  assert.equal(deriveV2LifecycleFields({ ...base, completionOutcome: 'retained_for_recovery' }).session_persistence, 'ephemeral_downgraded');
+  assert.equal(deriveV2LifecycleFields({ ...base }).session_persistence, 'ephemeral_downgraded');
+  assert.equal(deriveV2LifecycleFields({ sessionRequested: true, v2SessionAdmitted: false, completionOutcome: 'persistent' }).session_persistence, 'ephemeral_downgraded');
 });

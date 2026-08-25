@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 import { withCoderMaintenanceLock, withCoderInventoryLock } from './coder-lease.js';
+import { CODER_SESSION_ENGINES } from './coder-session-engines.js';
 
 export const RESULT_STATE_MAX_BYTES = 65536;
 export const RESULT_INDEX_MAX_BYTES = 64 * 1024;
@@ -67,7 +68,7 @@ export function validateResultState(record) {
   if (record.schema_version !== 1) return null;
   if (record.kind !== 'result') return null;
   if (typeof record.run_id !== 'string' || record.run_id.length === 0 || record.run_id.length > 128) return null;
-  if (!['opencode', 'crush', 'opencode2'].includes(record.engine)) return null;
+  if (!CODER_SESSION_ENGINES.includes(record.engine)) return null;
   if (typeof record.session_slug !== 'string' || record.session_slug.length === 0) return null;
   if (typeof record.project_root_fingerprint !== 'string' || !FINGERPRINT_RE.test(record.project_root_fingerprint)) {
     return null;

@@ -31,6 +31,7 @@ import {
   withCoderSessionOwnerPrefixLocks,
   withCoderSessionOwnerPrefixFromMaintenance,
   withCoderSessionOwnerInventory,
+  acquireCoderSessionRunLease,
 } from '../src/coder-lease.js';
 
 async function fixture() {
@@ -275,4 +276,201 @@ test('missing callbacks and invalid isolation modes fail closed', async () => {
   } finally {
     await fx.cleanup();
   }
+});
+
+function injectedRunLeaseDependencies(events, failures = {}) {
+  const handles = {};
+  for (const component of ['maintenance', 'target', 'slot']) {
+    let remaining = failures[component] || 0;
+    handles[component] = {
+      async release() {
+        events.push(component);
+        if (remaining > 0) {
+          remaining -= 1;
+          throw new Error(`${component} release injected failure`);
+        }
+      },
+    };
+  }
+  return {
+    handles,
+    dependencies: {
+      acquireMaintenance: async () => handles.maintenance,
+      acquireTarget: async () => handles.target,
+      acquireSlot: async () => handles.slot,
+      withInventory: async (_opts, callback) => callback(),
+    },
+  };
+}
+
+test('run lease release attempts every component and retries only unresolved handles', async () => {
+  const events = [];
+  const injected = injectedRunLeaseDependencies(events, { slot: 1 });
+  const lease = await acquireCoderSessionRunLease({
+    parentHandle: { path: '/unused-injected-parent' },
+    isolationMode: 'non-isolated',
+    selectLockSlot: async () => 0,
+    classifyAndWrite: async () => ({ result: { admitted: true } }),
+    dependencies: injected.dependencies,
+  });
+
+  await assert.rejects(() => lease.release(), /run lease release incomplete/);
+  assert.deepEqual(events, ['slot', 'target', 'maintenance']);
+  await lease.release();
+  assert.deepEqual(events, ['slot', 'target', 'maintenance', 'slot']);
+});
+
+test('run lease release attempts maintenance after target failure', async () => {
+  const events = [];
+  const injected = injectedRunLeaseDependencies(events, { target: 1 });
+  const lease = await acquireCoderSessionRunLease({
+    parentHandle: { path: '/unused-injected-parent' },
+    isolationMode: 'non-isolated',
+    selectLockSlot: async () => 0,
+    classifyAndWrite: async () => ({ result: { admitted: true } }),
+    dependencies: injected.dependencies,
+  });
+
+  await assert.rejects(() => lease.release(), /run lease release incomplete/);
+  assert.deepEqual(events, ['slot', 'target', 'maintenance']);
+  await lease.release();
+  assert.deepEqual(events, ['slot', 'target', 'maintenance', 'target']);
+});
+
+test('concurrent run lease release shares one in-flight attempt and invalidates inventory immediately', async () => {
+  const events = [];
+  const injected = injectedRunLeaseDependencies(events);
+  for (const handle of Object.values(injected.handles)) {
+    const release = handle.release;
+    handle.release = async function delayedRelease() {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return release.call(this);
+    };
+  }
+  const lease = await acquireCoderSessionRunLease({
+    parentHandle: { path: '/unused-injected-parent' },
+    isolationMode: 'non-isolated',
+    selectLockSlot: async () => 0,
+    classifyAndWrite: async () => ({ result: { admitted: true } }),
+    dependencies: injected.dependencies,
+  });
+
+  const first = lease.release();
+  const second = lease.release();
+  await assert.rejects(() => lease.withInventory(async () => {}), /already released/);
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['slot', 'target', 'maintenance']);
+  await lease.release();
+  assert.deepEqual(events, ['slot', 'target', 'maintenance']);
+});
+
+test('admission abort retries a one-shot slot release and preserves the acquisition error', async () => {
+  const events = [];
+  const injected = injectedRunLeaseDependencies(events, { slot: 1 });
+  await assert.rejects(
+    () => acquireCoderSessionRunLease({
+      parentHandle: { path: '/unused-injected-parent' },
+      isolationMode: 'non-isolated',
+      selectLockSlot: async () => 0,
+      classifyAndWrite: async () => { throw new Error('admission failed'); },
+      dependencies: injected.dependencies,
+    }),
+    (err) => {
+      assert.equal(err.message, 'admission failed');
+      return true;
+    },
+  );
+  assert.deepEqual(events, ['slot', 'target', 'slot', 'maintenance']);
+
+  // A cleanup that succeeded after the retry must not leave the next
+  // admission blocked on a leaked slot/target marker.
+  const next = await acquireCoderSessionRunLease({
+    parentHandle: { path: '/unused-injected-parent' },
+    isolationMode: 'non-isolated',
+    selectLockSlot: async () => 0,
+    classifyAndWrite: async () => ({ result: { admitted: true } }),
+    dependencies: injected.dependencies,
+  });
+  await next.release();
+});
+
+test('admission abort retries one-shot release failures for every acquired component', async () => {
+  const expected = {
+    slot: ['slot', 'target', 'slot', 'maintenance'],
+    target: ['slot', 'target', 'target', 'maintenance'],
+    maintenance: ['slot', 'target', 'maintenance', 'maintenance'],
+  };
+  for (const component of Object.keys(expected)) {
+    const events = [];
+    const injected = injectedRunLeaseDependencies(events, { [component]: 1 });
+    await assert.rejects(
+      () => acquireCoderSessionRunLease({
+        parentHandle: { path: '/unused-injected-parent' },
+        isolationMode: 'non-isolated',
+        selectLockSlot: async () => 0,
+        classifyAndWrite: async () => { throw new Error(`${component} admission failure`); },
+        dependencies: injected.dependencies,
+      }),
+      new RegExp(`${component} admission failure`),
+    );
+    assert.deepEqual(events, expected[component], component);
+  }
+});
+
+test('permanent admission cleanup failure is aggregate and retains the original cause', async () => {
+  const events = [];
+  const injected = injectedRunLeaseDependencies(events, { slot: Number.POSITIVE_INFINITY });
+  await assert.rejects(
+    () => acquireCoderSessionRunLease({
+      parentHandle: { path: '/unused-injected-parent' },
+      isolationMode: 'non-isolated',
+      selectLockSlot: async () => 0,
+      classifyAndWrite: async () => { throw new Error('original admission failure'); },
+      dependencies: injected.dependencies,
+    }),
+    (err) => {
+      assert.ok(err instanceof AggregateError);
+      assert.equal(err.cause.message, 'original admission failure');
+      assert.ok(err.errors.some((cause) => /slot release injected failure/.test(cause.message)));
+      return true;
+    },
+  );
+  assert.deepEqual(events, ['slot', 'target', 'slot', 'slot', 'maintenance']);
+});
+
+test('retake cleanup retries a one-shot slot release before the next admission', async () => {
+  const events = [];
+  let slotIndex = 0;
+  let targetIndex = 0;
+  let classifyCalls = 0;
+  const handle = (name, failures = 0) => ({
+    async release() {
+      events.push(name);
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error(`${name} release injected failure`);
+      }
+    },
+  });
+  const slots = [handle('slot-0', 1), handle('slot-1')];
+  const targets = [handle('target-0'), handle('target-1')];
+  const maintenance = handle('maintenance');
+  const lease = await acquireCoderSessionRunLease({
+    parentHandle: { path: '/unused-injected-parent' },
+    isolationMode: 'non-isolated',
+    selectLockSlot: async () => slotIndex,
+    classifyAndWrite: async () => {
+      classifyCalls += 1;
+      return classifyCalls === 1 ? { retake: true } : { result: { admitted: true } };
+    },
+    dependencies: {
+      acquireMaintenance: async () => maintenance,
+      acquireTarget: async () => targets[targetIndex++],
+      acquireSlot: async () => slots[slotIndex++],
+      withInventory: async (_opts, callback) => callback(),
+    },
+  });
+  assert.equal(lease.lockSlot, 1);
+  await lease.release();
+  assert.deepEqual(events, ['slot-0', 'target-0', 'slot-0', 'slot-1', 'target-1', 'maintenance']);
 });

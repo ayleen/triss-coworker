@@ -86,9 +86,13 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'triss-status-nokey-')));
   const origCwd = process.cwd();
   const origHome = process.env.HOME;
-  const origKey = process.env.ZHIPU_API_KEY;
+  // The block gates on coderCredentialReady() — ANY of the five provider
+  // keys enables coder — so the test must clear them ALL, not just
+  // ZHIPU_API_KEY, to stay hermetic against a developer's exported keys.
+  const savedKeys = ['TRISS_WORKER_API_KEY', 'ZHIPU_API_KEY', 'OPENCODE_API_KEY', 'MOONSHOT_API_KEY', 'KIMI_API_KEY']
+    .map((name) => [name, process.env[name]]);
   process.env.HOME = dir;
-  delete process.env.ZHIPU_API_KEY;
+  for (const [name] of savedKeys) delete process.env[name];
   process.chdir(dir);
   try {
     const out = stripAnsi(await captureStdout(runStatus)());
@@ -100,8 +104,10 @@ test('runStatus: the coder block is hidden when ZHIPU_API_KEY is not configured'
   } finally {
     process.chdir(origCwd);
     process.env.HOME = origHome;
-    if (origKey === undefined) delete process.env.ZHIPU_API_KEY;
-    else process.env.ZHIPU_API_KEY = origKey;
+    for (const [name, value] of savedKeys) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -149,18 +155,17 @@ test(
 );
 
 test(
-  'runStatus: shows the crush version with a pin-check label when crush is detected',
+  'runStatus: shows the crush version with a minimum-check label when crush is detected',
   withTmpKey(async () => {
     const dirty = 'crush version v0.0.0-20260704214312-f45bb790a171+dirty';
     const out = stripAnsi(
       await captureStdout(() => runStatus({ spawnSync: fakeSh({ crushVersion: dirty }) }))(),
     );
-    // crush ≥0.1.3 reports a clean semver and detect() parses the numeric
-    // core, so the dirty dev string surfaces as the bare `0.0.0` — below the
-    // pin, so it's flagged yellow with the pin (mirrors opencode's
-    // below-pin label). The raw +dirty marker no longer appears in the label.
-    assert.match(out, /crush\s+0\.0\.0/);
-    assert.match(out, /pin: 0\.1\.6/);
+    // A prerelease/dirty build is not a stable installed version, so status
+    // preserves the raw diagnostic and marks it below the configured minimum.
+    assert.match(out, /crush\s+crush version v0\.0\.0-20260704214312-f45bb790a171\+dirty/);
+    assert.match(out, /minimum: 0\.1\.6/);
+    assert.doesNotMatch(out, /crush\s+0\.0\.0\s/);
     assert.match(out, /crush\.json \[global\]/);
     assert.match(out, /crush\.json \[local\]/);
   }),
@@ -180,9 +185,9 @@ test(
   'runStatus: opencode present but version unknown (empty stdout) shows as installed with version unknown, NOT as not installed',
   withTmpKey(async () => {
     const out = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fakeSh({ opencodeVersion: '' }) }))());
-    // opencode should be shown as installed with "(version unknown)" plus the pin
+    // opencode should be shown as installed with "(version unknown)" plus the minimum
     assert.match(out, /opencode\s+\(version unknown\)/);
-    assert.match(out, new RegExp(`pin: ${PIN_RE}`));
+    assert.match(out, new RegExp(`minimum: ${PIN_RE}`));
     // Should NOT show "not installed"
     assert.doesNotMatch(out, /opencode\s+not installed/);
     // crush line still renders independently (not installed since not provided).

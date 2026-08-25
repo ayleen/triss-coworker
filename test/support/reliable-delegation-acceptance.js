@@ -26,7 +26,6 @@ import {
   reserveCoderSession,
   markCoderSessionRunning,
   markCoderSessionIdle,
-  cleanIdleCoderSession,
   beginCoderSessionDelete,
   listCoderSessions,
   removeCoderSessionRow,
@@ -37,17 +36,6 @@ import { allocateRunIdentity, isAnonymousSlug } from '../../src/coder-orchestrat
 export const SESSION_CAP_CODE = 'TRISS_CODER_SESSION_CAP';
 
 const FP = 'f'.repeat(64);
-
-// Exact current-owner tuple of a row, as the transitions now require it.
-function tupleOf(row) {
-  return {
-    runId: row.run_id,
-    sandboxId: row.sandbox_id,
-    pid: row.pid,
-    processStartId: row.process_start_id,
-    bootId: row.boot_id,
-  };
-}
 
 /**
  * Run the synthetic session acceptance suite against injected inventory
@@ -70,10 +58,6 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
   await mkdir(opencodeDir, { mode: 0o700, recursive: true });
   await mkdir(crushDir, { mode: 0o700, recursive: true });
 
-  // Canonical reserved rows by slug: later cases mutate a row only through
-  // its exact current owner tuple captured at reservation time.
-  const reservedRows = new Map();
-
   const reserve = (dir, engine, slug) =>
     reserveCoderSession({
       inventoryDir: dir,
@@ -91,7 +75,7 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
   // 0. Same-slug/different-engine isolation: each engine owns its own row.
   try {
     await reserve(crushDir, 'crush', 'same-slug');
-    const opencodeSameSlugRow = await reserve(opencodeDir, 'opencode', 'same-slug');
+    await reserve(opencodeDir, 'opencode', 'same-slug');
     const opencodeRows = await listCoderSessions({ inventoryDir: opencodeDir });
     const crushRows = await listCoderSessions({ inventoryDir: crushDir });
     if (opencodeRows.filter((r) => r.slug === 'same-slug').length !== 1 ||
@@ -101,20 +85,17 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
       pass('same-slug/different-engine isolation: independent per-engine rows');
     }
     // Release the opencode slot so the admission cap test sees a fresh store.
-    // Exact-owner migration: delete with the ACTUAL reserved row's owner
-    // tuple, then remove with the deleting row's exact tuple.
-    const deleting = await beginCoderSessionDelete({
+    await beginCoderSessionDelete({
       inventoryDir: opencodeDir,
       engine: 'opencode',
       slug: 'same-slug',
-      ...tupleOf(opencodeSameSlugRow),
+      runId: 'run-same-slug',
+      sandboxId: 'sbx_'.concat('b'.repeat(32)),
+      pid: 100,
+      processStartId: 'ps-1',
+      bootId: 'boot-1',
     });
-    await removeCoderSessionRow({
-      inventoryDir: opencodeDir,
-      engine: 'opencode',
-      slug: 'same-slug',
-      ...tupleOf(deleting),
-    });
+    await removeCoderSessionRow({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'same-slug' });
   } catch (err) {
     fail('same-slug/different-engine isolation', err);
   }
@@ -123,10 +104,7 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
   //    spawn with TRISS_CODER_SESSION_CAP.
   try {
     for (let i = 1; i <= INVENTORY_MAX_ENTRIES; i += 1) {
-      const slug = `sess-${i}`;
-      // Store each canonical reserved row: its exact owner tuple (including
-      // the store-generated sandboxId) is required by later transitions.
-      reservedRows.set(slug, await reserve(opencodeDir, 'opencode', slug));
+      await reserve(opencodeDir, 'opencode', `sess-${i}`);
     }
     let capError = null;
     try {
@@ -151,24 +129,18 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
 
   // 2. Clean one exact engine/slug row; capacity is reclaimed.
   try {
-    const reservedRow = reservedRows.get('sess-1');
-    const running = await markCoderSessionRunning({
+    await markCoderSessionRunning({
       inventoryDir: opencodeDir,
       engine: 'opencode',
       slug: 'sess-1',
-      ...tupleOf(reservedRow),
+      runId: 'run-sess-1',
+      pid: 100,
+      processStartId: 'ps-1',
+      bootId: 'boot-1',
     });
-    await markCoderSessionIdle({
-      inventoryDir: opencodeDir,
-      engine: 'opencode',
-      slug: 'sess-1',
-      ...tupleOf(running),
-    });
-    // The IDLE row carries no owner tuple, so clean it with the real atomic
-    // cleanIdleCoderSession using ONE fresh canonical owner tuple
-    // (idle -> deleting -> removed under one critical section) — never
-    // begin-delete with the stale running tuple.
-    await cleanIdleCoderSession({
+    await markCoderSessionIdle({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'sess-1' });
+    const { beginCoderSessionDelete } = await import('../../src/coder-session-transitions.js');
+    await beginCoderSessionDelete({
       inventoryDir: opencodeDir,
       engine: 'opencode',
       slug: 'sess-1',
@@ -178,6 +150,7 @@ export async function runSyntheticSessionAcceptance({ trissRoot, log = () => {} 
       processStartId: 'ps-1',
       bootId: 'boot-1',
     });
+    await removeCoderSessionRow({ inventoryDir: opencodeDir, engine: 'opencode', slug: 'sess-1' });
     const after = await listCoderSessions({ inventoryDir: opencodeDir });
     if (after.length !== INVENTORY_MAX_ENTRIES - 1) {
       fail('clean reclaims capacity', `expected ${INVENTORY_MAX_ENTRIES - 1} rows, got ${after.length}`);

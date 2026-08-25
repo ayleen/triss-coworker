@@ -516,8 +516,9 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    worktree is its reliable safety layer). `provider` selects a complete
    one-shot OpenCode provider pair and requires `model`; `small_model` is
    optional and defaults to `model`. This in-memory selection never rewrites
-   persistent config. For this one-shot path, Triss audits the pinned OpenCode
-   version's complete file graph, then validates the final merged config with
+   persistent config. For this one-shot path, Triss verifies the installed
+   OpenCode build meets the effective minimum (>= `1.18.22`) and audits its
+   complete file graph, then validates the final merged config with
    `debug config --pure` under the sanitized child environment and a random
    canary instead of the real key. Late provider/model overrides, unauditable
    JSONC, and unknown effective config fail closed; the actual run also uses
@@ -536,7 +537,7 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
    `MOONSHOT_API_KEY`), or a Kimi for Coding model (`kimi-for-coding/k3`, needs
    `KIMI_API_KEY`); triss forwards only the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
-  state (`opencode` vs the pinned version, `crush` presence), which
+  state (`opencode` and `crush` versions versus their configured minimums), which
   `opencode.json` / `crush.json` files exist, provider key presence
   (`TRISS_WORKER_API_KEY` / `ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
   `KIMI_API_KEY` — never the value), and how many isolation

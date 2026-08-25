@@ -44,7 +44,6 @@ import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEME
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
-import { processStartIdentity } from '../update/cache.js';
 import {
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
@@ -137,7 +136,34 @@ import {
 } from '../usage-schema.js';
 import { currentCall } from '../call-context.js';
 import { defaultBranchVia } from '../git.js';
+import { openManagedChildDir, openManagedTrissRoot } from '../managed-root.js';
+import {
+  acquireCoderMaintenanceLock,
+  acquireCoderSessionRunLease,
+  acquireCoderSlotLease,
+  acquireCoderTargetLease,
+  withCoderInventoryLock,
+} from '../coder-lease.js';
+// Plain string/number constants: static import keeps the typed admission
+// error codes available to module-level helpers without module-eval coupling.
+import {
+  CODER_SESSION_BUSY_CODE,
+  CODER_SESSION_INCOMPATIBLE_CODE,
+  CODER_SESSION_STORE_INVALID_CODE,
+} from '../coder-session-transitions.js';
+// Canonical engine enums (dependency-neutral single source of truth).
+import {
+  CODER_SESSION_ENGINES,
+  CODER_SESSION_STORE_ENGINES as SESSION_STORE_ENGINES,
+} from '../coder-session-engines.js';
+import {
+  readProjectCoderSessionInventories,
+  resolveProjectCoderSessionSlot,
+  validateProjectCoderSessionCleanupSlot,
+} from '../coder-session-slots.js';
+import { processStartIdentity } from '../update/cache.js';
 import { ZAI_CODING_PLAN_BASE_URL, ZAI_PAYG_BASE_URL } from '../zai.js';
+import { compareStableVersions, parseStableVersion } from '../version.js';
 import {
   OPENCODE_CATALOGUE_TRANSIENT_HTTP_STATUSES,
   isTransientOpenCodeReadError,
@@ -165,10 +191,26 @@ import { auditOpenCode2Run, auditOpenCode2Documents, verifyOpenCode2ContentHashe
 // source set.
 import { enumerateOpenCodeSources, parseOpenCodeDocument } from '../opencode-config.js';
 
-// Pinned opencode-ai version, overridable for testing/upgrades.
-// 1.18.7 (2026-07-27): 1.18.x is bugfix/Desktop work with no `run` CLI
-// changes; 1.18.4 specifically improved Kimi model handling.
-export const OPENCODE_PIN = '1.18.7';
+// Installation/preference minimum for `opencode-ai`, overridable via
+// TRISS_CODER_OPENCODE_VERSION (see opencodeVersionPin()). Drives install
+// suggestions, the installation presence check, AND one-shot credential
+// authorization through the shared resolver: an installed binary at or above
+// the effective minimum is authorized (owner decision, 2026-08). OPENCODE_PIN
+// is a compatibility export retained for callers that have not renamed the
+// field.
+export const OPENCODE_MIN_VERSION_DEFAULT = '1.18.22';
+export const OPENCODE_PIN = OPENCODE_MIN_VERSION_DEFAULT;
+export const OPENCODE_INVALID_MINIMUM_CODE = 'TRISS_CODER_OPENCODE_MINIMUM_INVALID';
+// Triss-owned IMMUTABLE supported security/runtime floor (owner decision,
+// 2026-08): every Triss release supports opencode >= 1.18.22, and a
+// user-supplied TRISS_CODER_OPENCODE_VERSION can never lower this bar — a
+// configured value below it (or any malformed value) is invalid policy and
+// fails with OPENCODE_INVALID_MINIMUM_CODE instead
+// (assertOpencodeMinimumVersion). A VALID higher configured minimum raises the
+// effective runtime/install minimum; it never lowers the floor. There is no
+// exact-audited-build concept anymore: one-shot credential-bearing runs are
+// authorized whenever the installed version satisfies the effective minimum.
+export const OPENCODE_SUPPORTED_FLOOR = '1.18.22';
 // The default assumes a `zai-coding-plan` subscription key, not a pay-as-you-go
 // `zai` key:
 // `zai/glm-*` fails with "Insufficient balance or no resource package" on
@@ -1160,8 +1202,99 @@ const CODER_BRANCH_PREFIX = 'coder/';
 // compliant with this pattern by construction.
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+// User-configured INSTALLATION minimum (TRISS_CODER_OPENCODE_VERSION). This
+// selects what `triss coder init` suggests installing and what ensureEngine
+// treats as installed-well-enough, and (through the ONE shared resolver
+// below) what the one-shot credential gate authorizes: installed >= the
+// effective minimum. A valid higher configured minimum raises that bar; a
+// malformed or below-floor value never lowers it.
 function opencodeVersionPin() {
-  return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_PIN;
+  return process.env.TRISS_CODER_OPENCODE_VERSION || OPENCODE_MIN_VERSION_DEFAULT;
+}
+
+// Pure range comparator over a minimum (default: the configured installation
+// pin). Answers "is this installed version usable as an install target?" —
+// nothing else. It stays intentionally a `>=` check; one-shot credential
+// authorization shares the same >= contract via resolveOpencodeVersionPolicy,
+// so display and enforcement cannot drift.
+export function opencodeVersionMeetsMinimum(installedVersion, minimumVersion = opencodeVersionPin()) {
+  const installed = parseStableVersion(typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion);
+  const minimum = parseStableVersion(minimumVersion);
+  return Boolean(installed && minimum && compareStableVersions(installed, minimum) >= 0);
+}
+
+// resolveOpencodeVersionPolicy: THE shared OpenCode minimum-version policy
+// resolver. Non-throwing; classifies a configured minimum + an installed
+// version into explicit fields so assert/init/run/status cannot diverge:
+//   - configuredMinimum: the raw configured value (TRISS_CODER_OPENCODE_VERSION)
+//   - supportedFloor:    the immutable OPENCODE_SUPPORTED_FLOOR (1.18.22)
+//   - configValid:       false for malformed values AND values below the floor
+//   - effectiveMinimum:  the configured value when valid, else the floor TEXT
+//     (a below-floor/malformed config never lowers the bar — status shows the
+//     effective floor while installedCompatible stays false)
+//   - installedCompatible: parsed installed >= effective minimum. Deliberately
+//     false whenever configValid is false ("never meetsMinimum=true" on broken
+//     policy) and also false when nothing parseable was installed.
+//   - reason: 'compatible' | 'version_unknown' | 'below_minimum' |
+//             'invalid_configured_minimum' | 'below_supported_floor'
+// This is BOTH the installation/preference surface and the one-shot
+// credential-authorization surface (owner decision, 2026-08): an installed
+// binary at or above the effective minimum — default floor 1.18.22, or any
+// valid higher configured minimum — is authorized; there is no exact-build
+// gate anymore.
+export function resolveOpencodeVersionPolicy(installedVersion, minimumVersion = opencodeVersionPin()) {
+  const floor = parseStableVersion(OPENCODE_SUPPORTED_FLOOR);
+  const configuredParsed = parseStableVersion(minimumVersion);
+  const configValid = Boolean(configuredParsed && floor && compareStableVersions(configuredParsed, floor) >= 0);
+  const effectiveMinimum = configValid
+    ? `${configuredParsed.major}.${configuredParsed.minor}.${configuredParsed.patch}`
+    : OPENCODE_SUPPORTED_FLOOR;
+  const installedParsed = parseStableVersion(
+    typeof installedVersion === 'string' ? installedVersion.trim() : installedVersion,
+  );
+  let installedCompatible = false;
+  let reason;
+  if (!configValid) {
+    reason = configuredParsed ? 'below_supported_floor' : 'invalid_configured_minimum';
+  } else if (!installedParsed) {
+    // detectOpencodeVersion returns null (not installed) or '' (installed but
+    // printed nothing usable); both mean there is nothing compatible to claim.
+    reason = 'version_unknown';
+  } else if (compareStableVersions(installedParsed, configuredParsed) >= 0) {
+    reason = 'compatible';
+    installedCompatible = true;
+  } else {
+    reason = 'below_minimum';
+  }
+  return {
+    configuredMinimum: minimumVersion,
+    supportedFloor: OPENCODE_SUPPORTED_FLOOR,
+    configValid,
+    effectiveMinimum,
+    installedCompatible,
+    reason,
+  };
+}
+
+export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin()) {
+  // Throwing adapter over the ONE resolver so run/init/status share policy.
+  const policy = resolveOpencodeVersionPolicy(null, minimumVersion);
+  // One stable typed code for both policy violations: an unparseable value,
+  // and a canonical value BELOW the immutable supported floor. Configuring a
+  // lower minimum must fail closed rather than weaken Triss's floor.
+  if (!policy.configValid) {
+    const reason = policy.reason === 'below_supported_floor'
+      ? `is below the supported floor ${OPENCODE_SUPPORTED_FLOOR}`
+      : 'is not a canonical stable x.y.z version';
+    const error = new Error(
+      `Invalid OpenCode minimum version "${String(minimumVersion)}" (${reason}); ` +
+        `set TRISS_CODER_OPENCODE_VERSION to a canonical stable x.y.z version >= ${OPENCODE_SUPPORTED_FLOOR}. ` +
+        'No installation was attempted.',
+    );
+    error.code = OPENCODE_INVALID_MINIMUM_CODE;
+    throw error;
+  }
+  return parseStableVersion(minimumVersion);
 }
 
 function coderModel() {
@@ -1446,42 +1579,102 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // default model atoms (glm5_2 / glm5_turbo) via `crush models use` so
     // --role smart/fast resolve to GLM deterministically; (2) seed the
     // permissions.run policy (restrict + read-only allow_bash) into crush.json
-    // as a FORWARD-COMPAT gesture — crush 0.1.3 currently IGNORES this block
+    // as a FORWARD-COMPAT gesture — verified crush releases IGNORE this block
     // (docs/engines/crush.md), so it does NOT make crush restricted by
     // itself; the working allowlist is enforced via CLI flags at run time when
     // --restrict is on (see buildCrushRunArgv). The adapter bridges
     // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
     // crush.json here.
+    //
+    // Version policy comes from THE shared resolver/assertion (same source as
+    // runCoderRun): a found-but-incompatible crush is NEVER treated as ready —
+    // no green check, no `crush models use`. A malformed configured minimum
+    // fails closed with the typed policy error. A found-but-below-minimum
+    // binary follows ensureEngine's install/upgrade interaction: offer/install
+    // the EFFECTIVE minimum when normal init is allowed (interactive), fail
+    // with the policy error when it cannot proceed.
     process.stderr.write('\n' + pc.bold('── coder (crush engine) ──') + '\n');
     const sh = deps.spawnSync || nodeSpawnSync;
-    const det = crushEngine.detect(sh);
-    if (det.found && det.version) {
-      // Version mismatch is NON-FATAL: warn yellow, keep going. The install
-      // hint below already carries the pin for an `npm install -g` upgrade.
-      if (det.satisfiesPin) {
-        process.stderr.write(pc.green(`  ✓ crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
-      } else {
-        process.stderr.write(
-          pc.yellow(
-            `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
-              '(not auto-upgrading — permissions.run still seeds into crush.json)\n',
-          ),
-        );
-      }
-    } else {
+    const policy = crushEngine.resolveVersionPolicy(sh);
+    // A malformed configured minimum can never be fixed by installing a
+    // binary: fail closed FIRST with the SAME typed error a run would raise —
+    // before the !policy.found advisory/install path and every crush.json
+    // config/model write.
+    if (!policy.configValid) {
+      throw crushEngine.assertVersionPolicy(policy);
+    }
+    let crushReady = false;
+    if (!policy.found) {
       process.stderr.write(
         pc.yellow(`  ⚠ crush not found — install: ${crushEngine.installHint()}\n`),
       );
+    } else if (policy.compatible) {
+      process.stderr.write(
+        pc.green(`  ✓ crush ${policy.installedVersion} (meets minimum ${policy.effectiveMinimum})\n`),
+      );
+      crushReady = true;
+    } else {
+      const eff = policy.effectiveMinimum;
+      const upgradeCmd = `npm install -g @phpcraftdream/crush@${eff}`;
+      if (policy.reason === 'version_unknown') {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ crush version could not be determined (${JSON.stringify(policy.installedVersion)}), ` +
+              `minimum supported version is ${eff}\n`,
+          ),
+        );
+      } else {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ crush ${policy.installedVersion} found, minimum supported version is ${eff}\n`,
+          ),
+        );
+      }
+      // Offer/install the effective minimum following ensureEngine's existing
+      // interaction pattern. Non-interactive shells cannot confirm an install:
+      // fail closed with the shared policy error. An injected
+      // deps.confirmInstall (the established test seam) bypasses only the TTY
+      // probe, never the policy itself.
+      let proceed;
+      if (deps.confirmInstall) {
+        proceed = await deps.confirmInstall();
+      } else if (!process.stdin.isTTY) {
+        throw crushEngine.assertVersionPolicy(policy);
+      } else {
+        proceed = await yesNo(`  Install @phpcraftdream/crush@${eff} globally via npm?`, true);
+      }
+      if (!proceed) {
+        process.stderr.write(pc.dim(`  · skipped — install manually later: ${upgradeCmd}\n`));
+      } else {
+        const npmCheck = sh('npm', ['--version']);
+        if (!npmCheck || npmCheck.error || npmCheck.status !== 0) {
+          throw new Error(`npm not found — install Node.js/npm, then run manually: ${upgradeCmd}`);
+        }
+        const install = sh('npm', ['install', '-g', `@phpcraftdream/crush@${eff}`], { stdio: 'inherit' });
+        if (!install || install.error || install.status !== 0) {
+          throw new Error(`Failed to install @phpcraftdream/crush@${eff} — run manually: ${upgradeCmd}`);
+        }
+        const after = crushEngine.resolveVersionPolicy(sh);
+        if (after.compatible) {
+          process.stderr.write(pc.green(`  ✓ crush ${after.installedVersion} installed\n`));
+          crushReady = true;
+        } else {
+          process.stderr.write(
+            pc.yellow('  ⚠ install finished but crush still does not meet the minimum\n'),
+          );
+        }
+      }
     }
     const hint = crushEngine.crushDefaultModelsHint();
     process.stderr.write(
       pc.dim(`  · default models: ${hint.large} (large) / ${hint.small} (small)\n`),
     );
-    // Only attempt the models write when crush is actually present; otherwise
-    // the install hint above is the actionable line and `models use` would just
-    // fail with ENOENT. Non-fatal: a non-zero exit returns {ok:false} and is
-    // surfaced yellow, never thrown (init still exits 0).
-    if (det.found) {
+    // Only run the models write when the installed binary is actually READY
+    // (present AND meets the effective minimum); otherwise the advisory above
+    // is the actionable line and treating an incompatible build as ready would
+    // be exactly the drift this gate removes. Non-fatal: a non-zero exit
+    // returns {ok:false} and is surfaced yellow, never thrown (init exits 0).
+    if (crushReady) {
       const res = crushEngine.configureCrushModels({ scope, sh });
       process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
       // Seed permissions.run AFTER `crush models use` has written the models
@@ -1489,9 +1682,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
       // (warned) when crush.json already has a user-set permissions.run.
       seedCrushPermissions(scope);
     } else {
-      // crush binary absent: still seed permissions.run into crush.json if we
-      // can, so the policy is in place the moment the user installs crush.
-      // (crush.json may not exist yet — seedCrushPermissions creates it.)
+      // crush absent or still incompatible: still seed permissions.run into
+      // crush.json if we can, so the policy is in place the moment a
+      // compatible crush lands. (crush.json may not exist yet —
+      // seedCrushPermissions creates it.)
       seedCrushPermissions(scope);
     }
   }
@@ -2229,24 +2423,25 @@ function detectOpencodeVersion(sh) {
 
 async function ensureEngine(sh, confirmInstall) {
   const pin = opencodeVersionPin();
+  assertOpencodeMinimumVersion(pin);
   const version = detectOpencodeVersion(sh);
   if (version !== null) {
-    if (version && version === pin) {
-      process.stderr.write(pc.green(`  ✓ opencode ${version} (matches pin)\n`));
+    if (version && opencodeVersionMeetsMinimum(version, pin)) {
+      process.stderr.write(pc.green(`  ✓ opencode ${version} (meets minimum ${pin})\n`));
     } else if (version) {
       process.stderr.write(
-        pc.yellow(`  ⚠ opencode ${version} found, pinned version is ${pin} (not auto-upgrading)\n`),
+        pc.yellow(`  ⚠ opencode ${version} found, minimum supported version is ${pin} (not auto-upgrading)\n`),
       );
     } else {
       process.stderr.write(
-        pc.yellow(`  ⚠ opencode found (version unknown), pinned version is ${pin} (not auto-upgrading)\n`),
+        pc.yellow(`  ⚠ opencode found (version unknown), minimum supported version is ${pin} (not auto-upgrading)\n`),
       );
     }
     return;
   }
 
   const installCmd = `npm install -g opencode-ai@${pin}`;
-  process.stderr.write(pc.dim(`  · opencode not found (pinned version: ${pin})\n`));
+  process.stderr.write(pc.dim(`  · opencode not found (minimum supported version: ${pin})\n`));
 
   // Non-interactive shell (CI, pipe): never install unattended — throw so
   // the caller sees a clear, actionable error (same shape as the
@@ -3451,10 +3646,11 @@ export function describeCoderStatus(deps = {}) {
   } catch {
     worktreeCount = 0;
   }
-  // Crush detection is presence-only (crush
-  // --version reports a dirty dev string; see docs/engines/crush.md); crush.json
-  // presence is a best-effort file check, never parsed deeply. Never throws.
-  const crushDetect = crushEngine.detect(sh);
+  // Crush detection goes through the ONE shared policy resolver (same source
+  // runCoderRun asserts against) so status can never claim readiness that a
+  // run would reject. Read-only; never throws.
+  const crushPolicy = crushEngine.resolveVersionPolicy(sh);
+  const ocPolicy = resolveOpencodeVersionPolicy(engineVersion, pin);
   const crushConfigs = ['global', 'local'].map((scope) => {
     const path = crushConfigPath(scope);
     return { scope, path, exists: existsSync(path) };
@@ -3476,14 +3672,33 @@ export function describeCoderStatus(deps = {}) {
   const defaultSmallModel = coderSmallModel();
   return {
     pin,
+    minimumVersion: pin,
     engineVersion,
+    // Real policy state (ONE resolver, shared with assert/init/run): a
+    // below-floor or malformed TRISS_CODER_OPENCODE_VERSION is INVALID
+    // configuration — status shows the effective floor 1.18.22 and NEVER
+    // meetsMinimum=true for it.
+    meetsMinimum: ocPolicy.installedCompatible,
+    configValid: ocPolicy.configValid,
+    configuredMinimum: ocPolicy.configuredMinimum,
+    supportedFloor: ocPolicy.supportedFloor,
+    effectiveMinimum: ocPolicy.effectiveMinimum,
+    reason: ocPolicy.reason,
     configs,
     worktreeCount,
     crush: {
-      found: crushDetect.found,
-      version: crushDetect.version,
-      satisfiesPin: crushDetect.satisfiesPin,
-      pin: crushEngine.CRUSH_PIN,
+      found: crushPolicy.found,
+      version: crushPolicy.installedVersion,
+      // Compatibility fields stay coherent with the shared policy verdict.
+      satisfiesPin: crushPolicy.compatible,
+      meetsMinimum: crushPolicy.compatible,
+      minimumVersion: crushPolicy.effectiveMinimum,
+      pin: crushPolicy.effectiveMinimum,
+      supportedFloor: crushPolicy.supportedFloor,
+      configuredMinimum: crushPolicy.configuredMinimum,
+      configValid: crushPolicy.configValid,
+      effectiveMinimum: crushPolicy.effectiveMinimum,
+      reason: crushPolicy.reason,
       configs: crushConfigs,
     },
     opencode2: {
@@ -3894,7 +4109,6 @@ function readSessionsMap() {
 // V2 read).
 
 const SESSION_STORE_VERSION = 2;
-const SESSION_STORE_ENGINES = ['opencode', 'opencode2'];
 
 // Normalize any on-disk shape (legacy flat map OR versioned) into the
 // versioned in-memory shape. Pure: never mutates the argument.
@@ -4126,6 +4340,63 @@ export function persistSessionMapping(sh, engine, slug, realId, deps = {}) {
   if (gitRepoRoot(sh, projectRoot())) addToGitignore(`${TRISS_STATE_DIR}/`);
 }
 
+/**
+ * Remove one slug's mapping from the versioned session store (the
+ * engine-owned session artifact `session clean` must clear before the
+ * inventory row disappears). No-op for engines without a store namespace and
+ * for an absent store file; read-modify-write under the same sessions lock as
+ * persistSessionMapping so a concurrent run can never resurrect or lose a
+ * mapping. Idempotent: removing an already-absent slug succeeds.
+ */
+export function removeSessionStoreMapping(engine, slug) {
+  // crush has no namespace in the versioned store — nothing to remove.
+  if (!SESSION_STORE_ENGINES.includes(engine)) return false;
+  const path = sessionsFilePath();
+  if (!existsSync(path)) return false;
+  const lockHandle = acquireCoderMutationLock('sessions', 'store', { lockPath: sessionsLockPath() });
+  try {
+    const store = readSessionStore();
+    const namespace = store.engines[engine];
+    if (!namespace || !Object.prototype.hasOwnProperty.call(namespace, slug)) return false;
+    delete namespace[slug];
+    atomicWriteJson(path, store);
+    return true;
+  } finally {
+    if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
+  }
+}
+
+/**
+ * Classify the DURABLE engine-owned session-store mapping for one slug —
+ * the lifecycle authority for whether a row may claim to be continuable.
+ * Returns { state, realId }:
+ *   not_applicable  engine keeps no store namespace (crush)
+ *   absent          no mapping for the slug (nothing published)
+ *   matching        slug -> string realId present (== expectedRealId when given)
+ *   mismatch        mapping exists but differs from expectedRealId, or the
+ *                   store is malformed/unreadable (fail closed, retain)
+ */
+function classifySessionStoreMapping(engine, slug, expectedRealId) {
+  if (!SESSION_STORE_ENGINES.includes(engine)) return { state: 'not_applicable', realId: null };
+  try {
+    const namespace = readSessionStore().engines[engine];
+    if (!namespace || !Object.prototype.hasOwnProperty.call(namespace, slug)) {
+      return { state: 'absent', realId: null };
+    }
+    const value = namespace[slug];
+    if (typeof value !== 'string' || value.length === 0) return { state: 'mismatch', realId: null };
+    if (expectedRealId !== undefined && value !== expectedRealId) {
+      return { state: 'mismatch', realId: value };
+    }
+    return { state: 'matching', realId: value };
+  } catch (err) {
+    // A malformed/unreadable store is mismatch by definition: fail closed.
+    // The ORIGINAL store error is preserved so callers can surface the real
+    // corruption diagnostic instead of a generic orphan/mismatch message.
+    return { state: 'mismatch', realId: null, unreadable: true, cause: err };
+  }
+}
+
 // Write-then-rename so a reader never observes a partially-written file.
 // renameSync is atomic on the same filesystem, which the tmp file always
 // is (same directory as the target).
@@ -4246,6 +4517,12 @@ function setupIsolation(sh, slug) {
 // status --porcelain default listing skips gitignored seed files, so a
 // freshly-seeded-but-untouched worktree still reads as clean here).
 function cleanupAbandonedIsolation(sh, isolation) {
+  // Reentrancy guard: the outer opencode2 catch now ALSO invokes cleanup on
+  // any unwind after setupIsolation. An inner catch may already have run it;
+  // probing (or worse, force-removing) the same worktree twice is at best
+  // noise and at worst unsafe, so only the first attempt per isolation acts.
+  if (!isolation || isolation.abandonedCleanupAttempted) return;
+  isolation.abandonedCleanupAttempted = true;
   const status = sh('git', ['-C', isolation.wtPath, 'status', '--porcelain']);
   const clean = status && !status.error && status.status === 0 && String(status.stdout || '').trim() === '';
   if (!clean) {
@@ -4407,28 +4684,20 @@ const RESIDUAL_GROUP_TERM_GRACE_MS = 250;
 const RESIDUAL_GROUP_KILL_WAIT_MS = 1000;
 const PROCESS_GROUP_POLL_MS = 25;
 
-// Stable structural marker: the engine's process group could NOT be proven
-// dead after the run (group alive after SIGKILL, or a strict signal/probe
-// failure left the result unknown). Engine-branch error handling MUST inspect
-// this marker: while cleanup is unverified the v2 session row keeps its exact
-// running state so a same-slug claim stays busy, and only an explicit
-// recovery operation (with proof the group is gone) may touch the row.
+// The engine process group could not be proven dead. Callers must retain the
+// exact running session row and must not remove its worktree; only explicit
+// recovery after an independent empty-tree proof may clear ownership.
 const CODER_PROCESS_GROUP_STILL_ALIVE = 'CODER_PROCESS_GROUP_STILL_ALIVE';
 
-// Build the typed unverified-cleanup error. `cause` preserves the original
-// cleanup error when one exists; the message text is unchanged from the
-// historical diagnostics. The handle/context fields carry no secrets.
 function unverifiedProcessGroupCleanup(message, cause) {
-  const error = cause !== undefined ? new Error(message, { cause }) : new Error(message);
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
   error.code = CODER_PROCESS_GROUP_STILL_ALIVE;
   error.cleanupVerified = false;
   return error;
 }
 
-function isUnverifiedProcessGroupCleanup(err) {
-  return Boolean(err) &&
-    err.code === CODER_PROCESS_GROUP_STILL_ALIVE &&
-    err.cleanupVerified === false;
+function isUnverifiedProcessGroupCleanup(error) {
+  return error?.code === CODER_PROCESS_GROUP_STILL_ALIVE && error.cleanupVerified === false;
 }
 // How often to poll the engine log for a usage-limit line while a run is in
 // flight. On a rate-limited run opencode emits nothing on stdout and retries
@@ -4457,8 +4726,6 @@ function killProcessGroup(
     // therefore means "still observable", not "already gone".
     if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
-    // A failed strict signal leaves cleanup UNVERIFIED: type it so terminal
-    // session handling can refuse to finalize/abandon the row.
     throw unverifiedProcessGroupCleanup(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
       err,
@@ -5059,6 +5326,10 @@ async function runCrushFlow({
   sessionV2 = null,
   // Already resolved by runCoderRun — crush is always protected_proxy.
   credentialMode,
+  // Resolved AND asserted by runCoderRun BEFORE isolation/proxy/session side
+  // effects. REQUIRED for a spawn to be reachable; the fallback re-resolve
+  // only covers direct internal callers (tests).
+  crushPolicy = null,
 }) {
   assertCoderCredentialMode(credentialMode);
   let crushSpawnStartMs;
@@ -5094,23 +5365,13 @@ async function runCrushFlow({
       : deps.proxy || null,
   );
 
-  // Version detect: crush 0.1.3+ reports a clean semver, so detect() now
-  // parses it and returns satisfiesPin. NON-FATAL: a mismatch warns yellow
-  // and the run continues (the restrict-run policy still applies via crush.json).
-  const det = crushEngine.detect(sh);
-  const engineVersion = det.version || crushEngine.CRUSH_PIN;
-  if (det.found && det.version) {
-    if (det.satisfiesPin) {
-      process.stderr.write(pc.dim(`  · crush ${det.version} (matches pin ${crushEngine.CRUSH_PIN})\n`));
-    } else {
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ crush ${det.version} found, pinned version is ${crushEngine.CRUSH_PIN} ` +
-            '(not auto-upgrading)\n',
-        ),
-      );
-    }
-  }
+  // Version policy was ASSERTED upstream (runCoderRun) before any side effect:
+  // only a compatible binary reaches this point, so this is a read-only echo of
+  // the shared resolver for the envelope's engine_version — never an
+  // independent admission decision and never a warning-and-continue path. The
+  // "(meets minimum …)" line was already printed by the runCoderRun gate.
+  const policy = crushPolicy || crushEngine.resolveVersionPolicy(sh);
+  const engineVersion = policy.installedVersion || crushEngine.CRUSH_PIN;
 
   process.stderr.write(
     pc.dim(
@@ -5143,10 +5404,6 @@ async function runCrushFlow({
       processGroupPollMs: deps.processGroupPollMs,
     });
   } catch (err) {
-    // UNVERIFIED process-group cleanup: the old engine tree may still be
-    // alive and writing, so the isolation worktree must NOT be removed.
-    // Rethrow the typed error untouched for the outer session-aware
-    // handler (it keeps the v2 row running and rethrows).
     if (isUnverifiedProcessGroupCleanup(err)) throw err;
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw err;
@@ -5277,6 +5534,17 @@ async function runCrushFlow({
     changed: (filesChanged || []).length > 0,
   });
 
+  // Finalization MUST precede lifecycle derivation and envelope assembly.
+  // Admission is not persistence evidence; only a confirmed typed outcome may
+  // authorize session_persistence=persistent.
+  const completionOutcome = await completeV2SessionRow(sessionV2, parsed.session_id);
+  if (completionOutcome === 'retained_for_recovery') {
+    throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+  }
+  if (completionOutcome === 'removed_unusable' && sessionV2) {
+    warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+  }
+
   // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
   // observed crush facts; crush exposes no per-event activity stream, so
   // tool activity is derived from its tool_calls array.
@@ -5295,6 +5563,8 @@ async function runCrushFlow({
     isolated: !!isolation,
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(session),
+    v2SessionAdmitted: sessionV2 != null,
+    completionOutcome,
   });
   const finishedAtMs = Date.now();
 
@@ -5350,12 +5620,8 @@ async function runCrushFlow({
   // Injectable so tests don't have to monkey-patch process.stdout.write
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
-  // Terminal session transaction BEFORE the success envelope: the v2 row
-  // must reach idle before success JSON reaches stdout — a mark-idle
-  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-  // instead of reporting a success that never finalized.
-  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
+  return { completionOutcome };
 }
 
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
@@ -5498,15 +5764,9 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
 // The production run reserves a v2 session row BEFORE spawn, marks it
 // running, and completes it to idle (or deletes it on failure), so the
 // `coder session list|clean` commands finally observe REAL runs instead of
-// only rows created by direct store tests. Admission is FAIL-CLOSED: every
-// reservation error throws before spawn. ONLY the explicit closed allowlist
-// of stable session codes (STABLE_SESSION_ADMISSION_CODES below) propagates
-// unchanged; every other error — unknown codes or bare system codes such as
-// ENOENT/EACCES — wraps as CODER_SESSION_ADMISSION_FAILED with the original
-// error preserved as cause. The single
-// exception is a row this run PROVED absent — its own stranded `reserved`
-// row was rolled back successfully (sessionRollbackVerified) — which alone
-// degrades to the dim warning + null contract.
+// only rows created by direct store tests. Store failures degrade to a dim
+// warning — the legacy .triss/sessions.json map stays authoritative for
+// continuation until persistent sessions become eligibility-enforced.
 
 export function currentBootIdentity({
   platform = process.platform,
@@ -5549,36 +5809,50 @@ export function currentSessionOwnerTuple(overrides = {}) {
   const processStartId = overrides.processStartId ?? processStartIdentity(pid);
   const bootId = overrides.bootId ?? currentBootIdentity();
   if (!Number.isInteger(pid) || pid <= 0 || !processStartId || !bootId) {
-    // Typed so admission can propagate identity unavailability unchanged
-    // instead of misclassifying it as an unknown store failure.
-    const err = new Error('coder-session: current process owner identity is unavailable');
-    err.code = 'CODER_SESSION_IDENTITY_UNAVAILABLE';
-    throw err;
+    throw new Error('coder-session: current process owner identity is unavailable');
   }
   return { pid, processStartId, bootId };
 }
 
-// Closed allowlist of stable session codes that admission propagates
-// UNCHANGED out of reserveV2SessionRow's fail-closed catch, so callers can
-// distinguish busy claims, isolation/fingerprint refusals, lock timeouts,
-// corrupt/IO-failed stores, durability-unknown writes, identity
-// unavailability, and rollback aggregates by their exact stable code.
-// Anything outside this Set — unknown codes or bare system codes such as
-// ENOENT/EACCES — wraps as CODER_SESSION_ADMISSION_FAILED with the original
-// error preserved as cause.
-const STABLE_SESSION_ADMISSION_CODES = new Set([
-  'CODER_SESSION_BUSY',
-  'CODER_SESSION_ISOLATION_MISMATCH',
-  'CODER_SESSION_FINGERPRINT_MISMATCH',
-  'CODER_SESSION_LOCK_TIMEOUT',
-  'CODER_SESSION_STORE_INVALID',
-  'CODER_SESSION_STORE_IO',
-  'CODER_SESSION_DURABILITY_UNKNOWN',
-  'CODER_SESSION_IDENTITY_UNAVAILABLE',
-  'CODER_SESSION_ROLLBACK_FAILED',
-]);
+function storeInvalidError(detail, code) {
+  const error = new Error(`coder-session: canonical store unusable — ${detail} (retain, fail closed)`);
+  // A typed reader code (e.g. TRISS_CODER_SESSION_LEGACY_SCHEMA for a
+  // released v0.39.0 schema-1 inventory) must survive the rewrap.
+  error.code = code || CODER_SESSION_STORE_INVALID_CODE;
+  return error;
+}
 
-export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps = {}) {
+// Two FIRST-EVER runs in one project may race the identity file creation
+// (exclusive create); the loser re-opens what the winner wrote — same id.
+async function loadProjectIdentityWithRaceRetry(trissHandle, attempts = 3) {
+  const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await loadOrCreateProjectIdentity(trissHandle);
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+// True iff the row's complete owner tuple is EXACTLY this run cycle's —
+// including the IMMUTABLE session_instance_id minted at THIS admission. A
+// same-slug replacement row (new incarnation, even with a coinciding
+// millisecond created_at) never matches.
+function rowOwnedByRun(row, sessionV2) {
+  return Boolean(row)
+    && row.run_id === sessionV2.runId
+    && row.sandbox_id === sessionV2.sandboxId
+    && row.pid === sessionV2.pid
+    && row.process_start_id === sessionV2.processStartId
+    && row.boot_id === sessionV2.bootId
+    && row.session_instance_id === sessionV2.instanceId;
+}
+
+export async function reserveV2SessionRow({ engine, slug, isolated, ownerTuple, dependencies = {} }) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5586,298 +5860,529 @@ export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps 
   if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) {
     return null;
   }
+  let owner;
   try {
-    // ONE owner tuple for the whole admission cycle: the claim and any
-    // follow-up transition must carry IDENTICAL (pid, processStartId, bootId)
-    // evidence or canonical validation rejects the row. Unavailable host
-    // identity throws CODER_SESSION_IDENTITY_UNAVAILABLE here, which
-    // propagates unchanged through the catch below.
-    const owner = (deps.currentSessionOwnerTuple || currentSessionOwnerTuple)();
-    const transitions = await import('../coder-session-transitions.js');
-    // Narrow injectable seams (tests only): forcing the claim or the
-    // reserved->running transition to fail deterministically, plus the
-    // acquireLock/lockRetryMs/inventoryFs mutex seams forwarded verbatim to
-    // the REAL transitions. Everything else always uses the real module —
-    // no broader abstraction, and production defaults are unchanged.
-    const markCoderSessionRunning =
-      deps.markCoderSessionRunning || transitions.markCoderSessionRunning;
-    const claimCoderSession = deps.claimCoderSession || transitions.claimCoderSession;
-    const { sessionInventoryPath } = transitions;
-    const lockSeam = {
-      acquireLock: deps.acquireLock,
-      lockRetryMs: deps.lockRetryMs,
-      inventoryFs: deps.inventoryFs,
-    };
-    const { loadOrCreateProjectIdentity, projectRootFingerprint } =
-      await import('../coder-state.js');
-    const { mkdir } = await import('node:fs/promises');
-    const trissRoot = join(projectRoot(), '.triss');
-    const inventoryDir = sessionInventoryPath(trissRoot, engine);
-    await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
-    const identity = await loadOrCreateProjectIdentity(trissRoot);
-    const fingerprint = projectRootFingerprint(identity.project_id);
-    // ONE fresh admission tuple per run attempt: a brand-new slug publishes
-    // its reserved row (origin 'new'), while an idle row from a completed
-    // earlier run continues atomically straight to running with THIS run's
-    // fresh run/sandbox identity (origin 'continued'). Live rows owned by
-    // another run reject here with the typed CODER_SESSION_BUSY refusal,
-    // which propagates unchanged through the catch below.
-    const runId = `run_${randomBytes(16).toString('hex')}`;
-    const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
-    const claim = await claimCoderSession({
-      inventoryDir,
-      engine,
-      slug,
-      isolationMode: isolated ? 'isolated' : 'non_isolated',
-      lockSlot: 0,
-      projectRootFingerprint: fingerprint,
-      runId,
-      sandboxId,
-      pid: owner.pid,
-      processStartId: owner.processStartId,
-      bootId: owner.bootId,
-      ...lockSeam,
-    });
-    // The COMPLETE handle exists the moment the claim succeeds: it carries the
-    // origin plus the EXACT persisted tuple from the canonical claimed row
-    // (never a second random one), because every later transition re-validates
-    // all five fields against the persisted row — an incomplete or stale tuple
-    // fails the exact-owner check and strands the row behind a typed error.
-    const handle = {
-      inventoryDir,
-      engine,
-      slug,
-      origin: claim.origin,
-      runId: claim.row.run_id,
-      sandboxId: claim.row.sandbox_id,
-      pid: claim.row.pid,
-      processStartId: claim.row.process_start_id,
-      bootId: claim.row.boot_id,
-    };
-    if (claim.origin === 'new') {
-      // Only a NEWLY claimed row needs the reserved->running second
-      // transition; a continued row left the claim already running.
-      try {
-        await markCoderSessionRunning({
+    owner = currentSessionOwnerTuple(ownerTuple);
+  } catch (err) {
+    // The ONLY sanctioned degradation: without both host identities no
+    // canonical row may be published (contract) — degrade explicitly and let
+    // the engine run stay ephemeral. Every other admission failure below is
+    // a typed fail-closed error, never a silent downgrade.
+    process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
+    return null;
+  }
+
+  const transitions = await import('../coder-session-transitions.js');
+  const {
+    reserveCoderSession,
+    markCoderSessionRunning,
+  } = transitions;
+  const { projectRootFingerprint } = await import('../coder-state.js');
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryHandle = await openManagedChildDir(parentHandle, 'engine-sessions-v2', engine);
+  const inventoryDir = inventoryHandle.path;
+  const identity = await loadProjectIdentityWithRaceRetry(parentHandle);
+  const fingerprint = projectRootFingerprint(identity.project_id);
+  const runId = `run_${randomBytes(16).toString('hex')}`;
+  const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
+  const requestedIsolationMode = isolated ? 'isolated' : 'non_isolated';
+  // Production admission runs under the RUN LEASE: ONE shared maintenance
+  // scope covering the whole cycle, conditional-target lease for
+  // non-isolated runs, assigned slot lease, and brief exclusive inventory
+  // scopes (normative hierarchy; release is strictly reverse). Concurrent
+  // same-slug admissions serialize so the loser observes a live row instead
+  // of clobbering it; non-isolated runs serialize on the target lease.
+  let resumedRealId = null;
+  const runLease = await acquireCoderSessionRunLease({
+    parentHandle,
+    isolationMode: isolated ? 'isolated' : 'non-isolated',
+    dependencies,
+    selectLockSlot: async () => {
+      // Project-wide snapshot under a brief exclusive inventory scope:
+      // selection only — the authoritative re-check below happens after the
+      // target/slot leases are acquired, under another fresh scope.
+      return withCoderInventoryLock({ parentHandle }, async () => {
+        const inventories = await readProjectCoderSessionInventories(parentHandle);
+        return resolveProjectCoderSessionSlot({ inventories, slug }).slot;
+      });
+    },
+    classifyAndWrite: async (lockSlot) => {
+      // Exclusive inventory: classify against a FRESH project-wide state.
+      // The same resolver used for initial selection revalidates the exact
+      // candidate, so a cross-engine claim causes a bounded retake.
+      const inventories = await readProjectCoderSessionInventories(parentHandle);
+      const resolved = resolveProjectCoderSessionSlot({
+        inventories,
+        slug,
+        candidateSlot: lockSlot,
+      });
+      if (resolved.retake) return { retake: true };
+      const current = inventories.find((inventory) => inventory.engine === engine);
+      const read = { entries: current?.entries || [] };
+      const existing = read.entries.find((e) => e.engine === engine && e.slug === slug);
+      if (!existing) {
+        // A NEW reservation must never silently adopt an ORPHAN durable
+        // mapping (slug -> realId with no inventory row): binding a fresh row
+        // to a foreign/old native conversation would make the next
+        // "continuation" resume somebody else's session. Only an ABSENT
+        // mapping admits brand-new state; anything present/malformed retains
+        // and fails closed.
+        if (SESSION_STORE_ENGINES.includes(engine)) {
+          const orphan = classifySessionStoreMapping(engine, slug);
+          // An UNREADABLE store must surface its real corruption diagnostic
+          // (unknown version, invalid JSON, …) rather than the orphan label.
+          if (orphan.unreadable) {
+            throw storeInvalidError(orphan.cause?.message ?? 'session store unreadable');
+          }
+          if (orphan.state !== 'absent') {
+            const error = new Error(
+              `coder-session: ${engine}/${slug} has a durable session mapping but NO inventory row — ` +
+                'orphaned state; recover with `triss coder session clean ' + slug + ' --engine ' + engine +
+                '` or restore from backup. Retain, fail closed.',
+            );
+            error.code = CODER_SESSION_STORE_INVALID_CODE;
+            throw error;
+          }
+        }
+        const row = await reserveCoderSession({
           inventoryDir,
           engine,
           slug,
-          runId: handle.runId,
-          sandboxId: handle.sandboxId,
-          pid: handle.pid,
-          processStartId: handle.processStartId,
-          bootId: handle.bootId,
-          ...lockSeam,
+          isolationMode: requestedIsolationMode,
+          lockSlot,
+          runId,
+          sandboxId,
+          ...owner,
+          projectRootFingerprint: fingerprint,
         });
-      } catch (err) {
-        // Roll back the stranded `reserved` row BEFORE rethrowing. A
-        // SUCCESSFUL rollback proves the store holds no row for this run, so
-        // the ORIGINAL mark error is marked structurally proven-absent
-        // (sessionRollbackVerified) — the only condition the admission
-        // policy below accepts as degradation. A FAILED rollback throws the
-        // typed CODER_SESSION_ROLLBACK_FAILED aggregate (both errors
-        // preserved), which propagates unchanged.
-        await abandonV2SessionRow(handle);
-        err.sessionRollbackVerified = true;
-        throw err;
+        return { result: { origin: 'new_reservation', row } };
       }
-    }
-    return handle;
-  } catch (err) {
-    // Explicit-session admission policy (fail closed): ONLY a verified
-    // rollback of this run's own stranded row (sessionRollbackVerified)
-    // proves the v2 store absent and may degrade to the legacy dim warning +
-    // null contract. Every other error must throw before spawn.
-    if (err && err.sessionRollbackVerified === true) {
-      process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
-      return null;
-    }
-    // ONLY codes in the closed STABLE_SESSION_ADMISSION_CODES allowlist keep
-    // their stable code unchanged so callers can distinguish busy claims,
-    // isolation/fingerprint refusals, lock timeouts, corrupt/IO-failed
-    // stores, durability-unknown writes, identity unavailability, and
-    // rollback aggregates from generic breakdowns. Unknown or bare system
-    // codes (ENOENT/EACCES, …) must not leak through unclassified.
-    if (err && STABLE_SESSION_ADMISSION_CODES.has(err.code)) throw err;
-    // Every other admission failure wraps so it stays machine-identifiable
-    // as CODER_SESSION_ADMISSION_FAILED without losing the original cause.
-    const failure = new Error(
-      `coder session admission failed: ${err?.message || String(err)}`,
-      { cause: err },
-    );
-    failure.code = 'CODER_SESSION_ADMISSION_FAILED';
-    throw failure;
-  }
+      if (existing.state !== 'idle') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} is ${existing.state} — another run owns it or` +
+          ' cleanup is in progress; wait for it to finish, clean it, or choose another slug.',
+        );
+        error.code = CODER_SESSION_BUSY_CODE;
+        throw error;
+      }
+      // Continuation compatibility BEFORE idle -> running: isolation mode
+      // and project ownership are part of session ownership — silently
+      // running an idle row under a different mode would make the
+      // inventory lie about how this spawn actually executes.
+      if (existing.isolation_mode !== requestedIsolationMode) {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} was created isolation_mode=${existing.isolation_mode};` +
+          ` this run requests ${requestedIsolationMode}. Isolation mode is part of session ownership —` +
+          ' clean the session (triss coder session clean ...) or use a different slug.',
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      if (existing.project_root_fingerprint !== fingerprint) {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} belongs to a different project identity — refusing to continue it`,
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      // A continuation MUST have a durable published mapping: without it the
+      // native conversation does not exist and this run would silently start
+      // a NEW conversation while claiming to resume.
+      const mapping = classifySessionStoreMapping(engine, slug);
+      if (mapping.state === 'absent') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} has NO published session mapping — nothing to continue.` +
+          ' Clean the stale row (triss coder session clean ...) or start a fresh slug.',
+        );
+        error.code = CODER_SESSION_INCOMPATIBLE_CODE;
+        throw error;
+      }
+      if (mapping.state === 'mismatch') {
+        const error = new Error(
+          `coder-session: ${engine}/${slug} has a malformed/unreadable session mapping — retain, fail closed.`,
+        );
+        error.code = CODER_SESSION_STORE_INVALID_CODE;
+        throw error;
+      }
+      resumedRealId = mapping.realId;
+      const row = await markCoderSessionRunning({
+        inventoryDir,
+        engine,
+        slug,
+        runId,
+        sandboxId,
+        lockSlot,
+        ...owner,
+      });
+      return { result: { origin: 'idle_continuation', row } };
+    },
+  });
+
+  const admission = runLease.admission || {};
+  const sessionV2 = {
+    inventoryDir,
+    engine,
+    slug,
+    runId,
+    sandboxId: admission.row ? admission.row.sandbox_id : sandboxId,
+    origin: admission.origin,
+    lockSlot: runLease.lockSlot,
+    // Immutable incarnation identity pinned from the admitted row: every
+    // later owner revalidation compares THIS value, never timestamps.
+    instanceId: admission.row ? admission.row.session_instance_id : null,
+    resumedRealId,
+    ...owner,
+    runLease,
+    // Convenience for tests/tools: releasing the run cycle lease releases
+    // slot -> target -> maintenance strictly in reverse acquisition order.
+    releaseRunLease: () => runLease.release(),
+  };
+  return sessionV2;
 }
 
-async function completeV2SessionRow(sessionV2, transitionDeps = {}) {
+/**
+ * Pre-spawn revalidation under the HELD run lease (brief exclusive inventory
+ * only — maintenance/target/slot stay held; nothing higher is reacquired):
+ * the exact claimed row must still exist and be ours. A fresh reserved row
+ * (this run between admission and spawn) transitions reserved -> running
+ * HERE; an already running row must carry EXACTLY this run cycle owner
+ * tuple — anything else means another writer touched the row and fails
+ * closed without mutation.
+ */
+export async function revalidateV2SessionRowBeforeSpawn(sessionV2) {
   if (!sessionV2) return;
+  const { markCoderSessionRunning } = await import('../coder-session-transitions.js');
+  const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
+  await sessionV2.runLease.withInventory(async () => {
+    const read = await readCoderSessionInventory(sessionV2.inventoryDir);
+    if (read.error) throw storeInvalidError(read.error, read.code);
+    const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
+    if (row && row.state === 'reserved' && rowOwnedByRun(row, sessionV2)) {
+      await markCoderSessionRunning(sessionV2);
+      return;
+    }
+    if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
+      throw new Error(
+        `coder-session: claimed row ${sessionV2.engine}/${sessionV2.slug} changed before spawn` +
+        ` (state=${row ? row.state : 'absent'}) — retain, fail closed`,
+      );
+    }
+  });
+}
+
+/**
+ * Store-state-driven finalizer. The DURABLE session-store mapping — not the
+ * admission-time origin alone — decides whether a row is published:
+ *   complete (success): running -> idle ONLY with a valid engine session id
+ *   AND its durable matching mapping; otherwise the row cannot claim a
+ *   continuable session and is removed through the canonical deleting
+ *   transition (a mapping mismatch retains/fails closed).
+ *   Removal of an unusable row is ownership-aware: an idle CONTINUATION
+ *   whose completion yields no confirmed native session id removes its OWN
+ *   durable mapping (the exact resumedRealId captured at claim time)
+ *   together with the row, in canonical deleting breadcrumb -> store
+ *   mapping -> row order — the old conversation tail is never retained as
+ *   an orphan. A NEW reservation removes a mapping only when it matches the
+ *   id THIS run durably published. An ABSENT mapping is harmless; a
+ *   MISMATCHED/FOREIGN mapping is retained_for_recovery and never deleted.
+ *   abandon (failure): a reservation WITHOUT a published mapping is removed;
+ *   one WITH a matching published mapping survives as idle (the persisted
+ *   session outlives the failed envelope write); a MISMATCHED mapping
+ *   retains and fails closed. Continuations additionally require their
+ *   captured resumed real id to remain durably present.
+ * Every mutation is owner-checked inside the held run lease; on any
+ * ambiguity the row is retained for recovery, never blindly deleted.
+ *
+ * Completion returns a TYPED outcome the envelope consumes:
+ *   'persistent'             — confirmed resumable idle row (mapping matched)
+ *   'removed_unusable'       — success produced nothing continuable; row removed
+ *   'retained_for_recovery'  — ambiguity/finalization failure; fail closed
+ * A persistent envelope claim is therefore only ever emitted AFTER the
+ * inventory transition is durably confirmed — never before finalization.
+ */
+async function finalizeV2SessionRow(sessionV2, mode, publishedRealId) {
+  if (!sessionV2) return mode === 'complete' ? 'removed_unusable' : undefined;
+  // The finalizer owns the run lease for the whole completion/rollback
+  // attempt. Outer engine catches must not invoke abandon a second time after
+  // a fail-closed completion has already released that lease.
+  sessionV2.finalizationAttempted = true;
+  let outcome;
+  let releaseError;
   try {
-    const { markCoderSessionIdle } = await import('../coder-session-transitions.js');
-    // Both origins return to idle on success; the handle carries the EXACT
-    // running tuple so the owner check passes. Optional narrow mutex seams
-    // (acquireLock/lockRetryMs/inventoryFs) are forwarded verbatim so tests
-    // can drive real lock contention / durability failures through this
-    // production finalization path; omitting them keeps production defaults.
-    await markCoderSessionIdle({
-      ...sessionV2,
-      acquireLock: transitionDeps.acquireLock,
-      lockRetryMs: transitionDeps.lockRetryMs,
-      inventoryFs: transitionDeps.inventoryFs,
+    const transitions = await import('../coder-session-transitions.js');
+    const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
+    const isStoreEngine = SESSION_STORE_ENGINES.includes(sessionV2.engine);
+    // Expected durable mapping per path: completion verifies EXACTLY the id
+    // this run published (sessionV2.publishedRealId, set right after the
+    // durable persist); a failed continuation verifies the id captured at
+    // claim time; a failed NEW reservation verifies ITS OWN published id too
+    // (undefined when publication never happened) — an existing mapping can
+    // NEVER be attributed to a run that did not publish it.
+    const expectedRealId =
+      mode === 'complete' ? publishedRealId
+      : sessionV2.origin === 'idle_continuation' ? sessionV2.resumedRealId
+      : sessionV2.publishedRealId;
+    outcome = await sessionV2.runLease.withInventory(async () => {
+      const read = await readCoderSessionInventory(sessionV2.inventoryDir);
+      if (read.error) throw storeInvalidError(read.error, read.code);
+      const row = read.entries.find((e) => e.engine === sessionV2.engine && e.slug === sessionV2.slug);
+      const mapping = isStoreEngine
+        ? classifySessionStoreMapping(sessionV2.engine, sessionV2.slug, expectedRealId)
+        : { state: 'not_applicable', realId: null };
+      const removeUnpublished = async () => {
+        if (!['reserved', 'running'].includes(row.state)) {
+          throw new Error(`unexpected row state ${row.state} during rollback`);
+        }
+        if (!rowOwnedByRun(row, sessionV2)) {
+          throw new Error('row owner tuple mismatch during rollback');
+        }
+        // Store engines: decide mapping ownership BEFORE the deleting
+        // breadcrumb so a foreign/mismatched durable state is never mutated.
+        // The only mapping this run may remove is the one it legitimately
+        // owns: the id captured at claim time for an idle continuation
+        // (resumedRealId), else the id THIS run published (publishedRealId).
+        // An ABSENT mapping is harmless; anything present that is not ours
+        // is retained_for_recovery and never deleted — removing an unusable
+        // row must never take somebody else's conversation tail with it.
+        let ownedMapping = false;
+        if (isStoreEngine) {
+          const liveMapping = classifySessionStoreMapping(sessionV2.engine, sessionV2.slug);
+          if (liveMapping.unreadable) {
+            throw storeInvalidError(liveMapping.cause?.message ?? 'session store unreadable');
+          }
+          if (liveMapping.state === 'matching' || liveMapping.state === 'mismatch') {
+            const ownedRealId = sessionV2.origin === 'idle_continuation'
+              ? sessionV2.resumedRealId
+              : sessionV2.publishedRealId;
+            if (
+              liveMapping.state === 'mismatch'
+              || ownedRealId === undefined
+              || ownedRealId === null
+              || liveMapping.realId !== ownedRealId
+            ) {
+              throw new Error(
+                'durable session mapping cannot be attributed to this run/continuation — retain, fail closed',
+              );
+            }
+            ownedMapping = true;
+          }
+          // absent: nothing durably published, no store touch needed.
+        }
+        // Canonical crash-safe order: the deleting breadcrumb publishes
+        // FIRST, then the OWNED store mapping goes away while the prefix is
+        // still held, then the row itself is removed last.
+        await transitions.beginCoderSessionDelete(sessionV2);
+        if (ownedMapping) {
+          removeSessionStoreMapping(sessionV2.engine, sessionV2.slug);
+        }
+        await transitions.removeCoderSessionRow(sessionV2);
+        return 'removed_unusable';
+      };
+      if (mode === 'complete') {
+        if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
+          throw new Error(`row is ${row ? row.state : 'absent'} / not owned by this run`);
+        }
+        if (!isStoreEngine) {
+          if (typeof publishedRealId !== 'string' || publishedRealId.length === 0) {
+            // Non-store engines (currently Crush) still need a native id to
+            // make the inventory row resumable. An admitted row alone is not
+            // persistence evidence.
+            process.stderr.write(pc.dim('  ⚠ v2 session had no resumable session id — removing the unusable persistent row\n'));
+            return removeUnpublished();
+          }
+          // Crush has no Triss-side slug -> real-id map: the caller slug is
+          // the native get-or-create key passed to the engine. A different
+          // id therefore proves that this run cannot be resumed by the
+          // admitted slug; retain the row for recovery rather than publishing
+          // a false persistent envelope.
+          if (publishedRealId !== sessionV2.slug) {
+            throw new Error(
+              `native Crush session id ${JSON.stringify(publishedRealId)} does not match ` +
+                `the admitted session slug ${JSON.stringify(sessionV2.slug)} (retain, fail closed)`,
+            );
+          }
+          await transitions.markCoderSessionIdle(sessionV2);
+          return 'persistent';
+        }
+        if (typeof publishedRealId !== 'string' || publishedRealId.length === 0) {
+          // A named run that produced no usable native session id can never
+          // be continued: do NOT publish an idle row that would make the
+          // next run silently start a fresh conversation.
+          process.stderr.write(pc.dim('  ⚠ v2 session had no resumable session id — removing the unusable persistent row\n'));
+          return removeUnpublished();
+        }
+        if (mapping.state === 'matching') {
+          await transitions.markCoderSessionIdle(sessionV2);
+          return 'persistent';
+        }
+        if (mapping.state === 'mismatch') {
+          throw new Error('session mapping changed during the run (retain, fail closed)');
+        }
+        // mapping absent: durable publication did not happen despite success.
+        process.stderr.write(pc.dim('  ⚠ v2 session mapping was not durably published — removing the unusable persistent row\n'));
+        return removeUnpublished();
+      }
+      // ── abandon (failure path) ──
+      const promoteThenIdle = async () => {
+        const { markCoderSessionRunning } = await import('../coder-session-transitions.js');
+        // A failure before pre-spawn revalidation leaves the row RESERVED;
+        // the canonical table has no reserved -> idle edge, so promote it to
+        // running under OUR tuple exactly like revalidate does, then idle.
+        await markCoderSessionRunning(sessionV2);
+        await transitions.markCoderSessionIdle(sessionV2);
+      };
+      if (sessionV2.origin === 'new_reservation') {
+        const ours = row && ['running', 'reserved'].includes(row.state) && rowOwnedByRun(row, sessionV2);
+        if (isStoreEngine && typeof sessionV2.publishedRealId !== 'string') {
+          // Publication never happened during this run: an existing durable
+          // mapping is FOREIGN (pre-existing orphan/other-run state) and must
+          // never be adopted as this run's session. Retain everything.
+          if (!ours) throw new Error('row not owned by this run during rollback');
+          if (mapping.state !== 'absent') {
+            throw new Error('pre-existing session mapping cannot be attributed to this failed run (retain, fail closed)');
+          }
+          await removeUnpublished();
+          return;
+        }
+        // Published BEFORE the failure? Then the persisted session survives —
+        // but ONLY when the durable mapping still matches OUR exact id:
+        // running -> idle keeps mapping and inventory consistent. Otherwise
+        // THIS run created the row and nothing durable references it —
+        // remove via the canonical deleting transition.
+        if (mapping.state === 'matching' && ours) {
+          if (row.state === 'running') await transitions.markCoderSessionIdle(sessionV2);
+          else await promoteThenIdle();
+          return;
+        }
+        if (mapping.state === 'mismatch') {
+          throw new Error('session mapping changed during the run (retain, fail closed)');
+        }
+        if (!ours) throw new Error('row not owned by this run during rollback');
+        await removeUnpublished();
+        return;
+      }
+      // Failed continuation: the previously published session SURVIVES the
+      // failure — but its mapping must still be durably present and equal
+      // the id captured at claim time, otherwise retain and fail closed.
+      if (!rowOwnedByRun(row, sessionV2) || row.state !== 'running') {
+        throw new Error(`row is ${row ? row.state : 'absent'} / not owned by this run`);
+      }
+      if (isStoreEngine && mapping.state !== 'matching') {
+        throw new Error(`session mapping ${mapping.state} during rollback (retain, fail closed)`);
+      }
+      await transitions.markCoderSessionIdle(sessionV2);
+      return undefined;
     });
   } catch (err) {
-    // Terminal transaction (mandatory finalization): a mark-idle failure is
-    // never swallowed into a dim warning. It throws the stable typed code,
-    // preserves the store failure as cause, and attaches the exact non-secret
-    // lifecycle handle so recovery/reconcile can find the stranded running
-    // row. Callers must not feed this error into ordinary abandon — the row
-    // stays exactly as the failed transition left it.
-    const failure = new Error(
-      `v2 session finalization failed for ${sessionV2.engine}/${sessionV2.slug}: ` +
-        `${err?.message || String(err)}`,
-      { cause: err },
-    );
-    failure.code = 'CODER_SESSION_FINALIZATION_FAILED';
-    failure.coderSessionHandle = sessionV2;
-    throw failure;
+    // Retain / fail closed: a finalization failure never deletes the row
+    // blindly — the diagnostic names the retained state for recovery.
+    process.stderr.write(pc.dim(`  ⚠ v2 session ${mode === 'complete' ? 'completion' : 'rollback'} retained row for recovery: ${err.message}\n`));
+    outcome = 'retained_for_recovery';
+  } finally {
+    const release = sessionV2.runLease?.release;
+    if (typeof release === 'function') {
+      // A run lease retries its unresolved components itself. One immediate
+      // retry here closes a one-shot descriptor/lock failure before deciding
+      // that the completion must fail closed.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await release.call(sessionV2.runLease);
+          releaseError = undefined;
+          break;
+        } catch (err) {
+          releaseError = err;
+          if (attempt === 0) {
+            process.stderr.write(pc.dim(`  ⚠ v2 session lease release failed; retrying: ${err.message}\n`));
+          }
+        }
+      }
+      if (releaseError) {
+        // An unresolved exclusion lifecycle is never a clean success. Keep
+        // the row fail-closed and make the completion outcome non-persistent.
+        process.stderr.write(pc.dim(`  ⚠ v2 session lease release incomplete: ${releaseError.message}\n`));
+        outcome = 'retained_for_recovery';
+      }
+    }
   }
+  if (releaseError) {
+    // Do not collapse an unresolved exclusion-lifecycle failure into the
+    // ordinary typed recovery outcome: callers must observe the release
+    // error itself, while the retained outcome still prevents any envelope.
+    const error = new Error('coder-session: run lease release failed; row retained for recovery', {
+      cause: releaseError,
+    });
+    error.code = 'TRISS_CODER_SESSION_RELEASE_FAILED';
+    throw error;
+  }
+  return outcome;
 }
 
-/**
- * Aggregate for "the run failed AND its session-row rollback also failed".
- * Both original errors stay reachable: errors[0]/.engineError is the engine
- * failure, errors[1]/.rollbackError is the store failure, so nothing is lost.
- */
-function coderSessionRollbackAggregate(primaryError, rollbackError, sessionV2) {
-  const describe = (e) => (e && e.message) || String(e);
-  const aggregate = new AggregateError(
-    [primaryError, rollbackError].filter(Boolean),
-    primaryError
-      ? `coder run failed (${describe(primaryError)}) AND its v2 session row rollback also failed ` +
-        `(${describe(rollbackError)}) — both errors are preserved; the row is left for explicit ` +
-        'recovery/reconcile'
-      : `v2 session row rollback failed: ${describe(rollbackError)}`,
-  );
-  aggregate.code = 'CODER_SESSION_ROLLBACK_FAILED';
-  if (primaryError) aggregate.engineError = primaryError;
-  aggregate.rollbackError = rollbackError;
-  if (sessionV2) aggregate.coderSessionHandle = sessionV2;
-  return aggregate;
+// Exported for tests + production envelope assembly: success finalizer
+// (running -> idle + lease release). Returns the typed completion outcome:
+// 'persistent' ONLY after the idle transition was durably confirmed with a
+// matching durable mapping; 'removed_unusable' when success produced nothing
+// continuable; 'retained_for_recovery' on any ambiguity (fail closed).
+// publishedRealId is the engine session id whose mapping was durably
+// persisted before the envelope is assembled (undefined for engines without
+// a versioned store namespace).
+export async function completeV2SessionRow(sessionV2, publishedRealId) {
+  return finalizeV2SessionRow(sessionV2, 'complete', publishedRealId);
 }
 
-// Low-level rollback of a reserved/running row: deletes a row this run
-// created ('new'), restores an inherited row to idle ('continued'). Throws
-// the raw transition error on failure — no swallowing here.
-async function rollbackV2SessionRow(sessionV2) {
-  const transitions = await import('../coder-session-transitions.js');
-  // sessionV2 must carry the complete owner/run tuple (runId, sandboxId,
-  // pid, processStartId, bootId): the deleting/idle transitions' exact-owner
-  // checks require all five to match the persisted row.
-  if (sessionV2.origin === 'continued') {
-    // The session predates this run: after process cleanup RESTORE it to
-    // idle so future runs can still continue it. Deleting it would destroy
-    // a session this run never created.
-    await transitions.markCoderSessionIdle(sessionV2);
-  } else {
-    // A row this run created is deleted outright.
-    await transitions.beginCoderSessionDelete(sessionV2);
-    await transitions.removeCoderSessionRow(sessionV2);
-  }
+// Exported for tests: provenance/store-aware rollback of a claimed row.
+export async function releaseV2SessionRow(sessionV2) {
+  await finalizeV2SessionRow(sessionV2, 'abandon', undefined);
 }
 
-/**
- * Roll a reserved/running row back after a rollback-safe failure. Rollback
- * failures are NEVER warning-only anymore: they throw the typed
- * CODER_SESSION_ROLLBACK_FAILED aggregate preserving BOTH the original
- * engine error (when given) and the rollback error.
- */
-async function abandonV2SessionRow(sessionV2, primaryError = null) {
-  if (!sessionV2) return;
-  try {
-    await rollbackV2SessionRow(sessionV2);
-  } catch (err) {
-    throw coderSessionRollbackAggregate(primaryError, err, sessionV2);
-  }
-}
-
-/**
- * ONE terminal-failure funnel shared by every engine-branch catch. Decides
- * between the three session regimes so no branch re-implements (and no
- * branch can get wrong) the semantics:
- *
- *   1. UNVERIFIED process-group cleanup (typed marker from spawnEngine/
- *      spawnCrush): the engine tree may still be alive, so the running row
- *      must keep claiming the slug. The row is left EXACTLY as-is (no
- *      complete/abandon/delete/idle), the exact lifecycle handle is attached
- *      to the non-secret error context, and only an explicit recovery call
- *      may touch the row later.
- *   2. SESSION FINALIZATION failure (success-path mark-idle) or an already-
- *      aggregated rollback failure: likewise never fed into ordinary abandon.
- *   3. Ordinary rollback-safe failure: abandon the row; if the rollback ALSO
- *      fails, throw the typed aggregate preserving both errors.
- */
-async function failCoderRunSessionAware(sessionV2, engineError) {
-  if (isUnverifiedProcessGroupCleanup(engineError)) {
-    // Non-secret lifecycle identity needed by recovery (inventoryDir, engine,
-    // slug, origin + the exact persisted owner tuple — no credentials).
-    if (sessionV2) engineError.coderSessionHandle = sessionV2;
-    throw engineError;
-  }
-  if (
-    engineError && (
-      engineError.code === 'CODER_SESSION_FINALIZATION_FAILED' ||
-      engineError.code === 'CODER_SESSION_ROLLBACK_FAILED'
-    )
-  ) {
-    throw engineError;
-  }
-  await abandonV2SessionRow(sessionV2, engineError);
-  throw engineError;
-}
-
-/**
- * Explicit recovery after an UNVERIFIED process-group cleanup. Fails closed
- * unless the caller presents BOTH the proof (`cleanupVerified: true` — the
- * caller verified the group is actually gone) and the EXACT saved lifecycle
- * handle (every owner field must still match the persisted running row).
- * Only then: a row this run created ('new') is deleted; an inherited row
- * ('continued') is restored to idle so future runs can continue it.
- */
-export async function recoverCoderSessionAfterUnverifiedCleanup({ cleanupVerified, handle } = {}) {
-  if (cleanupVerified !== true) {
-    throw new TypeError(
-      'recoverCoderSessionAfterUnverifiedCleanup: cleanupVerified=true is required — recovery ' +
-        'refuses to touch a session whose engine process group was never proven dead',
-    );
-  }
-  if (!handle || typeof handle !== 'object' || !handle.inventoryDir) {
-    throw new TypeError(
-      'recoverCoderSessionAfterUnverifiedCleanup: the exact saved lifecycle handle is required',
-    );
-  }
-  const tuple = {
-    inventoryDir: handle.inventoryDir,
-    engine: handle.engine,
-    slug: handle.slug,
-    runId: handle.runId,
-    sandboxId: handle.sandboxId,
-    pid: handle.pid,
-    processStartId: handle.processStartId,
-    bootId: handle.bootId,
+function coderSessionRecoveryHandle(sessionV2) {
+  return {
+    inventoryDir: sessionV2.inventoryDir,
+    engine: sessionV2.engine,
+    slug: sessionV2.slug,
+    origin: sessionV2.origin,
+    instanceId: sessionV2.instanceId,
+    lockSlot: sessionV2.lockSlot,
+    runId: sessionV2.runId,
+    sandboxId: sessionV2.sandboxId,
+    pid: sessionV2.pid,
+    processStartId: sessionV2.processStartId,
+    bootId: sessionV2.bootId,
   };
-  const transitions = await import('../coder-session-transitions.js');
-  if (handle.origin === 'continued') {
-    await transitions.markCoderSessionIdle(tuple);
-    return { recovered: true, action: 'restored_idle', engine: handle.engine, slug: handle.slug };
+}
+
+/**
+ * Preserve durable ownership when process-group cleanup is unverified.
+ * The row stays running so the same slug remains busy; the run lease itself
+ * is released so a long-lived MCP process does not strand kernel locks.
+ * Explicit session clean/recovery must independently prove the owner gone
+ * before mutating the retained row.
+ */
+async function retainV2SessionAfterUnverifiedCleanup(sessionV2, error) {
+  if (!isUnverifiedProcessGroupCleanup(error)) return false;
+  if (!sessionV2) return true;
+
+  sessionV2.finalizationAttempted = true;
+  error.coderSessionHandle = coderSessionRecoveryHandle(sessionV2);
+  const release = sessionV2.runLease?.release;
+  if (typeof release !== 'function') return true;
+
+  let releaseError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await release.call(sessionV2.runLease);
+      releaseError = undefined;
+      break;
+    } catch (err) {
+      releaseError = err;
+    }
   }
-  if (handle.origin === 'new') {
-    await transitions.beginCoderSessionDelete(tuple);
-    await transitions.removeCoderSessionRow(tuple);
-    return { recovered: true, action: 'removed', engine: handle.engine, slug: handle.slug };
+  if (releaseError) {
+    error.leaseReleaseError = releaseError;
+    process.stderr.write(
+      pc.dim(`  ⚠ unsafe-cleanup session lease release incomplete: ${releaseError.message}\n`),
+    );
   }
-  throw new Error(
-    `recoverCoderSessionAfterUnverifiedCleanup: unknown handle origin ${JSON.stringify(handle.origin)} — failing closed`,
-  );
+  return true;
 }
 
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
@@ -5912,6 +6417,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // that deliberately create a real detached group through a custom spawn
   // must also inject the matching killProcess seam explicitly.
   const killProcess = deps.killProcess || (spawnFn === nodeSpawn ? undefined : noInjectedProcessGroup);
+  const releaseSessionRow = deps.releaseSessionRow || releaseV2SessionRow;
+  const reserveSessionRow = deps.reserveSessionRow || reserveV2SessionRow;
+  const lookupSession = deps.lookupSessionRealId || lookupSessionRealId;
+  const startCredentialProxy = deps.startCredentialProxy || startCoderCredentialProxy;
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
@@ -5919,8 +6428,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // MCP) selects protected_proxy, everything else resolves through
   // resolveCoderCredentialMode — best_effort_raw by default for
   // OpenCode/OpenCode2, always protected_proxy for crush. There is
-  // deliberately NO environment fallback.
-  const credentialMode = resolveCoderCredentialMode({
+  // deliberately NO environment fallback. Tests may inject the already
+  // resolved mode to characterize one routing branch without depending on
+  // ambient process environment shared by the full test runner.
+  const credentialMode = deps.credentialMode ?? resolveCoderCredentialMode({
     engine,
     protectCredentials: opts.protectCredentials,
   });
@@ -6092,14 +6603,51 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     process.stderr.write(pc.yellow(`  ⚠ ${rawCredentialWarning}\n`));
   }
   const detectedOpencodeVersion = engine === 'opencode' ? detectOpencodeVersion(sh) : null;
-  if (engine === 'opencode' && oneShotProvider && detectedOpencodeVersion !== OPENCODE_PIN) {
-    const found = detectedOpencodeVersion === null
-      ? 'not installed'
-      : detectedOpencodeVersion || 'version unknown';
-    throw new Error(
-      `One-shot provider credential auditing is verified only for opencode ${OPENCODE_PIN}; ` +
-        `found ${found}. Run \`npm install -g opencode-ai@${OPENCODE_PIN}\` and retry.`,
-    );
+  if (engine === 'opencode' && oneShotProvider) {
+    // One shared policy source (owner decision, 2026-08): a credential-bearing
+    // one-shot run is authorized when the installed version satisfies the
+    // EFFECTIVE minimum — the immutable supported floor (1.18.22) or any valid
+    // higher configured TRISS_CODER_OPENCODE_VERSION. There is no exact-build
+    // gate.
+    const ocPin = opencodeVersionPin();
+    // Validate the CONFIGURED installation minimum first: malformed values AND
+    // values below the immutable supported floor fail closed with the typed
+    // configuration error instead of weakening policy.
+    assertOpencodeMinimumVersion(ocPin);
+    const ocPolicy = resolveOpencodeVersionPolicy(detectedOpencodeVersion, ocPin);
+    if (!ocPolicy.installedCompatible) {
+      // Missing, unparsable, and below-effective-minimum installs all fail
+      // closed BEFORE isolation/worktree creation, credential proxy setup,
+      // session reservation, or spawn.
+      const found = detectedOpencodeVersion === null
+        ? 'not installed'
+        : detectedOpencodeVersion || 'version unknown';
+      throw new Error(
+        `One-shot provider runs require opencode >= ${ocPolicy.effectiveMinimum} ` +
+          `(found ${found}). ` +
+          `Run \`npm install -g opencode-ai@${ocPolicy.effectiveMinimum}\` and retry.`,
+      );
+    }
+  }
+
+  // Crush runtime version policy is AUTHORITATIVE: probe + assert BEFORE
+  // isolation/worktree creation, credential proxy setup, session reservation,
+  // or ANY other side effect — an incompatible binary must make spawnCrush
+  // unreachable. One shared resolver/assertion (src/coder-engines/crush.js);
+  // runCrushFlow no longer interprets satisfiesPin itself.
+  let crushPolicy = null;
+  if (engine === 'crush') {
+    try {
+      crushPolicy = crushEngine.assertVersionPolicy(crushEngine.resolveVersionPolicy(sh));
+    } catch (err) {
+      process.stderr.write(pc.yellow(`  ⚠ ${err.message}\n`));
+      throw err;
+    }
+    if (crushPolicy.installedVersion) {
+      process.stderr.write(
+        pc.dim(`  · crush ${crushPolicy.installedVersion} (meets minimum ${crushPolicy.effectiveMinimum})\n`),
+      );
+    }
   }
 
   const slug = resolveSlug(opts, isolate);
@@ -6297,7 +6845,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const proxyRequired = engine === 'crush' || protectedRouting;
   if (proxyRequired && !deps.disableCredentialProxy && proxyTarget) {
     try {
-      credentialProxy = await startCoderCredentialProxy({
+      credentialProxy = await startCredentialProxy({
         provider: cred.provider || cred.env,
         model: protectedRouting ? transientModelName(runtimeRoute) : modelUsed,
         smallModel: protectedRouting && engine !== 'opencode2' && !separateSmallTransport
@@ -6321,7 +6869,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // route; both proxies intentionally share the one-run token because
       // the child has one credential environment variable.
       if (separateSmallTransport) {
-        smallCredentialProxy = await startCoderCredentialProxy({
+        smallCredentialProxy = await startCredentialProxy({
           provider: cred.provider || cred.env,
           model: transientModelName(runtimeSmallRoute),
           models: [runtimeSmallRoute.modelId],
@@ -6407,24 +6955,49 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
-  // v2 session lifecycle: reserve + running BEFORE the engine branch; the
-  // row completes to idle after the envelope is emitted and is deleted on
-  // any failure path. deps.sessionAdmission carries the narrow test seams
-  // (identity/claim/transition overrides + mutex seams) into admission.
-  const sessionV2 = await reserveV2SessionRow(
-    {
+  // Option validation that needs NO ownership claim runs BEFORE the v2
+  // reservation: a rejected request must never flip an existing idle row to
+  // running (the deterministic published-row deletion scenario).
+  if (engine === 'opencode2' && opts.session && opts.continue) {
+    if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw new Error(
+      '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
+        'pass one or the other, never both.',
+    );
+  }
+
+  // v2 session lifecycle: lease-integrated admission BEFORE the engine
+  // branch. The claimed row is finalized before the envelope is assembled;
+  // only its typed completion outcome can authorize persistence.
+  // Rollback is provenance-aware: a reservation THIS run created is removed
+  // on any failure path; a continuation of a previously published idle
+  // session returns to idle so the persisted session survives the failure.
+  let sessionV2;
+  try {
+    sessionV2 = await reserveSessionRow({
       engine,
       slug: opts.session || null,
       isolated: !!isolation,
-    },
-    deps.sessionAdmission || {},
-  );
+      // Test seam (deps.ownerTuple): CLI regression tests force the sanctioned
+      // "owner identity unavailable" downgrade without patching probes.
+      ownerTuple: deps.ownerTuple,
+    });
+  } catch (err) {
+    // Admission runs AFTER setupIsolation: a rejected claim (BUSY,
+    // INCOMPATIBLE, corrupt store/orphan mapping) must never strand a
+    // freshly-created isolation worktree/branch.
+    if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+    throw err;
+  }
 
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
   if (engine === 'crush') {
     try {
+      // Pre-spawn revalidation: reserved -> running under the leases, and a
+      // hijack/foreign-tuple claim fails closed before any engine spawn.
+      await revalidateV2SessionRowBeforeSpawn(sessionV2);
       return await runCrushFlow({
         opts,
         deps,
@@ -6439,13 +7012,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialProxy,
         sessionV2,
         credentialMode,
+        // Resolved + asserted in runCoderRun BEFORE any side effect; runCrushFlow
+        // only echoes it. An incompatible version never reaches this flow.
+        crushPolicy,
       });
     } catch (err) {
-      // Shared terminal funnel: an UNVERIFIED process-group cleanup leaves
-      // the v2 row exactly as-is, typed finalization/rollback failures pass
-      // through untouched, and an ordinary rollback-safe failure abandons
-      // the row. Always throws. Proxy release still runs via finally.
-      await failCoderRunSessionAware(sessionV2, err);
+      if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
+      if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
+      throw err;
     } finally {
       await releaseCredentialProxy();
     }
@@ -6461,18 +7035,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // setupIsolation but was never wrapped in the cleanup guard, so
   // `coder run --isolate --session foo` with a corrupted sessions.json
   // stranded a worktree+branch that blocked re-runs until `coder clean`.
-  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSessionRealId(engineName, opts.session) : null);
+  const sessionRealIdArgFor = (engineName) => (opts.session ? lookupSession(engineName, opts.session) : null);
   let sessionRealIdV1 = null;
   if (engine !== 'opencode2' && opts.session) {
     try {
-      sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
+      sessionRealIdV1 = lookupSession(engine, opts.session);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-      // The row was already reserved above, so a fail-closed store read must
-      // also delete it — otherwise every corrupted sessions.json run would
-      // strand a running v2 row behind a rollback warning.
-      await abandonV2SessionRow(sessionV2);
-      await releaseCredentialProxy();
+      // The claimed v2 row must not outlive a failed lookup — otherwise a
+      // corrupted sessions.json would strand a reserved/running row forever.
+      try {
+        await releaseSessionRow(sessionV2);
+      } finally {
+        await releaseCredentialProxy();
+      }
       throw err;
     }
   }
@@ -6500,17 +7076,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       : opts.cwd
         ? resolvePath(opts.cwd)
         : process.cwd();
-    // session/--continue mutual exclusion BEFORE any isolation side effects
-    // are possible. setupIsolation
-    // runs before runCoderRun's engine branches, so a freshly-created
-    // worktree MUST be cleaned up when this rejects.
-    if (opts.session && opts.continue) {
-      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-      throw new Error(
-        '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
-          'pass one or the other, never both.',
-      );
-    }
+    // NOTE: the --session/--continue mutual exclusion already ran BEFORE the
+    // v2 reservation (option validation must never claim ownership first).
     // Session lookup inside the guarded zone: the store read
     // fails closed on malformed/unknown shapes and must not leak a
     // freshly-created isolation worktree.
@@ -6645,6 +7212,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     let result2;
     let rateLimit2;
     try {
+      // Pre-spawn revalidation under the leases: a fresh reserved row
+      // transitions to running HERE; a row rewritten by another writer fails
+      // closed before any engine spawn.
+      await revalidateV2SessionRowBeforeSpawn(sessionV2);
       result2 = await spawnEngine({
         argv: argv2,
         env: env2,
@@ -6697,11 +7268,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         );
       }
     } catch (err) {
-      // UNVERIFIED process-group cleanup: the old engine tree may still be
-      // alive and writing, so the isolation worktree must NOT be removed.
-      // Rethrow the typed error untouched for the outer session-aware
-      // handler.
-      if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
+      if (isUnverifiedProcessGroupCleanup(err)) throw err;
+      if (isolation && isolation.freshlyCreated) {
         cleanupAbandonedIsolation(sh, isolation);
       }
       throw err;
@@ -6723,8 +7291,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     else if (result2.code === 0) exit_reason2 = 'end_turn';
     else exit_reason2 = 'error';
 
-    if (opts.session && result2.sessionRealId) {
+    if (opts.session && result2.sessionRealId && sessionV2) {
       persistSessionMapping(sh, 'opencode2', opts.session, result2.sessionRealId);
+      // Attribution anchor for the finalizer: only THIS exact id may be
+      // recognized as this run's publication during rollback.
+      sessionV2.publishedRealId = result2.sessionRealId;
+    } else if (opts.session && result2.sessionRealId && !sessionV2) {
+      // Sanctioned ephemeral downgrade (owner identity unavailable): the run
+      // itself succeeded, but publishing a durable slug mapping here would
+      // create exactly the ORPHAN state (mapping without inventory row) the
+      // admission gate rejects. The native session ends with this run; the
+      // envelope reports session_persistence=ephemeral_downgraded.
+      result2.warnings.push(
+        'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable — this native session is ephemeral and was NOT published for continuation',
+      );
     }
 
     let filesChanged2 = null;
@@ -6737,6 +7317,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (changes.filesChanged.length === 0) {
         try {
           gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+          // Intentional teardown, not an abandonment: stop the outer opencode2
+          // catch from probing the already-removed worktree on a later error.
+          isolation.freshlyCreated = false;
           if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
             const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
             if (!branchDeleted) {
@@ -6810,7 +7393,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const promptTokens2 = tokens2.input_uncached ?? 0;
     const completionTokens2 = tokens2.output_visible ?? 0;
     const ctx2 = currentCall();
-    logUsage({
+    const logUsageFn2 = deps.logUsage || logUsage;
+    logUsageFn2({
       model: modelUsed,
       billing_model: modelUsed,
       billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'opencode2' }),
@@ -6830,6 +7414,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       isolated: !!isolation,
       changed: (filesChanged2 || []).length > 0,
     });
+    // Finalization MUST precede lifecycle derivation and envelope assembly.
+    // The row is only persistent after the durable mapping and idle transition
+    // have both been confirmed.
+    const completionOutcome = await completeV2SessionRow(sessionV2, result2.sessionRealId);
+    if (completionOutcome === 'retained_for_recovery') {
+      throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+    }
+    if (completionOutcome === 'removed_unusable' && sessionV2) {
+      result2.warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+    }
+
     const lifecycle2 = deriveV2LifecycleFields({
       timedOut: result2.timedOut,
       terminationCause: result2.terminationCause,
@@ -6843,6 +7438,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       isolated: !!isolation,
       callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
       sessionRequested: Boolean(opts.session),
+      v2SessionAdmitted: sessionV2 != null,
+      completionOutcome,
     });
   const envelope2 = {
     engine: 'opencode2',
@@ -6888,24 +7485,19 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     };
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
-    // Terminal session transaction BEFORE the success envelope: the v2 row
-    // must reach idle before success JSON reaches stdout — a mark-idle
-    // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-    // instead of reporting a success that never finalized.
-    await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
     writeStdout2(JSON.stringify(envelope2) + '\n');
-    return;
+    return { completionOutcome };
     } catch (err) {
-      // Any failure inside the V2 branch (the session/--continue rejection,
-      // preflight gates, spawn failure, no-parseable output, post-run
-      // compatibility checks, envelope assembly) routes through the shared
-      // terminal funnel — same contract as the crush branch above:
-      // an UNVERIFIED process-group cleanup leaves the freshly reserved
-      // row exactly as-is, typed finalization/rollback failures pass
-      // through untouched, and an ordinary rollback-safe failure abandons
-      // the row (a failed rollback throws the typed aggregate preserving
-      // both errors). Always throws.
-      await failCoderRunSessionAware(sessionV2, err);
+      if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
+      // Match the inner catches and the V1 path: any failure AFTER
+      // setupIsolation created a fresh worktree — usage logging, store
+      // finalization, envelope assembly/write — must not strand
+      // .triss/wt/<slug> + its branch. cleanupAbandonedIsolation is
+      // reentrancy-guarded, so unwinds that already ran an inner cleanup are
+      // not touched twice, and a dirty/deliverable worktree is always kept.
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
+      throw err;
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
       // failure, preflight rejection, post-run compatibility failure, or
@@ -6970,6 +7562,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   let result;
   let rateLimit;
   try {
+    // Pre-spawn revalidation under the leases (same contract as the V2
+    // branch): reserved -> running here; a foreign-tuple row fails closed.
+    await revalidateV2SessionRowBeforeSpawn(sessionV2);
     result = await spawnEngine({
       argv,
       env,
@@ -7014,18 +7609,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
+    if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
+    await releaseSessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
-    // Exception: an UNVERIFIED process-group cleanup means the old engine
-    // tree may still be alive and writing, so the worktree must stay and the
-    // typed error goes to the shared terminal funnel untouched (it keeps the
-    // v2 row running and rethrows). Ordinary rollback-safe errors keep the
-    // existing cleanup, then route through the funnel (session-aware abandon;
-    // always throws).
-    if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
+    if (isolation && isolation.freshlyCreated) {
       cleanupAbandonedIsolation(sh, isolation);
     }
-    await failCoderRunSessionAware(sessionV2, err);
+    throw err;
   } finally {
     // component: the credential proxy is parent-owned and single-run —
     // revoke it as soon as the engine exits (success, failure, or throw).
@@ -7053,8 +7644,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   else if (result.code === 0) exit_reason = 'end_turn';
   else exit_reason = 'error';
 
-  if (opts.session && result.sessionRealId) {
+  if (opts.session && result.sessionRealId && sessionV2) {
     persistSessionMapping(sh, engine, opts.session, result.sessionRealId);
+    // Attribution anchor for the finalizer (exact-id rollback recognition).
+    sessionV2.publishedRealId = result.sessionRealId;
+  } else if (opts.session && result.sessionRealId && !sessionV2) {
+    // Sanctioned ephemeral downgrade: never publish a resumable mapping
+    // without a persistent claim behind it (orphan-mapping prevention).
+    result.warnings.push(
+      'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable — this native session is ephemeral and was NOT published for continuation',
+    );
   }
 
   // v2 contract: files_changed is [] ONLY for a successfully performed
@@ -7135,7 +7734,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const promptTokens = tokens.input_uncached ?? 0;
   const completionTokens = tokens.output_visible ?? 0;
   const ctx = currentCall();
-  logUsage({
+  const logUsageFn = deps.logUsage || logUsage;
+  logUsageFn({
     model: modelUsed,
     billing_model,
     billing_mode,
@@ -7149,6 +7749,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
   });
+
+  // Finalization MUST precede lifecycle derivation and envelope assembly.
+  const completionOutcome = await completeV2SessionRow(sessionV2, result.sessionRealId);
+  if (completionOutcome === 'retained_for_recovery') {
+    throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+  }
+  if (completionOutcome === 'removed_unusable' && sessionV2) {
+    result.warnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+  }
 
   // v2 lifecycle fields (Section 6.1/6.2): honest derivations from the
   // folded opencode event stream.
@@ -7165,6 +7774,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     isolated: !!isolation,
     callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
     sessionRequested: Boolean(opts.session || sessionRealIdV1),
+    v2SessionAdmitted: sessionV2 != null,
+    completionOutcome,
   });
   const finishedAtMs = Date.now();
 
@@ -7227,12 +7838,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // --test`'s own internal reporter, which also writes to stdout between
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
-  // Terminal session transaction BEFORE the success envelope: the v2 row
-  // must reach idle before success JSON reaches stdout — a mark-idle
-  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-  // instead of reporting a success that never finalized.
-  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
+  return { completionOutcome };
 }
 
 // ─── coder clean ─────────────────────────────────────────────────────────────
@@ -7317,22 +7924,6 @@ export async function runCoderClean(opts = {}, deps = {}) {
 
 // ─── v2 session CLI (shared contract) ──────────────────────────────────
 
-// The exact engine set the v2 session CLI accepts — nothing else.
-export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
-
-/**
- * Validate the --engine flag for the session list/clean surface: exactly
- * opencode|opencode2|crush. Read-only list may omit --engine (defaults to
- * opencode); clean is an owning mutation and must name its engine explicitly.
- */
-function requireSessionEngine(rawEngine, subcommand) {
-  const engine = rawEngine || (subcommand === 'list' ? 'opencode' : undefined);
-  if (!CODER_SESSION_ENGINES.includes(engine)) {
-    throw new Error(`--engine <opencode|opencode2|crush> is required for session ${subcommand}`);
-  }
-  return engine;
-}
-
 /**
  * `triss coder session list [--engine <name>]`: serialize the bounded
  * component inventory projection. Exits 0 only for a complete canonical
@@ -7340,9 +7931,16 @@ function requireSessionEngine(rawEngine, subcommand) {
  * partial JSON.
  */
 export async function runCoderSessionList(opts = {}, deps = {}) {
-  const engine = requireSessionEngine(opts.engine, 'list');
+  if (opts.engine && !CODER_SESSION_ENGINES.includes(opts.engine)) {
+    throw new Error(`--engine must be one of: ${CODER_SESSION_ENGINES.join(', ')}`);
+  }
   const { listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine || 'opencode',
+  )).path;
   const sessions = await listCoderSessions({ inventoryDir });
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
@@ -7350,34 +7948,447 @@ export async function runCoderSessionList(opts = {}, deps = {}) {
 
 /**
  * `triss coder session clean <slug> --engine <opencode|opencode2|crush>`:
- * requires the engine flag and removes only the selected engine's idle row,
- * atomically: clean rereads the row under the inventory mutex, transitions it
- * to deleting with a fresh clean-owner tuple, then removes it using that
- * exact deleting tuple. A concurrent continuation that won the race leaves
- * the row running; clean rejects and preserves it.
+ * requires the engine flag (one canonical enum shared by CLI validation,
+ * help, docs, and this implementation — opencode2 rows are first-class
+ * persistent sessions and MUST be cleanable). Forms its own COMPLETE clean
+ * owner tuple (run id, sandbox id, live PID + process-start + boot identity)
+ * and holds the normative clean lease — shared maintenance (whole cycle),
+ * conditional-target for non-isolated rows, the row's STORED assigned slot,
+ * brief exclusive inventory scopes.
+ *
+ * Ordering is crash-safe: the durable idle -> deleting transition publishes
+ * FIRST (the deleting row is the recovery breadcrumb), then the engine-owned
+ * store mapping is removed while the prefix stays held, and only after that
+ * a final brief inventory scope removes the row. A crash at any point leaves
+ * either an intact idle row or a deleting breadcrumb; a later clean takes
+ * the idempotent deleting-recovery path and always converges.
+ *
+ * Orphan recovery (MEDIUM-3): a crashed run used to brick its slug forever
+ * (every later admission fails TRISS_CODER_SESSION_BUSY and clean refused a
+ * non-idle row). Now a reserved|running row whose recorded owner is PROVABLY
+ * gone from this host (previous boot id, dead pid, or a pid reused by a
+ * different process-start identity) is classified as an ORPHAN and reclaimed
+ * automatically through this same pipeline. A row whose owner still appears
+ * live — or whose liveness cannot be proven on this host — still fails
+ * closed unless the operator passes --recover-live to attest the owner is
+ * really gone.
  */
-export async function runCoderSessionClean(slug, opts = {}) {
-  const engine = requireSessionEngine(opts.engine, 'clean');
-  const { cleanIdleCoderSession } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
-  // Clean is itself an owning action: it installs its own fresh owner tuple
-  // (never reuses a run's identity) as the deleting row's exact owner.
-  const owner = currentSessionOwnerTuple();
-  const result = await cleanIdleCoderSession({
-    inventoryDir,
-    engine,
-    slug,
-    runId: `run_${randomBytes(16).toString('hex')}`,
-    sandboxId: `sbx_${randomBytes(16).toString('hex')}`,
-    pid: owner.pid,
-    processStartId: owner.processStartId,
-    bootId: owner.bootId,
-  });
-  if (!result.removed) {
-    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${engine}\n`));
-    return;
+export async function runCoderSessionClean(slug, opts = {}, deps = {}) {
+  if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
+    throw new Error(`--engine <${CODER_SESSION_ENGINES.join('|')}> is required for session clean`);
   }
-  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${engine})\n`));
+  const { beginCoderSessionDelete, removeCoderSessionRow } =
+    await import('../coder-session-transitions.js');
+  const { readCoderSessionInventory } = await import('../coder-session-inventory-codec.js');
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine,
+  )).path;
+  // The clean action owns its complete owner tuple: the canonical deleting
+  // row requires run id + sandbox id + positive PID + process-start identity
+  // + boot identity, so a bare {inventoryDir, engine, slug} transition is
+  // invalid and would fail closed.
+  const ownerTuple = (deps.currentSessionOwnerTuple || currentSessionOwnerTuple)();
+  const cleanRunId = `run_${randomBytes(16).toString('hex')}`;
+  const cleanSandboxId = `sbx_${randomBytes(16).toString('hex')}`;
+  // ONE shared maintenance scope covers DISCOVERY through COMPLETION. Taking
+  // it BEFORE the first snapshot means no exclusive-maintenance writer
+  // (backup transaction) can interleave, and every later observation below
+  // happens under the same umbrella. ABA defense: the discovery row's EXACT
+  // identity is pinned here and byte-revalidated after every lock
+  // re-acquisition — the immutable session_instance_id (128 random bits)
+  // is the primary anchor, so a same-slug REPLACEMENT (even one that
+  // coincides on slot/mode/fingerprint AND millisecond created_at) is never
+  // deletable by an older clean attempt.
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  let target;
+  let slotLease;
+  let removedMapping;
+  let recovering = false;
+  // Set when this clean crossed the non-idle state gate: either an automatic
+  // ORPHAN reclaim (owner provably dead) or an explicit --recover-live
+  // attestation. Surfaced in the completion line for operator audit.
+  let reclaimedNote = null;
+  try {
+    // Discovery snapshot under the brief exclusive inventory scope.  The
+    // stored slot is project-wide metadata, so clean/recovery must inspect
+    // every canonical engine before acquiring a destructive slot lease.
+    let snapshot;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const inventories = await readProjectCoderSessionInventories(parentHandle);
+      const current = inventories.find((inventory) => inventory.engine === opts.engine);
+      snapshot = { entries: current?.entries || [] };
+    });
+    const snapRow = snapshot.entries.find((s) => s.slug === slug);
+    if (!snapRow) {
+      // Orphan-mapping recovery: a durable store mapping WITHOUT an inventory
+      // row is exactly the state new-reservation admission rejects (retain,
+      // fail closed) — `session clean` is its sanctioned recovery tool. A
+      // readable mapping (matching value or malformed value in a readable
+      // store) is removed; an UNREADABLE store still fails closed on its real
+      // corruption diagnostic, never on a guess.
+      const mapping = classifySessionStoreMapping(opts.engine, slug);
+      if (mapping.unreadable) {
+        throw storeInvalidError(mapping.cause?.message ?? 'session store unreadable');
+      }
+      if (mapping.state !== 'absent' && mapping.state !== 'not_applicable') {
+        removeSessionStoreMapping(opts.engine, slug);
+        process.stderr.write(pc.yellow(
+          `  ⚠ removed the orphaned ${opts.engine} store mapping for ${slug}` +
+          ' (no inventory row) — the slug is admissible again\n',
+        ));
+        return;
+      }
+      process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
+      return;
+    }
+    recovering = snapRow.state === 'deleting';
+    if (!recovering && snapRow.state !== 'idle') {
+      // MEDIUM-3: reserved|running rows are no longer unconditionally
+      // uncleanable. The recorded owner tuple decides:
+      //   orphan  -> reclaim automatically (crashed run; the slug was
+      //              otherwise bricked forever);
+      //   live/unknown -> fail closed UNLESS --recover-live attests the
+      //              operator knows the owner is really gone.
+      const liveness = classifyRecordedSessionOwner(snapRow, deps);
+      if (liveness.status === 'orphan') {
+        reclaimedNote = `orphaned owner reclaimed (${liveness.reason})`;
+        process.stderr.write(pc.yellow(
+          `  ⚠ v2 session ${slug} is ${snapRow.state} but its recorded owner is gone` +
+          ` (${liveness.reason}) — reclaiming the orphaned row\n`,
+        ));
+      } else if (opts.recoverLive === true) {
+        reclaimedNote = liveness.status === 'live'
+          ? `recovered via --recover-live over a LIVE-looking owner (pid ${snapRow.pid})`
+          : `recovered via --recover-live (owner unprovable: ${liveness.reason})`;
+        process.stderr.write(pc.yellow(
+          `  ⚠ recovering v2 session ${slug} per --recover-live: its recorded owner ` +
+          (liveness.status === 'live'
+            ? `appears live (pid ${snapRow.pid}, matching process-start)`
+            : `could not be proven dead (${liveness.reason})`) + '\n',
+        ));
+      } else {
+        throw new Error(
+          `session ${slug} is not idle (state=${snapRow.state}); its recorded owner ` +
+          (liveness.status === 'live'
+            ? `appears LIVE on this host (pid ${snapRow.pid}, matching process-start)`
+            : `could not be proven dead (${liveness.reason})`) +
+          '; pass --recover-live only if you attest that owner is really gone',
+        );
+      }
+    }
+    if (recovering && typeof snapRow.deleting_basename === 'string'
+        && !snapRow.deleting_basename.startsWith(`.deleting-${opts.engine}-${slug}-`)) {
+      throw new Error(`session ${slug} carries a foreign deleting breadcrumb (${snapRow.deleting_basename}) — retain, fail closed`);
+    }
+    const identity = {
+      // PRIMARY anchor: the immutable 128-bit incarnation identity minted at
+      // this row's reservation. created_at (millisecond precision) is kept
+      // only as a secondary metadata anchor — it can coincide across two
+      // incarnations and must never be the identity.
+      session_instance_id: snapRow.session_instance_id,
+      isolation_mode: snapRow.isolation_mode,
+      lock_slot: snapRow.lock_slot,
+      project_root_fingerprint: snapRow.project_root_fingerprint,
+      created_at: snapRow.created_at,
+    };
+    const recoveryBasename = recovering ? snapRow.deleting_basename : null;
+    // ABA anchors are ONLY the immutable identity fields. State and the
+    // deleting breadcrumb are deliberately EXCLUDED: this clean's own
+    // breadcrumb transition legitimately changes them between phases.
+    const sameRow = (candidate) => Boolean(candidate)
+      && ['session_instance_id', 'isolation_mode', 'lock_slot', 'project_root_fingerprint', 'created_at']
+        .every((key) => candidate[key] === identity[key]);
+
+    // Normative order under the held maintenance: conditional-target
+    // (non-isolated rows), then the STORED assigned slot.
+    target = isolationModeFor(snapRow.isolation_mode) === 'non-isolated'
+      ? await acquireCoderTargetLease({ parentHandle })
+      : null;
+    slotLease = await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${identity.lock_slot}` });
+
+    // Brief inventory #1: EXACT row revalidation, then publish the DELETING
+    // breadcrumb with this attempt's complete clean owner tuple.
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const freshInventories = await readProjectCoderSessionInventories(parentHandle);
+      const slotReasons = validateProjectCoderSessionCleanupSlot({
+        inventories: freshInventories,
+        engine: opts.engine,
+        slug,
+      });
+      if (slotReasons.length > 0) {
+        throw new Error(
+          `session ${slug} has a project-wide slot conflict — ${slotReasons.join('; ')}; retain, fail closed`,
+        );
+      }
+      const fresh = await readCoderSessionInventory(inventoryDir);
+      if (fresh.error) throw new Error(fresh.error);
+      const freshRow = fresh.entries.find((e) => e.engine === opts.engine && e.slug === slug);
+      if (!sameRow(freshRow)) {
+        throw new Error(
+          `session ${slug} changed while clean was starting (replaced or removed — ABA guard) — ` +
+            'retain, fail closed',
+        );
+      }
+      if (freshRow.state !== 'deleting') {
+        await beginCoderSessionDelete({
+          inventoryDir,
+          engine: opts.engine,
+          slug,
+          runId: cleanRunId,
+          sandboxId: cleanSandboxId,
+          ...ownerTuple,
+        });
+      }
+    });
+    // Inventory released; owner prefix STILL held: remove the engine-owned
+    // store artifact only after the deleting state is durably published.
+    removedMapping = removeSessionStoreMapping(opts.engine, slug);
+
+    // Brief inventory #2: verify the EXACT deleting breadcrumb we published
+    // (or the recovered one), then the row goes away last.
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const fresh = await readCoderSessionInventory(inventoryDir);
+      if (fresh.error) throw new Error(fresh.error);
+      const freshRow = fresh.entries.find((e) => e.engine === opts.engine && e.slug === slug);
+      if (!sameRow(freshRow)) {
+        throw new Error(
+          `session ${slug} changed while its artifacts were being removed (ABA guard) — retain, fail closed`,
+        );
+      }
+      if (freshRow.state !== 'deleting') {
+        throw new Error(`session ${slug} must be deleting before removal, got ${freshRow.state}`);
+      }
+      const expectedBasename = recovering
+        ? recoveryBasename
+        : `.deleting-${opts.engine}-${slug}-${cleanRunId}`;
+      if (freshRow.deleting_basename !== expectedBasename) {
+        throw new Error(
+          `unexpected deleting breadcrumb for ${slug}: ${freshRow.deleting_basename} — retain, fail closed`,
+        );
+      }
+      await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
+    });
+  } finally {
+    // Strict reverse order: slot -> target -> maintenance.
+    if (slotLease) await slotLease.release();
+    if (target) await target.release();
+    await maintenance.release();
+  }
+  process.stderr.write(
+    pc.dim(
+      `  · removed v2 session ${slug} (engine ${opts.engine}` +
+        `${removedMapping ? ', store mapping cleared' : ''}${recovering ? ', recovered from deleting' : ''}` +
+        `${reclaimedNote ? `, ${reclaimedNote}` : ''})\n`),
+  );
+}
+
+// isolation_mode (row form) -> lease wrapper form ('isolated'|'non-isolated').
+function isolationModeFor(rowMode) {
+  return rowMode === 'isolated' ? 'isolated' : 'non-isolated';
+}
+
+/**
+ * Classify whether a NON-IDLE row's recorded owner can still be alive on
+ * THIS host (MEDIUM-3 orphan recovery evidence):
+ *
+ *   - 'orphan'  — the owner is PROVABLY gone: the row was written under a
+ *                 different boot identity, its pid no longer exists, or the
+ *                 pid exists but carries a DIFFERENT process-start identity
+ *                 (pid reuse by an unrelated program);
+ *   - 'live'    — same boot id, pid alive with a MATCHING process-start id;
+ *   - 'unknown' — the evidence is unavailable (incomplete recorded tuple,
+ *                 boot probe failure, liveness/start probes unusable).
+ *
+ * Only 'orphan' authorizes an automatic reclaim; 'live' and 'unknown' fail
+ * closed unless the operator explicitly attests with --recover-live.
+ */
+export function classifyRecordedSessionOwner(row, deps = {}) {
+  const currentBoot = deps.currentBootIdentity || currentBootIdentity;
+  const pidAlive = deps.pidAlive || ((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      // EPERM means the process EXISTS but is owned by someone else — it is
+      // alive for our purposes; every other errno (ESRCH et al.) is not.
+      return error?.code === 'EPERM';
+    }
+  });
+  const startIdentity = deps.processStartIdentity || processStartIdentity;
+
+  if (!Number.isInteger(row.pid) || row.pid <= 0
+      || typeof row.boot_id !== 'string' || row.boot_id.length === 0) {
+    return { status: 'unknown', reason: 'incomplete recorded owner tuple' };
+  }
+  const boot = currentBoot();
+  if (!boot) {
+    return { status: 'unknown', reason: 'host boot identity is unavailable' };
+  }
+  if (row.boot_id !== boot) {
+    return { status: 'orphan', reason: `recorded owner ran under a previous boot (${row.boot_id})` };
+  }
+  let alive;
+  try {
+    alive = pidAlive(row.pid) === true;
+  } catch {
+    return { status: 'unknown', reason: `liveness probe for pid ${row.pid} failed` };
+  }
+  if (!alive) {
+    return { status: 'orphan', reason: `recorded pid ${row.pid} is no longer alive` };
+  }
+  const start = startIdentity(row.pid);
+  if (!start) {
+    return { status: 'unknown', reason: `process-start identity for pid ${row.pid} is unavailable` };
+  }
+  if (start !== row.process_start_id) {
+    return { status: 'orphan', reason: `pid ${row.pid} was reused by another process (process-start mismatch)` };
+  }
+  return { status: 'live' };
+}
+
+/**
+ * `triss coder session migrate --engine <opencode|opencode2|crush>`: the ONE
+ * sanctioned consumer of a released v0.39.0 (schema_version 1) inventory
+ * document (PR #85 review HIGH-2). Normal readers never auto-mutate a legacy
+ * document — they return the typed TRISS_CODER_SESSION_LEGACY_SCHEMA error —
+ * so this explicit command is the only path that upgrades it:
+ *
+ *   - Runs under the canonical exclusion hierarchy: shared MAINTENANCE,
+ *     brief exclusive INVENTORY scopes, and every assigned SLOT lease.
+ *   - Migrates ONLY fully-idle documents: an idle row carries no owner tuple,
+ *     so minting a fresh 128-bit session_instance_id cannot split any
+ *     existing owner/row pairing (the ABA identity did not exist yet).
+ *   - A document containing ANY reserved|running|deleting row FAILS CLOSED
+ *     without partial migration — those owners' semantics cannot be trusted
+ *     without identities; resolve them first (`session clean`, optionally
+ *     --recover-live).
+ *   - The ORIGINAL schema-1 bytes are preserved verbatim under
+ *     `.triss/quarantine-v1/inventory-schema1-<engine>-<stamp>/` BEFORE the
+ *     canonical document is atomically published (crash-safe: any
+ *     interruption leaves either the untouched legacy file or the migrated
+ *     file plus its preserved original).
+ *   - Idempotent: absent or already-canonical inventories are reported and
+ *     left untouched.
+ */
+export async function runCoderSessionMigrate(opts = {}, _deps = {}) {
+  if (!opts.engine || !CODER_SESSION_ENGINES.includes(opts.engine)) {
+    throw new Error(`--engine <${CODER_SESSION_ENGINES.join('|')}> is required for session migrate`);
+  }
+  const codec = await import('../coder-session-inventory-codec.js');
+  const {
+    readRawCoderSessionInventory,
+    decodeCoderSessionInventory,
+    decodeLegacyCoderSessionInventory,
+    writeCoderSessionInventory,
+    CODER_SESSION_LEGACY_SCHEMA_CODE,
+  } = codec;
+  const { reconcileCoderSessionInventory } = await import('../coder-session-transitions.js');
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const inventoryDir = (await openManagedChildDir(
+    parentHandle,
+    'engine-sessions-v2',
+    opts.engine,
+  )).path;
+  // Shared maintenance covers DISCOVERY through PUBLICATION: no exclusive
+  // writer (backup transaction) may interleave while identities are minted.
+  const maintenance = await acquireCoderMaintenanceLock({ parentHandle, mode: 'shared' });
+  const slotLeases = [];
+  let migrated = 0;
+  try {
+    // Discovery under a brief exclusive inventory scope: pin the EXACT raw
+    // bytes this decision is made on (byte-level ABA anchor).
+    let discovered = null;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const raw = await readRawCoderSessionInventory(inventoryDir);
+      if (raw.error) throw new Error(raw.error);
+      if (raw.absent) return;
+      discovered = raw.text;
+    });
+    if (discovered === null) {
+      process.stderr.write(pc.dim(
+        `  · no ${opts.engine} v2 session inventory — nothing to migrate\n`,
+      ));
+      return;
+    }
+    if (decodeCoderSessionInventory(discovered) !== null) {
+      process.stderr.write(pc.dim(
+        `  · ${opts.engine} v2 session inventory is already canonical (schema_version `
+          + `${codec.INVENTORY_SCHEMA_VERSION}) — nothing to migrate\n`,
+      ));
+      return;
+    }
+    const legacy = decodeLegacyCoderSessionInventory(discovered);
+    if (legacy === null) {
+      throw new Error('inventory: corrupt canonical inventory (fail closed)');
+    }
+    // Only fully-idle documents migrate: minting identities for a row whose
+    // owner may still be alive would let two incarnations claim one slug.
+    const liveRows = legacy.entries.filter((e) => e.state !== 'idle');
+    if (liveRows.length > 0) {
+      const error = new Error(
+        'inventory: legacy schema_version 1 has non-idle rows (' +
+          liveRows.map((r) => `${r.engine}/${r.slug}:${r.state}`).join(', ') +
+          ') — possibly-live owners cannot be migrated by minting identities;' +
+          ' resolve them first (`triss coder session clean <slug> --engine ' + opts.engine +
+          '`, --recover-live if you attest the owner is gone). No partial migration.',
+      );
+      error.code = CODER_SESSION_LEGACY_SCHEMA_CODE;
+      throw error;
+    }
+    // Hold EVERY assigned slot lease while identities are rewritten, in
+    // stable slot order (normative hierarchy: below maintenance, above the
+    // exclusive inventory mutation).
+    for (const slot of [...new Set(legacy.entries.map((e) => e.lock_slot))].sort((a, b) => a - b)) {
+      slotLeases.push(await acquireCoderSlotLease({ parentHandle, lockSlot: `session-${slot}` }));
+    }
+    // Publication under a second brief exclusive inventory scope: the exact
+    // discovered bytes must still be on disk (no writer slipped in between),
+    // then quarantine-preserve the original and atomically publish canonical.
+    let quarantinedTo = null;
+    await withCoderInventoryLock({ parentHandle }, async () => {
+      const raw = await readRawCoderSessionInventory(inventoryDir);
+      // Absent, unreadable, or byte-different: somebody touched the document
+      // after discovery — never publish over an unverified state.
+      if (raw.absent || raw.error || raw.text !== discovered) {
+        throw new Error('inventory changed while migrate was starting — retain, fail closed');
+      }
+      // Preserve the ORIGINAL v0.39.0 bytes FIRST (crash before the publish
+      // below leaves the legacy file untouched and simply retryable).
+      const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
+      const batch = await openManagedChildDir(
+        await openManagedChildDir(parentHandle, 'quarantine-v1'),
+        `inventory-schema1-${opts.engine}-${stamp}`,
+      );
+      const { writeFile: writeFileAsync } = await import('node:fs/promises');
+      const preservePath = join(batch.path, '.inventory.json');
+      await writeFileAsync(preservePath, discovered, { mode: 0o600 });
+      quarantinedTo = preservePath;
+      // Canonical publication: mint a fresh immutable 128-bit instance id
+      // for every idle legacy row (validated + sorted by the encoder).
+      const canonicalEntries = legacy.entries.map((row) => ({
+        ...row,
+        session_instance_id: randomBytes(16).toString('hex'),
+      }));
+      await writeCoderSessionInventory(inventoryDir, canonicalEntries);
+      // Real coherence use of the reconciliation helper: every published row
+      // must satisfy the admission/recovery state table post-migration.
+      await reconcileCoderSessionInventory({ inventoryDir });
+      migrated = canonicalEntries.length;
+    });
+    process.stderr.write(pc.green(
+      `  ✓ migrated ${migrated} idle legacy row(s) (${opts.engine}) to canonical schema ` +
+        `(${codec.INVENTORY_SCHEMA_VERSION}); original preserved at ${quarantinedTo}\n`,
+    ));
+  } finally {
+    // Strict reverse order: slot leases -> maintenance.
+    for (let i = slotLeases.length - 1; i >= 0; i -= 1) {
+      await slotLeases[i].release();
+    }
+    await maintenance.release();
+  }
 }
 
 /**
@@ -7390,13 +8401,14 @@ export async function runCoderStateAdopt(opts = {}) {
   if (!opts.fromProjectId || !/^[0-9a-f]{32}$/.test(opts.fromProjectId)) {
     throw new Error('--from-project-id <32hex> is required for state adopt');
   }
-  const trissRoot = join(projectRoot(), '.triss');
-  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  const parentHandle = await openManagedTrissRoot(projectRoot());
+  const identity = await loadOrCreateProjectIdentity(parentHandle);
   if (identity.project_id === opts.fromProjectId) {
     throw new Error('adopt requires a DIFFERENT newly generated project id');
   }
   const result = await adoptOrQuarantineCoderState({
-    trissRootPath: trissRoot,
+    trissRootPath: parentHandle.path,
+    parentHandle,
     oldProjectId: opts.fromProjectId,
     newProjectId: identity.project_id,
   });
@@ -7416,18 +8428,19 @@ export async function runCoderStateReset(opts = {}) {
   const { resolve: resolvePath } = await import('node:path');
   const { loadOrCreateProjectIdentity } = await import('../coder-state.js');
   const { randomBytes } = await import('node:crypto');
-  const { mkdir, readdir, rename, rm } = await import('node:fs/promises');
+  const { readdir, rename, rm } = await import('node:fs/promises');
   // --project names the target tree: resetting repo-B from repo-A's cwd must
   // never quarantine repo-A's state. Resolve the EXPLICIT path, not cwd.
-  const trissRoot = join(resolvePath(opts.project), '.triss');
+  const parentHandle = await openManagedTrissRoot(resolvePath(opts.project));
+  const trissRoot = parentHandle.path;
   // A fresh identity is created only after the old one is quarantined;
   // the identity itself is never deleted.
-  const identity = await loadOrCreateProjectIdentity(trissRoot);
+  const identity = await loadOrCreateProjectIdentity(parentHandle);
 
   // Invariant: actually quarantine ALL validated v2 state — every session and
   // result state directory is MOVED (recoverable) under the quarantine
   // root, not merely reported. The identity file itself is never deleted.
-  const quarantineRoot = join(trissRoot, 'quarantine-v1');
+  const quarantineRootHandle = await openManagedChildDir(parentHandle, 'quarantine-v1');
   const stamp = `${Date.now()}-${randomBytes(8).toString('hex')}`;
   let quarantined = 0;
   const stateRoots = ['coder-state-v2', 'engine-sessions-v2', 'coder-results-v1'];
@@ -7439,10 +8452,11 @@ export async function runCoderStateReset(opts = {}) {
     } catch {
       continue; // root absent: nothing to quarantine
     }
+    let batchHandle;
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
-      const dst = join(quarantineRoot, `${root}-${stamp}`, ent.name);
-      await mkdir(join(quarantineRoot, `${root}-${stamp}`), { mode: 0o700, recursive: true });
+      batchHandle ||= await openManagedChildDir(quarantineRootHandle, `${root}-${stamp}`);
+      const dst = join(batchHandle.path, ent.name);
       try {
         await rename(join(src, ent.name), dst);
         quarantined += 1;
@@ -7458,12 +8472,24 @@ export async function runCoderStateReset(opts = {}) {
     }
   }
 
+  // The shared slug -> native-session map (.triss/sessions.json) is durable
+  // v2-owned continuation state too: reset must QUARANTINE it (recoverable),
+  // never delete or leave it behind — a stale map would make every cleaned
+  // slug's mapping dangle (and re-trigger the orphan-mapping admission gate).
+  try {
+    const sessionsQuarantine = await openManagedChildDir(quarantineRootHandle, `sessions-${stamp}`);
+    await rename(join(trissRoot, 'sessions.json'), join(sessionsQuarantine.path, 'sessions.json'));
+    quarantined += 1;
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+
   // Quarantine the old project-identity-v1.json and create a fresh identity
   const identityFile = join(trissRoot, 'project-identity-v1.json');
   try {
-    await mkdir(join(quarantineRoot, `identity-${stamp}`), { mode: 0o700, recursive: true });
-    await rename(identityFile, join(quarantineRoot, `identity-${stamp}`, 'project-identity-v1.json'));
-    await loadOrCreateProjectIdentity(trissRoot);
+    const identityQuarantine = await openManagedChildDir(quarantineRootHandle, `identity-${stamp}`);
+    await rename(identityFile, join(identityQuarantine.path, 'project-identity-v1.json'));
+    await loadOrCreateProjectIdentity(parentHandle);
   } catch (err) {
     if (err && err.code !== 'ENOENT') throw err;
   }

@@ -79,7 +79,7 @@ const makeSh = () => {
       return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
     }
     if (cmd === 'opencode' && args[0] === '--version') {
-      return { status: 0, stdout: '1.18.7\n', stderr: '' };
+      return { status: 0, stdout: '1.18.22\n', stderr: '' };
     }
     return { status: 0, stdout: '', stderr: '' };
   };

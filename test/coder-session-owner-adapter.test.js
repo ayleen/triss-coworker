@@ -74,21 +74,10 @@ function makeContext(kind) {
   return ctx;
 }
 
-// Exact current-owner tuple of a row, as the transitions now require it.
-function tupleOf(row) {
-  return {
-    runId: row.run_id,
-    sandboxId: row.sandbox_id,
-    pid: row.pid,
-    processStartId: row.process_start_id,
-    bootId: row.boot_id,
-  };
-}
-
 // Seed a deleting row in the inventory.
 async function seedDeletingRow(fx, phase = 'store_tombstoned') {
   const { reserveCoderSession } = await import('../src/coder-session-transitions.js');
-  const reserved = await reserveCoderSession({
+  await reserveCoderSession({
     inventoryDir: fx.inventoryDir,
     engine: 'opencode',
     slug: 'task-a',
@@ -100,12 +89,15 @@ async function seedDeletingRow(fx, phase = 'store_tombstoned') {
     processStartId: 'ps-1',
     bootId: 'boot-1',
   });
-  // The reserved row is live: the delete must carry its exact current tuple.
   return beginCoderSessionDelete({
     inventoryDir: fx.inventoryDir,
     engine: 'opencode',
     slug: 'task-a',
-    ...tupleOf(reserved),
+    runId: 'run-1',
+    sandboxId: 'sbx_'.concat('a'.repeat(32)),
+    pid: 111,
+    processStartId: 'ps-1',
+    bootId: 'boot-1',
     deletePhase: phase,
   });
 }

@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 
 import { loadOrCreateProjectIdentity } from '../coder-state.js';
 import { backupCoderV2State, validateCoderV2Backup } from '../coder-state-backup.js';
+import { openManagedChildDir, openManagedTrissRoot } from '../managed-root.js';
 
 function printResult(obj, json) {
   if (json) {
@@ -35,13 +36,24 @@ function resolveBackupDirectory(projectRoot, backupArg) {
  */
 export async function runCoderStateBackup({ project, backup, json }) {
   const projectRoot = resolve(String(project));
-  const trissRoot = join(projectRoot, '.triss');
-  const identity = await loadOrCreateProjectIdentity(trissRoot);
-  const backupDir = backup
-    ? resolveBackupDirectory(projectRoot, backup)
-    : join(trissRoot, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
+  const parentHandle = await openManagedTrissRoot(projectRoot);
+  const identity = await loadOrCreateProjectIdentity(parentHandle);
+  let backupDir;
+  let backupHandle;
+  const backupName = backup && !String(backup).includes('/') && !String(backup).includes('\\')
+    ? String(backup)
+    : (!backup ? new Date().toISOString().replace(/[:.]/g, '-') : null);
+  if (backupName) {
+    const backupsHandle = await openManagedChildDir(parentHandle, 'backups');
+    backupHandle = await openManagedChildDir(backupsHandle, backupName);
+    backupDir = backupHandle.path;
+  } else {
+    backupDir = resolveBackupDirectory(projectRoot, backup);
+  }
   const { manifest, completion } = await backupCoderV2State({
     projectRoot,
+    parentHandle,
+    backupHandle,
     backupDir,
     projectId: identity.project_id,
   });

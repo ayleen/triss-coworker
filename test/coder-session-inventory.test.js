@@ -12,7 +12,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,8 +24,10 @@ import {
   SESSION_DELETE_PHASE,
   RESERVED_BYTES,
   validateCoderSessionEntry,
+  validateLegacyCoderSessionEntry,
   encodeCoderSessionInventory,
   decodeCoderSessionInventory,
+  decodeLegacyCoderSessionInventory,
   readCoderSessionInventory,
   writeCoderSessionInventory,
 } from '../src/coder-session-inventory-codec.js';
@@ -49,6 +51,7 @@ function runningEntry(overrides = {}) {
   return {
     engine: 'opencode',
     slug: 'task-a',
+    session_instance_id: '7'.repeat(32),
     isolation_mode: 'isolated',
     lock_slot: 0,
     state: 'running',
@@ -90,6 +93,7 @@ test('a running entry with a complete tuple validates byte-exactly', () => {
   assert.deepEqual(Object.keys(result), [
     'engine',
     'slug',
+    'session_instance_id',
     'isolation_mode',
     'lock_slot',
     'state',
@@ -168,6 +172,30 @@ test('unknown or missing keys fail closed (additionalProperties: false)', () => 
   assert.equal(validateCoderSessionEntry(missing), null);
 });
 
+test('session_instance_id is required in EVERY state with an exact 32-hex grammar', () => {
+  for (const state of ['reserved', 'running', 'idle', 'deleting']) {
+    const entry = runningEntry({
+      state,
+      ...(state === 'deleting' ? {
+        deleting_basename: '.deleting-opencode-task-a-run-abc123',
+        session_delete_phase: 'store_tombstoned',
+      } : {}),
+      ...(state === 'idle' ? { run_id: null, sandbox_id: null, pid: null, process_start_id: null, boot_id: null } : {}),
+    });
+    assert.notEqual(validateCoderSessionEntry(entry), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: null }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: '' }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'XYZ' }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'g'.repeat(32) }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'a'.repeat(31) }), null, state);
+    assert.equal(validateCoderSessionEntry({ ...entry, session_instance_id: 'A'.repeat(32) }), null, state);
+    // Exactly 128 bits of lowercase hex validates.
+    assert.notEqual(validateCoderSessionEntry({ ...entry, session_instance_id: 'b'.repeat(32) }), null, state);
+    const { session_instance_id: _omitInstance, ...missingInstance } = entry;
+    assert.equal(validateCoderSessionEntry(missingInstance), null, state + ': missing key');
+  }
+});
+
 // ─── encode / decode ─────────────────────────────────────────────────────────
 
 test('encode produces sorted canonical docs; decode round-trips', () => {
@@ -207,11 +235,172 @@ test('more than four entries fails closed', () => {
 test('oversized and malformed documents fail closed', () => {
   assert.equal(decodeCoderSessionInventory('x'.repeat(INVENTORY_MAX_BYTES + 1)), null);
   assert.equal(decodeCoderSessionInventory('not json'), null);
-  assert.equal(decodeCoderSessionInventory('{"schema_version":1,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}'), null); // no LF
+  assert.equal(decodeCoderSessionInventory('{"schema_version":2,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}'), null); // no LF
+  // A FUTURE version is never decoded by this reader (fail closed; a
+  // schema_version 1 document is LEGACY — see the dedicated tests below).
   assert.equal(
-    decodeCoderSessionInventory('{"schema_version":2,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n'),
+    decodeCoderSessionInventory('{"schema_version":3,"entries":[],"updated_at":"2026-08-13T10:00:00.000Z"}\n'),
     null,
   );
+});
+
+// ─── released v0.39.0 legacy schema (schema_version 1) ──────────────────────
+
+test('a realistic v0.39.0 schema-1 document decodes under the legacy rules only', () => {
+  const legacyEntry = {
+    engine: 'opencode2',
+    slug: 'v039-row',
+    // EXACTLY the 16 released keys: no session_instance_id.
+    isolation_mode: 'isolated',
+    lock_slot: 2,
+    state: 'idle',
+    run_id: null,
+    sandbox_id: null,
+    pid: null,
+    process_start_id: null,
+    boot_id: null,
+    project_root_fingerprint: 'f'.repeat(64),
+    reserved_bytes: RESERVED_BYTES,
+    deleting_basename: null,
+    session_delete_phase: null,
+    created_at: NOW,
+    updated_at: NOW,
+  };
+  assert.deepEqual(Object.keys(legacyEntry).length, 16);
+  const text = JSON.stringify({
+    schema_version: 1,
+    entries: [legacyEntry],
+    updated_at: NOW,
+  }) + '\n';
+  // Canonical readers reject it (wrong version AND extra/missing key shape).
+  assert.equal(decodeCoderSessionInventory(text), null);
+  // The shared shape validator accepts the raw legacy row directly and
+  // returns it in canonical key order with a null identity.
+  const validated = validateLegacyCoderSessionEntry(legacyEntry);
+  assert.notEqual(validated, null);
+  assert.equal(validated.session_instance_id, null);
+  assert.equal(validateLegacyCoderSessionEntry({ ...legacyEntry, state: 'bogus' }), null);
+  // The dedicated legacy decoder validates it under identical rules minus the
+  // identity field and returns rows in canonical key order with null id.
+  const decoded = decodeLegacyCoderSessionInventory(text);
+  assert.notEqual(decoded, null);  assert.equal(decoded.schema_version, 1);
+  assert.deepEqual(Object.keys(decoded), ['schema_version', 'entries', 'updated_at']);
+  assert.equal(decoded.entries.length, 1);
+  assert.deepEqual(
+    Object.keys(decoded.entries[0]),
+    [
+      'engine',
+      'slug',
+      'session_instance_id',
+      'isolation_mode',
+      'lock_slot',
+      'state',
+      'run_id',
+      'sandbox_id',
+      'pid',
+      'process_start_id',
+      'boot_id',
+      'project_root_fingerprint',
+      'reserved_bytes',
+      'deleting_basename',
+      'session_delete_phase',
+      'created_at',
+      'updated_at',
+    ],
+  );
+  assert.equal(decoded.entries[0].session_instance_id, null);
+  assert.equal(decoded.entries[0].slug, 'v039-row');
+  assert.equal(decoded.entries[0].state, 'idle');
+});
+
+test('legacy decoding enforces the same fail-closed rules as canonical', () => {
+  const base = {
+    engine: 'opencode',
+    slug: 'task-a',
+    isolation_mode: 'isolated',
+    lock_slot: 0,
+    state: 'idle',
+    run_id: null,
+    sandbox_id: null,
+    pid: null,
+    process_start_id: null,
+    boot_id: null,
+    project_root_fingerprint: 'f'.repeat(64),
+    reserved_bytes: RESERVED_BYTES,
+    deleting_basename: null,
+    session_delete_phase: null,
+    created_at: NOW,
+    updated_at: NOW,
+  };
+  const doc = (entries, updatedAt = NOW) => JSON.stringify({
+    schema_version: 1,
+    entries,
+    updated_at: updatedAt,
+  }) + '\n';
+  assert.notEqual(decodeLegacyCoderSessionInventory(doc([base])), null);
+  // A CANONICAL row inside a legacy doc fails closed (17 keys).
+  assert.equal(decodeLegacyCoderSessionInventory(doc([{ ...base, session_instance_id: '7'.repeat(32) }])), null);
+  // Unknown/missing keys, bad values: identical rules.
+  assert.equal(decodeLegacyCoderSessionInventory(doc([{ ...base, extra: 1 }])), null);
+  assert.equal(decodeLegacyCoderSessionInventory(doc([{ ...base, lock_slot: 9 }])), null);
+  assert.equal(decodeLegacyCoderSessionInventory(doc([base, base])), null); // duplicate slug
+  // Unsorted entries fail closed.
+  const z = { ...base, slug: 'z-slug' };
+  const a = { ...base, slug: 'a-slug' };
+  assert.equal(decodeLegacyCoderSessionInventory(doc([z, a])), null);
+  // Wrong envelope: future version, missing LF, bad timestamp, oversize.
+  assert.equal(decodeLegacyCoderSessionInventory('{"schema_version":2,"entries":[],"updated_at":"' + NOW + '"}\n'), null);
+  assert.equal(decodeLegacyCoderSessionInventory(JSON.stringify({ schema_version: 1, entries: [], updated_at: NOW })), null);
+  assert.equal(decodeLegacyCoderSessionInventory('{"schema_version":1,"entries":[],"updated_at":"nope"}\n'), null);
+  assert.equal(decodeLegacyCoderSessionInventory('x'.repeat(INVENTORY_MAX_BYTES + 1)), null);
+});
+
+test('normal readers return the typed actionable legacy error and never mutate', async () => {
+  const fx = await fixture();
+  try {
+    const { CODER_SESSION_LEGACY_SCHEMA_CODE } = await import('../src/coder-session-inventory-codec.js');
+    const legacyText = JSON.stringify({
+      schema_version: 1,
+      entries: [{
+        engine: 'opencode',
+        slug: 'task-a',
+        isolation_mode: 'isolated',
+        lock_slot: 0,
+        state: 'idle',
+        run_id: null,
+        sandbox_id: null,
+        pid: null,
+        process_start_id: null,
+        boot_id: null,
+        project_root_fingerprint: 'f'.repeat(64),
+        reserved_bytes: RESERVED_BYTES,
+        deleting_basename: null,
+        session_delete_phase: null,
+        created_at: NOW,
+        updated_at: NOW,
+      }],
+      updated_at: NOW,
+    }) + '\n';
+    await writeFile(join(fx.inventoryDir, '.inventory.json'), legacyText, { mode: 0o600 });
+    for (const reportMissing of [false, true]) {
+      const read = await readCoderSessionInventory(fx.inventoryDir, { reportMissing });
+      assert.match(read.error, /legacy schema_version 1/);
+      assert.match(read.error, /triss coder session migrate/);
+      assert.equal(read.code, CODER_SESSION_LEGACY_SCHEMA_CODE);
+      if (reportMissing) assert.equal(read.missing, false);
+      assert.equal(read.entries, undefined, 'no partial entries are ever returned');
+    }
+    // The legacy file on disk was never touched by any read.
+    const after = await readFile(join(fx.inventoryDir, '.inventory.json'), 'utf8');
+    assert.equal(after, legacyText);
+    // A corrupt document that is NEITHER canonical nor legacy stays generic.
+    await writeFile(join(fx.inventoryDir, '.inventory.json'), '{"schema_version":9,"entries":[]}\n', { mode: 0o600 });
+    const corrupt = await readCoderSessionInventory(fx.inventoryDir);
+    assert.equal(corrupt.code, undefined);
+    assert.match(corrupt.error, /corrupt/);
+  } finally {
+    await fx.cleanup();
+  }
 });
 
 // ─── I/O ─────────────────────────────────────────────────────────────────────
@@ -236,10 +425,111 @@ test('writeCoderSessionInventory atomically publishes a mode-0600 file; read rou
   }
 });
 
+function recordingInventoryFs({ failOn = () => false } = {}) {
+  const calls = [];
+  const fd = (path) => ({
+    async writeFile(text) {
+      calls.push(`write:${path}:${text.endsWith('\n') ? 'lf' : 'nolf'}`);
+    },
+    async sync() {
+      calls.push(`fsync:${path}`);
+      if (failOn(`fsync:${path}`)) throw new Error(`injected fsync failure: ${path}`);
+    },
+    async close() {
+      calls.push(`close:${path}`);
+    },
+  });
+  return {
+    calls,
+    async open(path, flags, mode) {
+      calls.push(`open:${path}:${flags}:${mode ?? 'default'}`);
+      return fd(path);
+    },
+    async rename(from, to) {
+      calls.push(`rename:${from}->${to}`);
+      if (failOn(`rename:${from}`)) throw new Error(`injected rename failure: ${from}`);
+    },
+    async unlink(path) {
+      calls.push(`unlink:${path}`);
+    },
+  };
+}
+
+test('writeCoderSessionInventory fsyncs the parent after the atomic rename', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs();
+    await writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl);
+    const tmpOpen = fsImpl.calls.find((call) => call.includes('.inventory.tmp.') && call.startsWith('open:'));
+    const tmpPath = tmpOpen.slice(5).split(':wx:')[0];
+    assert.deepEqual(fsImpl.calls, [
+      `open:${tmpPath}:wx:${0o600}`,
+      `write:${tmpPath}:lf`,
+      `fsync:${tmpPath}`,
+      `close:${tmpPath}`,
+      `rename:${tmpPath}->${join(fx.inventoryDir, '.inventory.json')}`,
+      `open:${fx.inventoryDir}:r:default`,
+      `fsync:${fx.inventoryDir}`,
+      `close:${fx.inventoryDir}`,
+    ]);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('writeCoderSessionInventory removes an unconsumed temp on pre-rename failure', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({ failOn: (call) => call.startsWith('rename:') });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      (error) => {
+        assert.equal(error.code, 'CODER_SESSION_STORE_IO');
+        assert.equal(error.inventoryDir, fx.inventoryDir);
+        assert.match(error.cause.message, /injected rename failure/);
+        return true;
+      },
+    );
+    const tmpOpen = fsImpl.calls.find((call) => call.includes('.inventory.tmp.') && call.startsWith('open:'));
+    const tmpPath = tmpOpen.slice(5).split(':wx:')[0];
+    assert.ok(fsImpl.calls.includes(`unlink:${tmpPath}`));
+    assert.equal(fsImpl.calls.some((call) => call === `open:${fx.inventoryDir}:r:default`), false);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('writeCoderSessionInventory reports durability unknown after a renamed entry cannot be parent-fsynced', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({
+      failOn: (call) => call === `fsync:${fx.inventoryDir}`,
+    });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      (error) => {
+        assert.equal(error.code, 'CODER_SESSION_DURABILITY_UNKNOWN');
+        assert.equal(error.publicationMayHaveOccurred, true);
+        assert.equal(error.inventoryDir, fx.inventoryDir);
+        assert.match(error.cause.message, /injected fsync failure/);
+        return true;
+      },
+    );
+    assert.equal(fsImpl.calls.some((call) => call.startsWith('unlink:')), false);
+    assert.ok(fsImpl.calls.includes(`close:${fx.inventoryDir}`));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('readCoderSessionInventory returns empty entries when absent and fails closed on corrupt content', async () => {
   const fx = await fixture();
   try {
     assert.deepEqual(await readCoderSessionInventory(fx.inventoryDir), { entries: [] });
+    assert.deepEqual(
+      await readCoderSessionInventory(fx.inventoryDir, { reportMissing: true }),
+      { entries: [], missing: true },
+    );
     await writeFile(join(fx.inventoryDir, '.inventory.json'), 'BROKEN\n', { mode: 0o600 });
     const read = await readCoderSessionInventory(fx.inventoryDir);
     assert.match(read.error, /corrupt/);
@@ -248,130 +538,23 @@ test('readCoderSessionInventory returns empty entries when absent and fails clos
   }
 });
 
-// ─── crash-durable publication order and cleanup ─────────────────────────────
-
-/**
- * Recording filesystem double: captures the exact call sequence through the
- * narrow writeCoderSessionInventory seam (open/rename/unlink; all other
- * operations flow through the fds this open returns). `failOn` injects a
- * failure after the recorded call.
- */
-function recordingInventoryFs({ failOn = () => false } = {}) {
-  const calls = [];
-  const makeFd = (path) => ({
-    async writeFile(text) {
-      calls.push(`writeFile:${path}:${text.endsWith('\n') ? 'lf' : 'nolf'}`);
-    },
-    async sync() {
-      calls.push(`fsync:${path}`);
-      if (failOn(`fsync:${path}`)) throw new Error(`injected fsync failure: ${path}`);
-    },
-    async close() {
-      calls.push(`close:${path}`);
-      if (failOn(`close:${path}`)) throw new Error(`injected close failure: ${path}`);
-    },
-  });
-  return {
-    calls,
-    async open(path, flags, mode) {
-      calls.push(`open:${path}:flags=${flags}:mode=${mode ?? 'default'}`);
-      if (failOn(`open:${path}`)) throw new Error(`injected open failure: ${path}`);
-      return makeFd(path);
-    },
-    async rename(from, to) {
-      calls.push(`rename:${from}->${to}`);
-      if (failOn(`rename:${from}`)) throw new Error(`injected rename failure: ${from}`);
-    },
-    async unlink(path) {
-      calls.push(`unlink:${path}`);
-      if (failOn(`unlink:${path}`)) throw new Error(`injected unlink failure: ${path}`);
-    },
-  };
-}
-
-const DIR_FSYNC_FAILURE = /injected fsync failure/;
-
-test('writeCoderSessionInventory publishes in exact crash-durable order', async () => {
+test('readCoderSessionInventory pins the final file and enforces the byte cap', async () => {
   const fx = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'triss-inventory-outside-'));
   try {
-    const fsImpl = recordingInventoryFs();
-    await writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl);
-    const tmpOpen = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.'));
-    assert.ok(tmpOpen, 'the temp was opened');
-    const tmpPath = tmpOpen.slice('open:'.length).split(':flags=')[0];
-    const dirPath = fx.inventoryDir;
-    assert.deepEqual(fsImpl.calls, [
-      `open:${tmpPath}:flags=wx:mode=${0o600}`, // exclusive temp, mode 0600
-      `writeFile:${tmpPath}:lf`,
-      `fsync:${tmpPath}`, // file fsync BEFORE rename
-      `close:${tmpPath}`,
-      `rename:${tmpPath}->${join(dirPath, '.inventory.json')}`,
-      `open:${dirPath}:flags=r:mode=default`, // parent opened as a directory
-      `fsync:${dirPath}`, // directory fsync makes the rename durable
-      `close:${dirPath}`,
-    ]);
-  } finally {
-    await fx.cleanup();
-  }
-});
-
-test('a file-stage fsync failure closes the descriptor, removes the temp, and surfaces', async () => {
-  const fx = await fixture();
-  try {
-    const fsImpl = recordingInventoryFs({
-      failOn: (call) => call.startsWith('fsync:') && call.includes('.inventory.tmp.'),
-    });
+    const valid = encodeCoderSessionInventory([], NOW);
+    await writeFile(join(outside, '.inventory.json'), valid, { mode: 0o600 });
+    await symlink(join(outside, '.inventory.json'), join(fx.inventoryDir, '.inventory.json'));
     await assert.rejects(
-      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
-      DIR_FSYNC_FAILURE,
+      () => readCoderSessionInventory(fx.inventoryDir),
+      /ELOOP|too many symbolic links|symlink/i,
     );
-    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
-    assert.ok(fsImpl.calls.some((c) => c === `fsync:${tmpPath}`), 'the file fsync was attempted');
-    assert.ok(fsImpl.calls.some((c) => c === `close:${tmpPath}`), 'the file descriptor was still closed');
-    assert.ok(fsImpl.calls.some((c) => c === `unlink:${tmpPath}`), 'the unconsumed temp was removed');
-    assert.equal(fsImpl.calls.some((c) => c.startsWith('rename:')), false, 'no rename happened');
-    assert.equal(fsImpl.calls.some((c) => c.startsWith(`open:${fx.inventoryDir}:flags=r`)), false, 'no directory fsync happened');
+    await rm(join(fx.inventoryDir, '.inventory.json'), { force: true });
+    await writeFile(join(fx.inventoryDir, '.inventory.json'), 'x'.repeat(INVENTORY_MAX_BYTES + 1), { mode: 0o600 });
+    const oversized = await readCoderSessionInventory(fx.inventoryDir);
+    assert.match(oversized.error, /corrupt/);
   } finally {
     await fx.cleanup();
-  }
-});
-
-test('a rename failure removes the temp and never claims publication', async () => {
-  const fx = await fixture();
-  try {
-    const fsImpl = recordingInventoryFs({ failOn: (call) => call.startsWith('rename:') });
-    await assert.rejects(
-      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
-      /injected rename failure/,
-    );
-    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
-    assert.ok(fsImpl.calls.some((c) => c.startsWith(`rename:${tmpPath}->`)), 'the rename was attempted');
-    assert.ok(fsImpl.calls.some((c) => c === `unlink:${tmpPath}`), 'the unconsumed temp was removed');
-    assert.equal(fsImpl.calls.filter((c) => c.startsWith(`open:${fx.inventoryDir}:flags=r`)).length, 0);
-  } finally {
-    await fx.cleanup();
-  }
-});
-
-test('a directory-fsync failure after rename surfaces instead of claiming success', async () => {
-  const fx = await fixture();
-  try {
-    const fsImpl = recordingInventoryFs({
-      failOn: (call) => call === `fsync:${fx.inventoryDir}`, // only the DIRECTORY fsync fails
-    });
-    await assert.rejects(
-      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
-      DIR_FSYNC_FAILURE,
-    );
-    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
-    assert.ok(fsImpl.calls.some((c) => c.startsWith(`rename:${tmpPath}->`)), 'the rename consumed the temp');
-    assert.equal(
-      fsImpl.calls.some((c) => c === `unlink:${tmpPath}`),
-      false,
-      'a consumed temp is never unlinked',
-    );
-    assert.ok(fsImpl.calls.some((c) => c === `close:${fx.inventoryDir}`), 'the directory descriptor is closed on error too');
-  } finally {
-    await fx.cleanup();
+    await rm(outside, { recursive: true, force: true });
   }
 });

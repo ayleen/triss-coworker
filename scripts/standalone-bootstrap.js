@@ -765,11 +765,13 @@ function processIdentity(pid) {
     const ticks = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
     if (ticks) return `proc:${ticks}`;
   } catch { /* use the POSIX fallback below */ }
-  const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+  // Fixed absolute binary + minimal fixed environment: never forward the
+  // parent environment to a PATH-resolved identity probe.
+  const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: 1_000,
-    env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+    env: { TZ: 'UTC', LC_ALL: 'C' },
   });
   const started = result.status === 0 ? result.stdout.replace(/\s+/g, ' ').trim() : '';
   return started ? `ps:${started}` : null;

@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -26,6 +27,7 @@ import {
   buildCrushRunArgv,
   buildCrushSpawnEnv,
   detectCrush,
+  installHintCrush,
   parseCrushEnvelope,
   mapCrushExitReason,
   configureCrushModels,
@@ -33,6 +35,7 @@ import {
   mergeCrushPermissionsRun,
   CRUSH_ALLOW_BASH_PATTERNS,
   CRUSH_ALLOW_TOOLS,
+  CRUSH_INVALID_MINIMUM_CODE,
 } from '../src/coder-engines/crush.js';
 import { resolveCoderEngine, DEFAULT_CODER_ENGINE, runCoderInit, resolveCrushRestrict } from '../src/commands/coder.js';
 
@@ -170,7 +173,7 @@ test('buildCrushSpawnEnv: omits allowlist keys that are unset on the base env', 
 // crush ≥0.1.3 reports a clean `crush version v0.1.3`. detectCrush parses the
 // vX.Y.Z out and returns {found, version, satisfiesPin}; it must NOT throw on
 // a +dirty suffix, garbage, or a newer version. Version mismatch is NON-FATAL
-// (caller warns) — detect just reports satisfiesPin:false.
+// to the init/run advisory surfaces — detect reports the minimum result.
 
 // A fake spawnSync that returns `stdout` for `crush --version`.
 function versionSh(stdout) {
@@ -182,17 +185,19 @@ function versionSh(stdout) {
   };
 }
 
-test('detectCrush: clean `crush version v0.1.6` (== pin) -> found true, version "0.1.6" (bare), satisfiesPin true', () => {
+test('detectCrush: clean `crush version v0.1.6` (== minimum) -> found true, version "0.1.6" (bare), satisfiesPin true', () => {
   const det = detectCrush(versionSh('crush version v0.1.6\n'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.6');
+  assert.equal(det.meetsMinimum, true);
   assert.equal(det.satisfiesPin, true);
 });
 
-test('detectCrush: a version below the pin (v0.1.3) -> found true, satisfiesPin false (NON-FATAL — caller warns)', () => {
+test('detectCrush: a version below the minimum (v0.1.3) -> found true, satisfiesPin false', () => {
   const det = detectCrush(versionSh('crush version v0.1.3'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.3');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
@@ -200,27 +205,30 @@ test('detectCrush: a NEWER version (v0.2.0) -> found true, satisfiesPin true', (
   const det = detectCrush(versionSh('crush version v0.2.0'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.2.0');
+  assert.equal(det.meetsMinimum, true);
   assert.equal(det.satisfiesPin, true);
 });
 
-test('detectCrush: an OLDER version (v0.1.2) -> found true, satisfiesPin false (NON-FATAL — caller warns)', () => {
+test('detectCrush: an OLDER version (v0.1.2) -> found true, satisfiesPin false', () => {
   const det = detectCrush(versionSh('crush version v0.1.2'));
   assert.equal(det.found, true);
   assert.equal(det.version, '0.1.2');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
-test('detectCrush: a +dirty suffix (pre-0.1.3 dev build) does not throw, parses the numeric core', () => {
+test('detectCrush: a prerelease/dirty build does not satisfy the stable minimum', () => {
   const det = detectCrush(versionSh('crush version v0.0.0-20260704214312-f45bb790a171+dirty\n'));
   assert.equal(det.found, true);
-  // The placeholder 0.0.0 numeric core is parsed; it's below the pin.
-  assert.equal(det.version, '0.0.0');
+  assert.equal(det.version, 'crush version v0.0.0-20260704214312-f45bb790a171+dirty');
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
 });
 
 test('detectCrush: a garbage version string does not throw; found stays true, version is the raw string', () => {
   const det = detectCrush(versionSh('totally not a version string'));
   assert.equal(det.found, true);
+  assert.equal(det.meetsMinimum, false);
   assert.equal(det.satisfiesPin, false);
   // No semver parseable -> version is the raw trimmed stdout (for diagnostics).
   assert.equal(det.version, 'totally not a version string');
@@ -237,37 +245,138 @@ test('detectCrush: crush missing (non-zero exit / spawn error) -> found false, v
   }
 });
 
-// ─── detectCrush: unparseable pin (Task 5b) ───────────────────────────────────
-//
-// When TRISS_CODER_CRUSH_VERSION itself doesn't parse to semver (e.g. "latest"),
-// detectCrush SKIPS the comparison and treats the installed version as
-// satisfying the pin — instead of a perpetual satisfiesPin:false yellow warning
-// at every init/run/status.
+// ─── detectCrush: malformed minimum override fails closed ────────────────────
 
-test('detectCrush: a non-semver pin (TRISS_CODER_CRUSH_VERSION=latest) -> satisfiesPin TRUE (comparison skipped)', () => {
+test('detectCrush: malformed configured minimums all fail closed', () => {
   const saved = process.env.TRISS_CODER_CRUSH_VERSION;
-  process.env.TRISS_CODER_CRUSH_VERSION = 'latest';
   try {
-    // Even an OLDER installed version is treated as satisfied when the pin
-    // itself is unparseable — the comparison is skipped, not failed.
-    const det = detectCrush(versionSh('crush version v0.1.2'));
-    assert.equal(det.found, true);
-    assert.equal(det.version, '0.1.2');
-    assert.equal(det.satisfiesPin, true, 'unparseable pin must skip the comparison (treat as satisfied)');
+    for (const minimum of [
+      '0.1.6.1',
+      'prefix-0.1.6',
+      '0.1.6-rc.1',
+      '0.1.6+build',
+      ' 0.1.6 ',
+      '9007199254740992.0.0',
+      'garbage',
+    ]) {
+      process.env.TRISS_CODER_CRUSH_VERSION = minimum;
+      const det = detectCrush(versionSh('crush version v0.1.6'));
+      assert.equal(det.found, true, minimum);
+      assert.equal(det.meetsMinimum, false, minimum);
+      assert.equal(det.satisfiesPin, false, minimum);
+    }
   } finally {
     if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
     else process.env.TRISS_CODER_CRUSH_VERSION = saved;
   }
 });
 
-test('detectCrush: a non-semver pin still reports found:true + the parsed version for a clean install', () => {
+test('detectCrush: unsafe numeric components fail closed for both installed and configured versions', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '9007199254740992.0.0';
+    const unsafeMinimum = detectCrush(versionSh('crush version v9007199254740993.0.0'));
+    assert.equal(unsafeMinimum.meetsMinimum, false);
+    assert.equal(unsafeMinimum.satisfiesPin, false);
+
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.0.0';
+    const unsafeInstalled = detectCrush(versionSh('crush version v9007199254740993.0.0'));
+    assert.equal(unsafeInstalled.meetsMinimum, false);
+    assert.equal(unsafeInstalled.satisfiesPin, false);
+    assert.equal(unsafeInstalled.version, 'crush version v9007199254740993.0.0');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a malformed minimum still reports found:true + raw installed diagnostics', () => {
   const saved = process.env.TRISS_CODER_CRUSH_VERSION;
   process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
   try {
     const det = detectCrush(versionSh('crush version v0.1.3'));
     assert.equal(det.found, true);
     assert.equal(det.version, '0.1.3');
+    assert.equal(det.satisfiesPin, false);
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+// ─── detectCrush: the hard supported floor cannot be lowered ──────────────────
+
+test('detectCrush: a configured minimum below the floor cannot admit an unsupported release', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    for (const [configured, installed] of [
+      ['0.1.4', '0.1.4'],
+      ['0.1.5', '0.1.5'],
+      ['0.0.9', '0.1.5'],
+    ]) {
+      process.env.TRISS_CODER_CRUSH_VERSION = configured;
+      const det = detectCrush(versionSh(`crush version v${installed}`));
+      assert.equal(det.found, true, configured);
+      assert.equal(det.meetsMinimum, false, `${configured} must not admit ${installed}`);
+      assert.equal(det.satisfiesPin, false);
+      // The enforced minimum surfaces as the floored value, not the override.
+      assert.equal(det.minimumVersion, '0.1.6');
+    }
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a below-floor configured minimum clamps UP to the floor for admission', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.1.4';
+    const det = detectCrush(versionSh('crush version v0.1.6'));
+    assert.equal(det.found, true);
+    // The floor itself stays supported even when someone asks for a lower pin.
+    assert.equal(det.meetsMinimum, true);
     assert.equal(det.satisfiesPin, true);
+    assert.equal(det.minimumVersion, '0.1.6');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('detectCrush: a higher configured minimum is preserved (raise-only override)', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.2.0';
+    const older = detectCrush(versionSh('crush version v0.1.6'));
+    assert.equal(older.meetsMinimum, false);
+    assert.equal(older.satisfiesPin, false);
+    assert.equal(older.minimumVersion, '0.2.0');
+
+    const newer = detectCrush(versionSh('crush version v0.2.0'));
+    assert.equal(newer.meetsMinimum, true);
+    assert.equal(newer.satisfiesPin, true);
+    assert.equal(newer.minimumVersion, '0.2.0');
+  } finally {
+    if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
+    else process.env.TRISS_CODER_CRUSH_VERSION = saved;
+  }
+});
+
+test('installHintCrush: below-floor and malformed overrides cannot move the install target off the floor', () => {
+  const saved = process.env.TRISS_CODER_CRUSH_VERSION;
+  try {
+    assert.equal(installHintCrush(), 'npm install -g @phpcraftdream/crush@0.1.6');
+    process.env.TRISS_CODER_CRUSH_VERSION = '0.2.0';
+    assert.equal(installHintCrush(), 'npm install -g @phpcraftdream/crush@0.2.0');
+    for (const bad of ['0.1.4', 'garbage', ' 0.1.6 ']) {
+      process.env.TRISS_CODER_CRUSH_VERSION = bad;
+      assert.equal(
+        installHintCrush(),
+        'npm install -g @phpcraftdream/crush@0.1.6',
+        `${bad} must not become an install target`,
+      );
+    }
   } finally {
     if (saved === undefined) delete process.env.TRISS_CODER_CRUSH_VERSION;
     else process.env.TRISS_CODER_CRUSH_VERSION = saved;
@@ -650,17 +759,62 @@ function withTmpCrushHome(fn) {
   };
 }
 
-// Fake spawnSync that reports crush PRESENT (--version ok) and records every
-// call. `modelsResponse` is the spawnSync result returned for `crush models ...`.
+// Fake spawnSync that reports crush PRESENT at a COMPATIBLE version
+// (--version ok, >= 0.1.6 floor) and records every call. `modelsResponse` is
+// the spawnSync result returned for `crush models ...`. Tests targeting the
+// version-policy gate itself use their own fakes; this one exists so the
+// models-pinning/seeding tests exercise the READY path.
 function crushPresentSh(modelsResponse) {
   const calls = [];
   const sh = (cmd, argv) => {
     calls.push({ cmd, argv });
     if (cmd === 'crush' && argv[0] === '--version') {
-      return { status: 0, stdout: 'crush version v0.0.0-test', stderr: '', error: null };
+      return { status: 0, stdout: 'crush version v0.1.6', stderr: '', error: null };
     }
     if (cmd === 'crush' && argv[0] === 'models') {
       return typeof modelsResponse === 'function' ? modelsResponse(argv) : modelsResponse;
+    }
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+  sh.calls = calls;
+  return sh;
+}
+
+// Like crushPresentSh but with an explicit --version stdout, so tests can pin
+// the detected version (compatible or not) independently of the models reply.
+function crushPresentShAt(versionStdout, modelsResponse = { status: 0, stdout: '', stderr: '', error: null }) {
+  const calls = [];
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: versionStdout, stderr: '', error: null };
+    }
+    if (cmd === 'crush' && argv[0] === 'models') return modelsResponse;
+    return { status: 1, stdout: '', stderr: '', error: null };
+  };
+  sh.calls = calls;
+  return sh;
+}
+
+// A crush binary that UPGRADES after a successful `npm install -g`: reports
+// `from` before the install and `to` after. npm probes/installs succeed.
+function upgradableCrushSh({ from, to }) {
+  const calls = [];
+  let installed = false;
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: installed ? to : from, stderr: '', error: null };
+    }
+    if (cmd === 'npm' && argv[0] === '--version') {
+      return { status: 0, stdout: '10.9.9', stderr: '', error: null };
+    }
+    if (cmd === 'npm' && argv[0] === 'install') {
+      installed = true;
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    if (cmd === 'crush' && argv[0] === 'models') {
+      return { status: 0, stdout: '', stderr: '', error: null };
     }
     return { status: 1, stdout: '', stderr: '', error: null };
   };
@@ -719,6 +873,159 @@ test(
     assert.equal(modelsCall, undefined, 'crush models use must NOT be invoked when crush is absent');
     assert.match(captured(), /crush not found/);
     assert.match(captured(), /npm install -g @phpcraftdream\/crush/);
+  }),
+);
+
+// ─── version-policy gate at init ───────────────────────────────────────────────
+//
+// A found-but-incompatible crush is NEVER treated as ready. Init follows
+// ensureEngine's install/upgrade interaction (deps.confirmInstall seam) for
+// the EFFECTIVE minimum and fails closed with the shared typed policy error
+// for a malformed TRISS_CODER_CRUSH_VERSION.
+
+test(
+  'runCoderInit --engine crush: found-but-below-floor crush is rejected in non-interactive mode — no models write',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = crushPresentShAt('crush version v0.1.5\n');
+    await assert.rejects(
+      () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+      /crush 0\.1\.5 found, minimum supported version is 0\.1\.6/,
+    );
+    assert.doesNotMatch(captured(), /set default models/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: a malformed configured minimum fails with the TYPED policy error before any write',
+  withTmpCrushHome(async ({ captured }) => {
+    process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
+    try {
+      const sh = crushPresentShAt('crush version v0.1.6\n');
+      await assert.rejects(
+        () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+        (err) => {
+          assert.equal(err.code, CRUSH_INVALID_MINIMUM_CODE);
+          assert.match(err.message, /Invalid Crush minimum version "HEAD"/);
+          return true;
+        },
+      );
+      assert.doesNotMatch(captured(), /set default models/);
+    } finally {
+      delete process.env.TRISS_CODER_CRUSH_VERSION;
+    }
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: malformed minimum + MISSING binary fails TYPED before the install path — no config/model write',
+  withTmpCrushHome(async () => {
+    process.env.TRISS_CODER_CRUSH_VERSION = 'HEAD';
+    try {
+      // Every command fails -> crush is absent (and npm unreachable too).
+      const calls = [];
+      const sh = (cmd, argv) => {
+        calls.push({ cmd, argv });
+        return { status: 1, stdout: '', stderr: '', error: null };
+      };
+      const snapshot = (root) => {
+        const files = [];
+        const walk = (dir) => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const p = join(dir, entry.name);
+            if (entry.isDirectory()) walk(p);
+            else files.push(p);
+          }
+        };
+        if (existsSync(root)) walk(root);
+        return files.sort();
+      };
+      const before = snapshot(process.env.HOME);
+      await assert.rejects(
+        () => runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh }),
+        (err) => {
+          assert.equal(err.code, CRUSH_INVALID_MINIMUM_CODE);
+          assert.match(err.message, /Invalid Crush minimum version "HEAD"/);
+          return true;
+        },
+      );
+      // ONLY the read-only `--version` probe ran: no `crush models use`
+      // (models write), no `npm` (install path), nothing else side-effectful.
+      for (const call of calls) {
+        const isProbe = call.cmd === 'crush' && call.argv[0] === '--version';
+        assert.ok(
+          isProbe,
+          `no side-effectful command may run before the typed rejection: ${call.cmd} ${call.argv.join(' ')}`,
+        );
+      }
+      // And the filesystem is byte-for-byte untouched: no crush.json
+      // (permissions/models surface) appeared anywhere under HOME.
+      assert.deepEqual(snapshot(process.env.HOME), before);
+      assert.equal(existsSync(join(process.env.HOME, '.local', 'share', 'crush', 'crush.json')), false);
+    } finally {
+      delete process.env.TRISS_CODER_CRUSH_VERSION;
+    }
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: declining the effective-minimum install skips the models write but still seeds permissions.run',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = crushPresentShAt('crush version v0.1.5\n');
+    let confirmations = 0;
+    await runCoderInit({ global: true, engine: 'crush' }, {
+      spawnSync: sh,
+      confirmInstall: async () => {
+        confirmations += 1;
+        return false;
+      },
+    });
+
+    assert.equal(confirmations, 1, 'the effective-minimum install offer must be made once');
+    const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
+    assert.equal(modelsCall, undefined, 'incompatible crush must NOT get a models write');
+    assert.match(captured(), /skipped — install manually later: npm install -g @phpcraftdream\/crush@0\.1\.6/);
+    // permissions.run still seeds (forward-compat gesture, same as absent).
+    const path = join(process.env.HOME, '.local', 'share', 'crush', 'crush.json');
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(config.permissions.run.restrict, true);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: accepting the install upgrades to the effective minimum and then runs the models write',
+  withTmpCrushHome(async ({ captured }) => {
+    const sh = upgradableCrushSh({ from: 'crush version v0.1.5\n', to: 'crush version v0.1.6\n' });
+    await runCoderInit({ global: true, engine: 'crush' }, {
+      spawnSync: sh,
+      confirmInstall: async () => true,
+    });
+
+    assert.match(captured(), /✓ crush 0\.1\.6 installed/);
+    const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
+    assert.ok(modelsCall, 'models write must run once the binary meets the minimum');
+    assert.match(captured(), /set default models: glm5_2 \(large\) \/ glm5_turbo \(small\)/);
+  }),
+);
+
+test(
+  'runCoderInit --engine crush: accepted install but npm unavailable fails with an actionable manual command',
+  withTmpCrushHome(async () => {
+    const calls = [];
+    const sh = (cmd, argv) => {
+      calls.push({ cmd, argv });
+      if (cmd === 'crush' && argv[0] === '--version') {
+        return { status: 0, stdout: 'crush version v0.1.5\n', stderr: '', error: null };
+      }
+      if (cmd === 'npm') return { status: 1, stdout: '', stderr: '', error: null };
+      return { status: 1, stdout: '', stderr: '', error: null };
+    };
+    await assert.rejects(
+      () => runCoderInit({ global: true, engine: 'crush' }, {
+        spawnSync: sh,
+        confirmInstall: async () => true,
+      }),
+      /npm not found — install Node\.js\/npm, then run manually: npm install -g @phpcraftdream\/crush@0\.1\.6/,
+    );
   }),
 );
 

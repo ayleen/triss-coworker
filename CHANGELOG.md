@@ -5,72 +5,140 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.39.2] — 2026-08-25
+
+
+### Added
+
+- **v2 session-state recovery/migration consistency (PR #85).**
+  - `triss coder session migrate --engine <name>`: one-shot upgrade of a
+    released v0.39.0 (`schema_version: 1`) engine inventory to the canonical
+    identity-carrying schema. Runs under the canonical maintenance, slot,
+    and exclusive-inventory leases; migrates ONLY fully-idle documents by
+    minting fresh immutable `session_instance_id`s; preserves the original
+    bytes verbatim under `.triss/quarantine-v1/` before the atomic
+    publication; is idempotent on absent or already-canonical inventories.
+    Any reserved|running|deleting legacy row fails the migration closed with
+    no partial rewrite — normal readers surface such documents as the typed,
+    actionable `TRISS_CODER_SESSION_LEGACY_SCHEMA` error instead of generic
+    corruption.
+  - Orphan reclaim for interrupted runs: a `reserved|running` row whose
+    recorded owner is provably gone from this host (previous boot id, dead
+    pid, pid reused by a different process-start identity) is reclaimed by
+    `triss coder session clean` automatically through the crash-safe
+    deleting pipeline; a live-looking or unprovable owner still fails closed
+    unless the operator passes the new `--recover-live` attestation flag.
+  - `session clean` now also removes an ORPHAN store mapping (durable
+    `sessions.json` entry with no inventory row) — the sanctioned recovery
+    for the state new-reservation admission rejects — and `triss coder state
+    reset` quarantines the shared `sessions.json` map together with the v2
+    state roots instead of leaving stale mappings behind.
+  - The OpenCode2 outer run guard now also cleans freshly-created isolation
+    worktrees on late failures (thrown usage logging, envelope assembly or
+    write), with a reentrancy guard so an already-cleaned or intentionally
+    torn-down worktree is never probed or removed twice; dirty/deliverable
+    worktrees are always kept.
+
+### Changed
+
+- **SECURITY FIX — the Crush runtime version gate is now authoritative, and
+  read-only Crush probes no longer inherit credentials.** The run path
+  previously treated a below-minimum `crush` as a warning and spawned anyway.
+  - `triss coder run --engine crush` now probes and asserts the shared
+    version policy BEFORE any side effect — an incompatible binary makes
+    engine spawn unreachable: no isolation worktree, no credential proxy, no
+    session reservation. Distinct failure reasons: missing binary,
+    unparsable installed version, installed below the immutable floor
+    (`0.1.6`), installed below a valid stricter
+    `TRISS_CODER_CRUSH_VERSION`, and malformed configured minimum (typed
+    `TRISS_CODER_CRUSH_MINIMUM_INVALID`). Raise-only semantics are preserved
+    (`0.1.4` config ⇒ effective `0.1.6`; `0.2.0` config ⇒ effective
+    `0.2.0`).
+  - `triss coder init --engine crush` no longer treats a found-but-
+    incompatible Crush as ready: it offers/installs the effective minimum via
+    the existing install-confirmation interaction (failing closed in
+    non-interactive shells) and skips the model-role write until compatible.
+  - Every read-only Crush probe (`crush --version`) now receives a minimal
+    sanitized environment — PATH plus deterministic locale/TZ only. Provider,
+    cloud, GitHub/AWS, and arbitrary parent credentials are never inherited by
+    a probe; the protected execution path is unchanged.
+- **OpenCode supported floor raised to `1.18.22`; exact-audited-build
+  credential gate removed (owner policy decision).** Triss supports OpenCode
+  versions >= `1.18.22`, and that floor is immutable: a
+  `TRISS_CODER_OPENCODE_VERSION` below it — or any malformed value — fails
+  closed with the typed `TRISS_CODER_OPENCODE_MINIMUM_INVALID` error instead
+  of lowering the bar. A valid higher configured minimum raises the effective
+  runtime/install minimum; it never lowers the floor.
+  - Credential-bearing one-shot provider runs (`--provider …`) are authorized
+    when the installed version is >= the effective minimum. Under the default
+    minimum, compatible newer releases (`1.19.0`, `2.0.0`) are accepted and
+    `1.18.21` and lower are rejected before isolation, proxy setup, session
+    reservation, and spawn. The previous exact-match gate against the audited
+    build (`1.18.7`) is removed with no alias: authorization flows through the
+    one shared resolver (`resolveOpencodeVersionPolicy`) that also backs init,
+    run, and status.
+  - Status accuracy: a below-floor or malformed
+    `TRISS_CODER_OPENCODE_VERSION` renders as invalid configuration with the
+    effective floor (`1.18.22`) in `triss status` and can never show
+    `meetsMinimum=true`.
+- **Crush's supported floor is no longer lowerable:** a
+  `TRISS_CODER_CRUSH_VERSION` below `0.1.6` clamps up to the floor (so
+  `0.1.4` stays unsupported), malformed values still fail closed, and
+  legitimate higher configured minimums are preserved. Install hints always
+  target at least the floor.
+- Release companion version: `0.39.2`.
+
+### Artifact integrity (0.39.2)
+
+- `triss-dsh-provider-bundle-0.39.2.tgz` — sha256
+  `728da46e1d0d1052f9f6ac7a83318a0287bc7effd83d7dd50fe5adb138bd3899`
+  — `sha512-WYW4BrLi1EXZnlf6oLVYj91wV41UXwuM1SEv4LoEGrqLKPQGHaAvoDxNpQtS+Urxhy55Sdjgc7c1Kn9QFWsOQQ==`
+
 ## [0.39.1] — 2026-08-25
 
 ### Fixed
 
-- **Session owner identity** — a fresh admission publishes its owner identity
-  before spawn and fails closed when the current process owner identity is
-  unavailable, instead of degrading to an unattributable running row that no
-  recovery operation could lawfully claim.
-- **Continuation/ownership validation** — the atomic admission-or-continuation
-  claim (`claimCoderSession`) validates an existing row before continuing it:
-  a mismatched engine/slug/owner binding, `isolation_mode`, or
-  `project_root_fingerprint` is refused with a typed error rather than
-  silently adopted, while fresh admissions publish a fresh running owner
-  tuple.
-- **Cross-process inventory safety** — session inventory publication writes a
-  temp file, fsyncs it, renames it into place, and then fsyncs the parent
-  directory (required), closing the crash window where a renamed file was not
-  yet durable as a directory entry; mutating transitions take an
-  engine-scoped inventory mutex acquired via O_EXCL creation with dead-PID
-  reclaim under bounded async retry, keeping the read-check-write section
-  mutually exclusive across processes.
-- **Three-engine clean** — `triss coder session clean` enforces the exact
-  closed three-engine grammar (`opencode`, `opencode2`, `crush`) across the
-  CLI flags and the public contract Cleanup line, so plain `opencode` is
-  never misread as V2 and stale engine names are rejected.
-- **Fail-closed admission** — session admission (`reserveCoderSession`) runs
-  the whole read → duplicate-check → mutation → durable-write sequence under
-  the inventory mutex and fails closed on lock timeout, a corrupt inventory,
-  pre-rename store I/O errors, post-rename durability uncertainty, or owner
-  identity unavailable before spawn; nothing trusts pre-lock state.
-- **Unverified cleanup retention/recovery** — when the engine process group
-  cannot be proven dead after a run, the typed
-  `CODER_PROCESS_GROUP_STILL_ALIVE` error keeps the v2 session row in its
-  exact running state (same-slug claims stay busy); only an explicit recovery
-  operation carrying proof the group is gone may touch the row.
-- **Finalization-before-envelope + aggregate rollback** — v2 session
-  finalization runs BEFORE stdout: the success envelope is withheld until the
-  running→idle transition succeeds, and a failed finalization throws the
-  typed `CODER_SESSION_FINALIZATION_FAILED` error with its cause chain
-  preserved; if rollback also fails, the failure surfaces as a typed
-  AggregateError preserving both the engine error and the rollback error.
+- **Session-owner identity is now enforced end to end:** coder-session rows
+  persist the process start identity and boot id alongside the PID, strict
+  transitions compare the complete owner tuple, and PID reuse or a stale boot
+  can no longer authorize another process to mutate a live session row.
+- **Continuation validates ownership before reuse:** an idle row is claimed
+  through the project-wide run lease before it transitions to `running`;
+  incompatible or concurrently claimed sessions fail closed before engine
+  spawn.
+- **Inventory publication is crash-durable:** writes now fsync the temporary
+  file, atomically rename it over `.inventory.json`, then fsync the parent
+  directory. Pre-rename failures remove the unconsumed temp; a post-rename
+  parent-fsync failure reports that publication durability is unknown.
+- **Cleanup and migration cover all coder engines:** session maintenance
+  handles OpenCode, OpenCode 2, and Crush inventories under the same
+  project-scoped ownership and lease rules.
+- **Admission remains fail-closed under concurrency:** same-slug runs cannot
+  both pass an idle check, and target/session mutation is serialized by the
+  matching project lease before any engine side effect.
+- **Unverified process-group cleanup is retained for recovery:** if descendants
+  still appear alive after `SIGKILL`, the run emits no completion envelope,
+  keeps the exact session row `running`, releases the kernel lease, and returns
+  a typed non-secret recovery handle instead of publishing a false idle state.
+- **Session finalization precedes success publication:** a success envelope is
+  emitted only after the row has transitioned back to `idle`; reservation,
+  running-transition, engine-spawn, and finalization failures roll back only
+  through strict owner-checked transitions.
 
 ### Changed
 
-- Safe-envelope consumer contract documented for OpenCode 2:
-  `docs/reliable-delegation-contract.md` now documents safe envelope
-  consumption/recovery as a tri-state (consume proven successes, recover
-  boundedly on unknown outcomes, never loop), and corrects the shared
-  OpenCode2 `envelope-v2` / `session clean` grammar; consumers must treat
-  these documented lifecycle facts as authoritative — infinite recovery on
-  this shape is a consumer bug.
-- The `triss-dsh-provider-bundle` companion ships at 0.39.1 aligned with this
-  release; it is configuration-only and has no functional change.
+- **`triss coder` stdout is safe for automatic consumers:** engine diagnostics
+  remain on stderr, while stdout contains only the final machine-readable
+  envelope after lifecycle finalization succeeds.
+- Release companion version: `0.39.1`.
 
 ### Artifact integrity (0.39.1)
 
 - `triss-dsh-provider-bundle-0.39.1.tgz` — sha256
-  `334e1aae099cedfe1c29c9e03761e515d05c36458f8ace766b8a71128d222ac3`,
-  integrity
-  `sha512-vk3ajtlIAZEZuwpZ8PhEN/KouwXw9rqWsppmnQx1lDH3iRwi8YsaYjxS8fsZjqTeGfgE6EWZvaY/PtzLnF7JJA==`
-  (computed with the pinned release npm 11.6.2 via `npm pack`; `npm pack`
-  output is byte-deterministic).
-- Root `triss-coworker-0.39.1.tgz` sha256 is reproducible via `npm pack` at
-  tag `v0.39.1` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
-  recorded inside this file); registry verification compares the packed
-  artifact against the published tarball byte-for-byte.
+  `334e1aae099cedfe1c29c9e03761e515d05c36458f8ace766b8a71128d222ac3`
+  — `sha512-vk3ajtlIAZEZuwpZ8PhEN/KouwXw9rqWsppmnQx1lDH3iRwi8YsaYjxS8fsZjqTeGfgE6EWZvaY/PtzLnF7JJA==`
 
 ## [0.39.0] — 2026-08-23
 
@@ -1611,7 +1679,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...HEAD
+[0.39.2]: https://github.com/ayleen/triss-coworker/compare/v0.39.1...v0.39.2
+[0.39.1]: https://github.com/ayleen/triss-coworker/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...v0.39.0
 [0.37.1]: https://github.com/ayleen/triss-coworker/compare/v0.37.0...v0.37.1
 [0.34.0]: https://github.com/ayleen/triss-coworker/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/ayleen/triss-coworker/compare/v0.32.0...v0.33.0
