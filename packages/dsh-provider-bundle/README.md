@@ -45,7 +45,7 @@ Only `headless` terminates by itself; `web` blocks waiting for a client, and a c
 ```bash
 pnpm --version
 node --version
-dsh plugin --profile headless add -w triss-dsh-provider-bundle@0.39.0
+dsh plugin --profile headless add -w triss-dsh-provider-bundle@0.39.1
 dsh --profile headless --dump-config
 ```
 
@@ -63,7 +63,7 @@ Tested tuple (packed-tarball fixture, `dsh plugin` full cycle — add, remove, r
 | pnpm | `9.0.0` (lockfileVersion `9.0`) |
 | `@deepseek-ai/dsh` | `0.1.0-rc.6` |
 | Profile template | `dsh-headless@0.1.0-rc.6` (bundles: `dsh-base` + `dsh-headless`) |
-| This package | `0.39.0` |
+| This package | `0.39.1` |
 
 Artifact integrity (tarball sha256/sha512) for each release is recorded in the
 root repository `CHANGELOG.md` release entry — it cannot be embedded here,

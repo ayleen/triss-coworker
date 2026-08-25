@@ -415,25 +415,98 @@ export async function readCoderSessionInventory(inventoryDir, { reportMissing = 
   return reportMissing ? { entries: decoded.entries, missing: false } : { entries: decoded.entries };
 }
 
+// Narrow injectable filesystem seam (deterministic tests only). Production
+// always uses the real node:fs/promises functions — omitting the seam never
+// changes behavior.
+const defaultInventoryFs = { open, rename, unlink };
+
 /**
- * Atomically publish the inventory: exclusive same-directory temp (mode
- * 0600) -> write -> fsync -> rename. Returns the updated_at.
+ * Fsync the parent inventoryDir as a directory. Per contract this step is
+ * REQUIRED: a directory-fsync failure after rename must surface to the
+ * caller, never silently claim success.
  */
-export async function writeCoderSessionInventory(inventoryDir, entries, updatedAt = timestampNow()) {
+async function fsyncDirectory(dirPath, fsImpl) {
+  const dirFd = await fsImpl.open(dirPath, 'r');
+  try {
+    await dirFd.sync();
+  } finally {
+    await dirFd.close();
+  }
+}
+
+/**
+ * Typed store-I/O failure: the staged write or the atomic rename failed
+ * BEFORE the rename completed, so the previous canonical content is exactly
+ * as it was. The original error is preserved as cause.
+ */
+function storeIoError(inventoryDir, stage, cause) {
+  const err = new Error(
+    `coder-session: session-inventory write failed before rename (${stage}): ` +
+      `${cause && cause.message ? cause.message : String(cause)}`,
+    { cause },
+  );
+  err.code = 'CODER_SESSION_STORE_IO';
+  err.inventoryDir = inventoryDir;
+  return err;
+}
+
+/**
+ * Typed durability-unknown failure: the rename onto the canonical path
+ * ALREADY succeeded, so the new content may or may not have become durable.
+ * This must never be reported as a recoverable I/O error — publication may
+ * have occurred, so callers must fail closed and treat any published state
+ * as real.
+ */
+function durabilityUnknownError(inventoryDir, cause) {
+  const err = new Error(
+    'coder-session: session-inventory rename succeeded but durability is unknown ' +
+      '(parent-directory fsync failed): ' +
+      `${cause && cause.message ? cause.message : String(cause)}`,
+    { cause },
+  );
+  err.code = 'CODER_SESSION_DURABILITY_UNKNOWN';
+  err.publicationMayHaveOccurred = true;
+  err.inventoryDir = inventoryDir;
+  return err;
+}
+
+/**
+ * Crash-durably publish the inventory. Exact order: exclusive same-directory
+ * temp (mode 0600) -> write -> file fsync -> close -> rename -> open the
+ * parent inventoryDir as a directory -> directory fsync -> close -> return.
+ * The directory fsync makes the renamed entry durable, so a failure there
+ * propagates (the temp is already consumed by rename and is not removed).
+ * Every earlier failure closes the file descriptor and removes the temp.
+ *
+ * Typed outcomes: any failure BEFORE a successful rename throws
+ * CODER_SESSION_STORE_IO (original error preserved as cause); any failure AT
+ * or AFTER a successful rename — including the parent-directory fsync —
+ * throws CODER_SESSION_DURABILITY_UNKNOWN with publicationMayHaveOccurred=true
+ * (original error preserved as cause). Descriptor/temp cleanup semantics are
+ * identical in both cases.
+ *
+ * Returns the updated_at.
+ */
+export async function writeCoderSessionInventory(inventoryDir, entries, updatedAt = timestampNow(), fsImpl = defaultInventoryFs) {
   const text = encodeCoderSessionInventory(entries, updatedAt);
   const tmpPath = join(inventoryDir, `.inventory.tmp.${randomBytes(8).toString('hex')}`);
   const targetPath = join(inventoryDir, INVENTORY_BASENAME);
   let fd;
+  let renamed = false;
   try {
-    fd = await open(tmpPath, 'wx', 0o600);
+    fd = await fsImpl.open(tmpPath, 'wx', 0o600);
     await fd.writeFile(text, 'utf8');
     await fd.sync();
     await fd.close();
     fd = undefined;
-    await rename(tmpPath, targetPath);
+    await fsImpl.rename(tmpPath, targetPath);
+    renamed = true; // rename consumed the temp
+    await fsyncDirectory(inventoryDir, fsImpl);
+    return updatedAt;
   } catch (err) {
     if (fd) await fd.close().catch(() => {});
-    throw err;
+    if (!renamed) await fsImpl.unlink(tmpPath).catch(() => {});
+    if (renamed) throw durabilityUnknownError(inventoryDir, err);
+    throw storeIoError(inventoryDir, 'staged temp write', err);
   }
-  return updatedAt;
 }
