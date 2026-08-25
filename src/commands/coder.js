@@ -44,6 +44,7 @@ import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEME
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
+import { processStartIdentity } from '../update/cache.js';
 import {
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
@@ -4405,6 +4406,30 @@ const KILL_GRACE_MS = 5000;
 const RESIDUAL_GROUP_TERM_GRACE_MS = 250;
 const RESIDUAL_GROUP_KILL_WAIT_MS = 1000;
 const PROCESS_GROUP_POLL_MS = 25;
+
+// Stable structural marker: the engine's process group could NOT be proven
+// dead after the run (group alive after SIGKILL, or a strict signal/probe
+// failure left the result unknown). Engine-branch error handling MUST inspect
+// this marker: while cleanup is unverified the v2 session row keeps its exact
+// running state so a same-slug claim stays busy, and only an explicit
+// recovery operation (with proof the group is gone) may touch the row.
+const CODER_PROCESS_GROUP_STILL_ALIVE = 'CODER_PROCESS_GROUP_STILL_ALIVE';
+
+// Build the typed unverified-cleanup error. `cause` preserves the original
+// cleanup error when one exists; the message text is unchanged from the
+// historical diagnostics. The handle/context fields carry no secrets.
+function unverifiedProcessGroupCleanup(message, cause) {
+  const error = cause !== undefined ? new Error(message, { cause }) : new Error(message);
+  error.code = CODER_PROCESS_GROUP_STILL_ALIVE;
+  error.cleanupVerified = false;
+  return error;
+}
+
+function isUnverifiedProcessGroupCleanup(err) {
+  return Boolean(err) &&
+    err.code === CODER_PROCESS_GROUP_STILL_ALIVE &&
+    err.cleanupVerified === false;
+}
 // How often to poll the engine log for a usage-limit line while a run is in
 // flight. On a rate-limited run opencode emits nothing on stdout and retries
 // forever, so without this the run hangs to --timeout; polling turns that
@@ -4432,9 +4457,11 @@ function killProcessGroup(
     // therefore means "still observable", not "already gone".
     if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
-    throw new Error(
+    // A failed strict signal leaves cleanup UNVERIFIED: type it so terminal
+    // session handling can refuse to finalize/abandon the row.
+    throw unverifiedProcessGroupCleanup(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
-      { cause: err },
+      err,
     );
   }
 }
@@ -4537,7 +4564,7 @@ function spawnEngine({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw new Error(
+        throw unverifiedProcessGroupCleanup(
           `${label} process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -4875,7 +4902,7 @@ function spawnCrush({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw new Error(
+        throw unverifiedProcessGroupCleanup(
           `Crush process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -5116,6 +5143,11 @@ async function runCrushFlow({
       processGroupPollMs: deps.processGroupPollMs,
     });
   } catch (err) {
+    // UNVERIFIED process-group cleanup: the old engine tree may still be
+    // alive and writing, so the isolation worktree must NOT be removed.
+    // Rethrow the typed error untouched for the outer session-aware
+    // handler (it keeps the v2 row running and rethrows).
+    if (isUnverifiedProcessGroupCleanup(err)) throw err;
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw err;
   }
@@ -5318,8 +5350,12 @@ async function runCrushFlow({
   // Injectable so tests don't have to monkey-patch process.stdout.write
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  // Terminal session transaction BEFORE the success envelope: the v2 row
+  // must reach idle before success JSON reaches stdout — a mark-idle
+  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
+  // instead of reporting a success that never finalized.
+  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
-  await completeV2SessionRow(sessionV2);
 }
 
 // ─── prompt resolution (mirrors `triss chat --stdin`) ───────────────────────────
@@ -5462,11 +5498,87 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
 // The production run reserves a v2 session row BEFORE spawn, marks it
 // running, and completes it to idle (or deletes it on failure), so the
 // `coder session list|clean` commands finally observe REAL runs instead of
-// only rows created by direct store tests. Store failures degrade to a dim
-// warning — the legacy .triss/sessions.json map stays authoritative for
-// continuation until persistent sessions become eligibility-enforced.
+// only rows created by direct store tests. Admission is FAIL-CLOSED: every
+// reservation error throws before spawn. ONLY the explicit closed allowlist
+// of stable session codes (STABLE_SESSION_ADMISSION_CODES below) propagates
+// unchanged; every other error — unknown codes or bare system codes such as
+// ENOENT/EACCES — wraps as CODER_SESSION_ADMISSION_FAILED with the original
+// error preserved as cause. The single
+// exception is a row this run PROVED absent — its own stranded `reserved`
+// row was rolled back successfully (sessionRollbackVerified) — which alone
+// degrades to the dim warning + null contract.
 
-async function reserveV2SessionRow({ engine, slug, isolated }) {
+export function currentBootIdentity({
+  platform = process.platform,
+  readFile = readFileSync,
+  spawnSync = nodeSpawnSync,
+} = {}) {
+  if (platform === 'linux') {
+    try {
+      const value = readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
+      return /^[0-9a-f-]{36}$/.test(value) ? `linux:${value}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (platform === 'darwin') {
+    try {
+      // Fixed absolute binary + minimal fixed environment: a boot-identity
+      // probe must never forward the parent process.env (which can carry
+      // credentials loaded from project env files) to a PATH-resolved
+      // subprocess. A missing binary degrades to null -> explicit ephemeral
+      // downgrade by the caller.
+      const result = spawnSync('/usr/sbin/sysctl', ['-n', 'kern.boottime'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1_000,
+        env: { TZ: 'UTC', LC_ALL: 'C' },
+      });
+      if (result.status !== 0) return null;
+      const match = /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout || '');
+      return match ? `darwin:${match[1]}:${match[2]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function currentSessionOwnerTuple(overrides = {}) {
+  const pid = overrides.pid ?? process.pid;
+  const processStartId = overrides.processStartId ?? processStartIdentity(pid);
+  const bootId = overrides.bootId ?? currentBootIdentity();
+  if (!Number.isInteger(pid) || pid <= 0 || !processStartId || !bootId) {
+    // Typed so admission can propagate identity unavailability unchanged
+    // instead of misclassifying it as an unknown store failure.
+    const err = new Error('coder-session: current process owner identity is unavailable');
+    err.code = 'CODER_SESSION_IDENTITY_UNAVAILABLE';
+    throw err;
+  }
+  return { pid, processStartId, bootId };
+}
+
+// Closed allowlist of stable session codes that admission propagates
+// UNCHANGED out of reserveV2SessionRow's fail-closed catch, so callers can
+// distinguish busy claims, isolation/fingerprint refusals, lock timeouts,
+// corrupt/IO-failed stores, durability-unknown writes, identity
+// unavailability, and rollback aggregates by their exact stable code.
+// Anything outside this Set — unknown codes or bare system codes such as
+// ENOENT/EACCES — wraps as CODER_SESSION_ADMISSION_FAILED with the original
+// error preserved as cause.
+const STABLE_SESSION_ADMISSION_CODES = new Set([
+  'CODER_SESSION_BUSY',
+  'CODER_SESSION_ISOLATION_MISMATCH',
+  'CODER_SESSION_FINGERPRINT_MISMATCH',
+  'CODER_SESSION_LOCK_TIMEOUT',
+  'CODER_SESSION_STORE_INVALID',
+  'CODER_SESSION_STORE_IO',
+  'CODER_SESSION_DURABILITY_UNKNOWN',
+  'CODER_SESSION_IDENTITY_UNAVAILABLE',
+  'CODER_SESSION_ROLLBACK_FAILED',
+]);
+
+export async function reserveV2SessionRow({ engine, slug, isolated } = {}, deps = {}) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5475,8 +5587,27 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     return null;
   }
   try {
-    const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
-      await import('../coder-session-transitions.js');
+    // ONE owner tuple for the whole admission cycle: the claim and any
+    // follow-up transition must carry IDENTICAL (pid, processStartId, bootId)
+    // evidence or canonical validation rejects the row. Unavailable host
+    // identity throws CODER_SESSION_IDENTITY_UNAVAILABLE here, which
+    // propagates unchanged through the catch below.
+    const owner = (deps.currentSessionOwnerTuple || currentSessionOwnerTuple)();
+    const transitions = await import('../coder-session-transitions.js');
+    // Narrow injectable seams (tests only): forcing the claim or the
+    // reserved->running transition to fail deterministically, plus the
+    // acquireLock/lockRetryMs/inventoryFs mutex seams forwarded verbatim to
+    // the REAL transitions. Everything else always uses the real module —
+    // no broader abstraction, and production defaults are unchanged.
+    const markCoderSessionRunning =
+      deps.markCoderSessionRunning || transitions.markCoderSessionRunning;
+    const claimCoderSession = deps.claimCoderSession || transitions.claimCoderSession;
+    const { sessionInventoryPath } = transitions;
+    const lockSeam = {
+      acquireLock: deps.acquireLock,
+      lockRetryMs: deps.lockRetryMs,
+      inventoryFs: deps.inventoryFs,
+    };
     const { loadOrCreateProjectIdentity, projectRootFingerprint } =
       await import('../coder-state.js');
     const { mkdir } = await import('node:fs/promises');
@@ -5485,56 +5616,268 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     await mkdir(inventoryDir, { recursive: true, mode: 0o700 });
     const identity = await loadOrCreateProjectIdentity(trissRoot);
     const fingerprint = projectRootFingerprint(identity.project_id);
+    // ONE fresh admission tuple per run attempt: a brand-new slug publishes
+    // its reserved row (origin 'new'), while an idle row from a completed
+    // earlier run continues atomically straight to running with THIS run's
+    // fresh run/sandbox identity (origin 'continued'). Live rows owned by
+    // another run reject here with the typed CODER_SESSION_BUSY refusal,
+    // which propagates unchanged through the catch below.
     const runId = `run_${randomBytes(16).toString('hex')}`;
-    await reserveCoderSession({
+    const sandboxId = `sbx_${randomBytes(16).toString('hex')}`;
+    const claim = await claimCoderSession({
       inventoryDir,
       engine,
       slug,
       isolationMode: isolated ? 'isolated' : 'non_isolated',
       lockSlot: 0,
-      runId,
-      pid: process.pid,
-      // Explicit nulls: undefined owner-tuple fields fail canonical validation.
-      processStartId: null,
-      bootId: null,
       projectRootFingerprint: fingerprint,
+      runId,
+      sandboxId,
+      pid: owner.pid,
+      processStartId: owner.processStartId,
+      bootId: owner.bootId,
+      ...lockSeam,
     });
-    await markCoderSessionRunning({
+    // The COMPLETE handle exists the moment the claim succeeds: it carries the
+    // origin plus the EXACT persisted tuple from the canonical claimed row
+    // (never a second random one), because every later transition re-validates
+    // all five fields against the persisted row — an incomplete or stale tuple
+    // fails the exact-owner check and strands the row behind a typed error.
+    const handle = {
       inventoryDir,
       engine,
       slug,
-      runId,
-      pid: process.pid,
-      processStartId: null,
-      bootId: null,
-    });
-    return { inventoryDir, engine, slug };
+      origin: claim.origin,
+      runId: claim.row.run_id,
+      sandboxId: claim.row.sandbox_id,
+      pid: claim.row.pid,
+      processStartId: claim.row.process_start_id,
+      bootId: claim.row.boot_id,
+    };
+    if (claim.origin === 'new') {
+      // Only a NEWLY claimed row needs the reserved->running second
+      // transition; a continued row left the claim already running.
+      try {
+        await markCoderSessionRunning({
+          inventoryDir,
+          engine,
+          slug,
+          runId: handle.runId,
+          sandboxId: handle.sandboxId,
+          pid: handle.pid,
+          processStartId: handle.processStartId,
+          bootId: handle.bootId,
+          ...lockSeam,
+        });
+      } catch (err) {
+        // Roll back the stranded `reserved` row BEFORE rethrowing. A
+        // SUCCESSFUL rollback proves the store holds no row for this run, so
+        // the ORIGINAL mark error is marked structurally proven-absent
+        // (sessionRollbackVerified) — the only condition the admission
+        // policy below accepts as degradation. A FAILED rollback throws the
+        // typed CODER_SESSION_ROLLBACK_FAILED aggregate (both errors
+        // preserved), which propagates unchanged.
+        await abandonV2SessionRow(handle);
+        err.sessionRollbackVerified = true;
+        throw err;
+      }
+    }
+    return handle;
   } catch (err) {
-    process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
-    return null;
+    // Explicit-session admission policy (fail closed): ONLY a verified
+    // rollback of this run's own stranded row (sessionRollbackVerified)
+    // proves the v2 store absent and may degrade to the legacy dim warning +
+    // null contract. Every other error must throw before spawn.
+    if (err && err.sessionRollbackVerified === true) {
+      process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
+      return null;
+    }
+    // ONLY codes in the closed STABLE_SESSION_ADMISSION_CODES allowlist keep
+    // their stable code unchanged so callers can distinguish busy claims,
+    // isolation/fingerprint refusals, lock timeouts, corrupt/IO-failed
+    // stores, durability-unknown writes, identity unavailability, and
+    // rollback aggregates from generic breakdowns. Unknown or bare system
+    // codes (ENOENT/EACCES, …) must not leak through unclassified.
+    if (err && STABLE_SESSION_ADMISSION_CODES.has(err.code)) throw err;
+    // Every other admission failure wraps so it stays machine-identifiable
+    // as CODER_SESSION_ADMISSION_FAILED without losing the original cause.
+    const failure = new Error(
+      `coder session admission failed: ${err?.message || String(err)}`,
+      { cause: err },
+    );
+    failure.code = 'CODER_SESSION_ADMISSION_FAILED';
+    throw failure;
   }
 }
 
-async function completeV2SessionRow(sessionV2) {
+async function completeV2SessionRow(sessionV2, transitionDeps = {}) {
   if (!sessionV2) return;
   try {
     const { markCoderSessionIdle } = await import('../coder-session-transitions.js');
-    await markCoderSessionIdle(sessionV2);
+    // Both origins return to idle on success; the handle carries the EXACT
+    // running tuple so the owner check passes. Optional narrow mutex seams
+    // (acquireLock/lockRetryMs/inventoryFs) are forwarded verbatim so tests
+    // can drive real lock contention / durability failures through this
+    // production finalization path; omitting them keeps production defaults.
+    await markCoderSessionIdle({
+      ...sessionV2,
+      acquireLock: transitionDeps.acquireLock,
+      lockRetryMs: transitionDeps.lockRetryMs,
+      inventoryFs: transitionDeps.inventoryFs,
+    });
   } catch (err) {
-    process.stderr.write(pc.dim(`  ⚠ v2 session completion failed: ${err.message}\n`));
+    // Terminal transaction (mandatory finalization): a mark-idle failure is
+    // never swallowed into a dim warning. It throws the stable typed code,
+    // preserves the store failure as cause, and attaches the exact non-secret
+    // lifecycle handle so recovery/reconcile can find the stranded running
+    // row. Callers must not feed this error into ordinary abandon — the row
+    // stays exactly as the failed transition left it.
+    const failure = new Error(
+      `v2 session finalization failed for ${sessionV2.engine}/${sessionV2.slug}: ` +
+        `${err?.message || String(err)}`,
+      { cause: err },
+    );
+    failure.code = 'CODER_SESSION_FINALIZATION_FAILED';
+    failure.coderSessionHandle = sessionV2;
+    throw failure;
   }
 }
 
-async function abandonV2SessionRow(sessionV2) {
+/**
+ * Aggregate for "the run failed AND its session-row rollback also failed".
+ * Both original errors stay reachable: errors[0]/.engineError is the engine
+ * failure, errors[1]/.rollbackError is the store failure, so nothing is lost.
+ */
+function coderSessionRollbackAggregate(primaryError, rollbackError, sessionV2) {
+  const describe = (e) => (e && e.message) || String(e);
+  const aggregate = new AggregateError(
+    [primaryError, rollbackError].filter(Boolean),
+    primaryError
+      ? `coder run failed (${describe(primaryError)}) AND its v2 session row rollback also failed ` +
+        `(${describe(rollbackError)}) — both errors are preserved; the row is left for explicit ` +
+        'recovery/reconcile'
+      : `v2 session row rollback failed: ${describe(rollbackError)}`,
+  );
+  aggregate.code = 'CODER_SESSION_ROLLBACK_FAILED';
+  if (primaryError) aggregate.engineError = primaryError;
+  aggregate.rollbackError = rollbackError;
+  if (sessionV2) aggregate.coderSessionHandle = sessionV2;
+  return aggregate;
+}
+
+// Low-level rollback of a reserved/running row: deletes a row this run
+// created ('new'), restores an inherited row to idle ('continued'). Throws
+// the raw transition error on failure — no swallowing here.
+async function rollbackV2SessionRow(sessionV2) {
+  const transitions = await import('../coder-session-transitions.js');
+  // sessionV2 must carry the complete owner/run tuple (runId, sandboxId,
+  // pid, processStartId, bootId): the deleting/idle transitions' exact-owner
+  // checks require all five to match the persisted row.
+  if (sessionV2.origin === 'continued') {
+    // The session predates this run: after process cleanup RESTORE it to
+    // idle so future runs can still continue it. Deleting it would destroy
+    // a session this run never created.
+    await transitions.markCoderSessionIdle(sessionV2);
+  } else {
+    // A row this run created is deleted outright.
+    await transitions.beginCoderSessionDelete(sessionV2);
+    await transitions.removeCoderSessionRow(sessionV2);
+  }
+}
+
+/**
+ * Roll a reserved/running row back after a rollback-safe failure. Rollback
+ * failures are NEVER warning-only anymore: they throw the typed
+ * CODER_SESSION_ROLLBACK_FAILED aggregate preserving BOTH the original
+ * engine error (when given) and the rollback error.
+ */
+async function abandonV2SessionRow(sessionV2, primaryError = null) {
   if (!sessionV2) return;
   try {
-    const { beginCoderSessionDelete, removeCoderSessionRow } =
-      await import('../coder-session-transitions.js');
-    await beginCoderSessionDelete(sessionV2);
-    await removeCoderSessionRow(sessionV2);
+    await rollbackV2SessionRow(sessionV2);
   } catch (err) {
-    process.stderr.write(pc.dim(`  ⚠ v2 session rollback failed: ${err.message}\n`));
+    throw coderSessionRollbackAggregate(primaryError, err, sessionV2);
   }
+}
+
+/**
+ * ONE terminal-failure funnel shared by every engine-branch catch. Decides
+ * between the three session regimes so no branch re-implements (and no
+ * branch can get wrong) the semantics:
+ *
+ *   1. UNVERIFIED process-group cleanup (typed marker from spawnEngine/
+ *      spawnCrush): the engine tree may still be alive, so the running row
+ *      must keep claiming the slug. The row is left EXACTLY as-is (no
+ *      complete/abandon/delete/idle), the exact lifecycle handle is attached
+ *      to the non-secret error context, and only an explicit recovery call
+ *      may touch the row later.
+ *   2. SESSION FINALIZATION failure (success-path mark-idle) or an already-
+ *      aggregated rollback failure: likewise never fed into ordinary abandon.
+ *   3. Ordinary rollback-safe failure: abandon the row; if the rollback ALSO
+ *      fails, throw the typed aggregate preserving both errors.
+ */
+async function failCoderRunSessionAware(sessionV2, engineError) {
+  if (isUnverifiedProcessGroupCleanup(engineError)) {
+    // Non-secret lifecycle identity needed by recovery (inventoryDir, engine,
+    // slug, origin + the exact persisted owner tuple — no credentials).
+    if (sessionV2) engineError.coderSessionHandle = sessionV2;
+    throw engineError;
+  }
+  if (
+    engineError && (
+      engineError.code === 'CODER_SESSION_FINALIZATION_FAILED' ||
+      engineError.code === 'CODER_SESSION_ROLLBACK_FAILED'
+    )
+  ) {
+    throw engineError;
+  }
+  await abandonV2SessionRow(sessionV2, engineError);
+  throw engineError;
+}
+
+/**
+ * Explicit recovery after an UNVERIFIED process-group cleanup. Fails closed
+ * unless the caller presents BOTH the proof (`cleanupVerified: true` — the
+ * caller verified the group is actually gone) and the EXACT saved lifecycle
+ * handle (every owner field must still match the persisted running row).
+ * Only then: a row this run created ('new') is deleted; an inherited row
+ * ('continued') is restored to idle so future runs can continue it.
+ */
+export async function recoverCoderSessionAfterUnverifiedCleanup({ cleanupVerified, handle } = {}) {
+  if (cleanupVerified !== true) {
+    throw new TypeError(
+      'recoverCoderSessionAfterUnverifiedCleanup: cleanupVerified=true is required — recovery ' +
+        'refuses to touch a session whose engine process group was never proven dead',
+    );
+  }
+  if (!handle || typeof handle !== 'object' || !handle.inventoryDir) {
+    throw new TypeError(
+      'recoverCoderSessionAfterUnverifiedCleanup: the exact saved lifecycle handle is required',
+    );
+  }
+  const tuple = {
+    inventoryDir: handle.inventoryDir,
+    engine: handle.engine,
+    slug: handle.slug,
+    runId: handle.runId,
+    sandboxId: handle.sandboxId,
+    pid: handle.pid,
+    processStartId: handle.processStartId,
+    bootId: handle.bootId,
+  };
+  const transitions = await import('../coder-session-transitions.js');
+  if (handle.origin === 'continued') {
+    await transitions.markCoderSessionIdle(tuple);
+    return { recovered: true, action: 'restored_idle', engine: handle.engine, slug: handle.slug };
+  }
+  if (handle.origin === 'new') {
+    await transitions.beginCoderSessionDelete(tuple);
+    await transitions.removeCoderSessionRow(tuple);
+    return { recovered: true, action: 'removed', engine: handle.engine, slug: handle.slug };
+  }
+  throw new Error(
+    `recoverCoderSessionAfterUnverifiedCleanup: unknown handle origin ${JSON.stringify(handle.origin)} — failing closed`,
+  );
 }
 
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
@@ -6066,12 +6409,16 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   // v2 session lifecycle: reserve + running BEFORE the engine branch; the
   // row completes to idle after the envelope is emitted and is deleted on
-  // any failure path.
-  const sessionV2 = await reserveV2SessionRow({
-    engine,
-    slug: opts.session || null,
-    isolated: !!isolation,
-  });
+  // any failure path. deps.sessionAdmission carries the narrow test seams
+  // (identity/claim/transition overrides + mutex seams) into admission.
+  const sessionV2 = await reserveV2SessionRow(
+    {
+      engine,
+      slug: opts.session || null,
+      isolated: !!isolation,
+    },
+    deps.sessionAdmission || {},
+  );
 
   // crush diverges here — its own (simpler) spawn + single-envelope parse flow.
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
@@ -6094,8 +6441,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialMode,
       });
     } catch (err) {
-      await abandonV2SessionRow(sessionV2);
-      throw err;
+      // Shared terminal funnel: an UNVERIFIED process-group cleanup leaves
+      // the v2 row exactly as-is, typed finalization/rollback failures pass
+      // through untouched, and an ordinary rollback-safe failure abandons
+      // the row. Always throws. Proxy release still runs via finally.
+      await failCoderRunSessionAware(sessionV2, err);
     } finally {
       await releaseCredentialProxy();
     }
@@ -6118,6 +6468,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       sessionRealIdV1 = lookupSessionRealId(engine, opts.session);
     } catch (err) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+      // The row was already reserved above, so a fail-closed store read must
+      // also delete it — otherwise every corrupted sessions.json run would
+      // strand a running v2 row behind a rollback warning.
+      await abandonV2SessionRow(sessionV2);
       await releaseCredentialProxy();
       throw err;
     }
@@ -6343,7 +6697,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         );
       }
     } catch (err) {
-      if (isolation && isolation.freshlyCreated) {
+      // UNVERIFIED process-group cleanup: the old engine tree may still be
+      // alive and writing, so the isolation worktree must NOT be removed.
+      // Rethrow the typed error untouched for the outer session-aware
+      // handler.
+      if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
         cleanupAbandonedIsolation(sh, isolation);
       }
       throw err;
@@ -6530,8 +6888,24 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     };
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
+    // Terminal session transaction BEFORE the success envelope: the v2 row
+    // must reach idle before success JSON reaches stdout — a mark-idle
+    // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
+    // instead of reporting a success that never finalized.
+    await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
     writeStdout2(JSON.stringify(envelope2) + '\n');
     return;
+    } catch (err) {
+      // Any failure inside the V2 branch (the session/--continue rejection,
+      // preflight gates, spawn failure, no-parseable output, post-run
+      // compatibility checks, envelope assembly) routes through the shared
+      // terminal funnel — same contract as the crush branch above:
+      // an UNVERIFIED process-group cleanup leaves the freshly reserved
+      // row exactly as-is, typed finalization/rollback failures pass
+      // through untouched, and an ordinary rollback-safe failure abandons
+      // the row (a failed rollback throws the typed aggregate preserving
+      // both errors). Always throws.
+      await failCoderRunSessionAware(sessionV2, err);
     } finally {
       // The proxy is parent-owned and must not survive a V2 success, spawn
       // failure, preflight rejection, post-run compatibility failure, or
@@ -6640,13 +7014,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
-    await abandonV2SessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
-    if (isolation && isolation.freshlyCreated) {
+    // Exception: an UNVERIFIED process-group cleanup means the old engine
+    // tree may still be alive and writing, so the worktree must stay and the
+    // typed error goes to the shared terminal funnel untouched (it keeps the
+    // v2 row running and rethrows). Ordinary rollback-safe errors keep the
+    // existing cleanup, then route through the funnel (session-aware abandon;
+    // always throws).
+    if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
       cleanupAbandonedIsolation(sh, isolation);
     }
-    throw err;
+    await failCoderRunSessionAware(sessionV2, err);
   } finally {
     // component: the credential proxy is parent-owned and single-run —
     // revoke it as soon as the engine exits (success, failure, or throw).
@@ -6848,8 +7227,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // --test`'s own internal reporter, which also writes to stdout between
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+  // Terminal session transaction BEFORE the success envelope: the v2 row
+  // must reach idle before success JSON reaches stdout — a mark-idle
+  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
+  // instead of reporting a success that never finalized.
+  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
-  await completeV2SessionRow(sessionV2);
 }
 
 // ─── coder clean ─────────────────────────────────────────────────────────────
@@ -6934,6 +7317,22 @@ export async function runCoderClean(opts = {}, deps = {}) {
 
 // ─── v2 session CLI (shared contract) ──────────────────────────────────
 
+// The exact engine set the v2 session CLI accepts — nothing else.
+export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
+
+/**
+ * Validate the --engine flag for the session list/clean surface: exactly
+ * opencode|opencode2|crush. Read-only list may omit --engine (defaults to
+ * opencode); clean is an owning mutation and must name its engine explicitly.
+ */
+function requireSessionEngine(rawEngine, subcommand) {
+  const engine = rawEngine || (subcommand === 'list' ? 'opencode' : undefined);
+  if (!CODER_SESSION_ENGINES.includes(engine)) {
+    throw new Error(`--engine <opencode|opencode2|crush> is required for session ${subcommand}`);
+  }
+  return engine;
+}
+
 /**
  * `triss coder session list [--engine <name>]`: serialize the bounded
  * component inventory projection. Exits 0 only for a complete canonical
@@ -6941,40 +7340,44 @@ export async function runCoderClean(opts = {}, deps = {}) {
  * partial JSON.
  */
 export async function runCoderSessionList(opts = {}, deps = {}) {
+  const engine = requireSessionEngine(opts.engine, 'list');
   const { listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine || 'opencode');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
   const sessions = await listCoderSessions({ inventoryDir });
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
   writeStdout(`${JSON.stringify({ schema_version: 1, sessions })}\n`);
 }
 
 /**
- * `triss coder session clean <slug> --engine <opencode|crush>`: requires the
- * engine flag; validates ownership and removes only the selected engine's
- * inactive isolated session row.
+ * `triss coder session clean <slug> --engine <opencode|opencode2|crush>`:
+ * requires the engine flag and removes only the selected engine's idle row,
+ * atomically: clean rereads the row under the inventory mutex, transitions it
+ * to deleting with a fresh clean-owner tuple, then removes it using that
+ * exact deleting tuple. A concurrent continuation that won the race leaves
+ * the row running; clean rejects and preserves it.
  */
 export async function runCoderSessionClean(slug, opts = {}) {
-  if (!opts.engine || !['opencode', 'crush'].includes(opts.engine)) {
-    throw new Error('--engine <opencode|crush> is required for session clean');
-  }
-  const { removeCoderSessionRow, listCoderSessions } = await import('../coder-session-transitions.js');
-  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', opts.engine);
-  const sessions = await listCoderSessions({ inventoryDir });
-  const row = sessions.find((s) => s.slug === slug);
-  if (!row) {
-    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${opts.engine}\n`));
+  const engine = requireSessionEngine(opts.engine, 'clean');
+  const { cleanIdleCoderSession } = await import('../coder-session-transitions.js');
+  const inventoryDir = join(projectRoot(), '.triss', 'engine-sessions-v2', engine);
+  // Clean is itself an owning action: it installs its own fresh owner tuple
+  // (never reuses a run's identity) as the deleting row's exact owner.
+  const owner = currentSessionOwnerTuple();
+  const result = await cleanIdleCoderSession({
+    inventoryDir,
+    engine,
+    slug,
+    runId: `run_${randomBytes(16).toString('hex')}`,
+    sandboxId: `sbx_${randomBytes(16).toString('hex')}`,
+    pid: owner.pid,
+    processStartId: owner.processStartId,
+    bootId: owner.bootId,
+  });
+  if (!result.removed) {
+    process.stderr.write(pc.dim(`  · no v2 session ${slug} for engine ${engine}\n`));
     return;
   }
-  if (row.state !== 'idle') {
-    throw new Error(`session ${slug} is not idle (state=${row.state}); only inactive sessions can be cleaned`);
-  }
-  // The state machine requires reserved/running/idle -> deleting BEFORE a
-  // row can be removed; skipping the transition made every idle clean fail
-  // with 'row must be deleting before removal'.
-  const { beginCoderSessionDelete } = await import('../coder-session-transitions.js');
-  await beginCoderSessionDelete({ inventoryDir, engine: opts.engine, slug });
-  await removeCoderSessionRow({ inventoryDir, engine: opts.engine, slug });
-  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${opts.engine})\n`));
+  process.stderr.write(pc.dim(`  · removed v2 session ${slug} (engine ${engine})\n`));
 }
 
 /**

@@ -20,9 +20,9 @@ codes, and the execution-capability model.
   `--session <slug>` or a generated per-run slug. A generated slug is
   correlation evidence, never an implicit continuation of your
   conversation; its anonymity status depends on the engine and isolation:
-  an unnamed *non-isolated* run on the `opencode` or `crush` engine gets an
-  `anon-<32 lowercase hex>` id (`anonymous: true`); the `opencode2` beta
-  envelope reports neither `session_slug` nor `expectation`; an unnamed
+  an unnamed *non-isolated* run on any supported engine (`opencode`, the
+  `opencode2` beta, or `crush`) gets an
+  `anon-<32 lowercase hex>` id (`anonymous: true`); an unnamed
   *isolated* opencode run reuses its
   per-run worktree slug `run-<6 lowercase hex>` as the session id
   (`anonymous: false`, correlation only, not resumable); an unnamed
@@ -70,9 +70,10 @@ codes, and the execution-capability model.
 > envelope), and any unstaged changes with `git diff`.
 >
 > This note is about the *input* gate (`--expect` / the MCP `expectation`
-> argument). On the `opencode` and `crush` engines, the returned envelope
-> reports `expectation: "either"` as an informational output field, not a
-> caller control; the `opencode2` beta envelope has no `expectation` field.
+> argument). On all three supported engines (`opencode`, the `opencode2`
+> beta, and `crush`), the returned envelope reports
+> `expectation: "either"` as an informational output field, not a caller
+> control.
 
 The `--expect` CLI flag and the MCP `expectation` argument are NOT part of
 the v0.37.1 surface (see above), so no `--expect` command is valid today.
@@ -96,6 +97,91 @@ without weakening the result matrix. When shipped:
 - `--expect changes --isolate` will provide a verifiable deliverable
   check (the host will still inspect the local worktree/diff directly);
 - MCP `triss_coder_run` will accept the same closed enum.
+
+## Consuming coder envelopes safely
+
+A parseable JSON envelope is an outcome report, not proof of success. It
+describes how a run ended; it never states that the task was satisfied.
+Classify every terminal observation before acting on it:
+
+| Observation | Classification | Consumer obligation |
+| --- | --- | --- |
+| Missing envelope (throw, empty or unparseable output) | outcome unknown | recover within budget; inspect real worktree state first |
+| Timeout (`process_status: "timeout"`, `termination_cause: "deadline"`) | interrupted | recover on the same worktree; treat partial work as unverified |
+| `exit_reason: "end_turn"` with null/blank `final_text` | ended without a closing message | verify via change evidence and the worktree; not success by itself |
+| Observed missing terminal stop (`saw_terminal_stop: false` WITH activity evidence) | missing terminal stop | apply the tri-state test below; recover boundedly, never loop |
+| Successful terminal `end_turn` (non-blank `final_text`, process and engine completed) | candidate success | still verify deliverables (`run_files_changed` / isolated `files_changed`, diff) before declaring success |
+| Permanent typed errors (`TRISS_PROVIDER_*`; isolation/credential preflight codes) | non-retryable as-is | fix the input (key, model, flags) or stop; never retry blind |
+| Cancellation (`termination_cause: "caller_abort"` / `"host_signal"`, `TRISS_CANCELLED`, exit 130) | interrupted by owner | recovery is a deliberate decision, never automatic |
+| Unsafe cleanup (`cleanup_status: "best_effort"`; `"failed"` emits no envelope) | descendants may still write | prove cleanup/process death before any further writer |
+
+### Terminal-stop tri-state
+
+`saw_terminal_stop` carries three meanings, not two:
+
+- `true`: a terminal stop was observed.
+- `false` WITH parseable activity (`activity.events > 0`, non-null
+  `first_event_at` / `last_event_at`): events were captured and none was
+  the terminal stop — genuine missing-stop evidence.
+- `false` with `activity.events === 0` and null timestamps: no stream
+  evidence exists at all — evidence UNAVAILABLE, never a proven missing
+  stop.
+
+The real opencode2 shape — `exit_reason: "end_turn"`,
+`final_text: "READY"`, `process_status: "completed"` plus
+`engine_status: "completed"`, `activity.events === 0`,
+`saw_terminal_stop: false` — is a COMPLETED run (opencode2 emits no
+`step_finish` event). It must TERMINATE a recovery loop, never feed one;
+infinite recovery on this shape is a consumer bug.
+
+### Recovery rules
+
+- Attempt bounded recovery BEFORE declaring ordinary attempt-exhaustion
+  failure: exhaustion triggers recovery, not surrender.
+- Recover on the SAME worktree, preferably the SAME session, so prior
+  partial work is continued rather than duplicated.
+- Inspect the real retained worktree (`git status --short`,
+  `git diff --cached`, `git diff`); envelope lists are evidence, not the
+  state itself.
+- NEVER interpret `files_changed: null` as "no changes": non-isolated
+  runs report `null` (not `[]`); branch on `envelope_version` and
+  `change_detection.status`.
+- NEVER start a second writer until verified cleanup or proven process
+  death (`cleanup_status: "verified"`, or the engine process group is
+  demonstrably gone); overlapping writers corrupt the worktree.
+- Classify failures by stable typed error codes (`err.code`,
+  `TRISS_PROVIDER_*`), never by matching error prose with regexes.
+- Give recovery its OWN bounded budget, separate from the attempt count,
+  and preserve the full attempt history in the final failure report.
+
+Implementation-neutral recovery skeleton:
+
+```text
+while attempts remain:
+  outcome = classify(run())            # table above; typed codes win
+  history.append(outcome)
+  if outcome == candidate_success and inspect(worktree): return ok
+  if outcome in {permanent_typed_error, cancellation}: return outcome
+  if recovery_budget.exhausted(): return fail(history)  # bounded
+  await proven_cleanup_or_process_death()               # no 2nd writer
+  resume(same_worktree, same_session_if_possible)
+```
+
+### Acceptance checklist
+
+- Envelope presence and bare `exit_reason: "end_turn"` are classified,
+  never trusted as success.
+- Every terminal observation resolves to exactly one classification-table
+  row before any action.
+- `saw_terminal_stop: false` with zero events and null timestamps reads
+  as evidence unavailable, and the opencode2 `READY` shape ends recovery.
+- Recovery ran within its own bounded budget before attempt-exhaustion
+  failure, on the same worktree, preferably the same session.
+- The real worktree was inspected, and `files_changed: null` was never
+  read as "no changes".
+- No second writer started before cleanup/process death was proven.
+- Failures matched typed error codes, and the final report preserves the
+  complete attempt history.
 
 ## Bounded diagnostics
 
@@ -162,9 +248,9 @@ Lease behavior: maintenance → inventory → slot leases form the fixed lock
 hierarchy; slot leases serialize run/clean cycles on the same
 slot; leases are released in `finally`.
 
-Cleanup: `triss coder session clean <slug> --engine <opencode|crush>` removes
-only the selected inactive isolated session row; `triss coder result clean
-<run-id>` removes only a validated retained result artifact, never a
+Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush>`
+removes only the selected inactive isolated session row; `triss coder result
+clean <run-id>` removes only a validated retained result artifact, never a
 persistent session.
 
 Rollback: `triss coder state backup|validate|adopt|reset` implement the

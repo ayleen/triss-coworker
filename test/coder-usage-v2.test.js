@@ -34,6 +34,8 @@ import { EventEmitter } from 'node:events';
 
 import { createEventFolder, foldEventLine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { readCoderSessionInventory } from '../src/coder-session-inventory-codec.js';
+import { sessionInventoryPath } from '../src/coder-session-transitions.js';
 
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
@@ -540,5 +542,122 @@ test(
     assert.equal(loggedArgs[0].billing_model, 'crush');
     assert.equal(loggedArgs[0].model, 'crush');
     assert.equal(loggedArgs[0].provider, 'zai');
+  }),
+);
+
+// ── Crush: v2 session continuation regression ────────────────────────────────
+//
+// claimCoderSession admission-or-continuation, exercised through the REAL
+// crush flow: a fresh slug publishes reserved -> running BEFORE the engine
+// spawns and completes to idle after the envelope; an IDLE row left by that
+// run continues atomically straight to running under the next run's freshly
+// minted identity (origin 'continued'); a failed continuation RESTORES the
+// inherited row to idle — never deleting a session this run did not create.
+// None of the three outcomes may degrade into the store-unavailable warning,
+// collide with the stale "already reserved" reservation path, or strand a
+// rollback-failed warning.
+
+test(
+  'crush continuation: same-slug reruns republish fresh running ownership and preserve the idle row across a failed third run',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+    const home = process.env.TRISS_PROJECT_ROOT;
+    const inventoryDir = sessionInventoryPath(join(home, '.triss'), 'crush');
+    const envelopeLine =
+      JSON.stringify({
+        session_id: 'ses_crush_cont',
+        exit_reason: 'end_turn',
+        final_text: 'done',
+        usage: { delta_tokens: 42, delta_cost_usd: 0.0001 },
+      }) + '\n';
+    const runOpts = { engine: 'crush', isolate: false, timeout: 30, session: 'crush-cont' };
+    const capture = stdoutCapture();
+
+    // Production writes warnings straight to process.stderr with no injection
+    // seam, so (unlike stdout above) stderr must be monkey-patched to capture.
+    const originalStderrWrite = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (s) => {
+      stderrChunks.push(s);
+      return true;
+    };
+    try {
+      // Run 1 — fresh admission: the row is RUNNING with the first run's
+      // identity by the time the engine spawns, then completes to idle.
+      let firstSpawnSnapshot = null;
+      await runCoderRun('do something', runOpts, {
+        ...crushRunDeps(envelopeLine),
+        spawn: (...args) => {
+          // STARTED synchronously at spawn; awaiting the captured Promise
+          // after the run observes that live-run state with no .then
+          // assignment race.
+          firstSpawnSnapshot = readCoderSessionInventory(inventoryDir);
+          return fakeCrushSpawn(envelopeLine)(...args);
+        },
+        stdoutWrite: capture.stdoutWrite,
+      });
+      const firstLiveEntries = (await firstSpawnSnapshot).entries;
+      assert.equal(firstLiveEntries.length, 1, 'exactly one row exists while the first run is live');
+      assert.equal(firstLiveEntries[0].engine, 'crush');
+      assert.equal(firstLiveEntries[0].slug, 'crush-cont');
+      assert.equal(firstLiveEntries[0].state, 'running');
+      const firstRunId = firstLiveEntries[0].run_id;
+      const firstSandboxId = firstLiveEntries[0].sandbox_id;
+      assert.ok(firstRunId && firstSandboxId, 'the fresh admission published its owner identity before spawn');
+      const afterFirst = await readCoderSessionInventory(inventoryDir);
+      assert.equal(afterFirst.entries.length, 1);
+      assert.equal(afterFirst.entries[0].slug, 'crush-cont');
+      assert.equal(afterFirst.entries[0].state, 'idle', 'the first success completes reserved->running->idle');
+
+      // Run 2 — SAME slug: the idle row continues atomically to running under
+      // THIS run's fresh identity (origin 'continued'), then completes again.
+      let secondSpawnSnapshot = null;
+      await runCoderRun('do something again', runOpts, {
+        ...crushRunDeps(envelopeLine),
+        spawn: (...args) => {
+          secondSpawnSnapshot = readCoderSessionInventory(inventoryDir);
+          return fakeCrushSpawn(envelopeLine)(...args);
+        },
+        stdoutWrite: capture.stdoutWrite,
+      });
+      const continuedEntries = (await secondSpawnSnapshot).entries;
+      assert.equal(continuedEntries.length, 1, 'continuation reuses the SAME single row — no duplicate');
+      assert.equal(continuedEntries[0].slug, 'crush-cont');
+      assert.equal(continuedEntries[0].state, 'running', 'the idle row was republished straight to running');
+      assert.notEqual(continuedEntries[0].run_id, firstRunId, "a FRESH run_id replaces the completed run's");
+      assert.notEqual(continuedEntries[0].sandbox_id, firstSandboxId, "a FRESH sandbox_id replaces the completed run's");
+      for (const field of ['run_id', 'sandbox_id', 'pid', 'process_start_id', 'boot_id']) {
+        assert.ok(continuedEntries[0][field] !== null && continuedEntries[0][field] !== undefined, `the continued running row carries a non-null ${field}`);
+      }
+      const afterSecond = await readCoderSessionInventory(inventoryDir);
+      assert.equal(afterSecond.entries.length, 1);
+      assert.equal(afterSecond.entries[0].state, 'idle', 'the continued success completes back to idle');
+
+      // Run 3 — SAME slug, empty/nonparseable crush output: the run rejects
+      // and the inherited row is RESTORED to idle (origin 'continued' rolls
+      // back to idle instead of deleting the pre-existing session). The
+      // process-group seams come from crushRunDeps itself (goneProcessGroup +
+      // fast poll), so group-cleanup polling treats the fake child's group as
+      // already vanished.
+      await assert.rejects(
+        () =>
+          runCoderRun('do something once more', runOpts, {
+            ...crushRunDeps(''),
+            stdoutWrite: capture.stdoutWrite,
+          }),
+        /no parseable output/,
+      );
+      const afterThird = await readCoderSessionInventory(inventoryDir);
+      assert.equal(afterThird.entries.length, 1, 'the failed continuation strands NO extra row');
+      assert.equal(afterThird.entries[0].slug, 'crush-cont');
+      assert.equal(afterThird.entries[0].state, 'idle', 'a continued session is preserved as idle on failure');
+
+      assert.doesNotMatch(
+        stderrChunks.join(''),
+        /v2 session store unavailable|already reserved|v2 session rollback failed/u,
+        'admission, continuation, and failed continuation all stay clean across every run',
+      );
+    } finally {
+      process.stderr.write = originalStderrWrite;
+    }
   }),
 );

@@ -477,13 +477,13 @@ const coderSession = coder
 coderSession
   .command('list')
   .description('Serialize the bounded v2 session inventory projection to stdout')
-  .option('--engine <name>', 'coding engine: opencode (default) or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2, or crush')
   .action((opts) => wrap(runCoderSessionList)(opts));
 
 coderSession
   .command('clean <slug>')
   .description('Remove a selected inactive v2 isolated session/workspace transaction')
-  .requiredOption('--engine <name>', 'coding engine: opencode or crush (MANDATORY)')
+  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, or crush (MANDATORY)')
   .action((slug, opts) => wrap(runCoderSessionClean)(slug, opts));
 
 // `coder result` group (retained-result CLI contract).

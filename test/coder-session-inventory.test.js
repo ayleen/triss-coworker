@@ -247,3 +247,131 @@ test('readCoderSessionInventory returns empty entries when absent and fails clos
     await fx.cleanup();
   }
 });
+
+// ─── crash-durable publication order and cleanup ─────────────────────────────
+
+/**
+ * Recording filesystem double: captures the exact call sequence through the
+ * narrow writeCoderSessionInventory seam (open/rename/unlink; all other
+ * operations flow through the fds this open returns). `failOn` injects a
+ * failure after the recorded call.
+ */
+function recordingInventoryFs({ failOn = () => false } = {}) {
+  const calls = [];
+  const makeFd = (path) => ({
+    async writeFile(text) {
+      calls.push(`writeFile:${path}:${text.endsWith('\n') ? 'lf' : 'nolf'}`);
+    },
+    async sync() {
+      calls.push(`fsync:${path}`);
+      if (failOn(`fsync:${path}`)) throw new Error(`injected fsync failure: ${path}`);
+    },
+    async close() {
+      calls.push(`close:${path}`);
+      if (failOn(`close:${path}`)) throw new Error(`injected close failure: ${path}`);
+    },
+  });
+  return {
+    calls,
+    async open(path, flags, mode) {
+      calls.push(`open:${path}:flags=${flags}:mode=${mode ?? 'default'}`);
+      if (failOn(`open:${path}`)) throw new Error(`injected open failure: ${path}`);
+      return makeFd(path);
+    },
+    async rename(from, to) {
+      calls.push(`rename:${from}->${to}`);
+      if (failOn(`rename:${from}`)) throw new Error(`injected rename failure: ${from}`);
+    },
+    async unlink(path) {
+      calls.push(`unlink:${path}`);
+      if (failOn(`unlink:${path}`)) throw new Error(`injected unlink failure: ${path}`);
+    },
+  };
+}
+
+const DIR_FSYNC_FAILURE = /injected fsync failure/;
+
+test('writeCoderSessionInventory publishes in exact crash-durable order', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs();
+    await writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl);
+    const tmpOpen = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.'));
+    assert.ok(tmpOpen, 'the temp was opened');
+    const tmpPath = tmpOpen.slice('open:'.length).split(':flags=')[0];
+    const dirPath = fx.inventoryDir;
+    assert.deepEqual(fsImpl.calls, [
+      `open:${tmpPath}:flags=wx:mode=${0o600}`, // exclusive temp, mode 0600
+      `writeFile:${tmpPath}:lf`,
+      `fsync:${tmpPath}`, // file fsync BEFORE rename
+      `close:${tmpPath}`,
+      `rename:${tmpPath}->${join(dirPath, '.inventory.json')}`,
+      `open:${dirPath}:flags=r:mode=default`, // parent opened as a directory
+      `fsync:${dirPath}`, // directory fsync makes the rename durable
+      `close:${dirPath}`,
+    ]);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a file-stage fsync failure closes the descriptor, removes the temp, and surfaces', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({
+      failOn: (call) => call.startsWith('fsync:') && call.includes('.inventory.tmp.'),
+    });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      DIR_FSYNC_FAILURE,
+    );
+    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
+    assert.ok(fsImpl.calls.some((c) => c === `fsync:${tmpPath}`), 'the file fsync was attempted');
+    assert.ok(fsImpl.calls.some((c) => c === `close:${tmpPath}`), 'the file descriptor was still closed');
+    assert.ok(fsImpl.calls.some((c) => c === `unlink:${tmpPath}`), 'the unconsumed temp was removed');
+    assert.equal(fsImpl.calls.some((c) => c.startsWith('rename:')), false, 'no rename happened');
+    assert.equal(fsImpl.calls.some((c) => c.startsWith(`open:${fx.inventoryDir}:flags=r`)), false, 'no directory fsync happened');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a rename failure removes the temp and never claims publication', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({ failOn: (call) => call.startsWith('rename:') });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      /injected rename failure/,
+    );
+    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
+    assert.ok(fsImpl.calls.some((c) => c.startsWith(`rename:${tmpPath}->`)), 'the rename was attempted');
+    assert.ok(fsImpl.calls.some((c) => c === `unlink:${tmpPath}`), 'the unconsumed temp was removed');
+    assert.equal(fsImpl.calls.filter((c) => c.startsWith(`open:${fx.inventoryDir}:flags=r`)).length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('a directory-fsync failure after rename surfaces instead of claiming success', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({
+      failOn: (call) => call === `fsync:${fx.inventoryDir}`, // only the DIRECTORY fsync fails
+    });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      DIR_FSYNC_FAILURE,
+    );
+    const tmpPath = fsImpl.calls.find((c) => c.startsWith('open:') && c.includes('.inventory.tmp.')).slice(5).split(':flags=')[0];
+    assert.ok(fsImpl.calls.some((c) => c.startsWith(`rename:${tmpPath}->`)), 'the rename consumed the temp');
+    assert.equal(
+      fsImpl.calls.some((c) => c === `unlink:${tmpPath}`),
+      false,
+      'a consumed temp is never unlinked',
+    );
+    assert.ok(fsImpl.calls.some((c) => c === `close:${fx.inventoryDir}`), 'the directory descriptor is closed on error too');
+  } finally {
+    await fx.cleanup();
+  }
+});

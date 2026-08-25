@@ -481,21 +481,32 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   tool argument). There is intentionally no `expectation` *input* field:
   the strict expectation gate is still a designed contract and is not
   exposed as a caller input until a capability gate is met (see
-  docs/reliable-delegation-contract.md). Note that on the `opencode` and
-  `crush` engines the returned envelope still reports a constant
-  `expectation: "either"` output field — that is informational, not an
-  accepted caller control.
-  Returns one JSON envelope as the tool result. On the `opencode` and
-  `crush` engines it carries the session acceptance contract fields —
-  `engine`, `engine_version`, `session_id`, `session_slug`,
-  `result_retention`, `result_id`, `execution_capabilities`, `exit_reason`,
-  `final_text`, `files_changed`, `diff_stat`, `worktree`, `usage`,
-  `warnings`. The `opencode2` beta engine returns the older envelope
-  (`engine`, `engine_version`, `session_id`, `exit_reason`, `final_text`,
-  `files_changed`, `diff_stat`, `worktree`, `usage`, `warnings`) — without
-  `expectation`/`session_slug` and the other session-acceptance/lifecycle
-  fields; use its `files_changed` / `diff_stat` / `worktree` as evidence
-  there. `engine` is the
+  docs/reliable-delegation-contract.md). Note that on all three supported
+  engines (`opencode`, the `opencode2` beta, and `crush`) the returned
+  envelope reports a constant `expectation: "either"` output field — that
+  is informational, not an accepted caller control.
+  Returns one JSON envelope as the tool result. On all three supported
+  engines (`opencode`, the `opencode2` beta, and `crush`) it carries the
+  shared envelope_v2 contract — `envelope_version: 2`, `engine`,
+  `engine_version`, `session_id`, `session_slug`, `result_retention`,
+  `result_id`, `execution_capabilities`, the lifecycle/status fields
+  (`process_status`, `termination_cause`, `engine_status`,
+  `cleanup_status`, `provider_status`, `session_persistence`,
+  `effective_isolation`, `artifact_status`, `requirement_status`,
+  `change_detection`), `activity`, and the common result fields
+  (`exit_reason`, `final_text`, `files_changed`, `diff_stat`, `worktree`,
+  `usage`, `warnings`). Engine-specific evidence may differ inside that
+  shared contract — crush derives its activity from the tool-call array
+  rather than an event stream, and the `opencode2` beta reports changes
+  evidence through `files_changed` rather than `run_files_changed` — so
+  consume whatever evidence fields the returned envelope carries. Treat
+  every returned envelope as an outcome report, not proof of
+  success: envelope presence or bare `exit_reason: end_turn` alone is
+  never success — classify timeouts, blank `final_text`, terminal-stop
+  evidence, typed errors, cancellations, and unsafe cleanup, and recover
+  within a bounded budget before declaring failure (see
+  [Consuming coder envelopes safely](reliable-delegation-contract.md#consuming-coder-envelopes-safely)).
+  `engine` is the
   `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
   `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
   [opencode2.md](engines/opencode2.md));
