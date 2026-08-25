@@ -9,42 +9,11 @@
  * Exports:
  *   allocateCoderSessionSlug()          — 128 random bits, collision scan,
  *                                         retry exactly eight times
- *   claimCoderSession()                 — atomic admission-or-continuation:
- *                                         no row -> reserved (origin 'new');
- *                                         idle row -> straight to running
- *                                         (origin 'continued'); live/deleting
- *                                         rows reject; an existing row bound
- *                                         to another isolation_mode or
- *                                         project fingerprint rejects TYPED
- *                                         (CODER_SESSION_ISOLATION_MISMATCH /
- *                                         CODER_SESSION_FINGERPRINT_MISMATCH)
- *                                         and is left byte-identical
  *   reserveCoderSession()               — install a reserved row (admission)
  *   markCoderSessionRunning()           — reserved -> running
- *   markCoderSessionIdle()              — running -> idle
- *   cleanIdleCoderSession()             — atomic idle -> deleting -> removed
  *   reconcileCoderSessionInventory()    — admission/recovery state table
  *   listCoderSessions()                 — bounded read-only projection
  *   beginCoderSessionDelete()           — running/idle -> deleting
- *
- * Every mutating transition performs its complete fresh read ->
- * current-state/owner validation -> mutation -> durable write while holding
- * the engine inventory mutex (`.inventory.lock` inside the inventoryDir,
- * shared acquireCoderMutationLock O_EXCL/dead-PID-reclaim primitive with a
- * bounded ASYNC LOCK_HELD retry/backoff). Read-only list/reconcile never
- * take the mutex.
- *
- * Typed failure codes (fail closed — callers must never guess store state):
- *   CODER_SESSION_LOCK_TIMEOUT      mutex still LOCK_HELD after the bounded
- *                                   retry schedule is exhausted (cause +
- *                                   lockPath preserved)
- *   CODER_SESSION_STORE_INVALID     canonical inventory read reported a
- *                                   corrupt document in a mutating transition
- *   CODER_SESSION_STORE_IO          inventory publication failed before its
- *                                   rename (from writeCoderSessionInventory)
- *   CODER_SESSION_DURABILITY_UNKNOWN publication rename succeeded but
- *                                   durability is unproven; carries
- *                                   publicationMayHaveOccurred=true
  *
  * Non-goals: process-journal reconciliation or real generation inspection.
  */
@@ -52,7 +21,6 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
-import { acquireCoderMutationLock } from './coder-lock.js';
 import {
   RESERVED_BYTES,
   SESSION_STATE,
@@ -88,87 +56,6 @@ export const CODER_SESSION_STORE_INVALID_CODE = 'TRISS_CODER_SESSION_STORE_INVAL
 // dependency-neutral coder-session-engines.js module (shared with backup,
 // CLI, and the result registry); re-exported here for existing importers.
 export { CODER_SESSION_ENGINES } from './coder-session-engines.js';
-
-// Engine inventory mutation mutex: one O_EXCL kernel lock file inside each
-// inventoryDir serializes every mutating transition across processes
-// (Section 6.3: `.inventory.lock` protects brief admission/registry writes).
-export const INVENTORY_LOCK_BASENAME = '.inventory.lock';
-
-// Bounded LOCK_HELD retry/backoff (ms). ASYNC sleeps only — same-process
-// Promise.all contention yields to the event loop instead of blocking it.
-export const INVENTORY_LOCK_RETRY_MS = Object.freeze([10, 25, 50, 100, 250, 500]);
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-/**
- * Typed corrupt-store failure for MUTATING transitions: the canonical
- * inventory exists but cannot be decoded, so no state inference is lawful.
- * Read-only projections keep their plain fail-closed error.
- */
-function corruptStoreError(inventoryDir, detail) {
-  const err = new Error(
-    `coder-session: canonical session inventory is unreadable (fail closed): ${detail}`,
-  );
-  err.code = 'CODER_SESSION_STORE_INVALID';
-  err.inventoryDir = inventoryDir;
-  return err;
-}
-
-/**
- * Acquire the mutex handle, retrying LOCK_HELD on the bounded backoff
- * schedule. ASYNC sleeps only — same-process Promise.all contention yields
- * to the event loop instead of blocking it. Every other error fails closed
- * immediately; LOCK_HELD that survives the whole schedule becomes a typed
- * CODER_SESSION_LOCK_TIMEOUT (cause + lock path preserved) so admission can
- * distinguish "still busy" from every other failure. Returns the acquired
- * handle directly, so there is never a placeholder assignment to read past.
- */
-async function acquireWithRetry(acquire, lockPath, retryMs) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return acquire(lockPath);
-    } catch (err) {
-      if (!err || err.code !== 'LOCK_HELD') throw err;
-      if (attempt >= retryMs.length) {
-        const timeout = new Error(
-          `coder-session: engine session-inventory mutex still held after ` +
-            `${retryMs.length} bounded retries: ${lockPath}`,
-          { cause: err },
-        );
-        timeout.code = 'CODER_SESSION_LOCK_TIMEOUT';
-        timeout.lockPath = lockPath;
-        throw timeout;
-      }
-      await delay(retryMs[attempt]);
-    }
-  }
-}
-
-/**
- * Run fn() while holding the engine inventory mutation mutex for
- * inventoryDir. Reuses the shared acquireCoderMutationLock O_EXCL /
- * dead-PID-reclaim primitive with a custom in-directory lock path.
- * LOCK_HELD is retried on the bounded schedule; every other error fails
- * closed immediately. The lock is always released in finally. The entire
- * fresh read -> validation -> mutation -> durable write sequence must live
- * inside this single wrapper — state read before the lock is untrustworthy,
- * and nested acquisition is forbidden.
- */
-async function withCoderInventoryMutex(inventoryDir, opts, fn) {
-  const acquire = opts.acquireLock || ((lockPath) => acquireCoderMutationLock('engine-sessions', 'inventory', { lockPath }));
-  const retryMs = opts.lockRetryMs || INVENTORY_LOCK_RETRY_MS;
-  const lockPath = join(inventoryDir, INVENTORY_LOCK_BASENAME);
-  const handle = await acquireWithRetry(acquire, lockPath, retryMs);
-  try {
-    return await fn();
-  } finally {
-    handle.release();
-  }
-}
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -221,11 +108,6 @@ export async function allocateCoderSessionSlug({ isCollision }) {
  * @param {number} opts.lockSlot 0..3
  * @param {string} opts.projectRootFingerprint
  * @param {string} [opts.sandboxId]
- * @param {(lockPath: string) => object} [opts.acquireLock] narrow test seam:
- *   lock factory override (production default is the shared O_EXCL primitive)
- * @param {number[]} [opts.lockRetryMs] bounded LOCK_HELD backoff schedule
- * @param {object} [opts.inventoryFs] narrow test seam: filesystem impl for
- *   durable publication (production default is node:fs/promises)
  * @returns {Promise<object>} the reserved row
  */
 export async function reserveCoderSession({
@@ -241,9 +123,6 @@ export async function reserveCoderSession({
   pid,
   processStartId,
   bootId,
-  acquireLock,
-  lockRetryMs,
-  inventoryFs,
 }) {
   if (!validSlug(slug)) throw new Error(`coder-session: invalid slug: ${JSON.stringify(slug)}`);
   if (!['isolated', 'non_isolated'].includes(isolationMode)) {
@@ -289,6 +168,11 @@ export async function reserveCoderSession({
     created_at: now,
     updated_at: now,
   });
+  if (row === null) {
+    throw new Error('coder-session: reservation row failed canonical validation');
+  }
+  await writeCoderSessionInventory(inventoryDir, [...read.entries, row], now);
+  return row;
 }
 
 /**
@@ -323,13 +207,15 @@ export async function markCoderSessionRunning({ inventoryDir, engine, slug, runI
     boot_id: bootId,
     updated_at: now,
   });
+  if (next === null) throw new Error('coder-session: running row failed canonical validation');
+  const entries = [...read.entries];
+  entries[idx] = next;
+  await writeCoderSessionInventory(inventoryDir, entries, now);
+  return next;
 }
 
 /**
- * reserved -> running (after spawn). Serialized under the engine inventory
- * mutex (optional acquireLock/lockRetryMs/inventoryFs are narrow test seams).
- * The caller must present the row's EXACT current owner tuple — only the run
- * that reserved the row may mark it running.
+ * running -> idle (normal completion; complete published store).
  */
 export async function markCoderSessionIdle({ inventoryDir, engine, slug }) {
   const now = timestampNow();
@@ -351,6 +237,11 @@ export async function markCoderSessionIdle({ inventoryDir, engine, slug }) {
     boot_id: null,
     updated_at: now,
   });
+  if (next === null) throw new Error('coder-session: idle row failed canonical validation');
+  const entries = [...read.entries];
+  entries[idx] = next;
+  await writeCoderSessionInventory(inventoryDir, entries, now);
+  return next;
 }
 
 /**
@@ -382,12 +273,17 @@ export async function beginCoderSessionDelete({ inventoryDir, engine, slug, runI
     session_delete_phase: deletePhase,
     updated_at: now,
   });
+  if (next === null) throw new Error('coder-session: deleting row failed canonical validation');
+  const entries = [...read.entries];
+  entries[idx] = next;
+  await writeCoderSessionInventory(inventoryDir, entries, now);
+  return next;
 }
 
 /**
  * Reconciliation pass over the state table: for each row, validate the
  * transition rules and return a bounded projection. Unknown rows fail
- * closed (never ignored). Read-only: never takes the inventory mutex.
+ * closed (never ignored).
  */
 export async function reconcileCoderSessionInventory({ inventoryDir }) {
   const read = await readCoderSessionInventory(inventoryDir);
@@ -410,8 +306,7 @@ export async function reconcileCoderSessionInventory({ inventoryDir }) {
 
 /**
  * Bounded read-only listing: {engine,slug,isolation_mode,lock_slot,state}.
- * Never performs recovery or reads a session store. Read-only: never takes
- * the inventory mutex.
+ * Never performs recovery or reads a session store.
  */
 export async function listCoderSessions({ inventoryDir }) {
   const read = await readCoderSessionInventory(inventoryDir);
@@ -426,12 +321,7 @@ export async function listCoderSessions({ inventoryDir }) {
 }
 
 /**
- * Remove a deleting row once clean confirmed all artifacts absent. The caller
- * must present the EXACT deleting tuple (the one beginCoderSessionDelete /
- * cleanIdleCoderSession installed) — deleting->remove is owner-checked so a
- * stale cleaner can never remove a row another action now owns. Serialized
- * under the engine inventory mutex (optional acquireLock/lockRetryMs/
- * inventoryFs are narrow test seams).
+ * Remove a deleting row once clean confirmed all artifacts absent.
  */
 export async function removeCoderSessionRow({ inventoryDir, engine, slug }) {
   const now = timestampNow();

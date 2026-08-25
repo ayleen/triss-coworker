@@ -44,7 +44,6 @@ import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEME
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
-import { processStartIdentity } from '../update/cache.js';
 import {
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
@@ -4684,30 +4683,6 @@ const KILL_GRACE_MS = 5000;
 const RESIDUAL_GROUP_TERM_GRACE_MS = 250;
 const RESIDUAL_GROUP_KILL_WAIT_MS = 1000;
 const PROCESS_GROUP_POLL_MS = 25;
-
-// Stable structural marker: the engine's process group could NOT be proven
-// dead after the run (group alive after SIGKILL, or a strict signal/probe
-// failure left the result unknown). Engine-branch error handling MUST inspect
-// this marker: while cleanup is unverified the v2 session row keeps its exact
-// running state so a same-slug claim stays busy, and only an explicit
-// recovery operation (with proof the group is gone) may touch the row.
-const CODER_PROCESS_GROUP_STILL_ALIVE = 'CODER_PROCESS_GROUP_STILL_ALIVE';
-
-// Build the typed unverified-cleanup error. `cause` preserves the original
-// cleanup error when one exists; the message text is unchanged from the
-// historical diagnostics. The handle/context fields carry no secrets.
-function unverifiedProcessGroupCleanup(message, cause) {
-  const error = cause !== undefined ? new Error(message, { cause }) : new Error(message);
-  error.code = CODER_PROCESS_GROUP_STILL_ALIVE;
-  error.cleanupVerified = false;
-  return error;
-}
-
-function isUnverifiedProcessGroupCleanup(err) {
-  return Boolean(err) &&
-    err.code === CODER_PROCESS_GROUP_STILL_ALIVE &&
-    err.cleanupVerified === false;
-}
 // How often to poll the engine log for a usage-limit line while a run is in
 // flight. On a rate-limited run opencode emits nothing on stdout and retries
 // forever, so without this the run hangs to --timeout; polling turns that
@@ -4735,11 +4710,9 @@ function killProcessGroup(
     // therefore means "still observable", not "already gone".
     if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
-    // A failed strict signal leaves cleanup UNVERIFIED: type it so terminal
-    // session handling can refuse to finalize/abandon the row.
-    throw unverifiedProcessGroupCleanup(
+    throw new Error(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
-      err,
+      { cause: err },
     );
   }
 }
@@ -4842,7 +4815,7 @@ function spawnEngine({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw unverifiedProcessGroupCleanup(
+        throw new Error(
           `${label} process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -5180,7 +5153,7 @@ function spawnCrush({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw unverifiedProcessGroupCleanup(
+        throw new Error(
           `Crush process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -5415,11 +5388,6 @@ async function runCrushFlow({
       processGroupPollMs: deps.processGroupPollMs,
     });
   } catch (err) {
-    // UNVERIFIED process-group cleanup: the old engine tree may still be
-    // alive and writing, so the isolation worktree must NOT be removed.
-    // Rethrow the typed error untouched for the outer session-aware
-    // handler (it keeps the v2 row running and rethrows).
-    if (isUnverifiedProcessGroupCleanup(err)) throw err;
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw err;
   }
@@ -5635,11 +5603,6 @@ async function runCrushFlow({
   // Injectable so tests don't have to monkey-patch process.stdout.write
   // (same reason as the opencode path — see comment there).
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
-  // Terminal session transaction BEFORE the success envelope: the v2 row
-  // must reach idle before success JSON reaches stdout — a mark-idle
-  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-  // instead of reporting a success that never finalized.
-  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
   return { completionOutcome };
 }
@@ -5784,15 +5747,9 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
 // The production run reserves a v2 session row BEFORE spawn, marks it
 // running, and completes it to idle (or deletes it on failure), so the
 // `coder session list|clean` commands finally observe REAL runs instead of
-// only rows created by direct store tests. Admission is FAIL-CLOSED: every
-// reservation error throws before spawn. ONLY the explicit closed allowlist
-// of stable session codes (STABLE_SESSION_ADMISSION_CODES below) propagates
-// unchanged; every other error — unknown codes or bare system codes such as
-// ENOENT/EACCES — wraps as CODER_SESSION_ADMISSION_FAILED with the original
-// error preserved as cause. The single
-// exception is a row this run PROVED absent — its own stranded `reserved`
-// row was rolled back successfully (sessionRollbackVerified) — which alone
-// degrades to the dim warning + null contract.
+// only rows created by direct store tests. Store failures degrade to a dim
+// warning — the legacy .triss/sessions.json map stays authoritative for
+// continuation until persistent sessions become eligibility-enforced.
 
 export function currentBootIdentity({
   platform = process.platform,
@@ -6358,86 +6315,6 @@ export async function completeV2SessionRow(sessionV2, publishedRealId) {
 // Exported for tests: provenance/store-aware rollback of a claimed row.
 export async function releaseV2SessionRow(sessionV2) {
   await finalizeV2SessionRow(sessionV2, 'abandon', undefined);
-}
-
-/**
- * ONE terminal-failure funnel shared by every engine-branch catch. Decides
- * between the three session regimes so no branch re-implements (and no
- * branch can get wrong) the semantics:
- *
- *   1. UNVERIFIED process-group cleanup (typed marker from spawnEngine/
- *      spawnCrush): the engine tree may still be alive, so the running row
- *      must keep claiming the slug. The row is left EXACTLY as-is (no
- *      complete/abandon/delete/idle), the exact lifecycle handle is attached
- *      to the non-secret error context, and only an explicit recovery call
- *      may touch the row later.
- *   2. SESSION FINALIZATION failure (success-path mark-idle) or an already-
- *      aggregated rollback failure: likewise never fed into ordinary abandon.
- *   3. Ordinary rollback-safe failure: abandon the row; if the rollback ALSO
- *      fails, throw the typed aggregate preserving both errors.
- */
-async function failCoderRunSessionAware(sessionV2, engineError) {
-  if (isUnverifiedProcessGroupCleanup(engineError)) {
-    // Non-secret lifecycle identity needed by recovery (inventoryDir, engine,
-    // slug, origin + the exact persisted owner tuple — no credentials).
-    if (sessionV2) engineError.coderSessionHandle = sessionV2;
-    throw engineError;
-  }
-  if (
-    engineError && (
-      engineError.code === 'CODER_SESSION_FINALIZATION_FAILED' ||
-      engineError.code === 'CODER_SESSION_ROLLBACK_FAILED'
-    )
-  ) {
-    throw engineError;
-  }
-  await abandonV2SessionRow(sessionV2, engineError);
-  throw engineError;
-}
-
-/**
- * Explicit recovery after an UNVERIFIED process-group cleanup. Fails closed
- * unless the caller presents BOTH the proof (`cleanupVerified: true` — the
- * caller verified the group is actually gone) and the EXACT saved lifecycle
- * handle (every owner field must still match the persisted running row).
- * Only then: a row this run created ('new') is deleted; an inherited row
- * ('continued') is restored to idle so future runs can continue it.
- */
-export async function recoverCoderSessionAfterUnverifiedCleanup({ cleanupVerified, handle } = {}) {
-  if (cleanupVerified !== true) {
-    throw new TypeError(
-      'recoverCoderSessionAfterUnverifiedCleanup: cleanupVerified=true is required — recovery ' +
-        'refuses to touch a session whose engine process group was never proven dead',
-    );
-  }
-  if (!handle || typeof handle !== 'object' || !handle.inventoryDir) {
-    throw new TypeError(
-      'recoverCoderSessionAfterUnverifiedCleanup: the exact saved lifecycle handle is required',
-    );
-  }
-  const tuple = {
-    inventoryDir: handle.inventoryDir,
-    engine: handle.engine,
-    slug: handle.slug,
-    runId: handle.runId,
-    sandboxId: handle.sandboxId,
-    pid: handle.pid,
-    processStartId: handle.processStartId,
-    bootId: handle.bootId,
-  };
-  const transitions = await import('../coder-session-transitions.js');
-  if (handle.origin === 'continued') {
-    await transitions.markCoderSessionIdle(tuple);
-    return { recovered: true, action: 'restored_idle', engine: handle.engine, slug: handle.slug };
-  }
-  if (handle.origin === 'new') {
-    await transitions.beginCoderSessionDelete(tuple);
-    await transitions.removeCoderSessionRow(tuple);
-    return { recovered: true, action: 'removed', engine: handle.engine, slug: handle.slug };
-  }
-  throw new Error(
-    `recoverCoderSessionAfterUnverifiedCleanup: unknown handle origin ${JSON.stringify(handle.origin)} — failing closed`,
-  );
 }
 
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
@@ -7322,11 +7199,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         );
       }
     } catch (err) {
-      // UNVERIFIED process-group cleanup: the old engine tree may still be
-      // alive and writing, so the isolation worktree must NOT be removed.
-      // Rethrow the typed error untouched for the outer session-aware
-      // handler.
-      if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
+      if (isolation && isolation.freshlyCreated) {
         cleanupAbandonedIsolation(sh, isolation);
       }
       throw err;
@@ -7542,11 +7415,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     };
 
     const writeStdout2 = deps.stdoutWrite || ((s) => process.stdout.write(s));
-    // Terminal session transaction BEFORE the success envelope: the v2 row
-    // must reach idle before success JSON reaches stdout — a mark-idle
-    // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-    // instead of reporting a success that never finalized.
-    await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
     writeStdout2(JSON.stringify(envelope2) + '\n');
     return { completionOutcome };
     } catch (err) {
@@ -7673,16 +7541,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     await releaseSessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).
-    // Exception: an UNVERIFIED process-group cleanup means the old engine
-    // tree may still be alive and writing, so the worktree must stay and the
-    // typed error goes to the shared terminal funnel untouched (it keeps the
-    // v2 row running and rethrows). Ordinary rollback-safe errors keep the
-    // existing cleanup, then route through the funnel (session-aware abandon;
-    // always throws).
-    if (!isUnverifiedProcessGroupCleanup(err) && isolation && isolation.freshlyCreated) {
+    if (isolation && isolation.freshlyCreated) {
       cleanupAbandonedIsolation(sh, isolation);
     }
-    await failCoderRunSessionAware(sessionV2, err);
+    throw err;
   } finally {
     // component: the credential proxy is parent-owned and single-run —
     // revoke it as soon as the engine exits (success, failure, or throw).
@@ -7904,11 +7766,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // --test`'s own internal reporter, which also writes to stdout between
   // turns and would otherwise corrupt the captured buffer.
   const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
-  // Terminal session transaction BEFORE the success envelope: the v2 row
-  // must reach idle before success JSON reaches stdout — a mark-idle
-  // failure throws the typed CODER_SESSION_FINALIZATION_FAILED error
-  // instead of reporting a success that never finalized.
-  await completeV2SessionRow(sessionV2, deps.sessionFinalization || {});
   writeStdout(JSON.stringify(envelope) + '\n');
   return { completionOutcome };
 }
@@ -7994,22 +7851,6 @@ export async function runCoderClean(opts = {}, deps = {}) {
 }
 
 // ─── v2 session CLI (shared contract) ──────────────────────────────────
-
-// The exact engine set the v2 session CLI accepts — nothing else.
-export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
-
-/**
- * Validate the --engine flag for the session list/clean surface: exactly
- * opencode|opencode2|crush. Read-only list may omit --engine (defaults to
- * opencode); clean is an owning mutation and must name its engine explicitly.
- */
-function requireSessionEngine(rawEngine, subcommand) {
-  const engine = rawEngine || (subcommand === 'list' ? 'opencode' : undefined);
-  if (!CODER_SESSION_ENGINES.includes(engine)) {
-    throw new Error(`--engine <opencode|opencode2|crush> is required for session ${subcommand}`);
-  }
-  return engine;
-}
 
 /**
  * `triss coder session list [--engine <name>]`: serialize the bounded

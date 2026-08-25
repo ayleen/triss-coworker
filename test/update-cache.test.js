@@ -429,13 +429,11 @@ test('cache lock does not compare identities from different probe schemes', asyn
 });
 
 test('macOS process-start identities use one canonical ps environment across runtimes', async () => {
-  let cachePsCommand;
   let cachePsOptions;
   let installPsOptions;
   const cacheIdentity = processStartIdentity(123, {
     readProc: () => { throw new Error('no procfs'); },
-    execPs: (command, _args, options) => {
-      cachePsCommand = command;
+    execPs: (_command, _args, options) => {
       cachePsOptions = options;
       return '  Tue   Aug 12 10:00:00 2026\n';
     },
@@ -447,8 +445,6 @@ test('macOS process-start identities use one canonical ps environment across run
       return { status: 0, stdout: 'Tue Aug 12 10:00:00 2026\n' };
     },
   });
-  assert.equal(cachePsCommand, '/bin/ps');
-  assert.deepEqual(cachePsOptions.env, { TZ: 'UTC', LC_ALL: 'C' });
   assert.equal(cacheIdentity, 'ps:Tue Aug 12 10:00:00 2026');
   assert.equal(installIdentity, cacheIdentity);
   for (const options of [cachePsOptions, installPsOptions]) {

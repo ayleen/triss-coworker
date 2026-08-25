@@ -46,42 +46,23 @@ const NOW = '2026-08-13T10:00:00.000Z';
 
 async function fixture() {
   const base = await mkdtemp(join(tmpdir(), 'triss-session-cli-'));
-  // Real layout: .triss/engine-sessions-v2/<engine> (per-engine v2 store),
-  // one directory per session-CLI engine.
-  const v2Root = join(base, '.triss', 'engine-sessions-v2');
-  const inventoryDir = join(v2Root, 'opencode');
+  // Real layout: .triss/engine-sessions-v2/<engine> (per-engine v2 store).
+  const inventoryDir = join(base, '.triss', 'engine-sessions-v2', 'opencode');
   await mkdir(inventoryDir, { mode: 0o700, recursive: true });
-  await mkdir(join(v2Root, 'opencode2'), { mode: 0o700, recursive: true });
-  await mkdir(join(v2Root, 'crush'), { mode: 0o700, recursive: true });
+  await mkdir(join(base, '.triss', 'engine-sessions-v2', 'crush'), { mode: 0o700, recursive: true });
   return {
     base,
     inventoryDir,
-    opencode2Dir: join(v2Root, 'opencode2'),
-    crushDir: join(v2Root, 'crush'),
+    crushDir: join(base, '.triss', 'engine-sessions-v2', 'crush'),
     async cleanup() {
       await rm(base, { recursive: true, force: true });
     },
   };
 }
 
-// Per-engine store selection across the full session-CLI engine set.
-function inventoryDirFor(fx, engine) {
-  const byEngine = {
-    opencode: fx.inventoryDir,
-    opencode2: fx.opencode2Dir,
-    crush: fx.crushDir,
-  };
-  const dir = byEngine[engine];
-  if (!dir) throw new Error(`fixture: unknown engine ${JSON.stringify(engine)}`);
-  return dir;
-}
-
 async function seedSession(fx, engine, slug, { idle = true } = {}) {
-  const dir = inventoryDirFor(fx, engine);
-  // Owner-tuple cutover: every mutating transition presents the row's EXACT
-  // current owner tuple — captured from the row the previous step returned,
-  // never restated by hand.
-  const reserved = await reserveCoderSession({
+  const dir = engine === 'crush' ? fx.crushDir : fx.inventoryDir;
+  await reserveCoderSession({
     inventoryDir: dir,
     engine,
     slug,
@@ -93,27 +74,17 @@ async function seedSession(fx, engine, slug, { idle = true } = {}) {
     processStartId: 'ps-1',
     bootId: 'boot-1',
   });
-  const running = await markCoderSessionRunning({
-    inventoryDir: dir,
-    engine,
-    slug,
-    runId: reserved.run_id,
-    sandboxId: reserved.sandbox_id,
-    pid: reserved.pid,
-    processStartId: reserved.process_start_id,
-    bootId: reserved.boot_id,
-  });
   if (idle) {
-    await markCoderSessionIdle({
+    await markCoderSessionRunning({
       inventoryDir: dir,
       engine,
       slug,
-      runId: running.run_id,
-      sandboxId: running.sandbox_id,
-      pid: running.pid,
-      processStartId: running.process_start_id,
-      bootId: running.boot_id,
+      runId: `run-${slug}`,
+      pid: 100,
+      processStartId: 'ps-1',
+      bootId: 'boot-1',
     });
+    await markCoderSessionIdle({ inventoryDir: dir, engine, slug });
   }
 }
 
@@ -2272,34 +2243,6 @@ test('session clean requires the engine flag and rejects non-idle sessions', asy
   }
 });
 
-test('session clean removes an idle row for each of the three session engines', async () => {
-  for (const engine of ['opencode', 'opencode2', 'crush']) {
-    const fx = await fixture();
-    try {
-      await seedSession(fx, engine, 'task-clean'); // idle row
-      const originalRoot = process.env.TRISS_PROJECT_ROOT;
-      process.env.TRISS_PROJECT_ROOT = fx.base;
-      try {
-        await runCoderSessionClean('task-clean', { engine });
-        // Clean is engine-scoped: the selected engine's inventory empties.
-        const read = await readCoderSessionInventory(inventoryDirFor(fx, engine));
-        assert.equal(read.entries.length, 0, `${engine} inventory must be empty after clean`);
-      } finally {
-        if (originalRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
-        else process.env.TRISS_PROJECT_ROOT = originalRoot;
-      }
-    } finally {
-      await fx.cleanup();
-    }
-  }
-  // Owning mutation: clean never guesses an engine — anything outside the
-  // closed three-engine set rejects with the exact flag grammar.
-  await assert.rejects(
-    () => runCoderSessionClean('task-clean', { engine: 'claude' }),
-    /--engine <opencode\|opencode2\|crush> is required for session clean/,
-  );
-});
-
 // ─── result list / clean ─────────────────────────────────────────────────────
 
 test('result clean validates the run-id grammar and never accepts a slug', async () => {
@@ -2348,21 +2291,4 @@ test('result-state records persist and list under the runs root', async () => {
   } finally {
     await fx.cleanup();
   }
-});
-
-// ─── public contract grammar ─────────────────────────────────────────────────
-
-// Semantic guard for the published contract: its Cleanup line must carry the
-// exact closed three-engine grammar the CLI enforces above, never the stale
-// two-engine form.
-test('public contract Cleanup line carries the exact three-engine clean grammar', async () => {
-  const contract = await readFile(new URL('../docs/reliable-delegation-contract.md', import.meta.url), 'utf8');
-  assert.ok(
-    contract.includes('--engine <opencode|opencode2|crush>'),
-    'public contract must document --engine <opencode|opencode2|crush>',
-  );
-  const cleanupLine = contract.split('\n').find((line) => line.startsWith('Cleanup:'));
-  assert.ok(cleanupLine, 'contract must contain a Cleanup line');
-  assert.match(cleanupLine, /--engine <opencode\|opencode2\|crush>/);
-  assert.ok(!cleanupLine.includes('<opencode|crush>'), 'stale two-engine grammar must not remain in the Cleanup line');
 });

@@ -86,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legitimate higher configured minimums are preserved. Install hints always
   target at least the floor.
 
+### Artifact integrity (0.39.1)
+
+- `triss-dsh-provider-bundle-0.39.1.tgz` — sha256
+  `334e1aae099cedfe1c29c9e03761e515d05c36458f8ace766b8a71128d222ac3`
+  — `sha512-vk3ajtlIAZEZuwpZ8PhEN/KouwXw9rqWsppmnQx1lDH3iRwi8YsaYjxS8fsZjqTeGfgE6EWZvaY/PtzLnF7JJA==`
+
 ## [0.39.0] — 2026-08-23
 
 ### Changed
