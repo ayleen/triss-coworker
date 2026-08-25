@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.1] — 2026-08-25
+
+### Fixed
+
+- **Session owner identity** — a fresh admission publishes its owner identity
+  before spawn and fails closed when the current process owner identity is
+  unavailable, instead of degrading to an unattributable running row that no
+  recovery operation could lawfully claim.
+- **Continuation/ownership validation** — the atomic admission-or-continuation
+  claim (`claimCoderSession`) validates an existing row before continuing it:
+  a mismatched engine/slug/owner binding, `isolation_mode`, or
+  `project_root_fingerprint` is refused with a typed error rather than
+  silently adopted, while fresh admissions publish a fresh running owner
+  tuple.
+- **Cross-process inventory safety** — session inventory publication writes a
+  temp file, fsyncs it, renames it into place, and then fsyncs the parent
+  directory (required), closing the crash window where a renamed file was not
+  yet durable as a directory entry; mutating transitions take an
+  engine-scoped inventory mutex acquired via O_EXCL creation with dead-PID
+  reclaim under bounded async retry, keeping the read-check-write section
+  mutually exclusive across processes.
+- **Three-engine clean** — `triss coder session clean` enforces the exact
+  closed three-engine grammar (`opencode`, `opencode2`, `crush`) across the
+  CLI flags and the public contract Cleanup line, so plain `opencode` is
+  never misread as V2 and stale engine names are rejected.
+- **Fail-closed admission** — session admission (`reserveCoderSession`) runs
+  the whole read → duplicate-check → mutation → durable-write sequence under
+  the inventory mutex and fails closed on lock timeout, a corrupt inventory,
+  pre-rename store I/O errors, post-rename durability uncertainty, or owner
+  identity unavailable before spawn; nothing trusts pre-lock state.
+- **Unverified cleanup retention/recovery** — when the engine process group
+  cannot be proven dead after a run, the typed
+  `CODER_PROCESS_GROUP_STILL_ALIVE` error keeps the v2 session row in its
+  exact running state (same-slug claims stay busy); only an explicit recovery
+  operation carrying proof the group is gone may touch the row.
+- **Finalization-before-envelope + aggregate rollback** — v2 session
+  finalization runs BEFORE stdout: the success envelope is withheld until the
+  running→idle transition succeeds, and a failed finalization throws the
+  typed `CODER_SESSION_FINALIZATION_FAILED` error with its cause chain
+  preserved; if rollback also fails, the failure surfaces as a typed
+  AggregateError preserving both the engine error and the rollback error.
+
+### Changed
+
+- Safe-envelope consumer contract documented for OpenCode 2:
+  `docs/reliable-delegation-contract.md` now documents safe envelope
+  consumption/recovery as a tri-state (consume proven successes, recover
+  boundedly on unknown outcomes, never loop), and corrects the shared
+  OpenCode2 `envelope-v2` / `session clean` grammar; consumers must treat
+  these documented lifecycle facts as authoritative — infinite recovery on
+  this shape is a consumer bug.
+- The `triss-dsh-provider-bundle` companion ships at 0.39.1 aligned with this
+  release; it is configuration-only and has no functional change.
+
+### Artifact integrity (0.39.1)
+
+- `triss-dsh-provider-bundle-0.39.1.tgz` — sha256
+  `334e1aae099cedfe1c29c9e03761e515d05c36458f8ace766b8a71128d222ac3`,
+  integrity
+  `sha512-vk3ajtlIAZEZuwpZ8PhEN/KouwXw9rqWsppmnQx1lDH3iRwi8YsaYjxS8fsZjqTeGfgE6EWZvaY/PtzLnF7JJA==`
+  (computed with the pinned release npm 11.6.2 via `npm pack`; `npm pack`
+  output is byte-deterministic).
+- Root `triss-coworker-0.39.1.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.39.1` (the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file); registry verification compares the packed
+  artifact against the published tarball byte-for-byte.
+
 ## [0.39.0] — 2026-08-23
 
 ### Changed
