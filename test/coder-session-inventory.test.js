@@ -425,6 +425,103 @@ test('writeCoderSessionInventory atomically publishes a mode-0600 file; read rou
   }
 });
 
+function recordingInventoryFs({ failOn = () => false } = {}) {
+  const calls = [];
+  const fd = (path) => ({
+    async writeFile(text) {
+      calls.push(`write:${path}:${text.endsWith('\n') ? 'lf' : 'nolf'}`);
+    },
+    async sync() {
+      calls.push(`fsync:${path}`);
+      if (failOn(`fsync:${path}`)) throw new Error(`injected fsync failure: ${path}`);
+    },
+    async close() {
+      calls.push(`close:${path}`);
+    },
+  });
+  return {
+    calls,
+    async open(path, flags, mode) {
+      calls.push(`open:${path}:${flags}:${mode ?? 'default'}`);
+      return fd(path);
+    },
+    async rename(from, to) {
+      calls.push(`rename:${from}->${to}`);
+      if (failOn(`rename:${from}`)) throw new Error(`injected rename failure: ${from}`);
+    },
+    async unlink(path) {
+      calls.push(`unlink:${path}`);
+    },
+  };
+}
+
+test('writeCoderSessionInventory fsyncs the parent after the atomic rename', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs();
+    await writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl);
+    const tmpOpen = fsImpl.calls.find((call) => call.includes('.inventory.tmp.') && call.startsWith('open:'));
+    const tmpPath = tmpOpen.slice(5).split(':wx:')[0];
+    assert.deepEqual(fsImpl.calls, [
+      `open:${tmpPath}:wx:${0o600}`,
+      `write:${tmpPath}:lf`,
+      `fsync:${tmpPath}`,
+      `close:${tmpPath}`,
+      `rename:${tmpPath}->${join(fx.inventoryDir, '.inventory.json')}`,
+      `open:${fx.inventoryDir}:r:default`,
+      `fsync:${fx.inventoryDir}`,
+      `close:${fx.inventoryDir}`,
+    ]);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('writeCoderSessionInventory removes an unconsumed temp on pre-rename failure', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({ failOn: (call) => call.startsWith('rename:') });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      (error) => {
+        assert.equal(error.code, 'CODER_SESSION_STORE_IO');
+        assert.equal(error.inventoryDir, fx.inventoryDir);
+        assert.match(error.cause.message, /injected rename failure/);
+        return true;
+      },
+    );
+    const tmpOpen = fsImpl.calls.find((call) => call.includes('.inventory.tmp.') && call.startsWith('open:'));
+    const tmpPath = tmpOpen.slice(5).split(':wx:')[0];
+    assert.ok(fsImpl.calls.includes(`unlink:${tmpPath}`));
+    assert.equal(fsImpl.calls.some((call) => call === `open:${fx.inventoryDir}:r:default`), false);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('writeCoderSessionInventory reports durability unknown after a renamed entry cannot be parent-fsynced', async () => {
+  const fx = await fixture();
+  try {
+    const fsImpl = recordingInventoryFs({
+      failOn: (call) => call === `fsync:${fx.inventoryDir}`,
+    });
+    await assert.rejects(
+      () => writeCoderSessionInventory(fx.inventoryDir, [runningEntry()], NOW, fsImpl),
+      (error) => {
+        assert.equal(error.code, 'CODER_SESSION_DURABILITY_UNKNOWN');
+        assert.equal(error.publicationMayHaveOccurred, true);
+        assert.equal(error.inventoryDir, fx.inventoryDir);
+        assert.match(error.cause.message, /injected fsync failure/);
+        return true;
+      },
+    );
+    assert.equal(fsImpl.calls.some((call) => call.startsWith('unlink:')), false);
+    assert.ok(fsImpl.calls.includes(`close:${fx.inventoryDir}`));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('readCoderSessionInventory returns empty entries when absent and fails closed on corrupt content', async () => {
   const fx = await fixture();
   try {

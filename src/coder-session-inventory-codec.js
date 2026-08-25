@@ -45,7 +45,7 @@
  * admission, recovery, store mutation, or process-owner adapter.
  */
 
-import { open, rename } from 'node:fs/promises';
+import { open, rename, unlink } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -415,25 +415,72 @@ export async function readCoderSessionInventory(inventoryDir, { reportMissing = 
   return reportMissing ? { entries: decoded.entries, missing: false } : { entries: decoded.entries };
 }
 
+// Narrow injectable filesystem seam for deterministic durability tests.
+// Production callers always use the real node:fs/promises functions.
+const defaultInventoryFs = { open, rename, unlink };
+
+async function fsyncDirectory(dirPath, fsImpl) {
+  const dirFd = await fsImpl.open(dirPath, 'r');
+  try {
+    await dirFd.sync();
+  } finally {
+    await dirFd.close();
+  }
+}
+
+function inventoryStoreIoError(inventoryDir, cause) {
+  const error = new Error(
+    `coder-session: session-inventory write failed before rename: ${cause?.message || String(cause)}`,
+    { cause },
+  );
+  error.code = 'CODER_SESSION_STORE_IO';
+  error.inventoryDir = inventoryDir;
+  return error;
+}
+
+function inventoryDurabilityUnknownError(inventoryDir, cause) {
+  const error = new Error(
+    'coder-session: session-inventory rename succeeded but durability is unknown ' +
+      `(parent-directory fsync failed): ${cause?.message || String(cause)}`,
+    { cause },
+  );
+  error.code = 'CODER_SESSION_DURABILITY_UNKNOWN';
+  error.publicationMayHaveOccurred = true;
+  error.inventoryDir = inventoryDir;
+  return error;
+}
+
 /**
- * Atomically publish the inventory: exclusive same-directory temp (mode
- * 0600) -> write -> fsync -> rename. Returns the updated_at.
+ * Crash-durably publish the inventory: exclusive same-directory temp (mode
+ * 0600) -> write -> file fsync -> close -> rename -> parent-directory fsync.
+ * Pre-rename failures remove the unconsumed temp. Post-rename failures report
+ * durability as unknown because publication may already have occurred.
  */
-export async function writeCoderSessionInventory(inventoryDir, entries, updatedAt = timestampNow()) {
+export async function writeCoderSessionInventory(
+  inventoryDir,
+  entries,
+  updatedAt = timestampNow(),
+  fsImpl = defaultInventoryFs,
+) {
   const text = encodeCoderSessionInventory(entries, updatedAt);
   const tmpPath = join(inventoryDir, `.inventory.tmp.${randomBytes(8).toString('hex')}`);
   const targetPath = join(inventoryDir, INVENTORY_BASENAME);
   let fd;
+  let renamed = false;
   try {
-    fd = await open(tmpPath, 'wx', 0o600);
+    fd = await fsImpl.open(tmpPath, 'wx', 0o600);
     await fd.writeFile(text, 'utf8');
     await fd.sync();
     await fd.close();
     fd = undefined;
-    await rename(tmpPath, targetPath);
-  } catch (err) {
+    await fsImpl.rename(tmpPath, targetPath);
+    renamed = true;
+    await fsyncDirectory(inventoryDir, fsImpl);
+    return updatedAt;
+  } catch (error) {
     if (fd) await fd.close().catch(() => {});
-    throw err;
+    if (!renamed) await fsImpl.unlink(tmpPath).catch(() => {});
+    if (renamed) throw inventoryDurabilityUnknownError(inventoryDir, error);
+    throw inventoryStoreIoError(inventoryDir, error);
   }
-  return updatedAt;
 }

@@ -4683,6 +4683,22 @@ const KILL_GRACE_MS = 5000;
 const RESIDUAL_GROUP_TERM_GRACE_MS = 250;
 const RESIDUAL_GROUP_KILL_WAIT_MS = 1000;
 const PROCESS_GROUP_POLL_MS = 25;
+
+// The engine process group could not be proven dead. Callers must retain the
+// exact running session row and must not remove its worktree; only explicit
+// recovery after an independent empty-tree proof may clear ownership.
+const CODER_PROCESS_GROUP_STILL_ALIVE = 'CODER_PROCESS_GROUP_STILL_ALIVE';
+
+function unverifiedProcessGroupCleanup(message, cause) {
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  error.code = CODER_PROCESS_GROUP_STILL_ALIVE;
+  error.cleanupVerified = false;
+  return error;
+}
+
+function isUnverifiedProcessGroupCleanup(error) {
+  return error?.code === CODER_PROCESS_GROUP_STILL_ALIVE && error.cleanupVerified === false;
+}
 // How often to poll the engine log for a usage-limit line while a run is in
 // flight. On a rate-limited run opencode emits nothing on stdout and retries
 // forever, so without this the run hangs to --timeout; polling turns that
@@ -4710,9 +4726,9 @@ function killProcessGroup(
     // therefore means "still observable", not "already gone".
     if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
-    throw new Error(
+    throw unverifiedProcessGroupCleanup(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
-      { cause: err },
+      err,
     );
   }
 }
@@ -4815,7 +4831,7 @@ function spawnEngine({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw new Error(
+        throw unverifiedProcessGroupCleanup(
           `${label} process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -5153,7 +5169,7 @@ function spawnCrush({
       if (await waitForGroupExit(residualTermGraceMs)) return;
       if (!killGroup('SIGKILL')) return;
       if (!(await waitForGroupExit(residualKillWaitMs))) {
-        throw new Error(
+        throw unverifiedProcessGroupCleanup(
           `Crush process group ${child.pid} remained alive after SIGKILL; refusing to report completion.`,
         );
       }
@@ -5388,6 +5404,7 @@ async function runCrushFlow({
       processGroupPollMs: deps.processGroupPollMs,
     });
   } catch (err) {
+    if (isUnverifiedProcessGroupCleanup(err)) throw err;
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw err;
   }
@@ -6317,6 +6334,57 @@ export async function releaseV2SessionRow(sessionV2) {
   await finalizeV2SessionRow(sessionV2, 'abandon', undefined);
 }
 
+function coderSessionRecoveryHandle(sessionV2) {
+  return {
+    inventoryDir: sessionV2.inventoryDir,
+    engine: sessionV2.engine,
+    slug: sessionV2.slug,
+    origin: sessionV2.origin,
+    instanceId: sessionV2.instanceId,
+    lockSlot: sessionV2.lockSlot,
+    runId: sessionV2.runId,
+    sandboxId: sessionV2.sandboxId,
+    pid: sessionV2.pid,
+    processStartId: sessionV2.processStartId,
+    bootId: sessionV2.bootId,
+  };
+}
+
+/**
+ * Preserve durable ownership when process-group cleanup is unverified.
+ * The row stays running so the same slug remains busy; the run lease itself
+ * is released so a long-lived MCP process does not strand kernel locks.
+ * Explicit session clean/recovery must independently prove the owner gone
+ * before mutating the retained row.
+ */
+async function retainV2SessionAfterUnverifiedCleanup(sessionV2, error) {
+  if (!isUnverifiedProcessGroupCleanup(error)) return false;
+  if (!sessionV2) return true;
+
+  sessionV2.finalizationAttempted = true;
+  error.coderSessionHandle = coderSessionRecoveryHandle(sessionV2);
+  const release = sessionV2.runLease?.release;
+  if (typeof release !== 'function') return true;
+
+  let releaseError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await release.call(sessionV2.runLease);
+      releaseError = undefined;
+      break;
+    } catch (err) {
+      releaseError = err;
+    }
+  }
+  if (releaseError) {
+    error.leaseReleaseError = releaseError;
+    process.stderr.write(
+      pc.dim(`  ⚠ unsafe-cleanup session lease release incomplete: ${releaseError.message}\n`),
+    );
+  }
+  return true;
+}
+
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // The engine env allowlist (buildEngineEnv) and the timeout kill
   // (negative-PID process-group SIGTERM/SIGKILL in spawnEngine) are both
@@ -6949,6 +7017,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         crushPolicy,
       });
     } catch (err) {
+      if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
       if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
       throw err;
     } finally {
@@ -7199,6 +7268,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         );
       }
     } catch (err) {
+      if (isUnverifiedProcessGroupCleanup(err)) throw err;
       if (isolation && isolation.freshlyCreated) {
         cleanupAbandonedIsolation(sh, isolation);
       }
@@ -7418,6 +7488,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     writeStdout2(JSON.stringify(envelope2) + '\n');
     return { completionOutcome };
     } catch (err) {
+      if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
       // Match the inner catches and the V1 path: any failure AFTER
       // setupIsolation created a fresh worktree — usage logging, store
       // finalization, envelope assembly/write — must not strand
@@ -7538,6 +7609,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       );
     }
   } catch (err) {
+    if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
     await releaseSessionRow(sessionV2);
     // setupIsolation ran BEFORE spawnEngine — a throw here would otherwise
     // leak a freshly-created worktree/branch (see cleanupAbandonedIsolation).

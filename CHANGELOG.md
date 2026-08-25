@@ -86,6 +86,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legitimate higher configured minimums are preserved. Install hints always
   target at least the floor.
 
+## [0.39.1] — 2026-08-25
+
+### Fixed
+
+- **Session-owner identity is now enforced end to end:** coder-session rows
+  persist the process start identity and boot id alongside the PID, strict
+  transitions compare the complete owner tuple, and PID reuse or a stale boot
+  can no longer authorize another process to mutate a live session row.
+- **Continuation validates ownership before reuse:** an idle row is claimed
+  through the project-wide run lease before it transitions to `running`;
+  incompatible or concurrently claimed sessions fail closed before engine
+  spawn.
+- **Inventory publication is crash-durable:** writes now fsync the temporary
+  file, atomically rename it over `.inventory.json`, then fsync the parent
+  directory. Pre-rename failures remove the unconsumed temp; a post-rename
+  parent-fsync failure reports that publication durability is unknown.
+- **Cleanup and migration cover all coder engines:** session maintenance
+  handles OpenCode, OpenCode 2, and Crush inventories under the same
+  project-scoped ownership and lease rules.
+- **Admission remains fail-closed under concurrency:** same-slug runs cannot
+  both pass an idle check, and target/session mutation is serialized by the
+  matching project lease before any engine side effect.
+- **Unverified process-group cleanup is retained for recovery:** if descendants
+  still appear alive after `SIGKILL`, the run emits no completion envelope,
+  keeps the exact session row `running`, releases the kernel lease, and returns
+  a typed non-secret recovery handle instead of publishing a false idle state.
+- **Session finalization precedes success publication:** a success envelope is
+  emitted only after the row has transitioned back to `idle`; reservation,
+  running-transition, engine-spawn, and finalization failures roll back only
+  through strict owner-checked transitions.
+
+### Changed
+
+- **`triss coder` stdout is safe for automatic consumers:** engine diagnostics
+  remain on stderr, while stdout contains only the final machine-readable
+  envelope after lifecycle finalization succeeds.
+- Release companion version: `0.39.1`.
+
 ### Artifact integrity (0.39.1)
 
 - `triss-dsh-provider-bundle-0.39.1.tgz` — sha256
