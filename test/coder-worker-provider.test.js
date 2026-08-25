@@ -1127,9 +1127,15 @@ test(
           stdoutWrite: () => true,
         },
       ),
-      new RegExp(
-        `One-shot provider runs require opencode >= ${OPENCODE_SUPPORTED_FLOOR.replace(/\./gu, '\\.')}[\\s\\S]*found 1\\.18\\.21`,
-      ),
+      (error) => {
+        assert.ok(
+          error.message.includes(
+            `One-shot provider runs require opencode >= ${OPENCODE_SUPPORTED_FLOOR}`,
+          ),
+        );
+        assert.ok(error.message.includes('found 1.18.21'));
+        return true;
+      },
     );
     assert.equal(spawned, false);
   }),

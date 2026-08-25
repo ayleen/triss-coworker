@@ -264,7 +264,7 @@ test('OpenCode V1 invalid or below-floor minimum fails closed without an unsafe 
       (error) => {
         assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
         assert.match(error.message, /canonical stable x\.y\.z/);
-        if (reason) assert.match(error.message, new RegExp(reason.replace(/\./gu, '\\.')));
+        if (reason) assert.ok(error.message.includes(reason));
         assert.doesNotMatch(error.message, /npm install/);
         assert.doesNotMatch(error.message, /@bad-minimum/);
         return true;
@@ -340,9 +340,8 @@ test(
         ),
         (error) => {
           assert.equal(error.code, OPENCODE_INVALID_MINIMUM_CODE);
-          assert.match(
-            error.message,
-            new RegExp(`below the supported floor ${OPENCODE_SUPPORTED_FLOOR.replace(/\./gu, '\\.')}`),
+          assert.ok(
+            error.message.includes(`below the supported floor ${OPENCODE_SUPPORTED_FLOOR}`),
           );
           return true;
         },
@@ -476,9 +475,8 @@ test(
           // The gate fires BEFORE any worktree/isolation machinery: a
           // rejected version must leave no side effects behind.
           assert.doesNotMatch(error.message, /worktree/i);
-          assert.match(
-            error.message,
-            new RegExp(`require opencode >= ${OPENCODE_SUPPORTED_FLOOR.replace(/\./gu, '\\.')}`),
+          assert.ok(
+            error.message.includes(`require opencode >= ${OPENCODE_SUPPORTED_FLOOR}`),
           );
           assert.match(error.message, /found 1\.18\.21/);
           return true;
@@ -520,7 +518,7 @@ test(
         (error) => {
           assert.doesNotMatch(error.message, /worktree/i);
           assert.match(error.message, /require opencode >= 2\.0\.0/);
-          assert.match(error.message, new RegExp(`found ${OPENCODE_MIN_VERSION_DEFAULT.replace(/\./gu, '\\.')}`));
+          assert.ok(error.message.includes(`found ${OPENCODE_MIN_VERSION_DEFAULT}`));
           return true;
         },
       );

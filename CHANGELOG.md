@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.2] — 2026-08-25
+
+
 ### Added
 
 - **v2 session-state recovery/migration consistency (PR #85).**
@@ -85,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0.1.4` stays unsupported), malformed values still fail closed, and
   legitimate higher configured minimums are preserved. Install hints always
   target at least the floor.
+- Release companion version: `0.39.2`.
+
+### Artifact integrity (0.39.2)
+
+- `triss-dsh-provider-bundle-0.39.2.tgz` — sha256
+  `728da46e1d0d1052f9f6ac7a83318a0287bc7effd83d7dd50fe5adb138bd3899`
+  — `sha512-WYW4BrLi1EXZnlf6oLVYj91wV41UXwuM1SEv4LoEGrqLKPQGHaAvoDxNpQtS+Urxhy55Sdjgc7c1Kn9QFWsOQQ==`
 
 ## [0.39.1] — 2026-08-25
 
@@ -1669,7 +1679,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...HEAD
+[0.39.2]: https://github.com/ayleen/triss-coworker/compare/v0.39.1...v0.39.2
+[0.39.1]: https://github.com/ayleen/triss-coworker/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...v0.39.0
 [0.37.1]: https://github.com/ayleen/triss-coworker/compare/v0.37.0...v0.37.1
 [0.34.0]: https://github.com/ayleen/triss-coworker/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/ayleen/triss-coworker/compare/v0.32.0...v0.33.0
