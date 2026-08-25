@@ -275,14 +275,19 @@ test('release wakes a blocked waiter without waiting out the poll interval', asy
   try {
     const root = await openManagedTrissRoot(fx.base);
     const writer = await acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'exclusive' });
-    const waiter = acquireFixedKernelLock({ parentHandle: root, basename: 'rw.lock', mode: 'shared' });
+    const waiter = acquireFixedKernelLock({
+      parentHandle: root,
+      basename: 'rw.lock',
+      mode: 'shared',
+      pollMs: 2_000,
+    });
     await new Promise((r) => setTimeout(r, 60));
     const t0 = Date.now();
     await writer.release();
     const handle = await waiter;
     const waited = Date.now() - t0;
     await handle.release();
-    assert.ok(waited < 25, `release must wake the waiter promptly (waited ${waited}ms)`);
+    assert.ok(waited < 750, `release must wake the waiter promptly (waited ${waited}ms)`);
   } finally {
     await fx.cleanup();
   }

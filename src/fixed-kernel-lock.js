@@ -70,7 +70,7 @@ function notifyStateChange(state) {
 
 // Wait for the next state change on this lock path, with a poll fallback so
 // cross-process transitions (which cannot wake us) are still observed.
-function waitForStateChange(state) {
+function waitForStateChange(state, pollMs) {
   return new Promise((resolve) => {
     const entry = {
       wake: () => {
@@ -82,7 +82,7 @@ function waitForStateChange(state) {
       const idx = state.waiters.indexOf(entry);
       if (idx !== -1) state.waiters.splice(idx, 1);
       resolve();
-    }, 25);
+    }, pollMs);
     state.waiters.push(entry);
   });
 }
@@ -178,9 +178,18 @@ async function pinLockFileFd(fd, lockPath) {
  * @param {AbortSignal} [opts.signal] acquisition abort
  * @param {(fd: import('node:fs/promises').FileHandle) => Promise<void>} [opts.closeFd]
  * @param {(fd: import('node:fs/promises').FileHandle) => Promise<string>} [opts.readMarker]
+ * @param {number} [opts.pollMs] cross-process polling fallback interval
  * @returns {Promise<{release: () => Promise<void>}>}
  */
-export async function acquireFixedKernelLock({ parentHandle, basename, mode, signal, closeFd, readMarker }) {
+export async function acquireFixedKernelLock({
+  parentHandle,
+  basename,
+  mode,
+  signal,
+  closeFd,
+  readMarker,
+  pollMs = 25,
+}) {
   validateMode(mode);
   if (!parentHandle || typeof parentHandle.path !== 'string') {
     throw new TypeError('fixed-kernel-lock: parentHandle is required');
@@ -190,6 +199,9 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
   }
   if (readMarker !== undefined && typeof readMarker !== 'function') {
     throw new TypeError('fixed-kernel-lock: readMarker must be a function');
+  }
+  if (!Number.isFinite(pollMs) || pollMs < 1) {
+    throw new TypeError('fixed-kernel-lock: pollMs must be a positive finite number');
   }
   const closeDescriptor = closeFd || ((descriptor) => descriptor.close());
   const readMarkerFn = readMarker || readMarkerViaFd;
@@ -250,7 +262,7 @@ export async function acquireFixedKernelLock({ parentHandle, basename, mode, sig
           break;
         }
       }
-      await waitForStateChange(state);
+      await waitForStateChange(state, pollMs);
     }
   } catch (err) {
     if (fd) await fd.close().catch(() => {});
