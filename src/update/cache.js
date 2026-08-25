@@ -266,6 +266,15 @@ export function buildUpdateNotice(manifest, currentVersion, runningNodeMajor) {
 export const shouldPerformPassiveCheck = isPassiveCheckDue;
 export const shouldNotifyUpdate = shouldNotify;
 
+// Host-identity probes run a FIXED absolute binary with a MINIMAL fixed
+// environment — never the parent process.env (which can already carry
+// project/global credentials loaded from env files) and never a PATH
+// lookup (a substituted executable would inherit everything passed in).
+// A missing binary surfaces as ENOENT -> null -> the caller's explicit
+// ephemeral downgrade.
+const PS_IDENTITY_BINARY = '/bin/ps';
+const IDENTITY_PROBE_ENV = Object.freeze({ TZ: 'UTC', LC_ALL: 'C' });
+
 export function processStartIdentity(pid, {
   readProc = readFileSync,
   execPs = execFileSync,
@@ -280,11 +289,11 @@ export function processStartIdentity(pid, {
   try {
     // macOS has no procfs. `lstart` is stable for the process lifetime and is
     // used only as an opaque PID-reuse identity, never as a wall clock.
-    const started = execPs('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const started = execPs(PS_IDENTITY_BINARY, ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1_000,
-      env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+      env: { ...IDENTITY_PROBE_ENV },
     }).replace(/\s+/g, ' ').trim();
     return started ? `ps:${started}` : null;
   } catch { return null; }

@@ -44,6 +44,7 @@ import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEME
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
+import { processStartIdentity } from '../update/cache.js';
 import {
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
@@ -5466,7 +5467,53 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
 // warning — the legacy .triss/sessions.json map stays authoritative for
 // continuation until persistent sessions become eligibility-enforced.
 
-async function reserveV2SessionRow({ engine, slug, isolated }) {
+export function currentBootIdentity({
+  platform = process.platform,
+  readFile = readFileSync,
+  spawnSync = nodeSpawnSync,
+} = {}) {
+  if (platform === 'linux') {
+    try {
+      const value = readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
+      return /^[0-9a-f-]{36}$/.test(value) ? `linux:${value}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (platform === 'darwin') {
+    try {
+      // Fixed absolute binary + minimal fixed environment: a boot-identity
+      // probe must never forward the parent process.env (which can carry
+      // credentials loaded from project env files) to a PATH-resolved
+      // subprocess. A missing binary degrades to null -> explicit ephemeral
+      // downgrade by the caller.
+      const result = spawnSync('/usr/sbin/sysctl', ['-n', 'kern.boottime'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1_000,
+        env: { TZ: 'UTC', LC_ALL: 'C' },
+      });
+      if (result.status !== 0) return null;
+      const match = /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout || '');
+      return match ? `darwin:${match[1]}:${match[2]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function currentSessionOwnerTuple(overrides = {}) {
+  const pid = overrides.pid ?? process.pid;
+  const processStartId = overrides.processStartId ?? processStartIdentity(pid);
+  const bootId = overrides.bootId ?? currentBootIdentity();
+  if (!Number.isInteger(pid) || pid <= 0 || !processStartId || !bootId) {
+    throw new Error('coder-session: current process owner identity is unavailable');
+  }
+  return { pid, processStartId, bootId };
+}
+
+export async function reserveV2SessionRow({ engine, slug, isolated }) {
   // Only REAL slugs are wired in v1 of this integration: the anonymous slug
   // is allocated later in the flow, and reserving an unnamed row adds
   // pre-spawn awaits (dynamic import + mkdir) that shift abort-test timing
@@ -5475,6 +5522,11 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     return null;
   }
   try {
+    // ONE owner tuple for the whole admission cycle: the reserve and running
+    // transitions must claim IDENTICAL (pid, processStartId, bootId) evidence
+    // or canonical validation rejects the row. Unavailable host identity
+    // throws here and degrades through the catch below.
+    const owner = currentSessionOwnerTuple();
     const { reserveCoderSession, markCoderSessionRunning, sessionInventoryPath } =
       await import('../coder-session-transitions.js');
     const { loadOrCreateProjectIdentity, projectRootFingerprint } =
@@ -5486,17 +5538,16 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
     const identity = await loadOrCreateProjectIdentity(trissRoot);
     const fingerprint = projectRootFingerprint(identity.project_id);
     const runId = `run_${randomBytes(16).toString('hex')}`;
-    await reserveCoderSession({
+    const reserved = await reserveCoderSession({
       inventoryDir,
       engine,
       slug,
       isolationMode: isolated ? 'isolated' : 'non_isolated',
       lockSlot: 0,
       runId,
-      pid: process.pid,
-      // Explicit nulls: undefined owner-tuple fields fail canonical validation.
-      processStartId: null,
-      bootId: null,
+      pid: owner.pid,
+      processStartId: owner.processStartId,
+      bootId: owner.bootId,
       projectRootFingerprint: fingerprint,
     });
     await markCoderSessionRunning({
@@ -5504,11 +5555,25 @@ async function reserveV2SessionRow({ engine, slug, isolated }) {
       engine,
       slug,
       runId,
-      pid: process.pid,
-      processStartId: null,
-      bootId: null,
+      pid: owner.pid,
+      processStartId: owner.processStartId,
+      bootId: owner.bootId,
     });
-    return { inventoryDir, engine, slug };
+    // Return the EXACT complete owner/run tuple created during reservation:
+    // sandboxId is the canonical reserved row's value (never a second random
+    // one), because abandon's beginCoderSessionDelete transition re-validates
+    // all five fields against the persisted row — an incomplete tuple fails
+    // canonical validation and strands a running row with a rollback warning.
+    return {
+      inventoryDir,
+      engine,
+      slug,
+      runId,
+      sandboxId: reserved.sandbox_id,
+      pid: owner.pid,
+      processStartId: owner.processStartId,
+      bootId: owner.bootId,
+    };
   } catch (err) {
     process.stderr.write(pc.dim(`  ⚠ v2 session store unavailable: ${err.message}\n`));
     return null;
@@ -5530,6 +5595,9 @@ async function abandonV2SessionRow(sessionV2) {
   try {
     const { beginCoderSessionDelete, removeCoderSessionRow } =
       await import('../coder-session-transitions.js');
+    // sessionV2 must carry the complete reservation owner/run tuple (runId,
+    // sandboxId, pid, processStartId, bootId): the deleting transition's
+    // canonical validation requires all five non-null.
     await beginCoderSessionDelete(sessionV2);
     await removeCoderSessionRow(sessionV2);
   } catch (err) {

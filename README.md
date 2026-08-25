@@ -743,16 +743,17 @@ triss coder state backup --project <path>         # Section 15 rollback backup
 triss coder state validate --project <path> --backup <dir>
 ```
 
-Every `triss coder run` envelope on the `opencode` and `crush` engines
-(and the matching MCP tool) carries the session acceptance contract fields:
-`session_slug` (explicit slug or a generated per-run slug — never an
+Every `triss coder run` envelope — on all three supported engines
+(`opencode`, the `opencode2` beta, and `crush`; and the matching MCP tool)
+— carries the shared envelope v2 contract: the session acceptance contract
+fields `session_slug` (explicit slug or a generated per-run slug — never an
 implicit persistent conversation), `result_retention`
 / `result_id` (`retained` only for isolated changed runs with enforced
 result-store quota and a successful reservation), and `execution_capabilities`
 (eight honest `enforced|best_effort|unavailable` values plus
-`effective_isolation`). OpenCode 2 emits the same envelope v2 fields,
-including `envelope_version`, lifecycle fields, activity, and
-OpenCode best-effort raw runs explicitly report
+`effective_isolation`), plus `envelope_version`, lifecycle fields, activity,
+and the common result fields. Engine-specific evidence may differ inside
+that shared contract: OpenCode best-effort raw runs explicitly report
 `credential_isolation: "unavailable"` plus the stable downgrade warning;
 Crush remains proxy-backed and reports the proxy's `best_effort` capability.
 Non-isolated `files_changed` is `null`; the only
@@ -778,6 +779,15 @@ repository or worktree creation failure — slug/branch conflicts like
 `best_effort_caller_worktree` (advisory-only, `files_changed` is `null`,
 edits may reach the caller worktree). Full details are in the
 [`docs/reliable-delegation-contract.md`](docs/reliable-delegation-contract.md).
+
+**External orchestrators**: a parseable JSON envelope is an outcome
+report, not proof of success — never treat envelope presence or bare
+`exit_reason: end_turn` as success by itself. Classify timeouts, blank
+`final_text`, terminal-stop evidence, typed provider errors,
+cancellations, and unsafe cleanup, and run bounded recovery before
+declaring failure — see
+[Consuming coder envelopes safely](docs/reliable-delegation-contract.md#consuming-coder-envelopes-safely)
+in the reliable-delegation contract.
 
 `triss coder init` first asks which provider to configure — **Z.AI GLM**
 (default), the existing **Triss worker** (`--provider worker`, aliases
