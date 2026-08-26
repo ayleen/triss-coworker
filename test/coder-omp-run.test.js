@@ -320,29 +320,39 @@ test('buildOmpSpawnEnv: proxy mode sets marker', () => {
 test('buildOmpPolicyOverlay: best_effort allows git/ls/npm test', () => {
   const overlay = buildOmpPolicyOverlay({ protectCredentials: false });
   assert.equal(overlay.tools.approvalMode, 'write');
-  const bashPatterns = overlay.tools.bash.patterns;
-  assert.ok(bashPatterns.some(p => p.pattern.includes('git status') && p.action === 'allow'));
-  assert.ok(bashPatterns.some(p => p.pattern.includes('ls') && p.action === 'allow'));
-  assert.ok(bashPatterns.some(p => p.pattern === '*' && p.action === 'deny'));
+  // OMP real schema: bash.patterns at TOP LEVEL (not tools.bash.patterns),
+  // and uses { match, approval } with 'allow'|'prompt'|'deny' values.
+  const bashPatterns = overlay.bash.patterns;
+  assert.ok(bashPatterns.some(p => p.match.includes('git status') && p.approval === 'allow'));
+  assert.ok(bashPatterns.some(p => p.match.includes('ls') && p.approval === 'allow'));
+  assert.ok(bashPatterns.some(p => p.match === '*' && p.approval === 'deny'));
 });
 
 test('buildOmpPolicyOverlay: protected denies all bash', () => {
   const overlay = buildOmpPolicyOverlay({ protectCredentials: true });
-  const bashPatterns = overlay.tools.bash.patterns;
+  const bashPatterns = overlay.bash.patterns;
   assert.equal(bashPatterns.length, 1);
-  assert.equal(bashPatterns[0].pattern, '*');
-  assert.equal(bashPatterns[0].action, 'deny');
+  assert.equal(bashPatterns[0].match, '*');
+  assert.equal(bashPatterns[0].approval, 'deny');
+  // tools.approval.bash must also be pinned to deny so the bash tool itself
+  // stays inert regardless of any project-level config (deep-merge safety).
+  assert.equal(overlay.tools.approval.bash, 'deny');
 });
 
 test('renderOmpPolicyYaml: produces valid YAML-like output', () => {
   const overlay = buildOmpPolicyOverlay({ protectCredentials: false });
   const yaml = renderOmpPolicyYaml(overlay);
   assert.ok(yaml.includes('memory:'));
-  assert.ok(yaml.includes('backend: off'));
+  assert.ok(/backend:\s*off/.test(yaml));
   assert.ok(yaml.includes('tools:'));
   assert.ok(yaml.includes('approvalMode: write'));
+  // Top-level bash: not tools.bash:
   assert.ok(yaml.includes('bash:'));
-  assert.ok(yaml.includes('patterns:'));
+  assert.ok(yaml.includes('  patterns:'));
+  // match/approval not pattern/action
+  assert.ok(yaml.includes('- match: "git status*"'));
+  assert.ok(yaml.includes('approval: allow'));
+  assert.ok(yaml.includes('approval: deny'));
 });
 
 test('buildOmpModelsConfig: creates transient provider with correct structure', () => {
@@ -357,10 +367,14 @@ test('buildOmpModelsConfig: creates transient provider with correct structure', 
   });
   assert.ok(config.providers['triss-coder-transient']);
   const provider = config.providers['triss-coder-transient'];
-  assert.equal(provider.baseURL, 'https://api.opencode.ai/v1');
-  assert.equal(provider.apiKeyEnv, 'OPENCODE_API_KEY');
-  assert.ok(provider.models['deepseek-v4-flash']);
-  assert.equal(provider.models['deepseek-v4-flash'].protocol, 'openai-completions');
+  // OMP real schema: baseUrl/apiKey/api at provider level; models is an array.
+  assert.equal(provider.baseUrl, 'https://api.opencode.ai/v1');
+  assert.equal(provider.apiKey, 'OPENCODE_API_KEY');
+  assert.equal(provider.api, 'openai-completions');
+  assert.ok(Array.isArray(provider.models));
+  assert.equal(provider.models.length, 1);
+  assert.equal(provider.models[0].id, 'deepseek-v4-flash');
+  assert.equal(provider.models[0].api, 'openai-completions');
 });
 
 test('buildOmpModelsConfig: uses proxy baseUrl when proxy is provided', () => {
@@ -374,7 +388,7 @@ test('buildOmpModelsConfig: uses proxy baseUrl when proxy is provided', () => {
     proxy: { token: 'tok', baseUrl: 'http://127.0.0.1:9999/v1' },
     credentialEnv: 'OPENCODE_API_KEY',
   });
-  assert.equal(config.providers['triss-coder-transient'].baseURL, 'http://127.0.0.1:9999/v1');
+  assert.equal(config.providers['triss-coder-transient'].baseUrl, 'http://127.0.0.1:9999/v1');
 });
 
 // ─── full runCoderRun OMP envelope (fake spawn) ───────────────────────────

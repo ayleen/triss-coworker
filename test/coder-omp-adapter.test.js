@@ -145,20 +145,27 @@ test('buildOmpSpawnEnv: unknown extraEnv keys dropped', () => {
 // --- policy overlay ---
 test('buildOmpPolicyOverlay: protected deny-all', () => {
   const p = buildOmpPolicyOverlay({ protectCredentials: true });
-  assert.equal(p.tools.bash.patterns.length, 1);
-  assert.equal(p.tools.bash.patterns[0].pattern, '*');
-  assert.equal(p.tools.bash.patterns[0].action, 'deny');
+  // OMP real schema: top-level bash.patterns (not tools.bash.patterns)
+  // and { match, approval } with allow/prompt/deny values.
+  assert.equal(p.bash.patterns.length, 1);
+  assert.equal(p.bash.patterns[0].match, '*');
+  assert.equal(p.bash.patterns[0].approval, 'deny');
+  // tools.approval.bash must also be pinned to deny so the bash tool itself
+  // stays inert even if a project .omp/config.yml adds bash patterns.
+  assert.equal(p.tools.approval.bash, 'deny');
   assert.equal(p.memory.backend, 'off');
   assert.equal(p.async.enabled, false);
 });
 
 test('buildOmpPolicyOverlay: best-effort allowlist + final deny', () => {
   const p = buildOmpPolicyOverlay({ protectCredentials: false });
-  const pats = p.tools.bash.patterns;
+  const pats = p.bash.patterns;
   assert.ok(pats.length >= 8);
-  assert.equal(pats[pats.length-1].pattern, '*');
-  assert.equal(pats[pats.length-1].action, 'deny');
-  assert.ok(pats.some(x=>x.pattern==='git status*'));
+  // The catch-all deny MUST be the last rule (first match wins).
+  assert.equal(pats[pats.length-1].match, '*');
+  assert.equal(pats[pats.length-1].approval, 'deny');
+  assert.ok(pats.some(x => x.match === 'git status*'));
+  assert.ok(pats.every(x => x.approval === 'allow' || x.approval === 'deny' || x.approval === 'prompt'));
 });
 
 test('renderOmpPolicyYaml does not leak secrets', () => {
@@ -172,13 +179,16 @@ test('buildOmpModelsConfig: protocol mapping', () => {
   const route = { modelId: 'deepseek-v4-flash', protocol: 'openai_chat', endpoint: 'https://api.deepseek.com', pathPrefix: '/v1' };
   const cfg = buildOmpModelsConfig({ providerRoute: route, credentialEnv: 'TRISS_WORKER_API_KEY' });
   assert.ok(cfg.providers['triss-coder-transient']);
-  assert.equal(cfg.providers['triss-coder-transient'].apiKeyEnv, 'TRISS_WORKER_API_KEY');
+  // OMP schema: provider.apiKey is the env-var name (NOT apiKeyEnv).
+  assert.equal(cfg.providers['triss-coder-transient'].apiKey, 'TRISS_WORKER_API_KEY');
+  assert.equal(cfg.providers['triss-coder-transient'].api, 'openai-completions');
 });
 
 test('buildOmpModelsConfig: proxy baseUrl', () => {
   const route = { modelId: 'm', protocol: 'openai_chat', endpoint: 'https://api.example.com', pathPrefix: '/v1' };
   const cfg = buildOmpModelsConfig({ providerRoute: route, proxy: { baseUrl: 'http://127.0.0.1:1234' }, credentialEnv: 'ZHIPU_API_KEY' });
-  assert.equal(cfg.providers['triss-coder-transient'].baseURL, 'http://127.0.0.1:1234');
+  // OMP schema: baseUrl (not baseURL).
+  assert.equal(cfg.providers['triss-coder-transient'].baseUrl, 'http://127.0.0.1:1234');
 });
 
 test('buildOmpModelsConfig: throws without route', () => {

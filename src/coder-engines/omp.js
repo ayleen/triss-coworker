@@ -399,18 +399,27 @@ export function ensureOmpRuntimeDirs(projectRoot, runId = null) {
 
 // ─── policy overlay ─────────────────────────────────────────────────────────
 
+// OMP policy overlay (docs/settings.md).
+//
+// bash.patterns lives at the TOP level (not tools.bash.patterns) and uses
+// { match, approval } with values 'allow' | 'prompt' | 'deny'. OMP deep-merges
+// settings but REPLACES arrays wholesale, so the overlay MUST include a
+// catch-all rule to lock down the unlisted commands. For protected mode, the
+// same catch-all deny runs first; the policy layer is also re-pinned via
+// tools.approval.bash: deny so the bash tool itself stays inert.
 export function buildOmpPolicyOverlay({ protectCredentials = false } = {}) {
-  const bashAllow = protectCredentials
-    ? [{ pattern: '*', action: 'deny' }]
+  const bashPatterns = protectCredentials
+    ? [{ match: '*', approval: 'deny' }]
     : [
-        { pattern: 'git status*', action: 'allow' },
-        { pattern: 'git diff*', action: 'allow' },
-        { pattern: 'git log*', action: 'allow' },
-        { pattern: 'ls*', action: 'allow' },
-        { pattern: 'node --test*', action: 'allow' },
-        { pattern: 'npm test*', action: 'allow' },
-        { pattern: 'npm run test*', action: 'allow' },
-        { pattern: '*', action: 'deny' },
+        { match: 'git status*', approval: 'allow' },
+        { match: 'git diff*', approval: 'allow' },
+        { match: 'git log*', approval: 'allow' },
+        { match: 'ls *', approval: 'allow' },
+        { match: 'node --test*', approval: 'allow' },
+        { match: 'npm test*', approval: 'allow' },
+        { match: 'npm run test*', approval: 'allow' },
+        // Catch-all MUST be last — OMP picks the first matching rule.
+        { match: '*', approval: 'deny' },
       ];
 
   return {
@@ -418,30 +427,60 @@ export function buildOmpPolicyOverlay({ protectCredentials = false } = {}) {
     async: { enabled: false },
     tools: {
       approvalMode: 'write',
-      approval: { eval: 'deny', task: 'deny', hub: 'deny', web_search: 'deny' },
-      bash: { patterns: bashAllow },
+      approval: {
+        bash: protectCredentials ? 'deny' : 'allow',
+        eval: 'deny',
+        task: 'deny',
+        hub: 'deny',
+        web_search: 'deny',
+      },
     },
+    bash: { patterns: bashPatterns },
   };
 }
 
 export function renderOmpPolicyYaml(overlay) {
-  // Minimal YAML renderer for the overlay — avoids a yaml dependency.
+  if (!overlay || !overlay.bash || !Array.isArray(overlay.bash.patterns)) {
+    throw new TypeError('renderOmpPolicyYaml: overlay.bash.patterns is required');
+  }
   const lines = [];
-  lines.push('memory:');
-  lines.push(`  backend: ${overlay.memory.backend}`);
-  lines.push('async:');
-  lines.push(`  enabled: ${overlay.async.enabled}`);
+  // Top-level keys (order is irrelevant; the YAML parser accepts any order)
+  if (overlay.memory) {
+    lines.push('memory:');
+    for (const [k, v] of Object.entries(overlay.memory)) lines.push(`  ${k}: ${formatScalar(v)}`);
+  }
+  if (overlay.async) {
+    lines.push('async:');
+    for (const [k, v] of Object.entries(overlay.async)) lines.push(`  ${k}: ${formatScalar(v)}`);
+  }
   lines.push('tools:');
-  lines.push(`  approvalMode: ${overlay.tools.approvalMode}`);
-  lines.push('  approval:');
-  for (const [k, v] of Object.entries(overlay.tools.approval)) lines.push(`    ${k}: ${v}`);
-  lines.push('  bash:');
-  lines.push('    patterns:');
-  for (const { pattern, action } of overlay.tools.bash.patterns) {
-    lines.push(`      - pattern: "${pattern.replace(/"/g, '\\"')}"`);
-    lines.push(`        action: ${action}`);
+  if (overlay.tools.approvalMode) lines.push(`  approvalMode: ${formatScalar(overlay.tools.approvalMode)}`);
+  if (overlay.tools.approval) {
+    lines.push('  approval:');
+    for (const [k, v] of Object.entries(overlay.tools.approval)) lines.push(`    ${k}: ${formatScalar(v)}`);
+  }
+  lines.push('bash:');
+  lines.push('  patterns:');
+  for (const rule of overlay.bash.patterns) {
+    lines.push(`    - match: ${JSON.stringify(rule.match)}`);
+    lines.push(`      approval: ${formatScalar(rule.approval)}`);
   }
   return lines.join('\n') + '\n';
+}
+
+// Emit a YAML scalar. Strings that contain only safe characters (alphanumerics,
+// hyphens, underscores, dots, slashes, asterisks, and spaces) are emitted
+// unquoted; anything more exotic gets JSON-quoted. This matches the OMP docs
+// style (unquoted enums like "deny", "allow", "write") while staying safe for
+// URLs and apiKey names.
+function formatScalar(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  if (typeof v === 'string') {
+    if (/^[A-Za-z0-9_./\- ]*$/.test(v)) return v;
+    return JSON.stringify(v);
+  }
+  return JSON.stringify(v);
 }
 
 // ─── models config ──────────────────────────────────────────────────────────
@@ -452,27 +491,74 @@ const TRISS_TO_OMP_PROTOCOL = Object.freeze({
   anthropic_messages: 'anthropic-messages',
 });
 
+// OMP model registry accepts ONLY these api values (docs/models.md). An unknown
+// value would let the engine silently fall through to a default transport, so
+// reject it BEFORE spawn.
+export const OMP_SUPPORTED_PROTOCOLS = Object.freeze(['openai-completions', 'openai-responses', 'anthropic-messages']);
+
+function toOmpProtocol(protocol) {
+  if (!protocol) return 'openai-completions';
+  const mapped = TRISS_TO_OMP_PROTOCOL[protocol];
+  if (mapped) return mapped;
+  if (OMP_SUPPORTED_PROTOCOLS.includes(protocol)) return protocol;
+  return null;
+}
+
 export function buildOmpModelsConfig({ providerRoute, proxy = null, credentialEnv }) {
   if (!providerRoute || !providerRoute.modelId) throw new TypeError('buildOmpModelsConfig: providerRoute with modelId is required');
-  const ompProtocol = TRISS_TO_OMP_PROTOCOL[providerRoute.protocol];
-  if (!ompProtocol && providerRoute.protocol) throw new Error(`Unsupported OMP protocol ${providerRoute.protocol}`);
+  const ompProtocol = toOmpProtocol(providerRoute.protocol);
+  if (!ompProtocol) {
+    throw new Error(`Unsupported OMP protocol ${providerRoute.protocol} — supported: ${OMP_SUPPORTED_PROTOCOLS.join(', ')}`);
+  }
   const baseURL = proxy?.baseUrl || providerRoute.endpoint + (providerRoute.pathPrefix || '');
-  const entry = {
-    provider: 'triss-coder-transient',
-    model: providerRoute.modelId,
-    protocol: ompProtocol || 'openai-completions',
-    baseURL,
-    apiKeyEnv: credentialEnv,
-  };
+  // OMP real schema (docs/models.md): provider has baseUrl, apiKey, api at the
+  // top level; models is an ARRAY of { id, name, api, contextWindow, maxTokens }.
+  // Anything else (baseURL/apiKeyEnv/models-as-object) is silently ignored.
   return {
     providers: {
       'triss-coder-transient': {
-        baseURL,
-        apiKeyEnv: credentialEnv,
-        models: { [providerRoute.modelId]: { protocol: entry.protocol } },
+        baseUrl: baseURL,
+        apiKey: credentialEnv,
+        api: ompProtocol,
+        models: [
+          {
+            id: providerRoute.modelId,
+            name: `triss-coder-transient/${providerRoute.modelId}`,
+            api: ompProtocol,
+            contextWindow: providerRoute.contextWindow || 128000,
+            maxTokens: providerRoute.maxTokens || 16384,
+          },
+        ],
       },
     },
   };
+}
+
+// Render the OMP models config as a YAML string. The runtime file is
+// <PI_CODING_AGENT_DIR>/models.yml, the canonical OMP provider registry
+// (docs/models.md). YAML emission is a minimal mapping serializer — OMP reads
+// the file with the standard YAML parser, and the structure is small enough
+// that a hand-rolled renderer avoids adding js-yaml as a direct dep.
+export function renderOmpModelsYaml(config) {
+  if (!config || !config.providers) throw new TypeError('renderOmpModelsYaml: config.providers is required');
+  const lines = ['providers:'];
+  for (const [providerId, provider] of Object.entries(config.providers)) {
+    lines.push(`  ${formatScalar(providerId)}:`);
+    if (provider.baseUrl != null) lines.push(`    baseUrl: ${formatScalar(provider.baseUrl)}`);
+    if (provider.apiKey != null) lines.push(`    apiKey: ${formatScalar(provider.apiKey)}`);
+    if (provider.api != null) lines.push(`    api: ${formatScalar(provider.api)}`);
+    if (Array.isArray(provider.models) && provider.models.length > 0) {
+      lines.push('    models:');
+      for (const m of provider.models) {
+        lines.push(`      - id: ${formatScalar(m.id)}`);
+        if (m.name) lines.push(`        name: ${formatScalar(m.name)}`);
+        if (m.api) lines.push(`        api: ${formatScalar(m.api)}`);
+        if (m.contextWindow) lines.push(`        contextWindow: ${m.contextWindow}`);
+        if (m.maxTokens) lines.push(`        maxTokens: ${m.maxTokens}`);
+      }
+    }
+  }
+  return lines.join('\n') + '\n';
 }
 
 // ─── NDJSON fold ────────────────────────────────────────────────────────────
@@ -619,12 +705,14 @@ export const omp = {
   assertVersionPolicy: assertOmpVersionPolicy,
   buildProbeEnv: buildOmpProbeEnv,
   OMP_INVALID_MINIMUM_CODE,
+  OMP_SUPPORTED_PROTOCOLS,
   buildRunArgv: buildOmpRunArgv,
   buildSpawnEnv: buildOmpSpawnEnv,
   ensureRuntimeDirs: ensureOmpRuntimeDirs,
   buildPolicyOverlay: buildOmpPolicyOverlay,
   renderPolicyYaml: renderOmpPolicyYaml,
   buildModelsConfig: buildOmpModelsConfig,
+  renderModelsYaml: renderOmpModelsYaml,
   createEventFolder: createOmpEventFolder,
   foldEventLine: foldOmpEventLine,
   finalizeEnvelopeState: finalizeOmpEnvelopeState,

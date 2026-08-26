@@ -4202,7 +4202,10 @@ const SESSION_STORE_VERSION = 2;
 const emptyNamespace = () => Object.create(null);
 
 function normalizeSessionStore(raw) {
-  const store = { version: SESSION_STORE_VERSION, engines: { opencode: emptyNamespace(), opencode2: emptyNamespace() } };
+  // Each supported engine gets an own namespace so the version-2 session store
+// stays engine-agnostic. SESSION_STORE_ENGINES is the source of truth — adding
+// an engine there (e.g. omp, crush) automatically provisions a namespace here.
+const store = { version: SESSION_STORE_VERSION, engines: Object.fromEntries(SESSION_STORE_ENGINES.map((e) => [e, emptyNamespace()])) };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return store;
   if ('version' in raw && typeof raw.version === 'number') {
     if (raw.version === 2) {
@@ -7180,7 +7183,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // Run-private agent directory: <project>/.triss/omp/runs/<runId>/agent
       // Created here, removed after the run in reverse teardown order.
       const ompRunId = `run_${randomBytes(16).toString('hex')}`;
-      const { sessions: ompSessionsDir, agentDir } = ompEngine.ensureRuntimeDirs(root, ompRunId);
+      // Declare agentDir and ompSessionsDir BEFORE the call so the outer
+      // catch can safely rmSync(agentDir) (force:true makes a missing
+      // path a no-op) regardless of whether ensureRuntimeDirs threw. On
+      // success the destructure rebinds both to the real paths; on
+      // failure they stay null and any subsequent reference throws the
+      // original error (the catch will then run the rmSync safe no-op).
+      let agentDir = null;
+      let ompSessionsDir = null;
+      ({ sessions: ompSessionsDir, agentDir } = ompEngine.ensureRuntimeDirs(root, ompRunId));
 
       // Write policy overlay YAML to agent dir (tool policies, memory off,
       // bash allowlist). Protected mode denies all bash.
@@ -7190,8 +7201,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       const policyYaml = ompEngine.renderPolicyYaml(policyOverlay);
       writeFileSync(join(agentDir, 'policy.yaml'), policyYaml, { mode: 0o600 });
 
-      // Write models config JSON to agent dir. The transient provider
-      // maps to the real upstream endpoint (or the credential proxy).
+      // Write the OMP models registry (docs/models.md). OMP reads
+      // <PI_CODING_AGENT_DIR>/models.yml at startup; a custom provider
+      // registered here becomes selectable as `triss-coder-transient/<modelId>`.
+      // The rendered YAML is the real OMP schema: baseUrl/apiKey/api at the
+      // provider level and models as an array of {id, name, api, ...}.
+      // Write is 0600 because the apiKey field is just the env-var name (the
+      // real key is forwarded via the spawned child env, not embedded).
       const modelsConfig = ompEngine.buildModelsConfig({
         providerRoute: runtimeRoute,
         proxy: credentialProxy
@@ -7199,7 +7215,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           : null,
         credentialEnv: cred.env,
       });
-      writeFileSync(join(agentDir, 'models.json'), JSON.stringify(modelsConfig), { mode: 0o600 });
+      writeFileSync(join(agentDir, 'models.yml'), ompEngine.renderModelsYaml(modelsConfig), { mode: 0o600 });
 
       // OMP model selector: triss-coder-transient/<modelId> from the
       // resolved provider route. Falls back to raw model name when the
@@ -7283,14 +7299,14 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         }
       } catch (err) {
         if (isUnverifiedProcessGroupCleanup(err)) throw err;
-        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-        try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
         throw err;
-      } finally {
-        await releaseCredentialProxy();
       }
 
       // Finalize OMP envelope state from the folded event stream.
+      // Proxy release + isolation cleanup + agent dir removal + session row
+      // release are all unified in the OUTER try/catch/finally of the OMP
+      // block so every error path (pre-spawn, spawn, parse, publish,
+      // finalize) is covered by the same guarantee.
       const ompFinalized = ompEngine.finalizeEnvelopeState(ompResult, {
         exitCode: ompResult.code ?? 0,
         timedOut: ompResult.timedOut,
@@ -7387,6 +7403,31 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         changed: (ompFilesChanged || []).length > 0,
       });
 
+      // Publish durable slug -> native-id mapping BEFORE the V2 finalizer runs.
+      // The shared completeV2SessionRow contract requires a published mapping to
+      // exist; otherwise it treats the session as unusable and removes the row
+      // (docs/reliable-delegation-contract.md "named session"). For the FIRST
+      // successful `--session foo` run, the previous order (finalize -> map)
+      // created an orphan mapping without a persistent V2 session.
+      if (opts.session && ompFinalized.sessionId && sessionV2) {
+        // persistSessionMapping is fail-closed: a corrupt store or a
+        // foreign-tuple collision throws synchronously. The outer catch
+        // handles session-row release for this unpublished state — we do
+        // NOT swallow the error here.
+        persistSessionMapping(sh, 'omp', opts.session, ompFinalized.sessionId);
+        // Attribution anchor for the finalizer: only THIS exact id may be
+        // recognized as this run's publication during rollback.
+        sessionV2.publishedRealId = ompFinalized.sessionId;
+      } else if (opts.session && ompFinalized.sessionId && !sessionV2) {
+        ompWarnings.push(
+          'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable — this native session is ephemeral and was NOT published for continuation',
+        );
+      }
+
+      // Now finalize the V2 row. The shared finalizer reads publishedRealId set
+      // above; for a successful first-run publish the row transitions to idle
+      // and survives the engine exit. For a missing mapping (sanctioned
+      // ephemeral downgrade) the row is removed cleanly.
       const ompCompletionOutcome = await completeV2SessionRow(sessionV2, ompFinalized.sessionId);
       if (ompCompletionOutcome === 'retained_for_recovery') {
         throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
@@ -7394,17 +7435,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (ompCompletionOutcome === 'removed_unusable' && sessionV2) {
         ompWarnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
       }
-
-      // Publish durable slug -> native-id mapping for named sessions.
-      if (opts.session && ompFinalized.sessionId && sessionV2) {
-        persistSessionMapping(sh, 'omp', opts.session, ompFinalized.sessionId);
-        sessionV2.publishedRealId = ompFinalized.sessionId;
-      } else if (opts.session && ompFinalized.sessionId && !sessionV2) {
-        ompWarnings.push(
-          'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable \u2014 this native session is ephemeral and was NOT published for continuation',
-        );
-      }
-
       const ompV2Lifecycle = deriveV2LifecycleFields({
         timedOut: ompResult.timedOut,
         terminationCause: ompResult.terminationCause,
@@ -7466,8 +7496,27 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       writeStdout(JSON.stringify(envelope) + '\n');
       return { completionOutcome: ompCompletionOutcome };
     } catch (err) {
+      // Phase 7 acceptance: every error path (pre-spawn detect, write config,
+      // ensureRuntimeDirs, spawn, parse, publish mapping, finalize) must
+      // leave the V2 session row, the credential proxy, the run-private
+      // agent dir, and the freshly-created isolation worktree in a
+      // consistent state. retainV2SessionAfterUnverifiedCleanup mirrors the
+      // opencode/opencode2/crush contract: an unambiguous unpublished state
+      // is released; anything published or partially persisted is retained
+      // for explicit recovery.
+      if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
+      if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
+      // Run-private agent dir is best-effort removed on any failure path so
+      // we do not leak .triss/omp/runs/<run-id>/agent/ on the next failure.
+      // eslint-disable-next-line no-undef -- agentDir is declared in the outer try block above
+      try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
+    } finally {
+      // Credential proxy is parent-owned and must not survive success, spawn
+      // failure, preflight rejection, post-run compatibility failure, or
+      // envelope-assembly error. releaseCredentialProxy is idempotent.
+      await releaseCredentialProxy();
     }
   }
 
