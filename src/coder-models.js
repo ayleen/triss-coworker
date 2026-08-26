@@ -74,6 +74,7 @@ export function configBackendForEngine(engine) {
   if (engine === undefined || engine === null || engine === '') return 'opencode-v1';
   if (engine === 'opencode' || engine === 'opencode2') return 'opencode-v1';
   if (engine === 'crush') return 'crush';
+  if (engine === 'omp') return 'triss-env';
   return null;
 }
 
@@ -86,6 +87,7 @@ export function configBackendForEngine(engine) {
 export function lockPathForBackend(backend, scope) {
   if (backend === 'opencode-v1') return lockPathFor('opencode', scope);
   if (backend === 'crush') return lockPathFor('crush', scope);
+  if (backend === 'triss-env') return lockPathFor('omp', scope);
   return null;
 }
 // getEnvFilePath resolves the per-scope Triss env-pin file (global
@@ -342,6 +344,34 @@ function resolveRuntimeMain(shellSnapshot) {
 
   // 4. Built-in default (fallback).
   return { value: DEFAULT_CODER_MODEL, source_path: null, scope: 'default' };
+}
+
+// ─── OMP runtime small resolution (triss-env backend) ────────────────────────
+//
+// Mirrors resolveRuntimeMain for the SMALL pin, which OMP passes through as
+// `--smol`. Precedence: shell TRISS_CODER_SMALL_MODEL -> project .triss.env ->
+// global Triss env -> null (no built-in small default). Returns
+// { value, source_path, scope }.
+function resolveRuntimeSmall(shellSnapshot) {
+  const shellSmall = shellSnapshot?.TRISS_CODER_SMALL_MODEL;
+  if (shellSmall != null) {
+    return { value: shellSmall, source_path: 'shell', scope: 'shell' };
+  }
+  const localEnvPath = getEnvFilePath('local');
+  if (existsSync(localEnvPath)) {
+    const localEnv = readEnvFile(localEnvPath);
+    if (localEnv.vars.TRISS_CODER_SMALL_MODEL) {
+      return { value: localEnv.vars.TRISS_CODER_SMALL_MODEL, source_path: localEnvPath, scope: 'local' };
+    }
+  }
+  const globalEnvPath = getEnvFilePath('global');
+  if (existsSync(globalEnvPath)) {
+    const globalEnv = readEnvFile(globalEnvPath);
+    if (globalEnv.vars.TRISS_CODER_SMALL_MODEL) {
+      return { value: globalEnv.vars.TRISS_CODER_SMALL_MODEL, source_path: globalEnvPath, scope: 'global' };
+    }
+  }
+  return { value: null, source_path: null, scope: 'default' };
 }
 
 // ─── crush config resolution ────────────────────────────────────────────────
@@ -747,6 +777,17 @@ export async function inspectCoderModelState(input = {}, deps = {}) {
     if (crushRoles.main.parse_error) configParseErrors.push(crushRoles.main.parse_error);
     if (crushRoles.small.parse_error) configParseErrors.push(crushRoles.small.parse_error);
     // Crush has no separate config_main field — runtime main IS the config.
+    configMain = null;
+  } else if (engine === 'omp') {
+    // OMP uses the triss-env backend: runtime main/small are the env pins
+    // (shell -> .triss.env local -> global Triss env -> built-in default).
+    // OMP config is run-private (PI_CODING_AGENT_DIR) - there is no
+    // opencode.json/.omp config surface, so config_main is null and the small
+    // role is the effective TRISS_CODER_SMALL_MODEL pin (OMP --smol).
+    const runtime = resolveRuntimeMain(input.shellSnapshot || { TRISS_CODER_MODEL: undefined });
+    runtimeMain = { value: runtime.value, source_path: runtime.source_path, scope: runtime.scope };
+    const small = resolveRuntimeSmall(input.shellSnapshot);
+    configuredSmall = { value: small.value, source_path: small.source_path, scope: small.scope };
     configMain = null;
   } else {
     // OpenCode: resolve runtime main (env precedence) and config roles separately.
@@ -1466,7 +1507,12 @@ export async function planModelChange(input = {}, deps = {}) {
   //    verbatim — so this gate only decides whether to PROCEED. The
   //    diagnostic carries the exact model-set command WITH --allow-unsafe-bash
   //    plus the safer alternative of reviewing/adding a deny-first policy.
-  const denyFirstOk = checkDenyFirstBash(scope, allowUnsafeBash, diagnostics, { main, small, engine, provider });
+  // OMP rides the triss-env backend: there is no opencode.json in scope, so
+  // the deny-first bash gate does not apply (OMP's deny-first policy is the
+  // run-private overlay written at run time). All other plan gates stay.
+  const denyFirstOk = engine === 'omp'
+    ? true
+    : checkDenyFirstBash(scope, allowUnsafeBash, diagnostics, { main, small, engine, provider });
 
   const ok = diagnostics.length === 0 && denyFirstOk;
   return {
@@ -1657,7 +1703,7 @@ export async function applyModelChange(plan = {}, deps = {}) {
       path: opencodeConfigPath(scope),
       error:
         `unknown coder engine ${JSON.stringify(planEngine)} — the model mutation lock key is ` +
-        'derived from the configuration backend, and only opencode, opencode2, and crush have one',
+        'derived from the configuration backend, and only opencode, opencode2, crush, and omp have one',
     };
   }
   const lockEngine = backend;
@@ -1698,12 +1744,151 @@ export async function applyModelChange(plan = {}, deps = {}) {
     }
   }
   try {
+    if (backend === 'triss-env') {
+      return await applyTrissEnvModelChange({ plan, deps, changes, scope, envPath });
+    }
     return await applyModelChangeBody({ plan, deps, changes, scope, configPath, envPath, backend });
   } finally {
     if (lockHandle && typeof lockHandle.release === 'function') lockHandle.release();
   }
 }
 
+// ─── applyTrissEnvModelChange (triss-env backend) ────────────────────────────
+//
+// Transactional env-pins-only write for the OMP engine (docs/omp-engine-plan
+// Phase 4). OMP owns no opencode.json/crush.json surface - its persistent
+// model state IS the two Triss env pins (TRISS_CODER_MODEL /
+// TRISS_CODER_SMALL_MODEL). Reuses the env-file primitives from the shared
+// apply body (readModelPins / applyEnvPins / stageEnvSibling / secure writes
+// / transaction record) and mirrors its result shape, rollback-on-failure,
+// exit-code contract, and the rollback command.
+//
+// The manifest records config_backend "triss-env" with a single env target,
+// so rollback can verify CAS (current hash == outputHash) before restoring
+// the prior env bytes / pins from the transaction dir.
+async function applyTrissEnvModelChange({ plan, deps, changes, scope, envPath }) {
+  const changesSmall = Object.prototype.hasOwnProperty.call(changes, 'small_model');
+  const envExisted = existsSync(envPath);
+  const priorPins = readModelPins(envPath);
+  const envSnap = {
+    TRISS_CODER_MODEL: priorPins.TRISS_CODER_MODEL,
+    TRISS_CODER_SMALL_MODEL: priorPins.TRISS_CODER_SMALL_MODEL,
+  };
+  const envCur = envExisted ? readFileSync(envPath, 'utf8') : '';
+  const envOut = applyEnvPins(envCur, {
+    TRISS_CODER_MODEL: changes.model,
+    ...(changesSmall ? { TRISS_CODER_SMALL_MODEL: changes.small_model } : {}),
+  });
+
+  const txDir = createTransactionDir(deps.backupRoot);
+  const envBackupPath = join(txDir, 'env.bak');
+  const manifestPath = join(txDir, 'manifest.json');
+  const envSnapshotPath = join(txDir, 'env-snapshot.json');
+  const transaction = { dir: txDir, manifestPath, envSnapshotPath, envBackupPath };
+
+  if (envExisted) writeSecureFile(envBackupPath, envCur);
+  const manifest = {
+    createdAt: new Date().toISOString(),
+    scope,
+    engine: plan.engine || 'omp',
+    config_backend: 'triss-env',
+    provider: plan.provider,
+    targets: [
+      {
+        path: envPath,
+        existed: envExisted,
+        mode: 0o600,
+        hash: envExisted ? sha256(envCur) : null,
+        outputHash: sha256(envOut),
+      },
+    ],
+  };
+  writeSecureFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  writeSecureFile(envSnapshotPath, JSON.stringify(envSnap, null, 2) + '\n');
+
+  const temps = [];
+  let envTmp;
+  let envCommitted = false;
+  try {
+    if (envOut !== envCur) {
+      envTmp = stageEnvSibling(envPath, envOut);
+      temps.push(envTmp);
+      const envSnapshotHash = sha256(envCur);
+      const current = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+      if (sha256(current) !== envSnapshotHash) {
+        throw new Error('CAS verification failed: env file was modified after snapshot — refusing to overwrite external mutation.');
+      }
+      renameSync(envTmp, envPath);
+      envTmp = null;
+      envCommitted = true;
+    }
+    const actualPins = readModelPins(envPath);
+    if (actualPins.TRISS_CODER_MODEL !== changes.model) {
+      throw new Error('Post-commit audit failed: env TRISS_CODER_MODEL pin mismatch after commit.');
+    }
+    if (changesSmall && actualPins.TRISS_CODER_SMALL_MODEL !== changes.small_model) {
+      throw new Error('Post-commit audit failed: env TRISS_CODER_SMALL_MODEL pin mismatch after commit.');
+    }
+    process.env.TRISS_CODER_MODEL = changes.model;
+    if (changesSmall) {
+      if (changes.small_model == null) delete process.env.TRISS_CODER_SMALL_MODEL;
+      else process.env.TRISS_CODER_SMALL_MODEL = changes.small_model;
+    }
+  } catch (failure) {
+    cleanupTemps(temps);
+    const rollbackCtx = {
+      envPath,
+      envExisted,
+      envOutputHash: sha256(envOut),
+      envBackupPath,
+      envSnap,
+      envCommitted,
+      failRollback: !!deps.failRollback,
+    };
+    try {
+      performTrissEnvRollback(rollbackCtx);
+    } catch (rollbackErr) {
+      return { ok: false, exitCode: 3, reason: 'rollback-failed', scope, envPath, transaction, restorePaths: buildRestorePaths(transaction), rollbackCommand: buildRollbackCommand(txDir, scope), error: rollbackErr && rollbackErr.message ? rollbackErr.message : String(rollbackErr), cause: failure && failure.message ? failure.message : String(failure), envCommitted };
+    }
+    return { ok: false, exitCode: 2, reason: 'write-or-validate-failed', scope, envPath, transaction, rollbackCommand: buildRollbackCommand(txDir, scope), error: failure && failure.message ? failure.message : String(failure) };
+  }
+
+  cleanupTemps(temps);
+  return { ok: true, scope, engine: plan.engine || 'omp', provider: plan.provider, path: envPath, envPath, transaction, rollbackCommand: buildRollbackCommand(txDir, scope) };
+}
+
+// Restores the pre-transaction env file / pins from the triss-env transaction
+// record. Throws on failure (caller maps to exitCode 3).
+function performTrissEnvRollback(ctx) {
+  if (ctx.failRollback) {
+    throw new Error('injected rollback failure (deps.failRollback)');
+  }
+  const current = existsSync(ctx.envPath) ? readFileSync(ctx.envPath, 'utf8') : '';
+  if (sha256(current) !== ctx.envOutputHash) {
+    throw new Error('rollback: env hash mismatch — recorded outputHash ' + ctx.envOutputHash + ', actual ' + sha256(current) + '; refusing to rollback over external mutation');
+  }
+  if (ctx.envExisted) {
+    if (!existsSync(ctx.envBackupPath)) {
+      throw new Error('rollback: env backup missing: ' + ctx.envBackupPath);
+    }
+    writeSecureFile(ctx.envPath, readFileSync(ctx.envBackupPath));
+    chmodSync(ctx.envPath, 0o600);
+  } else {
+    const reduced = applyEnvPins(current, { TRISS_CODER_MODEL: null, TRISS_CODER_SMALL_MODEL: null });
+    if (reduced.trim() === '') {
+      rmSync(ctx.envPath, { force: true });
+    } else {
+      writeSecureFile(ctx.envPath, reduced);
+      chmodSync(ctx.envPath, 0o600);
+    }
+  }
+  if (ctx.envCommitted && ctx.envSnap) {
+    if (ctx.envSnap.TRISS_CODER_MODEL == null) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = ctx.envSnap.TRISS_CODER_MODEL;
+    if (ctx.envSnap.TRISS_CODER_SMALL_MODEL == null) delete process.env.TRISS_CODER_SMALL_MODEL;
+    else process.env.TRISS_CODER_SMALL_MODEL = ctx.envSnap.TRISS_CODER_SMALL_MODEL;
+  }
+}
 // The transactional read-modify-write body of applyModelChange. Isolated so
 // applyModelChange can wrap it in the exclusive (engine, scope) lock's
 // try/finally. ctx carries the already-validated plan/deps plus the derived
@@ -2910,17 +3095,25 @@ export async function rollbackModelChange(input = {}, deps = {}) {
   // unknown engines/backends fail closed.
   const backend = firstManifest && firstManifest.config_backend
     ? firstManifest.config_backend
-    : (engine === 'crush' ? 'crush' : 'opencode-v1');
-  if (engine !== 'crush' && engine !== 'opencode' && engine !== 'opencode2') {
+    : (engine === 'omp' ? 'triss-env' : engine === 'crush' ? 'crush' : 'opencode-v1');
+  // Cross-engine rejection: the caller's explicit engine must match the
+  // record's engine (an omp record is never restored through a crush request).
+  if (input.engine && firstManifest && firstManifest.engine && input.engine !== firstManifest.engine) {
     throw new Error(
-      `rollback: unsupported rollback engine ${JSON.stringify(engine)} ` +
-        `— only opencode, opencode2, and crush are supported (record: ${from})`,
+      `rollback: record engine ${JSON.stringify(firstManifest.engine)} does not match requested engine ` +
+        `${JSON.stringify(input.engine)} (record: ${from})`,
     );
   }
-  if (backend !== 'opencode-v1' && backend !== 'crush') {
+  if (engine !== 'crush' && engine !== 'opencode' && engine !== 'opencode2' && engine !== 'omp') {
+    throw new Error(
+      `rollback: unsupported rollback engine ${JSON.stringify(engine)} ` +
+        `— only opencode, opencode2, crush, and omp are supported (record: ${from})`,
+    );
+  }
+  if (backend !== 'opencode-v1' && backend !== 'crush' && backend !== 'triss-env') {
     throw new Error(
       `rollback: unsupported rollback config backend ${JSON.stringify(backend)} ` +
-        `— only opencode-v1 and crush are supported (record: ${from})`,
+        `— only opencode-v1, crush, and triss-env are supported (record: ${from})`,
     );
   }
   // engine/backend pairing must be consistent: both OpenCode engines ride
@@ -2953,7 +3146,7 @@ export async function rollbackModelChange(input = {}, deps = {}) {
     }
     const manifestBackend = manifest && manifest.config_backend
       ? manifest.config_backend
-      : (manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
+      : (manifest.engine === 'omp' ? 'triss-env' : manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
     if (manifestBackend !== backend) {
       throw new Error(
         `rollback: manifest config_backend changed after acquiring the lock (TOCTOU): expected ` +
@@ -2973,6 +3166,72 @@ export async function rollbackModelChange(input = {}, deps = {}) {
   }
 }
 
+function rollbackTrissEnvModelChange({ from, scope, manifest, manifestPath }) {
+  // Similar in-scope guard to the Crush path: the single target must be the
+  // per-scope Triss env file (triss-env backend never mutates any OMP config).
+  if (!Array.isArray(manifest.targets) || manifest.targets.length !== 1) {
+    throw new Error(
+      `rollback: triss-env manifest must record exactly one target (got ` +
+      `${Array.isArray(manifest.targets) ? manifest.targets.length : 'none'}) at ${manifestPath}`,
+    );
+  }
+  const target = manifest.targets[0];
+  if (!target || typeof target !== 'object') {
+    throw new Error(`rollback: triss-env manifest target is not an object at ${manifestPath}`);
+  }
+  const expectedPath = getEnvFilePath(scope);
+  if (typeof target.path !== 'string' || target.path !== expectedPath) {
+    throw new Error(
+      `rollback: triss-env target.path ${JSON.stringify(target.path)} does not match the ` +
+      `default Triss env path for scope ${scope} (${expectedPath})`,
+    );
+  }
+
+  // Verify CAS before any restore: the current env bytes must equal the
+  // recorded outputHash (refuse to rollback over external mutation).
+  const current = existsSync(target.path) ? readFileSync(target.path, 'utf8') : '';
+  const currentHash = sha256(current);
+  if (typeof target.outputHash !== 'string' || target.outputHash === '') {
+    throw new Error(`rollback: triss-env manifest requires outputHash at ${manifestPath}`);
+  }
+  if (currentHash !== target.outputHash) {
+    throw new Error(
+      `rollback: triss-env env hash mismatch — recorded ${target.outputHash}, ` +
+      `actual ${currentHash}; refusing to rollback over external mutation`,
+    );
+  }
+
+  const txDir = dirname(manifestPath);
+  const envBackupPath = join(txDir, 'env.bak');
+  const envSnapshotPath = join(txDir, 'env-snapshot.json');
+  if (target.existed) {
+    if (!existsSync(envBackupPath)) {
+      throw new Error(`rollback: triss-env env backup missing at ${envBackupPath}`);
+    }
+    writeSecureFile(target.path, readFileSync(envBackupPath));
+    chmodSync(target.path, 0o600);
+  } else {
+    const reduced = applyEnvPins(current, { TRISS_CODER_MODEL: null, TRISS_CODER_SMALL_MODEL: null });
+    if (reduced.trim() === '') {
+      rmSync(target.path, { force: true });
+    } else {
+      writeSecureFile(target.path, reduced);
+      chmodSync(target.path, 0o600);
+    }
+  }
+
+  // Restore the in-process pins from the recorded snapshot so a long-lived
+  // consumer (MCP server) observes the rollback immediately.
+  let snap = null;
+  try { snap = JSON.parse(readFileSync(envSnapshotPath, 'utf8')); } catch { /* best effort */ }
+  if (snap) {
+    if (snap.TRISS_CODER_MODEL == null) delete process.env.TRISS_CODER_MODEL;
+    else process.env.TRISS_CODER_MODEL = snap.TRISS_CODER_MODEL;
+    if (snap.TRISS_CODER_SMALL_MODEL == null) delete process.env.TRISS_CODER_SMALL_MODEL;
+    else process.env.TRISS_CODER_SMALL_MODEL = snap.TRISS_CODER_SMALL_MODEL;
+  }
+  return { ok: true, reason: 'restored', scope, path: target.path, from };
+}
 // rollbackModelChangeLocked — the scope check + OpenCode dispatch + the Crush
 // restore branch, run UNDER the default (engine, scope) lock after the TOCTOU
 // manifest re-read. Behavior is unchanged from the pre-lock contract; it is
@@ -2994,8 +3253,9 @@ function rollbackModelChangeLocked({ from, scope, manifest, manifestPath }) {
   // opencode2 records ride the identical OpenCode restore path.
   const backend = manifest.config_backend
     ? manifest.config_backend
-    : (manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
+    : (manifest.engine === 'omp' ? 'triss-env' : manifest.engine === 'crush' ? 'crush' : 'opencode-v1');
   if (backend === 'opencode-v1') return rollbackOpenCodeModelChange({ from, scope, manifest, manifestPath });
+  if (backend === 'triss-env') return rollbackTrissEnvModelChange({ from, scope, manifest, manifestPath });
 
   // 4. Exactly one target in the manifest — Crush records a single crush.json
   //    target. Any other count is a corrupted/wrong-engine manifest.

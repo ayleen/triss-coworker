@@ -43,7 +43,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
-import { normalizeProviderFlag, resolveCoderEngine } from './coder.js';
+import { normalizeProviderFlag, resolveCoderEngine, VALID_CODER_ENGINES } from './coder.js';
 import { projectRoot } from '../safety.js';
 import { getEnvFilePath, readEnvFile } from '../secrets.js';
 import {
@@ -641,7 +641,7 @@ export function renderEngineRequired(opts, mainArg, scope) {
   );
   const scopeFlag = scope === 'local' ? '--local' : '--global';
   const commands = [];
-  for (const engineName of ['opencode', 'crush']) {
+  for (const engineName of VALID_CODER_ENGINES) {
     const argv = ['triss', 'coder', 'model', 'set'];
     if (mainArg) argv.push(mainArg);
     if (opts.small) argv.push('--small', opts.small);

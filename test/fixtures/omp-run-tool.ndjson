@@ -1,0 +1,10 @@
+{"type":"session","version":3,"id":"omp_ses_tool_002","timestamp":"2026-08-26T10:00:02.000Z","cwd":"/tmp/triss-omp-fixture"}
+{"type":"agent_start","timestamp":"2026-08-26T10:00:02.100Z","sessionId":"omp_ses_tool_002"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:02.110Z","sessionId":"omp_ses_tool_002"}
+{"type":"tool_execution_start","toolCallId":"call_omp_tool_001","toolName":"write","timestamp":"2026-08-26T10:00:03.000Z","sessionId":"omp_ses_tool_002","args":{"path":"result.txt","content":"OMP_OK\n"}}
+{"type":"tool_execution_update","toolCallId":"call_omp_tool_001","toolName":"write","timestamp":"2026-08-26T10:00:03.100Z","sessionId":"omp_ses_tool_002"}
+{"type":"tool_execution_end","toolCallId":"call_omp_tool_001","toolName":"write","timestamp":"2026-08-26T10:00:03.200Z","sessionId":"omp_ses_tool_002","status":"success","result":{"path":"result.txt"},"error":null}
+{"type":"message_start","role":"assistant","timestamp":"2026-08-26T10:00:04.000Z","sessionId":"omp_ses_tool_002"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:04.500Z","sessionId":"omp_ses_tool_002","stopReason":"stop","errorMessage":null,"usage":{"input":9200,"output":8,"cacheRead":900,"cacheWrite":0,"totalTokens":10108,"cost":{"input":0.00202,"output":0.000005,"cacheRead":0.0000063,"cacheWrite":0,"total":0.0020313}},"content":[{"type":"text","text":"DONE"}]}
+{"type":"turn_end","timestamp":"2026-08-26T10:00:04.510Z","sessionId":"omp_ses_tool_002"}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:04.520Z","sessionId":"omp_ses_tool_002","isTerminal":true}

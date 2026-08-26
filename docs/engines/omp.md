@@ -1,0 +1,131 @@
+# Oh My Pi engine (`omp`) — integration guide
+
+Status: supported. `omp` is the fourth `triss coder` engine alongside `opencode`, `opencode2`, and `crush`. The default engine remains `opencode`.
+
+## Installation
+
+`omp` is a compiled binary (not an npm package):
+
+```bash
+curl https://omp.sh/install | sh   # official installer — writes `omp` to PATH
+omp --version                          # must print `omp/<semver>`
+```
+
+Triss never executes the installer. `triss coder init --engine omp` only probes the already-installed binary and prints the hint above when it is missing or incompatible.
+
+- Hard supported floor: `18.0.6` (`omp/18.0.6`, verified 2026-08-26, arm64).
+- `TRISS_CODER_OMP_VERSION` may **raise** the minimum (e.g. `18.1.0`) but can never lower it below the floor. A malformed value fails closed (nothing admitted); the display degrades to the floor so install advice stays actionable.
+- Admission requires **both** a parsable `omp/<semver>` version **and** a capability probe. Version text alone is insufficient.
+
+Required capabilities (verified against `omp --help` and `omp models --help` at 18.0.6):
+
+- launch: `--mode`, `--model`, `--smol`, `--session-dir`, `--no-session`, `--resume`, `--continue`, `--config`, `--tools`, `--approval-mode`, `--no-extensions`, `--no-skills`, `--no-title`, `--no-pty`
+- models: `--json`, `--no-extensions`
+
+An incompatible binary is rejected before any isolation worktree, credential proxy, or session reservation is created.
+
+## Quickstart
+
+```bash
+triss coder init --engine omp --provider opencode-go
+triss coder status
+triss coder models --engine omp --json
+triss coder model set --engine omp --provider opencode-go opencode-go/deepseek-v4-flash --small opencode-go/deepseek-v4-flash --yes
+triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"
+triss coder run --engine omp --session task-a "Remember ALPHA"
+triss coder run --engine omp --session task-a "Repeat the remembered value"
+triss coder session list --engine omp
+triss coder session clean task-a --engine omp
+```
+
+One-shot overrides: `triss coder run --engine omp --model <provider>/<id> [--small-model <provider>/<id>]` maps `--small-model` to OMP `--smol`.
+
+## Headless protocol
+
+Managed invocation (Triss builds the argv; callers do not):
+
+```bash
+omp -p \
+  --mode json \
+  --model <omp-selector> \
+  [--smol <omp-small-selector>] \
+  --session-dir <triss-owned-session-dir> \
+  --no-title --no-extensions --no-skills --no-pty \
+  --approval-mode write \
+  --tools <triss-tool-set> \
+  --config <triss-owned-overlay> \
+  [--no-session | --resume <real-id> | --continue] \
+  -- <prompt>
+```
+
+- `--mode json` emits newline-delimited JSON events: `session` (version 3), `agent_start`/`turn_start`/`turn_end`/`agent_end`, `message_start`/`message_update`/`message_end`, `tool_execution_start`/`update`/`end`.
+- `agent_end.isTerminal === false` is non-terminal; missing `isTerminal` is terminal for older compatible releases.
+- `message_end` carries `provider`, `model`, `usage` (input/output/cacheRead/cacheWrite/totalTokens/cost), `stopReason`, `errorMessage`, and `content` text blocks.
+- Parent Triss owns the public `--timeout` contract (process-group kill); OMP `--max-time` is never used because it can abort a tool and exit 0.
+
+## Provider / model translation
+
+Triss model IDs stay the public API; translation happens only at the adapter boundary:
+
+| Triss prefix | OMP selector | Credential |
+|---|---|---|
+| `opencode` | `opencode-zen` | `OPENCODE_API_KEY` |
+| `opencode-go` | `opencode-go` | `OPENCODE_API_KEY` |
+| `zai-coding-plan` | `zhipu-coding-plan` | `ZHIPU_API_KEY` |
+| `zai` | `zai` | bridge `ZHIPU_API_KEY` → `ZAI_API_KEY` |
+| `moonshotai` | `moonshot` | `MOONSHOT_API_KEY` |
+| `moonshotai-cn` | `moonshot` | `MOONSHOT_API_KEY` + `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` |
+| `kimi-for-coding` | `kimi-code` | `KIMI_API_KEY` |
+| `triss-worker` | transient `triss-coder-transient` | `TRISS_WORKER_API_KEY` + worker base URL |
+
+Audited routes generate a transient `models.yml` entry under a run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
+
+## Credential modes
+
+- Default: `best_effort_raw` — one selected provider credential forwarded into the OMP child; curated bash allowlist; proxy not started.
+- `--protect-credentials`: `protected_proxy` — only the short-lived proxy credential forwarded; deny-all bash; unknown transports fail before proxy startup.
+
+No raw upstream key is persisted into OMP YAML, SQLite, JSONL, result artifacts, argv, logs, warnings, or usage records.
+
+## Tool policy
+
+Generated overlay forces at minimum:
+
+```yaml
+memory:
+  backend: off
+async:
+  enabled: false
+tools:
+  approvalMode: write
+  approval:
+    eval: deny
+    task: deny
+    hub: deny
+    web_search: deny
+```
+
+Launch tool set: `read,write,edit,glob,grep,bash,todo` plus `--no-extensions --no-skills --no-pty --no-title`. Bash:
+
+- protected: `*` → `deny`
+- best-effort: allowlist (`git status`, `git diff*`, `git log*`, `ls*`, `node --test*`, `npm test*`, `npm run test*`) then `*` → `deny`.
+
+Project `.omp/config.yml` cannot weaken the overlay; higher-precedence overlay + CLI flags win.
+
+## Sessions and filesystem
+
+- Bare runs: `--no-session` (no session files).
+- `--session <slug>`: reserve v2 inventory row → existing mapping uses `--resume <real-id>`, new mapping captures first `session.id` and publishes after resumable session established.
+- `--continue` → OMP `--continue` inside Triss-owned session directory.
+- Session directory: `<project>/.triss/omp/sessions` (original project root, not disposable worktree).
+- Run-private agent directory: `<project>/.triss/omp/runs/<run-id>/agent` (0700, 0600 temp files, fsync/rename, removed after run). Only `.triss/omp/sessions` persists.
+- A worktree limits accidental mutations but is not an OS sandbox — OMP file tools accept absolute paths.
+
+## Capability floor
+
+Verified against `omp/18.0.6` on 2026-08-26:
+
+- `omp --version` prints `omp/18.0.6`
+- `omp --help` and `omp models --help` contain the capability strings listed above (see fixtures `test/fixtures/omp-*.ndjson` for event samples)
+
+Deterministic unit tests replay fixtures; no OMP binary or network is required. Live smoke is opt-in and uses an isolated `PI_CODING_AGENT_DIR`.

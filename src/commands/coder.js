@@ -40,7 +40,7 @@ import {
   readWorkerConfigSnapshot,
 } from '../config.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
-import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE } from '../coder-result.js';
+import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE, normalizeActivity } from '../coder-result.js';
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
 import { startCoderCredentialProxy } from '../coder-credential-proxy.js';
 import { positiveIntegerOption, positiveNumberOption } from '../option-validation.js';
@@ -54,6 +54,8 @@ import {
   CODER_TRANSIENT_PROVIDER_ALIAS,
 } from '../coder-providers.js';
 export { coderCredentialReady } from '../coder-providers.js';
+import { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES, CODER_ENGINE_REGISTRY } from '../coder-engine-registry.js';
+export { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES };
 
 export const CREDENTIAL_ISOLATION_DOWNGRADED_CODE = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED';
 // The CODE stays stable for machine consumers (renaming it is a separate
@@ -75,6 +77,7 @@ const NON_SECRET_CODER_STORE_KEYS = new Set([
   'TRISS_CODER_OPENCODE_VERSION',
   'TRISS_CODER_OPENCODE2_VERSION',
   'TRISS_CODER_CRUSH_VERSION',
+  'TRISS_CODER_OMP_VERSION',
   'TRISS_CODER_CRUSH_RESTRICT',
   'TRISS_CODER_SESSION_CAP',
   'TRISS_WORKER_BASE_URL',
@@ -173,6 +176,7 @@ import {
 // orchestration (isolation, spawn, envelope assembly). See
 // docs/engines/crush.md for the supported engine boundary.
 import { crush as crushEngine } from '../coder-engines/crush.js';
+import { omp as ompEngine } from '../coder-engines/omp.js';
 import {
   opencode2 as opencode2Engine,
   opencode2VersionPin,
@@ -224,8 +228,7 @@ const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
 // and a denied bash command can wait until timeout, so this module
 // compensates by defaulting --isolate ON for Crush and making restrict opt-in.
 // Override per-call via --engine or globally via TRISS_CODER_ENGINE.
-export const DEFAULT_CODER_ENGINE = 'opencode';
-const VALID_CODER_ENGINES = ['opencode', 'opencode2', 'crush'];
+
 
 // Resolve + validate the engine selection. --engine beats TRISS_CODER_ENGINE
 // beats the default. An invalid name throws a clear Error listing valid values
@@ -1689,7 +1692,38 @@ export async function runCoderInit(opts = {}, deps = {}) {
       seedCrushPermissions(scope);
     }
   }
-  if (engine !== 'crush') {
+  if (engine === 'omp') {
+    // OMP init: the shared provider credential setup above already wrote the
+    // selected key to the env file. OMP owns NO persistent Triss config: its
+    // config/auth/state live in the run-private PI_CODING_AGENT_DIR created at
+    // run time, so init NEVER mutates ~/.omp or a project .omp. The only job
+    // left is the shared version/capability gate - missing/incompatible prints
+    // the official install hint without executing it (idempotent re-run).
+    process.stderr.write('\n' + pc.bold('── coder (omp engine) ──') + '\n');
+    const sh = deps.spawnSync || nodeSpawnSync;
+    const policy = ompEngine.resolveVersionPolicy(sh);
+    if (!policy.configValid) {
+      throw ompEngine.assertVersionPolicy(policy);
+    }
+    if (!policy.found) {
+      process.stderr.write(pc.yellow(`  ⚠ omp not found — install: ${ompEngine.installHint()}\n`));
+    } else if (policy.compatible) {
+      process.stderr.write(pc.green(`  ✓ omp ${policy.installedVersion} (meets minimum ${policy.effectiveMinimum})\n`));
+      if (policy.capabilities && !policy.capabilities.ok) {
+        process.stderr.write(pc.yellow(`  ⚠ omp capabilities missing: ${(policy.capabilities.missing || []).join(', ')}\n`));
+      }
+    } else {
+      if (policy.reason === 'version_unknown') {
+        process.stderr.write(pc.yellow(`  ⚠ omp version could not be determined (${JSON.stringify(policy.installedVersion)}), minimum supported version is ${policy.effectiveMinimum}\n`));
+      } else {
+        process.stderr.write(pc.yellow(`  ⚠ omp ${policy.installedVersion} found, minimum supported version is ${policy.effectiveMinimum}\n`));
+      }
+      process.stderr.write(pc.dim(`  · install: ${ompEngine.installHint()}\n`));
+    }
+    // Session path / model backend are reported via `triss coder status` and
+    // `triss coder models --engine omp`; init writes nothing else persistent.
+  }
+  if (engine !== 'crush' && engine !== 'omp') {
     // runCoderSetup does the cross-scope opencode.json audit AND the pin-shadow
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
@@ -2148,6 +2182,24 @@ async function runCoderSetupUnlocked(
   // idempotent no-op when the key is already loaded.
   loadEnvFiles();
   const resolvedScope = scope || 'global';
+  // omp mirrors crush here: the wizard only writes the provider credential;
+  // the shared OMP verification job (binary gate + capability report) lives in
+  // `triss coder init --engine omp`. OMP owns no opencode.json/crush.json
+  // surface - its config is the run-private PI_CODING_AGENT_DIR.
+  if (engine === 'omp') {
+    process.stderr.write('\n' + pc.bold('── coder (omp engine) ──') + '\n');
+    const sh = deps.spawnSync || nodeSpawnSync;
+    const policy = ompEngine.resolveVersionPolicy(sh);
+    if (!policy.compatible) {
+      throw ompEngine.assertVersionPolicy(policy);
+    }
+    const scopeFlag = scope === 'local' ? '--local' : '--global';
+    throw new Error(
+      'Coder (omp engine) setup incomplete: the wizard saved the provider credential but did not ' +
+        'verify the OMP binary/session layout. Complete setup with the exact command:\n' +
+        `  triss coder init --engine omp ${scopeFlag}`,
+    );
+  }
   // The wizard resolves engine FIRST, provider SECOND (resolveWizardCtx) and
   // passes both in. crush fixes provider to Z.AI and rejects conflicts before
   // this point; reaching here with engine=crush means Z.AI was agreed, so the
@@ -3663,6 +3715,8 @@ export function describeCoderStatus(deps = {}) {
   // V2-native config), so there are no separate config rows — the shared
   // files above already describe them.
   const oc2Detect = detectOpenCode2(sh);
+  // OMP detection goes through the ONE shared policy resolver (raise-only floor).
+  const ompPolicy = ompEngine.resolveVersionPolicy(sh);
   // What a bare `triss coder run` (no --engine) resolves to right now.
   const defaultEngine = resolveCoderEngine({});
   // The model a bare `triss coder run` on the opencode engine would use — i.e.
@@ -3708,6 +3762,21 @@ export function describeCoderStatus(deps = {}) {
       satisfiesPin: oc2Detect.satisfiesPin,
       pin: opencode2VersionPin(),
       serviceProcessCheck: oc2Detect.capabilities?.serviceProcessCheck || null,
+    },
+    omp: {
+      found: ompPolicy.found,
+      version: ompPolicy.installedVersion,
+      satisfiesPin: ompPolicy.compatible,
+      meetsMinimum: ompPolicy.compatible,
+      minimumVersion: ompPolicy.effectiveMinimum,
+      pin: ompPolicy.effectiveMinimum,
+      supportedFloor: ompPolicy.supportedFloor,
+      configuredMinimum: ompPolicy.configuredMinimum,
+      configValid: ompPolicy.configValid,
+      effectiveMinimum: ompPolicy.effectiveMinimum,
+      reason: ompPolicy.reason,
+      compatible: ompPolicy.compatible,
+      capabilities: ompPolicy.capabilities,
     },
     defaultEngine,
     // The credential mode a bare run would use RIGHT NOW, resolved through
@@ -5678,7 +5747,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
       '(letters, digits, underscore, hyphen; max 64 chars; no path separators).',
     );
   }
-  const isolate = opts.isolate === undefined ? engine === 'crush' : !!opts.isolate;
+  const isolate = opts.isolate === undefined ? Boolean(CODER_ENGINE_REGISTRY[engine]?.defaultIsolate) : !!opts.isolate;
   // shared contract: an isolation downgrade to a best-effort CALLER
   // worktree is opt-in only. Without the explicit flag the run fails before
   // spawn when the enforced sandbox is unavailable (fail closed).
@@ -6650,6 +6719,24 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
+  // OMP runtime version policy is AUTHORITATIVE — same contract as crush:
+  // probe + assert BEFORE isolation, credential proxy, or session reservation.
+  // ompPolicy feeds Phase 5-6 envelope wiring; the version gate above is already authoritative.
+  let ompPolicy = null;
+  if (engine === 'omp') {
+    try {
+      ompPolicy = ompEngine.assertVersionPolicy(ompEngine.resolveVersionPolicy(sh));
+    } catch (err) {
+      process.stderr.write(pc.yellow(`  ⚠ ${err.message}\n`));
+      throw err;
+    }
+    if (ompPolicy.installedVersion) {
+      process.stderr.write(
+        pc.dim(`  · omp ${ompPolicy.installedVersion} (meets minimum ${ompPolicy.effectiveMinimum})\n`),
+      );
+    }
+  }
+
   const slug = resolveSlug(opts, isolate);
 
   let isolation = null;
@@ -7049,6 +7136,337 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       } finally {
         await releaseCredentialProxy();
       }
+      throw err;
+    }
+  }
+
+
+  // ─── Oh My Pi (OMP) ───────────────────────────────────────────────────────
+  //
+  // OMP headless JSON protocol with NDJSON event streaming. Uses its own
+  // config overlay (YAML policy + JSON models), PI_CODING_AGENT_DIR for
+  // runtime isolation, and the standard spawnEngine fold pipeline.
+  //
+  // Phase 5: run flow + credentials. The OMP flow must:
+  //  - translate Triss model id to OMP selector (triss-coder-transient/<id>)
+  //  - write run-private config/models files under <project>/.triss/omp/runs/<runId>/agent
+  //  - enforce strict env allowlists for best_effort_raw vs protected_proxy
+  //  - invoke shared spawnEngine with OMP fold callbacks
+  //  - dispose proxy/process-group/run-private dir in reverse order
+
+  if (engine === 'omp') {
+    try {
+      const root = projectRoot();
+      const runtimeDir = isolation
+        ? isolation.wtPath
+        : opts.cwd
+          ? resolvePath(opts.cwd)
+          : process.cwd();
+
+      // Re-resolve version policy for envelope engine_version (admission
+      // already asserted upstream before any side effect).
+      const ompVer = ompPolicy || ompEngine.resolveVersionPolicy(sh);
+      const engineVersion = ompVer.installedVersion || ompEngine.OMP_PIN;
+
+      // Resolve the absolute binary path — never rely on PATH lookup for
+      // the credential-bearing spawn.
+      const ompDetected = ompEngine.detect(sh);
+      if (!ompDetected.found) {
+        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+        throw new Error('OMP binary not found — run `triss coder init --engine omp`.');
+      }
+      const ompPath = ompDetected.path;
+
+      // Run-private agent directory: <project>/.triss/omp/runs/<runId>/agent
+      // Created here, removed after the run in reverse teardown order.
+      const ompRunId = `run_${randomBytes(16).toString('hex')}`;
+      const { sessions: ompSessionsDir, agentDir } = ompEngine.ensureRuntimeDirs(root, ompRunId);
+
+      // Write policy overlay YAML to agent dir (tool policies, memory off,
+      // bash allowlist). Protected mode denies all bash.
+      const policyOverlay = ompEngine.buildPolicyOverlay({
+        protectCredentials: credentialMode === 'protected_proxy',
+      });
+      const policyYaml = ompEngine.renderPolicyYaml(policyOverlay);
+      writeFileSync(join(agentDir, 'policy.yaml'), policyYaml, { mode: 0o600 });
+
+      // Write models config JSON to agent dir. The transient provider
+      // maps to the real upstream endpoint (or the credential proxy).
+      const modelsConfig = ompEngine.buildModelsConfig({
+        providerRoute: runtimeRoute,
+        proxy: credentialProxy
+          ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
+          : null,
+        credentialEnv: cred.env,
+      });
+      writeFileSync(join(agentDir, 'models.json'), JSON.stringify(modelsConfig), { mode: 0o600 });
+
+      // OMP model selector: triss-coder-transient/<modelId> from the
+      // resolved provider route. Falls back to raw model name when the
+      // route is absent (e.g. a bare zai/* model with no known transport).
+      const ompModelSelector = runtimeRoute
+        ? `triss-coder-transient/${runtimeRoute.modelId}`
+        : modelUsed;
+      const ompSmallSelector = runtimeSmallRoute
+        ? `triss-coder-transient/${runtimeSmallRoute.modelId}`
+        : null;
+
+      // Build OMP argv: --model <selector> [--smol <small>] --session-dir
+      // <dir> --config <policy> [--resume|--continue|--no-session] -- <prompt>
+      const argv = ompEngine.buildRunArgv({
+        prompt,
+        model: ompModelSelector,
+        smallModel: smallModelUsed ? ompSmallSelector : null,
+        sessionDir: ompSessionsDir,
+        sessionRealId: sessionRealIdV1,
+        cont: !!opts.continue,
+        noSession: !opts.session && !opts.continue,
+        configPath: join(agentDir, 'policy.yaml'),
+      });
+
+      // Build OMP spawn env: strict allowlist of PATH/HOME/etc, the
+      // selected credential (raw or proxy-token), and PI_CODING_AGENT_DIR
+      // for runtime state isolation. Never spread baseEnv blindly.
+      const env = ompEngine.buildSpawnEnv({
+        projectRoot: root,
+        credentialEnv: cred.env,
+        credentialValue: credentialProxy
+          ? credentialProxy.token
+          : (canonicalOpenCodeRouting ? credentialValue : undefined),
+        proxy: credentialProxy
+          ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
+          : null,
+        agentDir,
+      });
+
+      process.stderr.write(
+        pc.dim(
+          `[coder run] engine=omp model=${modelUsed}` +
+            (smallModelUsed ? ` small_model=${smallModelUsed}` : '') +
+            (isolation ? ` isolate=${isolation.wtPath}` : '') +
+            '\n',
+        ),
+      );
+
+      const ompSpawnStartMs = Date.now();
+      let ompResult;
+      try {
+        await revalidateV2SessionRowBeforeSpawn(sessionV2);
+        ompResult = await spawnEngine({
+          argv,
+          env,
+          timeoutSec,
+          spawnFn,
+          sinceMs: ompSpawnStartMs,
+          scanRateLimit: deps.scanRateLimit,
+          logPath: deps.logPath,
+          pollMs: deps.pollMs,
+          abortSignal: deps.abortSignal,
+          killProcess,
+          residualTermGraceMs: deps.residualTermGraceMs,
+          residualKillWaitMs: deps.residualKillWaitMs,
+          processGroupPollMs: deps.processGroupPollMs,
+          binary: ompPath,
+          label: 'omp',
+          createState: ompEngine.createEventFolder,
+          foldLine: ompEngine.foldEventLine,
+          cwd: runtimeDir,
+        });
+
+        if (!ompResult.sawParseableEvent) {
+          const tailLines = ompResult.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+          const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+          throw new Error(
+            `omp produced no parseable output (exit ${ompResult.code ?? 'null'}` +
+              `${ompResult.signal ? `, signal ${ompResult.signal}` : ''}).${detail}`,
+          );
+        }
+      } catch (err) {
+        if (isUnverifiedProcessGroupCleanup(err)) throw err;
+        if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
+        try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+        throw err;
+      } finally {
+        await releaseCredentialProxy();
+      }
+
+      // Finalize OMP envelope state from the folded event stream.
+      const ompFinalized = ompEngine.finalizeEnvelopeState(ompResult, {
+        exitCode: ompResult.code ?? 0,
+        timedOut: ompResult.timedOut,
+        killed: !!ompResult.signal,
+      });
+
+      const ompWarnings = [...(ompResult.warnings || []), ...(ompFinalized.warnings || [])];
+      if (allowBestEffortCallerWorktree && !isolation && isolate) {
+        ompWarnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
+      }
+
+      const ompActivity = normalizeActivity({ engine: 'omp',
+        toolCalls: (ompFinalized.toolActivity || []).map((t) => ({ name: t.toolName, count: 1 })),
+      });
+
+      const ompUsage = ompFinalized.usage || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, _rawCosts: [] };
+      const ompTokens = {
+        input_uncached: ompUsage.input || 0,
+        input_cached: ompUsage.cacheRead || 0,
+        cache_read: ompUsage.cacheRead || 0,
+        cache_write: ompUsage.cacheWrite || 0,
+        output_visible: ompUsage.output || 0,
+        reasoning: null,
+        combined: ompUsage.totalTokens || 0,
+        total: ompUsage.totalTokens || 0,
+      };
+      const ompReportedTotalUsd = Array.isArray(ompUsage._rawCosts) && ompUsage._rawCosts.length > 0
+        ? ompUsage._rawCosts.reduce((a, b) => a + b, 0)
+        : null;
+
+      const ompUsageTimestamp = new Date().toISOString();
+      const ompUsageStatus = ompReportedTotalUsd !== null ? 'reported' : 'estimated';
+      const ompBillingModel = modelUsed;
+      const ompCost = estimateCanonicalCost({
+        billing_model: ompBillingModel,
+        billing_mode: 'unknown',
+        timestamp: ompUsageTimestamp,
+        tokens: ompTokens,
+        reported_total_usd: ompReportedTotalUsd,
+        reported_total_source: ompReportedTotalUsd !== null ? 'engine' : null,
+        usage_source: 'omp',
+      });
+      const ompPromptTokens = ompTokens.input_uncached ?? 0;
+      const ompCompletionTokens = ompTokens.output_visible ?? 0;
+      const ompCtx = currentCall();
+      const logUsageFn = deps.logUsage || logUsage;
+      logUsageFn({
+        model: modelUsed,
+        billing_model: ompBillingModel,
+        billing_mode: 'unknown',
+        usage_source: 'omp',
+        engine: 'omp',
+        usage_status: ompUsageStatus,
+        timestamp: ompUsageTimestamp,
+        tokens: ompTokens,
+        cost: ompCost,
+        label: 'coder',
+        call_id: ompCtx?.callId,
+        parent_call_id: ompCtx?.parentCallId,
+      });
+
+      // Isolation teardown: engine-agnostic helpers.
+      let ompFilesChanged = null;
+      let ompDiffStat = null;
+      let ompWorktreeOut = null;
+      if (isolation) {
+        const changes = computeWorktreeChanges(sh, isolation.repoRoot, isolation.wtPath);
+        if (changes.warnings.length) ompWarnings.push(...changes.warnings);
+        ompFilesChanged = changes.filesChanged;
+        if (changes.filesChanged.length === 0) {
+          try {
+            gitWorktreeRemove(sh, isolation.repoRoot, isolation.wtPath, { force: true });
+            if (isolation.branch.startsWith(CODER_BRANCH_PREFIX)) {
+              const branchDeleted = gitBranchDeleteSafe(sh, isolation.repoRoot, isolation.branch);
+              if (!branchDeleted) {
+                ompWarnings.push(
+                  `branch ${isolation.branch} kept — not fully merged; a future --isolate --session ` +
+                    "<slug> reusing this slug will fail until it's removed (see `triss coder clean --all`)",
+                );
+              }
+            }
+          } catch (err) {
+            ompWarnings.push(`isolate cleanup failed: ${err.message}`);
+          }
+        } else {
+          ompDiffStat = changes.diffStat;
+          ompWorktreeOut = isolation.wtPath;
+        }
+      }
+
+      const ompRunIdentity = allocateRunIdentity({
+        slug: opts.session || null,
+        isolated: !!isolation,
+        changed: (ompFilesChanged || []).length > 0,
+      });
+
+      const ompCompletionOutcome = await completeV2SessionRow(sessionV2, ompFinalized.sessionId);
+      if (ompCompletionOutcome === 'retained_for_recovery') {
+        throw new Error('coder-session: completion retained row for recovery — refusing to emit a clean envelope');
+      }
+      if (ompCompletionOutcome === 'removed_unusable' && sessionV2) {
+        ompWarnings.push('TRISS_CODER_SESSION_NOT_RESUMABLE: native session id was not confirmed; persistent row removed');
+      }
+
+      // Publish durable slug -> native-id mapping for named sessions.
+      if (opts.session && ompFinalized.sessionId && sessionV2) {
+        persistSessionMapping(sh, 'omp', opts.session, ompFinalized.sessionId);
+        sessionV2.publishedRealId = ompFinalized.sessionId;
+      } else if (opts.session && ompFinalized.sessionId && !sessionV2) {
+        ompWarnings.push(
+          'TRISS_CODER_PERSISTENCE_UNAVAILABLE: v2 session store unavailable \u2014 this native session is ephemeral and was NOT published for continuation',
+        );
+      }
+
+      const ompV2Lifecycle = deriveV2LifecycleFields({
+        timedOut: ompResult.timedOut,
+        terminationCause: ompResult.terminationCause,
+        signal: ompResult.signal,
+        exitCode: ompResult.code,
+        engineErrorObserved: ompFinalized.isError || false,
+        rateLimited: false,
+        exitReason: ompFinalized.exitReason,
+        finalText: ompFinalized.finalText,
+        toolActivityCount: ompActivity.tool_uses || 0,
+        isolated: !!isolation,
+        callerWorktreeDowngrade: allowBestEffortCallerWorktree && !isolation && isolate,
+        sessionRequested: Boolean(opts.session || sessionRealIdV1),
+        v2SessionAdmitted: sessionV2 != null,
+        completionOutcome: ompCompletionOutcome,
+      });
+
+      const ompFinishedAtMs = Date.now();
+
+      const envelope = {
+        engine: 'omp',
+        envelope_version: 2,
+        engine_version: engineVersion,
+        credential_mode: credentialMode,
+        session_id: ompFinalized.sessionId || null,
+        ...ompRunIdentity,
+        execution_capabilities: buildExecutionCapabilities({
+          engine: 'omp',
+          proxyAvailable: !!credentialProxy,
+          credentialMode,
+        }),
+        ...ompV2Lifecycle,
+        run_id: `run_${randomBytes(16).toString('hex')}`,
+        started_at: new Date(ompSpawnStartMs).toISOString(),
+        finished_at: new Date(ompFinishedAtMs).toISOString(),
+        duration_ms: ompFinishedAtMs - ompSpawnStartMs,
+        activity: ompActivity,
+        exit_reason: ompFinalized.exitReason,
+        final_text: ompFinalized.finalText ?? null,
+        files_changed: ompFilesChanged,
+        run_files_changed: ompFilesChanged,
+        diff_stat: ompDiffStat,
+        worktree: ompWorktreeOut,
+        usage: {
+          schema_version: 2,
+          usage_status: ompUsageStatus,
+          tokens: ompTokens,
+          cost: ompCost,
+          prompt_tokens: ompPromptTokens,
+          completion_tokens: ompCompletionTokens,
+        },
+        warnings: ompWarnings,
+      };
+
+      // Clean up run-private agent dir (success path).
+      try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+
+      const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
+      writeStdout(JSON.stringify(envelope) + '\n');
+      return { completionOutcome: ompCompletionOutcome };
+    } catch (err) {
+      if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     }
   }

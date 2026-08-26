@@ -236,6 +236,17 @@ export async function runStatus(deps = {}) {
         : pc.dim(`not installed (minimum: ${oc2.pin})`);
       lines.push(`  ${oc2Marker} opencode2                    ${oc2Label}`);
     }
+    // omp (engine #4) — binary + capability probe under isolated PI_CODING_AGENT_DIR
+    const omp = coder.omp;
+    if (omp) {
+      const ompMarker = omp.found ? pc.green('●') : pc.dim('○');
+      const ompInvalid = omp.configValid === false ? pc.yellow(`(invalid configured minimum: ${omp.configuredMinimum}; effective floor: ${omp.effectiveMinimum})`) : null;
+      const ompLabel = ompInvalid ?? (omp.found ? `${omp.version} ${pc.dim('(meets minimum)')}` : (omp.reason === 'missing' ? pc.dim(`not installed (minimum: ${omp.minimumVersion})`) : pc.yellow(`${omp.version || '(version unknown)'} (minimum: ${omp.minimumVersion}) — ${omp.reason}`)));
+      lines.push(`  ${ompMarker} omp                            ${ompLabel}`);
+      if (omp.capabilities && omp.capabilities.missing && omp.capabilities.missing.length) {
+        lines.push(pc.dim(`    capabilities missing: ${omp.capabilities.missing.join(', ')}`));
+      }
+    }
     const wtMarker = coder.worktreeCount > 0 ? pc.green('●') : pc.dim('○');
     lines.push(`  ${wtMarker} worktrees (.triss/wt)       ${coder.worktreeCount} live`);
   }

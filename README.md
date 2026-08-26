@@ -407,7 +407,7 @@ them). To adopt the stronger coder/researcher roles:
 | `triss coder init` | Sets up a coding agent (default `opencode` V1 engine; `--engine opencode2` for the V2 beta — shares the `opencode.json` config, see [docs/engines/opencode2.md](docs/engines/opencode2.md); `--engine crush` for crush): provider key/profile (`--provider worker` reuses `TRISS_WORKER_*`; Z.AI GLM default; Zen, Go, and Kimi are also supported), config, permission policy, and agent templates. Blocks (non-zero) on an unsafe existing `opencode.json` — missing deny-first bash policy (override with `--allow-unsafe-bash`) or a stale/cross-provider `small_model`. | Manually installing/configuring opencode |
 | `triss coder run` | Spawns the coding agent (the OpenAI-compatible Triss worker, GLM, Kimi, OpenCode Zen, or OpenCode Go) and prints one JSON envelope (`--engine opencode|opencode2|crush` — opencode V1 default, opencode2 beta per [docs/engines/opencode2.md](docs/engines/opencode2.md); `--isolate` for a disposable worktree — opencode defaults to isolate-OFF, crush defaults to isolate-ON; crush adds opt-in `--restrict`/`--no-restrict` for its CLI allowlist). **POSIX only** (macOS/Linux) — refuses to run on Windows. | Manually driving `opencode run` and parsing its ndjson stream |
 | `triss coder clean` | Removes finished `.triss/wt` isolation worktrees (`--all` forces all) | Manually finding and deleting stale git worktrees |
-| `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|crush`) | Hand-patching the session store |
+| `triss coder session` | Lists / cleans inactive v2 sessions per engine (`--engine opencode|crush|omp`) | Hand-patching the session store |
 | `triss coder result` | Lists / cleans retained result artifacts (enforced result-store quota) | Finding result-store files by hand |
 | `triss coder state` | Section 15 rollback backup / validate for a project | Manual backups before model transactions |
 | `triss coder models` | Lists the resolved engine/provider model catalogue (`--json` for scripting) | Reading upstream model catalogues by hand |
@@ -726,7 +726,7 @@ default timeout, configurable via `--timeout <ms>`.
 Delegates an implementation task to a cheap coding agent — the existing
 OpenAI-compatible Triss worker, GLM, Kimi,
 OpenCode Zen, or OpenCode Go models (the `opencode` V1 engine by default;
-`opencode2` beta — see [docs/engines/opencode2.md](docs/engines/opencode2.md) — or `crush`; see
+`opencode2` beta — see [docs/engines/opencode2.md](docs/engines/opencode2.md) — `crush`, or `omp` (see [docs/engines/omp.md](docs/engines/omp.md)); see
 **Engines** below) instead of the primary model writing
 the code itself.
 
@@ -738,13 +738,14 @@ triss coder run "..." --engine crush --restrict   # crush + CLI allowlist on top
 triss coder clean                                 # remove finished isolation worktrees
 triss coder session list                          # list v2 sessions (per engine)
 triss coder session clean <slug> --engine opencode # remove one inactive isolated session
+  triss coder session clean <slug> --engine omp      # remove one inactive OMP session
 triss coder result list                           # list retained result artifacts
 triss coder state backup --project <path>         # Section 15 rollback backup
 triss coder state validate --project <path> --backup <dir>
 ```
 
-Every `triss coder run` envelope — on all three supported engines
-(`opencode`, the `opencode2` beta, and `crush`; and the matching MCP tool)
+Every `triss coder run` envelope — on all four supported engines
+(`opencode`, the `opencode2` beta, `crush`, and `omp`; and the matching MCP tool)
 — carries the shared envelope v2 contract: the session acceptance contract
 fields `session_slug` (explicit slug or a generated per-run slug — never an
 implicit persistent conversation), `result_retention`

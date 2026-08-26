@@ -951,7 +951,7 @@ const CODER_TOOLS = [
         prompt: { type: 'string', description: 'The task for the coding agent' },
         engine: {
           type: 'string',
-          enum: ['opencode', 'opencode2', 'crush'],
+          enum: ['opencode', 'opencode2', 'crush', 'omp'],
           description: 'Coding engine (default: opencode V1; opencode2 is the V2 beta — see docs/engines/opencode2.md; or TRISS_CODER_ENGINE)',
         },
         session: {

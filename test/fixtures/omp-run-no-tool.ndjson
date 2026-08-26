@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"omp_ses_no_tool_001","timestamp":"2026-08-26T10:00:00.000Z","cwd":"/tmp/triss-omp-fixture"}
+{"type":"agent_start","timestamp":"2026-08-26T10:00:00.100Z","sessionId":"omp_ses_no_tool_001"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:00.110Z","sessionId":"omp_ses_no_tool_001"}
+{"type":"message_start","role":"assistant","timestamp":"2026-08-26T10:00:01.000Z","sessionId":"omp_ses_no_tool_001"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:01.500Z","sessionId":"omp_ses_no_tool_001","stopReason":"stop","errorMessage":null,"usage":{"input":9135,"output":4,"cacheRead":896,"cacheWrite":0,"totalTokens":10035,"cost":{"input":0.0020097,"output":0.00000264,"cacheRead":0.000006272,"cacheWrite":0,"total":0.002018612}},"content":[{"type":"text","text":"READY"}]}
+{"type":"turn_end","timestamp":"2026-08-26T10:00:01.510Z","sessionId":"omp_ses_no_tool_001"}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:01.520Z","sessionId":"omp_ses_no_tool_001","isTerminal":true}

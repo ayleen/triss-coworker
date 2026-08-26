@@ -1,0 +1,12 @@
+{"type":"session","version":3,"id":"omp_ses_retry_004","timestamp":"2026-08-26T10:00:07.000Z","cwd":"/tmp/triss-omp-fixture"}
+{"type":"agent_start","timestamp":"2026-08-26T10:00:07.100Z","sessionId":"omp_ses_retry_004"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:07.110Z","sessionId":"omp_ses_retry_004"}
+{"type":"message_start","role":"assistant","timestamp":"2026-08-26T10:00:07.500Z","sessionId":"omp_ses_retry_004"}
+{"type":"message_update","role":"assistant","timestamp":"2026-08-26T10:00:07.600Z","sessionId":"omp_ses_retry_004","delta":{"text":"partial"}}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:08.000Z","sessionId":"omp_ses_retry_004","stopReason":"retry","errorMessage":null,"usage":{"input":5000,"output":10,"cacheRead":400,"cacheWrite":0,"totalTokens":5410,"cost":{"input":0.001,"output":0.00001,"cacheRead":0.000002,"cacheWrite":0,"total":0.001012}},"content":[{"type":"text","text":"retrying"}]}
+{"type":"turn_end","timestamp":"2026-08-26T10:00:08.010Z","sessionId":"omp_ses_retry_004"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:09.000Z","sessionId":"omp_ses_retry_004"}
+{"type":"message_start","role":"assistant","timestamp":"2026-08-26T10:00:09.100Z","sessionId":"omp_ses_retry_004"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:09.500Z","sessionId":"omp_ses_retry_004","stopReason":"stop","errorMessage":null,"usage":{"input":5200,"output":4,"cacheRead":450,"cacheWrite":0,"totalTokens":5654,"cost":{"input":0.00105,"output":0.000004,"cacheRead":0.000003,"cacheWrite":0,"total":0.001057}},"content":[{"type":"text","text":"DONE after retry"}]}
+{"type":"turn_end","timestamp":"2026-08-26T10:00:09.510Z","sessionId":"omp_ses_retry_004"}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:09.520Z","sessionId":"omp_ses_retry_004","isTerminal":true}

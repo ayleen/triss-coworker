@@ -39,6 +39,7 @@ import Footer from "../components/Footer.astro";
       <button data-engine="opencode" class="engine-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">opencode <span>default</span></button>
       <button data-engine="opencode2" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">opencode2 <span>beta</span></button>
       <button data-engine="crush" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span>interim</span></button>
+<button data-engine="omp" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span>interim</span></button>
       <button data-engine="harness" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">harness bundle <span>DSH plugin, not --engine</span></button>
     </div>
     <div id="engine-body" style="margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
@@ -68,6 +69,7 @@ import Footer from "../components/Footer.astro";
       opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
       opencode2: { body: "The V2 line. Shares the same opencode.json config and provider catalogue, so switching is one flag. Credential handling defaults to best_effort_raw; pass --protect-credentials for the parent-owned credential proxy with strict executable-surface gates (crush is always protected).", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
       crush: { body: "Supported with isolation ON by default. The disposable worktree is the layer Triss can guarantee.", flag: "--engine crush", isolation: "ON by default" },
+      omp: { body: "Native OMP headless adapter. Run-private config, YAML policy overlay, NDJSON event streaming, and session storage under .triss/omp/.", flag: "--engine omp", isolation: "ON by default" },
       harness: { body: "Not an --engine value — opt-in DSH companion bundle. One profile dependency instead of hand-authoring provider mapping.", flag: "dsh plugin add triss-dsh-provider-bundle", isolation: "owned by Harness" },
     };
     let engine = "opencode";
