@@ -196,8 +196,8 @@ may appear, but existing keys keep their names and shape.
 
 ```json
 {
-  "engine": "opencode | opencode2 | crush",
-  "provider": "zai-coding-plan | zai | opencode | moonshotai | kimi-for-coding",
+  "engine": "opencode | opencode2 | crush | omp",
+  "provider": "zai-coding-plan | zai | opencode | opencode-go | moonshotai | kimi-for-coding | triss-worker",
   "scope": "global | local",
   "current": {
     "main":  { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" },
@@ -225,7 +225,8 @@ Shape rules:
   for visibility and debugging. When `current.main` equals the config value, this
   field is omitted.
 - **`current.small`** reports the actual configured small model from
-  `opencode.json.small_model` (or `crush.json` for crush) with its source/scope.
+  `opencode.json.small_model`, `crush.json`, or OMP's effective
+  `TRISS_CODER_SMALL_MODEL` Triss env pin, with its source/scope.
 - Each role object carries exactly `value`, `scope`, `source_path`,
   `availability`, `compatibility` — every one a string or `null`
   (e.g. `source_path` is `null` for a run-only override or the built-in default;
@@ -374,7 +375,7 @@ budget, use at least 16384; explicit budgets disable auto-sizing, and the generi
 When reviewing a focused remediation, narrow `--base` to that commit as well.
 
 ### 5.2 Engine choice
-`--engine opencode|opencode2|crush` (per call) or
+`--engine opencode|opencode2|crush|omp` (per call) or
 `TRISS_CODER_ENGINE=<name>` (default for the shell/CI). `--engine` beats
 the env beats the built-in default (`opencode`). An unknown name fails
 fast with the valid list.
@@ -383,12 +384,12 @@ fast with the valid list.
 - `--session <slug>` (pattern `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) continues
   the same GLM conversation across calls. opencode maps the slug to a real
   `ses_…` id in `.triss/sessions.json`; opencode2 keeps its own versioned
-  session map (`engines.opencode2` — V1 and V2 slugs never cross-resume);
-  crush uses the slug as the native session id directly.
+  session-map namespace (V1 and V2 slugs never cross-resume); crush uses the
+  slug as the native session id directly; OMP maps the slug to its native id
+  and stores engine-owned sessions under `.triss/omp/sessions`.
 - `--continue` resumes the most recent session (no slug needed).
-- The `triss coder session` CLI lists/cleans the Release-A per-engine
-  inventory for opencode and crush; opencode2 adds no separate CLI surface
-  (its sessions live in the shared store namespace above).
+- `triss coder session list|clean --engine <opencode|opencode2|crush|omp>`
+  addresses only the selected engine's inventory and mapping namespace.
 
 ### 5.4 Isolation (disposable worktree)
 - `--isolate` runs the agent in a throwaway git worktree at
@@ -397,10 +398,11 @@ fast with the valid list.
 - **Defaults differ by engine:** opencode and opencode2 default
   isolate-**OFF** (the deny-first `opencode.json` bash policy is the
   dependable safety layer — opencode2 shares it and adds a static
-  plugin/agent preflight); crush defaults isolate-**ON** (crush 0.1.3's
-  `permissions.run` config is inert and a denied bash deadlocks to timeout,
-  so the disposable worktree is crush's reliable safety layer). An explicit
-  flag always wins.
+  plugin/agent preflight). Crush and OMP default isolate-**ON**: Crush's
+  persistent `permissions.run` config is inert, while OMP file tools accept
+  absolute paths despite its run-private policy/config overlay. Their
+  disposable worktree limits repository mutations but is not an OS sandbox.
+  An explicit isolation flag always wins.
 - `triss coder clean` removes finished worktrees (branches with no diff vs
   the default branch); `--all` forces all.
 
@@ -408,13 +410,14 @@ fast with the valid list.
 Positional `[prompt]`, or `--stdin` to read the prompt from a pipe. (crush
 also accepts stdin natively and combines it as `<stdin>\n\n<args>`.)
 
-### 5.6 Agent template (opencode / opencode2)
+### 5.6 Agent selection
 `--agent <name>` selects an opencode agent template (default `coder`; a
-read-only `researcher` template also ships). crush uses `--agents single`
-to disable sub-agent fan-out. With --protect-credentials the opencode2 beta rejects
-unverified sub-agent or plugin sources before spawn; the default best-effort
-mode permits them after structural checks and reports the credential-exposure
-warning (see [opencode2.md](engines/opencode2.md)).
+read-only `researcher` template also ships). Crush forces
+`--agents single`; OMP rejects `--agent` and disables extensions and skills.
+With `--protect-credentials`, the opencode2 beta rejects unverified sub-agent
+or plugin sources before spawn; the default best-effort mode permits them
+after structural checks and reports the credential-exposure warning (see
+[opencode2.md](engines/opencode2.md)).
 
 ### 5.7 Roles / health-check (crush)
 crush exposes model **roles** and a **ping** neither opencode path does:
@@ -441,7 +444,7 @@ Every run prints exactly one JSON object on stdout:
 
 ```json
 {
-  "engine": "opencode | opencode2 | crush",
+  "engine": "opencode | opencode2 | crush | omp",
   "engine_version": "…",
   "session_id": "…",
   "exit_reason": "end_turn | error | timeout | killed",
@@ -461,15 +464,14 @@ plus totals) and a `cost` object with completeness, alongside deprecated
 `null` and the count lands in `tokens.combined`. Full shape:
 [usage-accounting.md](usage-accounting.md#coder-envelope).
 
-**`exit_reason` resolution** (same rule for all three engines): the
+**`exit_reason` resolution** (same outer rule for all four engines): the
 outer timeout/signal wins first — `timedOut → timeout`, killed by signal →
 `killed`. Otherwise opencode and opencode2 map the engine exit code
 (0 → `end_turn`, non-zero → `error`; opencode2 also lets a terminal
 provider `error` event beat a later exit 0 — see
-[opencode2.md](engines/opencode2.md)); crush maps its own vocabulary
-(`done`/`end_turn` → `end_turn`, `canceled` → `killed`,
-`max_cost`/`max_tokens`/`error` → `error`, `timeout` → `timeout`) via
-`mapCrushExitReason`, preserving the raw reason for diagnostics.
+[opencode2.md](engines/opencode2.md)); crush maps its own terminal vocabulary
+through `mapCrushExitReason`; OMP folds terminal message/agent events and
+provider errors into the shared reason (see [omp.md](engines/omp.md)).
 
 Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 
@@ -479,13 +481,14 @@ Read `files_changed` + `diff_stat` + `worktree` to know what to review.
 
 | Var | Required | Purpose |
 |---|---|---|
-| `ZHIPU_API_KEY` | **yes** | Z.AI key for GLM (all three engines). Bridged to `ZAI_API_KEY` for crush. |
-| `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush`. |
-| `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). |
-| `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. |
+| `ZHIPU_API_KEY` | **yes** | Z.AI key for GLM coder routes. Bridged to `ZAI_API_KEY` where the selected Crush or OMP route requires it. |
+| `TRISS_CODER_ENGINE` | no | Default engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), `crush`, or `omp` (see [omp.md](engines/omp.md)). |
+| `TRISS_CODER_MODEL` | no | Override main model, e.g. `zai-coding-plan/glm-5.2` (verbatim, prefix included). OMP passes it at run time. |
+| `TRISS_CODER_SMALL_MODEL` | no | Override small/fast model, e.g. `zai-coding-plan/glm-5-turbo`. OMP maps it to `--smol`. |
 | `TRISS_CODER_OPENCODE_VERSION` | no | Installation/preference minimum for the `opencode-ai` npm package (default/immutable floor `1.18.22`). Below-floor and malformed values are rejected with a typed error; a valid higher value raises the effective minimum. One-shot provider runs are authorized when the installed version is >= the effective minimum — newer releases (e.g. `1.19.0`, `2.0.0`) pass under the default. |
 | `TRISS_CODER_OPENCODE2_VERSION` | no | Minimum accepted OpenCode 2 version (default `0.0.0-beta-17793`; unsupported `next/dev/tui-v2` values fail closed — see [opencode2.md](engines/opencode2.md)). |
-| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | **Deprecated no-op.** OpenCode/OpenCode2 now use `best_effort_raw` by default; `--protect-credentials` selects the parent-owned credential proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. |
+| `TRISS_CODER_OMP_VERSION` | no | Raise-only minimum for the already-installed OMP binary (hard floor `18.0.6` plus capability probe). Triss never executes OMP's installer. |
+| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | **Deprecated no-op.** OpenCode/OpenCode2/OMP use `best_effort_raw` by default; `--protect-credentials` selects the parent-owned credential proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. |
 | `TRISS_CODER_CRUSH_VERSION` | no | Minimum accepted `@phpcraftdream/crush` version (hard floor `0.1.6`). Raise-only: values below the floor clamp up to it; malformed values fail closed. |
 | `TRISS_CODER_CRUSH_RESTRICT` | no | crush only: `1` opts INTO the allowlist (emits `--restrict-run` plus the `--allow-bash`/`--allow-tool` CLI flags — the only enforcement path that works today); unset/`0` leaves crush unrestricted (the default, paired with isolate-ON). Overridden per-run by `--restrict`/`--no-restrict`. |
 
@@ -509,6 +512,16 @@ best-effort mode permits those sources and the normal V1 allowlist policy (a
 MISSING deny-first wildcard still blocks init in every mode — see
 --allow-unsafe-bash) while warning that the selected raw credential is exposed; **select protection explicitly
 with --protect-credentials rather than editing `opencode.json` alone.**
+
+**omp — run-private policy/config; isolate-ON.** OMP ignores the user's normal
+profile: Triss supplies a private `PI_CODING_AGENT_DIR`, transient model route,
+and higher-precedence policy overlay, then removes the run-private directory.
+OMP defaults to worktree isolation and `best_effort_raw` credential handling.
+Pass `--protect-credentials` for the parent-owned proxy and deny-all bash.
+Extensions, skills, PTY, memory, async work, and sub-agent selection are
+disabled. The worktree and overlay limit mutations and inherited configuration;
+they do not confine absolute-path file access or provide an OS sandbox. See
+[omp.md](engines/omp.md).
 
 **crush — interim stance (config inert; CLI-flag enforcement; isolate-ON).**
 Live testing (2026-07-06, `docs/crush-restrict-issues.md`) proved crush 0.1.3

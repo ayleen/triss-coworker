@@ -510,15 +510,18 @@ fixed order so only the right single key is prompted:
 2. **Provider** next, *after* the engine and *before* any credential
    prompt: `--provider` (`glm`, `worker`, `opencode-zen`, `opencode-go`, `moonshot`,
    `kimi-for-coding`) → the engine's default for the keys already set.
-3. Triss then prompts for **only** that provider's key and writes the
-   matching `opencode.json`/`crush.json`.
+3. Triss then prompts for **only** that provider's key and updates the
+   selected engine backend: `opencode.json`, `crush.json`, or OMP's
+   `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` Triss env pins.
 
-`--provider worker` is OpenCode-only and reuses the existing
+`--provider worker` is supported by OpenCode and OMP and reuses the existing
 `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, and worker flash/pro model
-settings. It creates `triss-worker/*` model pins and does not introduce or copy
-another secret. V1 supports one active worker profile and Chat Completions.
+settings without introducing or copying another secret. OpenCode creates
+`triss-worker/*` model pins and one managed Chat Completions profile; OMP keeps
+the public pins in Triss env and projects the route into run-private config.
 Rerun `triss coder init --provider worker` after changing the base URL or
-flash/pro model ids so the managed OpenCode provider stays in sync. `--global`
+flash/pro model ids so the managed OpenCode provider or OMP env pins stay in
+sync. `--global`
 reads the global worker profile rather than project-local values; parent-shell
 exports remain explicit overrides. Before a worker run forwards the key, Triss
 checks the effective project/global provider, endpoint, and complete model
