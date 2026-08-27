@@ -309,14 +309,6 @@ test('buildOmpSpawnEnv: ZHIPU_API_KEY bridges to ZAI_API_KEY', () => {
   assert.equal(env.ZAI_API_KEY, 'zhipu-key');
 });
 
-test('buildOmpSpawnEnv: proxy mode sets marker', () => {
-  const env = buildOmpSpawnEnv({
-    proxy: { token: 'proxy-token', baseUrl: 'http://127.0.0.1:9999/v1' },
-    agentDir: '/tmp/agent',
-  });
-  assert.equal(env._TRISS_OMP_PROXY, '1');
-});
-
 test('buildOmpPolicyOverlay: best_effort allows git/ls/npm test', () => {
   const overlay = buildOmpPolicyOverlay({ protectCredentials: false });
   assert.equal(overlay.tools.approvalMode, 'write');

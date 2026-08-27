@@ -5777,7 +5777,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   let oneShotSmallModel = null;
   if (opts.provider) {
     if (engine === 'crush') {
-      throw new Error('--provider and --small-model are not supported with the selected engine.');
+      throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
     }
     if (!modelOverride) {
       throw new Error(
