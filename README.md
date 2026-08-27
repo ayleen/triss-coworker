@@ -389,11 +389,13 @@ triss coder run --engine omp --model opencode-go/deepseek-v4-flash \
 
 Triss never executes OMP's installer. OMP runs default to worktree isolation,
 load policy and model configuration only from a run-private
-`PI_CODING_AGENT_DIR`, and preserve public Triss model IDs while the child uses
-`triss-coder-transient/<model-id>`. A worktree limits repository mutations; it
-is not an OS sandbox. Default `best_effort_raw` mode exposes the selected key
-to same-UID child code; pass `--protect-credentials` for the parent-owned
-credential proxy and deny-all bash policy. Full contract:
+`PI_CODING_AGENT_DIR`, and preserve public Triss model IDs. Audited routes use
+`triss-coder-transient/<model-id>`; unaudited Zen/Go routes in raw mode use
+OMP's built-in selectors instead of guessed transport metadata. A worktree
+limits repository mutations; it is not an OS sandbox. Default `best_effort_raw`
+mode exposes the selected key to same-UID child code; pass
+`--protect-credentials` for the parent-owned credential proxy and deny-all bash
+policy. Full contract:
 [`docs/engines/omp.md`](docs/engines/omp.md).
 
 `triss agent-help` prints the generated host-agent cookbook and the final

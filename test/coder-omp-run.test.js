@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -81,6 +81,18 @@ function fakeSpawnReplaying(streamText, { code = 0, signal = null } = {}) {
       setImmediate(() => child.emit('close', code, signal));
     });
     return child;
+  };
+}
+
+function captureOmpSpawn(streamText, capture) {
+  const replay = fakeSpawnReplaying(streamText, { code: 0 });
+  return (binary, argv, options) => {
+    capture.binary = binary;
+    capture.argv = argv;
+    capture.env = options.env;
+    const modelsPath = join(options.env.PI_CODING_AGENT_DIR, 'models.yml');
+    capture.modelsYaml = existsSync(modelsPath) ? readFileSync(modelsPath, 'utf8') : null;
+    return replay();
   };
 }
 
@@ -456,6 +468,195 @@ test('runCoderRun: OMP invalid flags fail before reservation or spawn', async ()
     assert.equal(spawns, 0, `spawn occurred for ${JSON.stringify(invalid)}`);
   }
 });
+
+test(
+  'runCoderRun: explicit OMP small model is registered before --smol references it',
+  withEnv({
+    ZHIPU_API_KEY: 'zk-omp-main-small',
+    TRISS_USAGE_LOG: '0',
+  }, async (fakeOmpBin) => {
+    const capture = {};
+    const output = stdoutCapture();
+    await runCoderRunProduction(
+      'do something',
+      {
+        engine: 'omp',
+        isolate: false,
+        provider: 'zai',
+        model: 'zai-coding-plan/glm-5.2',
+        smallModel: 'zai-coding-plan/glm-5-turbo',
+      },
+      {
+        spawn: captureOmpSpawn(readFileSync(FIXTURE_PATH, 'utf8'), capture),
+        spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+        stdoutWrite: output.stdoutWrite,
+        disableCredentialProxy: true,
+      },
+    );
+    assert.ok(capture.modelsYaml);
+    assert.match(capture.modelsYaml, /id: glm-5\.2/u);
+    assert.match(capture.modelsYaml, /id: glm-5-turbo/u);
+    assert.equal(
+      capture.argv[capture.argv.indexOf('--model') + 1],
+      'triss-coder-transient/glm-5.2',
+    );
+    assert.equal(
+      capture.argv[capture.argv.indexOf('--smol') + 1],
+      'triss-coder-transient/glm-5-turbo',
+    );
+  }),
+);
+
+test(
+  'runCoderRun: protected OMP main and small transports get separate scoped providers',
+  withEnv({
+    OPENCODE_API_KEY: 'sk-omp-two-transports',
+    TRISS_USAGE_LOG: '0',
+  }, async (fakeOmpBin) => {
+    const capture = {};
+    const proxyCalls = [];
+    await runCoderRunProduction(
+      'do something',
+      {
+        engine: 'omp',
+        isolate: false,
+        provider: 'opencode-go',
+        protectCredentials: true,
+        model: 'opencode-go/deepseek-v4-flash',
+        smallModel: 'opencode-go/gpt-5.6-luna',
+      },
+      {
+        spawn: captureOmpSpawn(readFileSync(FIXTURE_PATH, 'utf8'), capture),
+        spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+        stdoutWrite: () => true,
+        startCredentialProxy: async (options) => {
+          proxyCalls.push(options);
+          const index = proxyCalls.length;
+          const token = options.token || 'shared-omp-token';
+          return {
+            token,
+            baseUrl: `http://127.0.0.1:100${index}`,
+            scopedBaseUrl: `http://127.0.0.1:100${index}/v1`,
+            revoke() {},
+            closed: Promise.resolve(),
+          };
+        },
+      },
+    );
+    assert.equal(proxyCalls.length, 2);
+    assert.equal(proxyCalls[0].protocol, 'openai_chat');
+    assert.equal(proxyCalls[1].protocol, 'openai_responses');
+    assert.match(capture.modelsYaml, /triss-coder-transient:/u);
+    assert.match(capture.modelsYaml, /triss-coder-transient-small:/u);
+    assert.match(capture.modelsYaml, /baseUrl: "http:\/\/127\.0\.0\.1:1001\/v1"/u);
+    assert.match(capture.modelsYaml, /baseUrl: "http:\/\/127\.0\.0\.1:1002\/v1"/u);
+    assert.equal(
+      capture.argv[capture.argv.indexOf('--smol') + 1],
+      'triss-coder-transient-small/gpt-5.6-luna',
+    );
+  }),
+);
+
+test(
+  'runCoderRun: persisted OMP small model is registered before --smol references it',
+  withEnv({
+    ZHIPU_API_KEY: 'zk-omp-persisted-small',
+    TRISS_USAGE_LOG: '0',
+    TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    TRISS_CODER_SMALL_MODEL: 'zai-coding-plan/glm-5-turbo',
+  }, async (fakeOmpBin) => {
+    const capture = {};
+    await runCoderRunProduction(
+      'do something',
+      { engine: 'omp', isolate: false },
+      {
+        spawn: captureOmpSpawn(readFileSync(FIXTURE_PATH, 'utf8'), capture),
+        spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+        stdoutWrite: () => true,
+        disableCredentialProxy: true,
+      },
+    );
+    assert.match(capture.modelsYaml, /id: glm-5\.2/u);
+    assert.match(capture.modelsYaml, /id: glm-5-turbo/u);
+    assert.ok(capture.argv.includes('triss-coder-transient/glm-5-turbo'));
+  }),
+);
+
+test(
+  'runCoderRun: raw unaudited OMP Zen and Go models use built-in selectors without fake models.yml',
+  withEnv({
+    OPENCODE_API_KEY: 'sk-omp-built-in',
+    TRISS_USAGE_LOG: '0',
+  }, async (fakeOmpBin) => {
+    for (const [model, selector] of [
+      ['opencode/future-zen-model', 'opencode-zen/future-zen-model'],
+      ['opencode-go/future-go-model', 'opencode-go/future-go-model'],
+    ]) {
+      const capture = {};
+      await runCoderRunProduction(
+        'do something',
+        {
+          engine: 'omp',
+          isolate: false,
+          provider: model.startsWith('opencode-go/') ? 'opencode-go' : 'opencode-zen',
+          model,
+          smallModel: model,
+        },
+        {
+          spawn: captureOmpSpawn(readFileSync(FIXTURE_PATH, 'utf8'), capture),
+          spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+          stdoutWrite: () => true,
+          disableCredentialProxy: true,
+        },
+      );
+      assert.equal(capture.modelsYaml, null);
+      assert.equal(capture.argv[capture.argv.indexOf('--model') + 1], selector);
+      assert.equal(capture.argv[capture.argv.indexOf('--smol') + 1], selector);
+      assert.equal(capture.env.OPENCODE_API_KEY, 'sk-omp-built-in');
+    }
+  }),
+);
+
+test(
+  'runCoderRun: protected unaudited OMP route fails before proxy or spawn',
+  withEnv({
+    OPENCODE_API_KEY: 'sk-omp-protected-unknown',
+    TRISS_USAGE_LOG: '0',
+  }, async (fakeOmpBin) => {
+    let proxies = 0;
+    let spawns = 0;
+    let reservations = 0;
+    await assert.rejects(
+      () => runCoderRunProduction(
+        'do something',
+        {
+          engine: 'omp',
+          isolate: false,
+          protectCredentials: true,
+          provider: 'opencode-zen',
+          model: 'opencode/future-zen-model',
+          smallModel: 'opencode/future-zen-model',
+        },
+        {
+          spawn: () => { spawns += 1; throw new Error('must not spawn'); },
+          spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+          reserveSessionRow: async () => {
+            reservations += 1;
+            throw new Error('must not reserve session');
+          },
+          startCredentialProxy: async () => {
+            proxies += 1;
+            throw new Error('must not start proxy');
+          },
+        },
+      ),
+      /audited protected OpenCode transport metadata|not supported for protected credential routing/iu,
+    );
+    assert.equal(proxies, 0);
+    assert.equal(spawns, 0);
+    assert.equal(reservations, 0);
+  }),
+);
 
 test(
   'runCoderRun: OMP engine produces a correct envelope for a successful run',

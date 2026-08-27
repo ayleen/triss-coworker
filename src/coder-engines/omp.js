@@ -11,6 +11,7 @@ import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync as nodeRealpathSync, rmSync, statSync as nodeStatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { coderRoutesShareTransport } from '../coder-providers.js';
 
 // Hard supported floor — verified against omp/18.0.6 (arm64, 2026-08-26).
 export const OMP_SUPPORTED_FLOOR = '18.0.6';
@@ -507,41 +508,162 @@ const TRISS_TO_OMP_PROTOCOL = Object.freeze({
 export const OMP_SUPPORTED_PROTOCOLS = Object.freeze(['openai-completions', 'openai-responses', 'anthropic-messages']);
 
 function toOmpProtocol(protocol) {
-  if (!protocol) return 'openai-completions';
   const mapped = TRISS_TO_OMP_PROTOCOL[protocol];
   if (mapped) return mapped;
   if (OMP_SUPPORTED_PROTOCOLS.includes(protocol)) return protocol;
   return null;
 }
 
-export function buildOmpModelsConfig({ providerRoute, proxy = null, credentialEnv }) {
-  if (!providerRoute || !providerRoute.modelId) throw new TypeError('buildOmpModelsConfig: providerRoute with modelId is required');
-  const ompProtocol = toOmpProtocol(providerRoute.protocol);
-  if (!ompProtocol) {
-    throw new Error(`Unsupported OMP protocol ${providerRoute.protocol} — supported: ${OMP_SUPPORTED_PROTOCOLS.join(', ')}`);
+const OMP_TRANSIENT_PROVIDER_ALIAS = 'triss-coder-transient';
+const OMP_TRANSIENT_SMALL_PROVIDER_ALIAS = `${OMP_TRANSIENT_PROVIDER_ALIAS}-small`;
+const OMP_BUILTIN_PROVIDER_BY_ROUTE = Object.freeze({
+  'opencode-zen': 'opencode-zen',
+  'opencode-go': 'opencode-go',
+});
+
+function requireOmpProtocol(route) {
+  const protocol = toOmpProtocol(route?.protocol);
+  if (!protocol) {
+    throw new Error(
+      `Unsupported OMP protocol ${String(route?.protocol)} — supported: ${OMP_SUPPORTED_PROTOCOLS.join(', ')}`,
+    );
   }
-  const baseURL = proxy?.baseUrl || providerRoute.endpoint + (providerRoute.pathPrefix || '');
-  // OMP real schema (docs/models.md): provider has baseUrl, apiKey, api at the
-  // top level; models is an ARRAY of { id, name, api, contextWindow, maxTokens }.
-  // Anything else (baseURL/apiKeyEnv/models-as-object) is silently ignored.
+  return protocol;
+}
+
+function ompModelDefinition(providerAlias, route, protocol) {
   return {
-    providers: {
-      'triss-coder-transient': {
-        baseUrl: baseURL,
-        apiKey: credentialEnv,
-        api: ompProtocol,
-        models: [
-          {
-            id: providerRoute.modelId,
-            name: `triss-coder-transient/${providerRoute.modelId}`,
-            api: ompProtocol,
-            contextWindow: providerRoute.contextWindow || 128000,
-            maxTokens: providerRoute.maxTokens || 16384,
-          },
-        ],
-      },
-    },
+    id: route.modelId,
+    name: `${providerAlias}/${route.modelId}`,
+    api: protocol,
+    contextWindow: route.contextWindow || 128000,
+    maxTokens: route.maxTokens || 16384,
   };
+}
+
+function ompTransientProvider({ providerAlias, route, routes, proxy, credentialEnv }) {
+  const protocol = requireOmpProtocol(route);
+  return {
+    baseUrl: proxy?.baseUrl || route.endpoint + (route.pathPrefix || ''),
+    apiKey: credentialEnv,
+    api: protocol,
+    models: routes.map((modelRoute) =>
+      ompModelDefinition(providerAlias, modelRoute, requireOmpProtocol(modelRoute))),
+  };
+}
+
+function buildOmpTransientProjection({
+  providerRoute,
+  smallRoute = null,
+  proxy = null,
+  smallProxy = null,
+  credentialEnv,
+}) {
+  if (!providerRoute?.modelId) {
+    throw new TypeError('buildOmpModelsConfig: providerRoute with modelId is required');
+  }
+  if (typeof credentialEnv !== 'string' || !credentialEnv) {
+    throw new TypeError('buildOmpModelsConfig: credentialEnv is required');
+  }
+  const hasSmall = Boolean(smallRoute?.modelId);
+  const separateSmall = hasSmall && !coderRoutesShareTransport(providerRoute, smallRoute);
+  const mainRoutes = [
+    providerRoute,
+    ...(hasSmall && !separateSmall && smallRoute.modelId !== providerRoute.modelId ? [smallRoute] : []),
+  ];
+  const providers = {
+    [OMP_TRANSIENT_PROVIDER_ALIAS]: ompTransientProvider({
+      providerAlias: OMP_TRANSIENT_PROVIDER_ALIAS,
+      route: providerRoute,
+      routes: mainRoutes,
+      proxy,
+      credentialEnv,
+    }),
+  };
+  if (separateSmall) {
+    providers[OMP_TRANSIENT_SMALL_PROVIDER_ALIAS] = ompTransientProvider({
+      providerAlias: OMP_TRANSIENT_SMALL_PROVIDER_ALIAS,
+      route: smallRoute,
+      routes: [smallRoute],
+      proxy: smallProxy,
+      credentialEnv,
+    });
+  }
+  return {
+    modelsConfig: { providers },
+    mainSelector: `${OMP_TRANSIENT_PROVIDER_ALIAS}/${providerRoute.modelId}`,
+    smallSelector: hasSmall
+      ? `${separateSmall ? OMP_TRANSIENT_SMALL_PROVIDER_ALIAS : OMP_TRANSIENT_PROVIDER_ALIAS}/${smallRoute.modelId}`
+      : null,
+  };
+}
+
+export function buildOmpModelsConfig(options) {
+  return buildOmpTransientProjection(options).modelsConfig;
+}
+
+function ompBuiltInSelector(route) {
+  if (route?.transportAudited !== false) return null;
+  const provider = OMP_BUILTIN_PROVIDER_BY_ROUTE[route.provider];
+  if (!provider) {
+    throw new Error(
+      `OMP cannot use unaudited transport metadata for provider ${String(route.provider)}`,
+    );
+  }
+  return `${provider}/${route.modelId}`;
+}
+
+export function buildOmpModelProjection({
+  providerRoute,
+  smallRoute = null,
+  proxy = null,
+  smallProxy = null,
+  credentialEnv,
+}) {
+  if (!providerRoute?.modelId) {
+    throw new TypeError('buildOmpModelProjection: providerRoute with modelId is required');
+  }
+  const builtInMain = ompBuiltInSelector(providerRoute);
+  const builtInSmall = smallRoute ? ompBuiltInSelector(smallRoute) : null;
+
+  if (builtInMain && (!smallRoute || builtInSmall)) {
+    return {
+      modelsConfig: null,
+      mainSelector: builtInMain,
+      smallSelector: builtInSmall,
+    };
+  }
+  if (builtInMain) {
+    const transient = buildOmpTransientProjection({
+      providerRoute: smallRoute,
+      proxy: smallProxy || proxy,
+      credentialEnv,
+    });
+    return {
+      modelsConfig: transient.modelsConfig,
+      mainSelector: builtInMain,
+      smallSelector: transient.mainSelector,
+    };
+  }
+  if (builtInSmall) {
+    const transient = buildOmpTransientProjection({
+      providerRoute,
+      proxy,
+      credentialEnv,
+    });
+    return {
+      modelsConfig: transient.modelsConfig,
+      mainSelector: transient.mainSelector,
+      smallSelector: builtInSmall,
+    };
+  }
+  return buildOmpTransientProjection({
+    providerRoute,
+    smallRoute,
+    proxy,
+    smallProxy,
+    credentialEnv,
+  });
 }
 
 // Render the OMP models config as a YAML string. The runtime file is
@@ -785,6 +907,7 @@ export const omp = {
   buildPolicyOverlay: buildOmpPolicyOverlay,
   renderPolicyYaml: renderOmpPolicyYaml,
   buildModelsConfig: buildOmpModelsConfig,
+  buildModelProjection: buildOmpModelProjection,
   renderModelsYaml: renderOmpModelsYaml,
   createEventFolder: createOmpEventFolder,
   foldEventLine: foldOmpEventLine,

@@ -6591,7 +6591,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       mainProviderRoute?.provider === smallProviderRoute?.provider &&
       mainProviderRoute?.prefix === smallProviderRoute?.prefix
     );
-  if (engine === 'opencode' && !oneShotProvider && !sameProviderScope) {
+  if (engine === 'omp' && !sameProviderScope) {
+    if (oneShotSmallModel) {
+      throw new Error(
+        `OMP requires main and small models to use one provider credential scope; ` +
+          `"${modelUsed}" and "${smallModelUsed}" resolve to different providers.`,
+      );
+    }
+    smallModelUsed = modelUsed;
+  } else if (engine === 'opencode' && !oneShotProvider && !sameProviderScope) {
     smallModelUsed = modelUsed;
   }
   // The worker key and endpoint are resolved independently per field. Reject
@@ -6653,7 +6661,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     runtimeSmallRoute = runtimeRoute;
   }
   const separateSmallTransport = Boolean(
-    canonicalOpenCodeRouting && engine === 'opencode' &&
+    canonicalOpenCodeRouting && (engine === 'opencode' || engine === 'omp') &&
     !coderRoutesShareTransport(runtimeSmallRoute, runtimeRoute),
   );
   if (!credentialValue) {
@@ -6837,7 +6845,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     }
-  } else if (rawBuiltInRoute) {
+  } else if (engine === 'opencode' && rawBuiltInRoute) {
     const runtimeDir = isolation
       ? isolation.wtPath
       : opts.cwd
@@ -6973,10 +6981,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         deadlineMs: (timeoutSec + 60) * 1000,
         ...(deps.credentialProxyOptions || {}),
       });
-      // OpenCode 1 can retain a distinct small_model role. If its audited
-      // transport differs from main, give it a separate scoped loopback
-      // route; both proxies intentionally share the one-run token because
-      // the child has one credential environment variable.
+      // OpenCode 1 and OMP can retain a distinct small-model role. If its
+      // audited transport differs from main, give it a separate scoped
+      // loopback route; both proxies intentionally share the one-run token
+      // because the child has one credential environment variable.
       if (separateSmallTransport) {
         smallCredentialProxy = await startCredentialProxy({
           provider: cred.provider || cred.env,
@@ -7213,38 +7221,35 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       const policyPath = join(agentDir, 'policy.yaml');
       writeFileSync(policyPath, policyYaml, { mode: 0o600 });
 
-      // Write the OMP models registry (docs/models.md). OMP reads
-      // <PI_CODING_AGENT_DIR>/models.yml at startup; a custom provider
-      // registered here becomes selectable as `triss-coder-transient/<modelId>`.
-      // The rendered YAML is the real OMP schema: baseUrl/apiKey/api at the
-      // provider level and models as an array of {id, name, api, ...}.
-      // Write is 0600 because the apiKey field is just the env-var name (the
-      // real key is forwarded via the spawned child env, not embedded).
-      const modelsConfig = ompEngine.buildModelsConfig({
+      // Project main and small roles together so argv selectors cannot refer
+      // to a model missing from the registry. Audited routes use transient
+      // providers; unaudited Zen/Go routes in best_effort_raw use OMP's
+      // built-in providers and produce no guessed transport metadata.
+      const modelProjection = ompEngine.buildModelProjection({
         providerRoute: runtimeRoute,
+        smallRoute: smallModelUsed ? runtimeSmallRoute : null,
         proxy: credentialProxy
           ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
           : null,
+        smallProxy: smallCredentialProxy
+          ? { token: smallCredentialProxy.token, baseUrl: smallCredentialProxy.scopedBaseUrl }
+          : null,
         credentialEnv: cred.env,
       });
-      writeFileSync(join(agentDir, 'models.yml'), ompEngine.renderModelsYaml(modelsConfig), { mode: 0o600 });
-
-      // OMP model selector: triss-coder-transient/<modelId> from the
-      // resolved provider route. Falls back to raw model name when the
-      // route is absent (e.g. a bare zai/* model with no known transport).
-      const ompModelSelector = runtimeRoute
-        ? `triss-coder-transient/${runtimeRoute.modelId}`
-        : modelUsed;
-      const ompSmallSelector = runtimeSmallRoute
-        ? `triss-coder-transient/${runtimeSmallRoute.modelId}`
-        : null;
+      if (modelProjection.modelsConfig) {
+        writeFileSync(
+          join(agentDir, 'models.yml'),
+          ompEngine.renderModelsYaml(modelProjection.modelsConfig),
+          { mode: 0o600 },
+        );
+      }
 
       // Build OMP argv. The policy overlay is enforced through
       // PI_CONFIG_FILES in buildSpawnEnv because OMP run mode ignores --config.
       const argv = ompEngine.buildRunArgv({
         prompt,
-        model: ompModelSelector,
-        smallModel: smallModelUsed ? ompSmallSelector : null,
+        model: modelProjection.mainSelector,
+        smallModel: modelProjection.smallSelector,
         sessionDir: ompSessionsDir,
         sessionRealId: sessionRealIdV1,
         noSession: !opts.session && !opts.continue,
@@ -7258,7 +7263,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialEnv: cred.env,
         credentialValue: credentialProxy
           ? credentialProxy.token
-          : (canonicalOpenCodeRouting ? credentialValue : undefined),
+          : (canonicalOpenCodeRouting || engine === 'omp' ? credentialValue : undefined),
         proxy: credentialProxy
           ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
           : null,

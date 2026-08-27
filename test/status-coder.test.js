@@ -45,7 +45,13 @@ function captureStdout(fn) {
 // engine only when one is provided; everything else (git, the other engine)
 // exits non-zero so worktreeCount stays 0 and the absent engine reads
 // "not installed". Mirrors how coder.js injects deps.spawnSync.
-function fakeSh({ crushVersion = null, opencodeVersion = null } = {}) {
+function fakeSh({
+  crushVersion = null,
+  opencodeVersion = null,
+  ompVersion = null,
+  ompLaunchHelp = '',
+  ompModelsHelp = '',
+} = {}) {
   return (cmd, args) => {
     if (cmd === 'crush' && args[0] === '--version') {
       return crushVersion != null
@@ -56,6 +62,17 @@ function fakeSh({ crushVersion = null, opencodeVersion = null } = {}) {
       return opencodeVersion != null
         ? { status: 0, stdout: opencodeVersion, stderr: '', error: null }
         : { status: 1, stdout: '', stderr: '', error: null };
+    }
+    if (cmd === 'omp' && args[0] === '--version') {
+      return ompVersion != null
+        ? { status: 0, stdout: ompVersion, stderr: '', error: null }
+        : { status: 1, stdout: '', stderr: '', error: null };
+    }
+    if (cmd === 'omp' && args[0] === 'models' && args[1] === '--help') {
+      return { status: 0, stdout: ompModelsHelp, stderr: '', error: null };
+    }
+    if (cmd === 'omp' && args[0] === '--help') {
+      return { status: 0, stdout: ompLaunchHelp, stderr: '', error: null };
     }
     return { status: 1, stdout: '', stderr: '', error: null };
   };
@@ -192,6 +209,51 @@ test(
     assert.doesNotMatch(out, /opencode\s+not installed/);
     // crush line still renders independently (not installed since not provided).
     assert.match(out, /crush\s+not installed/);
+  }),
+);
+
+test(
+  'runStatus: below-floor OMP is incompatible and never rendered as meeting minimum',
+  withTmpKey(async () => {
+    const savedMinimum = process.env.TRISS_CODER_OMP_VERSION;
+    delete process.env.TRISS_CODER_OMP_VERSION;
+    try {
+      const out = stripAnsi(
+        await captureStdout(() => runStatus({
+          spawnSync: fakeSh({ ompVersion: '17.9.0' }),
+        }))(),
+      );
+      assert.match(out, /omp\s+17\.9\.0 \(minimum: 18\.0\.6\) — below_floor/u);
+      assert.doesNotMatch(out, /omp\s+17\.9\.0.*meets minimum/u);
+    } finally {
+      if (savedMinimum === undefined) delete process.env.TRISS_CODER_OMP_VERSION;
+      else process.env.TRISS_CODER_OMP_VERSION = savedMinimum;
+    }
+  }),
+);
+
+test(
+  'runStatus: OMP missing CLI capabilities is incompatible and names the gap',
+  withTmpKey(async () => {
+    const savedMinimum = process.env.TRISS_CODER_OMP_VERSION;
+    delete process.env.TRISS_CODER_OMP_VERSION;
+    try {
+      const out = stripAnsi(
+        await captureStdout(() => runStatus({
+          spawnSync: fakeSh({
+            ompVersion: '18.0.6',
+            ompLaunchHelp: '--mode --model',
+            ompModelsHelp: '--json --no-extensions',
+          }),
+        }))(),
+      );
+      assert.match(out, /omp\s+18\.0\.6 \(minimum: 18\.0\.6\) — unsupported CLI contract/u);
+      assert.match(out, /capabilities missing:.*--smol/u);
+      assert.doesNotMatch(out, /omp\s+18\.0\.6.*meets minimum/u);
+    } finally {
+      if (savedMinimum === undefined) delete process.env.TRISS_CODER_OMP_VERSION;
+      else process.env.TRISS_CODER_OMP_VERSION = savedMinimum;
+    }
   }),
 );
 

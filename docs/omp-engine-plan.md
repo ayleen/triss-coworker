@@ -186,8 +186,8 @@ Keep Triss model IDs and provider aliases as the public API. Translate only at t
 
 | Triss selector prefix | OMP catalogue provider | Actual run selector | Credential/environment handling |
 | --- | --- | --- | --- |
-| `opencode` | `opencode-zen` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
-| `opencode-go` | `opencode-go` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode` | `opencode-zen` | audited: `triss-coder-transient/<model-id>`; unaudited raw: `opencode-zen/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode-go` | `opencode-go` | audited: `triss-coder-transient/<model-id>`; unaudited raw: `opencode-go/<model-id>` | `OPENCODE_API_KEY` |
 | `zai-coding-plan` | `zhipu-coding-plan` | `triss-coder-transient/<model-id>` | `ZHIPU_API_KEY` |
 | `zai` | `zai` | `triss-coder-transient/<model-id>` | bridge `ZHIPU_API_KEY` to OMP's `ZAI_API_KEY` |
 | `moonshotai` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
@@ -195,7 +195,7 @@ Keep Triss model IDs and provider aliases as the public API. Translate only at t
 | `kimi-for-coding` | `kimi-code` | `triss-coder-transient/<model-id>` | `KIMI_API_KEY` |
 | `triss-worker` | none (transient only) | `triss-coder-transient/<model-id>` | `TRISS_WORKER_API_KEY` and worker base URL |
 
-The catalogue provider is used only to project isolated `omp models` output back to public Triss selectors. For audited runs, generate an OMP `models.yml` entry under a run-private agent directory using provider ID `triss-coder-transient`. Map Triss protocols exactly:
+The catalogue provider is used only to project isolated `omp models` output back to public Triss selectors. Audited runs generate OMP `models.yml` entries under a run-private agent directory using provider ID `triss-coder-transient`; a different small-model transport uses `triss-coder-transient-small`. Unaudited Zen/Go in `best_effort_raw` use OMP's built-in selectors instead, and protected mode fails before proxy startup. Missing protocol metadata is never guessed. Map audited Triss protocols exactly:
 
 - `openai_chat` -> `openai-completions`;
 - `openai_responses` -> `openai-responses`;
@@ -205,7 +205,7 @@ The file contains an environment variable name, never a secret value. Protected 
 
 Preserve the original Triss model as `billing_model` and result metadata. The rewritten OMP selector is execution metadata only and must not corrupt cost/provider classification.
 
-The run option `triss coder run --small-model` maps to OMP `--smol`. The persistent option remains `triss coder model set --small`; it writes `TRISS_CODER_SMALL_MODEL`, which a later OMP run resolves and passes through the same `--smol` path. Existing same-provider/same-credential validation remains authoritative. The small-model path must never cause a second raw credential to enter the child.
+The run option `triss coder run --small-model` maps to OMP `--smol`. The persistent option remains `triss coder model set --small`; it writes `TRISS_CODER_SMALL_MODEL`, which a later OMP run resolves and passes through the same `--smol` path. The projection registers both IDs in one transient provider when they share a transport and creates a second provider (plus a second scoped proxy in protected mode) when they do not. Existing same-provider/same-credential validation remains authoritative. The small-model path never sends a second raw credential into the child.
 
 ### 4.6 Model configuration backend
 

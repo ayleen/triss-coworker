@@ -21,6 +21,7 @@ import {
   buildOmpPolicyOverlay,
   renderOmpPolicyYaml,
   buildOmpModelsConfig,
+  buildOmpModelProjection,
   ompDataRoot,
   ompSessionsRoot,
   ompRunsRoot,
@@ -199,6 +200,148 @@ test('buildOmpModelsConfig: proxy baseUrl', () => {
 
 test('buildOmpModelsConfig: throws without route', () => {
   assert.throws(() => buildOmpModelsConfig({ providerRoute: null, credentialEnv: 'X' }), /providerRoute/);
+});
+
+test('buildOmpModelsConfig: unknown transport fails closed', () => {
+  assert.throws(
+    () => buildOmpModelsConfig({
+      providerRoute: {
+        modelId: 'future-model',
+        protocol: undefined,
+        endpoint: 'https://api.example.com',
+        pathPrefix: '/v1',
+      },
+      credentialEnv: 'OPENCODE_API_KEY',
+    }),
+    /Unsupported OMP protocol undefined/,
+  );
+});
+
+test('buildOmpModelProjection: same transport registers both model IDs', () => {
+  const main = {
+    provider: 'zai',
+    modelId: 'glm-5.2',
+    protocol: 'openai_chat',
+    endpoint: 'https://api.z.ai',
+    pathPrefix: '/api/coding/paas/v4',
+    package: '@ai-sdk/openai-compatible',
+    authStyle: 'bearer',
+  };
+  const small = { ...main, modelId: 'glm-5-turbo' };
+  const projection = buildOmpModelProjection({
+    providerRoute: main,
+    smallRoute: small,
+    credentialEnv: 'ZHIPU_API_KEY',
+  });
+  assert.equal(projection.mainSelector, 'triss-coder-transient/glm-5.2');
+  assert.equal(projection.smallSelector, 'triss-coder-transient/glm-5-turbo');
+  assert.deepEqual(
+    projection.modelsConfig.providers['triss-coder-transient'].models.map(({ id }) => id),
+    ['glm-5.2', 'glm-5-turbo'],
+  );
+});
+
+test('buildOmpModelProjection: distinct transports get separate providers and selectors', () => {
+  const main = {
+    provider: 'opencode-go',
+    modelId: 'deepseek-v4-flash',
+    protocol: 'openai_chat',
+    endpoint: 'https://opencode.ai',
+    pathPrefix: '/zen/go/v1',
+    package: '@ai-sdk/openai-compatible',
+    authStyle: 'bearer',
+    transportAudited: true,
+  };
+  const small = {
+    ...main,
+    modelId: 'gpt-5.6-luna',
+    protocol: 'openai_responses',
+    package: '@ai-sdk/openai',
+  };
+  const projection = buildOmpModelProjection({
+    providerRoute: main,
+    smallRoute: small,
+    proxy: { baseUrl: 'http://127.0.0.1:1001/v1' },
+    smallProxy: { baseUrl: 'http://127.0.0.1:1002/v1' },
+    credentialEnv: 'OPENCODE_API_KEY',
+  });
+  assert.equal(projection.mainSelector, 'triss-coder-transient/deepseek-v4-flash');
+  assert.equal(projection.smallSelector, 'triss-coder-transient-small/gpt-5.6-luna');
+  assert.equal(
+    projection.modelsConfig.providers['triss-coder-transient'].baseUrl,
+    'http://127.0.0.1:1001/v1',
+  );
+  assert.equal(
+    projection.modelsConfig.providers['triss-coder-transient-small'].baseUrl,
+    'http://127.0.0.1:1002/v1',
+  );
+  assert.equal(
+    projection.modelsConfig.providers['triss-coder-transient-small'].api,
+    'openai-responses',
+  );
+});
+
+test('buildOmpModelProjection: unaudited Zen and Go use built-in OMP selectors', () => {
+  for (const [provider, expected] of [
+    ['opencode-zen', 'opencode-zen/future-zen'],
+    ['opencode-go', 'opencode-go/future-go'],
+  ]) {
+    const modelId = provider === 'opencode-zen' ? 'future-zen' : 'future-go';
+    const projection = buildOmpModelProjection({
+      providerRoute: {
+        provider,
+        modelId,
+        protocol: undefined,
+        transportAudited: false,
+      },
+      credentialEnv: 'OPENCODE_API_KEY',
+    });
+    assert.equal(projection.mainSelector, expected);
+    assert.equal(projection.modelsConfig, null);
+  }
+});
+
+test('buildOmpModelProjection: audited and built-in roles can be mixed without guessed transport', () => {
+  const audited = {
+    provider: 'opencode-go',
+    modelId: 'deepseek-v4-flash',
+    protocol: 'openai_chat',
+    endpoint: 'https://opencode.ai',
+    pathPrefix: '/zen/go/v1',
+    package: '@ai-sdk/openai-compatible',
+    authStyle: 'bearer',
+    transportAudited: true,
+  };
+  const builtIn = {
+    ...audited,
+    modelId: 'future-go',
+    protocol: undefined,
+    package: undefined,
+    transportAudited: false,
+  };
+  const auditedMain = buildOmpModelProjection({
+    providerRoute: audited,
+    smallRoute: builtIn,
+    credentialEnv: 'OPENCODE_API_KEY',
+  });
+  assert.equal(auditedMain.mainSelector, 'triss-coder-transient/deepseek-v4-flash');
+  assert.equal(auditedMain.smallSelector, 'opencode-go/future-go');
+  assert.deepEqual(
+    auditedMain.modelsConfig.providers['triss-coder-transient'].models.map(({ id }) => id),
+    ['deepseek-v4-flash'],
+  );
+
+  const builtInMain = buildOmpModelProjection({
+    providerRoute: builtIn,
+    smallRoute: audited,
+    credentialEnv: 'OPENCODE_API_KEY',
+  });
+  assert.equal(builtInMain.mainSelector, 'opencode-go/future-go');
+  assert.equal(builtInMain.smallSelector, 'triss-coder-transient/deepseek-v4-flash');
+  assert.deepEqual(
+    builtInMain.modelsConfig.providers['triss-coder-transient'].models.map(({ id }) => id),
+    ['deepseek-v4-flash'],
+  );
 });
 
 // --- runtime dirs ---

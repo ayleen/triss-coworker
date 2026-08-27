@@ -70,8 +70,8 @@ Triss model IDs stay the public API; translation happens only at the adapter bou
 
 | Triss prefix | OMP catalogue provider | Actual run selector | Credential |
 |---|---|---|---|
-| `opencode` | `opencode-zen` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
-| `opencode-go` | `opencode-go` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode` | `opencode-zen` | audited: `triss-coder-transient/<model-id>`; unaudited raw: `opencode-zen/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode-go` | `opencode-go` | audited: `triss-coder-transient/<model-id>`; unaudited raw: `opencode-go/<model-id>` | `OPENCODE_API_KEY` |
 | `zai-coding-plan` | `zhipu-coding-plan` | `triss-coder-transient/<model-id>` | `ZHIPU_API_KEY` |
 | `zai` | `zai` | `triss-coder-transient/<model-id>` | bridge `ZHIPU_API_KEY` → `ZAI_API_KEY` |
 | `moonshotai` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
@@ -79,7 +79,7 @@ Triss model IDs stay the public API; translation happens only at the adapter bou
 | `kimi-for-coding` | `kimi-code` | `triss-coder-transient/<model-id>` | `KIMI_API_KEY` |
 | `triss-worker` | none (transient only) | `triss-coder-transient/<model-id>` | `TRISS_WORKER_API_KEY` + worker base URL |
 
-The catalogue provider column describes selector translation for isolated `omp models`; it is not the run route. Every audited run goes through a transient `models.yml` entry under the run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
+The catalogue provider column describes selector translation for isolated `omp models`; it is not always the run route. Audited routes use transient `models.yml` entries under the run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). If main and small share a transport, both IDs are registered in that provider; different audited transports use `triss-coder-transient-small` plus a second scoped proxy in protected mode. Unaudited Zen/Go routes are never assigned a guessed protocol: `best_effort_raw` uses OMP's built-in provider selector, while protected mode rejects them before proxy, session reservation, or spawn. Billing preserves the original Triss `billing_model`.
 
 ## Credential modes
 

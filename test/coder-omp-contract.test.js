@@ -31,10 +31,12 @@ function resolveOmpBin() {
   if (process.env.OMP_BIN) return process.env.OMP_BIN;
   try {
     const out = execFileSync('which', ['omp'], { encoding: 'utf8' });
-    const p = out.trim().split('\n').pop();
-    if (p) return p;
-  } catch {}
-  return null;
+    const path = out.trim().split('\n').pop();
+    return path || null;
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.status === 1) return null;
+    throw error;
+  }
 }
 const OMP_BIN = resolveOmpBin();
 
@@ -60,6 +62,10 @@ const sampleRoute = {
   endpoint: 'https://api.opencode.ai',
   pathPrefix: '/v1',
 };
+const sampleSmallRoute = {
+  ...sampleRoute,
+  modelId: 'deepseek-v4-flash-free',
+};
 
 test(
   'real OMP: --version returns a semver that meets OMP_SUPPORTED_FLOOR',
@@ -72,13 +78,14 @@ test(
 );
 
 test(
-  'real OMP: triss-coder-transient/<model> is selectable after models.yml + agent dir',
+  'real OMP: main and small transient selectors are both registered by models.yml',
   { skip: SKIP },
   () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'omp-contract-'));
     try {
       const config = buildOmpModelsConfig({
         providerRoute: sampleRoute,
+        smallRoute: sampleSmallRoute,
         credentialEnv: 'OPENCODE_API_KEY',
       });
       const yaml = renderOmpModelsYaml(config);
@@ -93,14 +100,16 @@ test(
         Array.isArray(parsed.models),
         `expected models array: ${JSON.stringify(parsed).slice(0, 300)}`
       );
-      const found = parsed.models.find(
-        (m) => m.provider === 'triss-coder-transient' || m.id === 'deepseek-v4-flash'
-      );
-      assert.ok(
-        found,
-        `triss-coder-transient/deepseek-v4-flash not registered: ${JSON.stringify(parsed.models).slice(0, 300)}`
-      );
-      assert.equal(found.selector, 'triss-coder-transient/deepseek-v4-flash');
+      for (const selector of [
+        'triss-coder-transient/deepseek-v4-flash',
+        'triss-coder-transient/deepseek-v4-flash-free',
+      ]) {
+        const found = parsed.models.find((model) => model.selector === selector);
+        assert.ok(
+          found,
+          `${selector} not registered: ${JSON.stringify(parsed.models).slice(0, 500)}`,
+        );
+      }
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
