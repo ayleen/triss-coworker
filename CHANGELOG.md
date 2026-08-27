@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-08-28
+
+### Changed
+
+- GitHub Actions dependencies now use `actions/checkout@7.0.1`,
+  `actions/download-artifact@8.0.1`, `ossf/scorecard-action@2.4.4`, and
+  `github/codeql-action/upload-sarif@4.37.8`, all pinned to immutable commits.
+  The artifact download path now uses the Node 24 action runtime and fails on
+  digest mismatches by default.
+- ESLint is updated from `10.8.1` to `10.9.0`.
+- `triss-dsh-provider-bundle` is version-aligned and republished unchanged;
+  its OpenCode Zen, OpenCode Go, and Z.AI routes are unchanged.
+
+### Artifact integrity (0.41.0)
+
+- `triss-dsh-provider-bundle-0.41.0.tgz` — sha256
+  `cfcf46769b574e336ae119013020bfca2a3e379768904760a33f05c5c3b9314a`
+  — `sha512-1qAD9qLklmww0XvDj1IBaM6EFeHypcp58yoXYKP/xEqB7O80BZAekOcwopnGro0eeqn7WF3kZs5Yru64X1YCBQ==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.41.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.41.0`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
+
+
 ## [0.40.0] — 2026-08-27
 
 ### Added
@@ -1713,7 +1738,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...v0.40.0
 [0.39.2]: https://github.com/ayleen/triss-coworker/compare/v0.39.1...v0.39.2
 [0.39.1]: https://github.com/ayleen/triss-coworker/compare/v0.39.0...v0.39.1
