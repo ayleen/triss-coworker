@@ -79,6 +79,9 @@ test('applyModelChange omp: atomically writes ONLY the two pins (confirmed plan)
       };
       const result = await applyModelChange(plan, { backupRoot, lock: (_engine, _scope) => ({ release: () => {} }) });
       assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.backend, 'triss-env');
+      assert.equal(result.model, 'zai-coding-plan/glm-5.2');
+      assert.equal(result.small_model, 'zai-coding-plan/glm-5-turbo');
       const after = readFileSync(env, 'utf8');
       assert.ok(after.includes('KEEP_ME=1'), 'unrelated line preserved');
       assert.ok(after.includes('TRISS_CODER_MODEL=zai-coding-plan/glm-5.2'));

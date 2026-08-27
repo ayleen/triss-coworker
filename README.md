@@ -967,18 +967,20 @@ triss coder run "..." --model moonshotai/kimi-k3
 triss coder run "..." --model kimi-for-coding/k3
 ```
 
-`triss coder run` passes the resolved model to opencode with `--model` and
+`triss coder run` passes the resolved model to OpenCode with `--model` and
 forwards only the key that model needs — no Z.AI key is required for Zen, Go, or
-Kimi runs. A shell-exported `TRISS_CODER_MODEL` is a runtime override of the
-MAIN model only (it sits in the OpenCode-main precedence chain: one-run `--model`
-→ shell `TRISS_CODER_MODEL` → project `.triss.env` → global `.env` → built-in
-default), so it changes the main model for every run until unset.
-`TRISS_CODER_SMALL_MODEL` is setup intent consumed by `triss coder init` /
-`triss coder model` — it does not swap the small model mid-run (opencode reads
-`small_model` from `opencode.json`). Use `--model` alone for a one-run main-only
-override within the current provider; use `--provider` + `--model` and optional
-`--small-model` to switch the complete pair for one run. The deny-first
-`opencode.json` bash policy applies to every provider.
+Kimi runs. For OpenCode, a shell-exported `TRISS_CODER_MODEL` overrides only the
+runtime main role; `TRISS_CODER_SMALL_MODEL` remains setup/model-management
+intent because OpenCode reads `small_model` from `opencode.json`. Use `--model`
+alone for a one-run main-only override within the current provider; use
+`--provider` + `--model` and optional `--small-model` to switch the complete
+pair for one run. The deny-first `opencode.json` bash policy applies to every
+OpenCode provider.
+
+OMP is different: both `TRISS_CODER_MODEL` and `TRISS_CODER_SMALL_MODEL` are
+runtime inputs, mapped to `--model` and `--smol`. Persistent OMP model changes
+write only those two Triss env pins and never read or modify `opencode.json`.
+
 Full details, the model catalogue, and every configuration path are in
 [docs/engines/opencode-zen.md](docs/engines/opencode-zen.md) and [docs/engines/opencode-go.md](docs/engines/opencode-go.md).
 

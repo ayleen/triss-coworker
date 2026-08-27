@@ -59,6 +59,7 @@ import {
   formatModelRecovery,
   formatShellCommand,
   captureShellSnapshot,
+  configBackendForEngine,
 } from '../coder-models.js';
 
 // ─── shared helpers ──────────────────────────────────────────────────────────
@@ -89,6 +90,23 @@ function readOpencodeConfig(scope) {
   } catch {
     return { exists: false, denyFirstBash: false };
   }
+}
+
+// OMP persists both runtime roles in Triss env files. Local mutations inherit
+// an absent role from the lower-precedence global env; global mutations read
+// only the global target and never borrow a project-local value.
+function readTrissEnvConfig(scope) {
+  const targetPath = getEnvFilePath(scope);
+  const target = readEnvFile(targetPath).vars;
+  const fallback = scope === 'local'
+    ? readEnvFile(getEnvFilePath('global')).vars
+    : {};
+  return {
+    exists: Object.keys(target).length > 0,
+    model: target.TRISS_CODER_MODEL || fallback.TRISS_CODER_MODEL,
+    small_model: target.TRISS_CODER_SMALL_MODEL || fallback.TRISS_CODER_SMALL_MODEL,
+    path: targetPath,
+  };
 }
 
 // Maps the service's internal availability token to the user-facing term from
@@ -437,6 +455,10 @@ export async function runCoderModelSet(mainArg, opts = {}) {
     process.exit(1);
   }
   const engine = resolveCoderEngine(opts);
+  const backend = configBackendForEngine(engine);
+  if (backend === null) {
+    throw new Error(`Unsupported coder engine for model management: ${engine}`);
+  }
 
   // Crush persistent mutation: plan the spawn argv via the PURE service seam
   // (validates the exact canonical Z.AI coding-plan pair + scope), then apply
@@ -576,36 +598,36 @@ export async function runCoderModelSet(mainArg, opts = {}) {
     process.exit(1);
   }
 
-  // When only --small is given, keep the currently-configured main so a
-  // small-only edit doesn't accidentally drop the main role. planModelChange
-  // needs a concrete main to enforce the same-prefix rule.
-  const existing = readOpencodeConfig(scope);
+  // Inheritance follows the selected configuration backend. OMP reads only
+  // its Triss env graph; it must never consult opencode.json. A local OMP
+  // mutation may inherit an absent role from global env, while a global
+  // mutation reads only global env and cannot borrow project-local state.
+  const existing = backend === 'triss-env'
+    ? readTrissEnvConfig(scope)
+    : readOpencodeConfig(scope);
   const effectiveMain = main || existing.model;
   if (!effectiveMain) {
+    const source = backend === 'triss-env' ? 'Triss env configuration' : 'opencode.json';
     throw new Error(
-      'No main model given and none currently configured in opencode.json — ' +
-        'pass a main model positionally (e.g. `triss coder model set opencode/<id> ...`).',
+      `No main model given and none currently configured in ${source} — ` +
+        'pass a main model positionally.',
     );
   }
   const effectiveSmall = small || existing.small_model;
   if (!effectiveSmall) {
+    const source = backend === 'triss-env' ? 'TRISS_CODER_SMALL_MODEL' : 'opencode.json';
     throw new Error(
-      'No --small model given and none currently configured in opencode.json — ' +
-        'pass --small <model> (opencode reads small_model from this file at run time).',
+      `No --small model given and none currently configured in ${source} — ` +
+        'pass --small <model>.',
     );
   }
 
-  // Cross-scope shadow audit (global scope only). A project .triss.env
-  // (TRISS_CODER_MODEL) and/or a project opencode.json (model / small_model)
-  // have HIGHER precedence than the global config opencode resolves at run
-  // time, so a --global set that either file shadows would be cosmetic at the
-  // project root. Audit both BEFORE plan/apply so nothing is mutated while a
-  // shadow is active (the plan is pure but makes a network round-trip; failing
-  // fast here avoids it). The shell-export shadow is still caught post-apply by
-  // warnIfShellShadow; this catches the on-disk project shadows. --local sets
-  // and equal project values do NOT block.
+  // Cross-scope shadow audit (global scope only). The selected backend decides
+  // which project files can win: OMP audits both model pins in .triss.env and
+  // ignores opencode.json; opencode-v1 retains its project env/config audit.
+  // This runs before plan/apply so a cosmetic global mutation writes nothing.
   if (scope === 'global') {
-    const shadows = auditCrossScopeShadow(effectiveMain, effectiveSmall);
+    const shadows = auditCrossScopeShadow(effectiveMain, effectiveSmall, backend);
     if (shadows) {
       renderCrossScopeShadow(shadows, effectiveMain, effectiveSmall, opts);
       process.exit(1);
@@ -645,16 +667,15 @@ export async function runCoderModelSet(mainArg, opts = {}) {
     process.exit(1);
   }
 
-  // Deny-first bash policy gate (parity with `coder init`'s auditExistingConfig).
-  // A present opencode.json without permission.bash["*"]="deny" is BLOCKING by
-  // default; --allow-unsafe-bash is the explicit opt-in. applyModelChange
-  // RETAINS the existing policy verbatim, so this gate only decides whether to
-  // PROCEED, never whether to install a policy.
-  if (existing.exists && !existing.denyFirstBash && !opts.allowUnsafeBash) {
+  // Only the opencode-v1 backend loads a persistent OpenCode Bash policy.
+  // OMP enforces its own run-private policy overlay and ignores opencode.json.
+  if (backend === 'opencode-v1' &&
+      existing.exists && !existing.denyFirstBash && !opts.allowUnsafeBash) {
     renderBashPolicyGap(scope, plan, opts);
     process.exit(1);
   }
-  if (existing.exists && !existing.denyFirstBash && opts.allowUnsafeBash) {
+  if (backend === 'opencode-v1' &&
+      existing.exists && !existing.denyFirstBash && opts.allowUnsafeBash) {
     process.stderr.write(
       pc.yellow(
         '⚠ opencode.json has no deny-first bash policy (permission.bash["*"]="deny") — proceeding\n' +
@@ -686,28 +707,22 @@ export async function runCoderModelSet(mainArg, opts = {}) {
   // record + absolute manual restore paths).
   const result = await applyModelChange({ ...plan, confirmed: true }, {});
   if (!result.ok) {
-    renderApplyFailure(result);
+    renderApplyFailure(result, backend);
     process.exit(result.exitCode && typeof result.exitCode === 'number' ? result.exitCode : 1);
   }
 
-  // The two Triss intent pins are persisted INSIDE applyModelChange's
-  // transaction now (sibling-temp + 0600 + atomic rename), so there is no
-  // second setVar pass here — that would both duplicate the write and bypass
-  // the transactional guarantee. A fresh `triss coder run` reads
-  // TRISS_CODER_MODEL (now staged atomically) for the main role; OpenCode
-  // itself reads small_model from opencode.json (also staged atomically).
-  // TRISS_CODER_SMALL_MODEL is management intent — kept in sync so the next
-  // `triss coder init` is idempotent.
+  // applyModelChange owns the backend transaction. OpenCode atomically writes
+  // opencode.json plus the intent pins; OMP atomically writes only its two
+  // runtime env pins.
+  warnIfShellShadow(
+    inheritedModel,
+    inheritedSmall,
+    result.model,
+    result.small_model,
+    backend,
+  );
 
-  // Shell-export shadow warning: a shell export beats every .env file, so if
-  // TRISS_CODER_MODEL was exported to a different value the pin just written
-  // is cosmetic and the next run still uses the shell value. Warn loudly
-  // (parity with runCoderInit's warnIfPinShadowed). The on-disk cross-scope
-  // (project-env / project-opencode.json) shadow audit already ran BEFORE
-  // plan/apply above; this catches the shell-export path only.
-  warnIfShellShadow(inheritedModel, inheritedSmall, result.model, result.small_model);
-
-  renderApplySuccess(result, scope);
+  renderApplySuccess(result, scope, backend);
 }
 
 // ─── model set render helpers ────────────────────────────────────────────────
@@ -842,14 +857,10 @@ function renderPlanPreview(plan) {
   process.stderr.write(pc.dim(`  catalogue: ${plan.catalogue?.status || 'unknown'}\n`));
 }
 
-function renderApplyFailure(result) {
+export function renderApplyFailure(result, backend = result.backend || 'opencode-v1') {
   const reason = result.reason || 'unknown';
   const exitCode = result.exitCode;
   if (exitCode === 3) {
-    // Rollback FAILED — the protected transaction record is retained and the
-    // operator must restore manually from the absolute backup paths. Lead
-    // with the loudest possible banner: original files may currently be in
-    // the post-write state (the rename committed before the rollback threw).
     process.stderr.write(
       pc.bgRed(pc.white(' ROLLBACK FAILED ')) +
         pc.red(' — original files may NOT be restored.\n'),
@@ -861,9 +872,7 @@ function renderApplyFailure(result) {
       process.stderr.write(pc.dim(`  rollback error: ${result.error}\n`));
     }
     if (result.transaction && result.transaction.dir) {
-      process.stderr.write(
-        pc.dim(`  protected record: ${result.transaction.dir}\n`),
-      );
+      process.stderr.write(pc.dim(`  protected record: ${result.transaction.dir}\n`));
     }
     const restorePaths = Array.isArray(result.restorePaths) ? result.restorePaths : [];
     if (restorePaths.length) {
@@ -876,82 +885,66 @@ function renderApplyFailure(result) {
     }
     return;
   }
+  const targetLabel = backend === 'triss-env'
+    ? 'Triss env pins are unchanged'
+    : 'opencode.json is unchanged';
   process.stderr.write(
-    pc.red(`✗ Apply failed (${reason}) — rolled back; opencode.json is unchanged.\n`),
+    pc.red(`✗ Apply failed (${reason}) — rolled back; ${targetLabel}.\n`),
   );
-  if (result.path) {
-    process.stderr.write(pc.dim(`  target: ${result.path}\n`));
-  }
-  if (result.error) {
-    process.stderr.write(pc.dim(`  error: ${result.error}\n`));
-  }
+  const targetPath = backend === 'triss-env' ? result.envPath : result.path;
+  if (targetPath) process.stderr.write(pc.dim(`  target: ${targetPath}\n`));
+  if (result.error) process.stderr.write(pc.dim(`  error: ${result.error}\n`));
   if (result.transaction && result.transaction.dir) {
-    process.stderr.write(
-      pc.dim(`  forensics: ${result.transaction.dir} (retained)\n`),
-    );
+    process.stderr.write(pc.dim(`  forensics: ${result.transaction.dir} (retained)\n`));
   }
   if (result.rollbackCommand) {
     process.stderr.write(pc.dim(`  rollback: ${result.rollbackCommand}\n`));
   }
-  if (reason === 'malformed-config') {
+  if (backend === 'opencode-v1' && reason === 'malformed-config') {
     process.stderr.write(
       pc.dim('  opencode.json is not valid JSON — left byte-identical; fix it and re-run.\n'),
     );
-  } else if (reason === 'config-missing') {
+  } else if (backend === 'opencode-v1' && reason === 'config-missing') {
     process.stderr.write(
-      pc.dim(
-        '  opencode.json does not exist — run `triss coder init` first, or create it.\n',
-      ),
+      pc.dim('  opencode.json does not exist — run `triss coder init` first, or create it.\n'),
     );
   }
 }
 
-function renderApplySuccess(result, scope) {
+function renderApplySuccess(result, scope, backend = result.backend || 'opencode-v1') {
   process.stderr.write(pc.green('✓ Switched persistent coder models.\n'));
+  process.stderr.write(pc.dim(`  engine:       ${result.engine || 'opencode'}\n`));
   process.stderr.write(pc.dim(`  scope:        ${scope}\n`));
   process.stderr.write(`  main:         ${pc.cyan(result.model)}\n`);
   process.stderr.write(`  small:        ${pc.cyan(result.small_model)}\n`);
-  process.stderr.write(pc.dim(`  opencode.json: ${result.path}\n`));
-  // Phase 4: V2 mutation targets the SHARED config — state explicitly that
-  // both OpenCode engines see the change and the small value is a V1
-  // compatibility value (plan §"Small-model role").
-  if (result.engine === 'opencode2') {
-    process.stderr.write(
-      pc.yellow(
-        '  note: this opencode.json is shared with OpenCode 1 — both engines see this change. The small value is an OpenCode 1 compatibility value (no effect in opencode2).\n',
-      ),
-    );
+  if (backend === 'opencode-v1') {
+    process.stderr.write(pc.dim(`  opencode.json: ${result.path}\n`));
+    if (result.engine === 'opencode2') {
+      process.stderr.write(
+        pc.yellow(
+          '  note: this opencode.json is shared with OpenCode 1 — both engines see this change. The small value is an OpenCode 1 compatibility value (no effect in opencode2).\n',
+        ),
+      );
+    }
   }
-  if (result.envPath) {
-    process.stderr.write(pc.dim(`  env pins:     ${result.envPath}\n`));
-  }
+  if (result.envPath) process.stderr.write(pc.dim(`  env pins:     ${result.envPath}\n`));
   if (result.transaction && result.transaction.dir) {
     process.stderr.write(pc.dim(`  record:       ${result.transaction.dir}\n`));
   }
   if (result.rollbackCommand) {
     process.stderr.write(pc.dim(`  rollback:     ${result.rollbackCommand}\n`));
   }
+  const resolution = backend === 'triss-env'
+    ? 'TRISS_CODER_MODEL + TRISS_CODER_SMALL_MODEL'
+    : 'TRISS_CODER_MODEL + opencode.json.small_model';
   process.stderr.write(
-    pc.dim(
-      '  A fresh `triss coder run` resolves this pair (TRISS_CODER_MODEL + opencode.json.small_model).\n',
-    ),
+    pc.dim(`  A fresh \`triss coder run\` resolves this pair (${resolution}).\n`),
   );
 }
 
-// Writes TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL into the .env of `scope`
-// — handled INSIDE applyModelChange's transaction now (sibling-temp + 0600 +
-// exclusive-open + atomic rename), so this command module no longer performs
-// a second setVar pass. The previous Phase 4a helper is removed: it would
-// both duplicate the write and bypass the transactional guarantee. The
-// service owns the env-pin mutation; this module owns CLI affordances only.
-
-// Shell-export shadow check (subset of runCoderInit's warnIfPinShadowed). A
-// shell export beats every .env file, so a differing inherited value means the
-// pin just written is cosmetic — warn loudly. The on-disk cross-scope audit
-// (project .triss.env / project opencode.json overriding a global request) runs
-// BEFORE plan/apply via auditCrossScopeShadow; this catches the shell-export
-// trap, which cannot be detected from disk.
-function warnIfShellShadow(inheritedModel, inheritedSmall, model, smallModel) {
+// Shell-export shadow check. Both OMP pins are runtime inputs; OpenCode keeps
+// the historical small-role management-intent semantics.
+function warnIfShellShadow(inheritedModel, inheritedSmall, model, smallModel, backend) {
   if (inheritedModel && inheritedModel !== model) {
     process.stderr.write(
       pc.yellow(
@@ -961,16 +954,14 @@ function warnIfShellShadow(inheritedModel, inheritedSmall, model, smallModel) {
       ),
     );
   }
-  // TRISS_CODER_SMALL_MODEL is management intent, not a runtime override (the
-  // small role is read from opencode.json at run time). A differing shell
-  // export does not shadow THIS run, but is a management-intent conflict that
-  // the next `triss coder init` could restore — warn distinctly.
   if (inheritedSmall && inheritedSmall !== smallModel) {
+    const detail = backend === 'triss-env'
+      ? 'it overrides the OMP small role at run time'
+      : 'it does not shadow this OpenCode run, but the next `triss coder init` could restore it';
     process.stderr.write(
       pc.yellow(
-        `  ⚠ TRISS_CODER_SMALL_MODEL=${inheritedSmall} is exported in your shell — it does not\n` +
-          '    shadow this run (small_model is read from opencode.json) but the next\n' +
-          '    `triss coder init` could restore it. Run `unset TRISS_CODER_SMALL_MODEL`.\n',
+        `  ⚠ TRISS_CODER_SMALL_MODEL=${inheritedSmall} is exported in your shell — ${detail}.\n` +
+          '    Run `unset TRISS_CODER_SMALL_MODEL`, or export the pinned value.\n',
       ),
     );
   }
@@ -978,48 +969,39 @@ function warnIfShellShadow(inheritedModel, inheritedSmall, model, smallModel) {
 
 // ─── cross-scope shadow audit (read-only, --global model set) ────────────────
 //
-// A project .triss.env (TRISS_CODER_MODEL) and/or a project opencode.json
-// (model / small_model) have HIGHER precedence than the global config opencode
-// resolves at run time. A `coder model set --global` that either file shadows
-// would be cosmetic at the project root — exactly the silent footgun this gate
-// prevents. It runs AFTER effective main/small are known but BEFORE plan/apply,
-// so nothing is mutated while a shadow is active. The shell-export shadow is a
-// separate concern, caught post-apply by warnIfShellShadow; this gate reads the
-// project FILES directly (never confusing them with a shell export).
-//
-// Reuses projectRoot() (via getEnvFilePath('local') / opencodeConfigPath('local'))
-// and readEnvFile. For project opencode.json, the file is read directly:
-//   - Missing file is clean (no finding)
-//   - Present but unreadable (permission denied) or JSON parse error or non-JSON
-//     object produces a finding kind 'malformed-config' with path and safe detail
-//     (the global switch is refused before any write)
-//   - Valid JSON object keeps the existing differing model/small behavior
-//
-// Equal project values do NOT block (no shadow). --local sets skip the gate
-// entirely (the operator is already writing where the shadow lives).
-
-// Detects any project-scope file that would shadow a --global model set.
-// Returns null when clean (files absent, or project values already equal the
-// request), or a non-empty array of {kind:'env'|'config'|'malformed-config', path, detail}
-// findings. No credential value is ever read into `detail` — only the model ids
-// the operator already requested persistently.
-function auditCrossScopeShadow(effectiveMain, effectiveSmall) {
+// Backends have different project-level runtime inputs. OMP (`triss-env`)
+// audits both TRISS_CODER_MODEL and TRISS_CODER_SMALL_MODEL in .triss.env and
+// never opens opencode.json. OpenCode keeps the historical project env main
+// pin plus project opencode.json model/small_model audit.
+function auditCrossScopeShadow(effectiveMain, effectiveSmall, backend) {
   const findings = [];
 
-  // 1. Project .triss.env — read TRISS_CODER_MODEL directly from the file (NOT
-  //    a shell export). A differing value would win over the global pin at the
-  //    project root, so the --global switch would be cosmetic HERE.
   const projectEnvPath = getEnvFilePath('local');
-  const envMain = readEnvFile(projectEnvPath).vars.TRISS_CODER_MODEL;
-  if (envMain && envMain !== effectiveMain) {
-    findings.push({
-      kind: 'env',
-      path: projectEnvPath,
-      detail: `TRISS_CODER_MODEL=${envMain}`,
-    });
+  const projectVars = readEnvFile(projectEnvPath).vars;
+  const envRoles = [
+    ['main', 'TRISS_CODER_MODEL', effectiveMain],
+    ...(backend === 'triss-env'
+      ? [['small', 'TRISS_CODER_SMALL_MODEL', effectiveSmall]]
+      : []),
+  ];
+  for (const [role, env, proposed] of envRoles) {
+    const value = projectVars[env];
+    if (value && value !== proposed) {
+      findings.push({
+        kind: 'env',
+        role,
+        env,
+        path: projectEnvPath,
+        value,
+        detail: `${env}=${value}`,
+      });
+    }
+  }
+  if (backend === 'triss-env') {
+    return findings.length > 0 ? findings : null;
   }
 
-  // 2. Project opencode.json — read the file directly. A missing file is clean
+  // OpenCode alone audits project opencode.json.
   //    (no finding). A present but unreadable file (permission denied), or a file
   //    with JSON parse errors, or a non-JSON object produces a finding kind
   //    'malformed-config' with path and safe detail (the global switch is refused
@@ -1097,20 +1079,21 @@ function renderCrossScopeShadow(shadows, effectiveMain, effectiveSmall, opts) {
   const localCmd = buildLocalModelSetCommand(effectiveMain, effectiveSmall, opts);
   for (const s of shadows) {
     if (s.kind === 'env') {
+      const proposed = s.role === 'small' ? effectiveSmall : effectiveMain;
       process.stderr.write(
         pc.yellow(
           '⚠ Refusing to switch — a project .triss.env has higher precedence than the global config.\n',
         ) +
           pc.dim(
-            `    ${s.path} pins ${s.detail}, which shadows the requested main ` +
-              `"${effectiveMain}" at the project root (project scope has higher precedence ` +
+            `    ${s.path} pins ${s.detail}, which shadows the requested ${s.role} ` +
+              `"${proposed}" at the project root (project scope has higher precedence ` +
               `than global), so the --global switch would be cosmetic HERE.\n\n`,
           ) +
           pc.bold('  Either re-run scoped to the project, or clear the shadowing pin:\n'),
       );
       process.stderr.write(pc.cyan(`    ${localCmd}\n`));
       process.stderr.write(pc.dim('  or clear the shadowing project pin:\n'));
-      process.stderr.write(pc.cyan('    triss config unset TRISS_CODER_MODEL --local\n\n'));
+      process.stderr.write(pc.cyan(`    triss config unset ${s.env} --local\n\n`));
     } else if (s.kind === 'config') {
       process.stderr.write(
         pc.yellow(

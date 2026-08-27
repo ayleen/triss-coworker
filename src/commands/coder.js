@@ -6637,16 +6637,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       ['opencode-zen', 'opencode-go'].includes(smallRouteCandidate?.provider) &&
       !smallRouteCandidate.transportAudited
     ));
-  const canonicalOpenCodeRouting = engine !== 'crush' && (
+  const usesOpenCodeConfig = engine === 'opencode' || engine === 'opencode2';
+  const canonicalTransientRouting = engine !== 'crush' && (
     protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
   );
-  const runtimeRoute = canonicalOpenCodeRouting
+  const runtimeRoute = canonicalTransientRouting
     ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: protectedRouting })
     : routeCandidate;
-  let runtimeSmallRoute = canonicalOpenCodeRouting && engine !== 'opencode2'
+  let runtimeSmallRoute = canonicalTransientRouting && engine !== 'opencode2'
     ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: protectedRouting })
     : (engine === 'opencode2' ? runtimeRoute : smallRouteCandidate);
-  if (canonicalOpenCodeRouting && engine !== 'opencode2' &&
+  if (canonicalTransientRouting && engine !== 'opencode2' &&
       runtimeSmallRoute.provider !== runtimeRoute.provider) {
     if (oneShotProvider) {
       throw new Error(
@@ -6661,7 +6662,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     runtimeSmallRoute = runtimeRoute;
   }
   const separateSmallTransport = Boolean(
-    canonicalOpenCodeRouting && (engine === 'opencode' || engine === 'omp') &&
+    canonicalTransientRouting && (engine === 'opencode' || engine === 'omp') &&
     !coderRoutesShareTransport(runtimeSmallRoute, runtimeRoute),
   );
   if (!credentialValue) {
@@ -6815,17 +6816,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     })
     : null;
 
-  // Audit the exact directory tree OpenCode will load, not merely the Triss
-  // state root. A reused isolated session can carry its own opencode.json,
-  // while a non-isolated call without --cwd inherits process.cwd() even when
-  // TRISS_PROJECT_ROOT points elsewhere. No selected credential reaches the
-  // engine until every applicable layer from this runtime directory is safe.
-  // Security coupling: agent-level model defaults are deliberately outside
-  // this selected-provider audit because buildOpencodeArgv always passes the
-  // resolved model explicitly via --model, which OpenCode gives precedence.
-  // If that CLI pin is ever removed, this audit must expand to agent.*.model
-  // before any provider credential can still be forwarded safely.
-  if (canonicalOpenCodeRouting) {
+  // Audit only engines that actually load OpenCode configuration. Canonical
+  // transient routing is shared by OpenCode and OMP, but OMP's trust boundary
+  // is its run-private PI_CODING_AGENT_DIR / PI_CONFIG_FILES; opencode.json is
+  // not an OMP runtime input. A reused OpenCode isolation can carry its own
+  // opencode.json, while a non-isolated OpenCode call without --cwd inherits
+  // process.cwd() even when TRISS_PROJECT_ROOT points elsewhere. Security
+  // coupling: agent-level model defaults stay outside this selected-provider
+  // audit because buildOpencodeArgv pins --model explicitly.
+  if (usesOpenCodeConfig && canonicalTransientRouting) {
     const runtimeDir = isolation
       ? isolation.wtPath
       : opts.cwd
@@ -7027,7 +7026,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     (runtimeRoute ? `${runtimeRoute.endpoint}${runtimeRoute.pathPrefix === '/' ? '' : runtimeRoute.pathPrefix}` : `http://127.0.0.1:0/v1`);
   const transientSmallBaseURL = smallCredentialProxy?.scopedBaseUrl ||
     (runtimeSmallRoute ? `${runtimeSmallRoute.endpoint}${runtimeSmallRoute.pathPrefix === '/' ? '' : runtimeSmallRoute.pathPrefix}` : transientBaseURL);
-  const routingConfigContent = canonicalOpenCodeRouting
+  const routingConfigContent = canonicalTransientRouting
     ? JSON.stringify(buildCoderTransientProviderOverlay({
       route: runtimeRoute,
       model: modelUsed,
@@ -7263,7 +7262,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialEnv: cred.env,
         credentialValue: credentialProxy
           ? credentialProxy.token
-          : (canonicalOpenCodeRouting || engine === 'omp' ? credentialValue : undefined),
+          : (canonicalTransientRouting || engine === 'omp' ? credentialValue : undefined),
         proxy: credentialProxy
           ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
           : null,
@@ -7602,7 +7601,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           agentName: agent,
           expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
           credentialMode,
-          allowManagedProviderAbsent: canonicalOpenCodeRouting,
+          allowManagedProviderAbsent: canonicalTransientRouting,
         },
         { enumerate: deps.enumerateOpenCodeSources },
       );
@@ -7639,7 +7638,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
-      model: canonicalOpenCodeRouting ? transientModelName(runtimeRoute) : modelUsed,
+      model: canonicalTransientRouting ? transientModelName(runtimeRoute) : modelUsed,
       agent,
       sessionRealId: sessionRealIdArg2,
       cont: !!opts.continue,
@@ -7647,7 +7646,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const env2 = opencode2Engine.buildSpawnEnv({
       projectRoot: root,
       credentialEnv: cred.env,
-      credentialValue: credentialProxy ? credentialProxy.token : (canonicalOpenCodeRouting ? credentialValue : undefined),
+      credentialValue: credentialProxy ? credentialProxy.token : (canonicalTransientRouting ? credentialValue : undefined),
       configContent: routingConfigContent,
     });
     const logPath2 = opencode2LogPath(root);
@@ -7676,7 +7675,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           agentName: agent,
           expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
           credentialMode,
-          allowManagedProviderAbsent: canonicalOpenCodeRouting,
+          allowManagedProviderAbsent: canonicalTransientRouting,
         },
         { enumerate: deps.enumerateOpenCodeSources },
       );
@@ -7929,7 +7928,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         modelUsed,
         credential: cred,
         route: runtimeRoute,
-        canonical: canonicalOpenCodeRouting,
+        canonical: canonicalTransientRouting,
       }),
       session_id: result2.sessionRealId || null,
       ...runIdentity2,
@@ -7993,7 +7992,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const argv = buildOpencodeArgv({
     prompt,
     agent,
-    model: canonicalOpenCodeRouting ? transientModelName(runtimeRoute) : modelUsed,
+    model: canonicalTransientRouting ? transientModelName(runtimeRoute) : modelUsed,
     sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
@@ -8023,7 +8022,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
   const env = buildEngineEnv(
     cred.env,
-    credentialProxy ? credentialProxy.token : (canonicalOpenCodeRouting ? credentialValue : undefined),
+    credentialProxy ? credentialProxy.token : (canonicalTransientRouting ? credentialValue : undefined),
     proxiedConfigContent,
   );
   const engineVersion = detectedOpencodeVersion || opencodeVersionPin();
@@ -8267,7 +8266,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       modelUsed,
       credential: cred,
       route: runtimeRoute,
-      canonical: canonicalOpenCodeRouting,
+      canonical: canonicalTransientRouting,
     }),
     session_id: result.sessionRealId || null,
     // component: every safe envelope carries the run identity + honest

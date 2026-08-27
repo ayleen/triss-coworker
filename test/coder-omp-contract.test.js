@@ -6,8 +6,8 @@
  * this, the unit tests only prove that we build an object that LOOKS right
  * — they don’t prove OMP understands it.
  *
- * Skips automatically if /Users/ayleen/.local/bin/omp is not installed or
- * is below OMP_SUPPORTED_FLOOR. No network.
+ * Skips automatically when OMP is unavailable locally. A dedicated CI job
+ * sets OMP_CONTRACT_REQUIRED=1 so missing/incompatible OMP fails closed.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -55,6 +55,9 @@ const SKIP = !installed || !meetsFloor;
 const skipReason = !installed
   ? `OMP binary not at ${OMP_BIN}`
   : `OMP ${installed} is below supported floor ${OMP_SUPPORTED_FLOOR}`;
+const CONTRACT_REQUIRED = process.env.OMP_CONTRACT_REQUIRED === '1';
+const versionTestOptions = SKIP && !CONTRACT_REQUIRED ? { skip: skipReason } : {};
+const contractTestOptions = SKIP ? { skip: skipReason } : {};
 
 const sampleRoute = {
   modelId: 'deepseek-v4-flash',
@@ -69,7 +72,7 @@ const sampleSmallRoute = {
 
 test(
   'real OMP: --version returns a semver that meets OMP_SUPPORTED_FLOOR',
-  { skip: SKIP, signal: undefined },
+  versionTestOptions,
   () => {
     console.log(`real OMP version: ${installed} (floor: ${OMP_SUPPORTED_FLOOR})`);
     assert.ok(installed, skipReason);
@@ -79,7 +82,7 @@ test(
 
 test(
   'real OMP: main and small transient selectors are both registered by models.yml',
-  { skip: SKIP },
+  contractTestOptions,
   () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'omp-contract-'));
     try {
@@ -118,7 +121,7 @@ test(
 
 test(
   'real OMP: run-mode PI_CONFIG_FILES replaces hostile project bash.allow',
-  { skip: SKIP },
+  contractTestOptions,
   () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'omp-bash-hostile-'));
     try {
@@ -168,7 +171,7 @@ test(
 
 test(
   'real OMP: protected overlay has only catch-all deny, no allow rules',
-  { skip: SKIP },
+  contractTestOptions,
   () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'omp-bash-protected-'));
     try {

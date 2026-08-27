@@ -1267,6 +1267,7 @@ export function buildRollbackCommand(txDir, scope) {
 // never a model the verified catalogue says is absent.
 export async function planModelChange(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
+  const backend = configBackendForEngine(engine);
   const provider = input.provider;
   const scope = input.scope || 'global';
   const main = input.main;
@@ -1459,22 +1460,9 @@ export async function planModelChange(input = {}, deps = {}) {
     validateWorkerProviderConfig(scope, [main, small], diagnostics);
   }
 
-  // 5. Runtime shadow / management-intent conflict (plan §10 lines 220–225).
-  //    A shell-exported TRISS_CODER_MODEL with a DIFFERENT value than the
-  //    proposed main would win at run time and make the persistent change
-  //    cosmetic -> runtime shadow, blocks before writes. A shell-exported
-  //    TRISS_CODER_SMALL_MODEL with a DIFFERENT value does not shadow THIS
-  //    run (the small role is read from opencode.json) but is a separate
-  //    management-intent conflict: the next `triss coder init` could restore
-  //    that value, so it also blocks. Each diagnostic carries the exact unset
-  //    command the operator must run; this is the ONLY way to clear the
-  //    block (no --allow-shadowed escape hatch).
-  //
-  //    When the caller provides explicit shellModelOverride/shellSmallIntent
-  //    (captured before loadEnvFiles), use those values; otherwise fall back
-  //    to process.env for older/direct callers that did not provide them.
-  //    This ensures file values loaded after capture are never treated as
-  //    shell overrides.
+  // 5. Shell-export shadows. Both Triss env pins are runtime inputs for OMP.
+  // OpenCode retains its historical distinction: main is a runtime shadow,
+  // while small is management intent that may be restored by a later init.
   const envMain = Object.prototype.hasOwnProperty.call(input, 'shellModelOverride')
     ? input.shellModelOverride
     : process.env.TRISS_CODER_MODEL;
@@ -1498,20 +1486,24 @@ export async function planModelChange(input = {}, deps = {}) {
     ? input.shellSmallIntent
     : process.env.TRISS_CODER_SMALL_MODEL;
   if (small && envSmall && envSmall !== small) {
+    const ompRuntimeShadow = backend === 'triss-env';
     diagnostics.push({
-      code: 'management-intent-conflict',
+      code: ompRuntimeShadow ? 'runtime-shadow' : 'management-intent-conflict',
       severity: 'error',
-      scope: 'env-intent',
+      scope: ompRuntimeShadow ? 'env-override' : 'env-intent',
       role: 'small',
       env: 'TRISS_CODER_SMALL_MODEL',
       value: envSmall,
       proposed: small,
       unset: 'unset TRISS_CODER_SMALL_MODEL',
-      message:
-        `management-intent conflict: TRISS_CODER_SMALL_MODEL="${envSmall}" is exported in your ` +
-        `shell and differs from the proposed small "${small}". It does not shadow this run, but ` +
-        `the next \`triss coder init\` could restore it. Run \`unset TRISS_CODER_SMALL_MODEL\` ` +
-        `(or export the proposed value) before the persistent switch can take effect.`,
+      message: ompRuntimeShadow
+        ? `runtime shadow: TRISS_CODER_SMALL_MODEL="${envSmall}" is exported in your shell and ` +
+          `would override the proposed OMP small role "${small}" at run time. Run ` +
+          '`unset TRISS_CODER_SMALL_MODEL` (or export the proposed value) before the persistent switch can take effect.'
+        : `management-intent conflict: TRISS_CODER_SMALL_MODEL="${envSmall}" is exported in your ` +
+          `shell and differs from the proposed small "${small}". It does not shadow this OpenCode ` +
+          `run, but the next \`triss coder init\` could restore it. Run ` +
+          '`unset TRISS_CODER_SMALL_MODEL` (or export the proposed value) before the persistent switch can take effect.',
     });
   }
 
@@ -1825,6 +1817,7 @@ async function applyTrissEnvModelChange({ plan, deps, changes, scope, envPath })
   const temps = [];
   let envTmp;
   let envCommitted = false;
+  let actualPins;
   try {
     if (envOut !== envCur) {
       envTmp = stageEnvSibling(envPath, envOut);
@@ -1838,7 +1831,7 @@ async function applyTrissEnvModelChange({ plan, deps, changes, scope, envPath })
       envTmp = null;
       envCommitted = true;
     }
-    const actualPins = readModelPins(envPath);
+    actualPins = readModelPins(envPath);
     if (actualPins.TRISS_CODER_MODEL !== changes.model) {
       throw new Error('Post-commit audit failed: env TRISS_CODER_MODEL pin mismatch after commit.');
     }
@@ -1870,7 +1863,19 @@ async function applyTrissEnvModelChange({ plan, deps, changes, scope, envPath })
   }
 
   cleanupTemps(temps);
-  return { ok: true, scope, engine: plan.engine || 'omp', provider: plan.provider, path: envPath, envPath, transaction, rollbackCommand: buildRollbackCommand(txDir, scope) };
+  return {
+    ok: true,
+    backend: 'triss-env',
+    scope,
+    engine: plan.engine || 'omp',
+    provider: plan.provider,
+    model: actualPins.TRISS_CODER_MODEL,
+    small_model: actualPins.TRISS_CODER_SMALL_MODEL,
+    path: envPath,
+    envPath,
+    transaction,
+    rollbackCommand: buildRollbackCommand(txDir, scope),
+  };
 }
 
 // Restores the pre-transaction env file / pins from the triss-env transaction

@@ -31,6 +31,7 @@ management and recovery workflow.
 | Engine | Supported providers | Persistent model store |
 | --- | --- | --- |
 | `opencode` | Triss worker (OpenAI-compatible), Z.AI GLM, OpenCode Zen, OpenCode Go, Moonshot Kimi, Kimi for Coding | `opencode.json` plus `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` |
+| `omp` | Same provider-qualified models as Triss-mediated OpenCode | `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` only; no `opencode.json` |
 | `crush` | Z.AI GLM only | crush large/fast model roles in `crush.json` |
 
 OpenCode Zen is not an engine and `hy3-free` was not a GLM model. It was one
@@ -55,14 +56,18 @@ must inspect and report this matrix:
 | OpenCode main through Triss | one-run CLI/MCP model override -> shell `TRISS_CODER_MODEL` -> project `.triss.env` -> global Triss env -> built-in default |
 | OpenCode small/fast | project `opencode.json.small_model` -> global `opencode.json.small_model` -> OpenCode default |
 | Direct OpenCode main (config-only) | project `opencode.json.model` -> global `opencode.json.model` -> OpenCode default |
+| OMP main through Triss | one-run CLI/MCP model override -> shell `TRISS_CODER_MODEL` -> project `.triss.env` -> global Triss env -> built-in default |
+| OMP small/fast | one-run `--small-model` -> shell `TRISS_CODER_SMALL_MODEL` -> project `.triss.env` -> global Triss env -> built-in default |
 | Crush one-run main | explicit `--model` -> configured Crush large/smart role |
 | Crush persistent roles | project Crush large/fast roles -> global Crush roles -> Crush defaults |
 
 **Critical distinction:** For the opencode engine, `current.main` in inspection output MUST represent the effective runtime main model (resolved exactly as `runCoderRun`: one-run override -> shell `TRISS_CODER_MODEL` -> project `.triss.env` -> global Triss env -> built-in default). This is distinct from the OpenCode config's `model` field (`opencode.json.model`), which represents the config-only main model used only when running OpenCode directly (not through Triss). The two can differ when shell/project env pins or one-run overrides shadow the config value. JSON and human output must name these unambiguously: use "runtime main" or "effective main" for the Triss-resolved value and "config main" or "OpenCode config main" for the `opencode.json.model` value.
 
-`TRISS_CODER_SMALL_MODEL` is persisted intent used by init/model-management; it
-is not a runtime override because Triss cannot pass a small-model flag to
-OpenCode. Crush ignores both Triss model pins for its persistent roles.
+For OpenCode, `TRISS_CODER_SMALL_MODEL` is persisted intent used by
+init/model-management; it is not a runtime override because Triss cannot pass a
+small-model flag to OpenCode. For OMP it is a real runtime input mapped to
+`--smol`, with the same shell → project → global precedence as the main pin.
+Crush ignores both Triss model pins for its persistent roles.
 
 **Role-specific precedence for OpenCode config small/fast:** Each role has its own source_path and scope. The local config's `small_model` value (if present) is the effective small model; if the local config lacks `small_model`, the global config's `small_model` wins. Do not choose one whole file for both roles — a local opencode.json may have only `model` defined while the global defines only `small_model`, in which case the effective state is config main from local, config small from global, with distinct source_paths for each role.
 
@@ -259,11 +264,12 @@ The command must:
     exactly one canonical assignment; unsetting removes every occurrence.
     Shell-exported model variables are read-only signals.
     A different `TRISS_CODER_MODEL` is a runtime shadow and blocks before
-    writing. A different `TRISS_CODER_SMALL_MODEL` does not shadow a fresh run,
-    but is a separate `management-intent-conflict` because the next init could
-    restore that value; it also blocks persistent mutation by default. Report
-    the distinct reason and exact `unset` command for each. If any write or
-    final audit fails, restore all touched files from backups and report their
+    writing. For OMP, a different `TRISS_CODER_SMALL_MODEL` is also a runtime
+    shadow and blocks with the same semantics. For OpenCode it does not shadow
+    a fresh run, but remains a `management-intent-conflict` because the next
+    init could restore that value; it also blocks persistent mutation by
+    default. Report the engine-specific reason and exact `unset` command.
+    If any write or final audit fails, restore all touched files from backups and report their
     paths.
     The shared apply service performs the same global-to-local shadow preflight
     before creating a transaction record or staging either target. Existing
