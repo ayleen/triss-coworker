@@ -226,7 +226,7 @@ export function listOmpProviderModels(input = {}, deps = {}) {
       for (const prefix of prefixes) models.push(`${prefix}/${id}`);
     }
     if (!matchedProvider) {
-      return { engine: 'omp', provider, status: 'unauthenticated', models: [] };
+      return { engine: 'omp', provider, status: 'provider-absent', models: [] };
     }
     return {
       engine: 'omp',

@@ -297,4 +297,20 @@ test('listOmpProviderModels: returns stable typed catalogue failures', withSaved
     ).status,
     'invalid',
   );
+  assert.equal(
+    listOmpProviderModels(
+      { provider: 'opencode-go' },
+      {
+        detectOmp: () => ({ found: true, path: '/opt/omp', version: '18.0.6', capabilities: { ok: true } }),
+        spawnSync: () => ({
+          status: 0,
+          stdout: JSON.stringify({
+            models: [{ provider: 'zhipu-coding-plan', id: 'glm-5.2' }],
+          }),
+          stderr: '',
+        }),
+      },
+    ).status,
+    'provider-absent',
+  );
 }));

@@ -201,6 +201,54 @@ test('foldOmpEventLine: accepts the authoritative nested OMP message schema', ()
   assert.deepEqual(finalized.warnings, []);
 });
 
+test('foldOmpEventLine: agent_end fallback aggregates every assistant message', () => {
+  const state = createOmpEventFolder();
+  foldOmpEventLine(state, JSON.stringify({
+    type: 'agent_end',
+    isTerminal: true,
+    messages: [
+      { role: 'user', content: 'question' },
+      {
+        role: 'assistant',
+        provider: 'opencode-go',
+        model: 'deepseek-v4-flash',
+        content: [{ type: 'text', text: 'FIRST' }],
+        usage: {
+          input: 10,
+          output: 2,
+          cacheRead: 3,
+          cacheWrite: 1,
+          totalTokens: 16,
+          cost: { total: 0.01 },
+        },
+      },
+      {
+        role: 'assistant',
+        provider: 'opencode-go',
+        model: 'deepseek-v4-flash',
+        content: [{ type: 'text', text: 'FINAL' }],
+        usage: {
+          input: 4,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 9,
+          cost: { total: 0.02 },
+        },
+        stopReason: 'stop',
+      },
+    ],
+  }));
+  const finalized = finalizeOmpEnvelopeState(state);
+  assert.equal(finalized.finalText, 'FINAL');
+  assert.equal(finalized.usage.input, 14);
+  assert.equal(finalized.usage.output, 7);
+  assert.equal(finalized.usage.cacheRead, 3);
+  assert.equal(finalized.usage.cacheWrite, 1);
+  assert.equal(finalized.usage.totalTokens, 25);
+  assert.deepEqual(finalized.usage._rawCosts, [0.01, 0.02]);
+});
+
 test('foldOmpEventLine: caps distinct warnings and emits one overflow sentinel', () => {
   const state = createOmpEventFolder();
   for (let i = 0; i < 100; i += 1) {
@@ -468,6 +516,61 @@ test('runCoderRun: OMP invalid flags fail before reservation or spawn', async ()
     assert.equal(spawns, 0, `spawn occurred for ${JSON.stringify(invalid)}`);
   }
 });
+
+test(
+  'runCoderRun: OMP forwards bare, continue, and mapped resume session flags',
+  withEnv({
+    ZHIPU_API_KEY: 'zk-omp-session-flags',
+    TRISS_USAGE_LOG: '0',
+  }, async (fakeOmpBin) => {
+    const slug = 'mapped-omp-session';
+    const mappedId = 'omp_ses_mapped_123';
+    const lookups = [];
+    const runAndCapture = async (opts) => {
+      const capture = {};
+      await runCoderRunProduction(
+        'do something',
+        {
+          engine: 'omp',
+          isolate: false,
+          provider: 'zai',
+          model: 'zai-coding-plan/glm-5.2',
+          smallModel: 'zai-coding-plan/glm-5-turbo',
+          ...opts,
+        },
+        {
+          spawn: captureOmpSpawn(readFileSync(FIXTURE_PATH, 'utf8'), capture),
+          spawnSync: fakeSpawnSyncOmp(fakeOmpBin),
+          stdoutWrite: () => true,
+          disableCredentialProxy: true,
+          reserveSessionRow: async () => null,
+          lookupSessionRealId: (engine, requestedSlug) => {
+            lookups.push([engine, requestedSlug]);
+            return engine === 'omp' && requestedSlug === slug ? mappedId : null;
+          },
+        },
+      );
+      return capture.argv;
+    };
+
+    const bareArgv = await runAndCapture({});
+    assert.ok(bareArgv.includes('--no-session'));
+    assert.equal(bareArgv.includes('--continue'), false);
+    assert.equal(bareArgv.includes('--resume'), false);
+
+    const continueArgv = await runAndCapture({ continue: true });
+    assert.ok(continueArgv.includes('--continue'));
+    assert.equal(continueArgv.includes('--no-session'), false);
+    assert.equal(continueArgv.includes('--resume'), false);
+
+    const resumeArgv = await runAndCapture({ session: slug });
+    assert.deepEqual(lookups, [['omp', slug]]);
+    assert.equal(resumeArgv.includes('--no-session'), false);
+    assert.equal(resumeArgv.includes('--continue'), false);
+    assert.equal(resumeArgv[resumeArgv.indexOf('--resume') + 1], mappedId);
+  }),
+);
+
 
 test(
   'runCoderRun: malformed project opencode.json does not block audited raw OMP',

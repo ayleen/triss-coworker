@@ -859,8 +859,13 @@ export function foldOmpEventLine(state, rawLine) {
       state.sawTerminalAgentEnd = true;
       state.terminalAgentEnd = true;
       if (!state.sawAssistantMessageEnd && Array.isArray(evt.messages)) {
-        const assistant = [...evt.messages].reverse().find((message) => message?.role === 'assistant');
-        foldAssistantMessage(state, assistant);
+        // Some OMP builds omit message_end events and publish the complete
+        // turn only in agent_end.messages. Fold every assistant message so
+        // usage remains additive while finalText/provider/model settle on the
+        // last assistant response, matching the streamed path.
+        for (const message of evt.messages) {
+          foldAssistantMessage(state, message);
+        }
       }
       if (evt.errorMessage && !state.terminalError) {
         state.terminalError = evt.errorMessage;

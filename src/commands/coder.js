@@ -7251,6 +7251,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         smallModel: modelProjection.smallSelector,
         sessionDir: ompSessionsDir,
         sessionRealId: sessionRealIdV1,
+        cont: !!opts.continue,
         noSession: !opts.session && !opts.continue,
       });
 

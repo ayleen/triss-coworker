@@ -4,12 +4,18 @@ Status: supported. `omp` is the fourth `triss coder` engine alongside `opencode`
 
 ## Installation
 
-`omp` is a compiled binary (not an npm package):
+OMP runs as a compiled binary. User installations use the official installer:
 
 ```bash
 curl https://omp.sh/install | sh   # official installer — writes `omp` to PATH
 omp --version                          # must print `omp/<semver>`
 ```
+
+The repository's `omp-contract` CI job intentionally installs the pinned
+`@oh-my-pi/pi-coding-agent@18.0.6` npm distribution to provision that compiled
+CLI reproducibly. This is a CI-only installation choice: Triss runtime
+detection still resolves an executable `omp` binary and never assumes an npm
+installation or reads Node package metadata.
 
 Triss never executes the installer. `triss coder init --engine omp` only probes the already-installed binary and prints the hint above when it is missing or incompatible.
 

@@ -1406,6 +1406,16 @@ export async function planModelChange(input = {}, deps = {}) {
     // No catalogue API exists for this provider. Credential and local
     // provider/plan-prefix validation above are authoritative for this route;
     // there is no remote list to bypass with --allow-unverified.
+  } else if (cat.status === 'provider-absent') {
+    // OMP returned a valid catalogue that does not register the requested
+    // provider. This is authoritative for the probed runtime and must never be
+    // bypassed as a transient verification failure.
+    diagnostics.push({
+      code: 'catalogue-provider-absent',
+      severity: 'error',
+      scope: 'catalogue',
+      status: cat.status,
+    });
   } else if (provider === 'opencode-go') {
     if (cat.status === 'unauthenticated') {
       diagnostics.push({ code: 'unauthenticated', severity: 'error', scope: 'catalogue' });
