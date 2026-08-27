@@ -6,10 +6,13 @@ makes the trust boundary worth spelling out plainly.
 
 ## Reporting vulnerabilities
 
-Please report security issues through GitHub Security Advisories for this
-repository. If advisories are unavailable, open a minimal public issue asking
-for a private contact path; avoid posting exploit details, tokens, or private
-URLs in a public issue.
+Please report security issues through GitHub Security Advisories:
+<https://github.com/ayleen/triss-coworker/security/advisories/new>. See
+[GitHub's guide to privately reporting a security
+vulnerability](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
+if you are unsure how private reporting works. If advisories are unavailable,
+open a minimal public issue asking for a private contact path; avoid posting
+exploit details, tokens, or private URLs in a public issue.
 
 ## What leaves your machine
 
@@ -140,6 +143,9 @@ Security-sensitive changes include:
 
 - path sandbox changes
 - URL fetching, DNS, redirect, or response-size handling
+- special-use address classification in `src/net.js` — keep the
+  property-based fuzz tests in `test/fuzz.test.js` green and extend them
+  for any newly enforced range
 - credential loading, masking, or config-file writes
 - MCP tool exposure and write-capable tools
 - tracker commands that mutate remote state

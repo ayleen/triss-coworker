@@ -39,6 +39,24 @@ would otherwise make the test depend on the local network.
 `eslint.config.js` — minimal flat config, no Prettier, no pre-commit
 hooks (CI catches violations).
 
+## Contribution acceptance requirements
+
+These are the requirements for an acceptable contribution; `npm run check`
+enforces most of them mechanically:
+
+- `npm run check` passes: ESLint (`eslint.config.js`, `eslint:recommended`,
+  zero warnings), the syntax check, the full test suite, generated-docs
+  consistency, and the package-contents gate.
+- Behavior changes ship focused tests in the same PR: document the public
+  contract first, add a failing test, then make the smallest passing change.
+  Security-sensitive areas that always need tests are listed in
+  [SECURITY.md](SECURITY.md#development-expectations).
+- Code follows the conventions below (ESM, array-form subprocess arguments,
+  no `shell: true`, stdout/stderr split, secret masking helpers).
+- User-visible changes include documentation updates per the checklist below.
+- PRs stay focused and call out security-sensitive path, URL-fetching,
+  credential, or MCP changes explicitly.
+
 ## Project shape
 
 - `bin/triss.js` is the CLI entrypoint.
