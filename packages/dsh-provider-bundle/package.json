@@ -1,6 +1,6 @@
 {
   "name": "triss-dsh-provider-bundle",
-  "version": "0.39.2",
+  "version": "0.40.0",
   "description": "Configuration-only DeepSeek Harness (dsh) provider bundle activating the pi-ai opencode, opencode-go, and zai catalogue routes.",
   "type": "module",
   "files": [

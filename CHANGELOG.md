@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] — 2026-08-27
+
 ### Added
 
 - **Native Oh My Pi coder engine (`--engine omp`).** Adds a pinned OMP
@@ -20,6 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--protect-credentials` uses the parent-owned proxy and deny-all bash.
   Triss never executes OMP's remote installer, imports the user's OMP profile,
   or claims that worktree isolation confines the host filesystem.
+
+### Changed
+
+- `triss-dsh-provider-bundle` is version-aligned and republished unchanged;
+  OMP is a native Triss runtime engine and does not alter the companion's
+  DeepSeek Harness provider routes.
+
+### Artifact integrity (0.40.0)
+
+- `triss-dsh-provider-bundle-0.40.0.tgz` — sha256
+  `559a5e1d10778e7e56d1bfa20dc99357503b0730be654f5751ab469328d35c3f`
+  — `sha512-fnFsxXJEfkNe4nG1y87qcSFX6tZZffN5RFLGDEH6w1X6exbclsEcLFL9eQQG+X2e2MtNcZgOi4sQ5gqyS1KEdA==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.40.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.40.0`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
 
 
 ## [0.39.2] — 2026-08-25
@@ -1694,7 +1713,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...v0.40.0
 [0.39.2]: https://github.com/ayleen/triss-coworker/compare/v0.39.1...v0.39.2
 [0.39.1]: https://github.com/ayleen/triss-coworker/compare/v0.39.0...v0.39.1
 [0.39.0]: https://github.com/ayleen/triss-coworker/compare/v0.37.1...v0.39.0
