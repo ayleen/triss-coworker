@@ -300,7 +300,7 @@ config
   .option('-f, --force', 're-prompt for keys that are already set')
   .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
-  .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, or crush). `coder init` uses --engine')
+  .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine')
   .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
   .option('--coder-protect-credentials', 'coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials')
   .action(wrap(runWizard));
@@ -353,11 +353,11 @@ const coder = program
 
 coder
   .command('init')
-  .description('Install/configure a coding engine (opencode default, opencode2 beta, or crush), provider key, permission policy, and agent templates')
+  .description('Install/configure a coding engine (opencode default, opencode2 beta, crush, or omp), provider key, permission policy, and agent templates')
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
-  .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), or crush')
-  .option('--provider <name>', 'opencode engine model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding')
+  .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
+  .option('--provider <name>', 'model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding (omp reuses the same providers; see docs/engines/omp.md)')
   .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .option('--protect-credentials', PROTECT_HELP)
@@ -365,8 +365,8 @@ coder
 
 coder
   .command('run [prompt]')
-  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default; opencode2 beta or --engine crush) — and print a JSON envelope to stdout')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), or crush')
+  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default; opencode2 beta or --engine crush, or --engine omp — see docs/engines/omp.md) — and print a JSON envelope to stdout')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
   .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
@@ -397,7 +397,7 @@ coder
     'Configuration sources (layered; later sources win):\n' +
     '  • opencode & opencode2: JSONC-aware layered config — global ~/.config/opencode/opencode.json, then every opencode.json/.opencode/opencode.json up from the project root to the Git boundary (project-local wins)\n' +
     '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), crush, or omp (triss-env backend)')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
   .option('--json', 'print the stable machine-readable state object (no secrets)')
   .action(wrap(runCoderModels));
@@ -416,13 +416,15 @@ coderModel
       'A one-run main override is `triss coder run --model` (main-only, not a persistent repair).\n\n' +
       'Engines and configuration targets:\n' +
       '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global); runtime main follows TRISS_CODER_MODEL env precedence, config main is opencode.json.model\n' +
-      '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)'
+      '  • opencode2: shares opencode.json with opencode (see above)\n' +
+      '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)\n' +
+      '  • omp: TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL in .triss.env (project) or ~/.config/triss/.env (global); OMP config is run-private (PI_CODING_AGENT_DIR) and never persisted'
   )
   .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), crush, or omp (triss-env backend)')
   .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
-  .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json)')
-  .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json)')
+  .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json; OMP: ~/.config/triss/.env)')
+  .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json; OMP: ./.triss.env)')
   .option('--allow-unverified', 'with explicit main + --small, bypass only a provider-defined transient catalogue failure (Go: transport or HTTP 408/429/500/502/503/504; Zen: timeout/http-error/parse-error; never auth or authoritative failure)')
   .option('--allow-unsafe-bash', 'proceed even if the existing opencode.json lacks the deny-first bash policy')
   .option('--yes', 'non-interactive confirmation: apply the planned switch (required to write; without it the plan is printed and nothing is changed)')
@@ -432,8 +434,8 @@ coderModel
   .command('rollback')
   .description('Restore retained transaction record (opencode.json / crush.json + env pins)')
   .requiredOption('--from <absolute-record-dir>', 'absolute path to the retained transaction record directory')
-  .option('-g, --global', 'restore to the global scope (~/.config/opencode/ or ~/.local/share/crush/)')
-  .option('-l, --local', 'restore to the project scope (./opencode.json or ./.crush/crush.json)')
+  .option('-g, --global', 'restore to the global scope (~/.config/opencode/, ~/.local/share/crush/, or ~/.config/triss/.env)')
+  .option('-l, --local', 'restore to the project scope (./opencode.json, ./.crush/crush.json, or ./.triss.env)')
   .action((opts) => wrap(runCoderModelRollback)(opts.from, opts));
 
 // `coder state` is a command GROUP whose leaves are `backup` and `validate`
@@ -480,7 +482,7 @@ const coderSession = coder
 coderSession
   .command('list')
   .description('Serialize the bounded v2 session inventory projection to stdout')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2, or crush')
+  .option('--engine <name>', 'coding engine: opencode (default), opencode2, crush, or omp (see docs/engines/omp.md)')
   .action((opts) => wrap(runCoderSessionList)(opts));
 
 coderSession
@@ -490,7 +492,7 @@ coderSession
     + ' (a row whose recorded owner provably died is reclaimed automatically;'
     + ' --recover-live attests a still-live-looking owner is gone)',
   )
-  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, or crush (MANDATORY)')
+  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, crush, or omp (MANDATORY)')
   .option(
     '--recover-live',
     'force-clean a reserved/running session whose owner process may still appear live'
@@ -506,7 +508,7 @@ coderSession
     + ' original document is preserved under .triss/quarantine-v1/. An inventory with any'
     + ' reserved/running/deleting legacy row fails closed without partial migration',
   )
-  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, or crush (MANDATORY)')
+  .requiredOption('--engine <name>', 'coding engine: opencode, opencode2, crush, or omp (MANDATORY)')
   .action((opts) => wrap(runCoderSessionMigrate)(opts));
 
 // `coder result` group (retained-result CLI contract).

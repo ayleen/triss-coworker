@@ -368,17 +368,17 @@ test(
 // ─── Phase 6 step 4: engine selection over MCP ───────────────────────────────
 
 test(
-  'listTools: triss_coder_run schema exposes an `engine` enum [opencode, crush]',
+  'listTools: triss_coder_run schema exposes an `engine` enum [opencode, opencode2, crush, omp]',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const tools = await listTools();
     const run = tools.find((t) => t.name === 'triss_coder_run');
     const engineProp = run.inputSchema.properties.engine;
     assert.ok(engineProp, 'engine property must exist on triss_coder_run');
     assert.equal(engineProp.type, 'string');
-    // Phase 5: the engine enum must list all three engines — opencode2 is
+    // Phase 5: the engine enum must list all four engines — opencode, opencode2, crush, omp —
     // the V2 beta (docs/engines/opencode2.md); a client discovering the tool schema
     // must never interpret plain `opencode` as V2.
-    assert.deepEqual(engineProp.enum, ['opencode', 'opencode2', 'crush']);
+    assert.deepEqual(engineProp.enum, ['opencode', 'opencode2', 'crush', 'omp']);
     // isolate stays OPTIONAL with NO schema default — the undefined tristate
     // must reach runCoderRun (opencode resolves undefined -> isolate OFF;
     // crush resolves undefined -> isolate ON, since crush 0.1.3's config

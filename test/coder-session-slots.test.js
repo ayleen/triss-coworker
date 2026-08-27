@@ -184,6 +184,7 @@ test('project inventory snapshot treats absent canonical engine roots as empty w
       { engine: 'opencode', entries: [] },
       { engine: 'opencode2', entries: [] },
       { engine: 'crush', entries: [] },
+      { engine: 'omp', entries: [] },
     ]);
     assert.deepEqual(await readdir(join(base, '.triss', 'engine-sessions-v2')), []);
   } finally {

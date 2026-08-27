@@ -72,6 +72,13 @@ import Footer from "../../components/Footer.astro";
   [C]laude / Code[X] / [B]oth                       → B
 ✓ registered MCP server (claude + codex)
 ✓ wrote agent rules (CLAUDE.md + AGENTS.md)</pre>
+        <div data-omp-quickstart style="margin-top: 22px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
+          <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Optional: use the native OMP coder engine</div>
+          <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ curl https://omp.sh/install | sh
+$ triss config wizard coder --coder-engine omp --coder-provider opencode-go
+$ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"</pre>
+          <p style="margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">OMP 18.0.6 or newer must already be installed; Triss only probes it and never runs the installer. OMP defaults to worktree isolation, but that is not host-filesystem confinement. Default credential mode is <code style="font-family: var(--font-mono);">best_effort_raw</code>; add <code style="font-family: var(--font-mono);">--protect-credentials</code> when the selected key must stay behind the parent-owned proxy.</p>
+        </div>
       </section>
 
       <section id="step-4">

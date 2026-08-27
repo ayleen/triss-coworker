@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"omp_ses_err_003","timestamp":"2026-08-26T10:00:05.000Z","cwd":"/tmp/triss-omp-fixture"}
+{"type":"agent_start","timestamp":"2026-08-26T10:00:05.100Z","sessionId":"omp_ses_err_003"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:05.110Z","sessionId":"omp_ses_err_003"}
+{"type":"message_start","role":"assistant","timestamp":"2026-08-26T10:00:06.000Z","sessionId":"omp_ses_err_003"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:06.200Z","sessionId":"omp_ses_err_003","stopReason":"error","errorMessage":"Provider request failed with HTTP 401: invalid api key","usage":{"input":100,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":100,"cost":{"input":0.00002,"output":0,"cacheRead":0,"cacheWrite":0,"total":0.00002}},"content":[]}
+{"type":"turn_end","timestamp":"2026-08-26T10:00:06.210Z","sessionId":"omp_ses_err_003"}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:06.220Z","sessionId":"omp_ses_err_003","isTerminal":true,"errorMessage":"Provider request failed with HTTP 401: invalid api key"}

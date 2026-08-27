@@ -21,6 +21,7 @@
 
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { VALID_CODER_ENGINES } from './coder-engine-registry.js';
 
 export const EPHEMERAL_DEFAULT = true;
 
@@ -59,7 +60,7 @@ export async function assertNoRetainedCoderResultsForRollback({ resultsRoot }) {
  *
  * @param {object} opts
  * @param {object} opts.identity project identity record
- * @param {string} opts.engine opencode|crush
+ * @param {string} opts.engine opencode|opencode2|crush|omp
  * @param {string} opts.slug session slug
  * @param {'isolated'|'non_isolated'} opts.isolationMode
  * @param {boolean} [opts.ephemeral] ephemeral-default (true) versus
@@ -70,8 +71,8 @@ export function buildCoderRunState({ identity, engine, slug, isolationMode, ephe
   if (!identity || typeof identity.project_root_fingerprint !== 'string') {
     throw new TypeError('coder-run-state: identity with project_root_fingerprint is required');
   }
-  if (!['opencode', 'crush'].includes(engine)) {
-    throw new TypeError('coder-run-state: engine must be opencode|crush');
+  if (!VALID_CODER_ENGINES.includes(engine)) {
+    throw new TypeError(`coder-run-state: engine must be one of ${VALID_CODER_ENGINES.join('|')}`);
   }
   if (typeof slug !== 'string' || slug.length === 0) {
     throw new TypeError('coder-run-state: slug is required');

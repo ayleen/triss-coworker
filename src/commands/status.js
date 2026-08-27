@@ -236,6 +236,41 @@ export async function runStatus(deps = {}) {
         : pc.dim(`not installed (minimum: ${oc2.pin})`);
       lines.push(`  ${oc2Marker} opencode2                    ${oc2Label}`);
     }
+    // omp (engine #4) — binary + capability probe under isolated PI_CODING_AGENT_DIR
+    const omp = coder.omp;
+    if (omp) {
+      const ompMarker = omp.compatible
+        ? pc.green('●')
+        : omp.found
+          ? pc.yellow('●')
+          : pc.dim('○');
+      let ompLabel;
+      if (omp.configValid === false) {
+        ompLabel = pc.yellow(
+          `(invalid configured minimum: ${omp.configuredMinimum}; effective floor: ${omp.effectiveMinimum})`,
+        );
+      } else if (omp.compatible) {
+        ompLabel = `${omp.version} ${pc.dim('(meets minimum)')}`;
+      } else if (omp.reason === 'missing') {
+        ompLabel = pc.dim(`not installed (minimum: ${omp.minimumVersion})`);
+      } else if (omp.reason === 'version_unknown') {
+        ompLabel = pc.yellow(
+          `${omp.version || '(version unknown)'} (minimum: ${omp.minimumVersion}) — version unknown`,
+        );
+      } else if (omp.reason === 'unsupported-cli-contract') {
+        ompLabel = pc.yellow(
+          `${omp.version || '(version unknown)'} (minimum: ${omp.minimumVersion}) — unsupported CLI contract`,
+        );
+      } else {
+        ompLabel = pc.yellow(
+          `${omp.version || '(version unknown)'} (minimum: ${omp.minimumVersion}) — ${omp.reason}`,
+        );
+      }
+      lines.push(`  ${ompMarker} omp                            ${ompLabel}`);
+      if (omp.capabilities?.missing?.length) {
+        lines.push(pc.dim(`    capabilities missing: ${omp.capabilities.missing.join(', ')}`));
+      }
+    }
     const wtMarker = coder.worktreeCount > 0 ? pc.green('●') : pc.dim('○');
     lines.push(`  ${wtMarker} worktrees (.triss/wt)       ${coder.worktreeCount} live`);
   }

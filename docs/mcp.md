@@ -457,8 +457,8 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
 `--provider kimi-for-coding`) or `triss config wizard coder`.
 
 - `triss_coder_run` — delegate an implementation task to a coding
-  agent (default `opencode` engine; `engine: "crush"` selects the crush
-  engine). Same options as `triss coder run` on the CLI (`engine`,
+  agent (default `opencode` engine; `engine: "opencode2"`, `"crush"`, or
+  `"omp"` selects another supported engine). Same options as `triss coder run` on the CLI (`engine`,
   `session`, `continue`, `agent`, `provider`, `model`, `small_model`,
   `isolate`, `cwd`, `timeout`) plus `allowBestEffortCallerWorktree`
   (boolean, default FALSE — the only MCP consent to an isolation
@@ -470,7 +470,7 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `files_changed: null`/`worktree: null`, edits may reach the caller
   worktree; user-remediable slug/branch conflicts containing
   `already exists` still fail closed even with the opt-in) and
-  `protectCredentials` (boolean, default FALSE — OpenCode/OpenCode2 runs use
+  `protectCredentials` (boolean, default FALSE — OpenCode/OpenCode2/OMP runs use
   best_effort_raw credential handling by default; passing TRUE selects the
   parent-owned credential proxy with strict executable-surface gates and
   fails closed when protected credential isolation cannot be enforced;
@@ -481,13 +481,12 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   tool argument). There is intentionally no `expectation` *input* field:
   the strict expectation gate is still a designed contract and is not
   exposed as a caller input until a capability gate is met (see
-  docs/reliable-delegation-contract.md). Note that on all three supported
-  engines (`opencode`, the `opencode2` beta, and `crush`) the returned
+  docs/reliable-delegation-contract.md). Note that on all four supported
+  engines (`opencode`, the `opencode2` beta, `crush`, and `omp`) the returned
   envelope reports a constant `expectation: "either"` output field — that
   is informational, not an accepted caller control.
-  Returns one JSON envelope as the tool result. On all three supported
-  engines (`opencode`, the `opencode2` beta, and `crush`) it carries the
-  shared envelope_v2 contract — `envelope_version: 2`, `engine`,
+  Every supported engine carries the shared envelope_v2 contract —
+  `envelope_version: 2`, `engine`,
   `engine_version`, `session_id`, `session_slug`, `result_retention`,
   `result_id`, `execution_capabilities`, the lifecycle/status fields
   (`process_status`, `termination_cause`, `engine_status`,
@@ -496,48 +495,49 @@ the default), `OPENCODE_API_KEY` (OpenCode Zen or paid OpenCode Go — see
   `change_detection`), `activity`, and the common result fields
   (`exit_reason`, `final_text`, `files_changed`, `diff_stat`, `worktree`,
   `usage`, `warnings`). Engine-specific evidence may differ inside that
-  shared contract — crush derives its activity from the tool-call array
-  rather than an event stream, and the `opencode2` beta reports changes
-  evidence through `files_changed` rather than `run_files_changed` — so
-  consume whatever evidence fields the returned envelope carries. Treat
+  shared contract — crush derives its activity from the tool-call array,
+  while `opencode2` and OMP report change evidence through `files_changed`
+  rather than `run_files_changed` — so consume whatever evidence fields the
+  returned envelope carries. Treat
   every returned envelope as an outcome report, not proof of
   success: envelope presence or bare `exit_reason: end_turn` alone is
   never success — classify timeouts, blank `final_text`, terminal-stop
   evidence, typed errors, cancellations, and unsafe cleanup, and recover
   within a bounded budget before declaring failure (see
   [Consuming coder envelopes safely](reliable-delegation-contract.md#consuming-coder-envelopes-safely)).
-  `engine` is the
-  `opencode`/`opencode2`/`crush` enum (default `opencode` V1, or
-  `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta — see
-  [opencode2.md](engines/opencode2.md));
-   `isolate` is unset by default in the schema — opencode resolves unset to
-   isolate-OFF, crush resolves unset to isolate-ON (crush 0.1.3's
-   `permissions.run` config is inert and denied bash deadlocks, so the
-   worktree is its reliable safety layer). `provider` selects a complete
-   one-shot OpenCode provider pair and requires `model`; `small_model` is
-   optional and defaults to `model`. This in-memory selection never rewrites
-   persistent config. For this one-shot path, Triss verifies the installed
-   OpenCode build meets the effective minimum (>= `1.18.22`) and audits its
-   complete file graph, then validates the final merged config with
-   `debug config --pure` under the sanitized child environment and a random
-   canary instead of the real key. Late provider/model overrides, unauditable
-   JSONC, and unknown effective config fail closed; the actual run also uses
-   `--pure`. All OpenCode 1 MCP runs perform the bounded final-config probe
-   before the credential-bearing spawn. Calls without `provider` omit `--pure`
-   from both probe and run, preserving their disk-backed deny-first bash policy
-   while keeping later account/org, managed-directory, and macOS MDM layers in
-   the audited view.
-   Without `provider`, `model` keeps its legacy main-only semantics. `model`
-   takes a `<provider>/<id>`
-   string — a Triss worker model (`triss-worker/deepseek-v4-flash`, reuses
-   `TRISS_WORKER_API_KEY`), a Z.AI GLM (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
-   (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), an OpenCode
-   Go model (`opencode-go/deepseek-v4-flash`, needs `OPENCODE_API_KEY` and Go
-   entitlement), a Moonshot Kimi model (`moonshotai/kimi-k2.7-code`, needs
-   `MOONSHOT_API_KEY`), or a Kimi for Coding model (`kimi-for-coding/k3`, needs
-   `KIMI_API_KEY`); triss forwards only the key that model's provider requires.
+  `engine` is the `opencode`/`opencode2`/`crush`/`omp` enum (default
+  `opencode` V1, or `TRISS_CODER_ENGINE`; `opencode2` is the V2 beta and OMP
+  is documented in [omp.md](engines/omp.md)).
+  `isolate` is unset by default in the schema — opencode/opencode2 resolve
+  unset to isolate-OFF, while crush and OMP resolve unset to isolate-ON.
+  Worktree isolation limits repository mutations but is not an OS sandbox.
+  `provider` selects a complete one-shot provider pair for OpenCode or OMP
+  and requires `model`; `small_model` is optional and defaults to `model`.
+  This in-memory selection never rewrites persistent config.
+  For the OpenCode one-shot path, Triss verifies the installed OpenCode build
+  meets the effective minimum (>= `1.18.22`) and audits its complete file graph,
+  then validates the final merged config with `debug config --pure` under the
+  sanitized child environment and a random canary instead of the real key.
+  Late provider/model overrides, unauditable JSONC, and unknown effective
+  config fail closed; the actual run also uses `--pure`. All OpenCode 1 MCP runs
+  perform the bounded final-config probe before the credential-bearing spawn.
+  OpenCode calls without `provider` omit `--pure` from both probe and run,
+  preserving their disk-backed deny-first bash policy while keeping later
+  account/org, managed-directory, and macOS MDM layers in the audited view.
+  OMP materializes one-shot selection in its run-private config and forwards
+  only the selected credential (or the parent-owned credential proxy when
+  `protect_credentials` is true).
+  Without `provider`, `model` keeps its legacy main-only semantics. `model`
+  takes a `<provider>/<id>` string — a Triss worker model
+  (`triss-worker/deepseek-v4-flash`, reuses `TRISS_WORKER_API_KEY`), a Z.AI GLM
+  (`zai-coding-plan/glm-5.2`), an OpenCode Zen model
+  (`opencode/deepseek-v4-flash-free`, needs `OPENCODE_API_KEY`), an OpenCode Go
+  model (`opencode-go/deepseek-v4-flash`, needs `OPENCODE_API_KEY` and Go
+  entitlement), a Moonshot Kimi model (`moonshotai/kimi-k2.7-code`, needs
+  `MOONSHOT_API_KEY`), or a Kimi for Coding model (`kimi-for-coding/k3`, needs
+  `KIMI_API_KEY`); Triss forwards only the key that model's provider requires.
 - `triss_coder_status` — the default engine, each engine's version/install
-  state (`opencode` and `crush` versions versus their configured minimums), which
+  state (including OMP's version/capability gate and configured minimum), which
   `opencode.json` / `crush.json` files exist, provider key presence
   (`TRISS_WORKER_API_KEY` / `ZHIPU_API_KEY` / `OPENCODE_API_KEY` / `MOONSHOT_API_KEY` /
   `KIMI_API_KEY` — never the value), and how many isolation
@@ -571,13 +571,13 @@ reports it in Beijing time) rather than a generic "no parseable output".
 **Sandbox:** an explicit `cwd`, and the git repository root that
 `.triss/wt/<slug>` will be created under, are both checked against the
 [MCP path sandbox](#scope-and-the-path-sandbox) (`assertSafePath`) before
-the run starts. The worktree-root check fires for *either* engine
-whenever the run will actually isolate — i.e. when the caller passes
-`isolate: true`, OR when crush is selected and `isolate` is left unset
-(crush defaults to isolate-ON; opencode defaults to isolate-OFF). This matters
-because the worktree lands under the *enclosing git repository's*
-toplevel, which can be an ancestor of the sandboxed project root if the
-project lives in a subdirectory of a larger repo.
+the run starts. The worktree-root check fires for every engine whenever the
+run will actually isolate — either the caller passes `isolate: true`, or
+crush/OMP is selected and `isolate` is left unset (both default to
+isolate-ON; opencode/opencode2 default to isolate-OFF). This matters because
+the worktree lands under the *enclosing git repository's* toplevel, which can
+be an ancestor of the sandboxed project root if the project lives in a
+subdirectory of a larger repo.
 
 If the agent tries to call a tool that isn't currently in the list,
 Claude Code rejects the call before it reaches Triss. The user just

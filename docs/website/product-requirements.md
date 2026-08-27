@@ -64,7 +64,9 @@ The first documentation page must cover:
 - basic provider configuration;
 - `triss status` verification;
 - one minimal `triss ask` example;
-- links to deeper configuration and MCP documentation.
+- links to deeper configuration and MCP documentation;
+- an optional OMP engine path using the canonical public selector, supported
+  minimum version, and explicit credential/worktree isolation boundaries;
 
 The instructions must remain consistent with the canonical repository
 `README.md` and must not introduce a second, contradictory installation
@@ -196,6 +198,8 @@ The first production release is ready when:
 - 320 px, 375 px, 768 px, 900 px, and desktop layouts are visually inspected;
 - keyboard and screen-reader navigation, text zoom, safe areas, touch targets,
   and visible focus behavior are verified;
+- coder engine selection and copy controls remain keyboard-operable, include
+  OMP alongside OpenCode 1, OpenCode 2, and Crush, and wrap without overflow;
 - opening the mobile menu at 375 px and resizing above 900 px hides it and
   resets internal disclosure state and `aria-expanded`;
 - hostile HTML entered into command search remains text and creates no DOM

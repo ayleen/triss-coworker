@@ -2194,12 +2194,12 @@ test('session clean requires the engine flag and rejects non-idle sessions', asy
   try {
     await assert.rejects(
       () => runCoderSessionClean('task-a', {}),
-      (err) => err?.message === '--engine <opencode|opencode2|crush> is required for session clean',
+      (err) => err?.message === '--engine <opencode|opencode2|crush|omp> is required for session clean',
     );
     // Unknown engine names fail closed on the canonical enum.
     await assert.rejects(
       () => runCoderSessionClean('task-a', { engine: 'gemini' }),
-      /--engine <opencode\|opencode2\|crush> is required/,
+      /--engine <opencode\|opencode2\|crush\|omp> is required/,
     );
     // Engine flag present but the row is not idle: rejected. MEDIUM-3 makes
     // only PROVABLY-dead owners auto-reclaimable, so this fail-closed case

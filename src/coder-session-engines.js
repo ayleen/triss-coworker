@@ -8,10 +8,14 @@
  * picked up everywhere; a directory under engine-sessions-v2 that is NOT in
  * this list is an unrecognized state and must fail closed, never be ignored.
  */
-export const CODER_SESSION_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush']);
+import { CODER_ENGINE_ORDER, CODER_ENGINE_REGISTRY } from './coder-engine-registry.js';
+
+export const CODER_SESSION_ENGINES = Object.freeze([...CODER_ENGINE_ORDER]);
 
 /**
  * Engines that own a namespace in the versioned session store
  * (.triss/sessions.json engines.*). crush keeps no store mapping.
  */
-export const CODER_SESSION_STORE_ENGINES = Object.freeze(['opencode', 'opencode2']);
+export const CODER_SESSION_STORE_ENGINES = Object.freeze(
+  CODER_ENGINE_ORDER.filter((id) => CODER_ENGINE_REGISTRY[id]?.sessionStoreNamespace),
+);

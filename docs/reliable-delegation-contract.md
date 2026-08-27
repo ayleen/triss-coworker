@@ -21,15 +21,12 @@ codes, and the execution-capability model.
   correlation evidence, never an implicit continuation of your
   conversation; its anonymity status depends on the engine and isolation:
   an unnamed *non-isolated* run on any supported engine (`opencode`, the
-  `opencode2` beta, or `crush`) gets an
-  `anon-<32 lowercase hex>` id (`anonymous: true`); an unnamed
-  *isolated* opencode run reuses its
-  per-run worktree slug `run-<6 lowercase hex>` as the session id
-  (`anonymous: false`, correlation only, not resumable); an unnamed
-  *isolated* crush run gets the same `run-<6 lowercase hex>` slug and also
-  passes it as a native crush `--session` (`anonymous: false`), making that
-  id a resumable crush session — resume only deliberately with `--session
-  <id>` / `--continue`.
+  `opencode2` beta, `crush`, or `omp`) gets an
+  `anon-<32 lowercase hex>` id (`anonymous: true`); an unnamed isolated run
+  reuses its per-run worktree slug `run-<6 lowercase hex>` as correlation
+  identity. OpenCode and OMP named sessions map the caller slug to the native
+  engine id; Crush uses its native caller-supplied id. Resume only
+  deliberately with `--session <id>` / `--continue`.
 - Legacy `.triss/sessions.json` (the shared map) and direct real engine ids
   can neither select nor clean a v2 session.
 
@@ -64,14 +61,14 @@ codes, and the execution-capability model.
 > (`cleanup_status: "verified"`, `change_detection.status: "verified"`)
 > without weakening the result matrix. Today: use `--isolate`, check
 > `run_files_changed` (on `opencode`/`crush`) or `files_changed` (on the
-> `opencode2` beta) in the envelope, and inspect the retained
+> `opencode2` beta/OMP) in the envelope, and inspect the retained
 > worktree/diff directly: `git status --short`, the staged patch with
 > `git diff --cached` (Triss stages the deliverables before returning the
 > envelope), and any unstaged changes with `git diff`.
 >
 > This note is about the *input* gate (`--expect` / the MCP `expectation`
-> argument). On all three supported engines (`opencode`, the `opencode2`
-> beta, and `crush`), the returned envelope reports
+> argument). On all four supported engines (`opencode`, the `opencode2`
+> beta, `crush`, and `omp`), the returned envelope reports
 > `expectation: "either"` as an informational output field, not a caller
 > control.
 
@@ -79,7 +76,7 @@ The `--expect` CLI flag and the MCP `expectation` argument are NOT part of
 the v0.37.1 surface (see above), so no `--expect` command is valid today.
 Use the current workflow instead: run with `--isolate`, check
 `run_files_changed` on `opencode`/`crush` (or `files_changed` on the
-`opencode2` beta) in the envelope, and inspect the retained worktree/diff
+`opencode2` beta/OMP) in the envelope, and inspect the retained worktree/diff
 directly (`git status --short`, `git diff --cached`, `git diff`). Process
 completion and a non-empty final text are not task satisfaction.
 
@@ -223,14 +220,14 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
   `effective_isolation: "best_effort_caller_worktree"`, and is advisory-only
   (`files_changed: null`, `worktree: null`, edits may reach the caller
   worktree).
-- Credential handling is mode-based: OpenCode/OpenCode2 default to
+- Credential handling is mode-based: OpenCode/OpenCode2/OMP default to
   `best_effort_raw` (the envelope reports `credential_isolation` as
   `unavailable` and warns that same-UID code may read the selected raw
   credential); `--protect-credentials` (`protectCredentials: true` over MCP)
   selects the protected proxy mode, where unavailable credential isolation
-  ALWAYS blocks before spawn to protect the real provider key - Triss
-  intentionally rejects such a run when the credential proxy is unavailable.
-  Crush is always protected.
+  ALWAYS blocks before spawn to protect the real provider key. Crush is always
+  protected. OMP's default worktree and run-private config limit repository
+  mutations and config inheritance; neither is an OS sandbox.
 - A best-effort envelope is advisory-only: `null` change lists, no
   explicit-expectation success, no persistent session.
 - The credential proxy is a loopback one-run-token proxy;
@@ -294,7 +291,7 @@ before the failure, e.g. the envelope write threw) survives as `idle`; a
 MISMATCHED mapping retains and fails closed. Finalization is owner-checked; on
 any ambiguity the row is retained for recovery instead of being mutated.
 
-Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush>`
+Cleanup: `triss coder session clean <slug> --engine <opencode|opencode2|crush|omp>`
 (one canonical engine enum) forms its own complete clean owner tuple and takes
 the normative clean lease — shared maintenance (whole cycle), conditional-target
 for non-isolated rows, the row's STORED assigned slot, brief inventory scopes.

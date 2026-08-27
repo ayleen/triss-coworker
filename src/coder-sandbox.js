@@ -18,6 +18,8 @@
  * deterministically.
  */
 
+import { VALID_CODER_ENGINES } from './coder-engine-registry.js';
+
 export const PLATFORMS = Object.freeze(['darwin', 'linux', 'win32']);
 
 export const CAPABILITY_VALUE = Object.freeze(['enforced', 'best_effort', 'unavailable']);
@@ -96,7 +98,7 @@ export function resolveCoderSandbox({
   if (!PLATFORMS.includes(platform)) {
     throw new TypeError(`unsupported platform: ${JSON.stringify(platform)}`);
   }
-  if (!['opencode', 'opencode2', 'crush'].includes(engine)) {
+  if (!VALID_CODER_ENGINES.includes(engine)) {
     throw new TypeError(`unsupported engine: ${JSON.stringify(engine)}`);
   }
 

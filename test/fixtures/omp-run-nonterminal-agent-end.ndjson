@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"omp_ses_nonterm_005","timestamp":"2026-08-26T10:00:10.000Z","cwd":"/tmp/triss-omp-fixture"}
+{"type":"agent_start","timestamp":"2026-08-26T10:00:10.100Z","sessionId":"omp_ses_nonterm_005"}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:10.110Z","sessionId":"omp_ses_nonterm_005"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:11.000Z","sessionId":"omp_ses_nonterm_005","stopReason":"stop","errorMessage":null,"usage":{"input":9000,"output":4,"cacheRead":896,"cacheWrite":0,"totalTokens":9900,"cost":{"input":0.002,"output":0.000002,"cacheRead":0.000006,"cacheWrite":0,"total":0.002008}},"content":[{"type":"text","text":"intermediate"}]}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:11.100Z","sessionId":"omp_ses_nonterm_005","isTerminal":false}
+{"type":"turn_start","timestamp":"2026-08-26T10:00:11.200Z","sessionId":"omp_ses_nonterm_005"}
+{"type":"message_end","role":"assistant","provider":"opencode-go","model":"deepseek-v4-flash","timestamp":"2026-08-26T10:00:12.000Z","sessionId":"omp_ses_nonterm_005","stopReason":"stop","errorMessage":null,"usage":{"input":9100,"output":4,"cacheRead":900,"cacheWrite":0,"totalTokens":10004,"cost":{"input":0.00201,"output":0.000002,"cacheRead":0.000006,"cacheWrite":0,"total":0.002018}},"content":[{"type":"text","text":"FINAL"}]}
+{"type":"agent_end","timestamp":"2026-08-26T10:00:12.100Z","sessionId":"omp_ses_nonterm_005","isTerminal":true}

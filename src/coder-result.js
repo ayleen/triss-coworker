@@ -185,8 +185,14 @@ export function normalizeActivity(input) {
   if (engine === 'opencode') {
     return normalizeOpenCodeActivity(input.events ?? []);
   }
+  if (engine === 'opencode2') {
+    return normalizeOpenCodeActivity(input.events ?? []);
+  }
   if (engine === 'crush') {
     return normalizeCrushActivity(input.toolCalls);
+  }
+  if (engine === 'omp') {
+    return normalizeOmpActivity(input);
   }
   throw new TypeError(`unknown activity engine: ${JSON.stringify(engine)}`);
 }
@@ -229,6 +235,21 @@ function normalizeOpenCodeActivity(events) {
     saw_terminal_stop: sawTerminalStop,
     first_event_at: firstEventAt,
     last_event_at: lastEventAt,
+  };
+}
+
+function normalizeOmpActivity(input) {
+  if (Array.isArray(input.toolCalls)) return normalizeCrushActivity(input.toolCalls);
+  if (Array.isArray(input.events)) return normalizeOpenCodeActivity(input.events);
+  if (Array.isArray(input.tool_calls)) return normalizeCrushActivity(input.tool_calls);
+  return {
+    events: 0,
+    tool_uses: 0,
+    tool_errors: 0,
+    by_tool: {},
+    saw_terminal_stop: false,
+    first_event_at: null,
+    last_event_at: null,
   };
 }
 

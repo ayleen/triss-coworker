@@ -264,18 +264,18 @@ self-hosted endpoints).
 | Variable                        | Required | Default            | Notes                                     |
 | -------------------------------- | -------- | ------------------ | ------------------------------------------ |
 | `ZHIPU_API_KEY`                  | yes¹     | —                  | Z.AI API key for `ask`/`review --provider glm` and GLM coder models — <https://z.ai/manage-apikey/apikey-list> |
-| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (opencode engines). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](engines/opencode-zen.md) and [opencode-go.md](engines/opencode-go.md). |
+| `OPENCODE_API_KEY`               | no¹      | —                  | Shared OpenCode credential for Zen `opencode/*` and paid Go `opencode-go/*` models (OpenCode or OMP engines). A key alone does not prove Go subscription, quota, or regional readiness. See [opencode-zen.md](engines/opencode-zen.md) and [opencode-go.md](engines/opencode-go.md). |
 | `MOONSHOT_API_KEY`               | no¹      | —                  | Moonshot AI (Kimi) key for `ask`/`review --provider kimi` and `moonshotai/*` coder models — <https://platform.kimi.ai/console/api-keys> |
-| `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (opencode engines) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
+| `KIMI_API_KEY`                   | no¹      | —                  | Kimi for Coding subscription key (OpenCode or OMP engines) — unlocks `kimi-for-coding/*` models like `kimi-for-coding/k3` — <https://www.kimi.com/code/docs/en/> |
 | `TRISS_KIMI_BASE_URL`            | no       | `https://api.moonshot.ai/v1` | Endpoint for `--provider kimi` ask/review calls — set `https://api.moonshot.cn/v1` for a China-mainland key. Trailing slashes are stripped; a blank/degenerate value falls back to the default |
-| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model, passed to opencode via `--model`. Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
-| `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast **management/init intent** — written to `opencode.json` `small_model` by `init`/`triss coder model set`. **Not** a runtime override of an already-pinned small role (see precedence) |
+| `TRISS_CODER_MODEL`              | no       | `zai-coding-plan/glm-5.2`       | Resolved **main** model. Triss passes it to OpenCode or OMP; Worker uses `triss-worker/<id>`, Go uses `opencode-go/<id>`, and Zen uses `opencode/<id>`. Main and small must stay within one provider prefix. |
+| `TRISS_CODER_SMALL_MODEL`        | no       | `zai-coding-plan/glm-5-turbo`   | Small/fast intent. OpenCode init/model-set writes `small_model`; OMP reads the env pin at run time and maps it to `--smol`. |
 | `TRISS_CODER_OPENCODE_VERSION`   | no       | `1.18.22`          | Installation/preference minimum for `opencode-ai`. Values below the immutable supported floor (`1.18.22`) or malformed values are rejected with a typed error; a valid higher value raises the effective minimum. Credential-bearing one-shot provider runs are authorized when the installed version is >= the effective minimum — newer releases (e.g. `1.19.0`, `2.0.0`) pass under the default |
-| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta — see [opencode2.md](engines/opencode2.md)), or `crush` |
+| `TRISS_CODER_ENGINE`             | no       | `opencode`          | Coding engine: `opencode` (default), `opencode2` (beta), `crush`, or `omp` (native Oh My Pi adapter; see [omp.md](engines/omp.md)) |
 | `TRISS_CODER_OPENCODE2_VERSION`  | no       | `0.0.0-beta-17793`  | Minimum accepted OpenCode 2 version; install from `@opencode-ai/cli@beta` (unsupported `next/dev/tui-v2` overrides fail closed) |
-| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | **Deprecated no-op.** OpenCode/OpenCode2 default to `best_effort_raw`; `--protect-credentials` selects the protected proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. Crush always requires its credential proxy regardless. |
+| `TRISS_CODER_OMP_VERSION`        | no       | `18.0.6`            | Raise-only minimum for the already-installed `omp` binary. Values below the hard floor clamp to `18.0.6`; malformed values fail closed. Triss prints the official installer hint but never executes it. |
+| `TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION` | no | unset | **Deprecated no-op.** OpenCode/OpenCode2/OMP default to `best_effort_raw`; `--protect-credentials` selects the protected proxy mode. A stale value only triggers a one-time migration warning — remove it with `triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION [--local|--global]`. Crush always requires its credential proxy regardless. |
 | `TRISS_CODER_CRUSH_VERSION`      | no       | `0.1.6`             | Minimum accepted `@phpcraftdream/crush` version. Raise-only: values below the hard floor (`0.1.6`) clamp up to it and malformed values fail closed, so an unsupported release is never admitted. Enforced at run time: `coder run --engine crush` refuses to spawn (before any worktree/proxy/session side effect) when the installed release is incompatible; init offers the effective-minimum install instead of treating it as ready |
-| `TRISS_CODER_SESSION_CAP`        | no       | `4`                 | Persistent v2 session inventory cap per engine (fail closed) |
 
 ### Review limits
 
@@ -359,11 +359,12 @@ already names the endpoint.
 ### Coder model roles & precedence
 
 Each engine resolves two roles, and the source that wins differs by role and
-by engine. Triss's `TRISS_CODER_*` vars are **management/init knobs**, not
-always-on runtime overrides; whether one is even read at runtime depends on
-the engine and role.
+by engine. Triss's `TRISS_CODER_*` vars are management/init knobs for
+OpenCode/Crush and the direct runtime backend for OMP.
 
 - **opencode** resolves a **main** and a **small** role.
+- **omp** resolves a **main** and a **small** role from the effective Triss env
+  pins and passes them through `--model` / `--smol`.
 - **crush** resolves a **large** and a **fast** role.
 
 **Triss OpenCode `main`** (the model triss forwards to the engine via
@@ -413,6 +414,14 @@ each route remains pinned to its own protocol, package, path, and model. OpenCod
 2 validates an explicit small model as belonging to the selected provider but
 does not configure or route it because that beta has no small-model role.
 
+**OMP `main` and `small`:** explicit one-shot flags win, then shell exports,
+project `.triss.env`, global Triss env, and built-in defaults. Persistent model
+changes write only `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`; OMP owns no
+project or user config mutation. The child runs with a private
+`PI_CODING_AGENT_DIR`, and `PI_CONFIG_FILES` points at the run-private
+deny-first overlay. Public selectors remain unchanged in the envelope and
+usage record; the child receives `triss-coder-transient/<model-id>`.
+
 **Direct OpenCode `main` and `small`** (you run `opencode` yourself, not via
 `triss coder run`): `opencode.json` is the source of truth — project
 `opencode.json` → global `opencode.json` → default — plus opencode's own
@@ -433,16 +442,15 @@ defaults. **Crush ignores Triss pins at runtime**: `TRISS_CODER_MODEL` /
 crush run.
 
 So: a **shell main pin** (`export TRISS_CODER_MODEL=…`) is a runtime shadow
-*for the opencode engine only* — handy for a one-off try, gone when the
-shell closes; crush ignores it. A **shell small pin**
-(`export TRISS_CODER_SMALL_MODEL=…`) never shadows a running role; it
-expresses management/init intent, so if it disagrees with the persisted
-`small_model` / fast role it is a **conflict** — reconcile it with
-`triss coder model set` rather than expecting it to take over the next run.
+for the opencode and omp engines — handy for a one-off try, gone when the
+shell closes; crush ignores it. A shell
+`TRISS_CODER_SMALL_MODEL` is management intent for OpenCode/Crush but a runtime
+small-role shadow for OMP. Reconcile persistent roles with
+`triss coder model set` rather than relying on an accidental shell export.
 
 ### One-shot provider selection
 
-OpenCode can switch a complete provider pair without changing persistent
+OpenCode and OMP can switch a complete provider pair without changing persistent
 defaults:
 
 ```bash
@@ -460,7 +468,8 @@ the same raw prefix. Worker still requires a one-time local or global
 `coder init --provider worker` registration, but that registration can coexist
 with GLM credentials and does not prevent one-shot GLM runs. Crush rejects
 these flags because it remains Z.AI-only. One-shot OpenCode runs are preflighted
-against the final effective config and run with external plugins disabled.
+against the final effective config; OMP projects the audited pair through its
+run-private transient provider.
 
 ### Coder model management commands
 
@@ -471,9 +480,9 @@ are never printed** — only masked/omitted key presence and its source. Use
 it to pick a current id before pinning anything.
 
 **`triss coder model set [<main>]`** — persistently changes the **main and
-small** roles in the target engine's config (`opencode.json`
-`model`/`small_model`, or `crush.json`'s large/fast roles). The main model
-is **positional**; the small model is `--small <id>`; select the engine
+small** roles in the target engine's backend (`opencode.json`
+`model`/`small_model`, `crush.json` large/fast roles, or OMP's two Triss env
+pins). The main model is **positional**; the small model is `--small <id>`; select the engine
 with `--engine <engine>` and the scope with exactly one of `--global` /
 `--local`. (There is no `--scope`, `--models`, or `--main` flag.) It is
 transactional: it stages a backup in a **0700 transaction directory**, the
@@ -501,15 +510,18 @@ fixed order so only the right single key is prompted:
 2. **Provider** next, *after* the engine and *before* any credential
    prompt: `--provider` (`glm`, `worker`, `opencode-zen`, `opencode-go`, `moonshot`,
    `kimi-for-coding`) → the engine's default for the keys already set.
-3. Triss then prompts for **only** that provider's key and writes the
-   matching `opencode.json`/`crush.json`.
+3. Triss then prompts for **only** that provider's key and updates the
+   selected engine backend: `opencode.json`, `crush.json`, or OMP's
+   `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL` Triss env pins.
 
-`--provider worker` is OpenCode-only and reuses the existing
+`--provider worker` is supported by OpenCode and OMP and reuses the existing
 `TRISS_WORKER_API_KEY`, `TRISS_WORKER_BASE_URL`, and worker flash/pro model
-settings. It creates `triss-worker/*` model pins and does not introduce or copy
-another secret. V1 supports one active worker profile and Chat Completions.
+settings without introducing or copying another secret. OpenCode creates
+`triss-worker/*` model pins and one managed Chat Completions profile; OMP keeps
+the public pins in Triss env and projects the route into run-private config.
 Rerun `triss coder init --provider worker` after changing the base URL or
-flash/pro model ids so the managed OpenCode provider stays in sync. `--global`
+flash/pro model ids so the managed OpenCode provider or OMP env pins stay in
+sync. `--global`
 reads the global worker profile rather than project-local values; parent-shell
 exports remain explicit overrides. Before a worker run forwards the key, Triss
 checks the effective project/global provider, endpoint, and complete model
