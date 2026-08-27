@@ -15,6 +15,7 @@ import {
   renderApplyFailure,
   runCoderModelSet,
 } from '../src/commands/coder-models.js';
+import { stripAnsi } from './_ansi.js';
 
 const MAIN_OLD = 'zai-coding-plan/glm-5-turbo';
 const MAIN_NEW = 'zai-coding-plan/glm-5.2';
@@ -67,7 +68,7 @@ async function withCli(fn) {
       project,
       localEnv: join(project, '.triss.env'),
       globalEnv: join(home, '.config', 'triss', '.env'),
-      stderr: () => stderr,
+      stderr: () => stripAnsi(stderr),
     });
   } finally {
     process.stderr.write = savedWrite;
