@@ -26,9 +26,20 @@ import {
 } from '../src/coder-engines/omp.js';
 import { compareStableVersions, parseStableVersion } from '../src/version.js';
 
-const OMP_BIN = process.env.OMP_BIN || '/Users/ayleen/.local/bin/omp';
+function resolveOmpBin() {
+  if (process.env.OMP_BIN) return process.env.OMP_BIN;
+  try {
+    const { execFileSync } = require('node:child_process');
+    const out = execFileSync('which', ['omp'], { encoding: 'utf8' });
+    const p = out.trim().split('\n').pop();
+    if (p) return p;
+  } catch {}
+  return null;
+}
+const OMP_BIN = resolveOmpBin();
 
 function resolveOmpVersion() {
+  if (!OMP_BIN) return null;
   try {
     const out = execFileSync(OMP_BIN, ['--version'], { encoding: 'utf8', timeout: 5000 });
     const m = out.match(/v?(\d+\.\d+\.\d+)/);

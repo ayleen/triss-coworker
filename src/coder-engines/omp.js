@@ -303,7 +303,7 @@ export function buildOmpSpawnEnv({
   baseEnv = process.env,
   credentialEnv,
   credentialValue,
-  proxy = null,
+  _proxy = null,
   agentDir,
   extraEnv = {},
 } = {}) {
@@ -316,20 +316,8 @@ export function buildOmpSpawnEnv({
   // Never spread baseEnv credentials blindly — only the ONE selected provider credential
   // is forwarded (see plan §4.4/5). The raw-credential path sets credentialEnv/value;
   // the protected path sets proxy.token -> ZAI_API_KEY alias + upstream bridge handled below.
-  if (proxy && proxy.token && proxy.baseUrl) {
-    // Protected proxy: only proxy token (bridged to provider-specific var by caller)
-    // For now expose as the selected credential env pointing at proxy URL indirectly;
-    // the transient provider config points at proxy.baseUrl.
-    // Preserve proxy token under the provider's expected var is handled by caller
-    // mapping (e.g. ZHIPU→ZAI). Here just set a generic marker is NOT needed —
-    // caller sets credentialEnv to proxy token explicitly.
-    // This function is intentionally minimal; caller composes final credential vars.
-    env._TRISS_OMP_PROXY = '1';
-    if (proxy.token) {
-      // Expose proxy token under OPENCODE_API_KEY fallback for audit parity;
-      // real provider var is set by caller via credentialEnv.
-    }
-  }
+  // Protected proxy is reflected in the models.yml baseUrl and via
+  // credentialEnv/credentialValue forwarded above; no extra env marker is needed.
   const value = credentialValue === undefined ? (credentialEnv ? baseEnv[credentialEnv] : undefined) : credentialValue;
   if (credentialEnv && value) env[credentialEnv] = value;
   // Bridge ZHIPU_API_KEY -> ZAI_API_KEY for zai provider (OMP expects ZAI_API_KEY)
@@ -414,7 +402,7 @@ export function buildOmpPolicyOverlay({ protectCredentials = false } = {}) {
         { match: 'git status*', approval: 'allow' },
         { match: 'git diff*', approval: 'allow' },
         { match: 'git log*', approval: 'allow' },
-        { match: 'ls *', approval: 'allow' },
+        { match: 'ls*', approval: 'allow' },
         { match: 'node --test*', approval: 'allow' },
         { match: 'npm test*', approval: 'allow' },
         { match: 'npm run test*', approval: 'allow' },
@@ -570,7 +558,6 @@ export function createOmpEventFolder() {
     terminalAgentEnd: false,
     sawTerminalAgentEnd: false,
     finalText: null,
-    assistantMessages: [],
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, _rawCosts: [] },
     provider: null,
     model: null,
@@ -631,17 +618,12 @@ export function foldOmpEventLine(state, rawLine) {
         else if (evt.stopReason === 'error' && !state.terminalError) { state.isTerminalError = true; }
         if (evt.usage) {
           const u = evt.usage;
-          // Aggregate once per message_end — idempotence is caller's job to avoid double count of agent_end copy
-          const key = `${evt.provider || ''}/${evt.model || ''}/${evt.stopReason || ''}/${text.slice(0,50)}`;
-          if (!state.assistantMessages.includes(key)) {
-            state.assistantMessages.push(key);
-            state.usage.input += Number(u.input) || 0;
-            state.usage.output += Number(u.output) || 0;
-            state.usage.cacheRead += Number(u.cacheRead) || 0;
-            state.usage.cacheWrite += Number(u.cacheWrite) || 0;
-            state.usage.totalTokens += Number(u.totalTokens) || 0;
-            if (u.cost && typeof u.cost.total === 'number' && Number.isFinite(u.cost.total)) state.usage._rawCosts.push(u.cost.total);
-          }
+          state.usage.input += Number(u.input) || 0;
+          state.usage.output += Number(u.output) || 0;
+          state.usage.cacheRead += Number(u.cacheRead) || 0;
+          state.usage.cacheWrite += Number(u.cacheWrite) || 0;
+          state.usage.totalTokens += Number(u.totalTokens) || 0;
+          if (u.cost && typeof u.cost.total === 'number' && Number.isFinite(u.cost.total)) state.usage._rawCosts.push(u.cost.total);
         }
       }
       break;
@@ -709,6 +691,9 @@ export const omp = {
   buildRunArgv: buildOmpRunArgv,
   buildSpawnEnv: buildOmpSpawnEnv,
   ensureRuntimeDirs: ensureOmpRuntimeDirs,
+  ompRunsRoot,
+  ompDataRoot,
+  ompSessionsRoot,
   buildPolicyOverlay: buildOmpPolicyOverlay,
   renderPolicyYaml: renderOmpPolicyYaml,
   buildModelsConfig: buildOmpModelsConfig,

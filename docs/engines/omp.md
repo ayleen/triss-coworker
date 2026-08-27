@@ -74,11 +74,11 @@ Triss model IDs stay the public API; translation happens only at the adapter bou
 | `zai-coding-plan` | `zhipu-coding-plan` | `ZHIPU_API_KEY` |
 | `zai` | `zai` | bridge `ZHIPU_API_KEY` → `ZAI_API_KEY` |
 | `moonshotai` | `moonshot` | `MOONSHOT_API_KEY` |
-| `moonshotai-cn` | `moonshot` | `MOONSHOT_API_KEY` + `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` |
+| `moonshotai-cn` | `moonshot` | `MOONSHOT_API_KEY` (CN endpoint comes from the provider catalogue; no separate `MOONSHOT_BASE_URL` injection) |
 | `kimi-for-coding` | `kimi-code` | `KIMI_API_KEY` |
 | `triss-worker` | transient `triss-coder-transient` | `TRISS_WORKER_API_KEY` + worker base URL |
 
-Audited routes generate a transient `models.yml` entry under a run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
+All audited routes go through a transient `models.yml` entry under a run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
 
 ## Credential modes
 
@@ -118,7 +118,7 @@ Project `.omp/config.yml` cannot weaken the overlay; higher-precedence overlay +
 - `--session <slug>`: reserve v2 inventory row → existing mapping uses `--resume <real-id>`, new mapping captures first `session.id` and publishes after resumable session established.
 - `--continue` → OMP `--continue` inside Triss-owned session directory.
 - Session directory: `<project>/.triss/omp/sessions` (original project root, not disposable worktree).
-- Run-private agent directory: `<project>/.triss/omp/runs/<run-id>/agent` (0700, 0600 temp files, fsync/rename, removed after run). Only `.triss/omp/sessions` persists.
+- Run-private agent directory: `<project>/.triss/omp/runs/<run-id>/agent` (0700, 0600 temp files, removed after run). Only `.triss/omp/sessions` persists.
 - A worktree limits accidental mutations but is not an OS sandbox — OMP file tools accept absolute paths.
 
 ## Capability floor

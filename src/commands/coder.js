@@ -4203,9 +4203,9 @@ const emptyNamespace = () => Object.create(null);
 
 function normalizeSessionStore(raw) {
   // Each supported engine gets an own namespace so the version-2 session store
-// stays engine-agnostic. SESSION_STORE_ENGINES is the source of truth — adding
-// an engine there (e.g. omp, crush) automatically provisions a namespace here.
-const store = { version: SESSION_STORE_VERSION, engines: Object.fromEntries(SESSION_STORE_ENGINES.map((e) => [e, emptyNamespace()])) };
+  // stays engine-agnostic. SESSION_STORE_ENGINES is the source of truth — adding
+  // an engine there (e.g. omp, crush) automatically provisions a namespace here.
+  let store = { version: SESSION_STORE_VERSION, engines: Object.fromEntries(SESSION_STORE_ENGINES.map((e) => [e, emptyNamespace()])) };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return store;
   if ('version' in raw && typeof raw.version === 'number') {
     if (raw.version === 2) {
@@ -5777,7 +5777,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   let oneShotSmallModel = null;
   if (opts.provider) {
     if (engine === 'crush') {
-      throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
+      throw new Error('--provider and --small-model are not supported with the selected engine.');
     }
     if (!modelOverride) {
       throw new Error(
@@ -5818,6 +5818,14 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
         'Use the opencode engine (drop --engine crush) for triss-worker/*, opencode/*, opencode-go/*, moonshotai/*, or ' +
         'kimi-for-coding/* models, or choose a GLM model.',
     );
+  }
+  // OMP has no --agent launch flag; fail-closed per plan §4.3.
+  if (engine === 'omp' && opts.agent) {
+    throw new Error('--agent is not supported on the omp engine — OMP has no equivalent launch flag; run without --agent.');
+  }
+  // --restrict is crush-only per plan §4.3.
+  if (engine === 'omp' && (opts.restrict === true || opts.restrict === false)) {
+    throw new Error('--restrict/--no-restrict are crush-only; the omp engine enforces its deny-first policy via the run-private overlay.');
   }
   const timeoutSec = positiveNumberOption(opts.timeout, '--timeout', 900);
   return {
@@ -6532,7 +6540,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // were hand-installed — and the static agent-source preflight rejects
   // those. A beta V2 run without an explicit --agent uses the engine's
   // built-in primary agent instead.
-  const agent = opts.agent || (engine === 'opencode2' ? null : 'coder');
+  const agent = opts.agent || (engine === 'opencode2' || engine === 'omp' ? null : 'coder');
 
   const modelUsed = modelOverride || coderModel();
 
@@ -7048,10 +7056,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Option validation that needs NO ownership claim runs BEFORE the v2
   // reservation: a rejected request must never flip an existing idle row to
   // running (the deterministic published-row deletion scenario).
-  if (engine === 'opencode2' && opts.session && opts.continue) {
+  if ((engine === 'opencode2' || engine === 'omp') && opts.session && opts.continue) {
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
     throw new Error(
-      '--session and --continue state an ambiguous resume intent on the opencode2 engine — ' +
+      '--session and --continue state an ambiguous resume intent on the ' + engine + ' engine — ' +
         'pass one or the other, never both.',
     );
   }
@@ -7157,6 +7165,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   //  - invoke shared spawnEngine with OMP fold callbacks
   //  - dispose proxy/process-group/run-private dir in reverse order
 
+  // OMP run-private state is declared OUTSIDE the try so every
+  // error path (including the outer catch/finally) can reference it.
+  // agentDir is the full <root>/.triss/omp/runs/<runId>/agent path;
+  // ompRunDir is its parent <root>/.triss/omp/runs/<runId> (removed
+  // wholesale on both success and failure so no empty run dirs leak).
+  let ompRunId;
+  let agentDir;
+  let ompSessionsDir;
+  let ompRunDir;
   if (engine === 'omp') {
     try {
       const root = projectRoot();
@@ -7182,15 +7199,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
       // Run-private agent directory: <project>/.triss/omp/runs/<runId>/agent
       // Created here, removed after the run in reverse teardown order.
-      const ompRunId = `run_${randomBytes(16).toString('hex')}`;
-      // Declare agentDir and ompSessionsDir BEFORE the call so the outer
-      // catch can safely rmSync(agentDir) (force:true makes a missing
-      // path a no-op) regardless of whether ensureRuntimeDirs threw. On
-      // success the destructure rebinds both to the real paths; on
-      // failure they stay null and any subsequent reference throws the
-      // original error (the catch will then run the rmSync safe no-op).
-      let agentDir = null;
-      let ompSessionsDir = null;
+      ompRunId = `run_${randomBytes(16).toString('hex')}`;
+      ompRunDir = join(ompEngine.ompRunsRoot(root), ompRunId);
       ({ sessions: ompSessionsDir, agentDir } = ompEngine.ensureRuntimeDirs(root, ompRunId));
 
       // Write policy overlay YAML to agent dir (tool policies, memory off,
@@ -7342,7 +7352,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       const ompBillingModel = modelUsed;
       const ompCost = estimateCanonicalCost({
         billing_model: ompBillingModel,
-        billing_mode: 'unknown',
+        billing_mode: resolveBillingMode({ billing_model: ompBillingModel, engine: 'omp' }),
         timestamp: ompUsageTimestamp,
         tokens: ompTokens,
         reported_total_usd: ompReportedTotalUsd,
@@ -7356,7 +7366,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       logUsageFn({
         model: modelUsed,
         billing_model: ompBillingModel,
-        billing_mode: 'unknown',
+        billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'omp' }),
         usage_source: 'omp',
         engine: 'omp',
         usage_status: ompUsageStatus,
@@ -7489,8 +7499,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         warnings: ompWarnings,
       };
 
-      // Clean up run-private agent dir (success path).
-      try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      // Clean up run-private run dir (success path) — the whole
+      // runs/<runId>/ tree so no empty parent dirs leak.
+      try { rmSync(ompRunDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 
       const writeStdout = deps.stdoutWrite || ((s) => process.stdout.write(s));
       writeStdout(JSON.stringify(envelope) + '\n');
@@ -7506,10 +7517,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // for explicit recovery.
       if (await retainV2SessionAfterUnverifiedCleanup(sessionV2, err)) throw err;
       if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
-      // Run-private agent dir is best-effort removed on any failure path so
-      // we do not leak .triss/omp/runs/<run-id>/agent/ on the next failure.
-      // eslint-disable-next-line no-undef -- agentDir is declared in the outer try block above
-      try { rmSync(agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      // Run-private run dir is best-effort removed on any failure path so
+      // we do not leak .triss/omp/runs/<run-id>/ (including agent/models.yml).
+      // agentDir may be null if ensureRuntimeDirs threw — use ompRunDir
+      // fallback which is already set before the call.
+      try { rmSync(ompRunDir || agentDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     } finally {
