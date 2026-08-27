@@ -33,6 +33,10 @@ CI dependencies may be compromised.
   when required enforcement cannot be established.
 - The default coder isolation path does not silently downgrade. Best-effort
   execution requires an explicit operator acknowledgement.
+- The SSRF address classifier and its literal parsers in `src/net.js` are
+  exercised by property-based fuzz tests (`test/fuzz.test.js`) in addition to
+  the example-based suite; changes there must keep the fuzz properties green
+  and extend them for any newly enforced special-use range.
 - Release jobs minimize privileges, use OIDC for npm publication, and verify
   the bytes promoted between jobs.
 
