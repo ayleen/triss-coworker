@@ -74,62 +74,61 @@ test('buildOmpProbeEnv: allowlist', () => {
 
 // --- argv ---
 test('buildOmpRunArgv: ordering and -- prompt boundary', () => {
-  const argv = buildOmpRunArgv({ prompt: 'hello', model: 'm', sessionDir: '/s', configPath: '/c' });
+  const argv = buildOmpRunArgv({ prompt: 'hello', model: 'm', sessionDir: '/s' });
   assert.equal(argv[0], '-p');
   assert.ok(argv.includes('--mode'));
   assert.ok(argv.includes('json'));
   assert.ok(argv.includes('--model'));
   assert.ok(argv.includes('--session-dir'));
-  assert.ok(argv.includes('--config'));
   assert.ok(argv.includes('--tools'));
   assert.equal(argv[argv.length-2], '--');
   assert.equal(argv[argv.length-1], 'hello');
 });
 
 test('buildOmpRunArgv: smallModel via --smol', () => {
-  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', smallModel: 's', sessionDir: '/s', configPath: '/c' });
+  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', smallModel: 's', sessionDir: '/s' });
   const idx = a.indexOf('--smol');
   assert.ok(idx !== -1);
   assert.equal(a[idx+1], 's');
 });
 
 test('buildOmpRunArgv: session flags exclusive', () => {
-  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', configPath: '/c', sessionRealId: 'id', cont: true }), /mutually exclusive/);
-  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', configPath: '/c', noSession: true, sessionRealId: 'id' }), /exclusive/);
+  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', sessionRealId: 'id', cont: true }), /mutually exclusive/);
+  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', noSession: true, sessionRealId: 'id' }), /exclusive/);
 });
 
 test('buildOmpRunArgv: noSession', () => {
-  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', configPath: '/c', noSession: true });
+  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', noSession: true });
   assert.ok(a.includes('--no-session'));
 });
 
 test('buildOmpRunArgv: resume', () => {
-  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', configPath: '/c', sessionRealId: 'real123' });
+  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', sessionRealId: 'real123' });
   assert.ok(a.includes('--resume'));
   assert.ok(a.includes('real123'));
 });
 
 test('buildOmpRunArgv: continue', () => {
-  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', configPath: '/c', cont: true });
+  const a = buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s', cont: true });
   assert.ok(a.includes('--continue'));
 });
 
 test('buildOmpRunArgv: required fields throw', () => {
-  assert.throws(() => buildOmpRunArgv({ model: 'm', sessionDir: '/s', configPath: '/c' }), /prompt is required/);
-  assert.throws(() => buildOmpRunArgv({ prompt: 'p', sessionDir: '/s', configPath: '/c' }), /model is required/);
-  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', configPath: '/c' }), /sessionDir is required/);
-  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm', sessionDir: '/s' }), /configPath is required/);
+  assert.throws(() => buildOmpRunArgv({ model: 'm', sessionDir: '/s' }), /prompt is required/);
+  assert.throws(() => buildOmpRunArgv({ prompt: 'p', sessionDir: '/s' }), /model is required/);
+  assert.throws(() => buildOmpRunArgv({ prompt: 'p', model: 'm' }), /sessionDir is required/);
 });
 
 // --- spawn env ---
 test('buildOmpSpawnEnv: allowlist, bridge, and proxy', () => {
-  const env = buildOmpSpawnEnv({ baseEnv: { PATH: '/bin', HOME: '/h', ZHIPU_API_KEY: 'zk', OPENCODE_API_KEY: 'ok', AWS_SECRET_ACCESS_KEY: 'aws' }, credentialEnv: 'ZHIPU_API_KEY', credentialValue: 'zk', agentDir: '/tmp/agent' });
+  const env = buildOmpSpawnEnv({ baseEnv: { PATH: '/bin', HOME: '/h', ZHIPU_API_KEY: 'zk', OPENCODE_API_KEY: 'ok', AWS_SECRET_ACCESS_KEY: 'aws' }, credentialEnv: 'ZHIPU_API_KEY', credentialValue: 'zk', agentDir: '/tmp/agent', configPath: '/tmp/agent/policy.yml' });
   assert.equal(env.PATH, '/bin');
   assert.equal(env.ZHIPU_API_KEY, 'zk');
   assert.equal(env.ZAI_API_KEY, 'zk');
   assert.equal('AWS_SECRET_ACCESS_KEY' in env, false);
   assert.equal('OPENCODE_API_KEY' in env, false);
   assert.equal(env.PI_CODING_AGENT_DIR, '/tmp/agent');
+  assert.equal(env.PI_CONFIG_FILES, '/tmp/agent/policy.yml');
 });
 
 test('buildOmpSpawnEnv: extraEnv MOONSHOT_BASE_URL passthrough', () => {
@@ -140,6 +139,13 @@ test('buildOmpSpawnEnv: extraEnv MOONSHOT_BASE_URL passthrough', () => {
 test('buildOmpSpawnEnv: unknown extraEnv keys dropped', () => {
   const env = buildOmpSpawnEnv({ baseEnv: { PATH: '/bin' }, extraEnv: { RANDOM: 'x' } });
   assert.equal('RANDOM' in env, false);
+});
+
+test('buildOmpSpawnEnv: rejects policy paths outside the run-private agent dir', () => {
+  assert.throws(
+    () => buildOmpSpawnEnv({ agentDir: '/tmp/agent', configPath: '/tmp/project-policy.yml' }),
+    /configPath must be inside agentDir/,
+  );
 });
 
 // --- policy overlay ---

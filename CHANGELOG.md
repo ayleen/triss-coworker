@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Native Oh My Pi coder engine (`--engine omp`).** Adds a pinned OMP
+  `18.0.6`-minimum adapter with run-private model/policy configuration,
+  isolated `omp models --json --no-extensions` catalogue projection,
+  structured NDJSON event folding, persistent named sessions, worktree
+  isolation by default, and the shared envelope-v2 lifecycle.
+- OMP preserves public Triss model selectors while audited runs use the
+  transient child selector `triss-coder-transient/<model-id>`. Default
+  `best_effort_raw` mode forwards one selected credential; optional
+  `--protect-credentials` uses the parent-owned proxy and deny-all bash.
+  Triss never executes OMP's remote installer, imports the user's OMP profile,
+  or claims that worktree isolation confines the host filesystem.
+
+
 ## [0.39.2] — 2026-08-25
 
 

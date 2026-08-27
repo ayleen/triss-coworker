@@ -19,7 +19,7 @@ Triss never executes the installer. `triss coder init --engine omp` only probes 
 
 Required capabilities (verified against `omp --help` and `omp models --help` at 18.0.6):
 
-- launch: `--mode`, `--model`, `--smol`, `--session-dir`, `--no-session`, `--resume`, `--continue`, `--config`, `--tools`, `--approval-mode`, `--no-extensions`, `--no-skills`, `--no-title`, `--no-pty`
+- launch: `--mode`, `--model`, `--smol`, `--session-dir`, `--no-session`, `--resume`, `--continue`, `--tools`, `--approval-mode`, `--no-extensions`, `--no-skills`, `--no-title`, `--no-pty`
 - models: `--json`, `--no-extensions`
 
 An incompatible binary is rejected before any isolation worktree, credential proxy, or session reservation is created.
@@ -53,32 +53,33 @@ omp -p \
   --no-title --no-extensions --no-skills --no-pty \
   --approval-mode write \
   --tools <triss-tool-set> \
-  --config <triss-owned-overlay> \
   [--no-session | --resume <real-id> | --continue] \
   -- <prompt>
 ```
 
+The child receives the run-private overlay through `PI_CONFIG_FILES=<triss-owned-overlay>`; OMP run mode ignores `--config`.
+
 - `--mode json` emits newline-delimited JSON events: `session` (version 3), `agent_start`/`turn_start`/`turn_end`/`agent_end`, `message_start`/`message_update`/`message_end`, `tool_execution_start`/`update`/`end`.
 - `agent_end.isTerminal === false` is non-terminal; missing `isTerminal` is terminal for older compatible releases.
-- `message_end` carries `provider`, `model`, `usage` (input/output/cacheRead/cacheWrite/totalTokens/cost), `stopReason`, `errorMessage`, and `content` text blocks.
+- `message_end.message` carries `provider`, `model`, `usage` (input/output/cacheRead/cacheWrite/totalTokens/cost), `stopReason`, `errorMessage`, and `content` text blocks.
 - Parent Triss owns the public `--timeout` contract (process-group kill); OMP `--max-time` is never used because it can abort a tool and exit 0.
 
 ## Provider / model translation
 
 Triss model IDs stay the public API; translation happens only at the adapter boundary:
 
-| Triss prefix | OMP selector | Credential |
-|---|---|---|
-| `opencode` | `opencode-zen` | `OPENCODE_API_KEY` |
-| `opencode-go` | `opencode-go` | `OPENCODE_API_KEY` |
-| `zai-coding-plan` | `zhipu-coding-plan` | `ZHIPU_API_KEY` |
-| `zai` | `zai` | bridge `ZHIPU_API_KEY` → `ZAI_API_KEY` |
-| `moonshotai` | `moonshot` | `MOONSHOT_API_KEY` |
-| `moonshotai-cn` | `moonshot` | `MOONSHOT_API_KEY` (CN endpoint comes from the provider catalogue; no separate `MOONSHOT_BASE_URL` injection) |
-| `kimi-for-coding` | `kimi-code` | `KIMI_API_KEY` |
-| `triss-worker` | transient `triss-coder-transient` | `TRISS_WORKER_API_KEY` + worker base URL |
+| Triss prefix | OMP catalogue provider | Actual run selector | Credential |
+|---|---|---|---|
+| `opencode` | `opencode-zen` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode-go` | `opencode-go` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `zai-coding-plan` | `zhipu-coding-plan` | `triss-coder-transient/<model-id>` | `ZHIPU_API_KEY` |
+| `zai` | `zai` | `triss-coder-transient/<model-id>` | bridge `ZHIPU_API_KEY` → `ZAI_API_KEY` |
+| `moonshotai` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
+| `moonshotai-cn` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
+| `kimi-for-coding` | `kimi-code` | `triss-coder-transient/<model-id>` | `KIMI_API_KEY` |
+| `triss-worker` | none (transient only) | `triss-coder-transient/<model-id>` | `TRISS_WORKER_API_KEY` + worker base URL |
 
-All audited routes go through a transient `models.yml` entry under a run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
+The catalogue provider column describes selector translation for isolated `omp models`; it is not the run route. Every audited run goes through a transient `models.yml` entry under the run-private agent directory (provider `triss-coder-transient`, env-var indirection, never a secret value). Protected mode points it at the Triss credential proxy. Billing preserves the original Triss `billing_model`.
 
 ## Credential modes
 

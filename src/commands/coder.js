@@ -1128,7 +1128,7 @@ async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
   const interactive = deps && deps.isTTY !== undefined ? !!deps.isTTY : !!process.stdin.isTTY;
   if (interactive) {
     const choose = (deps && deps.promptChoice) || promptChoice;
-    return await choose('  Model provider for the opencode engine?', CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
+    return await choose(`  Model provider for the ${engine} engine?`, CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
   }
   // Non-interactive + genuinely ambiguous (no flag, no preset, no engine config,
   // and zero or several provider credentials). Refuse to silently default to zai
@@ -1139,15 +1139,15 @@ async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
   // values. WIZ-09.
   throw new Error(
     'Coder provider is required but ambiguous: no --coder-provider flag, no TRISS_CODER_MODEL ' +
-      'preset, no opencode.json model, and not exactly one provider credential (zero or several ' +
+      `preset, no ${engine === 'omp' ? 'Triss env' : 'opencode.json'} model, and not exactly one provider credential (zero or several ` +
       'are set). The wizard will not silently default to Z.AI. Disambiguate by re-running with ' +
       'one of:\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider zai\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider worker\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider opencode-zen\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider opencode-go\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider moonshot\n' +
-      '  triss config wizard coder --coder-engine opencode --coder-provider kimi-for-coding',
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider zai\n` +
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider worker\n` +
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider opencode-zen\n` +
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider opencode-go\n` +
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider moonshot\n` +
+      `  triss config wizard coder --coder-engine ${engine} --coder-provider kimi-for-coding`,
   );
 }
 
@@ -1385,7 +1385,7 @@ function posixSingleQuote(value) {
 // requires that (see src/integrations/_contract.js validateManifest).
 export const CODER_MANIFEST = {
   name: 'coder',
-  description: 'Coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go models (opencode or crush engine)',
+  description: 'Coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go models (opencode, opencode2, crush, or omp engine)',
   envVars: [
     {
       name: 'TRISS_WORKER_API_KEY',
@@ -2122,7 +2122,7 @@ export async function runCoderSetup(input = {}, deps = {}) {
     protectCredentials: input.protectCredentials,
   });
   assertCoderCredentialMode(resolvedCredentialMode);
-  if (input.engine === 'crush') {
+  if (input.engine === 'crush' || input.engine === 'omp') {
     return runCoderSetupUnlocked({
       ...input,
       scope: resolvedScope,
@@ -2182,23 +2182,28 @@ async function runCoderSetupUnlocked(
   // idempotent no-op when the key is already loaded.
   loadEnvFiles();
   const resolvedScope = scope || 'global';
-  // omp mirrors crush here: the wizard only writes the provider credential;
-  // the shared OMP verification job (binary gate + capability report) lives in
-  // `triss coder init --engine omp`. OMP owns no opencode.json/crush.json
-  // surface - its config is the run-private PI_CODING_AGENT_DIR.
+  // OMP has no persistent engine config: both init paths verify the pinned
+  // binary contract, then rely on the Triss env pins and a run-private
+  // PI_CODING_AGENT_DIR for every invocation.
   if (engine === 'omp') {
     process.stderr.write('\n' + pc.bold('── coder (omp engine) ──') + '\n');
     const sh = deps.spawnSync || nodeSpawnSync;
-    const policy = ompEngine.resolveVersionPolicy(sh);
-    if (!policy.compatible) {
-      throw ompEngine.assertVersionPolicy(policy);
+    const policy = ompEngine.assertVersionPolicy(ompEngine.resolveVersionPolicy(sh));
+    const resolvedProvider = provider || inferCoderProvider();
+    const keyEnv = coderProviderKeyInfo(resolvedProvider).env;
+    if (!process.env[keyEnv]) {
+      throw new Error(
+        `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+      );
     }
-    const scopeFlag = scope === 'local' ? '--local' : '--global';
-    throw new Error(
-      'Coder (omp engine) setup incomplete: the wizard saved the provider credential but did not ' +
-        'verify the OMP binary/session layout. Complete setup with the exact command:\n' +
-        `  triss coder init --engine omp ${scopeFlag}`,
+    const model = coderModel();
+    const smallModel = coderSmallModel();
+    process.stderr.write(
+      pc.green(`  ✓ omp ${policy.installedVersion} (meets minimum ${policy.effectiveMinimum})\n`) +
+        pc.dim('  · engine state and policy are isolated under a run-private PI_CODING_AGENT_DIR\n') +
+        pc.dim(`  · runtime models: ${model} (main) / ${smallModel} (small)\n`),
     );
+    return { model, smallModel };
   }
   // The wizard resolves engine FIRST, provider SECOND (resolveWizardCtx) and
   // passes both in. crush fixes provider to Z.AI and rejects conflicts before
@@ -5750,6 +5755,12 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
       '(letters, digits, underscore, hyphen; max 64 chars; no path separators).',
     );
   }
+  if ((engine === 'opencode2' || engine === 'omp') && opts.session && opts.continue) {
+    throw new Error(
+      '--session and --continue state an ambiguous resume intent on the ' + engine + ' engine — ' +
+        'pass one or the other, never both.',
+    );
+  }
   const isolate = opts.isolate === undefined ? Boolean(CODER_ENGINE_REGISTRY[engine]?.defaultIsolate) : !!opts.isolate;
   // shared contract: an isolation downgrade to a best-effort CALLER
   // worktree is opt-in only. Without the explicit flag the run fails before
@@ -7053,16 +7064,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     }
   }
 
-  // Option validation that needs NO ownership claim runs BEFORE the v2
-  // reservation: a rejected request must never flip an existing idle row to
-  // running (the deterministic published-row deletion scenario).
-  if ((engine === 'opencode2' || engine === 'omp') && opts.session && opts.continue) {
-    if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-    throw new Error(
-      '--session and --continue state an ambiguous resume intent on the ' + engine + ' engine — ' +
-        'pass one or the other, never both.',
-    );
-  }
 
   // v2 session lifecycle: lease-integrated admission BEFORE the engine
   // branch. The claimed row is finalized before the envelope is assembled;
@@ -7209,7 +7210,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         protectCredentials: credentialMode === 'protected_proxy',
       });
       const policyYaml = ompEngine.renderPolicyYaml(policyOverlay);
-      writeFileSync(join(agentDir, 'policy.yaml'), policyYaml, { mode: 0o600 });
+      const policyPath = join(agentDir, 'policy.yaml');
+      writeFileSync(policyPath, policyYaml, { mode: 0o600 });
 
       // Write the OMP models registry (docs/models.md). OMP reads
       // <PI_CODING_AGENT_DIR>/models.yml at startup; a custom provider
@@ -7237,17 +7239,15 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         ? `triss-coder-transient/${runtimeSmallRoute.modelId}`
         : null;
 
-      // Build OMP argv: --model <selector> [--smol <small>] --session-dir
-      // <dir> --config <policy> [--resume|--continue|--no-session] -- <prompt>
+      // Build OMP argv. The policy overlay is enforced through
+      // PI_CONFIG_FILES in buildSpawnEnv because OMP run mode ignores --config.
       const argv = ompEngine.buildRunArgv({
         prompt,
         model: ompModelSelector,
         smallModel: smallModelUsed ? ompSmallSelector : null,
         sessionDir: ompSessionsDir,
         sessionRealId: sessionRealIdV1,
-        cont: !!opts.continue,
         noSession: !opts.session && !opts.continue,
-        configPath: join(agentDir, 'policy.yaml'),
       });
 
       // Build OMP spawn env: strict allowlist of PATH/HOME/etc, the
@@ -7263,6 +7263,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
           : null,
         agentDir,
+        configPath: policyPath,
       });
 
       process.stderr.write(
@@ -7276,40 +7277,35 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
       const ompSpawnStartMs = Date.now();
       let ompResult;
-      try {
-        await revalidateV2SessionRowBeforeSpawn(sessionV2);
-        ompResult = await spawnEngine({
-          argv,
-          env,
-          timeoutSec,
-          spawnFn,
-          sinceMs: ompSpawnStartMs,
-          scanRateLimit: deps.scanRateLimit,
-          logPath: deps.logPath,
-          pollMs: deps.pollMs,
-          abortSignal: deps.abortSignal,
-          killProcess,
-          residualTermGraceMs: deps.residualTermGraceMs,
-          residualKillWaitMs: deps.residualKillWaitMs,
-          processGroupPollMs: deps.processGroupPollMs,
-          binary: ompPath,
-          label: 'omp',
-          createState: ompEngine.createEventFolder,
-          foldLine: ompEngine.foldEventLine,
-          cwd: runtimeDir,
-        });
+      await revalidateV2SessionRowBeforeSpawn(sessionV2);
+      ompResult = await spawnEngine({
+        argv,
+        env,
+        timeoutSec,
+        spawnFn,
+        sinceMs: ompSpawnStartMs,
+        scanRateLimit: deps.scanRateLimit,
+        logPath: deps.logPath,
+        pollMs: deps.pollMs,
+        abortSignal: deps.abortSignal,
+        killProcess,
+        residualTermGraceMs: deps.residualTermGraceMs,
+        residualKillWaitMs: deps.residualKillWaitMs,
+        processGroupPollMs: deps.processGroupPollMs,
+        binary: ompPath,
+        label: 'omp',
+        createState: ompEngine.createEventFolder,
+        foldLine: ompEngine.foldEventLine,
+        cwd: runtimeDir,
+      });
 
-        if (!ompResult.sawParseableEvent) {
-          const tailLines = ompResult.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
-          const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
-          throw new Error(
-            `omp produced no parseable output (exit ${ompResult.code ?? 'null'}` +
-              `${ompResult.signal ? `, signal ${ompResult.signal}` : ''}).${detail}`,
-          );
-        }
-      } catch (err) {
-        if (isUnverifiedProcessGroupCleanup(err)) throw err;
-        throw err;
+      if (!ompResult.sawParseableEvent) {
+        const tailLines = ompResult.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+        const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
+        throw new Error(
+          `omp produced no parseable output (exit ${ompResult.code ?? 'null'}` +
+            `${ompResult.signal ? `, signal ${ompResult.signal}` : ''}).${detail}`,
+        );
       }
 
       // Finalize OMP envelope state from the folded event stream.
@@ -7323,11 +7319,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         killed: !!ompResult.signal,
       });
 
-      const ompWarnings = [...(ompResult.warnings || []), ...(ompFinalized.warnings || [])];
+      const ompWarnings = [...new Set(ompFinalized.warnings || ompResult.warnings || [])];
       if (allowBestEffortCallerWorktree && !isolation && isolate) {
         ompWarnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
       }
-
       const ompActivity = normalizeActivity({ engine: 'omp',
         toolCalls: (ompFinalized.toolActivity || []).map((t) => ({ name: t.toolName, count: 1 })),
       });

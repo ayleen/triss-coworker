@@ -184,24 +184,24 @@ No raw upstream key may be persisted into OMP YAML, SQLite, session JSONL, resul
 
 Keep Triss model IDs and provider aliases as the public API. Translate only at the adapter boundary.
 
-| Triss selector prefix | OMP built-in selector | Credential/environment handling |
-| --- | --- | --- |
-| `opencode` | `opencode-zen` | `OPENCODE_API_KEY` |
-| `opencode-go` | `opencode-go` | `OPENCODE_API_KEY` |
-| `zai-coding-plan` | `zhipu-coding-plan` | `ZHIPU_API_KEY` |
-| `zai` | `zai` | bridge `ZHIPU_API_KEY` to OMP's `ZAI_API_KEY` |
-| `moonshotai` | `moonshot` | `MOONSHOT_API_KEY` |
-| `moonshotai-cn` | `moonshot` | `MOONSHOT_API_KEY` plus fixed `MOONSHOT_BASE_URL=https://api.moonshot.cn/v1` |
-| `kimi-for-coding` | `kimi-code` | `KIMI_API_KEY` |
-| `triss-worker` | Triss transient custom provider | `TRISS_WORKER_API_KEY` and worker base URL |
+| Triss selector prefix | OMP catalogue provider | Actual run selector | Credential/environment handling |
+| --- | --- | --- | --- |
+| `opencode` | `opencode-zen` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `opencode-go` | `opencode-go` | `triss-coder-transient/<model-id>` | `OPENCODE_API_KEY` |
+| `zai-coding-plan` | `zhipu-coding-plan` | `triss-coder-transient/<model-id>` | `ZHIPU_API_KEY` |
+| `zai` | `zai` | `triss-coder-transient/<model-id>` | bridge `ZHIPU_API_KEY` to OMP's `ZAI_API_KEY` |
+| `moonshotai` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
+| `moonshotai-cn` | `moonshot` | `triss-coder-transient/<model-id>` | `MOONSHOT_API_KEY` |
+| `kimi-for-coding` | `kimi-code` | `triss-coder-transient/<model-id>` | `KIMI_API_KEY` |
+| `triss-worker` | none (transient only) | `triss-coder-transient/<model-id>` | `TRISS_WORKER_API_KEY` and worker base URL |
 
-For audited routes, generate an OMP `models.yml` entry under a run-private agent directory using provider ID `triss-coder-transient`. Map Triss protocols exactly:
+The catalogue provider is used only to project isolated `omp models` output back to public Triss selectors. For audited runs, generate an OMP `models.yml` entry under a run-private agent directory using provider ID `triss-coder-transient`. Map Triss protocols exactly:
 
 - `openai_chat` -> `openai-completions`;
 - `openai_responses` -> `openai-responses`;
 - `anthropic_messages` -> `anthropic-messages`.
 
-The file contains an environment variable name, never a secret value. Protected mode points the transient provider at the Triss credential proxy. Raw mode may use the same transient provider for deterministic audited routes; unaudited Zen/Go fallback uses OMP's built-in provider only in explicitly allowed best-effort flows.
+The file contains an environment variable name, never a secret value. Protected mode points the transient provider at the Triss credential proxy. Raw mode uses the same transient provider so the audited endpoint and protocol cannot drift to a user-configured OMP route.
 
 Preserve the original Triss model as `billing_model` and result metadata. The rewritten OMP selector is execution metadata only and must not corrupt cost/provider classification.
 

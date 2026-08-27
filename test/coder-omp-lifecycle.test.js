@@ -12,7 +12,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -153,10 +153,8 @@ test(
       // OMP run writes under projectRoot()==TRISS_PROJECT_ROOT (tempHome), not chdir(tmpDir).
       // Check the real root and assert the whole run dir is gone (not just the agent subdir).
       const realRunsRoot = join(process.env.TRISS_PROJECT_ROOT, '.triss/omp/runs');
-      if (existsSync(realRunsRoot)) {
-        const entries = (await import('node:fs')).readdirSync(realRunsRoot);
-        assert.equal(entries.length, 0, `runs dir should be empty or removed after success -- found ${JSON.stringify(entries)}`);
-      }
+      assert.ok(existsSync(realRunsRoot), `runs root ${realRunsRoot} should have been created`);
+      assert.deepEqual(readdirSync(realRunsRoot), [], 'runs root should be empty after success');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -202,14 +200,8 @@ test(
       // Agent dir is best-effort cleaned by the outer catch (force:true makes
       // a missing path a no-op).
       const runsRoot = join(process.env.TRISS_PROJECT_ROOT, '.triss/omp/runs');
-      if (existsSync(runsRoot)) {
-        const fs = await import('node:fs');
-        const entries = fs.readdirSync(runsRoot);
-        for (const e of entries) {
-          const agentDir = join(runsRoot, e, 'agent');
-          assert.ok(!existsSync(agentDir), `agent dir ${agentDir} should be removed on spawn failure`);
-        }
-      }
+      assert.ok(existsSync(runsRoot), `runs root ${runsRoot} should have been created`);
+      assert.deepEqual(readdirSync(runsRoot), [], 'runs root should be empty after spawn failure');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -246,14 +238,8 @@ test(
       // After the envelope is written, the run-private agent dir must
       // be gone.
       const runsRoot = join(process.env.TRISS_PROJECT_ROOT, '.triss/omp/runs');
-      if (existsSync(runsRoot)) {
-        const fs = await import('node:fs');
-        const entries = fs.readdirSync(runsRoot);
-        for (const e of entries) {
-          const agentDir = join(runsRoot, e, 'agent');
-          assert.ok(!existsSync(agentDir), `agent dir ${agentDir} should be removed on envelope emission`);
-        }
-      }
+      assert.ok(existsSync(runsRoot), `runs root ${runsRoot} should have been created`);
+      assert.deepEqual(readdirSync(runsRoot), [], 'runs root should be empty after envelope emission');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

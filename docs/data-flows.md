@@ -10,6 +10,7 @@ check unless disabled.
 | Integrations | Configured GitHub, GitLab, Jira, Confluence, or Linear service | Query or mutation payload and that service's authentication token | On explicit integration operation | Do not configure or invoke the integration |
 | Passive update check | GitHub Releases | Current version and ordinary HTTP metadata; GitHub also receives connection metadata | Automatically when the cache is due | Set `TRISS_UPDATE_CHECK=0` |
 | Coder engine | Selected engine and its model provider | Task, selected context, tool results, and engine protocol events | On explicit `triss coder` request | Do not run a coder engine; select an approved local provider where supported |
+| `coder run --engine omp` | Local OMP binary, then the selected model provider | Task, repository/tool context, OMP protocol events, and either one selected raw provider credential (`best_effort_raw`) or a short-lived proxy token (`--protect-credentials`) | On explicit OMP coder request | Do not use OMP; or use protected mode. Worktree isolation and run-private config do not confine the host filesystem. |
 
 Repository content can therefore leave the machine and be processed by a
 third-party model provider. Review the provider's retention, training,

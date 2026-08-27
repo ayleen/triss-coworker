@@ -37,14 +37,16 @@
 //   - interactive TTY flow (engine/scope/provider/model prompts) — non-interactive
 //     only; a TTY still requires the explicit flags + --yes
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
 import { normalizeProviderFlag, resolveCoderEngine, VALID_CODER_ENGINES } from './coder.js';
 import { projectRoot } from '../safety.js';
+import { CODER_PROVIDER_REGISTRY } from '../coder-providers.js';
+import { omp as ompEngine } from '../coder-engines/omp.js';
 import { getEnvFilePath, readEnvFile } from '../secrets.js';
 import {
   resolveProviderIntent,
@@ -111,9 +113,117 @@ function severityColor(sev) {
   return pc.dim;
 }
 
+const OMP_CATALOGUE_TIMEOUT_MS = 30_000;
+const OMP_PUBLIC_SELECTOR_MAP = Object.freeze({
+  'opencode-zen': Object.freeze({ 'opencode-zen': Object.freeze(['opencode']) }),
+  'opencode-go': Object.freeze({ 'opencode-go': Object.freeze(['opencode-go']) }),
+  zai: Object.freeze({
+    'zhipu-coding-plan': Object.freeze(['zai-coding-plan']),
+    zai: Object.freeze(['zai']),
+  }),
+  moonshot: Object.freeze({ moonshot: Object.freeze(['moonshotai', 'moonshotai-cn']) }),
+  'kimi-for-coding': Object.freeze({ 'kimi-code': Object.freeze(['kimi-for-coding']) }),
+});
+
+function ompCatalogueFailure(detected) {
+  if (!detected?.path) return 'missing';
+  if (!detected.version) return 'version-unknown';
+  if (detected.capabilities && !detected.capabilities.ok) return 'unsupported-cli-contract';
+  return 'incompatible';
+}
+
+export function listOmpProviderModels(input = {}, deps = {}) {
+  const provider = input.provider;
+  const selectorMap = OMP_PUBLIC_SELECTOR_MAP[provider];
+  if (!selectorMap) {
+    return { engine: 'omp', provider, status: 'unsupported-selector', models: [] };
+  }
+  const sh = deps.spawnSync || spawnSync;
+  const detect = deps.detectOmp || ompEngine.detect;
+  const detected = detect(sh);
+  if (!detected?.found || !detected.path) {
+    return {
+      engine: 'omp',
+      provider,
+      status: ompCatalogueFailure(detected),
+      models: [],
+    };
+  }
+  const credentialEnv = CODER_PROVIDER_REGISTRY[provider]?.credentialEnv;
+  const credentialValue = credentialEnv ? process.env[credentialEnv] : undefined;
+  if (!credentialEnv || !credentialValue) {
+    return { engine: 'omp', provider, status: 'unauthenticated', models: [] };
+  }
+
+  const root = mkdtempSync(join(tmpdir(), 'triss-omp-models-'));
+  const agentDir = join(root, 'agent');
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  try {
+    const env = ompEngine.buildCatalogueEnv({
+      baseEnv: process.env,
+      credentialEnv,
+      credentialValue,
+      agentDir,
+    });
+    const result = sh(
+      detected.path,
+      ['models', '--json', '--no-extensions'],
+      {
+        encoding: 'utf8',
+        env,
+        timeout: OMP_CATALOGUE_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    if (!result || result.error || result.status !== 0) {
+      const diagnostic = `${result?.stderr || ''} ${result?.error?.message || ''}`;
+      const status = /(?:401|403|unauth|api[ _-]?key|credential)/iu.test(diagnostic)
+        ? 'unauthenticated'
+        : 'transient';
+      return { engine: 'omp', provider, status, models: [] };
+    }
+    let payload;
+    try {
+      payload = JSON.parse(String(result.stdout || ''));
+    } catch {
+      return { engine: 'omp', provider, status: 'invalid', models: [] };
+    }
+    if (!payload || !Array.isArray(payload.models)) {
+      return { engine: 'omp', provider, status: 'invalid', models: [] };
+    }
+
+    const models = [];
+    let matchedProvider = false;
+    for (const entry of payload.models) {
+      if (!entry || typeof entry !== 'object' || typeof entry.provider !== 'string' || typeof entry.id !== 'string') {
+        return { engine: 'omp', provider, status: 'invalid', models: [] };
+      }
+      const prefixes = selectorMap[entry.provider];
+      if (!prefixes) continue;
+      matchedProvider = true;
+      const id = entry.id.trim();
+      if (!id || id !== entry.id || /\s/u.test(id)) {
+        return { engine: 'omp', provider, status: 'invalid', models: [] };
+      }
+      for (const prefix of prefixes) models.push(`${prefix}/${id}`);
+    }
+    if (!matchedProvider) {
+      return { engine: 'omp', provider, status: 'unauthenticated', models: [] };
+    }
+    return {
+      engine: 'omp',
+      provider,
+      status: models.length ? 'ok' : 'empty',
+      models: [...new Set(models)].sort(),
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // ─── `triss coder models` — read-only listing ────────────────────────────────
 
-export async function runCoderModels(opts = {}) {
+export async function runCoderModels(opts = {}, deps = {}) {
   // Phase 4 (docs/opencode2-engine-plan.md): V2 renders through the SAME
   // inspectCoderModelState service (shared opencode.json backend). The JSON
   // contract gains one additive field; the human render adds a shared-config
@@ -151,9 +261,14 @@ export async function runCoderModels(opts = {}) {
   // deps.fetch so the service uses globalThis.fetch (the real network). This
   // is the documented behaviour and the counterpart to `triss status`, which
   // never makes a network call.
+  const modelDeps = engine === 'omp' && intent.provider !== 'worker'
+    ? {
+        listOmpProviderModels: (input) => listOmpProviderModels(input, deps),
+      }
+    : {};
   const state = await inspectCoderModelState(
     { engine, provider: intent.provider, shellSnapshot },
-    {},
+    modelDeps,
   );
 
   if (opts.json) {

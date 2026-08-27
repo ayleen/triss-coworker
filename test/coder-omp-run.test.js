@@ -154,6 +154,52 @@ test('foldOmpEventLine: replays OMP fixture into folded state', () => {
   assert.equal(state.usage.totalTokens, 10108);
   assert.ok(state.usage._rawCosts.length > 0);
 });
+test('foldOmpEventLine: accepts the authoritative nested OMP message schema', () => {
+  const state = createOmpEventFolder();
+  foldOmpEventLine(state, JSON.stringify({ type: 'session', id: 'omp_live_001' }));
+  foldOmpEventLine(state, JSON.stringify({
+    type: 'notice',
+    message: 'ordinary runtime notice',
+  }));
+  foldOmpEventLine(state, JSON.stringify({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      provider: 'opencode-go',
+      model: 'deepseek-v4-flash',
+      content: [{ type: 'text', text: 'EVENT_OK' }],
+      usage: {
+        input: 9,
+        output: 2,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: { total: 0.001 },
+      },
+      stopReason: 'stop',
+      errorMessage: null,
+    },
+  }));
+  foldOmpEventLine(state, JSON.stringify({ type: 'agent_end', isTerminal: true }));
+  const finalized = finalizeOmpEnvelopeState(state);
+  assert.equal(finalized.finalText, 'EVENT_OK');
+  assert.equal(finalized.provider, 'opencode-go');
+  assert.equal(finalized.model, 'deepseek-v4-flash');
+  assert.equal(finalized.usage.totalTokens, 14);
+  assert.deepEqual(finalized.warnings, []);
+});
+
+test('foldOmpEventLine: caps distinct warnings and emits one overflow sentinel', () => {
+  const state = createOmpEventFolder();
+  for (let i = 0; i < 100; i += 1) {
+    foldOmpEventLine(state, JSON.stringify({ type: `future_event_${i}` }));
+  }
+  assert.equal(state.warnings.length, 16);
+  assert.equal(state.warnings.at(-1), 'additional OMP warnings omitted');
+  assert.equal(state.warnings.filter((warning) => warning === 'additional OMP warnings omitted').length, 1);
+  assert.ok(state.warnings.every((warning) => warning.length <= 256));
+});
+
 
 test('finalizeOmpEnvelopeState: successful run with terminal agent_end', () => {
   const state = createOmpEventFolder();
@@ -223,7 +269,6 @@ test('buildOmpRunArgv: includes all expected flags', () => {
     model: 'triss-coder-transient/deepseek-v4-flash',
     smallModel: 'triss-coder-transient/deepseek-v4-flash-free',
     sessionDir: '/tmp/sessions',
-    configPath: '/tmp/config.yaml',
   });
   assert.ok(argv.includes('-p'));
   assert.ok(argv.includes('--mode'));
@@ -233,7 +278,6 @@ test('buildOmpRunArgv: includes all expected flags', () => {
   assert.ok(argv.includes('--smol'));
   assert.ok(argv.includes('triss-coder-transient/deepseek-v4-flash-free'));
   assert.ok(argv.includes('--session-dir'));
-  assert.ok(argv.includes('--config'));
   assert.ok(argv.includes('--no-title'));
   assert.ok(argv.includes('--no-extensions'));
   assert.ok(argv.includes('--no-skills'));
@@ -251,7 +295,6 @@ test('buildOmpRunArgv: --no-session when not resuming or continuing', () => {
     prompt: 'hello',
     model: 'm',
     sessionDir: '/tmp',
-    configPath: '/tmp/c.yaml',
     noSession: true,
   });
   assert.ok(argv.includes('--no-session'));
@@ -262,7 +305,6 @@ test('buildOmpRunArgv: --resume when sessionRealId given', () => {
     prompt: 'hello',
     model: 'm',
     sessionDir: '/tmp',
-    configPath: '/tmp/c.yaml',
     sessionRealId: 'omp_ses_123',
   });
   assert.ok(argv.includes('--resume'));
@@ -274,7 +316,6 @@ test('buildOmpRunArgv: --continue flag', () => {
     prompt: 'hello',
     model: 'm',
     sessionDir: '/tmp',
-    configPath: '/tmp/c.yaml',
     cont: true,
   });
   assert.ok(argv.includes('--continue'));
@@ -282,8 +323,11 @@ test('buildOmpRunArgv: --continue flag', () => {
 
 test('buildOmpRunArgv: --resume and --continue are mutually exclusive', () => {
   assert.throws(() => buildOmpRunArgv({
-    prompt: 'hello', model: 'm', sessionDir: '/tmp', configPath: '/tmp/c.yaml',
-    sessionRealId: 'omp_ses_123', cont: true,
+    prompt: 'hello',
+    model: 'm',
+    sessionDir: '/tmp',
+    sessionRealId: 'omp_ses_123',
+    cont: true,
   }), /mutually exclusive/);
 });
 
@@ -292,9 +336,11 @@ test('buildOmpSpawnEnv: strict env allowlist', () => {
     credentialEnv: 'ZAI_API_KEY',
     credentialValue: 'zai-fake-key',
     agentDir: '/tmp/agent',
+    configPath: '/tmp/agent/policy.yml',
   });
   assert.equal(env.ZAI_API_KEY, 'zai-fake-key');
   assert.equal(env.PI_CODING_AGENT_DIR, '/tmp/agent');
+  assert.equal(env.PI_CONFIG_FILES, '/tmp/agent/policy.yml');
   // Only allowlisted vars are present
   assert.equal(env.NODE_OPTIONS, undefined);
   assert.equal(env.DEBUG, undefined);
@@ -384,6 +430,32 @@ test('buildOmpModelsConfig: uses proxy baseUrl when proxy is provided', () => {
 });
 
 // ─── full runCoderRun OMP envelope (fake spawn) ───────────────────────────
+
+test('runCoderRun: OMP invalid flags fail before reservation or spawn', async () => {
+  const cases = [
+    [{ agent: 'coder' }, /--agent is not supported on the omp engine/],
+    [{ restrict: true }, /--restrict\/--no-restrict are crush-only/],
+    [{ restrict: false }, /--restrict\/--no-restrict are crush-only/],
+    [{ session: 'guarded', continue: true }, /--session and --continue.*omp engine/],
+  ];
+  for (const [invalid, expected] of cases) {
+    let reservations = 0;
+    let spawns = 0;
+    await assert.rejects(
+      () => runCoderRunProduction(
+        'do something',
+        { engine: 'omp', isolate: false, ...invalid },
+        {
+          reserveSessionRow: async () => { reservations += 1; },
+          spawn: () => { spawns += 1; throw new Error('must not spawn'); },
+        },
+      ),
+      expected,
+    );
+    assert.equal(reservations, 0, `reservation occurred for ${JSON.stringify(invalid)}`);
+    assert.equal(spawns, 0, `spawn occurred for ${JSON.stringify(invalid)}`);
+  }
+});
 
 test(
   'runCoderRun: OMP engine produces a correct envelope for a successful run',

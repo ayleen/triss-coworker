@@ -308,11 +308,11 @@ The exposed tool set is **filtered by configured credentials**:
   `ZHIPU_API_KEY` (Z.AI GLM), `OPENCODE_API_KEY` (OpenCode Zen or Go),
   `MOONSHOT_API_KEY` (Moonshot Kimi), or `KIMI_API_KEY` (Kimi for Coding)
   (setup: `triss coder init`). `triss_coder_run` takes an optional `engine`
-  (`opencode` V1 default; `--engine opencode2` beta — see
-  [opencode2.md](docs/engines/opencode2.md) — or `crush`); its timeout defaults to
-  1500s (25 min) over MCP, above the CLI's 900s, since coding runs are
-  expected to be long; override per call via the `timeout` arg. For
-  runs that may exceed it, use `triss coder run` on the CLI instead.
+  (`opencode` V1 default, `opencode2` beta, `crush`, or the native
+  [`omp`](docs/engines/omp.md) adapter); its timeout defaults to 1500s
+  (25 min) over MCP, above the CLI's 900s, since coding runs are expected to
+  be long; override per call via the `timeout` arg. For runs that may exceed
+  it, use `triss coder run` on the CLI instead.
 
 Add credentials later → restart session → new tools appear automatically.
 
@@ -376,6 +376,25 @@ Return
 - Outcome, files changed, checks, and unresolved blockers.
 TASK
 ```
+
+OMP is a first-class fourth engine with a supported floor of `18.0.6`.
+Install OMP separately, initialize one provider, then use the same envelope/session surfaces:
+
+```bash
+curl https://omp.sh/install | sh
+triss coder init --engine omp --provider opencode-go
+triss coder run --engine omp --model opencode-go/deepseek-v4-flash \
+  "Create result.txt containing OMP_OK"
+```
+
+Triss never executes OMP's installer. OMP runs default to worktree isolation,
+load policy and model configuration only from a run-private
+`PI_CODING_AGENT_DIR`, and preserve public Triss model IDs while the child uses
+`triss-coder-transient/<model-id>`. A worktree limits repository mutations; it
+is not an OS sandbox. Default `best_effort_raw` mode exposes the selected key
+to same-UID child code; pass `--protect-credentials` for the parent-owned
+credential proxy and deny-all bash policy. Full contract:
+[`docs/engines/omp.md`](docs/engines/omp.md).
 
 `triss agent-help` prints the generated host-agent cookbook and the final
 acceptance checklist.

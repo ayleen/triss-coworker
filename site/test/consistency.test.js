@@ -11,6 +11,7 @@ import {
   DEFAULTS,
   PROFILE,
 } from "../src/data/pricing.js";
+import { COMMANDS } from "../src/data/commands.js";
 
 const read = (file) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 
@@ -58,4 +59,36 @@ test("historical benchmark keeps its May 2026 list-price result", () => {
   assert.match(readme, /\*\*\\\$2\.22\*\*/);
   assert.doesNotMatch(readme, /off-peak window[\s\S]{0,100}75%/);
   assert.doesNotMatch(readme, /DeepSeek \(pro, -75%\)/);
+});
+
+test("website coder engines and OMP quickstart match repository contracts", () => {
+  const pkg = JSON.parse(read("../package.json"));
+  const coderPage = read("src/pages/coder.astro");
+  const gettingStarted = read("src/pages/docs/getting-started.astro");
+  const readme = read("../README.md");
+  const ompAdapter = read("../src/coder-engines/omp.js");
+  const floor = ompAdapter.match(/OMP_SUPPORTED_FLOOR = '([^']+)'/)?.[1];
+  assert.ok(floor, "OMP supported floor must be parseable from the adapter");
+
+  for (const engine of ["opencode", "opencode2", "crush", "omp"]) {
+    assert.match(coderPage, new RegExp(`data-engine="${engine}"`));
+  }
+  assert.match(coderPage, /data-engine="harness"[\s\S]*DSH plugin, not --engine/);
+
+  const coder = COMMANDS.find((command) => command.name === "coder");
+  assert.ok(coder);
+  assert.match(coder.flags.join(" "), /opencode\|opencode2\|crush\|omp/);
+  assert.equal(
+    coder.example,
+    '$ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"',
+  );
+
+  assert.equal(pkg.name, "triss-coworker");
+  assert.equal(pkg.engines.node, ">=22.12.0");
+  assert.match(gettingStarted, /npm install -g triss-coworker/);
+  assert.match(gettingStarted, /Node\.js ≥ 22\.12/);
+  assert.match(gettingStarted, new RegExp(`OMP ${floor.replaceAll(".", "\\.")} or newer`));
+  assert.match(gettingStarted, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);
+  assert.match(readme, new RegExp(`supported floor of \`${floor.replaceAll(".", "\\.")}\``));
+  assert.match(readme, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);
 });

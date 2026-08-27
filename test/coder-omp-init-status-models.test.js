@@ -14,12 +14,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runCoderInit, describeCoderStatus } from '../src/commands/coder.js';
+import { runCoderInit, runCoderSetup, describeCoderStatus } from '../src/commands/coder.js';
 import { inspectCoderModelState } from '../src/coder-models.js';
+import { listOmpProviderModels, runCoderModels } from '../src/commands/coder-models.js';
 
 const ENV_KEYS = [
   'TRISS_CODER_OMP_VERSION', 'TRISS_CODER_ENGINE', 'TRISS_CODER_MODEL',
@@ -152,6 +153,36 @@ test('runCoderInit omp: compatible binary is idempotent (green check, no throw)'
     cleanup();
   }
 }));
+test('runCoderSetup omp: wizard completes without taking the OpenCode config lock', withSavedEnv(ENV_KEYS, async () => {
+  delete process.env.TRISS_CODER_OMP_VERSION;
+  process.env.ZHIPU_API_KEY = 'test-key';
+  process.env.TRISS_CODER_MODEL = 'zai-coding-plan/glm-5.2';
+  process.env.TRISS_CODER_SMALL_MODEL = 'zai-coding-plan/glm-4.5-air';
+  const cap = captureStderr();
+  try {
+    const result = await runCoderSetup(
+      {
+        engine: 'omp',
+        provider: 'zai',
+        scope: 'local',
+        credentialMode: 'best_effort_raw',
+      },
+      {
+        spawnSync: okSh(),
+        lock: () => { throw new Error('OMP must not take the OpenCode config lock'); },
+      },
+    );
+    assert.deepEqual(result, {
+      model: 'zai-coding-plan/glm-5.2',
+      smallModel: 'zai-coding-plan/glm-4.5-air',
+    });
+    assert.match(cap.out.join(''), /✓ omp 18\.0\.6 \(meets minimum 18\.0\.6\)/);
+    assert.match(cap.out.join(''), /run-private PI_CODING_AGENT_DIR/);
+  } finally {
+    cap.restore();
+  }
+}));
+
 
 // ─── models: stable JSON over env pins ──────────────────────────────────────
 test('inspectCoderModelState omp: env pins as roles, deterministic, no fetch', withSavedEnv(ENV_KEYS, async () => {
@@ -170,4 +201,100 @@ test('inspectCoderModelState omp: env pins as roles, deterministic, no fetch', w
   assert.equal(state.config_main == null, true);
   const ser = JSON.stringify(state);
   assert.equal(ser.toLowerCase().includes('sk-'), false);
+}));
+
+test('runCoderModels omp: lists the selected provider through isolated pinned OMP', withSavedEnv(ENV_KEYS, async () => {
+  process.env.TRISS_CODER_MODEL = 'opencode-go/deepseek-v4-flash';
+  process.env.TRISS_CODER_SMALL_MODEL = 'opencode-go/deepseek-v4-flash';
+  process.env.OPENCODE_API_KEY = 'opencode-secret-sentinel';
+  process.env.ZHIPU_API_KEY = 'must-not-be-forwarded';
+  let catalogueAgentDir;
+  const calls = [];
+  const stdout = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => { stdout.push(String(chunk)); return true; };
+  try {
+    await runCoderModels(
+      { engine: 'omp', provider: 'opencode-go', json: true },
+      {
+        detectOmp: () => ({
+          found: true,
+          path: '/opt/pinned/omp',
+          version: '18.0.6',
+          capabilities: { ok: true },
+        }),
+        spawnSync: (command, argv, options) => {
+          calls.push({ command, argv, options });
+          catalogueAgentDir = options.env.PI_CODING_AGENT_DIR;
+          assert.ok(existsSync(catalogueAgentDir), 'isolated catalogue agent dir must exist during spawn');
+          assert.equal(options.env.OPENCODE_API_KEY, 'opencode-secret-sentinel');
+          assert.equal(options.env.ZHIPU_API_KEY, undefined);
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              models: [
+                {
+                  provider: 'opencode-go',
+                  id: 'deepseek-v4-flash',
+                  selector: 'opencode-go/deepseek-v4-flash',
+                },
+              ],
+            }),
+            stderr: '',
+          };
+        },
+      },
+    );
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, '/opt/pinned/omp');
+  assert.deepEqual(calls[0].argv, ['models', '--json', '--no-extensions']);
+  assert.equal(existsSync(catalogueAgentDir), false, 'isolated catalogue directory must be removed');
+  const state = JSON.parse(stdout.join(''));
+  assert.equal(state.engine, 'omp');
+  assert.equal(state.provider, 'opencode-go');
+  assert.equal(state.catalogue_status, 'ok');
+  assert.deepEqual(state.available_models, ['opencode-go/deepseek-v4-flash']);
+  assert.equal(state.current.main.availability, 'available');
+  assert.equal(stdout.join('').includes('opencode-secret-sentinel'), false);
+  assert.equal(stdout.join('').includes('must-not-be-forwarded'), false);
+}));
+
+test('listOmpProviderModels: returns stable typed catalogue failures', withSavedEnv(ENV_KEYS, async () => {
+  delete process.env.OPENCODE_API_KEY;
+  assert.equal(
+    listOmpProviderModels(
+      { provider: 'opencode-go' },
+      { detectOmp: () => ({ found: false, path: null }) },
+    ).status,
+    'missing',
+  );
+  assert.equal(
+    listOmpProviderModels(
+      { provider: 'unmapped-provider' },
+      { detectOmp: () => { throw new Error('must not probe'); } },
+    ).status,
+    'unsupported-selector',
+  );
+  assert.equal(
+    listOmpProviderModels(
+      { provider: 'opencode-go' },
+      { detectOmp: () => ({ found: true, path: '/opt/omp', version: '18.0.6', capabilities: { ok: true } }) },
+    ).status,
+    'unauthenticated',
+  );
+
+  process.env.OPENCODE_API_KEY = 'test-key';
+  assert.equal(
+    listOmpProviderModels(
+      { provider: 'opencode-go' },
+      {
+        detectOmp: () => ({ found: true, path: '/opt/omp', version: '18.0.6', capabilities: { ok: true } }),
+        spawnSync: () => ({ status: 0, stdout: '{"models":', stderr: '' }),
+      },
+    ).status,
+    'invalid',
+  );
 }));

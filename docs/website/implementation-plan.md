@@ -240,13 +240,16 @@ Website-only changes must not weaken or bypass the existing repository checks.
 - Focused component or behavior tests for interactive controls.
 - Regression tests for hostile search strings and for mobile disclosure reset
   across the 900 px breakpoint.
-- Critical-content consistency checks against repository metadata.
+- Critical-content consistency checks against repository metadata, including
+  coder engine names, the canonical OMP selector/example, and supported floor.
 - Production build from `npm ci`.
 - Internal-link and missing-asset checks against `site/dist/`.
 - HTML accessibility checks where reliable automation is available.
 - Browser acceptance checks at 320/375/768/900 px and desktop, including no
   horizontal overflow, keyboard/screen-reader semantics, text zoom, safe
   areas, reduced motion, touch-target sizing, and focus visibility.
+- Coder acceptance checks select OMP by keyboard, verify its worktree and
+  credential-boundary copy, and copy the canonical command.
 - Verify generated CSS/assets contain only the pinned local font files and no
   third-party runtime font URL.
 - Verification that preview deployments retain production canonical URLs and
@@ -302,7 +305,8 @@ CI checks pass.
 - Add the 404 page, sitemap, generated robots directives, security headers,
   and social metadata.
 - Add critical-content consistency checks (package name, Node ≥22,
-  `npm install -g triss-coworker`, repo/npm URLs).
+  `npm install -g triss-coworker`, repo/npm URLs, all four coder engines, and
+  the canonical OMP selector/example and supported floor).
 
 Exit condition: all requirements for the initial routes are satisfied locally.
 

@@ -632,6 +632,22 @@ export async function resolveProviderIntent(input = {}, _deps = {}) {
 export async function listProviderModels(input = {}, deps = {}) {
   const engine = input.engine || DEFAULT_CODER_ENGINE;
   const provider = input.provider;
+  if (engine === 'omp') {
+    if (typeof deps.listOmpProviderModels === 'function') {
+      return deps.listOmpProviderModels({ engine, provider, scope: input.scope });
+    }
+    if (provider === 'worker') {
+      const worker = readWorkerConfigSnapshot({ scope: input.scope || 'effective' });
+      const configured = [
+        worker.flashModel || 'deepseek-v4-flash',
+        worker.proModel || 'deepseek-v4-pro',
+      ];
+      const models = [...new Set(configured.map((id) => String(id).trim()).filter(Boolean))]
+        .map((id) => `triss-worker/${id}`);
+      return { engine, provider, status: 'not-supported', models };
+    }
+    return { engine, provider, status: 'not-supported', models: [] };
+  }
   if (provider === 'worker') {
     const worker = readWorkerConfigSnapshot({ scope: input.scope || 'effective' });
     const configured = [

@@ -22,6 +22,7 @@ import {
   buildOmpModelsConfig,
   renderOmpModelsYaml,
   buildOmpPolicyOverlay,
+  buildOmpSpawnEnv,
   renderOmpPolicyYaml,
 } from '../src/coder-engines/omp.js';
 import { compareStableVersions, parseStableVersion } from '../src/version.js';
@@ -29,7 +30,6 @@ import { compareStableVersions, parseStableVersion } from '../src/version.js';
 function resolveOmpBin() {
   if (process.env.OMP_BIN) return process.env.OMP_BIN;
   try {
-    const { execFileSync } = require('node:child_process');
     const out = execFileSync('which', ['omp'], { encoding: 'utf8' });
     const p = out.trim().split('\n').pop();
     if (p) return p;
@@ -108,7 +108,7 @@ test(
 );
 
 test(
-  'real OMP: hostile project bash.allow is replaced by transient overlay (arrays replace wholesale)',
+  'real OMP: run-mode PI_CONFIG_FILES replaces hostile project bash.allow',
   { skip: SKIP },
   () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'omp-bash-hostile-'));
@@ -130,12 +130,18 @@ test(
       const overlay = buildOmpPolicyOverlay({ protectCredentials: false });
       const policyPath = join(agentDir, 'policy.yml');
       writeFileSync(policyPath, renderOmpPolicyYaml(overlay), { mode: 0o600 });
-      // omp config list does NOT accept --config. PI_CONFIG_FILES (env-var
-      // path list) loads the overlay on top of the agent config; arrays
-      // REPLACE wholesale per docs/settings.md.
+      // buildOmpSpawnEnv is the exact run-mode path. OMP ignores --config for
+      // this surface, so Triss enforces the transient overlay through
+      // PI_CONFIG_FILES; arrays replace wholesale per docs/settings.md.
+      const env = buildOmpSpawnEnv({
+        baseEnv: process.env,
+        agentDir,
+        configPath: policyPath,
+      });
+      assert.equal(env.PI_CONFIG_FILES, policyPath);
       const result = execFileSync(
         OMP_BIN, ['config', 'list', '--json'],
-        { encoding: 'utf8', timeout: 15000, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CONFIG_FILES: policyPath } }
+        { encoding: 'utf8', timeout: 15000, env }
       );
       const bpMatch = result.match(/"bash\.patterns":\s*\{[^}]*"value":\s*(\[[\s\S]*?\])\s*[,}]/);
       assert.ok(bpMatch, 'bash.patterns key not visible in OMP config list output');
@@ -160,9 +166,14 @@ test(
       const overlay = buildOmpPolicyOverlay({ protectCredentials: true });
       const policyPath = join(agentDir, 'policy.yml');
       writeFileSync(policyPath, renderOmpPolicyYaml(overlay), { mode: 0o600 });
+      const env = buildOmpSpawnEnv({
+        baseEnv: process.env,
+        agentDir,
+        configPath: policyPath,
+      });
       const result = execFileSync(
         OMP_BIN, ['config', 'list', '--json'],
-        { encoding: 'utf8', timeout: 15000, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CONFIG_FILES: policyPath } }
+        { encoding: 'utf8', timeout: 15000, env }
       );
       const bpMatch = result.match(/"bash\.patterns":\s*\{[^}]*"value":\s*(\[[\s\S]*?\])\s*[,}]/);
       assert.ok(bpMatch, 'bash.patterns not visible in OMP config list output');

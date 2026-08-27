@@ -133,8 +133,8 @@ Rules:
 | `model` | the reporting/grouping key. `triss usage --by-model` groups strictly by this. |
 | `billing_model` | the **only** key used for price lookup. Keeps the endpoint/plan prefix (`zai/glm-5.2` vs `zai-coding-plan/glm-5.2`); the one exception is the `moonshotai/`/`moonshotai-cn/` prefix, which is stripped so one row covers the bare and prefixed Moonshot routes. `opencode-go/*` keeps its prefix and prices as null (unknown cost) — the Go reseller's tariffs are not modeled. |
 | `provider` | informational identity for diagnostics. Never selects a price. Never inferred from which API keys happen to be set. |
-| `usage_source` | which payload contract Triss parsed: `api`, `opencode`, `opencode2`, or `crush`. |
-| `engine` | `opencode`, `opencode2`, `crush`, or `null` for direct API calls. |
+| `usage_source` | which payload contract Triss parsed: `api`, `opencode`, `opencode2`, `crush`, or `omp`. |
+| `engine` | `opencode`, `opencode2`, `crush`, `omp`, or `null` for direct API calls. |
 | `billing_mode` | `payg`, `subscription`, `free`, or `unknown`. |
 | `usage_status` | `reported` or `missing`. |
 
@@ -149,6 +149,7 @@ Rules:
 | `moonshotai/*`, `moonshotai-cn/*` | `moonshot` |
 | `kimi-for-coding/*` | `kimi-for-coding` |
 | Crush runs | `zai`, with `engine: "crush"` |
+| OMP runs | provider from the original public Triss selector; `engine: "omp"` |
 
 `billing_mode` classification is **fail-closed** — when a route could have been
 served either by a subscription quota or by a balance-funded fallback and the
@@ -166,6 +167,7 @@ event does not prove which, the mode is `unknown`, not `subscription`:
 | OpenCode Go that may fall back to Zen balance | `unknown` |
 | `triss-worker/*` (configurable endpoint) | `unknown` — a configured price can still produce an estimate |
 | Crush | token pricing may stay `unknown`; cost trust follows `delta_cost_usd` |
+| OMP | billing mode follows the original public Triss selector; OMP-reported cost is evidence, while billing classification remains fail-closed |
 
 ### Proving a free call
 
@@ -310,6 +312,16 @@ Every split field — `input_uncached`, `cache_read`, `cache_write`,
 `output_visible`, `reasoning`, `input_total`, `output_total` — stays `null`.
 Crush's combined count is never stored as completion tokens in the canonical
 record.
+
+### Oh My Pi (`usage_source: "omp"`)
+
+OMP `message_end.message.usage` reports `input`, `output`, `cacheRead`,
+`cacheWrite`, `totalTokens`, and an optional total cost. Triss maps the token
+components directly, preserves the reported total, and stores the original
+public Triss selector as `billing_model`; the transient child selector
+`triss-coder-transient/<model-id>` never changes pricing/provider identity.
+Retries are additive across completed assistant messages. Missing or malformed
+components remain unknown rather than being fabricated as zero.
 
 ## Cost
 

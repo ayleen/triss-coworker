@@ -142,6 +142,29 @@ test("quickstart step navigation stops being sticky on mobile", async ({ page })
   await expect(steps).toHaveCSS("position", "sticky");
 });
 
+test("OMP engine control supports keyboard selection and command copy", async ({ context, page }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const runtimeErrors = collectRuntimeErrors(page);
+  await page.goto("/coder/", { waitUntil: "networkidle" });
+
+  const crush = page.locator('[data-engine="crush"]');
+  const omp = page.locator('[data-engine="omp"]');
+  await crush.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(omp).toBeFocused();
+  await expect(omp).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#engine-body")).toContainText(/run-private config/i);
+  await expect(page.locator("#engine-body")).toContainText("not an OS sandbox");
+  await expect(page.locator("#engine-command")).toHaveText('triss coder run --engine omp "your task"');
+
+  await page.locator("#copy-engine-command").click();
+  await expect(page.locator("#copy-engine-command")).toHaveText("copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('triss coder run --engine omp "your task"');
+  await expect(omp).toBeVisible();
+  expect(runtimeErrors).toEqual([]);
+});
+
 test("command search renders hostile input only as text", async ({ page }) => {
   await page.goto("/commands/");
   const hostile = '<img src=x onerror="window.__siteXss = true">';

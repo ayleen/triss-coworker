@@ -83,7 +83,7 @@ export function buildOmpProbeEnv(baseEnv = process.env) {
 const REQUIRED_LAUNCH_CAPS = Object.freeze([
   '--mode', '--model', '--smol', '--session-dir',
   '--no-session', '--resume', '--continue',
-  '--config', '--tools', '--approval-mode',
+  '--tools', '--approval-mode',
   '--no-extensions', '--no-skills', '--no-title', '--no-pty',
 ]);
 
@@ -123,41 +123,37 @@ export function resolveOmpVersionPolicy(sh = nodeSpawnSync) {
     r = null;
   }
   if (!r || r.error || r.status !== 0) return base;
+
   const out = String(r.stdout || '').trim();
   const parsed = parseInstalledVersion(out);
   base.found = true;
   base.installedVersion = parsed ? `${parsed.major}.${parsed.minor}.${parsed.patch}` : (out || null);
-  if (configValid) {
-    if (!parsed) base.reason = 'version_unknown';
-    else if (!semverGte(parsed, floor)) base.reason = 'below_floor';
-    else if (!configuredUnset && !semverGte(parsed, configuredParsed)) base.reason = 'below_configured_minimum';
-    else {
-      // Capability probe — version alone is not admission
-      // eslint-disable-next-line no-useless-assignment -- probe overwrites these when spawn succeeds
-      let launchHelp = '';
-      // eslint-disable-next-line no-useless-assignment
-      let modelsHelp = '';
-      // eslint-disable-next-line no-useless-assignment
-      let capOk = false;
-      try {
-        const lh = sh('omp', ['--help'], { env: buildOmpProbeEnv() });
-        launchHelp = `${lh?.stdout || ''}\n${lh?.stderr || ''}`;
-        const mh = sh('omp', ['models', '--help'], { env: buildOmpProbeEnv() });
-        modelsHelp = `${mh?.stdout || ''}\n${mh?.stderr || ''}`;
-        const cap = probeOmpCapabilities({ launchHelp, modelsHelp, version: base.installedVersion });
-        base.capabilities = cap;
-        capOk = cap.ok;
-        if (!capOk) base.reason = 'unsupported-cli-contract';
-        else base.reason = 'compatible';
-      } catch {
-        base.reason = 'unsupported-cli-contract';
-        base.capabilities = { ok: false, reason: 'unsupported-cli-contract', missing: [], help: '' };
-      }
-      if (base.reason === 'compatible') {
-        // leave as compatible
-      } else if (parsed && semverGte(parsed, floor) && (configuredUnset || semverGte(parsed, configuredParsed))) {
-        // keep unsupported-cli-contract reason
-      }
+  if (!configValid) return base;
+  if (!parsed) {
+    base.reason = 'version_unknown';
+  } else if (!semverGte(parsed, floor)) {
+    base.reason = 'below_floor';
+  } else if (!configuredUnset && !semverGte(parsed, configuredParsed)) {
+    base.reason = 'below_configured_minimum';
+  } else {
+    try {
+      const launch = sh('omp', ['--help'], { env: buildOmpProbeEnv() });
+      const models = sh('omp', ['models', '--help'], { env: buildOmpProbeEnv() });
+      const capabilities = probeOmpCapabilities({
+        launchHelp: `${launch?.stdout || ''}\n${launch?.stderr || ''}`,
+        modelsHelp: `${models?.stdout || ''}\n${models?.stderr || ''}`,
+        version: base.installedVersion,
+      });
+      base.capabilities = capabilities;
+      base.reason = capabilities.ok ? 'compatible' : 'unsupported-cli-contract';
+    } catch {
+      base.reason = 'unsupported-cli-contract';
+      base.capabilities = {
+        ok: false,
+        reason: 'unsupported-cli-contract',
+        missing: [],
+        help: '',
+      };
     }
   }
   base.compatible = base.reason === 'compatible';
@@ -270,13 +266,11 @@ export function buildOmpRunArgv({
   sessionRealId,
   cont = false,
   noSession = false,
-  configPath,
   tools: toolList = 'read,write,edit,glob,grep,bash,todo',
 } = {}) {
   if (!prompt || typeof prompt !== 'string') throw new TypeError('buildOmpRunArgv: prompt is required');
   if (!model || typeof model !== 'string') throw new TypeError('buildOmpRunArgv: model is required');
   if (!sessionDir || typeof sessionDir !== 'string') throw new TypeError('buildOmpRunArgv: sessionDir is required');
-  if (!configPath || typeof configPath !== 'string') throw new TypeError('buildOmpRunArgv: configPath is required');
   if (sessionRealId && cont) throw new Error('--resume and --continue are mutually exclusive');
   if (noSession && (sessionRealId || cont)) throw new Error('--no-session is exclusive with --resume/--continue');
 
@@ -288,7 +282,6 @@ export function buildOmpRunArgv({
     '--no-title', '--no-extensions', '--no-skills', '--no-pty',
     '--approval-mode', 'write',
     '--tools', toolList,
-    '--config', configPath,
   ];
   if (smallModel) argv.push('--smol', smallModel);
   if (noSession) argv.push('--no-session');
@@ -305,13 +298,27 @@ export function buildOmpSpawnEnv({
   credentialValue,
   _proxy = null,
   agentDir,
+  configPath,
   extraEnv = {},
 } = {}) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ']) {
     if (baseEnv[key] != null) env[key] = baseEnv[key];
   }
-  if (agentDir) env.PI_CODING_AGENT_DIR = agentDir;
+  if (agentDir || configPath) {
+    if (!agentDir || !isAbsolute(agentDir)) {
+      throw new TypeError('buildOmpSpawnEnv: agentDir must be an absolute path');
+    }
+    if (!configPath || !isAbsolute(configPath)) {
+      throw new TypeError('buildOmpSpawnEnv: configPath must be an absolute path');
+    }
+    const rel = relative(agentDir, configPath);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('buildOmpSpawnEnv: configPath must be inside agentDir');
+    }
+    env.PI_CODING_AGENT_DIR = agentDir;
+    env.PI_CONFIG_FILES = configPath;
+  }
   // Provider credential handling is done by the caller via credentialEnv/value or proxy.
   // Never spread baseEnv credentials blindly — only the ONE selected provider credential
   // is forwarded (see plan §4.4/5). The raw-credential path sets credentialEnv/value;
@@ -329,6 +336,21 @@ export function buildOmpSpawnEnv({
     if (['MOONSHOT_BASE_URL'].includes(k) && v) env[k] = v;
   }
   return env;
+}
+export function buildOmpCatalogueEnv({
+  baseEnv = process.env,
+  credentialEnv,
+  credentialValue,
+  agentDir,
+  extraEnv = {},
+} = {}) {
+  if (!agentDir || !isAbsolute(agentDir)) {
+    throw new TypeError('buildOmpCatalogueEnv: agentDir must be an absolute path');
+  }
+  return {
+    ...buildOmpSpawnEnv({ baseEnv, credentialEnv, credentialValue, extraEnv }),
+    PI_CODING_AGENT_DIR: agentDir,
+  };
 }
 
 // ─── runtime dirs ───────────────────────────────────────────────────────────
@@ -551,12 +573,68 @@ export function renderOmpModelsYaml(config) {
 
 // ─── NDJSON fold ────────────────────────────────────────────────────────────
 
+const OMP_MAX_WARNINGS = 16;
+const OMP_MAX_WARNING_BYTES = 256;
+const OMP_WARNING_OVERFLOW = 'additional OMP warnings omitted';
+function sanitizeOmpWarning(text) {
+  const value = String(text).slice(0, OMP_MAX_WARNING_BYTES);
+  let sanitized = '';
+  let segmentStart = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code > 31 && code !== 127) continue;
+    sanitized += `${value.slice(segmentStart, index)}?`;
+    segmentStart = index + 1;
+  }
+  return segmentStart ? sanitized + value.slice(segmentStart) : value;
+}
+
+function pushOmpWarning(state, text) {
+  const sanitized = sanitizeOmpWarning(text);
+  if (!sanitized || state.warnings.includes(sanitized)) return;
+  if (state.warnings.length < OMP_MAX_WARNINGS - 1) {
+    state.warnings.push(sanitized);
+    return;
+  }
+  if (!state.warnings.includes(OMP_WARNING_OVERFLOW)) {
+    state.warnings.push(OMP_WARNING_OVERFLOW);
+  }
+}
+
+function foldAssistantMessage(state, message, { countUsage = true } = {}) {
+  if (!message || typeof message !== 'object' || message.role !== 'assistant') return;
+  const text = Array.isArray(message.content)
+    ? message.content.filter((part) => part?.type === 'text').map((part) => part.text || '').join('')
+    : (typeof message.content === 'string' ? message.content : '');
+  if (text) state.finalText = text;
+  if (message.provider) state.provider = message.provider;
+  if (message.model) state.model = message.model;
+  if (message.stopReason) state.stopReason = message.stopReason;
+  if (message.errorMessage) {
+    state.terminalError = message.errorMessage;
+    state.isTerminalError = true;
+  } else if (message.stopReason === 'error' && !state.terminalError) {
+    state.isTerminalError = true;
+  }
+  if (!countUsage || !message.usage) return;
+  const usage = message.usage;
+  state.usage.input += Number(usage.input) || 0;
+  state.usage.output += Number(usage.output) || 0;
+  state.usage.cacheRead += Number(usage.cacheRead) || 0;
+  state.usage.cacheWrite += Number(usage.cacheWrite) || 0;
+  state.usage.totalTokens += Number(usage.totalTokens) || 0;
+  if (typeof usage.cost?.total === 'number' && Number.isFinite(usage.cost.total)) {
+    state.usage._rawCosts.push(usage.cost.total);
+  }
+}
+
 export function createOmpEventFolder() {
   return {
     sawParseableEvent: false,
     sessionId: null,
     terminalAgentEnd: false,
     sawTerminalAgentEnd: false,
+    sawAssistantMessageEnd: false,
     finalText: null,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, _rawCosts: [] },
     provider: null,
@@ -575,8 +653,10 @@ export function foldOmpEventLine(state, rawLine) {
   const line = String(rawLine).trim();
   if (!line) return;
   let evt;
-  try { evt = JSON.parse(line); } catch {
-    state.warnings.push(`unparseable line: ${line.slice(0, 200)}`);
+  try {
+    evt = JSON.parse(line);
+  } catch {
+    pushOmpWarning(state, `unparseable line: ${line.slice(0, 200)}`);
     state.invalidLines += 1;
     return;
   }
@@ -584,14 +664,17 @@ export function foldOmpEventLine(state, rawLine) {
 
   const type = evt.type;
   if (!type) {
-    state.warnings.push(`unknown event without type: ${line.slice(0, 200)}`);
+    pushOmpWarning(state, `unknown event without type: ${line.slice(0, 200)}`);
     return;
   }
 
   switch (type) {
     case 'session': {
       const id = evt.id;
-      if (!id) { state.warnings.push('session event missing id'); break; }
+      if (!id) {
+        pushOmpWarning(state, 'session event missing id');
+        break;
+      }
       if (state.sessionId && state.sessionId !== id) {
         throw new Error(`conflicting session ids: ${state.sessionId} vs ${id}`);
       }
@@ -602,29 +685,23 @@ export function foldOmpEventLine(state, rawLine) {
     case 'turn_start':
     case 'turn_end':
     case 'message_start':
-      break;
     case 'message_update':
-      // progress only
+    case 'notice':
+    case 'auto_compaction_start':
+    case 'auto_compaction_end':
+    case 'retry_fallback_applied':
+    case 'retry_fallback_succeeded':
+      break;
+    case 'auto_retry_start':
+      state.retryCount += 1;
+      break;
+    case 'auto_retry_end':
       break;
     case 'message_end': {
-      if (evt.role === 'assistant' || !evt.role) {
-        const text = Array.isArray(evt.content) ? evt.content.filter(c=>c.type==='text').map(c=>c.text).join('') : (evt.content || '');
-        // Keep last assistant text as current final; de-duplicate later in finalize if agent_end repeats it
-        if (text) state.finalText = text;
-        if (evt.provider) state.provider = evt.provider;
-        if (evt.model) state.model = evt.model;
-        if (evt.stopReason) state.stopReason = evt.stopReason;
-        if (evt.errorMessage) { state.terminalError = evt.errorMessage; state.isTerminalError = true; }
-        else if (evt.stopReason === 'error' && !state.terminalError) { state.isTerminalError = true; }
-        if (evt.usage) {
-          const u = evt.usage;
-          state.usage.input += Number(u.input) || 0;
-          state.usage.output += Number(u.output) || 0;
-          state.usage.cacheRead += Number(u.cacheRead) || 0;
-          state.usage.cacheWrite += Number(u.cacheWrite) || 0;
-          state.usage.totalTokens += Number(u.totalTokens) || 0;
-          if (u.cost && typeof u.cost.total === 'number' && Number.isFinite(u.cost.total)) state.usage._rawCosts.push(u.cost.total);
-        }
+      const message = evt.message && typeof evt.message === 'object' ? evt.message : evt;
+      if (message.role === 'assistant' || (!evt.message && !message.role)) {
+        foldAssistantMessage(state, { ...message, role: 'assistant' });
+        state.sawAssistantMessageEnd = true;
       }
       break;
     }
@@ -633,7 +710,14 @@ export function foldOmpEventLine(state, rawLine) {
     case 'tool_execution_end': {
       const id = evt.toolCallId || evt.id || 'unknown';
       const name = evt.toolName || evt.tool || 'unknown';
-      const entry = state.toolActivity.get(id) || { toolName: name, status: 'running', args: evt.args || null, result: null, error: null, timestamps: [] };
+      const entry = state.toolActivity.get(id) || {
+        toolName: name,
+        status: 'running',
+        args: evt.args || null,
+        result: null,
+        error: null,
+        timestamps: [],
+      };
       entry.toolName = name;
       if (evt.args) entry.args = evt.args;
       if (type === 'tool_execution_end') {
@@ -646,21 +730,24 @@ export function foldOmpEventLine(state, rawLine) {
       break;
     }
     case 'agent_end': {
-      const isTerminal = evt.isTerminal !== false;
-      if (isTerminal) {
-        state.sawTerminalAgentEnd = true;
-        state.terminalAgentEnd = true;
-        if (evt.errorMessage && !state.terminalError) { state.terminalError = evt.errorMessage; state.isTerminalError = true; }
-      } else {
-        state.warnings.push('non-terminal agent_end ignored');
+      if (evt.isTerminal === false) {
+        pushOmpWarning(state, 'non-terminal agent_end ignored');
+        break;
+      }
+      state.sawTerminalAgentEnd = true;
+      state.terminalAgentEnd = true;
+      if (!state.sawAssistantMessageEnd && Array.isArray(evt.messages)) {
+        const assistant = [...evt.messages].reverse().find((message) => message?.role === 'assistant');
+        foldAssistantMessage(state, assistant);
+      }
+      if (evt.errorMessage && !state.terminalError) {
+        state.terminalError = evt.errorMessage;
+        state.isTerminalError = true;
       }
       break;
     }
-    default: {
-      // Unknown valid JSON — warning, not failure
-      state.warnings.push(`unknown OMP event type: ${type}`);
-      break;
-    }
+    default:
+      pushOmpWarning(state, `unknown OMP event type: ${type}`);
   }
 }
 
@@ -671,7 +758,7 @@ export function finalizeOmpEnvelopeState(state, { exitCode = 0, timedOut = false
   if (exitCode !== 0) return { exitReason: 'error', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
   if (state.sawTerminalAgentEnd || state.stopReason === 'stop') return { exitReason: 'end_turn', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
   if (state.sawParseableEvent) {
-    state.warnings.push('parseable but incomplete stream — no terminal agent_end');
+    pushOmpWarning(state, 'parseable but incomplete stream — no terminal agent_end');
     return { exitReason: 'error', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
   }
   throw new Error('unparseable OMP output — no parseable events');
@@ -681,6 +768,7 @@ export const omp = {
   id: 'omp',
   binaryName: 'omp',
   get OMP_PIN() { return ompVersionPin(); },
+  buildCatalogueEnv: buildOmpCatalogueEnv,
   detect: detectOmp,
   installHint: installHintOmp,
   resolveVersionPolicy: resolveOmpVersionPolicy,
