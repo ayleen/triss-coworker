@@ -37,8 +37,10 @@ CI dependencies may be compromised.
   exercised by property-based fuzz tests (`test/fuzz.test.js`) in addition to
   the example-based suite; changes there must keep the fuzz properties green
   and extend them for any newly enforced special-use range.
-- Release jobs minimize privileges, use OIDC for npm publication, and verify
-  the bytes promoted between jobs.
+- Release jobs minimize privileges, use OIDC for npm publication, verify
+  the bytes promoted between jobs, and require GPG-signed release tags —
+  the tag signature is checked fail-closed against the public key committed
+  in the repository.
 
 ## Explicit non-guarantees
 
