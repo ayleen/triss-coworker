@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import OpenAI from 'openai';
 import pc from 'picocolors';
 import {

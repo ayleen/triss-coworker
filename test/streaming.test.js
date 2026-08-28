@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Streaming tests — focused on the deterministic pure helper.
 //
 // We previously tried mocking globalThis.fetch to exercise chatStream()

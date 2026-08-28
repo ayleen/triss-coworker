@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode2-models.test.js — Phase 4 contract for
  * `triss coder models --engine opencode2` and

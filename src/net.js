@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // SSRF guard: refuse to fetch URLs whose hostname resolves to a
 // private/loopback/link-local address. Applied to agent-controlled URLs
 // (`triss fetch`, `triss ask --urls`, MCP `triss_fetch` / `triss_ask`).

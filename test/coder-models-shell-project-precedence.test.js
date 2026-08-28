@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-shell-project-precedence.test.js — RED contract test for
  * runtime main model resolution precedence (Blocker 6 extension).

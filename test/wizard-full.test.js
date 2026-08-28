@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * wizard-full.test.js — WIZ-01 through WIZ-06
  *

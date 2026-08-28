@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 const ILLUSTRATIVE_PATHS = [
   /triss MCP: root=\/Users\/me\/projects\/foo \(from cwd\), sandbox=on/gu,
   /outside project root \/Users\/\.\.\.\/X/gu,

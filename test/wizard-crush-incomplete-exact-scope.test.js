@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * wizard-crush-incomplete-exact-scope.test.js — RED contract test for
  * wizard incomplete recovery scope (Blocker 4 extension).

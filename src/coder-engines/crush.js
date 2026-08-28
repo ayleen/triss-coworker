@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Crush adapter behind `triss coder run --engine
 // crush`. See docs/engines/crush.md for the supported configuration, safety
 // boundaries, and upstream limitations this adapter must preserve.

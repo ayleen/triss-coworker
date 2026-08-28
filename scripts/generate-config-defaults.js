@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CONFIG_DEFAULTS } from '../src/config-defaults.js';

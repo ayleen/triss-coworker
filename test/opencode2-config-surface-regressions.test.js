@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * opencode2-config-surface-regressions.test.js — executable configuration,
  * parser parity, model transport, and rollback regression coverage.

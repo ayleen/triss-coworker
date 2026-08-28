@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 

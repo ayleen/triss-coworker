@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * wizard-stale-zen-recovery-blocker.test.js — RED contract test for Corrective
  * Blocker B of docs/coder-model-management-plan.md.

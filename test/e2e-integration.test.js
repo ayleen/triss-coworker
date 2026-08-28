@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * Multi-module E2E integration tests — no real network, no external processes.
  * Each scenario exercises a user-visible flow across two or more source modules.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import { IntegrationError } from './integrations/_contract.js';

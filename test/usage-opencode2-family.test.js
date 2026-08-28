@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * usage-opencode2-family.test.js — Phase 4 RED contract: usage accounting must
  * treat `opencode2` as a member of the OpenCode engine family through an

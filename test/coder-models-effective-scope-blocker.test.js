@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-effective-scope-blocker.test.js — RED contract test for Blocker 5
  * of docs/coder-model-management-plan.md "Independently verified blockers".

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-crush.test.js — Phase 6 (crush engine) PURE adapter unit tests for
  * src/coder-engines/crush.js + resolveCoderEngine from src/commands/coder.js,

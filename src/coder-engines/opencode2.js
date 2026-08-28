@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // opencode2 adapter — the THIRD coding engine (OpenCode 2 beta) behind
 // `triss coder run --engine opencode2`. See docs/opencode2-engine-plan.md for
 // the verified facts this adapter follows. Scope mirrors crush.js: PURE

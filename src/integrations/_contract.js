@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import pc from 'picocolors';
 import { chat, reportUsage } from '../client.js';
 import { resolveModel } from '../models.js';

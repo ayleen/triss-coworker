@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-transaction.test.js — RED contract suite for the TRANSACTION
  * slice of applyModelChange / planModelChange (plan §8–§12, lines 213–272):

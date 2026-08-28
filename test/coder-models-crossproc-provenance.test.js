@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-crossproc-provenance.test.js — RED contract test for Blocker 2A
  * Defect (1): loadEnvFiles provenance

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * dsh-dump-assert tests: route assertions must parse
  * the dumped llm-pi-ai.config.providers object instead of grepping

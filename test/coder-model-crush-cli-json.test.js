@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-crush-cli-json.test.js — RED contract test for Crush CLI JSON output
  *

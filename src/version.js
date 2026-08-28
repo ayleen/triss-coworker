@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 

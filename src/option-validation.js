@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 export function positiveIntegerOption(value, name = '--max-tokens', defaultValue) {
   if (value === undefined) return defaultValue;
   if (typeof value !== 'string' && typeof value !== 'number') {

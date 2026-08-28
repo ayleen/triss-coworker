@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Tool definitions for the Triss MCP server: schema + dispatch table.
 // Tools are filtered at runtime so providers without configured
 // credentials don't surface their actions to the agent.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode2-adversarial.test.js — adversarial suite for the PR #46
  * OpenCode 2 security contract. Every test drives runCoderRun /

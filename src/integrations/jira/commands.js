@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import pc from 'picocolors';
 import { jira, setParentSmart } from './client.js';
 import { adfToText, textToAdf } from './adf.js';

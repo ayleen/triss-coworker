@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-opencode-role-split.test.js — RED contract test for
  * OpenCode config role-specific resolution (Blocker 6 extension).

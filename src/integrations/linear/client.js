@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { httpJson, requireEnv, IntegrationError } from '../_contract.js';
 
 export const ENV = {

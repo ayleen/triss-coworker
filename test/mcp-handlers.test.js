@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // MCP handler tests — MCP-H-01 through MCP-H-07
 // Each test imports the handler under test with a cache-busting query string
 // so module-level state (env snapshots, mocked fetch) is isolated between runs.

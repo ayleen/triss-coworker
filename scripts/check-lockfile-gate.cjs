@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Gate: lockfile integrity for the two-package workspace (plan step 9).
 // Asserts the exact workspace identity (name, version, engines) against the
 // live manifests, the pinned dsh-app-boot, and the lockfile format — a

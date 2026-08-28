@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import pc from 'picocolors';
 import { fetchAsMarkdown } from '../web.js';
 import { summarize, printResult } from '../integrations/_contract.js';

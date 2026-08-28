@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // test/init.test.js — covers INIT-01..INIT-07
 //
 // Strategy: runInit() writes to process.cwd() (local) or homedir() (global).

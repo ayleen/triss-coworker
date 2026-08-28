@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+
 import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';

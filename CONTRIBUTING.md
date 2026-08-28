@@ -73,6 +73,9 @@ enforces most of them mechanically:
 ## Code conventions
 
 - ESM only (`"type": "module"`).
+- Start every new source file with the SPDX and copyright header
+  (`// SPDX-License-Identifier: MIT` / `// Copyright (c) 2026 ayleen`),
+  after the shebang line when one is present.
 - Keep dependencies minimal and check `package.json` before adding one.
 - Use `process.stdout` for command output that users may pipe downstream.
 - Use `process.stderr` for logs and progress lines.

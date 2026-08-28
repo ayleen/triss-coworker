@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-omp-lifecycle.test.js — Phase 7 lifecycle regression tests.
  *

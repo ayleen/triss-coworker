@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-init-crossproc.test.js — the init pin must survive into a SEPARATE
  * process.

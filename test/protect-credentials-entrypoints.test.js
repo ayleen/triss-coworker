@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * protect-credentials-entrypoints.test.js — public contract for the
  * credential-mode switch (docs/plans/2025-protect-credentials-default.md):

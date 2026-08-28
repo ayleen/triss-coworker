@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * RED contract for exposing the existing OpenAI-compatible worker profile to
  * the OpenCode coder engine. No network request uses a real credential.

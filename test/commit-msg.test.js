@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // commit-msg command tests — covers the deterministic surface (validation,
 // git-state probing, fence-stripping) without making a real model call.
 

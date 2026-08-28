@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * status-coder.test.js — `triss status`'s "Coder" block.
  *

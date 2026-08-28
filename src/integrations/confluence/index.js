@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { searchCmd, pageCmd, createCmd, updateCmd, spacesCmd } from './commands.js';
 
 const CLAUDE_INSTRUCTIONS = `### \`triss confluence\` — Atlassian Confluence

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * opencode2-model-state-regressions.test.js — model inspection, credential
  * provenance, TOCTOU, and session-store regression coverage.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { searchCmd, issueCmd, createCmd, updateCmd, commentCmd } from './commands.js';
 
 const CLAUDE_INSTRUCTIONS = `### \`triss github\` — GitHub Issues

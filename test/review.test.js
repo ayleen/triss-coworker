@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // test/review.test.js — covers REV-01..REV-05
 //
 // Strategy: we cannot call runReview() directly because it imports and uses

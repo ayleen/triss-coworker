@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-crush-contract.test.js — RED-only public-contract tests:
  *   1. inspectCoderModelState exposes availability "not-verified" (NEVER

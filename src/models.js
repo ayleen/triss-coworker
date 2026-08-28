@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { getConfig, readGlmConfigSnapshot, readKimiConfigSnapshot } from './config.js';
 import { zaiBaseUrlForPrefix } from './zai.js';
 import { normalizeKimiBaseUrl } from './moonshot.js';

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Unified website pricing — single source for all calculators and static HTML.
 // CI compares this current schedule with src/usage.js DEEPSEEK_PRICING. Prices
 // are USD per 1M tokens.

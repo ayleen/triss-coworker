@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { globSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { assertSafePath } from './safety.js';

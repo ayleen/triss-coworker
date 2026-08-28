@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // The Commander probe tests parsing semantics, but these subprocess checks
 // pin the production CLI registrations so a future edit cannot drop either
 // flag from one command unnoticed.

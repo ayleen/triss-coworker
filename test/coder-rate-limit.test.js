@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-rate-limit.test.js — GLM usage-limit detection for `triss coder run`.
  *

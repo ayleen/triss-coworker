@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 export function renderEmptyState(grid, query, ownerDocument = grid.ownerDocument || document) {
   const empty = ownerDocument.createElement("div");
   empty.style.cssText = "background:var(--color-bg-raised); padding:32px; text-align:center; color:var(--color-text-muted);";

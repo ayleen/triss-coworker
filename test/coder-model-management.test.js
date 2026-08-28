@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-management.test.js — RED contract suite for the future
  * src/coder-models.js service (Phase 2 of docs/coder-model-management-plan.md).

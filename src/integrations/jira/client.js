@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { IntegrationError } from '../_contract.js';
 import { ATLASSIAN_ENV, atlassianConfig, atlassianCall } from '../_atlassian.js';
 

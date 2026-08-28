@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Normalizes provider and engine usage payloads into the canonical tokens
 // shape from docs/usage-accounting.md. The whole contract is "unknown is not
 // zero": a field a source did not report stays null, a reported 0 survives,

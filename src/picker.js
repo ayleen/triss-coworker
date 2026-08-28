@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Hand-rolled multi-select picker over raw TTY. No deps, no curses.
 // Up/Down to move, Space to toggle, Enter to confirm, q or Ctrl+C to cancel.
 // Falls back to a sequential y/N prompt when we're not on a TTY or the

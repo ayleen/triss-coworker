@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Integration tests against the live Linear GraphQL API.
 //
 // These tests run only when LINEAR_API_KEY is set (in process.env or in

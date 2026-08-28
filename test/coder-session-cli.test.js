@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-session-cli.test.js — CLI expectation
  * adapter / v2 session CLI.

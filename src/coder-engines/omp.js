@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // OMP adapter — the FOURTH coding engine (Oh My Pi) behind
 // `triss coder run --engine omp`. See docs/engines/omp.md and
 // docs/omp-engine-plan.md for the verified facts this adapter follows.

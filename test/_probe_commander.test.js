@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * commander-tristate.test.js — locks in the Commander parsing layer for the
  * two DUAL boolean flags on `triss coder run`: --isolate/--no-isolate and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import {
   closeSync, constants as fsConstants, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync,
   openSync, readFileSync, readSync, readdirSync,

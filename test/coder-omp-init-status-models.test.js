@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-omp-init-status-models.test.js — Phase 3: init, status, and model
  * catalogue wiring for the omp engine on the triss-env backend.

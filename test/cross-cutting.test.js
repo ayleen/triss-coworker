@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * Cross-cutting invariants spanning multiple modules.
  * Each test covers one broad concern; see test-plan-main.md "Cross-Cutting Tests".

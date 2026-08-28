@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * Package-resolution isolation matrix (plan §Package-resolution isolation
  * matrix). Every case asserts that Harness resolves triss-dsh-provider-bundle

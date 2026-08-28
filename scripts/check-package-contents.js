@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';

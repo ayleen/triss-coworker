@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-crush-role-precedence.test.js — RED contract test for
  * Crush role-specific resolution (Blocker 6 extension).

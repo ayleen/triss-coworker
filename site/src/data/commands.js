@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 export const COMMANDS = [
   { name: "ask", tier: "flash", group: "delegate", body: "Delegate bulk reading to the worker, GLM or Kimi — files, URLs or piped stdin. Returns a structured summary with citations.", flags: ["--paths <glob…>", "--urls <url…>", "--stdin", "--question <text>", "--model flash|pro", "--provider worker|glm|kimi"], example: "$ triss ask --paths \"src/**/*.ts\" --question \"find SQL injection risks\"" },
   { name: "review", tier: "pro", group: "delegate", body: "Code review on branch, PR or piped diff. Concrete file:line issues, not a summary.", flags: ["--base <ref>", "--stdin", "--files <path…>", "--max-tokens 16384"], example: "$ triss review 123\n$ triss review --base develop" },

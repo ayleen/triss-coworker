@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Manage the Triss MCP-server registration in agent configs.
 //
 // Two agents are supported via opts.target:

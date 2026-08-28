@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-set-help-engines.test.js — RED contract test for
  * coder model set help describing both engines and exact paths (Blocker 6 extension).

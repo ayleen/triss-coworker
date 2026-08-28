@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // The triss_write content/usage boundary: the generated file body must never
 // contain the usage report, and the report must surface exactly once in the
 // status line — independent of the report's wording. Pattern copied from

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Moonshot AI (Kimi) — OpenAI-compatible pay-as-you-go endpoint, one base URL
 // (platform.kimi.ai docs, checked 2026-07-27). Unlike Z.AI there is no plan
 // sibling to probe: the "Kimi for Coding" subscription lives on a DIFFERENT

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Regression coverage for the fixes raised in the second review pass:
 //   - Linear team UUID-or-key resolution (was silently sending key as id)
 //   - `config edit` exit-code propagation (was glossing over editor failures)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import pc from 'picocolors';
 import { getConfig } from '../config.js';
 import { listPresets, describeGlmRouting, describeKimiRouting } from '../models.js';

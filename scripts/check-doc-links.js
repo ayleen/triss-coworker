@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { extractMarkdownLinkTargets } from './markdown-links.js';

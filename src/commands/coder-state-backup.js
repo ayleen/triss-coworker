@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-state-backup.js (commands) — CLI run
  * functions for `triss coder state backup` and `triss coder state validate`.

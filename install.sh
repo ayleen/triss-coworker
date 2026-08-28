@@ -13,6 +13,9 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 exec node --input-type=module - "$@" <<'TRISS_STANDALONE_BOOTSTRAP'
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /*
  * Canonical npm-free standalone installer bootstrap.
  *

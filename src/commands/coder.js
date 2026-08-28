@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // `triss coder` — delegate coding tasks to a GLM agent. opencode is the
 // default engine (deny-first bash policy); crush is an optional second
 // engine behind --engine crush / TRISS_CODER_ENGINE=crush (single JSON
