@@ -36,6 +36,7 @@
     "test": "node scripts/check-lockfile-gate.cjs && npm run test:secure-default && npm run test:best-effort",
     "test:secure-default": "node scripts/run-tests.js secure-default",
     "test:best-effort": "node --test test/best-effort-*.test.js",
+    "test:coverage": "c8 --include 'src/**' --check-coverage --statements 80 --branches 75 --functions 80 --lines 80 --reporter=text --reporter=text-summary npm test",
     "start": "node bin/triss.js",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
@@ -95,6 +96,7 @@
   "devDependencies": {
     "@deepseek-ai/dsh-app-boot": "^0.1.0-rc.6",
     "@eslint/js": "^10.0.1",
+    "c8": "^12.0.0",
     "eslint": "^10.3.0",
     "fast-check": "^4.9.0",
     "globals": "^17.6.0"
