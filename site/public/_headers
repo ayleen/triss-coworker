@@ -8,7 +8,11 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+# Scripts are strictly external (script-src 'self', no 'unsafe-inline', no inline
+#  event handlers); SSR data reaches the page via non-executable JSON islands
+# (type="application/json"). Styles still require 'unsafe-inline' until the
+# inline style attributes are migrated to classes.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
 # Version previews and the technical fallback are public workers.dev URLs.
 # triss.work is canonical; workers.dev hosts must not be linked or submitted

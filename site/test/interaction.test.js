@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { renderEmptyState } from "../src/scripts/command-search.js";
-import { setupMobileMenu } from "../src/scripts/mobile-menu.js";
 
 class FakeElement {
   constructor() {
@@ -48,11 +47,18 @@ test("hostile command-search text cannot create elements or handlers", () => {
 });
 
 test("mobile disclosure resets when the viewport crosses 900px", () => {
+  // The menu logic now ships as a classic external script (strict CSP):
+  // evaluate public/scripts/mobile-menu.js against a fake DOM.
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "public/scripts/mobile-menu.js"), "utf8");
   const btn = new FakeElement();
   const nav = new FakeElement();
   const mediaQuery = new FakeElement();
   mediaQuery.matches = false;
-  setupMobileMenu({ btn, nav, mediaQuery });
+  const fakeDoc = { getElementById: (id) =>
+    id === "mobile-menu-btn" ? btn : id === "mobile-nav" ? nav : null };
+  const fakeWin = { matchMedia: () => mediaQuery };
+  new Function("document", "window", source)(fakeDoc, fakeWin);
 
   btn.dispatch("click");
   assert.equal(nav.hidden, false);
