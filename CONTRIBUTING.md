@@ -26,9 +26,12 @@ Requirements:
 npm run lint     # ESLint flat config, eslint:recommended
 npm test         # secure-default suite, then isolated best-effort tests
 npm run check    # lint, syntax, tests, generated docs, package smoke
+npm run test:coverage  # same suites under c8; thresholds below
 ```
 
-CI runs both on every pull request (Node 22 + 24 matrix).
+CI runs both on every pull request (Node 22 + 24 matrix), plus a dedicated
+coverage job enforcing `src/` thresholds: statements/lines/functions >= 80%
+and branches >= 75%.
 
 Tests should not call live external services. Mock `globalThis.fetch` for
 integration clients. For `src/web.js` tests, set
@@ -108,11 +111,28 @@ the relevant docs in the same PR:
 - `templates/claude.md` and `templates/codex.md` if agent-facing delegation
   behaviour changes.
 
+## Contribution authorization (DCO)
+
+Every commit — including maintainer commits — must end with a
+`Signed-off-by:` trailer certifying the
+[Developer Certificate of Origin](https://developercertificate.org/), version 1.1:
+
+```
+Signed-off-by: Jane Doe <jane@example.com>
+```
+
+Add the trailer automatically with `git commit -s` (or `git commit --amend -s`
+for the commit under preparation). The trailer records that you certify the
+DCO for the changes in that commit: you wrote them or otherwise have the
+right to submit them under the project license.
+
 ## Pull requests
 
 Before opening a PR:
 
 - Run `npm run lint && npm test`.
+- Ensure every commit carries a `Signed-off-by:` trailer (see the DCO
+  section above).
 - Keep changes focused.
 - Include docs updates for user-visible behaviour.
 - Mention any security-sensitive path, URL-fetching, credential, or MCP change
