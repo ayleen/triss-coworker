@@ -16,6 +16,7 @@ import Footer from "../components/Footer.astro";
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">no telemetry</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">zero data to the developers</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">local-first</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">CLI, not hosted service</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">7 deps</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">plain ESM, no build</div></div>
+      <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">signed releases</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">GPG tags + npm provenance</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">MIT</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">auditable on GitHub</div></div>
     </div>
   </section>
@@ -51,6 +52,7 @@ import Footer from "../components/Footer.astro";
       <button data-topic="coder" class="topic-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">coder / OMP</button>
       <button data-topic="log" class="topic-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">usage log</button>
       <button data-topic="updates" class="topic-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">updates</button>
+      <button data-topic="supply" class="topic-btn" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">supply chain</button>
     </div>
     <div id="topic-panel" style="margin-top: 20px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
   </section>
@@ -68,6 +70,7 @@ import Footer from "../components/Footer.astro";
       coder: { title: "Worktree isolation is not a host sandbox", body: "Crush and OMP default to disposable Git worktrees, which limit repository mutations but do not block absolute-path or same-UID access. OMP ignores the user profile by using run-private config. Its default best_effort_raw mode forwards one selected key; protected mode forwards only a short-lived proxy token and denies bash.", vars: ["triss coder run --engine omp --protect-credentials", "PI_CODING_AGENT_DIR — run-private, removed after the run", ".triss/omp/sessions — Triss-owned native session storage"] },
       log: { title: "Metadata only, and deletable", body: "Every worker call appends one record: timestamp, model, token counts, cost, label, call id, cwd. Prompt and file content never written.", vars: ["TRISS_USAGE_LOG_CWD=0 — keep log but stop recording cwd", "TRISS_USAGE_LOG=0 — no log", "triss usage --reset — delete log"] },
       updates: { title: "One credential-free GET, integrity-checked apply", body: "Passive update discovery is the only automatic network path. Applying an update is explicit and only for receipt-backed standalone installs.", vars: ["TRISS_UPDATE_CHECK=0 — disables passive checks", "triss update --apply — standalone installs only"] },
+      supply: { title: "Signed tags, provenance, and CI gates", body: "Release tags are GPG-signed and the publish pipeline rejects unsigned or unknown-key tags before anything is published. npm packages carry Sigstore provenance attestations, and every PR runs CodeQL, secret scanning, dependency review, and enforced test coverage.", vars: ["git tag -s — signature verified fail-closed in CI", "npm publish --provenance — Sigstore attestations", "CodeQL + gitleaks + Dependabot + c8 coverage on every PR"] },
     };
     let topic = "filesystem";
     function renderTopic() {
