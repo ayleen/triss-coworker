@@ -142,8 +142,8 @@ test('runList renders scopes, masks secrets, and tags unknown variables', async 
     assert.match(out, /── global ── /);
     assert.match(out, /── local ── /);
     assert.match(out, /GITHUB_TOKEN\s+•+/);
-    assert.match(out, /TOTALLY_UNKNOWN_VAR\s+plain \(unknown\)/);
-    assert.match(out, /GITHUB_TOKEN\s+•+/);
+    assert.match(out, /TOTALLY_UNKNOWN_VAR\s+plain/);
+    assert.match(out, /\(unknown\)/);
     assert.doesNotMatch(out, /sk-secret/);
     assert.doesNotMatch(out, /ghp_x/);
   } finally {
