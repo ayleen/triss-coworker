@@ -32,11 +32,15 @@ test('built pages contain no executable inline scripts', () => {
   const offenders = [];
   for (const file of htmlFiles(dist)) {
     const html = fs.readFileSync(file, 'utf8');
-    for (const m of html.matchAll(/<script\b([^>]*)>/g)) {
-      const attrs = m[1];
-      if (/src=/.test(attrs)) continue;
-      if (/type="application\/json"/.test(attrs)) continue;
-      offenders.push(`${path.relative(dist, file)}: <script${attrs.slice(0, 60)}>`);
+    // Index-based scan (a regex tag filter would be its own finding).
+    let idx = html.indexOf('<script');
+    while (idx !== -1) {
+      const end = html.indexOf('>', idx);
+      const attrs = html.slice(idx + '<script'.length, end);
+      if (!attrs.includes('src=') && !attrs.includes('type="application/json"')) {
+        offenders.push(`${path.relative(dist, file)}: <script${attrs.slice(0, 60)}>`);
+      }
+      idx = html.indexOf('<script', end);
     }
   }
   assert.deepEqual(offenders, [], 'inline executable scripts break script-src \'self\'');

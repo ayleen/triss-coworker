@@ -46,13 +46,33 @@ function render() {
     const d = DEEPSEEK[s.worker];
     const inUncached = (IN_TOK * (1 - s.cacheHit/100) * d.input / 1000).toFixed(4);
     const inCache = (IN_TOK * (s.cacheHit/100) * d.cache / 1000).toFixed(5);
-    bd.innerHTML = [
-      "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Requests / month</span><span style='font-family:var(--font-mono);'>"+monthly.toLocaleString()+"</span></div>",
-      "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Kept on primary</span><span style='font-family:var(--font-mono);'>"+Math.round(kept).toLocaleString()+" \u00b7 "+money(kept*primaryPer)+"</span></div>",
-      "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Run by worker</span><span style='font-family:var(--font-mono);'>"+Math.round(delegated).toLocaleString()+" \u00b7 "+money(delegated*wPer)+"</span></div>",
-      "<div style='display:flex;justify-content:space-between; padding-left:12px;'><span style='color:var(--color-text-label); font-size:11.5px;'>↳ input "+(100-s.cacheHit)+"% @ $"+d.input+" + cache "+s.cacheHit+"% @ $"+d.cache+"</span><span style='font-family:var(--font-mono); font-size:11.5px;'>$"+inUncached+" + $"+inCache+"</span></div>",
-      "<div style='display:flex;justify-content:space-between;'><span style='color:var(--color-text-muted);'>Summaries read back</span><span style='font-family:var(--font-mono);'>"+money(delegated*summaryPer)+"</span></div>",
-    ].join("");
+    // Built with DOM APIs and textContent so island-derived numbers can
+    // never be reinterpreted as HTML.
+    const row = (label, value, opts = {}) => {
+      const div = document.createElement("div");
+      div.style.display = "flex";
+      div.style.justifyContent = "space-between";
+      if (opts.indent) div.style.paddingLeft = "12px";
+      const l = document.createElement("span");
+      l.style.color = opts.indent ? "var(--color-text-label)" : "var(--color-text-muted)";
+      if (opts.indent) l.style.fontSize = "11.5px";
+      l.textContent = label;
+      const v = document.createElement("span");
+      v.style.fontFamily = "var(--font-mono)";
+      if (opts.indent) v.style.fontSize = "11.5px";
+      v.textContent = value;
+      div.append(l, v);
+      return div;
+    };
+    const rows = [
+      row("Requests / month", monthly.toLocaleString("en-US")),
+      row("Kept on primary", Math.round(kept).toLocaleString("en-US") + " \u00b7 " + money(kept * primaryPer)),
+      row("Run by worker", Math.round(delegated).toLocaleString("en-US") + " \u00b7 " + money(delegated * wPer)),
+      row("\u21b3 input " + (100 - s.cacheHit) + "% @ $" + d.input + " + cache " + s.cacheHit + "% @ $" + d.cache,
+        "$" + inUncached + " + $" + inCache, { indent: true }),
+      row("Summaries read back", money(delegated * summaryPer)),
+    ];
+    bd.replaceChildren(...rows);
   }
   document.getElementById("c-mid").style.borderColor = s.primary==="mid" ? "var(--color-accent)" : "var(--color-border-strong)";
   document.getElementById("c-mid").style.color = s.primary==="mid" ? "var(--color-accent)" : "var(--color-text-muted)";
