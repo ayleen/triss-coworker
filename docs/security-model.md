@@ -10,7 +10,8 @@ provider error contract are documented in the
 In short: external content is
 untrusted, required boundaries fail closed, best-effort isolation is opt-in,
 and release artifacts are verified before publication — including
-fail-closed GPG tag-signature checks (see [releasing.md](releasing.md)).
+fail-closed GPG tag-signature checks (see
+[releasing.md](https://github.com/ayleen/triss-coworker/blob/main/docs/releasing.md)).
 
 This document does not redefine those sources. Update them together whenever a
 new provider, automatic network path, child engine, credential route, or
