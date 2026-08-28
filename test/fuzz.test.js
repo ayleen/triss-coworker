@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Property-based fuzz tests for the SSRF address classifier in src/net.js.
 // net.test.js pins hand-picked literals; fast-check explores the input space
 // around them (random addresses, transition forms, malformed literals) and

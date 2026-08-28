@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode2.test.js — Phase 2 RED suite of
  * docs/opencode2-engine-plan.md: the OpenCode 2 adapter contract BEFORE the

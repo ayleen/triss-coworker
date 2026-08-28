@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-isolation-admission-leak.test.js — PR #85 review round 3, item 4.
  *

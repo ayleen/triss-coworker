@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * opencode2-provenance-regressions.test.js — configuration provenance and
  * canonical-path regression coverage.

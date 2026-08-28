@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * review-input.test.js — bounded stdin and issue
  * trust boundary.

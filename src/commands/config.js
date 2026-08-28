@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import pc from 'picocolors';

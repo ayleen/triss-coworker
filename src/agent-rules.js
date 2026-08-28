@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Shared agent-rules rendering. Used by `triss init` (writes the nano block
 // into CLAUDE.md / AGENTS.md) and by `triss agent-help` (prints the full
 // cookbook on demand). The split keeps the always-loaded block tiny while

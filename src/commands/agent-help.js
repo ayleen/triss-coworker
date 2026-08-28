@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Print the full Triss delegation cookbook to stdout. The nano block in
 // CLAUDE.md / AGENTS.md points here so the agent loads the long reference
 // only when it actually needs to look something up — saving the per-session

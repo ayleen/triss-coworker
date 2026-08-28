@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Shared by the coder test files: picocolors enables ANSI color codes in
 // GitHub Actions (its isColorSupported check treats the CI env var as
 // color-capable), even though it's off locally (no TTY, no CI var). Any

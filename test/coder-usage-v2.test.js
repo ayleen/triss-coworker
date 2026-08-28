@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-usage-v2.test.js — RED phase for the "Coder envelope" v2 usage member
  * contract defined in docs/usage-accounting.md ("## Coder envelope"):

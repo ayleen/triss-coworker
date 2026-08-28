@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-provider-detect.test.js — Z.AI provider auto-detection and the
  * interactive GLM model picker in `triss coder init`.

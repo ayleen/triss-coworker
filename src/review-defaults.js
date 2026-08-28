@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Shared GLM review defaults, used by both the CLI review command and the MCP
 // review path so the two entry points can never drift apart.
 //

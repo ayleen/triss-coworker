@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Per-invocation call context propagated via AsyncLocalStorage.
 //
 // Each CLI subcommand or MCP tool handler runs inside `withCall(fn)`; any

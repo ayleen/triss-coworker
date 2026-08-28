@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * opencode2-lifecycle-regressions.test.js — lock, cleanup, routing, and
  * runtime-directory lifecycle regression coverage.

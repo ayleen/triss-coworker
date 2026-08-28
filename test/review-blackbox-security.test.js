@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * review-blackbox-security.test.js — black-box acceptance for security and
  * reliable-delegation contract.

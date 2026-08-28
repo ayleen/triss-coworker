@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Cost tracker. Appends one JSONL record per worker call to
 // ~/.cache/triss/usage.jsonl, then `triss usage` aggregates.
 

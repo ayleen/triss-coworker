@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-opencode-transaction-safety.test.js — RED contract suite for
  * OpenCode transaction safety (CAS verification, hash guards, compensation rules)

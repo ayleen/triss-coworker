@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-crush-cli.test.js — RED-only PROCESS-LEVEL coverage for
  * `triss coder model set --engine crush` (bin/triss.js). The CLI must wire the

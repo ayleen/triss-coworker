@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-result-owner-adapter.test.js — retained-result
  * process-owner adapter.

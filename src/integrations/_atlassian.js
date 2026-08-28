@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Shared Atlassian (Jira + Confluence) auth and request helper.
 // Both products live on the same Cloud tenant and share the same triple
 // of env vars; centralising avoids drift if Atlassian changes auth.

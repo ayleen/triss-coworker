@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { computeRetainedStats, journalDigest, receiptDigest } from '../update/install.js';
 
 function parseVersion(value) {

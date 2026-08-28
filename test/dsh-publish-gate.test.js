@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * Release-gate tests for the two-package release train and
  * release topology): both manifests share the tag version, both tarballs

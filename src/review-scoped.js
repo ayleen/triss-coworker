@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * review-scoped.js — inventory-first acquisition for literal `--files`
  * selection (Invariant).

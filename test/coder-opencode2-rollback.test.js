@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode2-rollback.test.js — Phase 4 contract: rollback of a model
  * transaction recorded by the opencode2 engine (manifest engine=opencode2,

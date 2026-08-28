@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode2-crossreview.test.js — regressions for the maintainer
  * cross-review on top of rounds 3-4 (head 742c1a7):

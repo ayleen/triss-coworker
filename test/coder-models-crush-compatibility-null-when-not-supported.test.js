@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-models-crush-compatibility-null-when-not-supported.test.js — RED
  * regression test for compatibility null when catalogue cannot be read.

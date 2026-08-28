@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * Strict structural validation of the GitHub workflow files. A duplicated
  * mapping key (e.g. two `env:` blocks on one step) is

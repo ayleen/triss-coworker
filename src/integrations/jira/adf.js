@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Minimal Atlassian Document Format ↔ plain text bridge.
 // We do not aim for full ADF fidelity — just enough that round-tripping
 // description fields between humans, agents, and Jira is comprehensible.

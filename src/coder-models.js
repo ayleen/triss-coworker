@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // src/coder-models.js — shared model-management service.
 //
 // Extracts provider/model resolution and auditing into a testable in-process

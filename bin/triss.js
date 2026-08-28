@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
 if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
   process.stderr.write(

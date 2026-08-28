@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * managed-root.test.js — managed-root capability
  * primitive (path-based best-effort variant).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 const LINK_PATTERN = /\[[^\]]*\]\(([^)]+)\)/g;
 const ROOT_DOC_REFERENCE_PATTERN = /(?<![A-Za-z0-9_./:-])(?:\.\/)?(docs\/[A-Za-z0-9._/-]+\.md)\b/gu;
 

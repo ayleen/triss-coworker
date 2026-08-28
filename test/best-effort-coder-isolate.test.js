@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-isolate.test.js — Phase 2 (`triss coder run --isolate`), worktree
  * lifecycle, the timeout/kill path, and session-slug persistence.

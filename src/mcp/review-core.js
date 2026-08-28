@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Review logic shared between the CLI command and the MCP tool. The CLI
 // command (src/commands/review.js) keeps its own ergonomics; this module
 // exposes a callable that returns text and accepts a model-call function

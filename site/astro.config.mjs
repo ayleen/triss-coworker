@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { defineConfig } from "astro/config";
 import sitemap from "@astrojs/sitemap";
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,7 +27,7 @@ test("calculator clients receive the canonical pricing data", () => {
   assert.deepEqual(DEEPSEEK.flash, { input: 0.22, cache: 0.007, output: 0.66 });
   for (const file of ["src/pages/index.astro", "src/pages/cost.astro"]) {
     const source = read(file);
-    assert.match(source, /is:inline define:vars=\{\{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS \}\}/);
+    assert.match(source, /type="application\/json" id="pricing-data" set:html=\{JSON\.stringify\(\{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS \}\)\}/);
     assert.doesNotMatch(source, /const PROFILE = \{/);
     assert.doesNotMatch(source, /const DEEPSEEK = \{\s*flash:/);
   }
@@ -85,7 +88,8 @@ test("website coder engines and OMP quickstart match repository contracts", () =
 
   assert.equal(pkg.name, "triss-coworker");
   assert.equal(pkg.engines.node, ">=22.12.0");
-  assert.match(gettingStarted, /npm install -g triss-coworker/);
+  const gsScript = read("public/scripts/getting-started.js");
+  assert.match(gsScript, /npm install -g triss-coworker/);
   assert.match(gettingStarted, /Node\.js ≥ 22\.12/);
   assert.match(gettingStarted, new RegExp(`OMP ${floor.replaceAll(".", "\\.")} or newer`));
   assert.match(gettingStarted, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);

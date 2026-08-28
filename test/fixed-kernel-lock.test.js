@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * fixed-kernel-lock.test.js — fixed lock capability
  * primitive (best-effort non-kernel scope).

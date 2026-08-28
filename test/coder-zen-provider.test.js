@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-zen-provider.test.js — the OpenCode Zen provider path for
  * `triss coder run`.

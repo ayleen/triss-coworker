@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // chat command tests — what we can verify without making a real model call.
 // The handler ultimately invokes deepseekChat() which goes through the OpenAI
 // SDK, and v4 binds globalThis.fetch at module load time, so a late-installed

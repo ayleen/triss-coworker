@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * mcp-coder.test.js — Phase 4 (`triss_coder_run` / `triss_coder_status` MCP tools)
  *

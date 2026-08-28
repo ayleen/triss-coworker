@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // RED coverage: malformed OpenCode Zen responses, warning schema,
 // rollback missing-file validation, and help/docs assertions.
 // Tests added RED first to demonstrate required fixes; minimal GREEN changes will follow.

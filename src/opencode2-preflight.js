@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * opencode2-preflight.js — fail-closed effective-configuration preflight for
  * the OpenCode 2 coder engine. It prevents unverified provider routes,

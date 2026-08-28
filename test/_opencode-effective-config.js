@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 function resolveEnvReferences(value, env) {
   if (Array.isArray(value)) return value.map((item) => resolveEnvReferences(item, env));
   if (!value || typeof value !== 'object') {

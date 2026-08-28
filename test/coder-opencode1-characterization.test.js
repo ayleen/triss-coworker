@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-opencode1-characterization.test.js — Phase 1 of
  * docs/opencode2-engine-plan.md: lock the CURRENT OpenCode 1 engine behavior

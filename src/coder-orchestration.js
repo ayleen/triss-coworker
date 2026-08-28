@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-orchestration.js — OpenCode run and envelope
  * orchestration helpers (pure).

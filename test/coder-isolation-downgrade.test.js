@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-isolation-downgrade.test.js — hermetic isolation downgrade (no triss).
  *

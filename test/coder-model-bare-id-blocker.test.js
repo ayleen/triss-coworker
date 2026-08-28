@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-bare-id-blocker.test.js — RED contract tests for Blockers 1 & 2
  * of docs/coder-model-management-plan.md "Independently verified blockers".

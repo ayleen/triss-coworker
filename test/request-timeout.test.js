@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Contract for the optional OpenAI-compatible request timeout. Parsing must
 // fail safe without touching process.env, and the configured value must reach
 // worker, GLM, and Kimi clients alike.

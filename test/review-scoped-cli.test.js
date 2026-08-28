@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * review-scoped-cli.test.js — security regression: literal `--files` selection is
  * acquired inventory-first and never buffers or plans the full diff.

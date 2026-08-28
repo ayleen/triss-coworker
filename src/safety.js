@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { resolve, sep } from 'node:path';
 
 const RESTRICT_ENV = 'TRISS_RESTRICT_PATHS';

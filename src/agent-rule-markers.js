@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // The Triss managed-block markers, isolated in their own tiny module so the
 // marker transaction primitive can reference them without pulling in
 // agent-rules.js — which itself depends on the MCP install module. Without

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 export const RESPONSE_FORMATS = ['text', 'evidence'];
 
 export const EVIDENCE_SYSTEM_SUFFIX = [

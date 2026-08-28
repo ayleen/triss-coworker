@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 const freeze = (value) => Object.freeze(value);
 
 // This name is deliberately stable and owned by Triss.  It is used only in

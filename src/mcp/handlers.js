@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // MCP tool handlers — thin wrappers that return text instead of printing
 // to stdout. Each handler keeps its scope small and is testable on its own.
 

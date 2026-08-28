@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // test/agent-help.test.js — covers `triss agent-help`
 //
 // Contract:

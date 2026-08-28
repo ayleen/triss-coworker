@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 export function isExecExplainInvocation(argv = []) {
   if (argv[0] !== 'exec') return false;
   const commandArgs = argv.slice(1);

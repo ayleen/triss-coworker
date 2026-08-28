@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-model-shell-injection.test.js — RED contract tests for shell-safety Blocker
  * of docs/coder-model-management-plan.md §"Shell-safety invariant".

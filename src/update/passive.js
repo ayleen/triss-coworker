@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { isExecExplainInvocation } from '../cli-argv.js';
 
 function parseVersion(value) {

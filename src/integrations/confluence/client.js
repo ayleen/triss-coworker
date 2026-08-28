@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import { ATLASSIAN_ENV, atlassianConfig, atlassianCall } from '../_atlassian.js';
 
 export const ENV = ATLASSIAN_ENV;

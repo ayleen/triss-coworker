@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * wizard-crush-incomplete-blocker.test.js — RED contract test for Blocker 4
  * of docs/coder-model-management-plan.md "Independently verified blockers".

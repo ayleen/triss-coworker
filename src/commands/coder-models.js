@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // src/commands/coder-models.js — CLI handlers for `triss coder models` (live
 // read-only model listing) and `triss coder model set` (persistent model
 // switch). These are the Phase 4 command surfaces wired in bin/triss.js.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * review-live.js — live sharded review acceptance
  * helper. Runs ONE real sequential sharded review over the current branch

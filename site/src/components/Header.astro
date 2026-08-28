@@ -1,4 +1,7 @@
 ---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 interface Props { current?: string; }
 const { current } = Astro.props;
 const linkStyle = (active: boolean) =>
@@ -69,11 +72,4 @@ const linkStyle = (active: boolean) =>
     header div[style*="max-width"] { padding: 0 16px !important; }
   }
 </style>
-<script>
-// @ts-nocheck
-  import { setupMobileMenu } from '../scripts/mobile-menu.js';
-  const btn = document.getElementById('mobile-menu-btn');
-  const nav = document.getElementById('mobile-nav');
-  const mediaQuery = window.matchMedia('(min-width: 901px)');
-  setupMobileMenu({ btn, nav, mediaQuery });
-</script>
+  <script is:inline src="/scripts/mobile-menu.js" defer></script>

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * coder-isolation-gate.test.js — security regression: a PROTECTED (--protect-
  * credentials) coder run is refused BEFORE spawn whenever a raw credential

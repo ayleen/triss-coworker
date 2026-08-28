@@ -1,4 +1,8 @@
-export function setupMobileMenu({ btn, nav, mediaQuery } = {}) {
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+(function () {
+function setupMobileMenu({ btn, nav, mediaQuery } = {}) {
   if (!btn || !nav) return () => {};
 
   let open = false;
@@ -26,3 +30,9 @@ export function setupMobileMenu({ btn, nav, mediaQuery } = {}) {
     else if (mediaQuery?.removeListener) mediaQuery.removeListener(onMediaChange);
   };
 }
+
+const btn = document.getElementById('mobile-menu-btn');
+  const nav = document.getElementById('mobile-nav');
+  const mediaQuery = window.matchMedia('(min-width: 901px)');
+  setupMobileMenu({ btn, nav, mediaQuery });
+})();

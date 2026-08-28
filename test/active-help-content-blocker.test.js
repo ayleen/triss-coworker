@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 /**
  * active-help-content-blocker.test.js — RED contract tests for Blocker 10
  * of docs/coder-model-management-plan.md "Independently verified blockers".

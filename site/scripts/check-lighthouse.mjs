@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";

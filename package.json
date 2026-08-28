@@ -36,7 +36,7 @@
     "test": "node scripts/check-lockfile-gate.cjs && npm run test:secure-default && npm run test:best-effort",
     "test:secure-default": "node scripts/run-tests.js secure-default",
     "test:best-effort": "node --test test/best-effort-*.test.js",
-    "test:coverage": "c8 --include 'src/**' --check-coverage --statements 80 --branches 75 --functions 80 --lines 80 --reporter=text --reporter=text-summary npm test",
+    "test:coverage": "c8 --include 'src/**' --include 'bin/**' --check-coverage --statements 90 --branches 80 --functions 80 --lines 80 --reporter=text --reporter=text-summary npm test",
     "start": "node bin/triss.js",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
@@ -45,8 +45,9 @@
     "check:config-docs": "node scripts/generate-config-defaults.js --check",
     "check:docs": "npm run check:config-docs && node scripts/check-doc-links.js",
     "check:package": "node scripts/check-package-contents.js",
-    "check": "npm run lint && npm run typecheck && npm test && npm run check:docs && npm run check:package",
-    "prepublishOnly": "npm run check"
+    "check": "npm run lint && npm run typecheck && npm test && npm run check:docs && npm run check:package && npm run check:license-headers",
+    "prepublishOnly": "npm run check",
+    "check:license-headers": "node scripts/check-license-headers.js"
   },
   "keywords": [
     "claude-code",

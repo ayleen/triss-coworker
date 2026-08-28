@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 // Shell-completion generator. Walks the Commander tree and emits a
 // completion script for bash or zsh. The generated scripts complete:
 //   - top-level command names
