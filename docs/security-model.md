@@ -9,7 +9,8 @@ provider error contract are documented in the
 [Reliable Delegation contract](reliable-delegation-contract.md).
 In short: external content is
 untrusted, required boundaries fail closed, best-effort isolation is opt-in,
-and release artifacts are verified before publication.
+and release artifacts are verified before publication — including
+fail-closed GPG tag-signature checks (see [releasing.md](releasing.md)).
 
 This document does not redefine those sources. Update them together whenever a
 new provider, automatic network path, child engine, credential route, or

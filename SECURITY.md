@@ -99,9 +99,14 @@ Triss adds no additional data flows on top of it.
 The npm package ships source modules plus declared third-party dependencies.
 The standalone artifact is generated from a clean, locked production install.
 Release CI verifies package contents, compares independently staged builds,
-and smokes the promoted bytes. This provides a reviewable source-to-artifact
+and smokes the promoted bytes. Release tags are GPG-signed, and the publish
+pipeline verifies each tag's signature fail-closed against the public key
+committed in `.github/keys/` before anything is published; npm packages
+carry provenance attestations. This provides a reviewable source-to-artifact
 pipeline; it does not mean every installed byte is a verbatim repository file.
 Install a pinned version or use a reviewed checkout if policy requires it.
+See [docs/releasing.md](docs/releasing.md) for the signing setup and release
+procedure.
 
 ## Credentials
 
