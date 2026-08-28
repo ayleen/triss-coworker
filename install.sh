@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 ayleen
 # Triss Coworker standalone installer.
 # The JavaScript between the markers is generated from
 # scripts/standalone-bootstrap.js. It uses only Node built-ins after the
