@@ -125,6 +125,19 @@ jobs:
       publish_root: ${{ steps.plan.outputs.publish_root }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify release tag signature (fail-closed)
+        run: |
+          # Release tags must be annotated and GPG-signed with the key whose
+          # public half is committed at .github/keys/release-tag-signing.asc
+          # (see docs/releasing.md for the one-time setup). Unsigned tags,
+          # lightweight tags, and unknown keys all fail the pipeline here.
+          KEY_FILE=".github/keys/release-tag-signing.asc"
+          if [ ! -f "$KEY_FILE" ]; then
+            echo "::error::Missing ${KEY_FILE}. Add the release-signing public key first — see docs/releasing.md, 'One-time signing setup'."
+            exit 1
+          fi
+          gpg --import "$KEY_FILE"
+          git verify-tag "$GITHUB_REF_NAME"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
