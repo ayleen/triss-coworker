@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
 import pc from 'picocolors';
 import { gitlab, resolveProject } from './client.js';
 import { summarize, printResult, IntegrationError } from '../_contract.js';
 
 function issueLine(i) {
-  const project = i.references?.full || i.web_url?.replace(/.*?\/\/[^/]+\//, '').replace(/\/-\/issues\/\d+$/, '') || '?';
+  const project = (i.references?.full || i.web_url?.replace(/.*?\/\/[^/]+\//, '').replace(/\/-\/issues\/\d+$/, '') || '?').replace(/#\d+$/, '');
   return `${project}#${i.iid}\t[${i.state}]\t${i.title}\t(${(i.assignees || []).map((a) => a.username).join(',') || 'unassigned'})`;
 }
 
