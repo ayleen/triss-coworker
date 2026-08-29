@@ -2,6 +2,7 @@
 // Copyright (c) 2026 ayleen
 
 import { isExecExplainInvocation } from '../cli-argv.js';
+import { PASSIVE_TIMEOUT_MS } from './manifest.js';
 
 function parseVersion(value) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value || '');
@@ -138,7 +139,7 @@ export async function runDefaultPassiveCliCheck({
   stderr = (line) => process.stderr.write(line),
   cacheModule,
   manifestModule,
-  wallTimeMs = 1100,
+  wallTimeMs = PASSIVE_TIMEOUT_MS + 100,
 } = {}) {
   let lock = null;
   const deadlineAt = Date.now() + Math.max(0, wallTimeMs);
@@ -177,7 +178,7 @@ export async function runDefaultPassiveCliCheck({
       if (due && cache.isPassiveCheckDue(state, now)) {
         try {
           assertWithinDeadline();
-          const timeoutMs = Math.max(1, Math.min(1000, deadlineAt - Date.now()));
+          const timeoutMs = Math.max(1, Math.min(PASSIVE_TIMEOUT_MS, deadlineAt - Date.now()));
           const result = await fetchManifest({
             timeoutMs,
             runningNode: nodeMajor,

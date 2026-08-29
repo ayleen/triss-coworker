@@ -11,6 +11,7 @@ import {
   runPassiveCliCheck,
   shouldSuppressPassiveCheck,
 } from '../src/update/passive.js';
+import { PASSIVE_TIMEOUT_MS } from '../src/update/manifest.js';
 
 const compatible = {
   schema_version: 1,
@@ -354,6 +355,29 @@ function passiveCacheWith(overrides = {}) {
     ...overrides,
   };
 }
+
+test('default passive CLI gives a due manifest fetch the five-second budget', async () => {
+  let fetchTimeoutMs = null;
+  const cacheModule = passiveCacheWith({
+    isPassiveCheckDue: () => true,
+    readUpdateState: () => ({ manifest: null }),
+    recordSuccessfulCheck: (state, result) => ({ ...state, manifest: result }),
+  });
+  const result = await runDefaultPassiveCliCheck({
+    currentVersion: '0.31.1',
+    wallTimeMs: PASSIVE_TIMEOUT_MS + 1_000,
+    cacheModule,
+    manifestModule: {
+      fetchManifest: async ({ timeoutMs }) => {
+        fetchTimeoutMs = timeoutMs;
+        return compatible;
+      },
+    },
+  });
+  assert.equal(result.failed, false);
+  assert.equal(PASSIVE_TIMEOUT_MS, 5_000);
+  assert.equal(fetchTimeoutMs, PASSIVE_TIMEOUT_MS);
+});
 
 test('default passive CLI check caps a slow cache read at its wall-time deadline', async () => {
   const started = Date.now();
