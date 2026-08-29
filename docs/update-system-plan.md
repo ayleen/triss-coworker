@@ -121,8 +121,8 @@ detached background task. A fresh cache is read synchronously and can produce
 a notice without network I/O. When the cache is due, the command awaits one
 bounded fetch before process exit, updates the cache, and may print a notice
 from that fresh response. The entire passive network path, including redirects
-and body consumption, is aborted at one second; focused timing tests allow no
-more than 1.1 seconds of added command wall time. A timeout or failed check
+and body consumption, is aborted at five seconds; focused timing tests allow no
+more than 5.1 seconds of added command wall time. A timeout or failed check
 produces no notice on that invocation. The CLI never starts an unreferenced
 fetch, child process, or post-exit cache writer.
 
@@ -388,9 +388,8 @@ limited to `github.com`, `release-assets.githubusercontent.com`, and
 allowed because source archives are not update artifacts. Phase 0 must observe
 the actual draft-asset redirect chain and remove or add a hostname only with
 recorded GitHub evidence and focused tests. The manifest response is capped at
-64 KiB. Passive checks have a short total timeout capped at one second,
-including redirects and body consumption; explicit checks may use a documented
-five-second cap. Neither path accepts an agent-controlled URL.
+64 KiB. Passive and explicit checks have a five-second total timeout, including
+redirects and body consumption. Neither path accepts an agent-controlled URL.
 
 The dedicated update client does not call the public `fetchUrl`, whose contract
 accepts arbitrary caller URLs and HTML-oriented limits. It reuses a lower-level
