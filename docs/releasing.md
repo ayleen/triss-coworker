@@ -52,6 +52,9 @@ git push origin "v${VERSION}"
 Pushing the tag triggers the publish pipeline: the full test and bundle
 matrix, the standalone artifact build, tag-signature verification, and npm
 publication with provenance attestations.
+Instructions for users to verify what was published — provenance,
+checksums, and the tag signature — live in
+[verifying-releases.md](verifying-releases.md).
 
 ## Retag (safe retry)
 
