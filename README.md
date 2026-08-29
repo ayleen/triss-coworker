@@ -120,9 +120,9 @@ triss status
 
 During successful interactive CLI use, Triss checks a fixed GitHub Release
 endpoint at most once per cache window and prints a throttled update notice to
-stderr. A due check is awaited and adds at most 1.1 seconds; a fresh cache adds
-no network wait. Long-running MCP servers begin the same check only after the
-MCP initialization handshake and use MCP logging plus stderr fallback.
+stderr. A due check is awaited and adds at most 5.1 seconds; a fresh cache adds
+no network wait. Long-running MCP servers begin the same five-second check only
+after the MCP initialization handshake and use MCP logging plus stderr fallback.
 
 ```bash
 triss update                  # fresh status and guidance; no file changes

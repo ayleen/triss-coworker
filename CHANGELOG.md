@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1] — 2026-08-29
+
+### Fixed
+
+- Passive CLI and MCP update checks now allow five seconds for GitHub Release
+  redirects and manifest delivery, preventing persistent timeout backoff from
+  suppressing update notifications on ordinary network connections.
+
+### Changed
+
+- `triss-dsh-provider-bundle` is version-aligned and republished unchanged;
+  its OpenCode Zen, OpenCode Go, and Z.AI routes are unchanged.
+
+### Artifact integrity (0.41.1)
+
+- `triss-dsh-provider-bundle-0.41.1.tgz` — sha256
+  `11937c36ee4627c8704c9cdc0704b16f91cebb5a8fea9ab4c7e81da6c22f73dc`
+  — `sha512-sOwR4L1nbWj+goYxnKiYybcxX4hKbjycYk4OE1nDfIa7kVZ2KwOybzqVY8jZtbnaBreWS0fQN9Vn6NmdnD0F/A==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.41.1.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.41.1`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
+
 ## [0.41.0] — 2026-08-28
 
 ### Changed
@@ -1738,7 +1762,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...HEAD
+[0.41.1]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...v0.41.1
 [0.41.0]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...v0.40.0
 [0.39.2]: https://github.com/ayleen/triss-coworker/compare/v0.39.1...v0.39.2

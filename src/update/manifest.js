@@ -11,7 +11,7 @@ import {
 export const MANIFEST_URL =
   'https://github.com/ayleen/triss-coworker/releases/latest/download/update-manifest.json';
 export const MANIFEST_MAX_BYTES = 64 * 1024;
-export const PASSIVE_TIMEOUT_MS = 1_000;
+export const PASSIVE_TIMEOUT_MS = 5_000;
 export const EXPLICIT_TIMEOUT_MS = 5_000;
 export const UPDATE_HOSTS = Object.freeze([
   'github.com',
