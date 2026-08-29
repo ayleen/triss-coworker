@@ -14,6 +14,12 @@ if you are unsure how private reporting works. If advisories are unavailable,
 open a minimal public issue asking for a private contact path; avoid posting
 exploit details, tokens, or private URLs in a public issue.
 
+Coordinated disclosure timetable: reports are acknowledged within 48 hours.
+Remediation is coordinated with the reporter — fixes and the accompanying
+advisory are published together once a remedy is available, and the reporter
+is kept informed of progress throughout. Reporters receive credit in the
+advisory unless they ask to remain anonymous.
+
 ## What leaves your machine
 
 Model-backed commands send the requested prompt and selected corpus to the
