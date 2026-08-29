@@ -1377,10 +1377,10 @@ provider recipe blocks for Kimi, Ollama, and OpenRouter.
 Contributions are welcome; start with
 [CONTRIBUTING.md](https://github.com/ayleen/triss-coworker/blob/main/CONTRIBUTING.md)
 for local setup, test commands, and the project conventions. The support
-policy lives in
-[docs/support.md](https://github.com/ayleen/triss-coworker/blob/main/docs/support.md);
-release verification steps in
-[docs/verifying-releases.md](https://github.com/ayleen/triss-coworker/blob/main/docs/verifying-releases.md).
+policy is described in the
+[support policy page](https://github.com/ayleen/triss-coworker/blob/main/docs/support.md);
+release verification steps live in the
+[release verification guide](https://github.com/ayleen/triss-coworker/blob/main/docs/verifying-releases.md).
 
 Security-sensitive changes deserve extra care because Triss sits between an
 agent, your filesystem, web URLs, and tracker credentials. See
