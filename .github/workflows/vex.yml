@@ -1,0 +1,40 @@
+name: VEX
+
+# Vulnerability Exploitability eXchange: scan the production dependency
+# tree against OSV and fail closed when an advisory affects an installed
+# version without a triage decision (upgrade, or a justified suppression
+# in docs/vex/suppressions.json). The weekly schedule catches advisories
+# published after the last release.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NPM_VERSION: '11.6.2'
+
+permissions:
+  contents: read
+
+jobs:
+  vex:
+    runs-on: ubuntu-latest
+    name: OSV scan and VEX gate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Pin npm used for dependency installation
+        run: |
+          npm install --global "npm@${NPM_VERSION}"
+          test "$(npm --version)" = "$NPM_VERSION"
+      - run: npm ci
+      - name: Scan dependencies and regenerate the OpenVEX document (fail-closed)
+        run: npm run vex:generate
+      - name: Validate the committed document and suppression list
+        run: npm run check:vex
