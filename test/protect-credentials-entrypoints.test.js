@@ -18,14 +18,33 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 const BIN = join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'bin', 'triss.js');
+const OPENCODE_FIXTURE = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'opencode-run-events.ndjson'),
+  'utf8',
+);
+
+function fakeSpawnReplayingFixture() {
+  const child = new EventEmitter();
+  child.pid = 313131;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  setImmediate(() => {
+    child.stdout.end(OPENCODE_FIXTURE);
+    child.stderr.end('');
+    setImmediate(() => child.emit('close', 0, null));
+  });
+  return child;
+}
 
 function help(args) {
   const res = spawnSync(process.execPath, [BIN, ...args, '--help'], {
@@ -178,6 +197,7 @@ test('runCoderRun forwards a RAW protectCredentials value — resolver normalize
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
     providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
     stdoutWrite: (s) => output.push(s),
+    spawn: fakeSpawnReplayingFixture,
   });
   const envelope = JSON.parse(output.join('').trim());
   assert.equal(envelope.credential_mode, 'protected_proxy');

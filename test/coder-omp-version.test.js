@@ -13,6 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 import {
   buildOmpProbeEnv,
   detectOmp,
@@ -253,7 +254,14 @@ test('runCoderRun with engine omp incompatible version throws before side effect
     };
     let spawnCalled = false;
     try {
-      await runCoderRun('hello', { engine: 'omp', model: 'zai/glm-5', isolate: false }, { spawnSync: sh, spawn: () => { spawnCalled = true; throw new Error('should not spawn'); } });
+      await runCoderRun('hello', { engine: 'omp', model: 'zai/glm-5', isolate: false }, {
+        providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
+        spawnSync: sh,
+        spawn: () => {
+          spawnCalled = true;
+          throw new Error('should not spawn');
+        },
+      });
       assert.fail('should have thrown');
     } catch (err) {
       assert.match(String(err.message), /minimum supported version is/);

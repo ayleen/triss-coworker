@@ -34,10 +34,16 @@ test('core tools are always exposed', async () => {
 });
 
 test('coder status tool documents canonical provider readiness', async () => {
-  const tools = await listTools();
-  const status = tools.find((tool) => tool.name === 'triss_coder_status');
-  assert.ok(status, 'missing triss_coder_status');
-  assert.match(status.description, /canonical provider credential readiness/);
+  const restore = snapshot(['ZHIPU_API_KEY']);
+  process.env.ZHIPU_API_KEY = 'zk-test';
+  try {
+    const tools = await listTools();
+    const status = tools.find((tool) => tool.name === 'triss_coder_status');
+    assert.ok(status, 'missing triss_coder_status');
+    assert.match(status.description, /canonical provider credential readiness/);
+  } finally {
+    restore();
+  }
 });
 
 test('jira tools are hidden when ATLASSIAN_* env is missing', async () => {
