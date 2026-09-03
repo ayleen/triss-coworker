@@ -115,6 +115,17 @@ test('readEnvFile parses keys and strips quotes', () => {
   assert.equal(vars.IGNORED, undefined);
 });
 
+test('readEnvFile preserves foreign quoted values with dotenv-style backslashes', () => {
+  const path = tmpFile();
+  writeFileSync(path, [
+    String.raw`WINDOWS_PATH="C:\path\to"`,
+    'LITERAL_TAB="tab\ttab"',
+  ].join('\n'));
+  const { vars } = readEnvFile(path);
+  assert.equal(vars.WINDOWS_PATH, String.raw`C:\path\to`);
+  assert.equal(vars.LITERAL_TAB, 'tab\ttab');
+});
+
 test('setVar appends a new key on first use and chmod 600s the file', () => {
   const path = tmpFile();
   writeFileSync(path, '');

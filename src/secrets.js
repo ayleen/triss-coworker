@@ -75,7 +75,7 @@ export function parseEnvText(raw) {
       try {
         value = JSON.parse(value);
       } catch {
-        continue;
+        value = value.slice(1, -1);
       }
     } else if (value.startsWith("'") && value.endsWith("'")) {
       value = value.slice(1, -1);
