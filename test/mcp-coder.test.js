@@ -24,6 +24,7 @@ import { listTools } from '../src/mcp/tools.js';
 import { coderRunHandler, coderStatusHandler } from '../src/mcp/handlers.js';
 import { setRestricted } from '../src/safety.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -63,6 +64,10 @@ function fakeCoderRunDeps(spawn = fakeSpawnReplayingFixture()) {
   return {
     spawn,
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
+    spawnSync: (cmd, args, options) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : spawnSync(cmd, args, options),
   };
 }
 
@@ -75,6 +80,7 @@ function withIsolatedEnv(vars, fn) {
       HOME: tempHome,
       TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      TRISS_DEFAULT_PROVIDER: 'zai',
       ...vars,
     };
     const saved = {};
@@ -108,6 +114,7 @@ test(
       OPENCODE_API_KEY: undefined,
       MOONSHOT_API_KEY: undefined,
       KIMI_API_KEY: undefined,
+      TRISS_OPENAI_COMPATIBLE_API_KEY: undefined,
     },
     async () => {
     // Run from an empty tmp HOME/cwd so no .triss.env / global .env can
@@ -276,9 +283,9 @@ test(
     // aliases keep their pre-existing meaning and values (303 / 19)...
     assert.equal(envelope.usage.prompt_tokens, 303);
     assert.equal(envelope.usage.completion_tokens, 19);
-    // ...alongside the canonical tokens/cost/schema_version members. The model
-    // in play is pinned by withIsolatedEnv's TRISS_CODER_MODEL to an unpriced
-    // opencode/* route, so the engine-reported zero is NOT a known $0.
+    // ...alongside the canonical tokens/cost/schema_version members. The
+    // canonical Z.AI provider is subscription-metered, so the engine-reported
+    // zero remains a complete known plan call.
     assert.equal(envelope.usage.schema_version, 2);
     assert.equal(envelope.usage.usage_status, 'reported');
     assert.equal(envelope.usage.tokens.input_uncached, 303);
@@ -288,9 +295,9 @@ test(
     assert.equal(envelope.usage.tokens.output_total, 34);
     assert.equal(envelope.usage.cost.reported_total_usd, 0);
     assert.equal(envelope.usage.cost.reported_total_source, 'engine');
-    assert.equal(envelope.usage.cost.total_usd, null);
-    assert.equal(envelope.usage.cost.source, 'unknown');
-    assert.equal(envelope.usage.cost.complete, false);
+    assert.equal(envelope.usage.cost.total_usd, 0);
+    assert.equal(envelope.usage.cost.source, 'plan');
+    assert.equal(envelope.usage.cost.complete, true);
   }),
 );
 
@@ -409,35 +416,26 @@ test(
 );
 
 test(
-  'triss_coder_run exposes and forwards one-shot provider + small_model',
+  'triss_coder_run exposes and forwards canonical provider selection',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const tools = await listTools();
     const run = tools.find((tool) => tool.name === 'triss_coder_run');
     assert.deepEqual(run.inputSchema.properties.provider.enum, [
+      'openai-compatible',
       'zai',
-      'worker',
       'opencode-zen',
       'opencode-go',
       'moonshot',
       'kimi-for-coding',
     ]);
-    assert.equal(
-      run.inputSchema.properties.model.pattern,
-      '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$',
-    );
-    assert.equal(run.inputSchema.properties.small_model.type, 'string');
-    assert.equal(
-      run.inputSchema.properties.small_model.pattern,
-      '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$',
-    );
+    assert.equal(run.inputSchema.properties.model.pattern, undefined);
 
     const seen = [];
     await coderRunHandler(
       {
         prompt: 'do something',
         provider: 'zai',
-        model: 'zai-coding-plan/glm-5.2',
-        small_model: 'zai-coding-plan/glm-5-turbo',
+        model: 'glm-5.2',
       },
       {
         runCoderRun: async (_prompt, opts) => seen.push(opts),
@@ -445,7 +443,7 @@ test(
       },
     );
     assert.equal(seen[0].provider, 'zai');
-    assert.equal(seen[0].smallModel, 'zai-coding-plan/glm-5-turbo');
+    assert.equal(seen[0].model, 'glm-5.2');
   }),
 );
 

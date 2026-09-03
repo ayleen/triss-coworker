@@ -33,17 +33,11 @@ test('core tools are always exposed', async () => {
   }
 });
 
-test('coder status tool documents the OpenAI-compatible worker credential', async () => {
-  const restore = snapshot(['TRISS_WORKER_API_KEY']);
-  process.env.TRISS_WORKER_API_KEY = 'sk-worker-test';
-  try {
-    const tools = await listTools();
-    const status = tools.find((tool) => tool.name === 'triss_coder_status');
-    assert.ok(status, 'worker credential should expose triss_coder_status');
-    assert.match(status.description, /TRISS_WORKER_API_KEY/);
-  } finally {
-    restore();
-  }
+test('coder status tool documents canonical provider readiness', async () => {
+  const tools = await listTools();
+  const status = tools.find((tool) => tool.name === 'triss_coder_status');
+  assert.ok(status, 'missing triss_coder_status');
+  assert.match(status.description, /canonical provider credential readiness/);
 });
 
 test('jira tools are hidden when ATLASSIAN_* env is missing', async () => {
@@ -131,42 +125,18 @@ test('toMcpToolList strips handler functions', async () => {
   }
 });
 
-test('describeKimiRoutingLines names the key, endpoint source, and presets', async () => {
-  const { describeKimiRoutingLines } = await import('../src/mcp/handlers.js');
-  const lines = describeKimiRoutingLines({
-    keyConfigured: true,
-    baseUrl: 'https://api.moonshot.cn/v1',
-    baseUrlSource: 'config',
-    presets: [
-      { preset: 'flash', model: 'kimi-k2.6' },
-      { preset: 'pro', model: 'kimi-k3' },
-    ],
-  });
-  assert.equal(lines[0], 'Kimi (provider "kimi"):');
-  assert.match(lines[1], /MOONSHOT_API_KEY: configured/);
-  assert.match(lines[2], /https:\/\/api\.moonshot\.cn\/v1 \(from TRISS_KIMI_BASE_URL\)/);
-  assert.match(lines[3], /flash=kimi-k2\.6, pro=kimi-k3/);
 
-  const bare = describeKimiRoutingLines({
-    keyConfigured: false,
-    baseUrl: 'https://api.moonshot.ai/v1',
-    baseUrlSource: 'default',
-    presets: [],
-  });
-  assert.match(bare[1], /MOONSHOT_API_KEY: missing/);
-  assert.match(bare[2], /\(default\)/);
-});
-
-test('ask and review MCP tools expose worker/deepseek/glm/kimi provider routing', async () => {
+test('ask and review MCP tools expose canonical provider routing', async () => {
   const tools = await listTools();
   for (const name of ['triss_ask', 'triss_review']) {
     const tool = tools.find((entry) => entry.name === name);
     assert.deepEqual(tool.inputSchema.properties.provider.enum, [
-      'worker',
-      'deepseek',
-      'glm',
-      'kimi',
+      'openai-compatible',
+      'zai',
+      'opencode-zen',
+      'opencode-go',
       'moonshot',
+      'kimi-for-coding',
     ]);
   }
 });

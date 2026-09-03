@@ -28,8 +28,8 @@ costs are finite numbers or `null`.
 {
   "schema_version": 2,
   "ts": "2026-08-07T00:00:00.000Z",
-  "model": "opencode/deepseek-v4-flash-free",
-  "billing_model": "opencode/deepseek-v4-flash-free",
+  "model": "opencode-zen/deepseek-v4-flash-free",
+  "billing_model": "opencode-zen/deepseek-v4-flash-free",
   "billing_mode": "unknown",
   "provider": "opencode-zen",
   "usage_source": "opencode",
@@ -131,7 +131,7 @@ Rules:
 | Field | Purpose |
 | --- | --- |
 | `model` | the reporting/grouping key. `triss usage --by-model` groups strictly by this. |
-| `billing_model` | the **only** key used for price lookup. Keeps the endpoint/plan prefix (`zai/glm-5.2` vs `zai-coding-plan/glm-5.2`); the one exception is the `moonshotai/`/`moonshotai-cn/` prefix, which is stripped so one row covers the bare and prefixed Moonshot routes. `opencode-go/*` keeps its prefix and prices as null (unknown cost) — the Go reseller's tariffs are not modeled. |
+| `billing_model` | the only key used for price lookup. Canonical provider prefixes are preserved except where a direct-provider price table explicitly normalizes a prefix. |
 | `provider` | informational identity for diagnostics. Never selects a price. Never inferred from which API keys happen to be set. |
 | `usage_source` | which payload contract Triss parsed: `api`, `opencode`, `opencode2`, `crush`, or `omp`. |
 | `engine` | `opencode`, `opencode2`, `crush`, `omp`, or `null` for direct API calls. |
@@ -142,11 +142,11 @@ Rules:
 
 | Prefix | `provider` |
 | --- | --- |
-| `triss-worker/*` | `worker` |
-| `zai/*`, `zai-coding-plan/*` | `zai` |
-| `opencode/*` | `opencode-zen` |
+| `openai-compatible/*` | `openai-compatible` |
+| `zai/*` | `zai` |
+| `opencode-zen/*` | `opencode-zen` |
 | `opencode-go/*` | `opencode-go` |
-| `moonshotai/*`, `moonshotai-cn/*` | `moonshot` |
+| `moonshot/*` | `moonshot` |
 | `kimi-for-coding/*` | `kimi-for-coding` |
 | Crush runs | `zai`, with `engine: "crush"` |
 | OMP runs | provider from the original public Triss selector; `engine: "omp"` |
@@ -157,15 +157,13 @@ event does not prove which, the mode is `unknown`, not `subscription`:
 
 | Resolved route | `billing_mode` |
 | --- | --- |
-| `zai/*` | `payg` |
-| `zai-coding-plan/*` | `subscription` |
-| `moonshotai/*`, `moonshotai-cn/*` | `payg` |
+| `zai/*` | provider endpoint policy (`subscription` for the default coding-plan endpoint) |
+| `moonshot/*` | `payg` |
 | `kimi-for-coding/*` | `subscription` |
 | OpenCode Zen model proven free by a caller-supplied set | `free` |
 | OpenCode Zen model without that proof | `unknown` |
-| OpenCode Go with a proven per-call subscription route | `subscription` |
-| OpenCode Go that may fall back to Zen balance | `unknown` |
-| `triss-worker/*` (configurable endpoint) | `unknown` — a configured price can still produce an estimate |
+| OpenCode Go | `unknown` |
+| `openai-compatible/*` | `unknown` unless configured pricing proves an estimate |
 | Crush | token pricing may stay `unknown`; cost trust follows `delta_cost_usd` |
 | OMP | billing mode follows the original public Triss selector; OMP-reported cost is evidence, while billing classification remains fail-closed |
 
@@ -279,10 +277,10 @@ of `reasoning_content` to invent a reasoning count.
 of the prompt count and the subtraction is valid. `cache_write`,
 `output_visible`, and `reasoning` stay `null` when not reported.
 
-### Generic OpenAI-compatible worker (`usage_source: "api"`)
+### Generic OpenAI-compatible provider (`usage_source: "api"`)
 
-The worker endpoint is user-configurable, so normalization recognises the
-documented aliases without assuming any endpoint implements them:
+Normalization recognizes documented response token fields without inferring an
+upstream service from the endpoint:
 
 1. `prompt_tokens`, `completion_tokens`, `total_tokens` when present;
 2. nested `prompt_tokens_details.cached_tokens`;
@@ -437,12 +435,12 @@ TRISS_PRICE_<MODEL>=<input_uncached>,<cache_read>,<cache_write>,<output>
 Rates are USD **per token**. The parser distinguishes the two forms by arity.
 The three-value form leaves the cache-write rate **unknown** — it never copies
 the ordinary input rate into it. The model key is the uppercased
-`billing_model` with non-alphanumerics replaced by `_`, after the
-`moonshotai/`/`moonshotai-cn/` prefix is stripped (so `TRISS_PRICE_KIMI_K3`
-covers both the bare and the prefixed route).
+`billing_model` with non-alphanumerics replaced by `_`. Canonical Moonshot
+routes normalize to the provider-native model id for the built-in direct price
+table.
 
 An override also beats a subscription-plan's built-in zero: pricing a
-`zai-coding-plan/<model>` (or `kimi-for-coding/<model>`) model explicitly makes
+`zai/<model>` or `kimi-for-coding/<model>` explicitly, making
 that call a component estimate with `source: "estimated"` instead of the plan
 zero, so a user can account for a plan model whose contract differs.
 
@@ -620,10 +618,9 @@ Every token and component-cost aggregate tracks:
 independently from their components.
 
 Grouped views by model, project, and label use the same canonical aggregation.
-`--by-model` groups strictly by the persisted `model` field, so `zai/glm-5.2`
-and `zai-coding-plan/glm-5.2` stay distinct groups; `billing_model` is only
-ever a price key. Sorting by cost uses the complete known total and never
-presents a partial estimate as a complete one.
+`--by-model` groups strictly by the persisted canonical `model` field;
+`billing_model` is only a price key. Sorting by cost uses the complete known
+total and never presents a partial estimate as a complete one.
 
 The canonical `cost` object is aggregated too: its `reported_total_usd` carries
 its own `sum`/`known_calls`/`unknown_calls` (an explicit 0 is known, `null`/absent

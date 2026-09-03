@@ -4,11 +4,10 @@
 // MCP tool handlers — thin wrappers that return text instead of printing
 // to stdout. Each handler keeps its scope small and is testable on its own.
 
-import { chat as workerChat, reportUsage, responseText } from '../client.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { assertProviderText } from '../provider-errors.js';
-import { resolveModelRequest } from '../models.js';
-import { requestTimeoutMs } from '../config.js';
-import { glmReviewMaxTokens, GLM_REVIEW_MAX_TOKENS_CAP, GLM_REVIEW_SHARD_MAX_TOKENS, GLM_REVIEW_TIMEOUT_MS, emptyReviewResponseMessage } from '../review-defaults.js';
+import { emptyReviewResponseMessage } from '../review-defaults.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { stripHtml } from '../integrations/_contract.js';
@@ -32,62 +31,39 @@ export async function callModel(
   {
     provider,
     model,
+    engine,
+    effort,
     messages,
     maxTokens,
     timeoutMs,
-    thinking,
     purpose,
+    task,
     explicitMaxTokens,
   },
   deps = {},
 ) {
-  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
-  const sendChat = deps.chat || workerChat;
-  // Resolve the provider/model exactly once so a prefixed GLM id (zai/glm-5.2)
-  // routes to its endpoint first, and the review defaults below see the bare
-  // resolved model id rather than the raw input.
-  const request = resolveRequest({ provider, model });
-  // Non-review callers keep the historical implicit 4096 budget; review
-  // callers leave an absent maxTokens absent so the provider-specific review
-  // default is applied below (GLM models get a model-sized budget, non-GLM
-  // reviews get 8192).
-  let resolvedMaxTokens = maxTokens ?? 4096;
-  let resolvedTimeoutMs = timeoutMs;
-  let resolvedThinking = thinking;
-  if (purpose === 'review') {
-    if (request.provider === 'glm') {
-      // GLM review: model-sized output budget, long timeout, thinking on.
-      // Timeout precedence: explicit timeout_ms, then configured
-      // TRISS_REQUEST_TIMEOUT_MS, then the 30-minute GLM default.
-      resolvedMaxTokens = maxTokens ?? Math.min(glmReviewMaxTokens(request.model), GLM_REVIEW_MAX_TOKENS_CAP);
-      resolvedTimeoutMs =
-        timeoutMs ?? (deps.requestTimeoutMs || requestTimeoutMs)() ?? GLM_REVIEW_TIMEOUT_MS;
-      resolvedThinking = true;
-    } else {
-      // Non-GLM reviews keep the legacy budget and their existing timeout
-      // behavior (an explicit timeout_ms still wins for any provider).
-      resolvedMaxTokens = maxTokens ?? 8192;
-    }
-  }
-  const resp = await sendChat({
-    ...request,
-    messages,
-    maxTokens: resolvedMaxTokens,
-    ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
-    ...(resolvedThinking ? { thinking: resolvedThinking } : {}),
-    ...(deps.signal ? { signal: deps.signal } : {}),
-    ...(deps.onReasoning ? { onReasoning: deps.onReasoning } : {}),
-  });
-  const text = responseText(resp);
-  // Empty responses fail with the stable TRISS_PROVIDER_EMPTY code
-  // (documented contract): GLM reviews get the shared actionable guidance
-  // (never "disable thinking") with err.code TRISS_PROVIDER_EMPTY; every
-  // other empty response goes through assertProviderText (same stable code).
+  const execute = deps.executeModelTask || executeModelTask;
+  const output = await execute({
+    task: task || (purpose === 'review' ? 'review' : 'integration-summary'),
+    provider,
+    model,
+    engine,
+    effort,
+    signal: deps.signal,
+    timeout: timeoutMs,
+    input: {
+      messages,
+      maxOutputTokens: maxTokens ?? (purpose === 'review' ? 8192 : 4096),
+      onReasoning: deps.onReasoning,
+      label: 'triss',
+    },
+  }, deps.runtimeDeps);
+  const text = output.result.text;
   if (!text || !String(text).trim()) {
-    if (purpose === 'review' && request.provider === 'glm') {
+    if (purpose === 'review') {
       const err = new Error(
         emptyReviewResponseMessage({
-          finishReason: resp?.choices?.[0]?.finish_reason,
+          finishReason: output.result.finishReason,
           explicitMaxTokens: explicitMaxTokens ?? (maxTokens !== undefined),
           labeled: false,
         }),
@@ -97,12 +73,9 @@ export async function callModel(
     }
     assertProviderText(text);
   }
-  // Content and the usage report are separate values; handlers compose them
-  // at the response boundary, so writeHandler can drop the report entirely.
-  // The provider is passed through so the line matches the persisted record.
   return {
     content: text,
-    usageReport: reportUsage(resp, 'triss', { provider: request.provider }),
+    usageReport: reportNormalizedUsage(output.result, 'triss'),
   };
 }
 
@@ -115,17 +88,17 @@ function withUsage({ content, usageReport }) {
 
 // ─── core handlers ──────────────────────────────────────────────────────────
 
-export async function chatHandler({ prompt, system, model, max_tokens }) {
+export async function chatHandler({ prompt, system, provider, model, engine, effort, max_tokens }, deps = {}) {
   if (!prompt) throw new Error('prompt is required');
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 4096);
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  return withUsage(await callModel({ model, messages, maxTokens }));
+  return withUsage(await callModel({ task: 'chat', provider, model, engine, effort, messages, maxTokens }, deps));
 }
 
 export async function askHandler(
-  { paths, urls, question, provider, model, max_tokens, timeout_ms, system, response_format },
+  { paths, urls, question, provider, model, engine, effort, max_tokens, timeout_ms, system, response_format },
   deps = {},
 ) {
   const responseFormat = validateResponseFormat(response_format);
@@ -152,6 +125,9 @@ export async function askHandler(
     {
       provider,
       model,
+      engine,
+      effort,
+      task: 'ask',
       maxTokens,
       timeoutMs,
       messages: [
@@ -171,7 +147,7 @@ export async function askHandler(
   return withUsage({ content, usageReport });
 }
 
-export async function fetchHandler({ urls, question, model, max_tokens }) {
+export async function fetchHandler({ urls, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 4096);
   if (!urls?.length) throw new Error('urls is required');
   const parts = [];
@@ -182,14 +158,18 @@ export async function fetchHandler({ urls, question, model, max_tokens }) {
   const corpus = parts.join('\n\n');
   if (!question) return corpus;
   return withUsage(await callModel({
+    task: 'fetch',
+    provider,
     model,
+    engine,
+    effort,
     maxTokens,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
       { role: 'user', content: `<data>\n${corpus}\n</data>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function reviewHandler(
@@ -200,6 +180,8 @@ export async function reviewHandler(
     question,
     provider,
     model,
+    engine,
+    effort,
     max_tokens,
     timeout_ms,
     response_format,
@@ -228,7 +210,9 @@ export async function reviewHandler(
     skipIssue: skip_issue,
     question,
     provider,
-    model: model || 'pro',
+    model,
+    engine,
+    effort,
     maxTokens,
     timeoutMs,
     responseFormat,
@@ -244,7 +228,7 @@ export async function reviewHandler(
 }
 
 export async function reviewShardHandler(
-  { pr, base, question, provider, model, max_tokens, timeout_ms, files = null },
+  { pr, base, question, provider, model, engine, effort, max_tokens, timeout_ms, files = null },
   deps = {},
 ) {
   // Absent max_tokens stays absent so the handler can decide the budget:
@@ -270,12 +254,7 @@ export async function reviewShardHandler(
 Sharded review: sequential whole-file shards, per-shard verdicts only.
 </change>`;
   const timeoutMs = timeout_ms !== undefined ? timerMsOption(timeout_ms, 'timeout_ms') : undefined;
-  // Resolve provider/model once, like the CLI does (src/commands/review.js:220-224).
-  // Using the raw 'model' string (e.g. 'pro') would miss the preset mapping
-  // (pro -> glm-5.2) and glmReviewMaxTokens('pro') falls back to 16K, halving
-  // the shard budget.
-  const resolved = (deps.resolveModelRequest || resolveModelRequest)({ provider, model: model || 'pro' });
-  const shardMaxTokens = maxTokens ?? (resolved.provider === 'glm' ? Math.min(glmReviewMaxTokens(resolved.model), GLM_REVIEW_SHARD_MAX_TOKENS) : undefined);
+  const shardMaxTokens = maxTokens;
   const result = await runReviewCoreShard({
     diff,
     question,
@@ -287,8 +266,11 @@ Sharded review: sequential whole-file shards, per-shard verdicts only.
         wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((sec) => sec.raw).join('\n')}\n</diff>`),
       ].join('\n\n');
       const response = await (deps.callModel || callModel)({
-        provider: resolved.provider,
-        model: resolved.model,
+        task: 'review-shard',
+        provider,
+        model,
+        engine,
+        effort,
         maxTokens: shardMaxTokens,
         timeoutMs,
         purpose: 'review',
@@ -331,7 +313,7 @@ function stripFences(s) {
   return lastFence === -1 ? body : body.slice(0, lastFence);
 }
 
-export async function writeHandler({ spec, target, context, model, max_tokens }) {
+export async function writeHandler({ spec, target, context, provider, model, engine, effort, max_tokens }, deps = {}) {
   if (!spec) throw new Error('spec is required');
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 16384);
   const { readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
@@ -346,13 +328,17 @@ export async function writeHandler({ spec, target, context, model, max_tokens })
   if (target) assertSafePath(target, { kind: 'write' });
 
   const { content, usageReport } = await callModel({
+    task: 'write',
+    provider,
     model,
+    engine,
+    effort,
     maxTokens,
     messages: [
       { role: 'system', content: WRITE_SYSTEM },
       { role: 'user', content: `${ctx}Write: ${spec}` },
     ],
-  });
+  }, deps);
   // callModel keeps content and the usage line apart; only content belongs in
   // the file, and the report surfaces once in the status response.
   const body = stripFences(content);
@@ -367,7 +353,7 @@ export async function writeHandler({ spec, target, context, model, max_tokens })
 
 // ─── jira handlers ──────────────────────────────────────────────────────────
 
-export async function jiraSearchHandler({ jql, question, limit = 50, model, max_tokens }) {
+export async function jiraSearchHandler({ jql, question, limit = 50, provider, model, engine, effort, max_tokens }) {
   const { jira } = await import('../integrations/jira/client.js');
   const res = await jira.search({
     jql,
@@ -383,7 +369,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, model, max_
     .join('\n');
   if (!question) return corpus || '(no issues)';
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -393,7 +379,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, model, max_
   }));
 }
 
-export async function jiraIssueHandler({ key, with_comments, question, model, max_tokens }, deps = {}) {
+export async function jiraIssueHandler({ key, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { jira } = await import('../integrations/jira/client.js');
   const { adfToText } = await import('../integrations/jira/adf.js');
   const issue = await jira.getIssue(key);
@@ -419,7 +405,7 @@ export async function jiraIssueHandler({ key, with_comments, question, model, ma
   const text = lines.join('\n');
   if (!question) return text;
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -545,7 +531,7 @@ export async function jiraWhoamiHandler() {
 
 // ─── linear handlers ────────────────────────────────────────────────────────
 
-export async function linearSearchHandler({ term, question, limit = 50, model, max_tokens }) {
+export async function linearSearchHandler({ term, question, limit = 50, provider, model, engine, effort, max_tokens }) {
   const { linear } = await import('../integrations/linear/client.js');
   const issues = await linear.search({ term, limit });
   const corpus = issues
@@ -553,7 +539,7 @@ export async function linearSearchHandler({ term, question, limit = 50, model, m
     .join('\n');
   if (!question) return corpus || '(no issues)';
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -563,7 +549,7 @@ export async function linearSearchHandler({ term, question, limit = 50, model, m
   }));
 }
 
-export async function linearIssueHandler({ id, with_comments, question, model, max_tokens }) {
+export async function linearIssueHandler({ id, with_comments, question, provider, model, engine, effort, max_tokens }) {
   const { linear } = await import('../integrations/linear/client.js');
   const i = await linear.getIssue(id);
   const lines = [
@@ -586,7 +572,7 @@ export async function linearIssueHandler({ id, with_comments, question, model, m
   const text = lines.join('\n');
   if (!question) return text;
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -809,7 +795,7 @@ export async function linearAttachmentsHandler({ id }) {
 
 // ─── github handlers ────────────────────────────────────────────────────────
 
-export async function githubSearchHandler({ query, limit = 30, question, model, max_tokens }) {
+export async function githubSearchHandler({ query, limit = 30, question, provider, model, engine, effort, max_tokens }) {
   const { github } = await import('../integrations/github/client.js');
   const data = await github.search({ query, limit });
   const items = data.items || [];
@@ -821,7 +807,7 @@ export async function githubSearchHandler({ query, limit = 30, question, model, 
     .join('\n');
   if (!question) return corpus || '(no issues)';
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -831,7 +817,7 @@ export async function githubSearchHandler({ query, limit = 30, question, model, 
   }));
 }
 
-export async function githubIssueHandler({ repo, number, with_comments, question, model, max_tokens }) {
+export async function githubIssueHandler({ repo, number, with_comments, question, provider, model, engine, effort, max_tokens }) {
   const { github, resolveRepo } = await import('../integrations/github/client.js');
   const r = resolveRepo(repo);
   const issue = await github.getIssue(r, number);
@@ -854,7 +840,7 @@ export async function githubIssueHandler({ repo, number, with_comments, question
   const text = lines.join('\n');
   if (!question) return text;
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -894,7 +880,7 @@ export async function githubCommentHandler({ repo, number, body }) {
 
 // ─── confluence handlers ────────────────────────────────────────────────────
 
-export async function confluenceSearchHandler({ cql, limit = 25, question, model, max_tokens }) {
+export async function confluenceSearchHandler({ cql, limit = 25, question, provider, model, engine, effort, max_tokens }) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const data = await confluence.search({ cql, limit });
   const results = data.results || [];
@@ -906,7 +892,7 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, model
     .join('\n');
   if (!question) return corpus || '(no results)';
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -916,7 +902,7 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, model
   }));
 }
 
-export async function confluencePageHandler({ id, question, model, max_tokens }) {
+export async function confluencePageHandler({ id, question, provider, model, engine, effort, max_tokens }) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const { adfToText } = await import('../integrations/jira/adf.js');
   const page = await confluence.getPage(id);
@@ -941,7 +927,7 @@ export async function confluencePageHandler({ id, question, model, max_tokens })
   ].join('\n');
   if (!question) return text;
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -981,7 +967,7 @@ export async function confluenceSpacesHandler({ limit = 100 } = {}) {
 
 // ─── gitlab handlers ────────────────────────────────────────────────────────
 
-export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, model, max_tokens }) {
+export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, provider, model, engine, effort, max_tokens }) {
   const { gitlab } = await import('../integrations/gitlab/client.js');
   const items = await gitlab.search({ projectPath: project, search, scope, limit });
   const corpus = (Array.isArray(items) ? items : [])
@@ -992,7 +978,7 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
     .join('\n');
   if (!question) return corpus || '(no issues)';
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -1002,7 +988,7 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
   }));
 }
 
-export async function gitlabIssueHandler({ project, iid, with_comments, question, model, max_tokens }) {
+export async function gitlabIssueHandler({ project, iid, with_comments, question, provider, model, engine, effort, max_tokens }) {
   const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
   const p = resolveProject(project);
   const issue = await gitlab.getIssue(p, iid);
@@ -1025,7 +1011,7 @@ export async function gitlabIssueHandler({ project, iid, with_comments, question
   const text = lines.join('\n');
   if (!question) return text;
   return withUsage(await callModel({
-    model,
+    provider, model, engine, effort,
     maxTokens: max_tokens || 4096,
     messages: [
       { role: 'system', content: SUMMARY_SYSTEM },
@@ -1080,7 +1066,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // production calls fall through to the real subprocess machinery and the
 // import-time parent snapshot inside runCoderRun.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, small_model: smallModel, isolate, cwd, timeout, engine, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials, protect_credentials: protectCredentialsSnake } = {},
+  { prompt, session, continue: cont, agent, provider, model, isolate, cwd, timeout, engine, effort, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials, protect_credentials: protectCredentialsSnake } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -1138,12 +1124,12 @@ export async function coderRunHandler(
     prompt,
     {
       engine,
+      effort,
       session,
       continue: cont,
       agent,
       provider,
       model,
-      smallModel,
       isolate,
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
@@ -1157,6 +1143,7 @@ export async function coderRunHandler(
       spawn: deps.spawn,
       spawnSync: deps.spawnSync,
       effectiveConfigSpawnSync: deps.effectiveConfigSpawnSync,
+      providerConfigSnapshot: deps.providerConfigSnapshot,
       abortSignal: deps.signal,
       stdoutWrite: (s) => { envelope += s; },
     },
@@ -1170,9 +1157,9 @@ export async function coderStatusHandler() {
   const status = describeCoderStatus();
   const ready = envReadiness(CODER_MANIFEST);
   const lines = [
-    `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush; crush bridges it to ZAI_API_KEY at run time)`,
+    `ZHIPU_API_KEY: ${ready.ready ? 'configured' : 'missing'} (shared by opencode + crush)`,
     `OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? 'configured' : 'not set'} (optional — shared by OpenCode Zen and OpenCode Go on the opencode engine; a configured key alone does not prove a Go subscription or regional opt-in)`,
-    `MOONSHOT_API_KEY: ${process.env.MOONSHOT_API_KEY ? 'configured' : 'not set'} (optional — unlocks Moonshot Kimi models like moonshotai/kimi-k2.7-code on the opencode engine)`,
+    `MOONSHOT_API_KEY: ${process.env.MOONSHOT_API_KEY ? 'configured' : 'not set'} (optional — unlocks canonical moonshot/* models)`,
     `KIMI_API_KEY: ${process.env.KIMI_API_KEY ? 'configured' : 'not set'} (optional — unlocks Kimi for Coding subscription models like kimi-for-coding/k3 on the opencode engine)`,
     `Default engine: ${status.defaultEngine}`,
     `Default credential mode: ${status.defaultCredentialMode}`,
@@ -1181,7 +1168,7 @@ export async function coderStatusHandler() {
     status.defaultCredentialMode === 'best_effort_raw'
       ? 'Protected mode: set protectCredentials: true'
       : 'Protected mode: always on (crush is always protected)',
-    `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — from TRISS_CODER_MODEL, used by a bare opencode-engine run (crush ignores it and uses its own GLM atoms)`,
+    `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — resolved from the shared default provider roles`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${
           status.meetsMinimum ? ' (meets minimum)' : ` (minimum ${status.minimumVersion})`
@@ -1223,7 +1210,7 @@ export async function coderResultCleanHandler({ run_id }) {
 
 // ─── commit-msg ─────────────────────────────────────────────────────────────
 
-export async function commitMsgHandler({ type, scope, conventional = true, model, max_tokens }) {
+export async function commitMsgHandler({ type, scope, conventional = true, provider, model, engine, effort, max_tokens }, deps = {}) {
   const maxTokens = positiveIntegerOption(max_tokens, 'max_tokens', 2048);
   const { git } = await import('../git.js');
   const diff = git(['diff', '--staged']);
@@ -1247,55 +1234,32 @@ export async function commitMsgHandler({ type, scope, conventional = true, model
     .filter(Boolean)
     .join('\n');
   return withUsage(await callModel({
+    task: 'commit-msg',
+    provider,
     model,
+    engine,
+    effort,
     maxTokens,
     messages: [
       { role: 'system', content: SYSTEM },
       { role: 'user', content: userPrompt },
     ],
-  }));
+  }, deps));
 }
 
 // ─── status ─────────────────────────────────────────────────────────────────
 
-export function describeGlmRoutingLines(glm) {
-  const source = glm.endpointSource === 'config'
-    ? `pinned by TRISS_CODER_MODEL=${glm.coderModel}`
-    : 'default — a rejected call retries the other endpoint once and remembers the winner';
-  return [
-    'GLM (provider "glm"):',
-    `  ZHIPU_API_KEY: ${glm.keyConfigured ? 'configured' : 'missing'}`,
-    `  Endpoint: ${glm.baseUrl} (${glm.endpoint}, ${source})`,
-    `  Presets: ${glm.presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
-  ];
-}
-
-export function describeKimiRoutingLines(kimi) {
-  const source = kimi.baseUrlSource === 'config' ? 'from TRISS_KIMI_BASE_URL' : 'default';
-  return [
-    'Kimi (provider "kimi"):',
-    `  MOONSHOT_API_KEY: ${kimi.keyConfigured ? 'configured' : 'missing'}`,
-    `  Endpoint: ${kimi.baseUrl} (${source})`,
-    `  Presets: ${kimi.presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
-  ];
-}
-
 export async function statusHandler(_args = {}, deps = {}) {
-  const configModule = deps.getConfig
-    ? { getConfig: deps.getConfig }
-    : await import('../config.js');
-  const modelsModule = deps.listPresets
-    ? {
-      listPresets: deps.listPresets,
-      describeGlmRouting: deps.describeGlmRouting,
-      describeKimiRouting: deps.describeKimiRouting,
-    }
-    : await import('../models.js');
+  const providerConfigModule = deps.readProviderConfigSnapshot
+    ? { readProviderConfigSnapshot: deps.readProviderConfigSnapshot }
+    : await import('../provider-config.js');
+  const providerRegistryModule = deps.listProviderDefinitions
+    ? { listProviderDefinitions: deps.listProviderDefinitions }
+    : await import('../provider-registry.js');
   const registryModule = deps.loadIntegrations
     ? {
       loadIntegrations: deps.loadIntegrations,
       envReadiness: deps.envReadiness,
-      getCoreManifest: deps.getCoreManifest,
     }
     : await import('../integrations/_registry.js');
   const safetyModule = deps.projectRoot
@@ -1304,31 +1268,33 @@ export async function statusHandler(_args = {}, deps = {}) {
   const secretsModule = deps.activeEnvFiles
     ? { activeEnvFiles: deps.activeEnvFiles }
     : await import('../secrets.js');
-  const cfg = configModule.getConfig();
-  const presets = modelsModule.listPresets();
+  const snapshot = providerConfigModule.readProviderConfigSnapshot();
+  const providers = providerRegistryModule.listProviderDefinitions();
   const integrations = await registryModule.loadIntegrations();
-  const all = [registryModule.getCoreManifest(), ...integrations];
   const root = safetyModule.projectRoot();
   const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
-    `Worker API base: ${cfg.baseUrl}`,
-    `Worker API key:  ${cfg.apiKey ? cfg.apiKey.slice(0, 4) + '…' + cfg.apiKey.slice(-4) : '(missing)'}`,
-    `Default preset: ${cfg.defaultPreset}`,
+    `Default provider: ${snapshot.defaultProvider.value}`,
     `Project root: ${root} (from ${rootSource})`,
     `Path sandbox: ${safetyModule.pathsRestricted() ? 'on' : 'off'}`,
-    `Env files:`,
+    'Env files:',
     ...secretsModule.activeEnvFiles().map((f) => `  ${f.scope}: ${f.path} (${f.exists ? 'loaded' : 'absent'})`),
-    `Worker presets: ${presets.map((p) => p.preset + '=' + p.model).join(', ')}`,
-    // A GLM-only setup has no worker key at all, so the worker lines above say
-    // "(missing)" while provider:"glm" calls work fine. Spell out that route
-    // separately instead of letting the reader infer it from a worker field.
-    // Same for Kimi (provider "kimi").
-    ...describeGlmRoutingLines(modelsModule.describeGlmRouting()),
-    ...describeKimiRoutingLines(modelsModule.describeKimiRouting()),
-    `Integrations:`,
-    ...all.map((m) => {
-      const r = registryModule.envReadiness(m);
-      return `  ${m.name}: ${r.ready ? 'ready' : 'missing ' + r.missing.join(',')}`;
+    'Provider profiles:',
+    ...providers.flatMap((definition) => {
+      const profile = snapshot.providers[definition.id];
+      return [
+        `  ${definition.id}${definition.id === snapshot.defaultProvider.value ? ' (default)' : ''}:`,
+        `    credential: ${profile.credential?.value ? 'configured' : 'missing'}`,
+        `    endpoint: ${profile.endpoint?.value || '(engine-managed)'}`,
+        `    model: ${profile.model?.value || '(unset)'}`,
+        `    smallModel: ${profile.smallModel?.value || '(unset)'}`,
+        `    transport: ${profile.transport?.value || definition.transport}`,
+      ];
+    }),
+    'Integrations:',
+    ...integrations.map((manifest) => {
+      const readiness = registryModule.envReadiness(manifest);
+      return `  ${manifest.name}: ${readiness.ready ? 'ready' : 'missing ' + readiness.missing.join(',')}`;
     }),
   ];
   let updateState = null;

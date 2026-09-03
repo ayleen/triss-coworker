@@ -84,29 +84,6 @@ test('completion requires a program argument', () => {
   assert.throws(() => runCompletion('bash'), /requires the Commander program/);
 });
 
-test('bash completion surfaces coder models and coder model set flags', () => {
-  const program = fixtureProgram();
-  const out = captureStdout(() => runCompletion('bash', program));
-  // `coder models` sits one level under the coder group -> surfaced today.
-  assert.match(out, /models\)[\s\S]*?--engine --provider --json/);
-  // `coder model set` is nested two levels under coder -> not surfaced yet (RED).
-  assert.match(
-    out,
-    /model\)[\s\S]*?--small --engine --provider --global --local --allow-unverified --allow-unsafe-bash --yes/,
-  );
-});
-
-test('zsh completion surfaces coder models and coder model set flags', () => {
-  const program = fixtureProgram();
-  const out = captureStdout(() => runCompletion('zsh', program));
-  // `coder models` subcommand and its flags surface today.
-  assert.match(out, /'models:[^']*'/);
-  assert.match(out, /'--json'/);
-  // `coder model set` is nested two levels under coder -> not surfaced yet (RED).
-  assert.match(out, /'model:[^']*'/);
-  assert.match(out, /'--small'/);
-  assert.match(out, /'--allow-unsafe-bash'/);
-});
 
 test('completion exposes the exec router and explain flag', () => {
   const program = fixtureProgram();

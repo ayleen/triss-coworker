@@ -1,5 +1,9 @@
 # Crush + GLM: integration and plans
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 > **Superseded for engine #1:** the first implementation uses opencode — see
 > [`docs/coder-agent-plan.md`](coder-agent-plan.md). The crush fork remains
 > the planned engine #2; the research below still applies.

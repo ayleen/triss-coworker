@@ -43,21 +43,21 @@ export default {
     claude: CLAUDE_INSTRUCTIONS,
     codex: CLAUDE_INSTRUCTIONS, // same wording works for both right now
   },
-  register(program, { wrap }) {
-    program
+  register(program, { wrap, addModelSelectionOptions }) {
+    const search = program
       .command('search <jql>')
-      .description('Run a JQL search; pass --question to get a DeepSeek summary')
+      .description('Run a JQL search; pass --question to summarize')
       .option('-l, --limit <n>', 'max results', '50')
-      .option('-q, --question <text>', 'have DeepSeek summarise the result list')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize the result list');
+    addModelSelectionOptions(search)
       .option('--json', 'raw JSON output')
       .action(wrap(async (jql, opts) => searchCmd({ jql, ...opts })));
 
-    program
+    const issue = program
       .command('issue <key>')
-      .description('Read an issue; pass --question to summarise instead of dumping')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .description('Read an issue; pass --question to summarize instead of dumping')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(issue)
       .option('--with-comments', 'also fetch all comments')
       .option('--json', 'raw JSON output')
       .action(wrap(issueCmd));
@@ -84,11 +84,11 @@ export default {
       .option('--json', 'print created issue as JSON')
       .action(wrap(createCmd));
 
-    program
+    const comments = program
       .command('comments <key>')
-      .description('List comments (with --question summarise) or post one with --post')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .description('List comments (with --question summarize) or post one with --post')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(comments)
       .option('--post <text>', 'post a new comment')
       .option('--json', 'raw JSON output')
       .action(wrap(commentsCmd));

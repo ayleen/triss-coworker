@@ -593,6 +593,17 @@ Engine-specific configuration генерируется из route. Provider sele
 
 Если engine требует main/small models из одного credential scope, это проверяет engine projection после resolution. Command не содержит provider-specific исключений.
 
+> **Зафиксированный долг после review 0.42.** Runtime execution уже получает
+> resolved route через общий registry, но `src/commands/coder.js` всё ещё
+> содержит provider-specific ветвления в legacy `coder init`, проверках
+> существующего `opencode.json` и диагностике каталогов Zen/Go. Это не меняет
+> runtime route и не создаёт второй источник canonical provider defaults, но
+> означает, что пункт DoD 5 пока закрыт только для execution path. Полное
+> закрытие требует вынести init catalogue policy, persistent-config projection
+> и provider diagnostics в provider/coder projection layer; добавление нового
+> provider с новой setup policy до этого рефакторинга может потребовать
+> изменения `coder.js`.
+
 ## Миграция direct model callers
 
 Перевести на execution runtime:

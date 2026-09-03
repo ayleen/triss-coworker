@@ -1,0 +1,27 @@
+{
+  "model": "triss-worker/deepseek-v4-pro",
+  "small_model": "triss-worker/deepseek-v4-flash",
+  "permission": {
+    "bash": {
+      "*": "deny"
+    }
+  },
+  "provider": {
+    "triss-worker": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Triss worker (OpenAI-compatible)",
+      "options": {
+        "baseURL": "https://api.deepseek.com/v1",
+        "apiKey": "{env:TRISS_WORKER_API_KEY}"
+      },
+      "models": {
+        "deepseek-v4-flash": {
+          "name": "deepseek-v4-flash"
+        },
+        "deepseek-v4-pro": {
+          "name": "deepseek-v4-pro"
+        }
+      }
+    }
+  }
+}

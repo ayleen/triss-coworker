@@ -11,8 +11,8 @@
 // Verified-against-the-supported-beta facts encoded here (live recon against
 // the current beta line; see the routing recovery plan):
 //   - CLI surface: `run --standalone --format json --auto --model <m>
-//     [--agent <a>] [--session <id> | --continue] <prompt>`; NO --pure, NO
-//     --dir (unsupported on this build — child cwd selects the project).
+//     --variant <effort> [--agent <a>] [--session <id> | --continue] <prompt>`;
+//     NO --pure and NO --dir (child cwd selects the project).
 //   - Events on stdout are ndjson with the SAME event vocabulary as V1
 //     (step_start/tool_use/step_finish/text/error) but TWO differences the
 //     fold must handle: (1) `error.message` is populated (V1 parsers read
@@ -50,7 +50,7 @@ export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
 const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
+const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model', '--variant']);
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -335,7 +335,8 @@ export function installHintOpenCode2() {
 //  - `--format json --auto`: ndjson events on stdout; headless auto-approve.
 //  - `--model <m>` ALWAYS explicit — same determinism argument as V1 (the
 //    wrong config-file default loops forever with nothing on stdout).
-//  - `--agent <a>` optional (triss passes its `coder` agent).
+//  - `--variant <effort>` carries explicit logical effort on the supported
+//    beta contract; its absence is a capability mismatch, never downgraded.
 //  - `--session <real-id>` XOR `--continue` — the CLI accepts both together
 //    but the semantics are ambiguous (which session does --continue resume
 //    when --session also names one?), so the adapter refuses the combo
@@ -343,7 +344,7 @@ export function installHintOpenCode2() {
 //    slug->real-id map is the caller's job (needsSessionMap: true).
 //  - NO --pure, NO --dir, NO --cwd flag: this build supports neither, the
 //    child process cwd selects the project.
-export function buildOpenCode2RunArgv({ prompt, model, agent, sessionRealId, cont } = {}) {
+export function buildOpenCode2RunArgv({ prompt, model, effort, agent, sessionRealId, cont } = {}) {
   if (sessionRealId && cont) {
     throw new Error(
       '--session and --continue are mutually exclusive on the opencode2 engine — ' +
@@ -351,6 +352,7 @@ export function buildOpenCode2RunArgv({ prompt, model, agent, sessionRealId, con
     );
   }
   const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', model];
+  if (effort) argv.push('--variant', effort);
   if (agent) argv.push('--agent', agent);
   if (sessionRealId) argv.push('--session', sessionRealId);
   if (cont) argv.push('--continue');

@@ -35,7 +35,7 @@ function formatIssueFull(issue) {
   return lines.join('\n');
 }
 
-export async function searchCmd({ jql, limit, question, model, json }) {
+export async function searchCmd({ jql, limit, question, provider, model, engine, effort, json }) {
   const res = await jira.search({
     jql,
     fields: ['summary', 'status', 'assignee', 'issuetype', 'priority'],
@@ -46,14 +46,14 @@ export async function searchCmd({ jql, limit, question, model, json }) {
   if (!issues.length) return printResult('(no issues)');
   const corpus = issues.map(formatIssueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, model });
+    const out = await summarize({ corpus, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(key, { question, model, withComments, json }) {
+export async function issueCmd(key, { question, provider, model, engine, effort, withComments, json }) {
   const expand = withComments ? ['renderedFields'] : undefined;
   const issue = await jira.getIssue(key, { expand });
   if (json) return printResult(issue, { json: true });
@@ -67,7 +67,7 @@ export async function issueCmd(key, { question, model, withComments, json }) {
     text += '\n\n--- Comments ---' + (cmts.join('\n---') || '\n(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, model });
+    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(text);
@@ -117,7 +117,7 @@ export async function createCmd(opts) {
   if (opts.json) printResult(issue, { json: true });
 }
 
-export async function commentsCmd(key, { question, model, json, post }) {
+export async function commentsCmd(key, { question, provider, model, engine, effort, json, post }) {
   if (post) {
     await jira.addComment(key, textToAdf(post));
     process.stdout.write(pc.green(`✓ Comment posted to ${key}\n`));
@@ -129,7 +129,14 @@ export async function commentsCmd(key, { question, model, json, post }) {
     .map((c) => `[${c.author?.displayName ?? 'anon'} @ ${c.created}]\n${adfToText(c.body)}`)
     .join('\n---\n');
   if (question) {
-    const out = await summarize({ corpus: corpus || '(no comments)', question, model });
+    const out = await summarize({
+      corpus: corpus || '(no comments)',
+      question,
+      provider,
+      model,
+      engine,
+      effort,
+    });
     printResult(out);
   } else {
     printResult(corpus || '(no comments)');

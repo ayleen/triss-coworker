@@ -37,12 +37,19 @@ import { EventEmitter } from 'node:events';
 
 import { createEventFolder, foldEventLine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
-const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
-  prompt,
-  opts,
-  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
-);
+const runCoderRun = (prompt, opts, deps = {}) => {
+  const spawnSync = deps.spawnSync;
+  return runCoderRunProduction(prompt, opts, {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
+    ...deps,
+    spawnSync: (cmd, args, options) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : spawnSync?.(cmd, args, options) ?? { status: 1, stdout: '', stderr: '', error: null },
+  });
+};
 
 const FIXTURE_PATH = join(
   new URL('.', import.meta.url).pathname,
@@ -69,7 +76,8 @@ const AMBIENT_ENV = [
   'OPENCODE_API_KEY',
   'MOONSHOT_API_KEY',
   'KIMI_API_KEY',
-  'TRISS_CODER_MODEL',
+  'TRISS_DEFAULT_PROVIDER',
+  'TRISS_ZAI_MODEL',
   'TRISS_CODER_ENGINE',
   'TRISS_USAGE_LOG',
 ];
@@ -207,7 +215,7 @@ const UNPRICED_PAYG_MODEL = 'zai/glm-unreleased';
 test(
   'opencode envelope usage: deprecated aliases keep their existing meaning (prompt 303 / completion 19)',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       const capture = stdoutCapture();
       await runCoderRun(
@@ -225,7 +233,7 @@ test(
 test(
   'opencode envelope usage: reports the engine-reported cost verbatim (reported_total_usd 0 / reported_total_source "engine")',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       const capture = stdoutCapture();
       await runCoderRun(
@@ -241,9 +249,9 @@ test(
 );
 
 test(
-  'opencode envelope usage: a zero engine cost on an unproven model is NOT a known free call (complete false / source "unknown")',
+  'opencode envelope usage: a Z.AI subscription model stays a known plan call despite an unlisted model id',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       const capture = stdoutCapture();
       await runCoderRun(
@@ -252,8 +260,8 @@ test(
         { spawn: fakeOpencodeSpawn(), spawnSync: () => ({ status: 1, stdout: '', error: null }), stdoutWrite: capture.stdoutWrite },
       );
       const envelope = JSON.parse(capture.text().trim());
-      assert.equal(envelope.usage.cost.complete, false);
-      assert.equal(envelope.usage.cost.source, 'unknown');
+      assert.equal(envelope.usage.cost.complete, true);
+      assert.equal(envelope.usage.cost.source, 'plan');
     },
   ),
 );
@@ -261,7 +269,7 @@ test(
 test(
   'opencode envelope usage: carries schema_version 2 and usage_status "reported"',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       const capture = stdoutCapture();
       await runCoderRun(
@@ -283,7 +291,7 @@ test(
 test(
   'opencode envelope usage: a no-step run keeps canonical nulls but numeric 0 aliases',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       // A stream with NO step_finish: only a step_start and a text event.
       const noFinishEvents = [
@@ -360,7 +368,7 @@ const MISMATCH_STREAM = MISMATCH_EVENTS.map((e) => JSON.stringify(e));
 test(
   'opencode envelope: a normalization mismatch warning is surfaced in warnings, not dropped',
   withIsolatedEnv(
-    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_CODER_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
+    { ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: UNPRICED_PAYG_MODEL, TRISS_USAGE_LOG: '0' },
     async () => {
       const capture = stdoutCapture();
       await runCoderRun(

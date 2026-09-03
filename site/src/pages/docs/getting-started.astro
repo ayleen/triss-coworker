@@ -58,6 +58,14 @@ import Footer from "../../components/Footer.astro";
         <pre id="pm-code" style="margin: 0; border: 1px solid var(--color-border); background: #08090b; padding: 18px 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.95; white-space: pre-wrap;"></pre>
       </section>
 
+      <section id="upgrade-042" style="border: 1px solid #e0a458; background: var(--color-bg-raised); padding: 20px;">
+        <div style="font-family: var(--font-mono); font-size: 12px; color: #e0a458;">Upgrading from Triss &lt; 0.42.0</div>
+        <p style="margin: 10px 0 0; font-size: 13.5px; line-height: 1.65; color: var(--color-text-secondary);">Triss 0.42 replaces worker configuration and model presets with unified provider profiles. After installing the update and before running model commands:</p>
+        <pre style="margin: 12px 0 0; border: 1px solid var(--color-border); background: #08090b; padding: 14px 16px; font-family: var(--font-mono); font-size: 13px; line-height: 1.8; color: var(--color-text-code);">triss migrate
+triss status</pre>
+        <p style="margin: 10px 0 0; font-size: 13px; line-height: 1.65; color: var(--color-text-muted);">Restart MCP hosts and agent sessions after migration. Do not downgrade to a pre-0.42 release after migration.</p>
+      </section>
+
       <section id="step-3">
         <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;">
           <div> <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 14px;">step 03 · the only real step</div> <h2 style="margin: 0; font-size: 31px; line-height: 1.15; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Run the wizard</h2> </div>
@@ -66,19 +74,19 @@ import Footer from "../../components/Footer.astro";
         <pre style="margin-top: 22px; border: 1px solid var(--color-border-subtle); background: #08090b; padding: 18px 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.95; white-space: pre-wrap; color: var(--color-text-code);">$ triss config wizard
 
   Where to save?  [G]lobal ~/.config/triss/.env / [L]ocal ./.triss.env → G
-  Setup mode?  [S]tandard / [A]dvanced               → S
-  DeepSeek API key (masked)                         → ••••••••
-  Worker model                                     → deepseek-v4-flash
+  Default provider                                            → zai
+  Z.A.I API key (masked)                                      → ••••••••
+  Native model                                                → glm-5.2
 
 ✓ wrote ~/.config/triss/.env (chmod 600)
-  Standard will now register MCP + write rules. Choose agent:
-  [C]laude / Code[X] / [B]oth                       → B
+  Register MCP and write agent rules?                         → yes
+  [C]laude / Code[X] / [B]oth                                 → B
 ✓ registered MCP server (claude + codex)
 ✓ wrote agent rules (CLAUDE.md + AGENTS.md)</pre>
         <div data-omp-quickstart style="margin-top: 22px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
           <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Optional: use the native OMP coder engine</div>
           <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ curl https://omp.sh/install | sh
-$ triss config wizard coder --coder-engine omp --coder-provider opencode-go
+$ triss coder init --engine omp --provider opencode-go
 $ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"</pre>
           <p style="margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">OMP 18.0.6 or newer must already be installed; Triss only probes it and never runs the installer. OMP defaults to worktree isolation, but that is not host-filesystem confinement. Default credential mode is <code style="font-family: var(--font-mono);">best_effort_raw</code>; add <code style="font-family: var(--font-mono);">--protect-credentials</code> when the selected key must stay behind the parent-owned proxy.</p>
         </div>
@@ -106,7 +114,7 @@ $ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create res
         <pre style="margin-top: 22px; border: 1px solid var(--color-border-subtle); background: #08090b; padding: 18px 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.95; white-space: pre-wrap; color: var(--color-text-code);">$ triss ask --paths "src/**/*.js" \\
     --question "where is the API key read?"
 
-  47 files · 18.3K in / 2.4K out via flash (off-peak)
+  47 files · 18.3K in / 2.4K out via zai/glm-5.2
   src/config.js, src/mcp/server.js
 
 cost: $0.0056 off-peak ($0.011 peak)</pre>
@@ -115,7 +123,7 @@ cost: $0.0056 off-peak ($0.011 peak)</pre>
           <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ git clone https://github.com/ayleen/triss-coworker.git
 $ cd triss-coworker && npm install && npm link
 $ triss --version && triss status</pre>
-          <p style="margin: 8px 0 0; font-size: 12.5px; color: var(--color-text-muted);">Verify with <code style="font-family: var(--font-mono); color: var(--color-accent);">triss status</code> — shows <code style="font-family: var(--font-mono);">worker flash/pro</code>, <code style="font-family: var(--font-mono);">key ✓</code>, and masked env sources. Keep in sync with <a href="https://github.com/ayleen/triss-coworker#readme" style="text-decoration: underline; text-underline-offset: 0.16em;">README</a>.</p>
+          <p style="margin: 8px 0 0; font-size: 12.5px; color: var(--color-text-muted);">Verify with <code style="font-family: var(--font-mono); color: var(--color-accent);">triss status</code> — it shows the default provider, native role models, credential readiness, endpoints, and masked config sources. Keep in sync with <a href="https://github.com/ayleen/triss-coworker#readme" style="text-decoration: underline; text-underline-offset: 0.16em;">README</a>.</p>
         </div>
         <div style="margin-top: 24px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px;">
           <a href="https://github.com/ayleen/triss-coworker/blob/main/docs/configuration.md" style="border: 1px solid var(--color-border-strong); padding: 8px 12px; font-family: var(--font-mono);">Configuration →</a>

@@ -155,83 +155,6 @@ test('estimateCost returns null for unknown models instead of treating them as f
   );
 });
 
-test('estimateCost distinguishes the free coding-plan endpoint from priced PAYG calls', () => {
-  const usage = { prompt_tokens: 643, cached_tokens: 0, completion_tokens: 53 };
-  assert.equal(estimateCost({ ...usage, model: 'zai-coding-plan/glm-5.2' }), 0);
-  // PAYG bills per token: 643 × $1.40/1M + 53 × $4.40/1M.
-  const payg = estimateCost({ ...usage, model: 'zai/glm-5.2' });
-  assert.ok(Math.abs(payg - (643 * 1.4e-6 + 53 * 4.4e-6)) < 1e-12);
-  // A model outside the published catalogue stays unknown rather than $0.
-  assert.equal(estimateCost({ ...usage, model: 'zai/glm-unreleased' }), null);
-});
-
-test('estimateCost prices Kimi models bare and prefixed, and keeps the subscription free', () => {
-  const usage = { prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
-  // ask/review logs bare ids; coder runs log opencode's moonshotai/ prefix —
-  // both must resolve to the same DEFAULT_PRICES row.
-  const bare = estimateCost({ ...usage, model: 'kimi-k3' });
-  assert.ok(Math.abs(bare - (1000 * 3.0e-6 + 100 * 15.0e-6)) < 1e-12);
-  assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k3' }), bare);
-  assert.equal(estimateCost({ ...usage, model: 'moonshotai-cn/kimi-k2.6' }),
-    estimateCost({ ...usage, model: 'kimi-k2.6' }));
-  // The coder defaults are priced too, at their distinct list rates (the
-  // highspeed variant is exactly 2× the code model).
-  const code = estimateCost({ ...usage, model: 'kimi-k2.7-code' });
-  assert.ok(Math.abs(code - (1000 * 0.95e-6 + 100 * 4.0e-6)) < 1e-12);
-  assert.equal(estimateCost({ ...usage, model: 'kimi-k2.7-code-highspeed' }), code * 2);
-  // The Kimi for Coding subscription is metered by the plan — known-free, like
-  // the Z.AI coding plan, not "unknown".
-  assert.equal(estimateCost({ ...usage, model: 'kimi-for-coding/k3' }), 0);
-  // An unpublished Moonshot model stays unknown rather than $0.
-  assert.equal(estimateCost({ ...usage, model: 'moonshotai/kimi-k99' }), null);
-});
-
-test('a TRISS_PRICE override for a Kimi id applies to both the bare and the prefixed form', () => {
-  // ask/review logs `kimi-k3`; coder runs log `moonshotai/kimi-k3`. Both are
-  // the same billed model, so ONE override key must cover both routes.
-  const envKey = 'TRISS_PRICE_KIMI_K3';
-  const before = process.env[envKey];
-  const usage = { prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
-  try {
-    process.env[envKey] = '0.000001,0.0000001,0.000005';
-    const expected = 1000 * 0.000001 + 100 * 0.000005;
-    for (const model of ['kimi-k3', 'moonshotai/kimi-k3', 'moonshotai-cn/kimi-k3']) {
-      assert.ok(
-        Math.abs(estimateCost({ ...usage, model }) - expected) < 1e-9,
-        `override must apply to ${model}`,
-      );
-    }
-  } finally {
-    if (before === undefined) delete process.env[envKey];
-    else process.env[envKey] = before;
-  }
-});
-
-test('the GLM flash preset is priced well below the turbo tier it replaced', () => {
-  const usage = { prompt_tokens: 100_000, cached_tokens: 0, completion_tokens: 4_000 };
-  const air = estimateCost({ ...usage, model: 'zai/glm-4.5-air' });
-  const turbo = estimateCost({ ...usage, model: 'zai/glm-5-turbo' });
-  assert.ok(air > 0 && turbo > 0);
-  assert.ok(air * 4 < turbo, `expected air (${air}) to be well under turbo (${turbo})`);
-});
-
-test('all coding-plan model ids are known free unless an explicit price override is set', () => {
-  const model = 'zai-coding-plan/glm-5.1';
-  const envKey = 'TRISS_PRICE_ZAI_CODING_PLAN_GLM_5_1';
-  const before = process.env[envKey];
-  const usage = { model, prompt_tokens: 1000, cached_tokens: 0, completion_tokens: 100 };
-  try {
-    delete process.env[envKey];
-    assert.equal(estimateCost(usage), 0);
-
-    process.env[envKey] = '0.000001,0.0000001,0.000005';
-    assert.ok(Math.abs(estimateCost(usage) - 0.0015) < 1e-9);
-  } finally {
-    if (before === undefined) delete process.env[envKey];
-    else process.env[envKey] = before;
-  }
-});
-
 test('estimateCost honours TRISS_PRICE_<MODEL> env override', () => {
   const before = process.env.TRISS_PRICE_FAKE_MODEL;
   process.env.TRISS_PRICE_FAKE_MODEL = '0.000001,0.0000001,0.000005';
@@ -402,7 +325,7 @@ test('logUsage records explicit call_id and parent_call_id', () => {
 
 test('logUsage keeps cost_usd numeric and marks an unpriced model as unknown', () => {
   const r = logUsage({
-    model: 'zai/glm-unreleased',
+    model: 'opencode-go/unreleased',
     prompt_tokens: 10,
     completion_tokens: 5,
     label: 'unknown-price',

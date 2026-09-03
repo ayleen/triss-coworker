@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 
 import { handleToolRequest, MCP_SERVER_VERSION } from '../src/mcp/server.js';
 import { emptyReviewResponseMessage } from '../src/review-defaults.js';
+import { createExecutionResult } from '../src/transports/result.js';
 
 test('MCP server advertises the package version', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -196,18 +197,18 @@ test('MCP server projects TRISS_PROVIDER_EMPTY via handleToolRequest structuredC
 
   // Through the real callModel seam (resolved GLM, empty content) — not just a synthetic throw
   const viaCallModel = await handleToolRequest(
-    { params: { name: 'triss_review', arguments: { base: 'main', provider: 'glm', model: 'glm-5.2' } } },
+    { params: { name: 'triss_review', arguments: { base: 'main', provider: 'zai', model: 'glm-5.2' } } },
     {},
     {
       findTool: async () => ({
         handler: async (_args, deps) => {
           // callModel itself throws the shared actionable guidance with code TRISS_PROVIDER_EMPTY
           const result = await callModel(
-            { provider: 'glm', model: 'zai/glm-5.2', messages: [{ role: 'user', content: 'hi' }], purpose: 'review' },
+            { provider: 'zai', model: 'glm-5.2', messages: [{ role: 'user', content: 'hi' }], purpose: 'review' },
             {
-              resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2', baseUrl: 'https://api.z.ai/api/paas/v4' }),
-              requestTimeoutMs: () => undefined,
-              chat: async () => ({ choices: [{ message: { content: '' } }], usage: {} }),
+              executeModelTask: async () => ({
+                result: createExecutionResult({ text: '', finishReason: 'stop' }),
+              }),
               signal: deps.signal,
               onReasoning: deps.onReasoning,
             },
@@ -279,11 +280,11 @@ test('MCP server error structuredContent passes Client validation via InMemoryTr
           ...reviewTool,
           handler: async (_args, deps) => {
             const result = await cm(
-              { provider: 'glm', model: 'zai/glm-5.2', messages: [{ role: 'user', content: 'hi' }], purpose: 'review' },
+              { provider: 'zai', model: 'glm-5.2', messages: [{ role: 'user', content: 'hi' }], purpose: 'review' },
               {
-                resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2', baseUrl: 'https://api.z.ai/api/paas/v4' }),
-                requestTimeoutMs: () => undefined,
-                chat: async () => ({ choices: [{ message: { content: '' } }], usage: {} }),
+                executeModelTask: async () => ({
+                  result: createExecutionResult({ text: '', finishReason: 'stop' }),
+                }),
                 signal: deps.signal,
                 onReasoning: deps.onReasoning,
               },
@@ -327,10 +328,9 @@ test('review: frozen provider cause is wrapped without mutating (LOW)', async ()
   // The executor surfaces {ok:false, code, cause: frozen}; runReviewWithDeps must wrap without mutating.
   let caught;
   try {
-    await runReviewWithDeps(undefined, { base: 'main', provider: 'glm', model: 'glm-5.2', stdin: false }, {
+    await runReviewWithDeps(undefined, { base: 'main', provider: 'zai', model: 'glm-5.2', stdin: false }, {
       gitDiff: () => 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n',
-      resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2' }),
-      chat: async () => { throw frozen; },
+      executeModelTask: async () => { throw frozen; },
       hasCommand: () => false,
       currentBranch: () => 'main',
       defaultBranch: () => 'main',

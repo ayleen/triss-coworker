@@ -3,8 +3,8 @@
 
 import { spawnSync } from 'node:child_process';
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { git } from '../git.js';
 import { positiveIntegerOption } from '../option-validation.js';
 
@@ -30,6 +30,10 @@ Format: short imperative subject line (≤72 chars), blank line, then
 optional body wrapped at 72 chars explaining *why*.`;
 
 export async function runCommitMsg(opts) {
+  return runCommitMsgWithDeps(opts);
+}
+
+export async function runCommitMsgWithDeps(opts, deps = {}) {
   const maxTokens = positiveIntegerOption(opts.maxTokens, '--max-tokens', 2048);
   const diff = git(['diff', '--staged']);
   if (!diff.trim()) {
@@ -58,21 +62,30 @@ export async function runCommitMsg(opts) {
     .filter(Boolean)
     .join('\n');
 
-  const model = resolveModel(opts.model);
-  process.stderr.write(pc.dim(`[triss/commit-msg] model=${model} files=${fileList.length}\n`));
+  const execute = deps.executeModelTask || executeModelTask;
+  const output = await execute({
+    task: 'commit-msg',
+    provider: opts.provider,
+    model: opts.model,
+    engine: opts.engine,
+    effort: opts.effort,
+    input: {
+      maxOutputTokens: maxTokens,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userPrompt },
+      ],
+      label: 'triss/commit-msg',
+    },
+  }, deps.runtimeDeps);
+  process.stderr.write(
+    pc.dim(
+      `[triss/commit-msg] provider=${output.resolved.providerId} model=${output.resolved.publicModel} files=${fileList.length}\n`,
+    ),
+  );
 
-  const resp = await chat({
-    model,
-    maxTokens,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: userPrompt },
-    ],
-    label: 'triss/commit-msg',
-  });
-
-  let message = resp.choices?.[0]?.message?.content?.trim() || '';
-  if (!message) throw new Error('Worker returned empty message — try larger --max-tokens');
+  let message = output.result.text.trim();
+  if (!message) throw new Error('Model returned empty message — try larger --max-tokens');
   // Defensive: strip accidental triple-backtick fences if the model adds them.
   if (message.startsWith('```')) {
     message = message.replace(/^```[a-z]*\n?/, '').replace(/```$/, '').trim();
@@ -81,12 +94,12 @@ export async function runCommitMsg(opts) {
   if (opts.apply) {
     const r = spawnSync('git', ['commit', '-m', message], { stdio: 'inherit' });
     if (r.status !== 0) throw new Error('git commit failed');
-    process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/commit-msg') + '\n'));
+    process.stderr.write(pc.dim('\n' + reportNormalizedUsage(output.result, 'triss/commit-msg') + '\n'));
     return;
   }
 
   process.stdout.write(message + '\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/commit-msg') + '\n'));
+  process.stderr.write(pc.dim('\n' + reportNormalizedUsage(output.result, 'triss/commit-msg') + '\n'));
 
   if (opts.print) {
     process.stderr.write(

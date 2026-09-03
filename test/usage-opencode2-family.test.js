@@ -21,8 +21,8 @@ import {
 test('resolveBillingMode: opencode2 maps explicitly to the OpenCode family', () => {
   // Same model id under either engine identity resolves identically.
   assert.equal(resolveBillingMode({ billing_model: 'opencode-go/deepseek-v4-flash', engine: 'opencode2' }), 'unknown');
-  assert.equal(resolveBillingMode({ billing_model: 'zai/glm-4.7', engine: 'opencode2' }), 'payg');
-  assert.equal(resolveBillingMode({ billing_model: 'opencode/some-model', engine: 'opencode2', freeModels: new Set(['some-model']) }), 'free');
+  assert.equal(resolveBillingMode({ billing_model: 'zai/glm-4.7', engine: 'opencode2' }), 'subscription');
+  assert.equal(resolveBillingMode({ billing_model: 'opencode-zen/some-model', engine: 'opencode2', freeModels: new Set(['some-model']) }), 'free');
 });
 
 test('estimateCanonicalCost: usage_source=opencode2 gets OpenCode per-step coverage rules', () => {

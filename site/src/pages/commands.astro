@@ -16,7 +16,7 @@ import { COMMANDS } from "../data/commands.js";
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 36px; border-bottom: 1px solid var(--color-border);">
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">commands</div>
     <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong);">Every command, one handbook.</h1>
-    <p style="margin: 18px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">Grouped by what they do: delegate to the worker, work locally, or set things up. The agent decides when — you just need to know they exist.</p>
+    <p style="margin: 18px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">Grouped by what they do: delegate through a provider, work locally, or configure the runtime.</p>
     <div style="margin-top: 28px; max-width: 520px; position: relative;">
       <label for="cmd-search" style="position: absolute; left: -9999px;">Filter commands</label>
       <input id="cmd-search" type="text" placeholder="filter commands… (ask, review, --question)" aria-label="Filter commands" style="width: 100%; background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 12px 14px; font-family: var(--font-mono); font-size: 13.5px; color: var(--color-text); outline: none;" />
@@ -66,7 +66,7 @@ import { COMMANDS } from "../data/commands.js";
         name.style.cssText = "font-family:var(--font-mono); font-size:15px; font-weight:600; color:var(--color-text-heading);";
         name.textContent = "triss " + c.name;
         const tier = document.createElement("span");
-        tier.style.cssText = "font-family:var(--font-mono); font-size:11px; padding:4px 8px; border:1px solid var(--color-border-strong); color:" + (c.tier === "pro" ? "#e0a458" : c.tier === "flash" ? "var(--color-accent)" : "var(--color-text-muted)") + ";";
+        tier.style.cssText = "font-family:var(--font-mono); font-size:11px; padding:4px 8px; border:1px solid var(--color-border-strong); color:" + (c.tier === "main" ? "#e0a458" : c.tier === "small" ? "var(--color-accent)" : "var(--color-text-muted)") + ";";
         tier.textContent = c.tier;
         const group = document.createElement("span");
         group.style.cssText = "font-family:var(--font-mono); font-size:11px; color:var(--color-text-label);";

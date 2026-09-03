@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 const loadCommands = async () => import('../src/commands/coder.js');
 const loadConfig = async () => import('../src/opencode-config.js');
@@ -99,7 +100,10 @@ const makeSh = () => {
       return { status: 0, stdout: `${OC2_BIN}\n`, stderr: '' };
     }
     if (args && args[0] === 'run' && args[1] === '--help') {
-      return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+      return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
+    }
+    if (args && args[0] === '--version' && cmd === 'opencode') {
+      return { status: 0, stdout: '1.18.22\n', stderr: '' };
     }
     if (args && args[0] === '--version' && cmd !== 'npm') {
       return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
@@ -170,7 +174,9 @@ test('V1 --isolate --session with a corrupted sessions.json cleans the worktree'
   // The V1 default model needs the Z.AI key to pass the credential gate and
   // reach the session lookup that must fail closed.
   const snapZai = process.env.ZHIPU_API_KEY;
+  const snapDefaultProvider = process.env.TRISS_DEFAULT_PROVIDER;
   process.env.ZHIPU_API_KEY = 'zk-fake';
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
   const { sh } = makeSh();
   let threw = null;
   try {
@@ -178,12 +184,15 @@ test('V1 --isolate --session with a corrupted sessions.json cleans the worktree'
       spawnSync: sh,
       cwd: home,
       effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+      providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
     });
   } catch (err) {
     threw = err;
   }
   if (snapZai === undefined) delete process.env.ZHIPU_API_KEY;
   else process.env.ZHIPU_API_KEY = snapZai;
+  if (snapDefaultProvider === undefined) delete process.env.TRISS_DEFAULT_PROVIDER;
+  else process.env.TRISS_DEFAULT_PROVIDER = snapDefaultProvider;
   assert.ok(threw, 'the corrupted store must fail closed');
   assert.match(threw.message, /not valid JSON/u);
   const wtRoot = join(home, '.triss', 'wt');

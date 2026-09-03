@@ -19,12 +19,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 const BIN = join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'bin', 'triss.js');
 
@@ -81,13 +80,9 @@ for (const [label, extraOpts] of [
       HOME: process.env.HOME,
       ROOT: process.env.TRISS_PROJECT_ROOT,
       ZHIPU: process.env.ZHIPU_API_KEY,
-      MODEL: process.env.TRISS_CODER_MODEL,
-      SMALL: process.env.TRISS_CODER_SMALL_MODEL,
     };
     process.env.HOME = dir;
     process.env.TRISS_PROJECT_ROOT = dir;
-    delete process.env.TRISS_CODER_MODEL;
-    delete process.env.TRISS_CODER_SMALL_MODEL;
     process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
     t.after(() => {
       process.env.HOME = saved.HOME;
@@ -95,10 +90,6 @@ for (const [label, extraOpts] of [
       else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
       if (saved.ZHIPU === undefined) delete process.env.ZHIPU_API_KEY;
       else process.env.ZHIPU_API_KEY = saved.ZHIPU;
-      if (saved.MODEL === undefined) delete process.env.TRISS_CODER_MODEL;
-      else process.env.TRISS_CODER_MODEL = saved.MODEL;
-      if (saved.SMALL === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
-      else process.env.TRISS_CODER_SMALL_MODEL = saved.SMALL;
       rmSync(dir, { recursive: true, force: true });
     });
 
@@ -113,6 +104,7 @@ for (const [label, extraOpts] of [
         ...extraOpts,
       }, {
         spawnSync: CRUSH_PIN_SH,
+        providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
         spawn: () => {
           spawned = true;
           throw new Error('the engine must never spawn without its proxy');
@@ -172,172 +164,59 @@ test('MCP coderStatusHandler renders mode + MCP-specific remediation for both fa
 });
 
 test('runCoderRun forwards a RAW protectCredentials value — resolver normalizes it', async (t) => {
-  const restore = withLegacyHome('triss-truthy-');
+  const restore = withCanonicalHome('triss-truthy-');
   t.after(restore);
   const { runCoderRun } = await import('../src/commands/coder.js');
   const { fakeEffectiveOpenCodeConfig } = await import('./_opencode-effective-config.js');
   // A STRING 'true' as a caller might send over MCP: the narrowing used to
   // happen at the call sites; now the raw value reaches the resolver.
   const output = [];
-  const spawnFn = () => {
-    const child = new EventEmitter();
-    child.pid = 424100;
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    setImmediate(() => {
-      child.stdout.end(JSON.stringify({ type: 'text', sessionID: 'ses_truthy', part: { text: 'ok' } }) + '\n' +
-        JSON.stringify({ type: 'step_finish', sessionID: 'ses_truthy', reason: 'stop' }) + '\n');
-      setImmediate(() => child.emit('close', 0, null));
-    });
-    return child;
-  };
   await runCoderRun('do work', { protectCredentials: 'true' }, {
-    spawn: spawnFn,
-    spawnSync: () => ({ status: 1, stdout: '', error: null }),
+    spawnSync: (cmd, args) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : { status: 1, stdout: '', error: null },
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
     stdoutWrite: (s) => output.push(s),
   });
   const envelope = JSON.parse(output.join('').trim());
   assert.equal(envelope.credential_mode, 'protected_proxy');
 });
 
-// ─── migration warning: exactly once PER COMMAND INVOCATION ───────────────────
+// ─── canonical provider test environment ────────────────────────────────────
 
-const LEGACY_LINE = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1';
-
-function withLegacyHome(prefix) {
+function withCanonicalHome(prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const saved = {
     HOME: process.env.HOME,
     ROOT: process.env.TRISS_PROJECT_ROOT,
+    DEFAULT_PROVIDER: process.env.TRISS_DEFAULT_PROVIDER,
     ZHIPU: process.env.ZHIPU_API_KEY,
-    ZEN: process.env.OPENCODE_API_KEY,
-    MODEL: process.env.TRISS_CODER_MODEL,
-    SMALL: process.env.TRISS_CODER_SMALL_MODEL,
+    MODEL: process.env.TRISS_ZAI_MODEL,
+    SMALL: process.env.TRISS_ZAI_SMALL_MODEL,
     USAGE: process.env.TRISS_USAGE_LOG,
   };
   process.env.HOME = dir;
   process.env.TRISS_PROJECT_ROOT = dir;
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
   process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
-  process.env.OPENCODE_API_KEY = 'sk-zen-warn-fake';
-  delete process.env.TRISS_CODER_MODEL;
-  delete process.env.TRISS_CODER_SMALL_MODEL;
+  process.env.TRISS_ZAI_MODEL = 'glm-5.2';
+  process.env.TRISS_ZAI_SMALL_MODEL = 'glm-5-turbo';
   process.env.TRISS_USAGE_LOG = '0';
-  writeFileSync(join(dir, '.triss.env'), LEGACY_LINE + '\n');
   return () => {
     process.env.HOME = saved.HOME;
     if (saved.ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
+    if (saved.DEFAULT_PROVIDER === undefined) delete process.env.TRISS_DEFAULT_PROVIDER;
+    else process.env.TRISS_DEFAULT_PROVIDER = saved.DEFAULT_PROVIDER;
     if (saved.ZHIPU === undefined) delete process.env.ZHIPU_API_KEY;
     else process.env.ZHIPU_API_KEY = saved.ZHIPU;
-    if (saved.ZEN === undefined) delete process.env.OPENCODE_API_KEY;
-    else process.env.OPENCODE_API_KEY = saved.ZEN;
-    if (saved.MODEL === undefined) delete process.env.TRISS_CODER_MODEL;
-    else process.env.TRISS_CODER_MODEL = saved.MODEL;
-    if (saved.SMALL === undefined) delete process.env.TRISS_CODER_SMALL_MODEL;
-    else process.env.TRISS_CODER_SMALL_MODEL = saved.SMALL;
+    if (saved.MODEL === undefined) delete process.env.TRISS_ZAI_MODEL;
+    else process.env.TRISS_ZAI_MODEL = saved.MODEL;
+    if (saved.SMALL === undefined) delete process.env.TRISS_ZAI_SMALL_MODEL;
+    else process.env.TRISS_ZAI_SMALL_MODEL = saved.SMALL;
     if (saved.USAGE === undefined) delete process.env.TRISS_USAGE_LOG;
     else process.env.TRISS_USAGE_LOG = saved.USAGE;
     rmSync(dir, { recursive: true, force: true });
   };
 }
-
-test('migration warning fires once per invocation: two sequential runs warn twice', async (t) => {
-  const restore = withLegacyHome('triss-warn-twice-');
-  t.after(restore);
-  const { runCoderRun } = await import('../src/commands/coder.js');
-  const { fakeEffectiveOpenCodeConfig } = await import('./_opencode-effective-config.js');
-  const errs = [];
-  const origErr = process.stderr.write;
-  process.stderr.write = (s) => { errs.push(String(s)); return true; };
-  try {
-    for (const label of ['one', 'two']) {
-      const session = `ses_warn_${label}`;
-      const spawnFn = () => {
-        const child = new EventEmitter();
-        child.pid = 424000 + (label === 'one' ? 1 : 2);
-        child.stdout = new PassThrough();
-        child.stderr = new PassThrough();
-        setImmediate(() => {
-          child.stdout.end(JSON.stringify({ type: 'text', sessionID: session, part: { text: 'ok' } }) + '\n' +
-            JSON.stringify({ type: 'step_finish', sessionID: session, reason: 'stop' }) + '\n');
-          setImmediate(() => child.emit('close', 0, null));
-        });
-        return child;
-      };
-      await runCoderRun('do work', {}, {
-        spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', error: null }),
-        effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-        stdoutWrite: () => {},
-      });
-    }
-  } finally {
-    process.stderr.write = origErr;
-  }
-  const warnings = errs.filter((s) => s.includes('is deprecated and ignored'));
-  assert.equal(warnings.length, 2, 'each command invocation must warn exactly once');
-});
-
-test('coder init --engine crush prints the migration warning too', async (t) => {
-  const restore = withLegacyHome('triss-warn-crush-');
-  t.after(restore);
-  const { runCoderInit } = await import('../src/commands/coder.js');
-  // crush present at the pinned version; `crush models use` no-ops.
-  const sh = (cmd, argv) => {
-    if (cmd === 'crush' && argv?.[0] === '--version') {
-      return { status: 0, stdout: 'crush version v0.1.6\n', stderr: '', error: null };
-    }
-    if (cmd === 'crush' && argv?.[0] === 'models') {
-      return { status: 0, stdout: '', stderr: '', error: null };
-    }
-    return { status: 1, stdout: '', stderr: '', error: null };
-  };
-  const errs = [];
-  const origErr = process.stderr.write;
-  process.stderr.write = (s) => { errs.push(String(s)); return true; };
-  try {
-    await runCoderInit({ global: true, engine: 'crush' }, { spawnSync: sh });
-  } finally {
-    process.stderr.write = origErr;
-  }
-  const warnings = errs.filter((s) => s.includes('is deprecated and ignored'));
-  assert.equal(warnings.length, 1, 'crush init must warn exactly once');
-});
-
-test('nested setup does not duplicate the migration warning on one opencode2 init', async (t) => {
-  const restore = withLegacyHome('triss-warn-oc2-');
-  t.after(restore);
-  const commands = await import('../src/commands/coder.js');
-  // Minimal V2 binary resolution fakes (same shape as coder-opencode2-init).
-  const binDir = mkdtempSync(join(tmpdir(), 'triss-warn-oc2-bin-'));
-  const oc2 = join(binDir, 'opencode2');
-  writeFileSync(oc2, '#!/bin/sh\nexit 0\n');
-  chmodSync(oc2, 0o755);
-  t.after(() => rmSync(binDir, { recursive: true, force: true }));
-  const sh = (cmd, args) => {
-    if (cmd === 'which' && args?.[0] === 'opencode2') return { status: 0, stdout: `${oc2}\n`, stderr: '' };
-    if (cmd !== 'opencode' && args?.[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
-    if (args?.[0] === 'run' && args?.[1] === '--help') return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
-    return { status: 1, stdout: '', stderr: '', error: null };
-  };
-  const errs = [];
-  const origErr = process.stderr.write;
-  process.stderr.write = (s) => { errs.push(String(s)); return true; };
-  try {
-    await commands.runCoderInit(
-      { engine: 'opencode2', provider: 'opencode-go', scope: 'global', yes: true },
-      {
-        spawnSync: sh,
-        cwd: process.env.TRISS_PROJECT_ROOT,
-        lock: async () => ({ release() {} }),
-        fetch: async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: 'deepseek-v4-flash' }] }) }),
-        confirmInstall: async () => true,
-      },
-    );
-  } finally {
-    process.stderr.write = origErr;
-  }
-  const warnings = errs.filter((s) => s.includes('is deprecated and ignored'));
-  assert.equal(warnings.length, 1, 'one opencode2 init must warn exactly once despite nested setup');
-});

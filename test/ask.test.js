@@ -7,26 +7,43 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAsk, runAskWithDeps } from '../src/commands/ask.js';
-import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(ROOT, 'bin', 'triss.js');
 
-test('ASK-01: runAsk forwards GLM provider and model to model resolution', async () => {
+function runtimeResponse(request, text = 'ok') {
+  const providerId = request.provider || 'openai-compatible';
+  const modelId = request.model?.includes('/') ? request.model.split('/').slice(1).join('/') : (request.model || 'test');
+  return {
+    resolved: {
+      providerId,
+      modelId,
+      publicModel: `${providerId}/${modelId}`,
+    },
+    result: {
+      text,
+      reasoning: null,
+      usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      finishReason: 'stop',
+      rawMetadata: null,
+    },
+  };
+}
+
+test('ASK-01: runAsk rejects legacy providers before corpus I/O', async () => {
   await assert.rejects(
     () => runAsk({
       paths: ['not-read-because-model-resolution-runs-first'],
       question: 'What is this?',
       provider: 'glm',
-      model: 'zai/',
+      model: 'glm-5.2',
     }),
-    /GLM model id cannot be empty/,
+    /Invalid provider "glm"/,
   );
 });
 
-test('ASK-02: runAskWithDeps forwards the resolved provider, model, and base URL to chat', async () => {
-  let resolutionInput;
-  let chatInput;
+test('ASK-02: runAskWithDeps forwards canonical model selection to the shared runtime', async () => {
+  let runtimeInput;
   const stdoutWrite = process.stdout.write;
   const stderrWrite = process.stderr.write;
   process.stdout.write = () => true;
@@ -36,18 +53,16 @@ test('ASK-02: runAskWithDeps forwards the resolved provider, model, and base URL
       {
         paths: ['package.json'],
         question: 'What is this?',
-        provider: 'glm',
-        model: 'zai/glm-5.2',
+        provider: 'zai',
+        model: 'glm-5.2',
+        engine: 'direct',
+        effort: 'high',
         stream: false,
       },
       {
-        resolveModelRequest(input) {
-          resolutionInput = input;
-          return { provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL };
-        },
-        async chat(input) {
-          chatInput = input;
-          return { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] };
+        async executeModelTask(input) {
+          runtimeInput = input;
+          return runtimeResponse(input);
         },
       },
     );
@@ -56,23 +71,18 @@ test('ASK-02: runAskWithDeps forwards the resolved provider, model, and base URL
     process.stderr.write = stderrWrite;
   }
 
-  assert.deepEqual(resolutionInput, { provider: 'glm', model: 'zai/glm-5.2' });
-  assert.equal(chatInput.provider, 'glm');
-  assert.equal(chatInput.model, 'glm-5.2');
-  assert.equal(chatInput.baseUrl, ZAI_PAYG_BASE_URL);
-  assert.equal(chatInput.label, 'triss/ask');
+  assert.equal(runtimeInput.task, 'ask');
+  assert.equal(runtimeInput.provider, 'zai');
+  assert.equal(runtimeInput.model, 'glm-5.2');
+  assert.equal(runtimeInput.engine, 'direct');
+  assert.equal(runtimeInput.effort, 'high');
+  assert.equal(runtimeInput.input.label, 'triss/ask');
 });
 
 test('ASK-03: runAsk ignores Commander-like second arguments with dependency-shaped fields', async () => {
   const commanderArg = {
-    chat() {
-      throw new Error('Commander arg was used as chat deps');
-    },
-    chatStream() {
-      throw new Error('Commander arg was used as chatStream deps');
-    },
-    resolveModelRequest() {
-      throw new Error('Commander arg was used as resolver deps');
+    executeModelTask() {
+      throw new Error('Commander arg was used as runtime deps');
     },
   };
   await assert.rejects(
@@ -80,47 +90,38 @@ test('ASK-03: runAsk ignores Commander-like second arguments with dependency-sha
       paths: ['not-read-because-model-resolution-runs-first'],
       question: 'What is this?',
       provider: 'glm',
-      model: 'zai/',
+      model: 'glm-5.2',
     }, commanderArg),
-    /GLM model id cannot be empty/,
+    /Invalid provider "glm"/,
   );
 });
 
-test('ASK-04: CLI ask preserves a successful GLM top-level final_text response', async () => {
+test('ASK-04: CLI ask prints the normalized runtime text', async () => {
   const stdoutWrite = process.stdout.write;
   const stderrWrite = process.stderr.write;
-  const processExit = process.exit;
   const captured = [];
   process.stdout.write = (chunk) => {
     captured.push(String(chunk));
     return true;
   };
   process.stderr.write = () => true;
-  process.exit = (code) => {
-    throw new Error(`unexpected process.exit(${code})`);
-  };
 
   try {
     await runAskWithDeps(
       {
         paths: ['package.json'],
         question: 'What is this?',
-        provider: 'glm',
-        model: 'flash',
+        provider: 'zai',
+        model: 'glm-5.2',
         stream: false,
       },
       {
-        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
-        chat: async () => ({
-          final_text: 'The final answer.',
-          usage: { prompt_tokens: 10, completion_tokens: 4 },
-        }),
+        executeModelTask: async (input) => runtimeResponse(input, 'The final answer.'),
       },
     );
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;
-    process.exit = processExit;
   }
 
   assert.match(captured.join(''), /The final answer\./);
@@ -135,15 +136,17 @@ test('ASK-05: the real ask stdin caller keeps the helper default trim behavior',
     await runAskWithDeps(
       { stdin: true, question: 'q', stream: false },
       {
-        resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-        chat: async (input) => {
+        executeModelTask: async (input) => {
           captured = input;
-          return { final_text: 'ok', usage: {} };
+          return {
+            resolved: { providerId: 'openai-compatible', publicModel: 'openai-compatible/test' },
+            result: { text: 'ok', reasoning: null, usage: {}, finishReason: 'stop', rawMetadata: null },
+          };
         },
       },
     );
     process.stdout.write = originalWrite;
-    console.log(JSON.stringify(captured.messages[1].content));
+    console.log(JSON.stringify(captured.input.messages[1].content));
   `;
   const raw = '  leading\r\nbody\r\ntrailing  \n';
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
@@ -168,27 +171,25 @@ test('ASK-06: ask applies the direct CLI 8192 max-tokens default and honors an e
     await runAskWithDeps(
       { paths: ['package.json'], question: 'What is this?', stream: false },
       {
-        resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-        chat: async (request) => {
+        executeModelTask: async (request) => {
           defaultRequest = request;
-          return { final_text: 'ok', usage: {} };
+          return runtimeResponse(request);
         },
       },
     );
-    assert.equal(defaultRequest.maxTokens, 8192);
+    assert.equal(defaultRequest.input.maxOutputTokens, 8192);
 
     let explicitRequest;
     await runAskWithDeps(
       { paths: ['package.json'], question: 'What is this?', maxTokens: 12_345, stream: false },
       {
-        resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-        chat: async (request) => {
+        executeModelTask: async (request) => {
           explicitRequest = request;
-          return { final_text: 'ok', usage: {} };
+          return runtimeResponse(request);
         },
       },
     );
-    assert.equal(explicitRequest.maxTokens, 12_345);
+    assert.equal(explicitRequest.input.maxOutputTokens, 12_345);
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;
@@ -197,7 +198,7 @@ test('ASK-06: ask applies the direct CLI 8192 max-tokens default and honors an e
 
 test('ASK-07: invalid max-tokens fails before corpus or model I/O', async () => {
   for (const maxTokens of [0, -1, 'abc', 1.5]) {
-    let resolved = false;
+    let executed = false;
     await assert.rejects(
       () => runAskWithDeps({
         paths: ['missing-and-must-not-be-read'],
@@ -205,14 +206,14 @@ test('ASK-07: invalid max-tokens fails before corpus or model I/O', async () => 
         maxTokens,
         stream: false,
       }, {
-        resolveModelRequest: () => {
-          resolved = true;
-          return { provider: 'worker', model: 'test' };
+        executeModelTask: async () => {
+          executed = true;
+          throw new Error('unreachable');
         },
       }),
       /max-tokens must be a positive integer/,
     );
-    assert.equal(resolved, false);
+    assert.equal(executed, false);
   }
 });
 

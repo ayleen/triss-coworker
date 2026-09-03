@@ -1,5 +1,9 @@
 # OpenAI-compatible coder provider plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Implementation contract for running `triss coder` through a user-supplied
 OpenAI-compatible Chat Completions endpoint without adding a provider-specific
 branch to Triss for every vendor.

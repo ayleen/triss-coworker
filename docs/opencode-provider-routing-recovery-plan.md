@@ -1,5 +1,9 @@
 # OpenCode provider routing and OpenCode 2 recovery plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Status: implementation plan. No production code is changed by this document.
 
 This plan supersedes the exact OpenCode 2 build pin, unconditional

@@ -23,6 +23,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createExecutionResult } from '../src/transports/result.js';
 
 // writeHandler persists usage, and src/usage.js binds its log path from
 // homedir() at module load. Redirect HOME before the first import that reaches
@@ -82,6 +83,18 @@ function snapshot(vars) {
     }
   };
 }
+function modelDeps(content) {
+  return {
+    executeModelTask: async () => ({
+      result: createExecutionResult({
+        text: content,
+        finishReason: 'stop',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+    }),
+  };
+}
+
 
 const WORKER_VARS = ['TRISS_WORKER_API_KEY'];
 const ATLASSIAN_VARS = ['ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN'];
@@ -110,7 +123,7 @@ test('WRITE-01: writeHandler without target returns generated content', async ()
 
   const { writeHandler } = await import(`../src/mcp/handlers.js?write-01=${Date.now()}`);
   try {
-    const result = await writeHandler({ spec: 'a hello world script in JS' });
+    const result = await writeHandler({ spec: 'a hello world script in JS' }, modelDeps('console.log("hello")\n'));
     assert.match(result, /console\.log\("hello"\)/);
   } finally {
     await mock.close();
@@ -134,7 +147,7 @@ test('WRITE-02: writeHandler with target writes to disk and returns success', as
   const target = join(dir, 'out.js');
   const { writeHandler } = await import(`../src/mcp/handlers.js?write-02=${Date.now()}`);
   try {
-    const result = await writeHandler({ spec: 'log 42', target });
+    const result = await writeHandler({ spec: 'log 42', target }, modelDeps('```js\nconsole.log(42)\n```\n'));
     assert.match(result, /✓ Wrote/);
     const written = readFileSync(target, 'utf8');
     assert.equal(written.trim(), 'console.log(42)');

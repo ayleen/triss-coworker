@@ -1,5 +1,9 @@
 # How Triss talks to GLM — clients, engines, and usage modes
 
+> **Archived pre-0.42 reference.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 This document is the single reference for **every way Triss interacts with
 GLM** (Z.AI's GLM-5.2 / GLM-5-turbo / GLM-4.7 models). It covers the four
 engine "clients" Triss drives, how the API key reaches GLM, how models are
@@ -247,75 +251,51 @@ The human (non-`--json`) output is the same facts pretty-printed: it shows each
 model's `compatibility`, lists the main and small winning sources **separately**,
 and prints the credential-readiness and `catalogue_status` line.
 
-### Persistent switch (one transactional command)
+### Persistent provider roles
+
+Provider roles live in the canonical provider profile. Configure Z.AI globally or
+for the current project:
 
 ```bash
-# Interactive GLM switch through opencode:
-triss coder model set --engine opencode --provider zai --global
-
-# Non-interactive persistent GLM roles through crush (adapter maps to atoms):
-triss coder model set zai-coding-plan/glm-5.2 \
-  --small zai-coding-plan/glm-5-turbo --engine crush --global --yes
+triss config set --global TRISS_ZAI_MODEL glm-5.2
+triss config set --global TRISS_ZAI_SMALL_MODEL glm-5-turbo
 ```
 
-Provider aliases are normalized consistently for every engine. For example,
-`--provider glm`, `--provider z.ai`, and `--provider zhipu` are equivalent to
-`--provider zai`, including with `--engine crush`.
+Use `--local` instead of `--global` for project scope. Engine-specific config is
+derived by `triss coder init --engine <engine> --provider zai`; provider aliases
+are rejected.
 
-Engine and one scope flag (`--global` / `--local`) are required for a
-non-interactive persistent write. Main and small must share compatible
-credentials and, for Z.AI, the same verified plan prefix. The command preserves
-every unrelated config field and the full safety policy, writes atomically with
-a backup under `~/.config/triss/backups/coder-model/`, re-audits, and prints the
-effective pair plus a rollback command. `--allow-unsafe-bash` permits
-model-field repair when an existing config lacks the deny-first policy.
+### Provider-role precedence
 
-### Init-time precedence (per field, highest first)
+Each field resolves independently:
 
-- **Env override** — `TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`, verbatim,
-  **but only if it belongs to the chosen provider**. An explicit `--provider`
-  beats a stale cross-provider preset (e.g. `--provider opencode-zen` with a
-  leftover `TRISS_CODER_MODEL=zai-coding-plan/glm-5.2` ignores and warns).
-- **Existing `opencode.json`** — a model already in the file that matches the
-  chosen provider is reused (idempotent).
-- **Interactive** — on a TTY, init prompts for main and small.
-- **Default** — `zai-coding-plan/glm-5.2` (large) / `glm-5-turbo` (small); the
-  Z.AI prefix comes from plan detection (§3).
+1. parent-process environment;
+2. project `.triss.env`;
+3. global Triss environment;
+4. provider registry default.
 
-Role/runtime precedence is split (not one flat list): a Triss **main** run
-follows one-run override → shell `TRISS_CODER_MODEL` → project env → global env
-→ default; **small/fast** is read straight from `opencode.json.small_model`
-because Triss cannot pass a small-model flag at run time; a **direct**
-`opencode run` reads `opencode.json.model`. `triss coder models` reports the
-winning source per role; a shell/project override that would shadow a persistent
-change is reported with the exact `unset` / `--local` alternative (no `--force`).
+`triss coder init` projects the resolved provider profile into the selected
+engine without creating coder-specific model pins. OpenCode keeps its native
+`model` and `small_model` fields synchronized with that profile; OMP receives
+both roles in its run-private overlay; Crush maps the Z.AI role to its protected
+provider projection.
 
 ### Per-run model or provider override
 
-`--model <provider/model>` (CLI) or `model` (MCP) changes the **main** model for
-**one** invocation only. It does not rewrite `small_model` and is not a
-persistent repair — it cannot fix a stale or cross-provider `small_model`, so
-use `triss coder model set` for that.
-
-For a complete non-persistent provider switch on OpenCode, pass `--provider`
-with a fully qualified `--model`, plus optional `--small-model` (MCP:
-`provider`, `model`, `small_model`). The small role defaults to the one-shot
-main, and both roles must use the selected provider and identical raw prefix:
+`--provider` and `--model` use the same canonical selection contract as every
+model-backed command. A bare model id belongs to the explicit provider, or to the
+configured default when `--provider` is omitted. A provider-qualified model may
+select the provider itself; conflicting provider inputs fail before spawn.
 
 ```bash
 triss coder run "mechanical task" \
-  --provider worker --model triss-worker/deepseek-v4-flash
+  --provider zai --model glm-5.2
 ```
 
-This uses an in-memory OpenCode overlay and does not change `.env` or
-`opencode.json`. The worker provider must first be registered once with
-`triss coder init --provider worker --global|--local`; its exact endpoint,
-env-backed key binding, package, and model allowlist are revalidated before
-the credential is forwarded. Triss also resolves OpenCode's final effective
-configuration through a credential-free `debug config --pure` preflight,
-substituting a random canary for the selected key binding. Late account/org,
-managed-directory, or macOS MDM overrides therefore fail closed before the real
-credential is injected. The actual one-shot run also uses `--pure`.
+The explicit model changes only the main role for one invocation. The small role
+still comes from the selected provider profile. The run uses an in-memory or
+run-private engine projection and does not rewrite `.triss.env` or persistent
+engine configuration.
 
 ### Stale-model recovery
 

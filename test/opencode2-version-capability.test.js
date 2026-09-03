@@ -20,7 +20,7 @@ test('capability probe checks the version and run help without debug/service com
     calls.push([file, ...args]);
     if (file === 'which') return { status: 0, stdout: '/tmp/opencode2\n' };
     if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n' };
-    if (args[0] === 'run') return { status: 0, stdout: '  --standalone  --format json  --auto  --model <model>\n' };
+    if (args[0] === 'run') return { status: 0, stdout: '  --standalone  --format json  --auto  --model <model>  --variant <effort>\n' };
     return { status: 1, stdout: '' };
   };
   const fs = {
@@ -43,7 +43,7 @@ function detectVersionFixture(path, versionOutput) {
   return (file, args) => {
     if (file === 'which') return { status: 0, stdout: `${path}\n` };
     if (args[0] === '--version') return { status: 0, stdout: versionOutput };
-    if (args[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model\n' };
+    if (args[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n' };
     return { status: 1, stdout: '' };
   };
 }
@@ -108,7 +108,7 @@ function probeFixture(path, version = '0.0.0-beta-17794') {
   return (file, args) => {
     if (file === 'which') return { status: 0, stdout: `${path}\n` };
     if (args[0] === '--version') return { status: 0, stdout: `opencode2 v${version}\n` };
-    if (args[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model\n' };
+    if (args[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n' };
     return { status: 1, stdout: '' };
   };
 }
@@ -179,8 +179,8 @@ test('same path and version are re-probed so a replaced build cannot remain cach
     if (args[0] === 'run') {
       helpCalls += 1;
       return helpCalls === 1
-        ? { status: 0, stdout: '--format --auto --model\n' }
-        : { status: 0, stdout: '--standalone --format --auto --model\n' };
+        ? { status: 0, stdout: '--format --auto --model --variant\n' }
+        : { status: 0, stdout: '--standalone --format --auto --model --variant\n' };
     }
     return { status: 1, stdout: '' };
   };

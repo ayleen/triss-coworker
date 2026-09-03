@@ -111,8 +111,8 @@ committed in `.github/keys/` before anything is published; npm packages
 carry provenance attestations. This provides a reviewable source-to-artifact
 pipeline; it does not mean every installed byte is a verbatim repository file.
 Install a pinned version or use a reviewed checkout if policy requires it.
-See [docs/releasing.md](docs/releasing.md) for the signing setup and release
-procedure.
+Signing setup and release procedure are documented in the source repository's
+maintainer guide.
 
 ## Credentials
 

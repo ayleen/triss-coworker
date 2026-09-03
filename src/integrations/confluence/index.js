@@ -30,21 +30,21 @@ export default {
     claude: CLAUDE_INSTRUCTIONS,
     codex: CLAUDE_INSTRUCTIONS,
   },
-  register(program, { wrap }) {
-    program
+  register(program, { wrap, addModelSelectionOptions }) {
+    const search = program
       .command('search <cql>')
-      .description('CQL search; --question summarises the result list')
+      .description('CQL search; --question summarizes the result list')
       .option('-l, --limit <n>', 'max results', '25')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(search)
       .option('--json', 'raw JSON output')
       .action(wrap(async (cql, opts) => searchCmd({ cql, ...opts })));
 
-    program
+    const page = program
       .command('page <id>')
       .description('Read a page by id; ADF body is converted to plain text')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(page)
       .option('--json', 'raw JSON output')
       .action(wrap(pageCmd));
 

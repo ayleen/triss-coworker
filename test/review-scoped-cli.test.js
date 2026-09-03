@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 
 import { runReviewWithDeps, validateReviewOptions } from '../src/commands/review.js';
 import { validateReviewSelectors } from '../src/review-scoped.js';
+import { createExecutionResult } from '../src/transports/result.js';
 
 const SMALL_DIFF = [
   'diff --git a/small.js b/small.js',
@@ -53,10 +54,12 @@ function captureStdio() {
 }
 
 const MODEL_DEPS = (seenDiff) => ({
-  resolveModelRequest: () => ({ provider: 'worker', model: 'pro' }),
-  chat: async (req) => {
-    seenDiff.push(req.messages[1].content);
-    return { choices: [{ message: { content: 'LGTM' } }], usage: {} };
+  executeModelTask: async (request) => {
+    seenDiff.push(request.input.messages[1].content);
+    return {
+      resolved: { providerId: 'openai-compatible', publicModel: 'test' },
+      result: createExecutionResult({ text: 'LGTM', finishReason: 'stop' }),
+    };
   },
 });
 

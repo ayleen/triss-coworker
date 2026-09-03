@@ -1,8 +1,8 @@
-# Triss — Cheap DeepSeek Coworker (Token Saving)
+# Triss — Provider-Backed Delegation
 
-You have a DeepSeek-backed worker available as the `triss` CLI on PATH.
-Delegate token-heavy I/O to it — the primary model's tokens stay on
-reasoning and edits.
+You have provider-backed delegation available as the `triss` CLI on PATH.
+Delegate token-heavy I/O through a configured provider so the primary model's
+tokens stay on reasoning and edits.
 
 ## Commands
 
@@ -11,7 +11,7 @@ reasoning and edits.
 | `triss ask --paths <files> --question "<q>"` | bulk read of files; structured summary back |
 | `triss ask --urls <url> --question "<q>"` | same for web pages (HTML→markdown internally) |
 | `triss ask --stdin --question "<q>"` | pipe any command's stdout (`git diff \| triss ask --stdin -q "..."`) |
-| `triss chat "<prompt>"` | bare worker prompt, no corpus — definitions, transformations |
+| `triss chat "<prompt>"` | bare provider prompt, no corpus — definitions, transformations |
 | `triss write --spec "<spec>" --context <ref> --target <out>` | boilerplate generation against a style reference |
 | `triss extract <session.jsonl> -o <out>` | extract human-readable transcript from Claude Code logs |
 | `triss fetch <url> [--question "<q>"]` | fetch URL → markdown (with `--question`, summary) |
@@ -226,19 +226,13 @@ and harder to accept than a single focused run.
 
 ## Models
 
-Default preset is `flash` (cheap). Use `--model pro` for harder analysis
-or code review. Override preset names via `TRISS_WORKER_FLASH_MODEL` /
-`TRISS_WORKER_PRO_MODEL`. Pick a default with `TRISS_DEFAULT_MODEL=flash|pro`.
-For one-shot GLM analysis, use `triss ask ... --provider glm` or
-`triss review --provider glm`. `--model pro` is `glm-5.2`; `--model flash` is
-`glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go. An
-unpinned endpoint is auto-corrected once if the key belongs to the other plan.
-For GLM 5.2 code review, omit `--max-tokens` to use the model-sized auto-budget.
-If you pass it explicitly, use at least 16384; explicit budgets disable
-auto-sizing, and the generic 8192-token value can be exhausted by reasoning.
-For Kimi, use `--provider kimi` (needs `MOONSHOT_API_KEY`): `pro` is
-`kimi-k3`, `flash` is `kimi-k2.6` — one endpoint, bare model ids.
-Keep `triss coder` for agentic coding runs.
+Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
+`opencode-go`, `moonshot`, and `kimi-for-coding`. `--model <native-id>`
+overrides the selected provider role for one call; `--effort
+minimal|low|medium|high|max` controls reasoning consistently. With no explicit
+selection, commands use `TRISS_DEFAULT_PROVIDER` and that profile's `model` or
+`smallModel` role. For GLM 5.2 review, omit `--max-tokens` to use the
+model-sized budget; if explicit, use at least 16384.
 
 ## `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
 
@@ -246,21 +240,12 @@ Setup once per machine/project: `triss coder init` (installs the opencode
 engine, configures the selected provider key, writes `opencode.json` with a deny-first bash
 policy, and `.opencode/agents/{coder,researcher}.md`). Pass `--engine opencode2`
 for the V2 beta (shares the opencode.json config; see docs/engines/opencode2.md) or
-`--engine crush` (or set `TRISS_CODER_ENGINE=crush`) to target the crush
-engine instead. The
-opencode engine can reuse the existing OpenAI-compatible worker profile with
-`triss coder init --provider worker`; models use `triss-worker/*` and the same
-`TRISS_WORKER_API_KEY` / `TRISS_WORKER_BASE_URL` (no second key). The
-opencode engine also runs **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/deepseek-v4-flash-free`): `triss coder init --provider opencode-zen` sets it up with
-`OPENCODE_API_KEY` (a Zen-only machine needs no `ZHIPU_API_KEY`) — run
-`triss coder models` to see current offerings. Paid **OpenCode Go** uses the
-same key with a distinct `opencode-go/*` prefix; configure it with
-`triss coder init --provider opencode-go`. The engine also runs **Moonshot Kimi** models:
-`triss coder init --provider moonshot` (pay-as-you-go `moonshotai/*`, e.g.
-`moonshotai/kimi-k2.7-code`, `MOONSHOT_API_KEY`) or
-`triss coder init --provider kimi-for-coding` (flat-rate subscription
-`kimi-for-coding/*`, e.g. `kimi-for-coding/k3`, `KIMI_API_KEY`).
+`--engine crush` (or set `TRISS_CODER_ENGINE=crush`) to target Crush.
+Every engine uses the same canonical provider ids and role configuration.
+Examples: `openai-compatible/deepseek-v4-pro`, `zai/glm-5.2`,
+`opencode-zen/deepseek-v4-flash-free`, `opencode-go/deepseek-v4-flash`,
+`moonshot/kimi-k2.7-code`, and `kimi-for-coding/k3`. Configure one with
+`triss coder init --provider <canonical-id>`.
 
 Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 [--agent <name>] [--provider <name> --model <p/m> [--small-model <p/m>]]
@@ -277,15 +262,11 @@ carries `total_usd` plus `complete`, and an unreported class is `null`, never
 `opencode` (default) or `crush`. `--session <id>` is a triss-side slug
 mapped to a real opencode session id in `.triss/sessions.json` (first run
 creates it, later runs with the same slug continue that conversation).
-On OpenCode, `--provider` + provider-qualified `--model` switches the complete
-provider pair for this run without changing persistent config; `--small-model`
-is optional and defaults to the one-shot main. Worker must first be registered
-once with `triss coder init --provider worker`. On this one-shot path, Triss
-verifies the installed OpenCode build meets the effective minimum (>= `1.18.22`)
-and audits its complete file graph, validates the final
-merged config with `debug config --pure` using a random canary instead of the
-real key, and runs OpenCode with external plugins disabled. Late overrides and
-unauditable config fail closed.
+On OpenCode, `--provider` plus a canonical provider-qualified `--model`
+switches the complete provider pair for one run without changing persistent
+configuration. `--small-model` defaults to the one-shot main model. Triss
+audits the effective engine configuration and provider projection before
+forwarding the selected credential.
 `--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)
 so you review the diff before merging; irreversible actions stay with you.
 `triss coder clean [--all]` removes finished isolation worktrees (default:
@@ -309,18 +290,12 @@ it natively; triss also forwards it as `ZAI_API_KEY` for older binaries). See
 `docs/engines/crush.md` for the supported configuration, safety boundaries,
 and current upstream limitations.
 
-Env: `ZHIPU_API_KEY` (required for the default GLM provider;
-`OPENCODE_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` unlock the other
-providers), `TRISS_CODER_MODEL` /
-`TRISS_CODER_SMALL_MODEL` (model overrides, default `zai-coding-plan/glm-5.2` /
-`zai-coding-plan/glm-5-turbo`), `TRISS_CODER_OPENCODE_VERSION` (installation minimum
-override, default/immutable floor `1.18.22`; below-floor or malformed values are
-rejected, a valid higher value raises the effective minimum, and one-shot
-provider runs are authorized when the installed version is >= that effective
-minimum), `TRISS_CODER_ENGINE` (default
-`opencode`), `TRISS_CODER_CRUSH_VERSION`
-(crush pin override, hard floor `0.1.6` — raise-only), `TRISS_CODER_CRUSH_RESTRICT` (crush only —
-set `1` to opt INTO the CLI allowlist; default unset/OFF).
+Provider credentials are `TRISS_OPENAI_COMPATIBLE_API_KEY`, `ZHIPU_API_KEY`,
+`OPENCODE_API_KEY`, `MOONSHOT_API_KEY`, and `KIMI_API_KEY`. Persistent
+main/small roles live in the selected provider profile.
+`TRISS_CODER_OPENCODE_VERSION` raises the OpenCode installation minimum;
+`TRISS_CODER_ENGINE` selects the default engine; and
+`TRISS_CODER_CRUSH_RESTRICT=1` opts into Crush's CLI allowlist.
 
 `triss coder run` is **POSIX only** (macOS/Linux) — it refuses to run on
 Windows. `triss coder init`/`clean` are unaffected.

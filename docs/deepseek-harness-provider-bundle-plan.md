@@ -1,5 +1,9 @@
 # DeepSeek Harness provider bundle and ecosystem proposal plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Implementation contract for an opt-in DeepSeek Harness bundle that activates existing OpenCode and Z.AI catalogue routes without hand-written provider profiles.
 
 ## Status and verified baseline

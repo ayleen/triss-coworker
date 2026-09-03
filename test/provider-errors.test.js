@@ -113,16 +113,16 @@ test('unknown errors fall back to TRISS_PROVIDER_UNKNOWN with the cause retained
 // ─── fallback policy ─────────────────────────────────────────────────────────
 
 test('a proven rate limit never endpoint-hops (one request, no hop)', () => {
-  const c = classifyProviderError(httpError(429, 'quota exhausted'), { provider: 'glm' });
+  const c = classifyProviderError(httpError(429, 'quota exhausted'), { provider: 'zai' });
   assert.equal(c.code, PROVIDER_ERROR_CODES.RATE);
   assert.equal(c.endpoint_hop, false);
   assert.equal(c.requests, 1);
 });
 
-test('GLM 401/403 on a route-mismatched body is the recognized two-request mismatch case', () => {
+test('Z.AI 401/403 on a route-mismatched body is the recognized two-request mismatch case', () => {
   const mismatch = httpError(401, 'api key invalid for this endpoint (coding-plan route)');
   assert.equal(isGlmRouteMismatch(mismatch), true);
-  const c = classifyProviderError(mismatch, { provider: 'glm' });
+  const c = classifyProviderError(mismatch, { provider: 'zai' });
   // Auth classification + endpoint-hop true: the caller performs sibling
   // discovery once (two-request recognized-mismatch case).
   assert.equal(c.code, PROVIDER_ERROR_CODES.AUTH);
@@ -131,12 +131,12 @@ test('GLM 401/403 on a route-mismatched body is the recognized two-request misma
 
   // A bare 401 with no route evidence is NOT a mismatch (no hop).
   assert.equal(isGlmRouteMismatch(httpError(401, 'unauthorized')), false);
-  const bare = classifyProviderError(httpError(401, 'unauthorized'), { provider: 'glm' });
+  const bare = classifyProviderError(httpError(401, 'unauthorized'), { provider: 'zai' });
   assert.equal(bare.endpoint_hop, false);
 });
 
-test('a non-GLM provider never endpoint-hops on auth', () => {
-  const c = classifyProviderError(httpError(403, 'forbidden'), { provider: 'kimi' });
+test('a provider without endpoint discovery never endpoint-hops on auth', () => {
+  const c = classifyProviderError(httpError(403, 'forbidden'), { provider: 'moonshot' });
   assert.equal(c.code, PROVIDER_ERROR_CODES.AUTH);
   assert.equal(c.endpoint_hop, false);
 });
@@ -145,7 +145,7 @@ test('a non-GLM provider never endpoint-hops on auth', () => {
 
 test('serializeProviderError never leaks body secrets, paths, or control bytes', () => {
   const err = httpError(401, 'rejected: sk-live-secret-abcdef123456 token used from /Users/me/.secret/config.json\x00\x1f');
-  const classified = classifyProviderError(err, { provider: 'worker' });
+  const classified = classifyProviderError(err, { provider: 'openai-compatible' });
   const s = serializeProviderError(classified);
   assert.equal(s.code, PROVIDER_ERROR_CODES.AUTH);
   assert.ok(!s.message.includes('sk-live-secret'), 'secret-like token must be redacted');

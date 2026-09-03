@@ -1,5 +1,9 @@
 # Oh My Pi coder engine integration plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Status: implementation-ready plan  
 Target branch: `plan/omp-coder-engine`  
 Repository baseline: `b4884e6`  

@@ -265,6 +265,9 @@ export function installHintCrush() {
 //    answer in the envelope (unlike opencode, which retries forever).
 //  - `--model <model>` ONLY when an explicit override is given; otherwise rely
 //    on the configured default (crush.json's `glm5_2` atom — see hint).
+//  - `--effort low|medium|high` receives the exact supported logical value.
+//    Crush cannot represent xhigh/max; those requests fail before spawn rather
+//    than silently downgrading to high.
 //  - `--session <slug>` flows STRAIGHT THROUGH: crush sessions are native
 //    get-or-create with caller-supplied arbitrary ids (no slug->real-id map
 //    needed, unlike opencode's ses_ workaround). needsSessionMap: false.
@@ -295,6 +298,7 @@ export function buildCrushRunArgv({
   cwd,
   timeoutSec = 900,
   maxTokens,
+  effort,
   restrict = true,
 } = {}) {
   const argv = [
@@ -308,6 +312,14 @@ export function buildCrushRunArgv({
     'single',
   ];
   if (maxTokens !== undefined) argv.push('--max-tokens', String(maxTokens));
+  if (effort) {
+    if (!['low', 'medium', 'high'].includes(effort)) {
+      throw new Error(
+        `Crush cannot apply effort "${effort}" — this engine supports low, medium, and high only.`,
+      );
+    }
+    argv.push('--effort', effort);
+  }
   if (restrict) {
     argv.push('--restrict-run');
     // CLI allow flags are the load-bearing enforcement (config is inert — see
@@ -331,14 +343,10 @@ export function buildCrushRunArgv({
 // buildCrushSpawnEnv: minimal allowlist env for the crush subprocess. NEVER
 // spread process.env — only what crush needs.
 //
-// KEY BRIDGE: crush ≥0.1.1 reads `ZHIPU_API_KEY` natively (the ecosystem-
-// standard name used by Z.AI's own docs, opencode, and triss). We forward
-// `ZHIPU_API_KEY` straight through into the spawn env AND still forward
-// `ZAI_API_KEY` as a compatibility alias for older crush binaries that read
-// only that name. Native `ZHIPU_API_KEY` support landed in 0.1.1; the alias
-// keeps older binaries working with a single user-facing key. See
-// docs/engines/crush.md. NEVER log either value (use
-// maskValue() at the call site if anything is echoed).
+// Canonical Triss configuration uses `ZHIPU_API_KEY`. Protected projection
+// creates a run-private Crush `zai` provider pointed at the credential proxy,
+// then places only the single-run token in Crush's engine-native ZAI_API_KEY.
+// The child never receives the real credential. NEVER log the value.
 export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
@@ -348,16 +356,50 @@ export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   // receives the single-run proxy token in the API-key variables plus the
   // loopback base URL — never the real provider credential.
   if (proxy && proxy.token && proxy.baseUrl) {
-    env.ZHIPU_API_KEY = proxy.token;
     env.ZAI_API_KEY = proxy.token;
-    env.ZAI_BASE_URL = proxy.baseUrl;
+    env.CRUSH_GLOBAL_CONFIG = proxy.configDir;
+    env.CRUSH_GLOBAL_DATA = proxy.dataDir;
     return env;
   }
   if (baseEnv.ZHIPU_API_KEY) {
     env.ZHIPU_API_KEY = baseEnv.ZHIPU_API_KEY;
-    env.ZAI_API_KEY = baseEnv.ZHIPU_API_KEY;
   }
   return env;
+}
+
+export function buildCrushProtectedProviderConfig(baseUrl, model) {
+  if (typeof baseUrl !== 'string' || !baseUrl.startsWith('http://127.0.0.1:')) {
+    throw new Error('Crush protected provider config requires a loopback proxy URL');
+  }
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new Error('Crush protected provider config requires a native model');
+  }
+  return {
+    options: {
+      disable_provider_auto_update: true,
+      disable_metrics: true,
+    },
+    models: {
+      large: { model, provider: 'zai' },
+      small: { model, provider: 'zai' },
+    },
+    providers: {
+      zai: {
+        base_url: baseUrl,
+        api_key: '$ZAI_API_KEY',
+        discover_models: false,
+        models: [{
+          id: model,
+          name: model,
+          context_window: 200_000,
+          default_max_tokens: 65_536,
+          can_reason: true,
+          reasoning_levels: ['low', 'medium', 'high'],
+          default_reasoning_effort: 'high',
+        }],
+      },
+    },
+  };
 }
 
 // parseCrushEnvelope: crush prints ONE JSON object on stdout at end of run
@@ -501,8 +543,7 @@ export function mergeCrushPermissionsRun(config = {}) {
 // configureCrushModels: runs `crush models use glm5_2 glm5_turbo <scopeFlag>` so
 // crush's --role smart/fast resolve to GLM deterministically. This is the ONE
 // thing crush init does beyond the shared ZHIPU_API_KEY setup. It does NOT write
-// any api_key into crush.json — the adapter bridges ZHIPU_API_KEY -> ZAI_API_KEY
-// in the spawn env at run time (see buildCrushSpawnEnv).
+// any api_key into crush.json; buildCrushSpawnEnv forwards the canonical key.
 //
 // Idempotent + non-fatal: a missing binary, a non-zero exit, or a thrown
 // spawnSync all return {ok:false} with a short reason (stderr tail) so init
@@ -564,6 +605,7 @@ export const crush = {
   CRUSH_INVALID_MINIMUM_CODE,
   buildRunArgv: buildCrushRunArgv,
   buildSpawnEnv: buildCrushSpawnEnv,
+  buildProtectedProviderConfig: buildCrushProtectedProviderConfig,
   parseEnvelope: parseCrushEnvelope,
   mapExitReason: mapCrushExitReason,
   crushDefaultModelsHint,

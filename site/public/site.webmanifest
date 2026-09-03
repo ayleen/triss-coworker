@@ -1,7 +1,7 @@
 {
-  "name": "Triss — Cheap DeepSeek Coworker",
+  "name": "Triss — Unified Provider Runtime",
   "short_name": "Triss",
-  "description": "Delegate token-heavy work to a cheap DeepSeek worker",
+  "description": "Delegate token-heavy work through lower-cost model providers",
   "start_url": "/",
   "scope": "/",
   "icons": [

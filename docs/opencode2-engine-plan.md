@@ -1,5 +1,9 @@
 # OpenCode 2 coder engine plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 > **Superseded for implementation.** Current provider routing, credential
 > modes, protocol-aware proxying, and version compatibility are defined by
 > [`opencode-provider-routing-recovery-plan.md`](opencode-provider-routing-recovery-plan.md).

@@ -4,17 +4,14 @@
 (function () {
 'use strict';
 const DATA = JSON.parse(document.getElementById('pricing-data').textContent);
-const profile = DATA.profile;
-const anthropic = DATA.anthropic;
-const deepseek = DATA.deepseek;
+const PROFILE = DATA.profile;
+const ANTHROPIC = DATA.anthropic;
+const DEEPSEEK = DATA.deepseek;
 const defaults = DATA.defaults;
-const PROFILE = profile;
-const ANTHROPIC = anthropic;
-const DEEPSEEK = deepseek;
 function primaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.inK * p.input + PROFILE.outK * p.output) / 1000; }
 function summaryPer(m) { const p = ANTHROPIC[m]; return (PROFILE.sumInK * p.input + PROFILE.sumOutK * p.output) / 1000; }
-function workerPer(hit) { const d = DEEPSEEK.flash; return (PROFILE.inK * (1-hit/100) * d.input + PROFILE.inK * (hit/100) * d.cache + PROFILE.outK * d.output) / 1000; }
-function trissPer(m, hit) { return workerPer(hit) + summaryPer(m); }
+function delegatedPer(hit) { const d = DEEPSEEK[defaults.providerModel]; return (PROFILE.inK * (1-hit/100) * d.input + PROFILE.inK * (hit/100) * d.cache + PROFILE.outK * d.output) / 1000; }
+function trissPer(m, hit) { return delegatedPer(hit) + summaryPer(m); }
 const DEFAULT_HIT = defaults.cacheHit;
 function money(v) {
   if (v >= 100) return "$" + Math.round(v).toLocaleString("en-US");
@@ -69,13 +66,12 @@ if (copyBtn) copyBtn.addEventListener("click", () => {
 });
 render();
 
-// Commands preview
 const CMDS = [
-  { name: "ask", tier: "flash", short: "Reads files, URLs, or stdin — returns a focused summary.", note: "The whole trick: the primary agent gets the useful bits, not a firehose.", lines: "$ triss ask --paths \"src/**/*.ts\" \\\n    --question \"where do we read the API key?\"\n\n→ 47 files read \u00b7 18.3K in / 2.4K out via flash (off-peak)\n→ src/config.js, src/mcp/server.js\ncost: $0.0056 (off-peak, $0.011 peak)" },
-  { name: "review", tier: "pro", short: "Code review on a branch, a PR, or a piped diff.", note: "Concrete issues with file:line citations — not a diff summary.", lines: "$ triss review 123\n\nFindings\n- src/auth.js:42 accepts an expired token\n- test/auth.test.js:88 covers only happy path\nResidual risk: refresh path untested" },
-  { name: "write", tier: "pro", short: "Generates code or docs from a spec plus a reference file.", note: "Boilerplate the primary model should never type.", lines: "$ triss write --spec \"pytest for auth.py\" \\\n    --context tests/test_main.py \\\n    --target tests/test_auth.py\n\n→ wrote tests/test_auth.py (128 lines)" },
-  { name: "fetch", tier: "flash", short: "Fetches URLs and returns clean markdown.", note: "SSRF-guarded, 30s timeout, strips chrome.", lines: "$ triss fetch https://api-docs.example.com/ \\\n    --question \"auth header format?\"\n\n→ 214KB HTML → 3.1K markdown\n→ Bearer <token>, no refresh" },
-  { name: "coder", tier: "agent", short: "Delegates an implementation task to a cheap coding agent.", note: "--isolate runs in a disposable git worktree.", lines: "$ triss coder run \"add /signup validation\" \\\n    --isolate\n\n→ 3 files changed in .triss/wt/signup" },
+  { name: "ask", tier: "small", short: "Reads files, URLs, or stdin — returns a focused summary.", note: "The whole trick: the primary agent gets the useful bits, not a firehose.", lines: "$ triss ask --provider zai --model glm-5.2 \\\n    --paths \"src/**/*.ts\" \\\n    --question \"where do we read the API key?\"\n\n→ 47 files read · 18.3K in / 2.4K out\n→ src/config.js, src/mcp/server.js\ncost: $0.0056 (off-peak, $0.011 peak)" },
+  { name: "review", tier: "main", short: "Code review on a branch, a PR, or a piped diff.", note: "Concrete issues with file:line citations — not a diff summary.", lines: "$ triss review 123 --provider moonshot --model kimi-k3\n\nFindings\n- src/auth.js:42 accepts an expired token\n- test/auth.test.js:88 covers only happy path\nResidual risk: refresh path untested" },
+  { name: "write", tier: "main", short: "Generates code or docs from a spec plus a reference file.", note: "Boilerplate the primary model should never type.", lines: "$ triss write --spec \"pytest for auth.py\" \\\n    --context tests/test_main.py \\\n    --target tests/test_auth.py\n\n→ wrote tests/test_auth.py (128 lines)" },
+  { name: "fetch", tier: "small", short: "Fetches URLs and returns clean markdown.", note: "SSRF-guarded, 30s timeout, strips chrome.", lines: "$ triss fetch https://api-docs.example.com/ \\\n    --question \"auth header format?\"\n\n→ 214KB HTML → 3.1K markdown\n→ Bearer <token>, no refresh" },
+  { name: "coder", tier: "agent", short: "Delegates an implementation task to a coding agent.", note: "--isolate runs in a disposable git worktree.", lines: "$ triss coder run \"add /signup validation\" \\\n    --engine omp --provider opencode-go --isolate\n\n→ 3 files changed in .triss/wt/signup" },
 ];
 let cmdIdx = 0;
 const cmdList = document.getElementById("cmd-list");
@@ -100,11 +96,10 @@ function renderCmd() {
 }
 renderCmd();
 
-// Install tabs
 const TABS = {
-  npm: "$ npm install -g triss-coworker\n  # or: pnpm add -g / yarn global add\n\n$ triss config wizard\n  Standard or Advanced? [S] \n\u2713 key saved \u00b7 MCP + rules installed",
+  npm: "$ npm install -g triss-coworker\n\n$ triss config wizard\n  Default provider [zai]\n  Native model [glm-5.2]\n✓ provider profile saved · MCP + rules installed",
   curl: "$ curl -fsSL https://raw.githubusercontent.com/\\n    ayleen/triss-coworker/main/install.sh | bash\n\n→ ~/.local/share/triss (receipt-backed)\n→ linked ~/.local/bin/triss",
-  source: "$ git clone https://github.com/ayleen/triss-coworker.git\n$ cd triss-coworker && npm install && npm link\n\n$ triss --version && triss status\n\u2713 worker: deepseek-v4-flash / -pro",
+  source: "$ git clone https://github.com/ayleen/triss-coworker.git\n$ cd triss-coworker && npm install && npm link\n\n$ triss --version && triss status\n✓ default provider: zai · model: glm-5.2",
 };
 let tab = "npm";
 const installCode = document.getElementById("install-code");

@@ -2,9 +2,9 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { chat, chatStream, reportUsage, responseText } from '../client.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { assertProviderText } from '../provider-errors.js';
-import { resolveModelRequest } from '../models.js';
 import { expandPaths, readFilesAsCorpus } from '../paths.js';
 import { fetchAsMarkdown } from '../web.js';
 import { readStdin } from '../secrets.js';
@@ -48,18 +48,13 @@ export async function runAskWithDeps(opts, deps = {}) {
     urls,
     stdin,
     question,
-    model: modelInput,
-    provider: providerInput,
+    model,
+    provider,
+    engine,
+    effort,
     system,
   } = opts;
-  // Same default the direct `triss ask` CLI applies (its --max-tokens
-  // option defaults to 8192). A routed ask without --max-tokens must behave
-  // identically to a direct ask, mirroring review.js's own default.
-  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
-  const sendChat = deps.chat || chat;
-  const sendChatStream = deps.chatStream || chatStream;
-  const request = resolveRequest({ provider: providerInput, model: modelInput });
-  const { provider, model } = request;
+  const execute = deps.executeModelTask || executeModelTask;
 
   let corpus = '';
   let fileCount = 0;
@@ -96,9 +91,7 @@ export async function runAskWithDeps(opts, deps = {}) {
   }
 
   process.stderr.write(
-    pc.dim(
-      `[triss/ask] provider=${provider} model=${model} sources=${fileCount} bytes=${totalBytes}\n`,
-    ),
+    pc.dim(`[triss/ask] sources=${fileCount} bytes=${totalBytes}\n`),
   );
 
   const messages = [
@@ -108,19 +101,31 @@ export async function runAskWithDeps(opts, deps = {}) {
   ];
 
   const useStream = shouldStream(opts);
-  const resp = useStream
-    ? await sendChatStream({
-        ...request,
-        maxTokens,
-        messages,
-        label: 'triss/ask',
-        onChunk: (d) => process.stdout.write(d),
-      })
-    : await sendChat({ ...request, maxTokens, messages, label: 'triss/ask' });
-
-  const answer = assertProviderText(responseText(resp));
+  const { resolved, result } = await execute({
+    task: 'ask',
+    provider,
+    model,
+    engine,
+    effort,
+    signal: deps.signal,
+    timeout: opts.timeoutMs,
+    input: {
+      messages,
+      maxOutputTokens: maxTokens,
+      stream: useStream,
+      onText: useStream ? (chunk) => process.stdout.write(chunk) : undefined,
+      onReasoning: deps.onReasoning,
+      outputContract: responseFormat,
+      label: 'triss/ask',
+    },
+  }, deps.runtimeDeps);
+  const answer = assertProviderText(result.text);
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/ask', { provider: request.provider }) + '\n'));
+  process.stderr.write(
+    pc.dim(
+      `\n${reportNormalizedUsage(result, 'triss/ask')} provider=${resolved.providerId} model=${resolved.publicModel}\n`,
+    ),
+  );
   return answer;
 }

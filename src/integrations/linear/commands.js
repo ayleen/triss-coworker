@@ -50,20 +50,20 @@ function formatIssueFull(i) {
   return lines.join('\n');
 }
 
-export async function searchCmd({ term, limit, question, model, json }) {
+export async function searchCmd({ term, limit, question, provider, model, engine, effort, json }) {
   const issues = await linear.search({ term, limit: parseInt(limit, 10) || 50 });
   if (json) return printResult(issues, { json: true });
   if (!issues.length) return printResult('(no issues)');
   const corpus = issues.map(formatIssueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, model });
+    const out = await summarize({ corpus, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(idOrIdentifier, { question, model, withComments, json }) {
+export async function issueCmd(idOrIdentifier, { question, provider, model, engine, effort, withComments, json }) {
   const i = await linear.getIssue(idOrIdentifier);
   if (json) return printResult(i, { json: true });
   let text = formatIssueFull(i);
@@ -74,7 +74,7 @@ export async function issueCmd(idOrIdentifier, { question, model, withComments, 
     text += '\n\n--- Comments ---\n' + (cmts || '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, model });
+    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(text);
@@ -130,7 +130,7 @@ export async function createCmd(opts) {
   if (opts.json) printResult(issue, { json: true });
 }
 
-export async function commentsCmd(idOrIdentifier, { post, question, model, json }) {
+export async function commentsCmd(idOrIdentifier, { post, question, provider, model, engine, effort, json }) {
   if (post) {
     const issue = await linear.getIssue(idOrIdentifier);
     await linear.addComment(issue.id, post);
@@ -144,7 +144,14 @@ export async function commentsCmd(idOrIdentifier, { post, question, model, json 
     .map((c) => `[${c.user?.name ?? 'anon'} @ ${c.createdAt}]\n${c.body}`)
     .join('\n---\n');
   if (question) {
-    const out = await summarize({ corpus: corpus || '(no comments)', question, model });
+    const out = await summarize({
+      corpus: corpus || '(no comments)',
+      question,
+      provider,
+      model,
+      engine,
+      effort,
+    });
     printResult(out);
   } else {
     printResult(corpus || '(no comments)');

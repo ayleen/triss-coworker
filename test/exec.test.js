@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decideRoute, runExecWithDeps } from '../src/commands/exec.js';
+import { createExecutionResult } from '../src/transports/result.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(ROOT, 'bin', 'triss.js');
@@ -261,10 +262,12 @@ test('routed ask preserves the direct ask 8192 max-tokens default', async () => 
     const routedAsk = async (opts) => {
       const { runAskWithDeps } = await import('../src/commands/ask.js');
       return runAskWithDeps(opts, {
-        resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-        chat: async (request) => {
-          chatRequest = request;
-          return { final_text: 'ok', usage: {} };
+        executeModelTask: async (request) => {
+          chatRequest = request.input;
+          return {
+            resolved: { providerId: 'openai-compatible', publicModel: 'test' },
+            result: createExecutionResult({ text: 'ok', finishReason: 'stop' }),
+          };
         },
       });
     };
@@ -276,7 +279,7 @@ test('routed ask preserves the direct ask 8192 max-tokens default', async () => 
     process.stdout.write = originalOut;
     process.stderr.write = originalErr;
   }
-  assert.equal(chatRequest.maxTokens, 8192);
+  assert.equal(chatRequest.maxOutputTokens, 8192);
 });
 
 test('coder route forwards the common --max-tokens to runCoderRun under its expected option name', async () => {
@@ -439,7 +442,6 @@ test('exec --explain performs pure downstream structural validation', async () =
     [{ chat: true, explain: true }, /prompt.*argument|prompt.*stdin/i],
     [{ code: true, explain: true }, /prompt.*argument|prompt.*stdin/i],
     [{ task: 'fix it', code: true, continue: true, isolate: true, explain: true }, /continue.*isolate.*session/i],
-    [{ task: 'fix it', code: true, provider: 'zai', explain: true }, /provider requires --model/i],
     [{ task: 'fix it', code: true, timeout: 'nope', explain: true }, /timeout.*positive number/i],
     [{ task: 'fix it', code: true, timeout: '12junk', explain: true }, /timeout.*positive number/i],
   ];

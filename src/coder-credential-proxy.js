@@ -77,7 +77,7 @@ function isValidOrigin(endpoint) {
  * Start a parent-owned loopback credential proxy.
  *
  * @param {object} opts
- * @param {string} opts.provider       provider id (e.g. 'zai', 'worker')
+ * @param {string} opts.provider       canonical provider id
  * @param {string} opts.model          pinned model id for this run
  * @param {string} opts.endpoint       canonical upstream ORIGIN (https, no path)
  * @param {string} opts.credential     real provider credential (in-memory only)

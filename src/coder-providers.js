@@ -1,7 +1,28 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 ayleen
 
+import { getProviderDefinition } from './provider-registry.js';
+
 const freeze = (value) => Object.freeze(value);
+
+function providerRoute(id, overrides = {}) {
+  const definition = getProviderDefinition(id);
+  const url = new URL(definition.defaults.endpoint);
+  const protocol = definition.route.protocol === 'anthropic_messages'
+    ? 'anthropic_messages'
+    : 'openai_chat';
+  return freeze({
+    kind: id,
+    prefixes: freeze([id]),
+    credentialEnv: definition.credential,
+    endpoint: url.origin,
+    pathPrefix: url.pathname.replace(/\/+$/, '') || '/',
+    protocol,
+    package: protocol === 'anthropic_messages' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible',
+    authStyle: definition.route.authStyle,
+    ...overrides,
+  });
+}
 
 // This name is deliberately stable and owned by Triss.  It is used only in
 // OPENCODE_CONFIG_CONTENT for one run; persistent config layers defining it
@@ -35,21 +56,13 @@ function modelTransportMap({ chat = [], responses = [], anthropic = [], unsuppor
 }
 
 export const CODER_PROVIDER_REGISTRY = freeze({
-  worker: freeze({ kind: 'worker', prefixes: freeze(['triss-worker']), credentialEnv: 'TRISS_WORKER_API_KEY', endpoint: 'https://api.deepseek.com', pathPrefix: '/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
-  zai: freeze({ kind: 'zai', prefixes: freeze(['zai-coding-plan', 'zai']), credentialEnv: 'ZHIPU_API_KEY', endpoint: 'https://api.z.ai', pathPrefixByPrefix: freeze({ 'zai-coding-plan': '/api/coding/paas/v4', zai: '/api/paas/v4' }), protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
+  'openai-compatible': providerRoute('openai-compatible'),
+  zai: providerRoute('zai'),
   // OpenCode's catalogue is model/provider specific. Keep the provider
   // defaults for catalogue/status compatibility, but the runtime resolver
   // below only admits an exact audited model entry for Zen/Go. An unknown
   // model must never silently become Chat Completions.
-  'opencode-zen': freeze({
-    kind: 'opencode-zen',
-    prefixes: freeze(['opencode']),
-    credentialEnv: 'OPENCODE_API_KEY',
-    endpoint: 'https://opencode.ai',
-    pathPrefix: '/zen/v1',
-    protocol: 'openai_chat',
-    package: '@ai-sdk/openai-compatible',
-    authStyle: 'bearer',
+  'opencode-zen': providerRoute('opencode-zen', {
     // Audited against https://opencode.ai/docs/zen/ on 2026-08-22. Models
     // present only in the catalogue remain unaudited until endpoint/package
     // metadata is published.
@@ -87,15 +100,7 @@ export const CODER_PROVIDER_REGISTRY = freeze({
       ],
     }),
   }),
-  'opencode-go': freeze({
-    kind: 'opencode-go',
-    prefixes: freeze(['opencode-go']),
-    credentialEnv: 'OPENCODE_API_KEY',
-    endpoint: 'https://opencode.ai',
-    pathPrefix: '/zen/go/v1',
-    protocol: 'openai_chat',
-    package: '@ai-sdk/openai-compatible',
-    authStyle: 'bearer',
+  'opencode-go': providerRoute('opencode-go', {
     // Audited against https://opencode.ai/docs/go/ on 2026-08-22.
     modelOverrides: modelTransportMap({
       chat: [
@@ -111,20 +116,13 @@ export const CODER_PROVIDER_REGISTRY = freeze({
       ],
     }),
   }),
-  moonshot: freeze({ kind: 'moonshot', prefixes: freeze(['moonshotai', 'moonshotai-cn']), credentialEnv: 'MOONSHOT_API_KEY', endpointByPrefix: freeze({ moonshotai: 'https://api.moonshot.ai', 'moonshotai-cn': 'https://api.moonshot.cn' }), pathPrefix: '/v1', protocol: 'openai_chat', package: '@ai-sdk/openai-compatible', authStyle: 'bearer' }),
-  'kimi-for-coding': freeze({ kind: 'kimi-for-coding', prefixes: freeze(['kimi-for-coding']), credentialEnv: 'KIMI_API_KEY', endpoint: 'https://api.kimi.com', pathPrefix: '/coding/v1', protocol: 'anthropic_messages', package: '@ai-sdk/anthropic', authStyle: 'anthropic' }),
+  moonshot: providerRoute('moonshot'),
+  'kimi-for-coding': providerRoute('kimi-for-coding'),
 });
 
-export const CODER_PROVIDER_ALIASES = freeze({ glm: 'zai', deepseek: 'worker', kimi: 'moonshot', go: 'opencode-go', zen: 'opencode-zen' });
 
-// Credential mode is intentionally independent from caller-worktree
-// isolation. This resolver is the SINGLE source of truth for the public
-// contract: every entry point (CLI run/init/exec, config wizard, MCP) resolves
-// the mode HERE from explicit user intent (--protect-credentials), and all
-// internal helpers receive the already-resolved value. There is intentionally
-// NO environment fallback — the retired TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION
-// acknowledgement must never select a mode again (its value is a deprecated
-// no-op; see readLegacyCoderBestEffortEnv in config.js).
+// Credential mode is independent from caller-worktree isolation. Every entry
+// point resolves explicit user intent here; no environment fallback exists.
 //
 //   | engine    | without the flag | with --protect-credentials        |
 //   |-----------|------------------|-----------------------------------|
@@ -193,16 +191,8 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   });
 }
 
-// Historical V1 compatibility: a safe bare model id has always meant the
-// Z.AI PAYG route. Keep that rule in the shared resolver so runtime and status
-// cannot disagree about a model that `triss coder run` will accept.
 export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
-  const direct = resolveCoderProviderRoute(model, registry);
-  if (direct) return direct;
-  const bare = String(model || '').trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(bare)) return null;
-  const historical = resolveCoderProviderRoute(`zai/${bare}`, registry);
-  return historical ? Object.freeze({ ...historical, model: bare }) : null;
+  return resolveCoderProviderRoute(model, registry);
 }
 
 export function coderRoutesShareTransport(left, right) {
@@ -276,8 +266,8 @@ export function buildCoderTransientProviderOverlay({
 }
 
 export const CODER_PROVIDER_CREDENTIALS = Object.freeze([
-  Object.freeze({ label: 'triss-worker', env: 'TRISS_WORKER_API_KEY' }),
-  Object.freeze({ label: 'zai-coding-plan', env: 'ZHIPU_API_KEY' }),
+  Object.freeze({ label: 'openai-compatible', env: 'TRISS_OPENAI_COMPATIBLE_API_KEY' }),
+  Object.freeze({ label: 'zai', env: 'ZHIPU_API_KEY' }),
   Object.freeze({ label: 'opencode-zen/go', env: 'OPENCODE_API_KEY' }),
   Object.freeze({ label: 'moonshot', env: 'MOONSHOT_API_KEY' }),
   Object.freeze({ label: 'kimi-for-coding', env: 'KIMI_API_KEY' }),

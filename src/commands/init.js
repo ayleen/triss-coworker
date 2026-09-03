@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import pc from 'picocolors';
-import { getConfig } from '../config.js';
+import { readProviderConfigSnapshot } from '../provider-config.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { runWizard } from './config.js';
 import { promptChoice } from '../secrets.js';
@@ -91,15 +91,16 @@ async function postInit(opts) {
   }
 
   // Auto-detect missing credentials and print friendly next-step hints.
-  const cfg = getConfig();
+  const cfg = readProviderConfigSnapshot();
   const integrations = await loadIntegrations();
   const tips = [];
 
-  if (!cfg.apiKey) {
+  const defaultProfile = cfg.providers[cfg.defaultProvider.value];
+  if (!defaultProfile.credential.value) {
     tips.push({
       level: 'warn',
-      msg: 'Worker API key is not set — required for `triss ask`/`triss write`.',
-      cmd: 'triss config wizard worker',
+      msg: `Credential for default provider "${cfg.defaultProvider.value}" is not set.`,
+      cmd: 'triss config wizard',
     });
   }
 

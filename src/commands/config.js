@@ -86,11 +86,11 @@ export async function chooseMode() {
     'Setup mode?',
     [
       {
-        label: 'Standard  — API key + one model. For most users.',
+        label: 'Standard  — default provider, API key, main and small models.',
         value: 'standard',
       },
       {
-        label: 'Advanced  — full control: presets, base URL, integrations (Jira, Linear, …).',
+        label: 'Advanced  — configure additional providers and integrations.',
         value: 'advanced',
       },
     ],
@@ -101,13 +101,7 @@ export async function chooseMode() {
 export async function runWizard(target, opts, deps) {
   const manifests = await listManifests();
   const explicit = !!target;
-  // Capture shell-exported coder model overrides BEFORE anything loads .env
-  // files, so the coder postSetup's pin-shadow check can flag a shell override
-  // that would beat what the wizard writes (mirrors runCoderInit).
-  const inheritedModels = {
-    model: process.env.TRISS_CODER_MODEL,
-    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
-  };
+  const inheritedModels = {};
 
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope();
@@ -323,13 +317,9 @@ async function offerClaudeCodeIntegration(wizardScope) {
 
 async function runStandardWizard(path, current) {
   process.stdout.write('\n' + pc.bold('── Standard setup ──') + '\n');
-  process.stdout.write(pc.dim('Just the essentials: API key + worker model.\n'));
-  process.stdout.write(
-    pc.dim('For Jira / Linear / per-preset models, run `triss config wizard --advanced` later.\n'),
-  );
+  process.stdout.write(pc.dim('Configure the default OpenAI-compatible provider profile.\n'));
 
-  // 1. API key — required.
-  const existingKey = current['TRISS_WORKER_API_KEY'];
+  const existingKey = current.TRISS_OPENAI_COMPATIBLE_API_KEY;
   let proceedKey = true;
   if (existingKey) {
     proceedKey = await yesNo(
@@ -338,58 +328,35 @@ async function runStandardWizard(path, current) {
     );
   }
   if (proceedKey) {
-    process.stdout.write('\n  ' + pc.yellow('TRISS_WORKER_API_KEY') + ' (required)\n');
-    process.stdout.write(pc.dim('  Get one at https://platform.deepseek.com/\n'));
+    process.stdout.write('\n  ' + pc.yellow('TRISS_OPENAI_COMPATIBLE_API_KEY') + ' (required)\n');
     const key = await prompt('  value', { hidden: true, defaultValue: existingKey });
     if (key) {
-      setVar(path, 'TRISS_WORKER_API_KEY', key);
+      setVar(path, 'TRISS_OPENAI_COMPATIBLE_API_KEY', key);
       process.stdout.write(pc.green('  ✓ saved\n'));
     } else if (!existingKey) {
       process.stdout.write(
-        pc.yellow("  ⚠ skipped — set later via 'triss config set TRISS_WORKER_API_KEY'\n"),
+        pc.yellow("  ⚠ skipped — set later via 'triss config set TRISS_OPENAI_COMPATIBLE_API_KEY'\n"),
       );
     }
   }
 
-  // 2. Worker model — optional, single value writes to both presets.
-  const existingFlash = current['TRISS_WORKER_FLASH_MODEL'];
-  const existingPro = current['TRISS_WORKER_PRO_MODEL'];
-  const presetsMatch = existingFlash && existingFlash === existingPro;
-  const existingModel = presetsMatch ? existingFlash : '';
-  process.stdout.write(
-    '\n  ' + pc.dim('Worker model') + pc.dim(' (optional, Enter for default)\n'),
-  );
-  process.stdout.write(
-    pc.dim('  e.g. deepseek-v4-flash, kimi-k2.5, qwen2.5-coder:14b. Default: deepseek-v4-flash\n'),
-  );
-  const model = await prompt('  value', { defaultValue: existingModel });
-  if (model) {
-    if (existingFlash && existingPro && !presetsMatch) {
-      process.stdout.write(
-        pc.yellow(
-          `  ⚠ flash (${existingFlash}) and pro (${existingPro}) presets are currently different.\n` +
-            `    Standard mode will overwrite BOTH with "${model}".\n`,
-        ),
-      );
-      const ok = await yesNo('  Overwrite both?', false);
-      if (!ok) {
-        process.stdout.write(
-          pc.dim('  · skipped — keep separate presets via `triss config wizard --advanced`\n'),
-        );
-        return;
-      }
-    }
-    setVar(path, 'TRISS_WORKER_FLASH_MODEL', model);
-    setVar(path, 'TRISS_WORKER_PRO_MODEL', model);
-    process.stdout.write(pc.green('  ✓ saved as both flash and pro presets\n'));
-  }
+  const existingModel = current.TRISS_OPENAI_COMPATIBLE_MODEL || '';
+  const existingSmallModel = current.TRISS_OPENAI_COMPATIBLE_SMALL_MODEL || '';
+  process.stdout.write('\n  ' + pc.dim('Main model') + '\n');
+  const model = await prompt('  value', { defaultValue: existingModel || 'deepseek-v4-pro' });
+  process.stdout.write('\n  ' + pc.dim('Small model') + '\n');
+  const smallModel = await prompt('  value', { defaultValue: existingSmallModel || 'deepseek-v4-flash' });
+  if (model) setVar(path, 'TRISS_OPENAI_COMPATIBLE_MODEL', model);
+  if (smallModel) setVar(path, 'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL', smallModel);
+  setVar(path, 'TRISS_DEFAULT_PROVIDER', 'openai-compatible');
+  setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
 
   process.stdout.write(
     '\n' +
       pc.green('Done.') +
       ' Run ' +
       pc.cyan('triss status') +
-      pc.dim(' to verify. Need Jira/Linear or different presets? ') +
+      pc.dim(' to verify. Configure more providers with ') +
       pc.cyan('triss config wizard --advanced') +
       '\n',
   );

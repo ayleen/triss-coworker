@@ -1,8 +1,7 @@
-## Triss — Cheap DeepSeek Coworker (Token Saving)
+## Triss — Provider-Backed Delegation
 
-You have a cheap DeepSeek-backed coworker available as the `triss` CLI on PATH.
-Use it to delegate token-heavy I/O so this conversation stays focused on
-reasoning, not on bulk reading, boilerplate, or tracker chatter.
+Use the `triss` CLI to delegate token-heavy I/O so this conversation stays
+focused on reasoning.
 
 ### `triss ask` — bulk reading
 Use instead of reading files yourself when:
@@ -12,10 +11,10 @@ Use instead of reading files yourself when:
 ```bash
 triss ask --paths <file1> <file2> ... --question "<specific question>"
 # heavier analysis:
-triss ask --paths src/**/*.ts --question "..." --model pro --max-tokens 16384
+triss ask --paths src/**/*.ts --question "..." --provider zai --model glm-5.2 --effort high
 ```
 
-The worker returns a structured bullet summary with file paths and line
+The provider runtime returns a structured bullet summary with file paths and line
 numbers. Read the file yourself only when you need to make precise edits.
 Add `--format evidence` when the answer must use the shared Outcome / Evidence /
 Uncertainty / Decision required contract. Text remains the default.
@@ -49,13 +48,13 @@ Use this whenever the user asks you to commit work — much cheaper than
 the primary model writing the message itself, and the format is
 consistent.
 
-### `triss chat <prompt>` — bare worker prompt
+### `triss chat <prompt>` — bare provider prompt
 For one-shot lookups / transformations where there is **no corpus** —
 no files to read, no URLs to fetch, no diff to review. Just a question.
 
 ```bash
 triss chat "что такое JWT в одном абзаце"
-triss chat "design a rate limiter for the auth endpoint" --model pro
+triss chat "design a rate limiter for the auth endpoint" --provider zai --model glm-5.2
 echo "long prompt..." | triss chat --stdin
 triss chat --system "ты Postgres эксперт" "explain MVCC"
 ```
@@ -153,28 +152,20 @@ triss fetch https://api-docs.example.com/changelog
 
 1. `triss extract <latest-session.jsonl> -o /tmp/chat.txt`
 2. `triss ask --paths /tmp/chat.txt <doc-files> --question "read chat, give exact changes for docs"`
-3. Apply the worker's suggested edits via the Edit tool.
+3. Apply the provider's suggested edits via the Edit tool.
 
 ### Models
-- `--model flash` (default) — cheap, fast, good for bulk reads.
-- `--model pro` — pricier, smarter, use for harder analysis or generation.
-- `--model <full-name>` — pin to any model id (e.g. `deepseek-v4-flash`).
-- `triss ask ... --provider glm` / `triss review --provider glm` — one-shot
-  GLM analysis with the same commands. `pro` is `glm-5.2`; `flash` is
-  `glm-4.7` on the subscription endpoint and `glm-4.5-air` on pay-as-you-go.
-  If nothing pinned the endpoint, a rejected call retries the other one and
-  says so. For GLM 5.2 code review, omit `--max-tokens` to use the model-sized
-  auto-budget. If you pass it explicitly, use at least 16384; explicit budgets
-  disable auto-sizing, and the generic 8192-token value can be exhausted by
-  reasoning. Keep `triss coder` for agentic coding runs.
-- `--provider kimi` (alias `moonshot`) — same one-shot flow on Moonshot's
-  Kimi models with `MOONSHOT_API_KEY`. `pro` is `kimi-k3` (the flagship);
-  `flash` is `kimi-k2.6`. One endpoint, bare model ids, no endpoint probing.
+- Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
+  `opencode-go`, `moonshot`, and `kimi-for-coding`.
+- `--model <native-id>` overrides the selected provider's role model for one
+  call. Provider-qualified model selectors are reserved for coder engine runs.
+- `--effort minimal|low|medium|high|max` is the shared reasoning control.
+- With neither `--provider` nor `--model`, commands resolve the configured
+  `TRISS_DEFAULT_PROVIDER` and its `model` or `smallModel` role.
+- For GLM 5.2 review, omit `--max-tokens` to use the model-sized auto-budget;
+  if explicit, use at least 16384.
 
-Override the preset names if needed via `TRISS_WORKER_FLASH_MODEL` and
-`TRISS_WORKER_PRO_MODEL` env vars (no code changes required).
-
-### `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
+### `triss coder` — delegate a coding task to a coding agent (default opencode engine)
 Setup once per machine/project:
 
 ```bash
@@ -214,9 +205,9 @@ triss coder clean [--all]  # remove finished isolation worktrees (default: only
 ```
 
 `--provider` uses an in-memory main/small overlay and never changes `.env` or
-`opencode.json`. Register the worker once with `triss coder init --provider
-worker`; then GLM and worker can be selected per run while both credentials
-remain configured. On this one-shot path, Triss verifies the installed OpenCode
+`opencode.json`. Configure the canonical provider once with
+`triss coder init --provider <id>`; any configured provider can then be
+selected per run. On this one-shot path, Triss verifies the installed OpenCode
 build meets the effective minimum (>= `1.18.22`) and audits its complete file
 graph, validates the final merged config with `debug
 config --pure` using a random canary instead of the real key, and runs OpenCode
@@ -295,26 +286,17 @@ forwards it as `ZAI_API_KEY` for older binaries. See
 `docs/engines/crush.md` for the supported configuration, safety boundaries,
 and current upstream limitations.
 
-Configure via `triss coder init` or `triss config wizard coder`. The opencode
-engine can reuse the existing OpenAI-compatible worker profile with
-`--provider worker`; `triss-worker/*` models use `TRISS_WORKER_API_KEY` and
-`TRISS_WORKER_BASE_URL` directly, with no second coder key. The opencode
-engine is not limited to Z.AI GLM: `triss coder init --provider opencode-zen`
-sets up **OpenCode Zen** models (`opencode/*`, e.g. the free
-`opencode/deepseek-v4-flash-free`) with `OPENCODE_API_KEY` — run `triss coder models` to see current offerings.
-The paid `--provider opencode-go` path shares that key but uses distinct
-`opencode-go/*` models such as `opencode-go/deepseek-v4-flash`. The
-`--provider moonshot` / `--provider kimi-for-coding` paths set up **Moonshot
-Kimi** models: pay-as-you-go `moonshotai/*` (e.g. `moonshotai/kimi-k2.7-code`)
-with `MOONSHOT_API_KEY`, or the flat-rate subscription `kimi-for-coding/*`
-(e.g. `kimi-for-coding/k3` — Kimi K3) with `KIMI_API_KEY`. Each run forwards
-only the key its model needs, so a Zen-, Go-, or Kimi-only machine needs no
-`ZHIPU_API_KEY`. Env vars: `ZHIPU_API_KEY` (required for GLM; the default
-provider), `OPENCODE_API_KEY` (optional — shared by `opencode/*` Zen and `opencode-go/*` Go models),
-`MOONSHOT_API_KEY` / `KIMI_API_KEY` (optional — unlock `moonshotai/*` /
-`kimi-for-coding/*` Kimi models),
-`TRISS_CODER_MODEL` / `TRISS_CODER_SMALL_MODEL`
-(model overrides, default `zai-coding-plan/glm-5.2` / `zai-coding-plan/glm-5-turbo`),
+Configure via `triss coder init` or `triss config wizard coder`. Every command
+uses the same canonical provider ids and role configuration. Examples:
+`openai-compatible/deepseek-v4-pro`, `zai/glm-5.2`,
+`opencode-zen/deepseek-v4-flash-free`, `opencode-go/deepseek-v4-flash`,
+`moonshot/kimi-k2.7-code`, and `kimi-for-coding/k3`.
+
+Provider credentials are isolated per run:
+`TRISS_OPENAI_COMPATIBLE_API_KEY`, `ZHIPU_API_KEY`, `OPENCODE_API_KEY`,
+`MOONSHOT_API_KEY`, or `KIMI_API_KEY`. Persistent main/small roles live in the
+selected provider profile; use `triss config set <provider-field> <native-id>`
+or rerun `triss coder init --provider <canonical-id>`.
 `TRISS_CODER_OPENCODE_VERSION` (installation minimum override, default/immutable
 floor `1.18.22`; below-floor or malformed values are rejected, a valid higher
 value raises the effective minimum, and one-shot provider runs are authorized
@@ -492,7 +474,7 @@ and harder to accept than a single focused run.
 - Anything requiring careful step-by-step reasoning you must own.
 - When you need exact line numbers to make a precise Edit — read the file yourself.
 
-Run `triss status` to verify the worker and any integrations are configured.
+Run `triss status` to verify provider profiles and integrations.
 Missing credentials? Suggest `triss config wizard` (or `triss config wizard <target>`
 for a single provider; `--local` saves to `./.triss.env` for project-only keys).
 

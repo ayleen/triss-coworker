@@ -1,5 +1,9 @@
 # `triss review --stdin`
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Status: implementation plan for the next release after v0.31.1.
 
 ## Objective

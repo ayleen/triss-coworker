@@ -1,5 +1,9 @@
 # One-shot coder provider selection
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Status: implementation contract for v0.30.0.
 
 ## Problem

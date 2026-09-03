@@ -23,13 +23,18 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveCoderEngine, runCoderRun as runCoderRunProduction, validateCoderRunOptions } from '../src/commands/coder.js';
+import { resolveCoderEngine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
   opts,
-  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
+  {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
+    ...deps,
+  },
 );
 import {
   opencode2,
@@ -66,6 +71,10 @@ function withEnv(vars, fn) {
     const allVars = {
       HOME: isolatedHome,
       TRISS_PROJECT_ROOT: isolatedHome,
+      TRISS_DEFAULT_PROVIDER: 'zai',
+      TRISS_ZAI_MODEL: 'glm-5.2',
+      TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo',
+      ZHIPU_API_KEY: 'test-zai-key',
       ...vars,
     };
     const savedIsolation = process.env.TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION;
@@ -102,11 +111,14 @@ const pinSh = () => (cmd, args) => {
   if (cmd === 'which' && args && args[0] === 'opencode2') {
     return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
+  if (cmd === 'opencode' && args && args[0] === '--version') {
+    return { status: 0, stdout: '1.18.22\n', stderr: '' };
+  }
   if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
   }
   if (args && args[0] === 'run' && args[1] === '--help') {
-    return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
   }
   return { status: 1, stdout: '', stderr: '', error: null };
 };
@@ -192,7 +204,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
       return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     }
     assert.equal(cmd, '/resolved/bin/opencode2');
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
     assert.deepEqual(argv, ['--version']);
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null };
   };
@@ -204,7 +216,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17000\n', error: null };
   }, fsOk);
   assert.equal(detOld.found, true);
@@ -229,7 +241,7 @@ test('detectOpenCode2 invariant #6: relative which output, realpath failure, and
     argv && argv[0] === '--version'
       ? { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null }
       : argv && argv[0] === 'run'
-        ? { status: 0, stdout: '--standalone --format --auto --model\n', error: null }
+        ? { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null }
       : { status: 1, stdout: '', error: null }
   );
   // A relative PATH entry makes `which` print a relative path — the parent
@@ -289,25 +301,14 @@ test('declared capabilities: needsSessionMap, no small_model, standalone require
   assert.equal(opencode2.id, 'opencode2');
 });
 
-test('opencode2 one-shot provider and small-model validate before the later routing seam', () => {
-  const result = validateCoderRunOptions({
-    engine: 'opencode2',
-    provider: 'zai',
-    model: 'zai-coding-plan/glm-5.2',
-    smallModel: 'zai-coding-plan/glm-5-turbo',
-  }, { prompt: 'x' });
-  assert.equal(result.oneShotProvider, 'zai');
-  assert.equal(result.oneShotSmallModel, 'zai-coding-plan/glm-5-turbo');
-  assert.equal(result.smallModelUnused, true);
-});
 
 // ─── argv & the --session/--continue matrix ─────────────────────────────────
 
 test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt>; never --pure/--dir; session+continue rejected together', () => {
-  const base = buildOpenCode2RunArgv({ prompt: 'do it', model: 'zai-coding-plan/glm-5.2' });
+  const base = buildOpenCode2RunArgv({ prompt: 'do it', model: 'zai/glm-5.2' });
   assert.deepEqual(base, [
     'run', '--standalone', '--format', 'json', '--auto',
-    '--model', 'zai-coding-plan/glm-5.2',
+    '--model', 'zai/glm-5.2',
     'do it',
   ]);
   assert.equal(base.includes('--pure'), false);
@@ -344,7 +345,7 @@ test('buildOpenCode2SpawnEnv: allowlist + credential + OPENCODE_DISABLE_AUTOUPDA
       XDG_STATE_HOME: '/user/state',
       ZHIPU_API_KEY: 'zk-1',
       OPENCODE_API_KEY: 'sk-2',
-      TRISS_WORKER_API_KEY: 'wk-3',
+      TRISS_OPENAI_COMPATIBLE_API_KEY: 'wk-3',
     },
     credentialEnv: 'ZHIPU_API_KEY',
     configContent: '{"model":"zai/glm-5.2"}',
@@ -361,7 +362,7 @@ test('buildOpenCode2SpawnEnv: allowlist + credential + OPENCODE_DISABLE_AUTOUPDA
   // XDG_CONFIG_HOME is deliberately NOT forwarded; only the selected key rides
   assert.equal(env.XDG_CONFIG_HOME, undefined);
   assert.equal(env.OPENCODE_API_KEY, undefined);
-  assert.equal(env.TRISS_WORKER_API_KEY, undefined);
+  assert.equal(env.TRISS_OPENAI_COMPATIBLE_API_KEY, undefined);
 });
 
 // ─── event fold: reuse the canonical fold, add V2 error.message + unknowns ──
@@ -834,29 +835,6 @@ test(
   ),
 );
 
-test(
-  'runCoderRun --engine opencode2: --small-model validates, spawns, and reports unused role',
-  withEnv(
-    {
-      ZHIPU_API_KEY: 'zk-v2-test',
-      TRISS_USAGE_LOG: '0',
-      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
-    },
-    async () => {
-      const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
-      const capture = stdoutCapture();
-      await runCoderRun(
-        'x',
-        { engine: 'opencode2', provider: 'zai', model: 'zai-coding-plan/glm-5.2', smallModel: 'zai-coding-plan/glm-5-turbo' },
-        { spawn: rec.spawnFn, spawnSync: pinSh(), stdoutWrite: capture.stdoutWrite, disableCredentialProxy: true },
-      );
-      assert.equal(rec.calls.length, 1);
-      const envelope = JSON.parse(capture.text().trim());
-      assert.ok(envelope.warnings.includes('OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.'));
-      assert.deepEqual(envelope.small_model, { requested: 'zai-coding-plan/glm-5-turbo', used: false });
-    },
-  ),
-);
 
 // ─── provider routes: fail-closed without a fixture ─────────────────────────
 
@@ -866,7 +844,7 @@ test(
     {
       ZHIPU_API_KEY: 'zk-v2-test',
       OPENCODE_API_KEY: 'sk-v2-test',
-      TRISS_WORKER_API_KEY: 'wk-v2-test',
+      TRISS_OPENAI_COMPATIBLE_API_KEY: 'wk-v2-test',
       TRISS_USAGE_LOG: '0',
     },
     async () => {
@@ -874,7 +852,7 @@ test(
       const capture = stdoutCapture();
       await runCoderRun(
         'x',
-        { engine: 'opencode2', provider: 'opencode-zen', model: 'opencode/deepseek-v4-flash-free', smallModel: 'opencode/deepseek-v4-flash-free' },
+        { engine: 'opencode2', provider: 'opencode-zen', model: 'opencode-zen/deepseek-v4-flash-free' },
         { spawn: rec.spawnFn, spawnSync: pinSh(), stdoutWrite: capture.stdoutWrite, disableCredentialProxy: true },
       );
       assert.equal(rec.calls.length, 1);
@@ -889,103 +867,16 @@ test(
   ),
 );
 
-test(
-  'runCoderRun --engine opencode2: same-provider Chat main plus Responses small validates small as unused',
-  withEnv(
-    {
-      OPENCODE_API_KEY: 'sk-go-v2-small-transport',
-      TRISS_USAGE_LOG: '0',
-    },
-    async () => {
-      const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
-      const capture = stdoutCapture();
-      await runCoderRun('x', {
-        engine: 'opencode2',
-        provider: 'opencode-go',
-        model: 'opencode-go/deepseek-v4-flash',
-        smallModel: 'opencode-go/muse-spark-1.2-contributor',
-      }, {
-        spawn: rec.spawnFn,
-        spawnSync: pinSh(),
-        disableCredentialProxy: true,
-        stdoutWrite: capture.stdoutWrite,
-      });
-      assert.equal(rec.calls.length, 1);
-      const { argv, options } = rec.calls[0];
-      assert.equal(argv[argv.indexOf('--model') + 1], 'triss-coder-transient/deepseek-v4-flash');
-      const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
-      assert.equal(config.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible');
-      assert.equal(config.small_model, undefined, 'V2 must not configure the unused small transport');
-      const envelope = JSON.parse(capture.text().trim());
-      assert.deepEqual(envelope.small_model, {
-        requested: 'opencode-go/muse-spark-1.2-contributor',
-        used: false,
-      });
-      assert.ok(envelope.warnings.includes('OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.'));
-    },
-  ),
-);
 
 test(
-  'runCoderRun --engine opencode2: unaudited small transport is ignored for explicit and persisted roles',
-  withEnv(
-    {
-      OPENCODE_API_KEY: 'sk-go-v2-unaudited-small',
-      TRISS_USAGE_LOG: '0',
-    },
-    async () => {
-      for (const [label, opts, expectedRequested] of [
-        [
-          'explicit',
-          {
-            engine: 'opencode2',
-            provider: 'opencode-go',
-            model: 'opencode-go/deepseek-v4-flash',
-            smallModel: 'opencode-go/newly-published-model',
-          },
-          'opencode-go/newly-published-model',
-        ],
-        [
-          'persisted',
-          { engine: 'opencode2' },
-          null,
-        ],
-      ]) {
-        if (label === 'persisted') {
-          process.env.TRISS_CODER_MODEL = 'opencode-go/deepseek-v4-flash';
-          process.env.TRISS_CODER_SMALL_MODEL = 'opencode-go/newly-published-model';
-        }
-        const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
-        const capture = stdoutCapture();
-        await runCoderRun('x', opts, {
-          spawn: rec.spawnFn,
-          spawnSync: pinSh(),
-          disableCredentialProxy: true,
-          stdoutWrite: capture.stdoutWrite,
-        });
-        assert.equal(rec.calls.length, 1);
-        const config = JSON.parse(rec.calls[0].options.env.OPENCODE_CONFIG_CONTENT);
-        assert.equal(config.model, 'triss-coder-transient/deepseek-v4-flash', label);
-        assert.equal(config.small_model, undefined, label);
-        assert.equal(config.provider['triss-coder-transient'].npm, '@ai-sdk/openai-compatible', label);
-        const envelope = JSON.parse(capture.text().trim());
-        assert.equal(envelope.small_model.used, false, label);
-        assert.equal(envelope.small_model.requested, expectedRequested, label);
-        delete process.env.TRISS_CODER_MODEL;
-        delete process.env.TRISS_CODER_SMALL_MODEL;
-      }
-    },
-  ),
-);
-
-test(
-  'runCoderRun --engine opencode2 best_effort_raw: unknown main keeps the unused small role out of built-in audit',
+  'runCoderRun --engine opencode2 best_effort_raw: unknown main keeps the provider small role out of built-in audit',
   withEnv(
     {
       OPENCODE_API_KEY: 'sk-go-v2-raw-unknown-main',
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
-      TRISS_CODER_MODEL: 'opencode-go/unknown-main-model',
-      TRISS_CODER_SMALL_MODEL: 'opencode-go/hostile-small-model',
+      TRISS_DEFAULT_PROVIDER: 'opencode-go',
+      TRISS_OPENCODE_GO_MODEL: 'unknown-main-model',
+      TRISS_OPENCODE_GO_SMALL_MODEL: 'hostile-small-model',
       TRISS_USAGE_LOG: '0',
     },
     async () => {
@@ -998,12 +889,14 @@ test(
         stdoutWrite: capture.stdoutWrite,
       });
       assert.equal(rec.calls.length, 1);
-      assert.equal(rec.calls[0].options.env.OPENCODE_CONFIG_CONTENT, undefined);
+      assert.deepEqual(JSON.parse(rec.calls[0].options.env.OPENCODE_CONFIG_CONTENT), {
+        model: 'opencode-go/unknown-main-model',
+      });
       assert.equal(rec.calls[0].argv[rec.calls[0].argv.indexOf('--model') + 1], 'opencode-go/unknown-main-model');
       const envelope = JSON.parse(capture.text().trim());
       assert.deepEqual(envelope.small_model, {
-        // Persisted small_model is intentionally not surfaced as a requested
-        // V2 role: only an explicit --small-model is validated and reported.
+        // The configured small role is intentionally not surfaced as a
+        // requested V2 role because this engine does not consume it.
         requested: null,
         used: false,
       });
@@ -1012,18 +905,18 @@ test(
 );
 
 test(
-  'runCoderRun --engine opencode2: protected envelope identity is honest for worker and Go Responses routes',
+  'runCoderRun --engine opencode2: protected envelope identity is honest for OpenAI-compatible and Go Responses routes',
   withEnv(
     {
       OPENCODE_API_KEY: 'sk-v2-go-test',
-      TRISS_WORKER_API_KEY: 'wk-v2-test',
+      TRISS_OPENAI_COMPATIBLE_API_KEY: 'wk-v2-test',
       TRISS_USAGE_LOG: '0',
     },
     async () => {
       for (const row of [
         {
-          provider: 'worker',
-          model: 'triss-worker/deepseek-v4-flash',
+          provider: 'openai-compatible',
+          model: 'openai-compatible/deepseek-v4-flash',
           package: '@ai-sdk/openai-compatible',
         },
         {

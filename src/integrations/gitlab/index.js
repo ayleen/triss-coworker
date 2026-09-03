@@ -36,24 +36,24 @@ export default {
     claude: CLAUDE_INSTRUCTIONS,
     codex: CLAUDE_INSTRUCTIONS,
   },
-  register(program, { wrap }) {
-    program
+  register(program, { wrap, addModelSelectionOptions }) {
+    const search = program
       .command('search <text>')
       .description('Search issues; --project narrows to one project')
       .option('--project <namespace/name>', 'project path (auto-detected from origin)')
       .option('--scope <scope>', 'search scope (default: all)')
       .option('-l, --limit <n>', 'max results', '30')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(search)
       .option('--json', 'raw JSON output')
-      .action(wrap(async (search, opts) => searchCmd({ search, ...opts })));
+      .action(wrap(async (searchText, opts) => searchCmd({ search: searchText, ...opts })));
 
-    program
+    const issue = program
       .command('issue <iid>')
       .description('Read an issue by IID (project auto-detected from origin)')
       .option('--project <namespace/name>', 'override project')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(issue)
       .option('--with-comments', 'include notes (comments)')
       .option('--json', 'raw JSON output')
       .action(wrap(issueCmd));
@@ -78,13 +78,13 @@ export default {
       .option('--labels <list>', 'comma-separated labels (replaces existing)')
       .action(wrap(updateCmd));
 
-    program
+    const comment = program
       .command('comment <iid>')
-      .description('List notes (with --question summarise) or post one with --post')
+      .description('List notes (with --question summarize) or post one with --post')
       .option('--project <namespace/name>')
       .option('--post <text>', 'post a new note')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(comment)
       .option('--json', 'raw JSON output')
       .action(wrap(commentCmd));
   },

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-08-29
+
+### Added
+
+- Unified provider profiles for `openai-compatible`, `zai`, `opencode-zen`,
+  `opencode-go`, `moonshot`, and `kimi-for-coding`, with explicit main and
+  small native-model roles.
+- One shared provider, model, engine, and reasoning-effort selection contract
+  across CLI commands, MCP tools, integrations, and coder engines.
+- Native OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
+  transports behind normalized execution results and usage accounting.
+- `triss migrate`, which discovers pre-0.42 state, resolves conflicts before
+  writing, performs an atomic canonical migration, verifies the production
+  resolver, removes legacy fields only after verification, and supports safe
+  cleanup resume.
+
+### Changed
+
+- Coder engines now project the shared provider registry instead of maintaining
+  separate provider identities, credentials, endpoints, and model defaults.
+- Provider credentials and endpoints use field-level provenance checks before
+  credential-bearing engine launches.
+- `triss status`, help, generated agent rules, documentation, and the website
+  report canonical provider IDs and concrete native model IDs.
+- `triss-dsh-provider-bundle` is version-aligned at 0.42.0; its catalogue
+  routes are unchanged.
+
+### Removed
+
+- Legacy provider aliases, public `flash`/`pro` presets, worker-specific
+  runtime configuration, and global coder model pins.
+- The `coder models` and `coder model set` surfaces. Provider role models are
+  configured directly in canonical provider profiles.
+- Compatibility readers from normal runtime paths. Pre-0.42 spellings remain
+  understood only by `triss migrate`.
+
+### Upgrade from Triss < 0.42.0
+
+Triss 0.42 replaces worker configuration and model presets with unified
+provider profiles. After installing the update and before running model
+commands:
+
+```bash
+triss migrate
+triss status
+```
+
+Restart MCP hosts and agent sessions after migration. Do not downgrade to a
+pre-0.42 release after migration.
+
+### Artifact integrity (0.42.0)
+
+- `triss-dsh-provider-bundle-0.42.0.tgz` — sha256
+  `e3e620037b4ddb9d2f55728b3c5cb5d8ecbd514499962b2c587bc41d3b1a7422`
+  — `sha512-0YvcF+7iKTDDNvx4cv/+QZOeHaMok2Rd7WNcWm2RIsYl01TgRtG0yaP7GamdXfY9NaowJmSx48r6RA6COZ+IoA==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.42.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.42.0`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
+
 ## [0.41.1] — 2026-08-29
 
 ### Fixed
@@ -1762,7 +1823,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...v0.42.0
 [0.41.1]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...v0.41.1
 [0.41.0]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/ayleen/triss-coworker/compare/v0.39.2...v0.40.0

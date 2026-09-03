@@ -27,7 +27,7 @@ export const CODER_ENGINE_REGISTRY = Object.freeze({
     supportsAgent: true,
     supportsSmallModel: true,
     supportsRestrict: false,
-    providerKinds: Object.freeze(['worker', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
+    providerKinds: Object.freeze(['openai-compatible', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
   }),
   opencode2: Object.freeze({
     id: 'opencode2',
@@ -39,7 +39,7 @@ export const CODER_ENGINE_REGISTRY = Object.freeze({
     supportsAgent: true,
     supportsSmallModel: false,
     supportsRestrict: false,
-    providerKinds: Object.freeze(['worker', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
+    providerKinds: Object.freeze(['openai-compatible', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
   }),
   crush: Object.freeze({
     id: 'crush',
@@ -63,7 +63,7 @@ export const CODER_ENGINE_REGISTRY = Object.freeze({
     supportsAgent: false,
     supportsSmallModel: true,
     supportsRestrict: false,
-    providerKinds: Object.freeze(['worker', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
+    providerKinds: Object.freeze(['openai-compatible', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
   }),
 });
 

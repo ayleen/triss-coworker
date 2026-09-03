@@ -8,11 +8,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readEnvFile, setVar, unsetVar, addToGitignore, getEnvFilePath } from '../src/secrets.js';
-import {
-  readLegacyCoderBestEffortEnv,
-  readGlmConfigSnapshot,
-  readWorkerConfigSnapshot,
-} from '../src/config.js';
 
 function tmpFile() {
   const dir = mkdtempSync(join(tmpdir(), 'triss-test-'));
@@ -152,13 +147,13 @@ test('setVar quotes values containing spaces or special chars', () => {
   assert.match(raw, /WITHHASH="a#b"/);
 });
 
-test('setVar handles values with embedded double-quotes by escaping', () => {
+test('setVar round-trips embedded double-quotes and backslashes', () => {
   const path = tmpFile();
   writeFileSync(path, '');
-  setVar(path, 'X', 'he said "hi"');
+  const value = 'path\\segment says "hi"';
+  setVar(path, 'X', value);
   const { vars } = readEnvFile(path);
-  // round-trip: stripped on read but original quoting preserved on write
-  assert.equal(vars.X, 'he said \\"hi\\"');
+  assert.equal(vars.X, value);
 });
 
 test('unsetVar removes a key and is idempotent', () => {
@@ -170,234 +165,6 @@ test('unsetVar removes a key and is idempotent', () => {
   assert.equal(readEnvFile(path).vars.KEEP, '1');
 });
 
-test('readGlmConfigSnapshot refreshes edited and deleted GLM file values', () => {
-  const local = '/tmp/project/.triss.env';
-  const global = '/tmp/home/.config/triss/.env';
-  const contents = new Map([[local, 'TRISS_CODER_MODEL=zai/glm-5.2\nZHIPU_API_KEY=zk-first\n']]);
-  const files = [
-    { scope: 'local', path: local, exists: true },
-    { scope: 'global', path: global, exists: false },
-  ];
-  const readFile = (path) => contents.get(path);
-  const processEnvBefore = {
-    coderModel: process.env.TRISS_CODER_MODEL,
-    apiKey: process.env.ZHIPU_API_KEY,
-  };
-
-  assert.deepEqual(readGlmConfigSnapshot({ parentEnv: {}, files, readFile }), {
-    coderModel: 'zai/glm-5.2',
-    apiKey: 'zk-first',
-  });
-
-  contents.set(local, 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nZHIPU_API_KEY=zk-second\n');
-  assert.deepEqual(readGlmConfigSnapshot({ parentEnv: {}, files, readFile }), {
-    coderModel: 'zai-coding-plan/glm-5.2',
-    apiKey: 'zk-second',
-  });
-
-  contents.set(local, '');
-  assert.deepEqual(readGlmConfigSnapshot({ parentEnv: {}, files, readFile }), {
-    coderModel: '',
-    apiKey: '',
-  });
-  assert.deepEqual(
-    { coderModel: process.env.TRISS_CODER_MODEL, apiKey: process.env.ZHIPU_API_KEY },
-    processEnvBefore,
-    'the reloadable reader must not mutate shared process.env',
-  );
-});
-
-test('readLegacyCoderBestEffortEnv is reloadable, scope-aware, and returns the raw value', () => {
-  // The retired acknowledgement no longer selects anything; the reader exists
-  // only so a command can emit a one-time migration warning. It must still be
-  // a correct scope-aware, reloadable snapshot of the raw stored value.
-  const local = '/project/.triss.env';
-  const global = '/home/.config/triss/.env';
-  const files = [
-    { scope: 'local', path: local, exists: true },
-    { scope: 'global', path: global, exists: true },
-  ];
-  const contents = new Map([
-    [local, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n'],
-    [global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
-  ]);
-  const readFile = (path) => contents.get(path);
-  const resolve = (scope = 'effective', parentEnv = {}) => readLegacyCoderBestEffortEnv({
-    scope,
-    parentEnv,
-    files,
-    readFile,
-  });
-
-  assert.equal(resolve('effective'), '1', 'local wins at runtime');
-  assert.equal(resolve('local'), '1', 'local setup merges local over global');
-  assert.equal(resolve('global'), '0', 'global setup ignores the project file');
-
-  contents.set(local, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n');
-  contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=1\n');
-  assert.equal(resolve('effective'), '0', 'literal local 0 overrides global 1');
-  assert.equal(resolve('global'), '1');
-
-  contents.set(local, '');
-  assert.equal(resolve('effective'), '1', 'deletion falls back to global');
-  contents.set(global, 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=true\n');
-  assert.equal(resolve('effective'), 'true', 'the raw stored value is returned verbatim');
-  assert.equal(
-    resolve('effective', { TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1' }),
-    '1',
-    'the immutable parent shell snapshot has highest precedence',
-  );
-});
-
-test('readGlmConfigSnapshot keeps parent env precedence and merges partial local files', () => {
-  const local = '/tmp/project/.triss.env';
-  const global = '/tmp/home/.config/triss/.env';
-  const contents = new Map([
-    [global, 'TRISS_CODER_MODEL=zai/glm-5.2\nZHIPU_API_KEY=zk-global\n'],
-    [local, 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\n'],
-  ]);
-  const files = [
-    { scope: 'local', path: local, exists: true },
-    { scope: 'global', path: global, exists: true },
-  ];
-  const readFile = (path) => contents.get(path);
-
-  assert.deepEqual(readGlmConfigSnapshot({ parentEnv: {}, files, readFile }), {
-    coderModel: 'zai-coding-plan/glm-5.2',
-    apiKey: 'zk-global',
-  });
-  assert.deepEqual(
-    readGlmConfigSnapshot({
-      parentEnv: { TRISS_CODER_MODEL: 'zai/glm-5.2', ZHIPU_API_KEY: 'zk-shell' },
-      files,
-      readFile,
-    }),
-    { coderModel: 'zai/glm-5.2', apiKey: 'zk-shell' },
-  );
-});
-
-test('readGlmConfigSnapshot falls back to global values when local file is unreadable', () => {
-  const local = '/tmp/project/.triss.env';
-  const global = '/tmp/home/.config/triss/.env';
-  const files = [
-    { scope: 'local', path: local, exists: true },
-    { scope: 'global', path: global, exists: true },
-  ];
-  const readFile = (path) => {
-    if (path === local) throw new Error('EACCES');
-    return 'TRISS_CODER_MODEL=zai/glm-5.2\nZHIPU_API_KEY=zk-global\n';
-  };
-
-  assert.deepEqual(readGlmConfigSnapshot({ parentEnv: {}, files, readFile }), {
-    coderModel: 'zai/glm-5.2',
-    apiKey: 'zk-global',
-  });
-});
-
-test('readWorkerConfigSnapshot separates global and local profiles while shell values win', () => {
-  const files = [
-    { scope: 'local', path: '/project/.triss.env', exists: true },
-    { scope: 'global', path: '/home/.config/triss/.env', exists: true },
-  ];
-  const contents = new Map([
-    ['/project/.triss.env', [
-      'TRISS_WORKER_API_KEY=local-key',
-      'TRISS_WORKER_BASE_URL=https://local.example/v1',
-      'TRISS_WORKER_FLASH_MODEL=local-flash',
-    ].join('\n')],
-    ['/home/.config/triss/.env', [
-      'TRISS_WORKER_API_KEY=global-key',
-      'TRISS_WORKER_BASE_URL=https://global.example/v1',
-      'TRISS_WORKER_FLASH_MODEL=global-flash',
-      'TRISS_WORKER_PRO_MODEL=global-pro',
-    ].join('\n')],
-  ]);
-  const readFile = (path) => contents.get(path);
-
-  assert.deepEqual(
-    readWorkerConfigSnapshot({ scope: 'global', parentEnv: {}, files, readFile }),
-    {
-      apiKey: 'global-key',
-      baseUrl: 'https://global.example/v1',
-      flashModel: 'global-flash',
-      proModel: 'global-pro',
-    },
-  );
-  assert.deepEqual(
-    readWorkerConfigSnapshot({ scope: 'local', parentEnv: {}, files, readFile }),
-    {
-      apiKey: 'local-key',
-      baseUrl: 'https://local.example/v1',
-      flashModel: 'local-flash',
-      proModel: 'global-pro',
-    },
-  );
-  assert.equal(
-    readWorkerConfigSnapshot({
-      scope: 'global',
-      parentEnv: { TRISS_WORKER_BASE_URL: 'https://shell.example/v1' },
-      files,
-      readFile,
-    }).baseUrl,
-    'https://shell.example/v1',
-  );
-});
-
-test('reloadable GLM config drives consecutive model routes and client keys', () => {
-  const home = mkdtempSync(join(tmpdir(), 'triss-glm-home-'));
-  const project = mkdtempSync(join(tmpdir(), 'triss-glm-project-'));
-  const envPath = join(project, '.triss.env');
-  writeFileSync(envPath, 'TRISS_CODER_MODEL=zai/glm-5.2\nZHIPU_API_KEY=zk-first\n');
-
-  const childEnv = { ...process.env, HOME: home, TRISS_PROJECT_ROOT: project };
-  delete childEnv.TRISS_CODER_MODEL;
-  delete childEnv.ZHIPU_API_KEY;
-  const script = `
-    import { writeFileSync } from 'node:fs';
-    import { join } from 'node:path';
-    import { resolveModelRequest } from './src/models.js';
-    import { getClient } from './src/client.js';
-
-    const envPath = join(process.env.TRISS_PROJECT_ROOT, '.triss.env');
-    const read = () => {
-      const request = resolveModelRequest({ provider: 'glm', model: 'glm-4.7' });
-      return { baseUrl: request.baseUrl, apiKey: getClient(request).apiKey };
-    };
-    const first = read();
-    writeFileSync(envPath, 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\\nZHIPU_API_KEY=zk-second\\n');
-    const second = read();
-    const defaultBaseUrl = getClient({ provider: 'glm', baseUrl: undefined }).baseURL;
-    writeFileSync(envPath, '');
-    const deletedBaseUrl = resolveModelRequest({ provider: 'glm', model: 'glm-4.7' }).baseUrl;
-    let deletedKeyError = '';
-    try { getClient({ provider: 'glm', baseUrl: deletedBaseUrl }); } catch (err) { deletedKeyError = err.message; }
-    console.log(JSON.stringify({ first, second, deletedBaseUrl, deletedKeyError, defaultBaseUrl }));
-  `;
-
-  try {
-    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
-      cwd: process.cwd(),
-      env: childEnv,
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const actual = JSON.parse(result.stdout);
-    assert.deepEqual(actual.first, {
-      baseUrl: 'https://api.z.ai/api/paas/v4',
-      apiKey: 'zk-first',
-    });
-    assert.deepEqual(actual.second, {
-      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
-      apiKey: 'zk-second',
-    });
-    assert.equal(actual.deletedBaseUrl, 'https://api.z.ai/api/coding/paas/v4');
-    assert.match(actual.deletedKeyError, /No GLM API key found/);
-    assert.equal(actual.defaultBaseUrl, 'https://api.z.ai/api/coding/paas/v4');
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(project, { recursive: true, force: true });
-  }
-});
 
 // Regression for issue #6: getEnvFilePath('global') must resolve homedir()
 // lazily on each call. secrets.js is already imported at the top of this

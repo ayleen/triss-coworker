@@ -25,12 +25,19 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { validateCoderRunOptions, runCoderRun as runCoderRunProduction } from "../src/commands/coder.js";
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
-const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
-  prompt,
-  opts,
-  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
-);
+const runCoderRun = (prompt, opts, deps = {}) => {
+  const spawnSyncDep = deps.spawnSync;
+  return runCoderRunProduction(prompt, opts, {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
+    ...deps,
+    spawnSync: (cmd, args, options) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : spawnSyncDep?.(cmd, args, options) ?? { status: 1, stdout: '', stderr: '', error: null },
+  });
+};
 import { ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE } from "../src/coder-result.js";
 import { coderRunHandler } from "../src/mcp/handlers.js";
 import { listTools } from "../src/mcp/tools.js";
@@ -54,12 +61,14 @@ function fakeSpawnReplaying(text) {
 function withIsolatedEnv(vars, fn) {
   return async () => {
     const snap = {};
+    const savedDefaultProvider = process.env.TRISS_DEFAULT_PROVIDER;
     for (const k of Object.keys(vars)) snap[k] = process.env[k];
     for (const [k, v] of Object.entries(vars)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
     if (!process.env.ZHIPU_API_KEY) process.env.ZHIPU_API_KEY = "zk-fake-test-key";
+    if (!process.env.TRISS_DEFAULT_PROVIDER) process.env.TRISS_DEFAULT_PROVIDER = 'zai';
     const savedZ = snap.ZHIPU_API_KEY;
     if (savedZ !== undefined && vars.ZHIPU_API_KEY === undefined) {
       // withIsolatedEnv injected fake key; keep it
@@ -73,6 +82,8 @@ function withIsolatedEnv(vars, fn) {
       }
       if (vars.ZHIPU_API_KEY === undefined && savedZ === undefined) delete process.env.ZHIPU_API_KEY;
       else if (savedZ !== undefined) process.env.ZHIPU_API_KEY = savedZ;
+      if (savedDefaultProvider === undefined) delete process.env.TRISS_DEFAULT_PROVIDER;
+      else process.env.TRISS_DEFAULT_PROVIDER = savedDefaultProvider;
     }
   };
 }

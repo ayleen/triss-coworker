@@ -27,7 +27,6 @@ import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createReviewBoundaryId } from '../src/review-prompt.js';
-import { ZAI_PAYG_BASE_URL } from '../src/zai.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -300,7 +299,7 @@ test('REV-06: MCP review core forwards the selected inference provider and model
     const result = await runReviewCore({
       base: 'main',
       skipIssue: true,
-      provider: 'glm',
+      provider: 'zai',
       model: 'zai/glm-5.2',
       maxTokens: 1234,
       callModel: async (request) => {
@@ -310,7 +309,7 @@ test('REV-06: MCP review core forwards the selected inference provider and model
     });
 
     assert.equal(result, 'reviewed');
-    assert.equal(captured.provider, 'glm');
+    assert.equal(captured.provider, 'zai');
     assert.equal(captured.model, 'zai/glm-5.2');
     assert.equal(captured.maxTokens, 1234);
   } finally {
@@ -339,7 +338,7 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
       {
         base: 'main',
         skip_issue: true,
-        provider: 'glm',
+        provider: 'zai',
         model: 'zai/glm-5.2',
         max_tokens: 1234,
       },
@@ -353,7 +352,7 @@ test('REV-06b: MCP review handler supplies the shared untrusted-data system prom
     );
 
     assert.equal(result, 'reviewed');
-    assert.equal(captured.provider, 'glm');
+    assert.equal(captured.provider, 'zai');
     assert.equal(captured.model, 'zai/glm-5.2');
     assert.equal(captured.maxTokens, 1234);
     const systemPrompt = captured.messages[0].content;
@@ -402,7 +401,7 @@ test('REV-06c: review boundary ids are unique UUIDs', () => {
   assert.notEqual(first, second);
 });
 
-test('REV-07: CLI review preserves a successful GLM top-level final_text response', async () => {
+test('REV-07: CLI review uses the shared runtime and preserves normalized text', async () => {
   const dir = makeTmpDir();
   const originalCwd = process.cwd();
   const captured = [];
@@ -428,14 +427,19 @@ test('REV-07: CLI review preserves a successful GLM top-level final_text respons
     const { runReviewWithDeps } = await import('../src/commands/review.js');
     const result = await runReviewWithDeps(
       undefined,
-      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', noStream: true },
+      { base: 'main', skipIssue: true, provider: 'zai', model: 'glm-5.2', noStream: true },
       {
-        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
-        chat: async (request) => {
+        executeModelTask: async (request) => {
           modelRequest = request;
           return {
-            final_text: 'No issues found.',
-            usage: { prompt_tokens: 10, completion_tokens: 4 },
+            resolved: { providerId: 'zai', publicModel: 'zai/glm-5.2' },
+            result: {
+              text: 'No issues found.',
+              reasoning: null,
+              usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+              finishReason: 'stop',
+              rawMetadata: null,
+            },
           };
         },
       },
@@ -443,9 +447,9 @@ test('REV-07: CLI review preserves a successful GLM top-level final_text respons
 
     assert.equal(result, 'No issues found.');
     assert.match(captured.join(''), /No issues found\./);
-    assert.match(modelRequest.messages[0].content, /say "No issues found\." in one line/);
-    assert.match(modelRequest.messages[0].content, /trusted boundary ID/i);
-    assert.doesNotMatch(modelRequest.messages[0].content, /Outcome:/);
+    assert.match(modelRequest.input.messages[0].content, /say "No issues found\." in one line/);
+    assert.match(modelRequest.input.messages[0].content, /trusted boundary ID/i);
+    assert.doesNotMatch(modelRequest.input.messages[0].content, /Outcome:/);
   } finally {
     process.stdout.write = originalWrite;
     process.chdir(originalCwd);
@@ -476,18 +480,26 @@ test('REV-08: CLI streaming review evidence prompt drops the one-line clean rule
     const { runReviewWithDeps } = await import('../src/commands/review.js');
     await runReviewWithDeps(
       undefined,
-      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', format: 'evidence', stream: true },
+      { base: 'main', skipIssue: true, provider: 'zai', model: 'glm-5.2', format: 'evidence', stream: true },
       {
-        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
-        chatStream: async (request) => {
+        executeModelTask: async (request) => {
           captured = request;
-          request.onChunk('Outcome: no issues found');
-          return { final_text: 'Outcome: no issues found', usage: {} };
+          request.input.onText('Outcome: no issues found');
+          return {
+            resolved: { providerId: 'zai', publicModel: 'zai/glm-5.2' },
+            result: {
+              text: 'Outcome: no issues found',
+              reasoning: null,
+              usage: {},
+              finishReason: 'stop',
+              rawMetadata: null,
+            },
+          };
         },
       },
     );
 
-    const systemPrompt = captured.messages[0].content;
+    const systemPrompt = captured.input.messages[0].content;
     // Evidence mode must not simultaneously require the one-line text verdict.
     assert.doesNotMatch(systemPrompt, /say "No issues found\." in one line/);
     // It must require the shared Markdown contract and direct the clean case.
@@ -499,7 +511,7 @@ test('REV-08: CLI streaming review evidence prompt drops the one-line clean rule
     assert.match(systemPrompt, /clean verdict/i);
     assert.match(systemPrompt, /explicit none/i);
     assert.match(systemPrompt, /trusted boundary ID/i);
-    assert.equal(typeof captured.onChunk, 'function');
+    assert.equal(typeof captured.input.onText, 'function');
   } finally {
     process.stdout.write = originalWrite;
     process.stderr.write = originalErr;
@@ -529,7 +541,7 @@ test('REV-09: MCP review evidence prompt drops the one-line clean rule and requi
       {
         base: 'main',
         skip_issue: true,
-        provider: 'glm',
+        provider: 'zai',
         model: 'zai/glm-5.2',
         max_tokens: 1234,
         response_format: 'evidence',
@@ -581,7 +593,7 @@ test('REV-11: runReviewCore keeps absent maxTokens absent, marks purpose review,
     await runReviewCore({
       base: 'main',
       skipIssue: true,
-      provider: 'glm',
+      provider: 'zai',
       model: 'zai/glm-5.2',
       maxTokens: 1234,
       timeoutMs: 5000,
@@ -627,10 +639,10 @@ test('REV-11b: runReviewCore validates only explicit max_tokens before git work'
   );
 });
 
-test('REV-12: MCP review applies GLM defaults through the internal callModel after resolution', async () => {
+test('REV-12: MCP review applies standard defaults through the shared runtime', async () => {
   const dir = makeTmpDir();
   const originalCwd = process.cwd();
-  let chatInput;
+  let runtimeInput;
   try {
     initGitRepo(dir, 'main');
     const g = (args) =>
@@ -639,34 +651,39 @@ test('REV-12: MCP review applies GLM defaults through the internal callModel aft
         encoding: 'utf8',
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       });
-    g(['switch', '-c', 'feat/review-core-glm-defaults']);
-    addChange(dir, 'glm-defaults.js', 'export const reviewed = true;\n');
+    g(['switch', '-c', 'feat/review-core-runtime-defaults']);
+    addChange(dir, 'runtime-defaults.js', 'export const reviewed = true;\n');
     process.chdir(dir);
 
     const { reviewHandler } = await import('../src/mcp/handlers.js');
     const controller = new AbortController();
     const result = await reviewHandler(
-      { base: 'main', skip_issue: true, provider: 'glm', model: 'zai/glm-5.2' },
+      { base: 'main', skip_issue: true, provider: 'zai', model: 'zai/glm-5.2' },
       {
         reviewBoundaryId: 'test-boundary',
-        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-5.2', baseUrl: ZAI_PAYG_BASE_URL }),
-        requestTimeoutMs: () => undefined,
         signal: controller.signal,
         onReasoning: () => {},
-        chat: async (input) => {
-          chatInput = input;
-          return { choices: [{ message: { content: 'reviewed', finish_reason: 'stop' } }], usage: {} };
+        executeModelTask: async (input) => {
+          runtimeInput = input;
+          return {
+            result: {
+              text: 'reviewed',
+              reasoning: '',
+              finishReason: 'stop',
+              usage: null,
+              rawMetadata: {},
+            },
+          };
         },
       },
     );
     assert.equal(result, 'reviewed');
-    assert.equal(chatInput.provider, 'glm');
-    assert.equal(chatInput.model, 'glm-5.2');
-    assert.equal(chatInput.maxTokens, 65536, 'resolved GLM model drives the review budget (capped at 64K for context window)');
-    assert.equal(chatInput.timeoutMs, 1800000, 'GLM review timeout default applies');
-    assert.equal(chatInput.thinking, true);
-    assert.equal(typeof chatInput.onReasoning, 'function', 'handler deps reach the internal callModel');
-    assert.equal(chatInput.signal, controller.signal, 'caller cancellation signal reaches chat');
+    assert.equal(runtimeInput.provider, 'zai');
+    assert.equal(runtimeInput.model, 'zai/glm-5.2');
+    assert.equal(runtimeInput.input.maxOutputTokens, 8192);
+    assert.equal(runtimeInput.timeout, undefined);
+    assert.equal(typeof runtimeInput.input.onReasoning, 'function');
+    assert.equal(runtimeInput.signal, controller.signal);
   } finally {
     process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });
@@ -799,12 +816,16 @@ test('REVIEW-SHARD-CLI-01: shard mode prints per-shard verdicts and no global cl
     const { runReviewWithDeps } = await import('../src/commands/review.js');
     const result = await runReviewWithDeps(
       undefined,
-      { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', noStream: true, payloadMode: 'shard' },
+      { base: 'main', skipIssue: true, provider: 'zai', model: 'glm-5-turbo', noStream: true, payloadMode: 'shard' },
       {
-        resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
-        chat: async () => ({
-          final_text: 'shard verdict',
-          usage: { prompt_tokens: 10, completion_tokens: 4 },
+        executeModelTask: async () => ({
+          result: {
+            text: 'shard verdict',
+            reasoning: '',
+            finishReason: 'stop',
+            usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+            rawMetadata: {},
+          },
         }),
       },
     );
@@ -845,9 +866,9 @@ test('REVIEW-SHARD-CLI-03: shard + stream is rejected before any model call', as
       () =>
         runReviewWithDeps(
           undefined,
-          { base: 'main', skipIssue: true, provider: 'glm', model: 'flash', payloadMode: 'shard', stream: true },
+          { base: 'main', skipIssue: true, provider: 'zai', model: 'glm-5-turbo', payloadMode: 'shard', stream: true },
           {
-            resolveModelRequest: () => ({ provider: 'glm', model: 'glm-4.7' }),
+            resolveModelRequest: () => ({ provider: 'zai', model: 'glm-4.7' }),
             chat: async () => {
               modelCalled = true;
               return { final_text: 'x' };

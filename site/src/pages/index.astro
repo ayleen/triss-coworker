@@ -6,9 +6,9 @@ import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 import { ANTHROPIC, DEEPSEEK, DEFAULTS, PROFILE, calcMonthly } from "../data/pricing.js";
-// pkg version is 0.37.2 — keep in sync with root package.json
+// Release version is sourced from package metadata during publication.
 
-// Static calc for SSR — must match client JS defaults (sonnet + flash at 77% hit)
+// Static calc for SSR — must match client JS defaults (standard delegated model at 77% hit)
 const _idxDefaults = DEFAULTS;
 const _idxCalc = calcMonthly(_idxDefaults);
 function _idxMoney(v: number) { return v >= 100 ? "$" + Math.round(v).toLocaleString("en-US") : "$" + v.toFixed(2); }
@@ -20,7 +20,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
 
 <Base
   title="Triss — Your agent is a brilliant engineer. A very expensive proofreader."
-  description="Triss is a Node CLI that delegates token-heavy work to a cheaper worker and returns a compact summary to your primary agent. See the measured $2.22 week."
+  description="Triss is a Node CLI that delegates token-heavy work through a lower-cost provider and returns a compact summary to your primary agent. See the measured $2.22 week."
 >
   <Header />
 
@@ -48,8 +48,8 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
       </h1>
       <p style="margin: 26px 0 0; max-width: 30em; font-size: 17.5px; line-height: 1.6; color: var(--color-text-secondary);">
         Triss is a Node CLI that intercepts the token-heavy half of the job — bulk file reads, URL fetches, diff reviews,
-        tracker chatter, whole implementation tasks — and hands it to a cheap DeepSeek worker. Your primary agent gets a
-        1–2K-token summary instead of 28K in + 4.7K out per request (5.84M total week).
+        tracker chatter, whole implementation tasks — and hands it to your configured lower-cost provider. Your primary
+        agent gets a 1–2K-token summary instead of 28K in + 4.7K out per request (5.84M total week).
       </p>
       <div style="display: flex; gap: 12px; margin-top: 34px; flex-wrap: wrap;">
         <button
@@ -196,7 +196,7 @@ const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
       </div>
       <div style="display: flex; align-items: center; padding: 0 18px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label); white-space: nowrap;">→ corpus →</div>
       <div style="border: 1px solid var(--color-border-strong); padding: 24px; background: var(--color-bg-raised);">
-        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">worker</div>
+        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">provider runtime</div>
         <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">DeepSeek, GLM, Kimi, Ollama</div>
         <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted); margin-top: 10px;">Any OpenAI-compatible endpoint. Returns a focused summary with cited paths.</div>
         <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); margin-top: 18px; border-top: 1px solid var(--color-border-subtle); padding-top: 14px;">≈$0.01 / call</div>

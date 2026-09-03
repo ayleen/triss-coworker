@@ -1,6 +1,6 @@
-## Triss — cheap delegation worker
+## Triss — provider-backed delegation
 
-You have a cheap DeepSeek-backed worker exposed as MCP tools (`triss_ask`,
+You have provider-backed delegation exposed as MCP tools (`triss_ask`,
 `triss_review`, `triss_fetch`, `triss_chat`, `triss_write`,
 `triss_commit_msg`, `triss_status`) — or the `triss` CLI as a fallback if
 MCP is not loaded.
@@ -30,25 +30,18 @@ the V2 beta (see docs/engines/opencode2.md), or `--engine crush`). The
 default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
-CLI-flag allowlist on top. The opencode engine can also run the existing
-OpenAI-compatible worker profile (`triss coder init --provider
-worker`, model `triss-worker/<TRISS_WORKER_FLASH_MODEL>`, using the existing
-`TRISS_WORKER_API_KEY` and `TRISS_WORKER_BASE_URL`), OpenCode Zen
-models (e.g. `--model opencode/deepseek-v4-flash-free`) or paid OpenCode Go
-models (e.g. `--model opencode-go/deepseek-v4-flash`), both with `OPENCODE_API_KEY`,
-or Moonshot Kimi models (`--model moonshotai/kimi-k2.7-code` with
-`MOONSHOT_API_KEY`, or the flat-rate `--model kimi-for-coding/k3` with
-`KIMI_API_KEY`) instead of Z.AI GLM.
-After one-time worker registration, switch the complete provider pair for one
-OpenCode run without changing persistent defaults: `triss coder run "<task>"
---provider worker --model triss-worker/<id> [--small-model
-triss-worker/<id>]`. `--small-model` defaults to the one-shot main.
-For one-shot analysis through the standard tools, pass `provider: "glm"` or
-`provider: "kimi"` to `triss_ask` or `triss_review` (CLI: `--provider glm` /
-`--provider kimi`; Kimi presets: flash=kimi-k2.6, pro=kimi-k3). Keep
-`triss coder` for tool-using, sessionful coding runs.
-For GLM 5.2 code review the recommended default is `triss review --provider glm --model pro` with no explicit `--max-tokens` (GLM auto-sizes the budget). If you do pass `--max-tokens`, use at least 16384 — the generic 8192-token value can be exhausted by reasoning and return an empty verdict, and an explicit value disables the auto-budget.
+CLI-flag allowlist on top.
+
+The canonical providers are `openai-compatible`, `zai`, `opencode-zen`,
+`opencode-go`, `moonshot`, and `kimi-for-coding`. Configure one with
+`triss coder init --provider <id>` and use canonical qualified models such as
+`openai-compatible/deepseek-v4-pro`, `zai/glm-5.2`,
+`opencode-zen/deepseek-v4-flash-free`, or `moonshot/kimi-k2.7-code`.
+For direct analysis, pass the same canonical `provider`, optional native
+`model`, and optional `effort` (`minimal|low|medium|high|max`) to
+`triss_ask` or `triss_review`. GLM 5.2 reviews should omit `max_tokens` to use
+the model-sized budget; if explicit, use at least 16384.
 See `triss agent-help` for flags and the envelope it returns.
 
-For the full reference (examples, model presets, tracker integrations like
+For the full reference (examples, provider models, tracker integrations like
 Jira / Linear / GitHub) run `triss agent-help` once when you need it.

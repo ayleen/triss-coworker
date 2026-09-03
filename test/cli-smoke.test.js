@@ -62,6 +62,7 @@ test('cli: unknown commands fail with a nonzero status and a helpful error', () 
 test('cli: status without configuration still renders the full report and exits zero', () => {
   const out = runCli(['status']);
   assert.match(out.stdout, /Triss Coworker — status/);
-  assert.match(out.stdout, /TRISS_WORKER_API_KEY\s+\(unset\)/);
-  assert.match(out.stdout, /⚠ missing/);
+  assert.match(out.stdout, /Default provider: openai-compatible/);
+  assert.match(out.stdout, /Provider profiles/);
+  assert.match(out.stdout, /credential\s+: missing/);
 });

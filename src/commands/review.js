@@ -2,10 +2,9 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { chat, chatStream, reportUsage, responseText } from '../client.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { assertProviderText } from '../provider-errors.js';
-import { requestTimeoutMs } from '../config.js';
-import { resolveModelRequest } from '../models.js';
 import {
   createReviewBoundaryId,
   reviewSystemPromptForFormat,
@@ -27,7 +26,7 @@ import {
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { emptyReviewResponse, validateResponseFormat } from '../response-format.js';
 import { positiveIntegerOption } from '../option-validation.js';
-import { emptyReviewResponseMessage, GLM_REVIEW_TIMEOUT_MS, GLM_REVIEW_MAX_TOKENS_CAP, GLM_REVIEW_SHARD_MAX_TOKENS, glmReviewMaxTokens } from '../review-defaults.js';
+import { emptyReviewResponseMessage } from '../review-defaults.js';
 
 const DEFAULT_QUESTION =
   'Review this change. List concrete issues; do not summarise the diff.';
@@ -217,21 +216,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
     return empty;
   }
 
-  const resolveRequest = deps.resolveModelRequest || resolveModelRequest;
-  const sendChat = deps.chat || chat;
-  const sendChatStream = deps.chatStream || chatStream;
-  const request = resolveRequest({
-    provider: opts.provider,
-    model: opts.model || 'pro',
-  });
-  const { provider, model } = request;
-  // GLM reviews get the model-sized budget, thinking enabled, and a long
-  // timeout — but only when the user did not pass --max-tokens themselves.
-  const isGlm = provider === 'glm';
+  const execute = deps.executeModelTask || executeModelTask;
   const explicitMaxTokens = opts.maxTokens !== undefined;
-  const reviewMaxTokens = isGlm && !explicitMaxTokens ? Math.min(glmReviewMaxTokens(model), GLM_REVIEW_MAX_TOKENS_CAP) : maxTokens;
-  const readRequestTimeout = deps.requestTimeoutMs || requestTimeoutMs;
-  const reviewTimeoutMs = isGlm ? readRequestTimeout() ?? GLM_REVIEW_TIMEOUT_MS : undefined;
 
   const loadLinkedIssue = deps.loadLinkedIssue || tryLoadLinkedIssue;
   let ticketCorpus = '';
@@ -298,8 +284,6 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
       return undefined;
     }
 
-    const shardMaxTokens = isGlm && !explicitMaxTokens ? Math.min(glmReviewMaxTokens(model), GLM_REVIEW_SHARD_MAX_TOKENS) : maxTokens;
-    const shardRequestBase = isGlm ? { thinking: true, timeoutMs: reviewTimeoutMs } : {};
     const result = await executeReviewPlan(
       {
         callModel: async ({ shard, question, metadata }) => {
@@ -307,20 +291,30 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
             metadata,
             wrapReviewSection(boundaryId, 'diff', `<diff>\n${shard.sections.map((s) => s.raw).join('')}\n</diff>`),
           ].join('\n\n');
-          const resp = await sendChat({
-            ...request,
-            maxTokens: shardMaxTokens,
-            messages: [
-              { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
-              { role: 'user', content: shardCorpus },
-              { role: 'user', content: question },
-            ],
-            label: 'triss/review',
-            ...shardRequestBase,
-          });
-          const text = responseText(resp);
+          const output = await execute({
+            task: 'review-shard',
+            provider: opts.provider,
+            model: opts.model,
+            engine: opts.engine,
+            effort: opts.effort,
+            signal: deps.signal,
+            input: {
+              maxOutputTokens: maxTokens,
+              messages: [
+                { role: 'system', content: reviewSystemPromptForFormat('text', { boundaryId }) },
+                { role: 'user', content: shardCorpus },
+                { role: 'user', content: question },
+              ],
+              label: 'triss/review',
+            },
+          }, deps.runtimeDeps);
+          const text = output.result.text;
           if (!text || !text.trim()) {
-            const err = new Error(emptyReviewResponseMessage({ finishReason: resp?.choices?.[0]?.finish_reason, explicitMaxTokens, labeled: true }));
+            const err = new Error(emptyReviewResponseMessage({
+              finishReason: output.result.finishReason,
+              explicitMaxTokens,
+              labeled: true,
+            }));
             err.code = 'TRISS_PROVIDER_EMPTY';
             throw err;
           }
@@ -362,11 +356,8 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
   }
 
   const diagnostic = stdinMode
-    ? `[triss/review] provider=${provider} model=${model} source=stdin ` +
-      `bytes=${Buffer.byteLength(diff, 'utf8')} limits=bounded-stdin\n`
-    : `[triss/review] provider=${provider} model=${model} ` +
-      `bytes=${Buffer.byteLength(diff, 'utf8')} ` +
-      `base=${baseRef} head=${headRef}\n`;
+    ? `[triss/review] source=stdin bytes=${Buffer.byteLength(diff, 'utf8')} limits=bounded-stdin\n`
+    : `[triss/review] bytes=${Buffer.byteLength(diff, 'utf8')} base=${baseRef} head=${headRef}\n`;
   process.stderr.write(pc.dim(diagnostic));
 
   // review acceptance: bounded single-request payload planning (Invariant — a payload
@@ -464,37 +455,44 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
           process.stdout.write('\n');
           stdoutLineOpen = false;
         };
-        const reviewRequest = {
-          ...request,
-          maxTokens: reviewMaxTokens,
-          messages,
-          label: 'triss/review',
-          onChunk: (d) => {
-            if (!contentStarted) { contentStarted = true; closeReasoning(); }
-            process.stdout.write(d);
-            stdoutLineOpen = !String(d).endsWith('\n');
-          },
-          ...(isGlm ? { thinking: true, timeoutMs: reviewTimeoutMs, onReasoning } : {}),
-        };
-        let resp;
+        let output;
         try {
-          resp = useStream
-            ? await sendChatStream(reviewRequest)
-            : await sendChat(reviewRequest);
+          output = await execute({
+            task: 'review',
+            provider: opts.provider,
+            model: opts.model,
+            engine: opts.engine,
+            effort: opts.effort,
+            signal: deps.signal,
+            timeout: opts.timeoutMs,
+            input: {
+              maxOutputTokens: maxTokens,
+              messages,
+              stream: useStream,
+              onText: useStream ? (d) => {
+                if (!contentStarted) { contentStarted = true; closeReasoning(); }
+                process.stdout.write(d);
+                stdoutLineOpen = !String(d).endsWith('\n');
+              } : undefined,
+              onReasoning,
+              outputContract: responseFormat,
+              label: 'triss/review',
+            },
+          }, deps.runtimeDeps);
         } catch (error) {
           closeReasoning();
           terminatePartialStdout();
           flushPendingReasoning();
           throw error;
         }
-        const out = responseText(resp);
+        const out = output.result.text;
         if (!out || !out.trim()) {
           closeReasoning();
           terminatePartialStdout();
           flushPendingReasoning();
           const err = new Error(
             emptyReviewResponseMessage({
-              finishReason: resp?.choices?.[0]?.finish_reason,
+              finishReason: output.result.finishReason,
               explicitMaxTokens,
               labeled: true,
             }),
@@ -506,14 +504,14 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
           terminatePartialStdout();
           flushPendingReasoning();
           // Verdict already streamed; usage line handled below
-          const usage = reportUsage(resp, 'triss/review', { provider: request.provider });
+          const usage = reportNormalizedUsage(output.result, 'triss/review');
           if (usage) process.stderr.write(pc.dim('\n' + usage + '\n'));
           return out;
         }
         // Non-streaming path: usage is emitted here; the verdict itself is
         // printed exactly once by the runReviewWithDeps tail (shouldStream check).
         closeReasoning();
-        const usage = reportUsage(resp, 'triss/review', { provider: request.provider });
+        const usage = reportNormalizedUsage(output.result, 'triss/review');
         if (usage) process.stderr.write(pc.dim('\n' + usage + '\n'));
         return out;
       },

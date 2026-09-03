@@ -1,0 +1,8 @@
+User text before the managed block.
+<!-- triss:start -->
+## Triss — cheap delegation worker
+
+Use `triss ask --provider worker` for bulk reads. The coder can reuse
+`triss-worker/<TRISS_WORKER_FLASH_MODEL>` with `TRISS_WORKER_API_KEY`.
+<!-- triss:end -->
+User text after the managed block.

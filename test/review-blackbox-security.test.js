@@ -36,6 +36,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,6 +58,7 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
   };
   const saved = {
     HOME: process.env.HOME,
+    TRISS_DEFAULT_PROVIDER: process.env.TRISS_DEFAULT_PROVIDER,
     ZHIPU_API_KEY: process.env.ZHIPU_API_KEY,
     OPENCODE_API_KEY: process.env.OPENCODE_API_KEY,
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
@@ -67,6 +69,7 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
   const tempHome = mkdtempSync(join(tmpdir(), 'triss-bb-proxy-fail-home-'));
   process.env.HOME = tempHome;
   process.env.TRISS_PROJECT_ROOT = tempHome;
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
   process.env.ZHIPU_API_KEY = 'zk-raw-secret-should-never-reach-child';
   delete process.env.OPENCODE_API_KEY;
   delete process.env.MOONSHOT_API_KEY;
@@ -81,9 +84,12 @@ test('coder run without a startable proxy fails BEFORE spawn, env stays clean', 
         { protectCredentials: true },
         {
           spawn: fakeSpawn,
-          spawnSync: () => ({ status: 1, stdout: '', error: null }),
+          spawnSync: (cmd, args) => cmd === 'opencode' && args?.[0] === '--version'
+            ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+            : { status: 1, stdout: '', error: null },
           stdoutWrite: () => true,
           effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+          providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
           // The proxy CANNOT start (port binding fails via a dead listener).
           credentialProxyOptions: { host: '256.256.256.256', port: -1 },
         },
@@ -165,6 +171,7 @@ test('a successful proxied run hands the child the token, never the raw key', as
           }
         },
         stdoutWrite: () => true,
+        providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
       },
     );
     assert.ok(observedEnv, 'engine spawned');

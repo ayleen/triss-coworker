@@ -32,6 +32,7 @@ import { runCommitMsg } from '../src/commands/commit-msg.js';
 import { runInit } from '../src/commands/init.js';
 import { runAgentHelp } from '../src/commands/agent-help.js';
 import { runStatus } from '../src/commands/status.js';
+import { runMigrate } from '../src/commands/migrate.js';
 import { runCompletion } from '../src/commands/completion.js';
 import { runExec } from '../src/commands/exec.js';
 import { runUpdate } from '../src/commands/update.js';
@@ -56,7 +57,6 @@ import {
   runCoderResultList,
   runCoderResultClean,
 } from '../src/commands/coder.js';
-import { runCoderModels, runCoderModelSet, runCoderModelRollback } from '../src/commands/coder-models.js';
 import { runCoderStateBackup, runCoderStateValidate } from '../src/commands/coder-state-backup.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 import { withCall } from '../src/call-context.js';
@@ -67,6 +67,7 @@ import {
   shouldSuppressPassiveCheck,
 } from '../src/update/passive.js';
 import { isExecExplainInvocation } from '../src/cli-argv.js';
+import { normalizeModelEffort } from '../src/provider-contract.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -92,19 +93,35 @@ function parsePositiveNumber(value) {
   }
 }
 
+function parseEffort(value) {
+  try {
+    return normalizeModelEffort(value);
+  } catch (error) {
+    throw new InvalidArgumentError(error.message);
+  }
+}
+
+function addModelSelectionOptions(command) {
+  return command
+    .option('--provider <id>', 'canonical provider id')
+    .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
+    .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
+    .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort);
+}
+
 // Shared help text for the credential-mode flag (`coder init` and `coder run`;
 // `triss exec --code` forwards it under its own shorter description).
 const PROTECT_HELP =
   'Use the parent-owned credential proxy and strict executable-surface gates.\n' +
   'Fails closed when protected credential isolation cannot be enforced.\n' +
-  'OpenCode/OpenCode2 only; Crush is always protected.';
+  'OpenCode, OpenCode2, and OMP support this option; Crush is always protected.';
 
 const program = new Command();
 program
   .name('triss')
   .description(
-    'Cheap DeepSeek coworker for AI coding agents. Delegate bulk reads, ' +
-      'boilerplate generation, chat extraction, and tracker I/O to save tokens.',
+    'Provider-neutral coworker for AI coding agents. Delegate bulk reads, ' +
+      'code generation, chat extraction, reviews, and tracker I/O.',
   )
   .version(packageJson.version);
 
@@ -130,15 +147,15 @@ program
   .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
   .action(wrap(runInit));
 
-program
-  .command('ask')
-  .description('Delegate bulk reading to the configured worker, GLM, or Kimi; returns a structured summary')
+addModelSelectionOptions(
+  program
+    .command('ask')
+    .description('Read a corpus and answer through the configured provider runtime'),
+)
   .option('-p, --paths <paths...>', 'files or globs to read')
   .option('-u, --urls <urls...>', 'http(s) URLs to fetch and convert to markdown')
   .option('--stdin', 'read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)')
   .requiredOption('-q, --question <text>', 'question to answer about the corpus')
-  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + answer', parsePositiveInteger, 8192)
   .option('--system <text>', 'override the system prompt')
   .option('--format <format>', 'response format: text (default) or evidence')
@@ -148,13 +165,14 @@ program
   // at the CLI boundary so runAsk receives only its documented options.
   .action((opts) => wrap(runAsk)(opts));
 
-program
-  .command('write')
-  .description('Delegate boilerplate generation to DeepSeek')
+addModelSelectionOptions(
+  program
+    .command('write')
+    .description('Generate a file through the configured provider runtime'),
+)
   .requiredOption('-s, --spec <text>', 'what to write')
   .requiredOption('-t, --target <path>', 'output file path')
   .option('-c, --context <path>', 'reference file to mimic in style')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget for reasoning + output', parsePositiveInteger, 16384)
   .action(wrap(runWrite));
 
@@ -165,23 +183,25 @@ program
   .option('-o, --output <path>', 'write to file instead of stdout')
   .action((jsonl, opts) => wrap(runExtract)({ jsonl, ...opts }));
 
-program
-  .command('fetch')
-  .description('Fetch URL(s) and return readable markdown; --question summarises via DeepSeek')
+addModelSelectionOptions(
+  program
+    .command('fetch')
+    .description('Fetch URL(s); --question uses the configured provider runtime'),
+)
   .argument('<urls...>', 'one or more http(s) URLs')
-  .option('-q, --question <text>', 'have DeepSeek summarise the fetched corpus')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
+  .option('-q, --question <text>', 'summarise the fetched corpus')
   .option('--max-tokens <n>', 'token budget for the summary')
   .option('--timeout <ms>', 'per-request timeout in ms (default 30000)')
   .option('--json', 'output JSON array of {url, markdown}')
   .action((urls, opts) => wrap(runFetch)(urls, opts));
 
-program
-  .command('chat [prompt]')
-  .description('Ask the worker model anything — no corpus, just a bare prompt.')
+addModelSelectionOptions(
+  program
+    .command('chat [prompt]')
+    .description('Send a prompt through the configured provider runtime'),
+)
   .option('--stdin', 'read prompt from piped stdin instead of [prompt] arg')
   .option('-s, --system <text>', 'system prompt (e.g. role / persona)')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full model id')
   .option('--max-tokens <n>', 'token budget (default 4096)')
   .option('--stream', 'force streaming even when stdout is not a TTY')
   .option('--no-stream', 'disable streaming output (default streams when stdout is a TTY)')
@@ -202,6 +222,7 @@ program
   .option('--stdin', 'let the selected downstream command read piped input')
   .option('--provider <name>', 'forward the inference provider')
   .option('-m, --model <name>', 'forward the model')
+  .option('-e, --effort <level>', 'forward reasoning effort', parseEffort)
   .option('--max-tokens <n>', 'forward the token budget')
   .option('--format <format>', 'forward ask/review response format: text or evidence')
   .option('--system <text>', 'forward the system prompt to ask/chat')
@@ -211,7 +232,6 @@ program
   .option('--agent <name>', 'forward coder agent template')
   .option('--session <id>', 'forward coder session')
   .option('--continue', 'continue the most recent coder session')
-  .option('--small-model <p/m>', 'forward coder small model')
   .option('--isolate', 'forward coder isolation')
   .option('--no-isolate', 'disable coder isolation')
   .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
@@ -222,28 +242,29 @@ program
   .option('--timeout <sec>', 'forward coder timeout')
   .action((task, opts) => wrap(runExec)(task, opts));
 
-program
-  .command('commit-msg')
-  .description('Generate a Git commit message from staged changes (Conventional Commits by default).')
+addModelSelectionOptions(
+  program
+    .command('commit-msg')
+    .description('Generate a Git commit message from staged changes'),
+)
   .option('--apply', 'run `git commit -m <generated>` immediately instead of printing')
   .option('--no-conventional', 'use a free-form commit subject instead of Conventional Commits')
   .option('--type <type>', 'force the conventional type (feat | fix | refactor | …)')
   .option('--scope <scope>', 'force the conventional scope')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full id')
   .option('--max-tokens <n>', 'token budget (default 2048)')
   .action(wrap(runCommitMsg));
 
-program
-  .command('review [pr]')
-  .description('Code review via the configured worker, GLM, or Kimi. No arg: current branch vs default base. With <pr>: GitHub PR via gh.')
+addModelSelectionOptions(
+  program
+    .command('review [pr]')
+    .description('Review a local change or GitHub PR through the configured provider runtime'),
+)
   .option('-b, --base <branch>', 'compare against this branch (default: auto-detect origin/HEAD or main/master/develop)')
   .option('--skip-issue', "don't try to look up a Jira/Linear ticket from the branch/PR title")
   .option('--stdin', 'read an explicitly piped UTF-8 diff instead of Git or PR sources')
   .option('--files <paths...>', 'literal path selectors: review ONLY these files (repeatable; renames select both sides)')
   .option('--issue <key>', 'explicit linked-issue key (e.g. PROJ-123); PR prose never triggers tracker access')
   .option('-q, --question <text>', 'override the default review question')
-  .option('--provider <name>', 'inference provider: worker (default), deepseek (alias), glm, or kimi (alias: moonshot)')
-  .option('-m, --model <name>', 'model preset (flash | pro) or full model id (default: pro)')
   .option('--max-tokens <n>', 'token budget for the review (default 8192)')
   .option('--format <format>', 'response format: text (default) or evidence')
   .option('--stream', 'force streaming even when stdout is not a TTY')
@@ -273,6 +294,12 @@ program
   .command('status')
   .description('Show current configuration: API key, models, .env sources')
   .action(wrap(runStatus));
+
+program
+  .command('migrate')
+  .description('Migrate pre-0.42 Triss-owned configuration to canonical provider schema 2')
+  .option('--json', 'emit one machine-readable migration result')
+  .action(wrap(runMigrate));
 
 program
   .command('update')
@@ -305,7 +332,7 @@ config
   .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
   .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
   .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine')
-  .option('--coder-provider <name>', 'coder target only: opencode engine provider (zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding). `coder init` uses --provider')
+  .option('--coder-provider <name>', 'coder target only: canonical provider id. `coder init` uses --provider')
   .option('--coder-protect-credentials', 'coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials')
   .action(wrap(runWizard));
 
@@ -353,7 +380,7 @@ config
 
 const coder = program
   .command('coder')
-  .description('Run a coding agent (OpenCode V1, OpenCode 2 beta, or Crush engine)');
+  .description('Run a coding agent through OpenCode V1, OpenCode 2 beta, Crush, or OMP');
 
 coder
   .command('init')
@@ -361,22 +388,22 @@ coder
   .option('-g, --global', 'save to the global scope (~/.config/triss/.env, ~/.config/opencode/)')
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
-  .option('--provider <name>', 'model provider: zai, worker (existing OpenAI-compatible TRISS_WORKER_* profile), opencode-zen, opencode-go, moonshot, or kimi-for-coding (omp reuses the same providers; see docs/engines/omp.md)')
-  .option('--allow-unverified', 'requires explicit --provider opencode-go (alias: go): allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
+  .option('--provider <name>', 'canonical model provider id')
+  .option('--allow-unverified', 'requires explicit --provider opencode-go: allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .option('--protect-credentials', PROTECT_HELP)
   .action(wrap(runCoderInit));
 
 coder
   .command('run [prompt]')
-  .description('Spawn a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go (opencode default; opencode2 beta or --engine crush, or --engine omp — see docs/engines/omp.md) — and print a JSON envelope to stdout')
+  .description('Spawn a coding agent through the configured provider runtime and print a JSON envelope to stdout')
   .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
+  .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort)
   .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
   .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
   .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
-  .option('--provider <name>', 'OpenCode only: select a provider for one run; requires --model and does not modify .env or opencode.json')
-  .option('--model <p/m>', 'override the MAIN model for this one run only (does not change small_model or repair persistent config; use `triss coder model set` for that)')
-  .option('--small-model <p/m>', 'with --provider, override small_model for one run (defaults to the one-shot main model)')
+  .option('--provider <name>', 'canonical provider for this one run')
+  .option('--model <p/m>', 'override the main model for this one run; bare ids use --provider or the configured default')
   .option('--isolate', 'run in a disposable git worktree under .triss/wt/<slug>')
   .option('--no-isolate', 'disable worktree isolation (opencode defaults to OFF; crush defaults to ON)')
   .option('--restrict', 'crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)')
@@ -395,52 +422,6 @@ coder
   .option('--all', 'force-remove every worktree under .triss/wt, regardless of diff state')
   .action(wrap(runCoderClean));
 
-coder
-  .command('models')
-  .description('List current + live coder models, provider compatibility, and credential readiness (read-only)\n\n' +
-    'Configuration sources (layered; later sources win):\n' +
-    '  • opencode & opencode2: JSONC-aware layered config — global ~/.config/opencode/opencode.json, then every opencode.json/.opencode/opencode.json up from the project root to the Git boundary (project-local wins)\n' +
-    '  • crush: ./.crush/crush.json (local) or ~/.local/share/crush/crush.json (global)')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), crush, or omp (triss-env backend)')
-  .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
-  .option('--json', 'print the stable machine-readable state object (no secrets)')
-  .action(wrap(runCoderModels));
-
-// `coder model` is a command GROUP whose only leaf today is `set`. Registered
-// as a nested group so `triss coder model set --help` prints its OWN usage line
-// (`Usage: triss coder model set ...`) rather than the parent `coder` usage.
-const coderModel = coder
-  .command('model')
-  .description('Inspect or change persistent coder models (e.g. `triss coder model set`)');
-
-coderModel
-  .command('set [main-model]')
-  .description(
-    'Persistently switch the coder main/small models for one engine+scope (non-interactive; needs --yes to write). ' +
-      'A one-run main override is `triss coder run --model` (main-only, not a persistent repair).\n\n' +
-      'Engines and configuration targets:\n' +
-      '  • opencode: project opencode.json (local) or ~/.config/opencode/opencode.json (global); runtime main follows TRISS_CODER_MODEL env precedence, config main is opencode.json.model\n' +
-      '  • opencode2: shares opencode.json with opencode (see above)\n' +
-      '  • crush: project .crush/crush.json (local) or ~/.local/share/crush/crush.json (global)\n' +
-      '  • omp: TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL in .triss.env (project) or ~/.config/triss/.env (global); OMP config is run-private (PI_CODING_AGENT_DIR) and never persisted'
-  )
-  .option('--small <model>', 'small/fast model id (omit to keep the current compatible value)')
-  .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — layered JSONC config), crush, or omp (triss-env backend)')
-  .option('--provider <name>', 'provider kind: zai, worker, opencode-zen, opencode-go, moonshot, or kimi-for-coding')
-  .option('-g, --global', 'write to the global scope (OpenCode: ~/.config/opencode/opencode.json + global .env; Crush: ~/.local/share/crush/crush.json; OMP: ~/.config/triss/.env)')
-  .option('-l, --local', 'write to the project scope (OpenCode: ./opencode.json + ./.triss.env; Crush: ./.crush/crush.json; OMP: ./.triss.env)')
-  .option('--allow-unverified', 'with explicit main + --small, bypass only a provider-defined transient catalogue failure (Go: transport or HTTP 408/429/500/502/503/504; Zen: timeout/http-error/parse-error; never auth or authoritative failure)')
-  .option('--allow-unsafe-bash', 'proceed even if the existing opencode.json lacks the deny-first bash policy')
-  .option('--yes', 'non-interactive confirmation: apply the planned switch (required to write; without it the plan is printed and nothing is changed)')
-  .action((mainModel, opts) => wrap(runCoderModelSet)(mainModel, opts));
-
-coderModel
-  .command('rollback')
-  .description('Restore retained transaction record (opencode.json / crush.json + env pins)')
-  .requiredOption('--from <absolute-record-dir>', 'absolute path to the retained transaction record directory')
-  .option('-g, --global', 'restore to the global scope (~/.config/opencode/, ~/.local/share/crush/, or ~/.config/triss/.env)')
-  .option('-l, --local', 'restore to the project scope (./opencode.json, ./.crush/crush.json, or ./.triss.env)')
-  .action((opts) => wrap(runCoderModelRollback)(opts.from, opts));
 
 // `coder state` is a command GROUP whose leaves are `backup` and `validate`
 // (Section 15 rollback contract).
@@ -587,7 +568,7 @@ const isExplainOnly = isExecExplainInvocation(process.argv.slice(2));
 const integrations = isExplainOnly ? [] : await loadIntegrations();
 for (const manifest of integrations) {
   const sub = program.command(manifest.name).description(manifest.description || manifest.name);
-  manifest.register(sub, { wrap });
+  manifest.register(sub, { wrap, addModelSelectionOptions });
 }
 
 await program.parseAsync(process.argv);

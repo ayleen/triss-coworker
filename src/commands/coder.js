@@ -35,13 +35,12 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import pc from 'picocolors';
-import {
-  captureWorkerShellSnapshot,
-  LEGACY_CODER_BEST_EFFORT_ENV_KEY,
-  loadEnvFiles,
-  readLegacyCoderBestEffortEnv,
-  readWorkerConfigSnapshot,
-} from '../config.js';
+import { loadEnvFiles } from '../config.js';
+import { readProviderConfigSnapshot } from '../provider-config.js';
+import { getProviderDefinition, listProviderDefinitions } from '../provider-registry.js';
+import { assertCanonicalProviderId, validateModelSelectionInput } from '../provider-contract.js';
+import { resolveModelRequest } from '../model-selection.js';
+import { projectConfiguredEndpoint, validateProviderProfileSecurity } from '../provider-security.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
 import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE, normalizeActivity } from '../coder-result.js';
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
@@ -73,9 +72,9 @@ const CREDENTIAL_ISOLATION_DOWNGRADED_WARNING =
 // shell-credential `coder init` may persist its model pins without making the
 // following protected run misclassify the store as credential-bearing.
 const NON_SECRET_CODER_STORE_KEYS = new Set([
-  'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION',
-  'TRISS_CODER_MODEL',
-  'TRISS_CODER_SMALL_MODEL',
+  'TRISS_CONFIG_SCHEMA',
+  'TRISS_DEFAULT_PROVIDER',
+  ...listProviderDefinitions().flatMap((definition) => Object.values(definition.fields)),
   'TRISS_CODER_ENGINE',
   'TRISS_CODER_OPENCODE_VERSION',
   'TRISS_CODER_OPENCODE2_VERSION',
@@ -83,37 +82,8 @@ const NON_SECRET_CODER_STORE_KEYS = new Set([
   'TRISS_CODER_OMP_VERSION',
   'TRISS_CODER_CRUSH_RESTRICT',
   'TRISS_CODER_SESSION_CAP',
-  'TRISS_WORKER_BASE_URL',
-  'TRISS_WORKER_FLASH_MODEL',
-  'TRISS_WORKER_PRO_MODEL',
-  'TRISS_DEFAULT_MODEL',
-  'TRISS_KIMI_BASE_URL',
   'TRISS_REQUEST_TIMEOUT_MS',
 ]);
-// Migration warning (compat period before the cleanup release removes the
-// reader): TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION no longer selects anything.
-// '1' is an accepted no-op and '0' must NOT enable protected mode — only the
-// explicit --protect-credentials flag does.
-// Deliberately NO module-level guard: this is called exactly ONCE per public
-// command boundary (runCoderRun, runCoderInit, CODER_MANIFEST.postSetup), so
-// every command invocation — including each long-lived MCP server call —
-// warns at most once while repeated invocations still warn again.
-function warnLegacyCoderBestEffortEnv() {
-  let legacy;
-  try {
-    legacy = readLegacyCoderBestEffortEnv({ scope: 'effective' });
-  } catch {
-    return;
-  }
-  if (!legacy) return;
-  process.stderr.write(
-    pc.yellow(
-      `  ⚠ ${LEGACY_CODER_BEST_EFFORT_ENV_KEY}=${legacy} is deprecated and ignored — OpenCode/OpenCode2 default to ` +
-        'best_effort_raw credential handling and --protect-credentials selects protected_proxy. Remove the variable with ' +
-        '`triss config unset TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION --local` or `--global`.\n',
-    ),
-  );
-}
 
 // Circular import: config.js imports CODER_MANIFEST from this file. Safe
 // because both sides only touch the imported bindings inside function
@@ -133,6 +103,19 @@ import {
   readEnvFile,
 } from '../secrets.js';
 import { projectRoot } from '../safety.js';
+
+function readOpenAICompatibleConfigSnapshot({ scope = 'effective' } = {}) {
+  const files = scope === 'effective'
+    ? activeEnvFiles()
+    : activeEnvFiles().filter((file) => file.scope === scope);
+  const profile = readProviderConfigSnapshot({ files }).providers['openai-compatible'];
+  return Object.freeze({
+    apiKey: profile.credential.value,
+    baseUrl: profile.endpoint.value,
+    smallModel: profile.smallModel.value,
+    model: profile.model.value,
+  });
+}
 import { logUsage, estimateCanonicalCost, resolveBillingMode } from '../usage.js';
 import {
   emptyOpencodeUsage,
@@ -218,12 +201,7 @@ export const OPENCODE_INVALID_MINIMUM_CODE = 'TRISS_CODER_OPENCODE_MINIMUM_INVAL
 // exact-audited-build concept anymore: one-shot credential-bearing runs are
 // authorized whenever the installed version satisfies the effective minimum.
 export const OPENCODE_SUPPORTED_FLOOR = '1.18.22';
-// The default assumes a `zai-coding-plan` subscription key, not a pay-as-you-go
-// `zai` key:
-// `zai/glm-*` fails with "Insufficient balance or no resource package" on
-// that key. Runtime provider detection below verifies the actual key type.
-const DEFAULT_CODER_MODEL = 'zai-coding-plan/glm-5.2';
-const DEFAULT_CODER_SMALL_MODEL = 'zai-coding-plan/glm-5-turbo';
+// Provider role defaults live only in the shared provider registry.
 
 // OpenCode remains the default because its deny-first opencode.json policy is
 // enforced. Crush has a simpler single-envelope model but a weaker safety
@@ -290,34 +268,30 @@ async function probeZaiBase(fetchImpl, base, key) {
   }
 }
 
-// Returns 'zai-coding-plan', 'zai', or null (key unset, or neither base
-// accepted it — e.g. offline, or a key that's invalid everywhere).
-// `fetchImpl` defaults to globalThis.fetch (repo convention — tests mock
-// globalThis.fetch or pass a fake directly here).
-export async function detectZaiProvider(fetchImpl = globalThis.fetch) {
+// Returns the authenticated endpoint profile, or null when the key is unset or
+// neither endpoint can be verified.
+export async function detectZaiEndpoint(fetchImpl = globalThis.fetch) {
   const key = process.env.ZHIPU_API_KEY;
   if (!key) return null;
-  if (await probeZaiBase(fetchImpl, ZAI_CODING_PLAN_BASE_URL, key)) return 'zai-coding-plan';
-  if (await probeZaiBase(fetchImpl, ZAI_PAYG_BASE_URL, key)) return 'zai';
+  if (await probeZaiBase(fetchImpl, ZAI_CODING_PLAN_BASE_URL, key)) return 'coding-plan';
+  if (await probeZaiBase(fetchImpl, ZAI_PAYG_BASE_URL, key)) return 'payg';
   return null;
 }
 
-async function detectAndReportZaiProvider(fetchImpl) {
+async function detectAndReportZaiEndpoint(fetchImpl) {
   if (!process.env.ZHIPU_API_KEY) return null;
-  process.stderr.write(pc.dim('  · probing which Z.AI endpoint this key works with...\n'));
-  const provider = await detectZaiProvider(fetchImpl);
-  if (provider) {
-    process.stderr.write(pc.green(`  ✓ detected provider: ${provider}\n`));
+  process.stderr.write(pc.dim('  · probing which Z.A.I endpoint this key works with...\n'));
+  const endpoint = await detectZaiEndpoint(fetchImpl);
+  if (endpoint) {
+    process.stderr.write(pc.green(`  ✓ detected Z.A.I endpoint: ${endpoint}\n`));
   } else {
     process.stderr.write(
       pc.yellow(
-        '  ⚠ could not verify ZHIPU_API_KEY against either Z.AI endpoint (coding-plan or ' +
-          'pay-as-you-go) — keeping the current default provider prefix. If opencode seems to ' +
-          'retry a model call forever, set TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL explicitly.\n',
+        '  ⚠ could not verify ZHIPU_API_KEY against either Z.A.I endpoint; retaining the configured endpoint.\n',
       ),
     );
   }
-  return provider;
+  return endpoint;
 }
 
 // GLM models verified in the plan's "Fixed technical facts" (models.dev
@@ -356,11 +330,9 @@ const KIMI_CODING_MODEL_CHOICES = [
 // A convenience snapshot of the FREE OpenCode Zen models (served under the
 // built-in `opencode` provider, base https://opencode.ai/zen/v1) offered by
 // the `--provider opencode-zen` init picker. Free-tier only — the whole Zen
-// catalogue (paid GPT/Claude/Gemini/… mirrors) is large and moves, so any other
-// id is reachable verbatim via TRISS_CODER_MODEL=opencode/<id>. These free
-// models are TEMPORARY (promotional), so init resolves the actual default and
-// picker order against the LIVE catalogue (fetchZenModelIds) rather than
-// trusting this static list — it's the offline fallback.
+// catalogue is large and changes frequently, so any listed canonical model id
+// remains reachable through the provider role configuration. Init resolves its
+// defaults and picker order against the live catalogue.
 const ZEN_MODEL_CHOICES = [
   { label: 'deepseek-v4-flash-free — DeepSeek V4 Flash (free)', value: 'deepseek-v4-flash-free' },
   { label: 'north-mini-code-free — repo-level agentic coding (free)', value: 'north-mini-code-free' },
@@ -378,7 +350,7 @@ const ZEN_MAIN_PRIORITY = [
 ];
 const ZEN_SMALL_PRIORITY = ['deepseek-v4-flash-free', 'north-mini-code-free', 'mimo-v2.5-free'];
 const isAuditedZenModel = (modelId) =>
-  resolveCoderProviderRoute(`opencode/${modelId}`)?.transportAudited === true;
+  resolveCoderProviderRoute(`opencode-zen/${modelId}`)?.transportAudited === true;
 const ZEN_MODELS_URL = 'https://opencode.ai/zen/v1/models';
 const ZEN_MODELS_TIMEOUT_MS = 10_000;
 
@@ -550,7 +522,7 @@ function resolveZenCatalogue(available, { allowUnaudited = false } = {}) {
       pc.yellow(
         '  ⚠ could not fetch the OpenCode Zen catalogue — using built-in model defaults; their ' +
           'availability is NOT verified (free Zen models are temporary). If a run fails immediately, ' +
-          'set TRISS_CODER_MODEL to a model listed at https://opencode.ai/docs/zen/.\n',
+          'configure an available opencode-zen model listed at https://opencode.ai/docs/zen/.\n',
       ),
     );
     const allowed = (modelId) => allowUnaudited || isAuditedZenModel(modelId);
@@ -575,17 +547,9 @@ function resolveZenCatalogue(available, { allowUnaudited = false } = {}) {
   return { available, choices, mainDefault, smallDefault };
 }
 
-// Init-time picker choices for the provider itself (opencode engine only).
-const CODER_PROVIDER_CHOICES = [
-  { label: 'Z.AI GLM (glm-5.2, …) — needs a Z.AI key', value: 'zai' },
-  { label: 'Triss worker (OpenAI-compatible) — reuses the worker key and endpoint', value: 'worker' },
-  { label: 'OpenCode Zen (free models incl. DeepSeek V4 Flash) — needs an OpenCode key', value: 'opencode-zen' },
-  { label: 'OpenCode Go subscription (DeepSeek V4 Flash) — uses an OpenCode key', value: 'opencode-go' },
-  { label: 'Moonshot Kimi pay-as-you-go (kimi-k2.7-code, kimi-k3) — needs a Moonshot key', value: 'moonshot' },
-  { label: 'Kimi for Coding subscription (K3) — needs a Kimi for Coding key', value: 'kimi-for-coding' },
-];
 
-function workerCoderProfile(settings = readWorkerConfigSnapshot()) {
+function openAICompatibleCoderProfile(settings = readOpenAICompatibleConfigSnapshot()) {
+  settings ??= readOpenAICompatibleConfigSnapshot();
   const baseUrl = String(settings.baseUrl || 'https://api.deepseek.com/v1')
     .trim()
     .replace(/\/+$/, '');
@@ -593,59 +557,52 @@ function workerCoderProfile(settings = readWorkerConfigSnapshot()) {
   try {
     parsed = new URL(baseUrl);
   } catch {
-    throw new Error(`Invalid TRISS_WORKER_BASE_URL "${baseUrl}" — expected an absolute HTTP(S) URL.`);
+    throw new Error(`Invalid TRISS_OPENAI_COMPATIBLE_BASE_URL "${baseUrl}" — expected an absolute HTTP(S) URL.`);
   }
   const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error(
-      'Invalid TRISS_WORKER_BASE_URL — embedded credentials, query parameters, and fragments are not allowed.',
+      'Invalid TRISS_OPENAI_COMPATIBLE_BASE_URL — embedded credentials, query parameters, and fragments are not allowed.',
     );
   }
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
     throw new Error(
-      `Unsafe TRISS_WORKER_BASE_URL "${baseUrl}" — remote OpenAI-compatible endpoints must use HTTPS.`,
+      `Unsafe TRISS_OPENAI_COMPATIBLE_BASE_URL "${baseUrl}" — remote OpenAI-compatible endpoints must use HTTPS.`,
     );
   }
-  const flashModel = String(settings.flashModel || 'deepseek-v4-flash').trim();
-  const proModel = String(settings.proModel || 'deepseek-v4-pro').trim();
+  const smallModel = String(settings.smallModel || 'deepseek-v4-flash').trim();
+  const model = String(settings.model || 'deepseek-v4-pro').trim();
   for (const [env, value] of [
-    ['TRISS_WORKER_FLASH_MODEL', flashModel],
-    ['TRISS_WORKER_PRO_MODEL', proModel],
+    ['TRISS_OPENAI_COMPATIBLE_SMALL_MODEL', smallModel],
+    ['TRISS_OPENAI_COMPATIBLE_MODEL', model],
   ]) {
     if (!value || /\s/.test(value)) {
       throw new Error(`Invalid ${env} — model ids must be non-empty and contain no whitespace.`);
     }
   }
-  return { baseUrl, flashModel, proModel, models: [...new Set([flashModel, proModel])] };
+  return { baseUrl, smallModel, model, models: [...new Set([smallModel, model])] };
 }
 
-// Resolves the per-provider init catalogue: the model prefix written into
-// opencode.json, the picker choices, and the silent (non-TTY) defaults.
-// `providerInfo.kind` is 'zai' | 'opencode-zen' | 'moonshot' |
-// 'kimi-for-coding'; for zai, `detectedZai` is the plan probe result
-// (zai-coding-plan / zai / null) so the prefix matches the endpoint the key
-// actually authenticates against. The Kimi kinds need no probe at all: the two
-// plans use DIFFERENT credential envs (MOONSHOT_API_KEY vs KIMI_API_KEY), so
-// the chosen kind already names the endpoint.
-// `openCodeCatalogue` supplies the live-verified defaults/choices for either
-// OpenCode provider; it is omitted for providers without that catalogue flow.
+// Resolve the per-provider init catalogue, model choices, and non-interactive
+// defaults. Provider identity is always canonical; endpoint profiles never
+// alter the model prefix.
 function coderInitCatalogue(providerInfo, openCodeCatalogue) {
-  if (providerInfo.kind === 'worker') {
-    const profile = providerInfo.workerProfile || workerCoderProfile();
+  if (providerInfo.kind === 'openai-compatible') {
+    const profile = providerInfo.providerProfile || openAICompatibleCoderProfile();
     const choices = profile.models.map((value) => ({ label: value, value }));
     return {
-      prefix: 'triss-worker',
+      prefix: 'openai-compatible',
       choices,
-      mainDefault: profile.flashModel,
-      smallDefault: profile.flashModel,
+      mainDefault: profile.model,
+      smallDefault: profile.smallModel,
       mainIdx: 0,
       smallIdx: 0,
-      noun: 'Triss worker',
+      noun: 'OpenAI-compatible provider',
     };
   }
   if (providerInfo.kind === 'moonshot') {
     return {
-      prefix: 'moonshotai',
+      prefix: 'moonshot',
       choices: MOONSHOT_MODEL_CHOICES,
       mainDefault: 'kimi-k2.7-code',
       smallDefault: 'kimi-k2.6',
@@ -674,7 +631,7 @@ function coderInitCatalogue(providerInfo, openCodeCatalogue) {
     };
     const idxOf = (v) => Math.max(0, z.choices.findIndex((c) => c.value === v));
     return {
-      prefix: 'opencode',
+      prefix: 'opencode-zen',
       choices: z.choices,
       mainDefault: z.mainDefault,
       smallDefault: z.smallDefault,
@@ -704,7 +661,7 @@ function coderInitCatalogue(providerInfo, openCodeCatalogue) {
     };
   }
   return {
-    prefix: providerInfo.detectedZai || DEFAULT_CODER_MODEL.split('/')[0],
+    prefix: 'zai',
     choices: GLM_MODEL_CHOICES,
     mainDefault: 'glm-5.2',
     smallDefault: 'glm-5-turbo',
@@ -717,7 +674,7 @@ function coderInitCatalogue(providerInfo, openCodeCatalogue) {
 // The credential env a provider KIND uses (not the plan sub-prefix) — so a
 // preset is judged by provider, not by exact string.
 const KIND_KEY_ENVS = {
-  worker: 'TRISS_WORKER_API_KEY',
+  'openai-compatible': 'TRISS_OPENAI_COMPATIBLE_API_KEY',
   'opencode-zen': 'OPENCODE_API_KEY',
   'opencode-go': 'OPENCODE_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
@@ -730,27 +687,16 @@ function modelMatchesKind(model, kind) {
   return !!model && coderModelCredential(model).provider === kind;
 }
 
-// Whether a preset/existing model may be REUSED verbatim for the chosen
-// provider. Stricter than modelMatchesKind: for zai it also requires the
-// model's plan prefix to match the DETECTED plan (when detection succeeded), so
-// a `zai-coding-plan/*` model is not re-pinned against a probe that resolved to
-// the pay-as-you-go `zai` base (which would retry forever). Unknown/undetected
-// plan (detectedZai null) can't be verified, so it's allowed through.
+// Whether a preset or existing model may be reused for the selected canonical
+// provider.
 function modelFitsProvider(model, providerInfo) {
   if (!model) return false;
   const prefix = String(model).split('/')[0];
-  if (providerInfo.kind === 'worker') {
-    const profile = providerInfo.workerProfile || workerCoderProfile();
-    return prefix === 'triss-worker' && profile.models.includes(providerModelId(model));
+  if (providerInfo.kind === 'openai-compatible') {
+    const profile = providerInfo.providerProfile || openAICompatibleCoderProfile();
+    return prefix === 'openai-compatible' && profile.models.includes(providerModelId(model));
   }
-  if (providerInfo.kind === 'opencode-zen') return prefix === 'opencode';
-  if (providerInfo.kind === 'opencode-go') return prefix === 'opencode-go';
-  // Both Moonshot PAYG hosts share MOONSHOT_API_KEY, so either regional prefix
-  // fits; kimi-for-coding is its own credential and endpoint.
-  if (providerInfo.kind === 'moonshot') return prefix === 'moonshotai' || prefix === 'moonshotai-cn';
-  if (providerInfo.kind === 'kimi-for-coding') return prefix === 'kimi-for-coding';
-  if (prefix !== 'zai' && prefix !== 'zai-coding-plan') return false;
-  return providerInfo.detectedZai ? prefix === providerInfo.detectedZai : true;
+  return prefix === providerInfo.kind;
 }
 
 // The main/small_model of an existing opencode.json (or {} if absent/unreadable).
@@ -766,15 +712,9 @@ function readOpencodeModels(path) {
   }
 }
 
-// Resolve the main + small model for the CHOSEN provider. Per field, priority:
-//   1. a TRISS_CODER_MODEL/SMALL_MODEL preset — but ONLY if it belongs to the
-//      chosen provider (an explicit --provider must beat a stale cross-provider
-//      preset; a mismatch is warned and ignored, not written);
-//   2. the model already in opencode.json when it matches the provider (so a
-//      re-run is idempotent and pins what's configured, without re-prompting);
-//   3. the interactive picker (TTY);
-//   4. the provider's silent default.
-// `existing` is readOpencodeModels(opencode.json) from the caller.
+// Resolve the main and small role models for the selected canonical provider.
+// Provider-profile values win, followed by matching existing engine config,
+// the interactive picker, and finally the provider defaults.
 async function resolveInitModels(
   providerInfo,
   deps = {},
@@ -796,12 +736,8 @@ async function resolveInitModels(
   const choose = deps.promptChoice || promptChoice;
   const interactive = !!process.stdin.isTTY;
 
-  // With a VERIFIED live Zen catalogue (available is a Set), a preset/existing
-  // model — or a static default — is only usable if the catalogue still lists
-  // its bare id. Free Zen models are temporary, so a stale pin (e.g. a
-  // previous init's opencode/hy3-free after the promo ends) must NOT be honored
-  // verbatim just because its provider prefix matches. When the catalogue is
-  // unverified (available null) we can't reject anything.
+  // With a verified live Zen catalogue, configured or existing models are
+  // usable only while the catalogue still advertises them.
   const providerAvailable =
     providerInfo.kind === 'opencode-zen' || providerInfo.kind === 'opencode-go'
       ? cat.available
@@ -811,8 +747,8 @@ async function resolveInitModels(
     if (providerInfo.kind === 'opencode-zen' && !allowUnaudited && !isAuditedZenModel(providerModelId(m))) {
       return true;
     }
-    if (providerInfo.kind === 'worker') {
-      const profile = providerInfo.workerProfile || workerCoderProfile();
+    if (providerInfo.kind === 'openai-compatible') {
+      const profile = providerInfo.providerProfile || openAICompatibleCoderProfile();
       return !profile.models.includes(providerModelId(m));
     }
     return !!providerAvailable && !providerAvailable.has(providerModelId(m));
@@ -821,11 +757,10 @@ async function resolveInitModels(
   // `prefix` is the provider prefix used for picker/default resolutions of
   // THIS field; it defaults to the catalogue's canonical prefix but the small
   // model passes the resolved main model's prefix instead (see below).
-  const pickOne = async (envVar, existingVal, label, idx, def, fallbackFull, prefix = cat.prefix) => {
-    // 1. An explicit env preset is honored verbatim when it's the right PROVIDER
-    //    KIND (the user set it deliberately). Warn — but still use it — if its
-    //    plan prefix doesn't match the detected Z.AI plan.
-    const preset = process.env[envVar];
+  const pickOne = async (role, existingVal, label, idx, def, fallbackFull, prefix = cat.prefix) => {
+    const configuredProfile = readProviderConfigSnapshot().providers[providerInfo.kind];
+    const configuredNativeModel = configuredProfile?.[role]?.value;
+    const preset = configuredNativeModel ? `${providerInfo.kind}/${configuredNativeModel}` : null;
     if (preset) {
       if (modelMatchesKind(preset, providerInfo.kind)) {
         if (providerVerifiedAbsent(preset)) {
@@ -833,44 +768,25 @@ async function resolveInitModels(
           // through to an available audited model instead.
           process.stderr.write(
             pc.yellow(
-              `  ⚠ ignoring ${envVar}=${preset} — it is not in the current ${cat.noun} catalogue or lacks ` +
+              `  ⚠ ignoring configured ${role}=${preset} — it is not in the current ${cat.noun} catalogue or lacks ` +
                 `secure/audited transport metadata; ` +
                 'selecting an available model instead.\n',
             ),
           );
         } else {
-          // A zai preset on the wrong PLAN (detected) is honored but flagged; a
-          // totally unknown prefix is left to the end-of-function warning.
-          const pfx = preset.split('/')[0];
-          if (
-            providerInfo.kind === 'zai' &&
-            providerInfo.detectedZai &&
-            (pfx === 'zai' || pfx === 'zai-coding-plan') &&
-            pfx !== providerInfo.detectedZai
-          ) {
-            process.stderr.write(
-              pc.yellow(
-                `  ⚠ ${envVar}=${preset} uses the "${pfx}/" prefix but the key verified against the ` +
-                  `"${providerInfo.detectedZai}" plan — using it as set, but runs may retry forever if the ` +
-                  'key cannot serve that plan.\n',
-              ),
-            );
-          }
           return preset;
         }
       } else {
         process.stderr.write(
           pc.yellow(
-            `  ⚠ ignoring ${envVar}=${preset} — it does not match the ${cat.noun} provider you ` +
-              `selected (expected the "${cat.prefix}/" prefix); unset it or set a matching model.\n`,
+            `  ⚠ ignoring configured ${role}=${preset} — it does not match the ${cat.noun} provider you ` +
+              `selected (expected the "${cat.prefix}/" prefix).\n`,
           ),
         );
       }
     }
-    // 2. Reuse an existing opencode.json model only when it FITS the provider,
-    //    plan included — so a zai-coding-plan model isn't re-pinned against a
-    //    key that verified as pay-as-you-go zai (the infinite-retry trap) — AND
-    //    (for Zen) the live catalogue still offers it.
+    // Reuse an existing engine model only when it belongs to the selected
+    // canonical provider and remains available.
     if (modelFitsProvider(existingVal, providerInfo) && !providerVerifiedAbsent(existingVal)) {
       return existingVal;
     }
@@ -891,30 +807,24 @@ async function resolveInitModels(
       throw new Error(
         `Coder setup incomplete: none of triss's known free OpenCode Zen models are in the current ` +
           `catalogue (for the ${label.toLowerCase()} model). Pick one from https://opencode.ai/docs/zen/ and ` +
-          `set ${envVar}=opencode/<id>, then re-run.`,
+          `configure ${providerInfo.kind}/${role} with an available canonical model, then re-run.`,
       );
     }
     throw new Error(
       `Coder setup incomplete: none of triss's known ${cat.noun} models are in the current ` +
         `catalogue (for the ${label.toLowerCase()} model). Pick one from the provider catalogue and ` +
-        `set ${envVar}=${cat.prefix}/<id>, then re-run.`,
+        `configure ${providerInfo.kind}/${role} with an available canonical model, then re-run.`,
     );
   };
 
-  const model = await pickOne('TRISS_CODER_MODEL', existing.model, 'Main', cat.mainIdx, cat.mainDefault, null);
-  // The small model must share the MAIN model's provider/plan prefix when the
-  // main fits the chosen provider: an honored moonshotai-cn/* main would
-  // otherwise pair with the catalogue's default `moonshotai/` small — a
-  // cross-host mix one key cannot serve, which auditExistingConfig rightly
-  // blocks on the NEXT init run (breaking idempotency). A main that does NOT
-  // fit (a cross-plan zai preset honored with its loud warning) keeps the
-  // catalogue prefix — the endpoint the key actually verified against.
+  // Keep both roles on the selected canonical provider.
+  const model = await pickOne('model', existing.model, 'Main', cat.mainIdx, cat.mainDefault, null);
   const mainPrefix = String(model).split('/')[0];
   const smallPrefix = modelFitsProvider(model, providerInfo) ? mainPrefix : cat.prefix;
   // The resolved main model is the small model's last-resort fallback (see the
   // block above) so a paid/custom in-catalogue main pick never dead-ends here.
   const smallModel = await pickOne(
-    'TRISS_CODER_SMALL_MODEL',
+    'smallModel',
     existing.smallModel,
     'Small/fast',
     cat.smallIdx,
@@ -932,24 +842,20 @@ async function resolveInitModels(
       }
     }
   }
-  // A preset/existing model with a prefix triss doesn't recognize is routed to
-  // ZHIPU_API_KEY by default (coderModelCredential) and can never be served —
-  // opencode retries it forever. Warn rather than silently pin it.
-  for (const [field, m] of [['TRISS_CODER_MODEL', model], ['TRISS_CODER_SMALL_MODEL', smallModel]]) {
+  // Reject models outside the canonical provider registry.
+  for (const [field, m] of [['model', model], ['smallModel', smallModel]]) {
     if (!isKnownProviderPrefix(m)) {
       process.stderr.write(
         pc.yellow(
           `  ⚠ ${field} resolved to "${m}", whose provider prefix triss doesn't recognize ` +
-            '(known: triss-worker/*, zai-coding-plan/*, zai/*, opencode/*, opencode-go/*, moonshotai/*, moonshotai-cn/*, ' +
-            'kimi-for-coding/*). Runs will send it the ZHIPU_API_KEY by ' +
-            'default and likely retry forever — set a model with a known prefix.\n',
+            '(known: openai-compatible/*, zai/*, opencode-zen/*, opencode-go/*, moonshot/*, ' +
+            'kimi-for-coding/*). Select a canonical provider-qualified model.\n',
         ),
       );
     }
   }
-  // Return both the legacy Zen-specific view (for the focused stale-Zen
-  // recovery reporter) and the selected provider's catalogue (for generic
-  // cross-scope small-model validation, including Go).
+  // Return the selected provider's catalogue plus the Zen-specific view used
+  // by the stale-catalogue diagnostic.
   return {
     model,
     smallModel,
@@ -958,99 +864,22 @@ async function resolveInitModels(
   };
 }
 
-// Normalizes a --provider flag value (with aliases) to 'zai' | 'opencode-zen'
-// | 'opencode-go' | 'moonshot' | 'kimi-for-coding', throwing on anything else. Shared by
-// resolveInitProvider and the crush guard so both accept the SAME alias set
-// (glm/z.ai/zhipu -> zai; opencode/zen -> opencode-zen; kimi/moonshotai ->
-// moonshot; kimi-coding/kimi-code -> kimi-for-coding).
 export function normalizeProviderFlag(raw) {
-  const v = String(raw).trim().toLowerCase();
-  if (['zai', 'glm', 'z.ai', 'zhipu'].includes(v)) return 'zai';
-  if (['worker', 'openai', 'openai-compatible'].includes(v)) return 'worker';
-  if (['opencode-zen', 'opencode', 'zen'].includes(v)) return 'opencode-zen';
-  if (['opencode-go', 'go'].includes(v)) return 'opencode-go';
-  if (['moonshot', 'kimi', 'moonshotai'].includes(v)) return 'moonshot';
-  if (['kimi-for-coding', 'kimi-coding', 'kimi-code'].includes(v)) return 'kimi-for-coding';
-  throw new Error(
-    `Unknown --provider "${raw}" — valid values: zai, worker, opencode-zen, opencode-go, moonshot, kimi-for-coding.`,
-  );
+  return assertCanonicalProviderId(String(raw).trim().toLowerCase(), 'provider');
 }
 
-// Provider implied by the environment alone (no flag, no prompt): a
-// TRISS_CODER_MODEL preset decides by its prefix, else a single configured
-// credential is taken as the intent (only one of ZHIPU / OPENCODE / MOONSHOT /
-// KIMI set -> that provider). Returns null when genuinely ambiguous (none or
-// several set).
+// Coder shares the same explicit default provider as every model-backed command.
 function providerFromEnv() {
-  const preset = process.env.TRISS_CODER_MODEL;
-  if (preset) return coderModelCredential(preset).provider;
-  const configured = [
-    ['zai', 'ZHIPU_API_KEY'],
-    ['opencode-zen', 'OPENCODE_API_KEY'],
-    ['moonshot', 'MOONSHOT_API_KEY'],
-    ['kimi-for-coding', 'KIMI_API_KEY'],
-  ].filter(([, env]) => !!process.env[env]);
-  return configured.length === 1 ? configured[0][0] : null;
+  return readProviderConfigSnapshot().defaultProvider.value;
 }
 
-// Non-prompting resolution (wizard postSetup path): environment intent ONLY.
-// Throws when ambiguous or missing — this hardening is for direct/non-wizard
-// runCoderSetup and does NOT change resolveInitProvider behavior.
 function inferCoderProvider() {
-  const fromEnv = providerFromEnv();
-  if (fromEnv) return fromEnv;
-
-  // Provider intent is ambiguous or missing. Detect which keys are set to
-  // give a helpful error message.
-  const configuredKeys = [
-    ['zai', 'ZHIPU_API_KEY'],
-    ['opencode-zen', 'OPENCODE_API_KEY'],
-    ['moonshot', 'MOONSHOT_API_KEY'],
-    ['kimi-for-coding', 'KIMI_API_KEY'],
-  ].filter(([, env]) => !!process.env[env]);
-
-  const keyNames = configuredKeys.map(([, env]) => env).join(', ');
-  throw new Error(
-    `Coder provider intent is ambiguous or missing. ${keyNames ? `Multiple credentials are set: ${keyNames}.` : 'No provider credential is set.'} ` +
-      'Disambiguate by re-running with one of:\n' +
-      '  triss config wizard coder --coder-provider zai\n' +
-      '  triss config wizard coder --coder-provider worker\n' +
-      '  triss config wizard coder --coder-provider opencode-zen\n' +
-      '  triss config wizard coder --coder-provider opencode-go\n' +
-      '  triss config wizard coder --coder-provider moonshot\n' +
-      '  triss config wizard coder --coder-provider kimi-for-coding'
-  );
+  return providerFromEnv();
 }
 
-// The interactive provider resolution for `triss coder init`: explicit
-// --provider flag > environment intent (preset / single credential) > a TTY
-// prompt when genuinely ambiguous. Non-interactive + genuinely ambiguous (zero
-// or several credentials, no flag, no preset) REFUSES to silently default to
-// zai — the historical `return 'zai'` fallback that caused the incident — and
-// instead throws listing the exact per-provider alternatives, BEFORE any
-// spawn/fetch/write. Parity with resolveWizardCoderProvider's WIZ-09 branch.
-async function resolveInitProvider(opts, deps = {}) {
-  if (opts.provider) return normalizeProviderFlag(opts.provider);
-  const fromEnv = providerFromEnv();
-  if (fromEnv) return fromEnv;
-  if (process.stdin.isTTY) {
-    const choose = deps.promptChoice || promptChoice;
-    return await choose('  Model provider for the opencode engine?', CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
-  }
-  // Non-interactive + genuinely ambiguous (no flag, no preset, zero or several
-  // provider credentials). Fail BEFORE any spawn/fetch/write and list the exact
-  // alternatives; never silently pick zai.
-  throw new Error(
-    'Coder provider is required but ambiguous: no --provider flag, no TRISS_CODER_MODEL ' +
-      'preset, and not exactly one provider credential (zero or several are set). `triss coder init` ' +
-      'will not silently default to Z.AI. Re-run with one of:\n' +
-      '  triss coder init --provider zai\n' +
-      '  triss coder init --provider worker\n' +
-      '  triss coder init --provider opencode-zen\n' +
-      '  triss coder init --provider opencode-go\n' +
-      '  triss coder init --provider moonshot\n' +
-      '  triss coder init --provider kimi-for-coding',
-  );
+// Explicit provider wins; otherwise use the shared configured default.
+async function resolveInitProvider(opts) {
+  return opts.provider ? normalizeProviderFlag(opts.provider) : providerFromEnv();
 }
 
 // ─── `triss config wizard coder` provider/engine resolution ──────────────────
@@ -1076,90 +905,27 @@ function resolveWizardCoderEngine(opts = {}) {
   return engine;
 }
 
-// Provider intent implied by the EFFECTIVE opencode.json model prefix (intent
-// #3 in the wizard order). opencode resolves config from cwd upward, so the
-// project (local) file is checked first — that is the file that actually
-// governs runs and the one a stale Zen pin (the incident) lives in. Returns
-// null when there is no opencode.json model to read. Used ONLY by the wizard
-// resolver (coder init keeps its own, credential-first inference).
-function providerFromEngineConfig(engine) {
-  if (engine !== 'opencode') return null;
-  for (const s of ['local', 'global']) {
-    const p = opencodeConfigPath(s);
-    if (existsSync(p)) {
-      const { model } = readOpencodeModels(p);
-      if (model) return coderModelCredential(model).provider;
-    }
-  }
-  return null;
-}
-
-// The wizard provider resolver. Intent order (engine already resolved):
-//   1. explicit --coder-provider flag (or --coder-model prefix)
-//   2. effective TRISS_CODER_MODEL prefix
-//   3. effective engine config (opencode.json) model prefix — the incident hook
-//   4. exactly one configured provider credential
-//   5. a TTY prompt when genuinely ambiguous
-//   6. otherwise (non-interactive + genuinely ambiguous): THROW naming provider
-//      ambiguity and the exact per-provider recovery commands — rather than
-//      silently defaulting to zai. The zai fallback would write a global
-//      opencode.json, pin a Z.AI model into the env file, and demand
-//      ZHIPU_API_KEY against the user's actual intent. Throwing here (inside
-//      resolveWizardCtx, before the env-var loop or postSetup) guarantees the
-//      wizard writes nothing before the failure.
-// Crush short-circuits ALL of this: provider is fixed to zai and a non-zai
-// --coder-provider is rejected before credentials are iterated.
-async function resolveWizardCoderProvider(opts = {}, engine, deps = {}) {
+async function resolveWizardCoderProvider(opts = {}, engine) {
   if (engine === 'crush') {
     const want = opts.coderProvider ? normalizeProviderFlag(opts.coderProvider) : 'zai';
     if (want !== 'zai') {
       throw new Error(
-        `The crush engine supports Z.AI GLM only — \`--coder-provider ${opts.coderProvider}\` requires the ` +
-          'opencode engine. Drop --coder-engine crush (or use --coder-provider zai).',
+        `The crush engine supports Z.A.I only — \`--coder-provider ${opts.coderProvider}\` requires another engine.`,
       );
     }
     return 'zai';
   }
   if (opts.coderProvider) return normalizeProviderFlag(opts.coderProvider);
   if (opts.coderModel) return coderModelCredential(opts.coderModel).provider;
-  const preset = process.env.TRISS_CODER_MODEL;
-  if (preset) return coderModelCredential(preset).provider;
-  const fromCfg = providerFromEngineConfig(engine);
-  if (fromCfg) return fromCfg;
-  const fromCreds = providerFromEnv();
-  if (fromCreds) return fromCreds;
-  const interactive = deps && deps.isTTY !== undefined ? !!deps.isTTY : !!process.stdin.isTTY;
-  if (interactive) {
-    const choose = (deps && deps.promptChoice) || promptChoice;
-    return await choose(`  Model provider for the ${engine} engine?`, CODER_PROVIDER_CHOICES, { defaultIndex: 0 });
-  }
-  // Non-interactive + genuinely ambiguous (no flag, no preset, no engine config,
-  // and zero or several provider credentials). Refuse to silently default to zai
-  // — that would write a global opencode.json, pin a Z.AI model, and demand
-  // ZHIPU_API_KEY against the user's actual intent. Throw here (before the env-var
-  // loop or postSetup run) so the wizard writes nothing before this failure. The
-  // message lists the exact per-provider recovery commands and no credential
-  // values. WIZ-09.
-  throw new Error(
-    'Coder provider is required but ambiguous: no --coder-provider flag, no TRISS_CODER_MODEL ' +
-      `preset, no ${engine === 'omp' ? 'Triss env' : 'opencode.json'} model, and not exactly one provider credential (zero or several ` +
-      'are set). The wizard will not silently default to Z.AI. Disambiguate by re-running with ' +
-      'one of:\n' +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider zai\n` +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider worker\n` +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider opencode-zen\n` +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider opencode-go\n` +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider moonshot\n` +
-      `  triss config wizard coder --coder-engine ${engine} --coder-provider kimi-for-coding`,
-  );
+  return providerFromEnv();
 }
 
 // Per-provider key descriptor for setupKey / the init prompt.
 function coderProviderKeyInfo(provider) {
-  if (provider === 'worker') {
+  if (provider === 'openai-compatible') {
     return {
-      env: 'TRISS_WORKER_API_KEY',
-      doc: 'Existing OpenAI-compatible worker API key (TRISS_WORKER_BASE_URL selects the endpoint)',
+      env: 'TRISS_OPENAI_COMPATIBLE_API_KEY',
+      doc: 'API key for the configured OpenAI-compatible provider endpoint',
     };
   }
   if (provider === 'opencode-zen') {
@@ -1303,82 +1069,45 @@ export function assertOpencodeMinimumVersion(minimumVersion = opencodeVersionPin
   return parseStableVersion(minimumVersion);
 }
 
+function configuredRoleModel(role) {
+  const snapshot = readProviderConfigSnapshot();
+  const providerId = snapshot.defaultProvider.value;
+  const profile = snapshot.providers[providerId];
+  const nativeModel = profile[role].value;
+  return `${providerId}/${nativeModel}`;
+}
+
 function coderModel() {
-  return process.env.TRISS_CODER_MODEL || DEFAULT_CODER_MODEL;
+  return configuredRoleModel('model');
 }
 
 function coderSmallModel() {
-  return process.env.TRISS_CODER_SMALL_MODEL || DEFAULT_CODER_SMALL_MODEL;
+  return configuredRoleModel('smallModel');
 }
 
-// Which API key a resolved coder model needs. OpenCode Zen models (provider
-// prefix `opencode/`, e.g. the free `opencode/deepseek-v4-flash-free`) authenticate with
-// OPENCODE_API_KEY; Moonshot PAYG models (`moonshotai/*`, `moonshotai-cn/*`)
-// with MOONSHOT_API_KEY; Kimi for Coding subscription models
-// (`kimi-for-coding/*`) with KIMI_API_KEY; every other prefix — the Z.AI GLM
-// families `zai-coding-plan/*` and `zai/*`, plus any unrecognised prefix (the
-// historical default) — uses ZHIPU_API_KEY. triss forwards whichever key is
-// set straight through to the engine subprocess (see buildEngineEnv). The
-// crush engine only speaks Z.AI (it bridges ZHIPU_API_KEY -> ZAI_API_KEY), so
-// its credential is always ZHIPU regardless of the model string.
+// Resolve the credential solely through the canonical provider route.
 export function coderModelCredential(model) {
   const route = resolveCoderProviderRoute(model);
-  if (route) return { env: route.credentialEnv, provider: route.provider };
-  return { env: 'ZHIPU_API_KEY', provider: 'zai' };
+  if (!route) {
+    throw new Error(
+      `Unknown provider-qualified model "${String(model)}" — expected <canonical-provider>/<model-id>.`,
+    );
+  }
+  return { env: route.credentialEnv, provider: route.provider };
 }
 
-// Provider prefixes triss actually knows how to authenticate. Anything else is
-// routed to ZHIPU_API_KEY by coderModelCredential's default, which then can't
-// serve it — a silent infinite-retry trap. Used to warn at init time.
-const KNOWN_PROVIDER_PREFIXES = new Set([
-  'triss-worker',
-  'zai-coding-plan',
-  'zai',
-  'opencode',
-  'opencode-go',
-  'moonshotai',
-  'moonshotai-cn',
-  'kimi-for-coding',
-]);
 function isKnownProviderPrefix(model) {
-  return KNOWN_PROVIDER_PREFIXES.has(String(model || '').split('/')[0]);
+  return resolveCoderProviderRoute(model) !== null;
 }
 
-function isQualifiedProviderModel(model) {
-  const value = String(model || '');
-  const slash = value.indexOf('/');
-  return (
-    slash > 0 &&
-    slash < value.length - 1 &&
-    value === value.trim() &&
-    !/\s/.test(value) &&
-    !value.endsWith('/') &&
-    providerModelId(value).length > 0 &&
-    !providerModelId(value).startsWith('/')
-  );
-}
 
-// The bare model id of a provider-prefixed model string (everything after the
-// first `/`): `opencode/hy3-free` -> `hy3-free`. Used to check a model against
-// the live OpenCode Zen catalogue, whose ids are bare.
+// Extract the provider-native id from a canonical qualified model.
 function providerModelId(model) {
   return String(model || '').split('/').slice(1).join('/');
 }
 
-// POSIX single-quote a dynamic value for a printed, copy-paste command (model
-// ids in a recovery command). Wraps in '...' and escapes embedded quotes as
-// '\'' so the value parses as one shell argument even with spaces/apostrophes/
-// $();. Mirrors src/coder-models.js#posixSingleQuote without introducing a
-// circular coder.js <-> coder-models.js import.
-function posixSingleQuote(value) {
-  const v = String(value);
-  return `'${v.replace(/'/g, "'\\''")}'`;
-}
 
-// The coder tools/status surface as soon as ANY provider credential is
-// present: ZHIPU_API_KEY (Z.AI GLM — the default) or OPENCODE_API_KEY
-// (OpenCode Zen). envReadiness(CODER_MANIFEST) only tracks the required ZHIPU
-// key, so callers that must also light up for a zen-only setup OR this in.
+// The coder tool is ready when any canonical provider credential is present.
 // ─── wizard manifest ─────────────────────────────────────────────────────────
 
 // Pseudo-manifest so `triss config wizard` / `triss status` can surface
@@ -1388,13 +1117,13 @@ function posixSingleQuote(value) {
 // requires that (see src/integrations/_contract.js validateManifest).
 export const CODER_MANIFEST = {
   name: 'coder',
-  description: 'Coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, OpenCode Zen, or OpenCode Go models (opencode, opencode2, crush, or omp engine)',
+  description: 'Coding agent using the shared canonical provider runtime (opencode, opencode2, crush, or omp engine)',
   envVars: [
     {
-      name: 'TRISS_WORKER_API_KEY',
+      name: 'TRISS_OPENAI_COMPATIBLE_API_KEY',
       required: false,
       secret: true,
-      doc: 'Existing OpenAI-compatible worker key for triss-worker/* coder models',
+      doc: 'OpenAI-compatible provider key for openai-compatible/* coder models',
     },
     {
       name: 'ZHIPU_API_KEY',
@@ -1403,23 +1132,18 @@ export const CODER_MANIFEST = {
       doc: 'Z.AI API key for GLM models — https://z.ai/manage-apikey/apikey-list',
     },
     {
-      // Optional: only the opencode engine needs it, and only for
-      // `opencode/*` (OpenCode Zen) models — e.g. the free opencode/deepseek-v4-flash-free.
-      // Set TRISS_CODER_MODEL=opencode/<id> (or pass --model) to route a run
-      // through it. Readiness stays governed by ZHIPU_API_KEY (the default
-      // provider); this key just unlocks the zen provider when present.
+      // Shared credential for OpenCode Zen and OpenCode Go.
       name: 'OPENCODE_API_KEY',
       required: false,
       secret: true,
-      doc: 'OpenCode key for Zen opencode/* and Go opencode-go/* models — https://opencode.ai/docs/go/',
+      doc: 'OpenCode key for opencode-zen/* and opencode-go/* models — https://opencode.ai/docs/go/',
     },
     {
-      // Optional: unlocks Moonshot PAYG models (moonshotai/*) for the
-      // opencode engine and `--provider kimi` ask/review calls.
+      // Moonshot pay-as-you-go credential.
       name: 'MOONSHOT_API_KEY',
       required: false,
       secret: true,
-      doc: 'Moonshot AI key for moonshotai/* Kimi models (e.g. moonshotai/kimi-k2.7-code) — https://platform.kimi.ai/console/api-keys',
+      doc: 'Moonshot AI key for moonshot/* Kimi models — https://platform.kimi.ai/console/api-keys',
     },
     {
       // Optional: unlocks the Kimi for Coding subscription (kimi-for-coding/*)
@@ -1450,12 +1174,7 @@ export const CODER_MANIFEST = {
     // Raw value on purpose: resolveCoderCredentialMode owns normalization.
     return { envVars, ctx: { engine, provider, scope, path, protectCredentials: wizardOpts.coderProtectCredentials } };
   },
-  // One migration notice per wizard invocation (the wizard never goes through
-  // runCoderInit/runCoderRun), before the inner setup runs.
-  postSetup: (ctx, deps) => {
-    warnLegacyCoderBestEffortEnv();
-    return runCoderSetup(ctx, deps);
-  },
+  postSetup: (ctx, deps) => runCoderSetup(ctx, deps),
 };
 
 // ─── agent templates ─────────────────────────────────────────────────────────
@@ -1513,26 +1232,7 @@ implementation.
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
 export async function runCoderInit(opts = {}, deps = {}) {
-  // Capture model overrides that are in the environment BEFORE loadEnvFiles()
-  // merges the .env files — i.e. genuine shell exports, which have higher
-  // precedence than any .env file and so would shadow whatever init pins.
-  // Invariant: the pre-dotenv snapshots are taken FIRST and the env
-  // files are loaded BEFORE the engine dispatch — the dispatch used to read
-  // TRISS_CODER_ENGINE from the shell env only, so `TRISS_CODER_ENGINE=
-  // opencode2` in a .env file silently ran the whole V1 init path (V1 binary
-  // probe/install, V1 agent templates, the allowlist bash policy the V2
-  // preflight then rejects). The pre-dotenv snapshots are passed through to
-  // runOpenCode2Init so its own capture (which now runs AFTER this
-  // loadEnvFiles) is not polluted by dotenv values.
-  const inheritedModels = {
-    model: process.env.TRISS_CODER_MODEL,
-    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
-  };
-  const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
-  // One migration notice per command invocation, BEFORE the engine dispatch,
-  // so crush init is covered too.
-  warnLegacyCoderBestEffortEnv();
   const engine = resolveCoderEngine(opts);
   // OpenCode 2 shares the V1-compatible configuration surface.
   // V2 shares the V1-compatible opencode.json surface: the SAME
@@ -1542,12 +1242,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
   // starts a V2 service: detectOpenCode2 probes `--version` and `run --help`
   // under isolated roots and snapshots service processes.
   if (engine === 'opencode2') {
-    return runOpenCode2Init(opts, deps, { inheritedModels, workerShellEnv });
+    return runOpenCode2Init(opts, deps);
   }
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
   // The provider choice applies to the opencode engine only — crush speaks
-  // Z.AI GLM exclusively (it bridges ZHIPU_API_KEY -> ZAI_API_KEY). A
-  // non-zai --provider with --engine crush is a contradiction, so reject
+  // Z.AI GLM exclusively using the canonical ZHIPU_API_KEY. A non-zai
+  // --provider with --engine crush is a contradiction, so reject
   // it rather than silently ignoring the flag.
   if (engine === 'crush' && explicitProvider && explicitProvider !== 'zai') {
     throw new Error(
@@ -1569,14 +1269,14 @@ export async function runCoderInit(opts = {}, deps = {}) {
     : explicitProvider || await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
-  if (provider === 'worker') {
-    assertWorkerTransportProvenance(workerShellEnv);
+  if (provider === 'openai-compatible') {
+    assertOpenAICompatibleTransportProvenance();
   }
   const path = ensureEnvFile(scope);
-  const scopedWorker = provider === 'worker'
-    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
+  const scopedProfile = provider === 'openai-compatible'
+    ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
-  await setupKey(path, provider, provider === 'worker' ? { existing: scopedWorker?.apiKey } : {});
+  await setupKey(path, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -1588,9 +1288,8 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // as a FORWARD-COMPAT gesture — verified crush releases IGNORE this block
     // (docs/engines/crush.md), so it does NOT make crush restricted by
     // itself; the working allowlist is enforced via CLI flags at run time when
-    // --restrict is on (see buildCrushRunArgv). The adapter bridges
-    // ZHIPU_API_KEY -> ZAI_API_KEY at run time, so NO key is written into
-    // crush.json here.
+    // --restrict is on (see buildCrushRunArgv). The adapter forwards
+    // ZHIPU_API_KEY at run time, so NO key is written into crush.json here.
     //
     // Version policy comes from THE shared resolver/assertion (same source as
     // runCoderRun): a found-but-incompatible crush is NEVER treated as ready —
@@ -1743,10 +1442,8 @@ export async function runCoderInit(opts = {}, deps = {}) {
         scope,
         provider,
         credentialMode,
-        inheritedModels,
         allowUnsafeBash: opts.allowUnsafeBash,
         allowUnverified: opts.allowUnverified,
-        workerShellEnv,
       },
       deps,
     );
@@ -1757,8 +1454,8 @@ export async function runCoderInit(opts = {}, deps = {}) {
   // Config + templates are already on disk, so re-running after setting the key
   // is a clean, idempotent completion.
   const keyEnv = coderProviderKeyInfo(provider).env;
-  const selectedKey = provider === 'worker'
-    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv }).apiKey
+  const selectedKey = provider === 'openai-compatible'
+    ? readOpenAICompatibleConfigSnapshot({ scope }).apiKey
     : process.env[keyEnv];
   if (!selectedKey) {
     process.stderr.write(
@@ -1775,39 +1472,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
   );
 }
 
-// Credential/transport provenance invariant: the worker credential and its
-// transport must form one consistently trusted profile. Precedence is shell
-// > project .triss.env > global .env PER FIELD,
-// so a repository can steer the effective transport while the key comes from
-// a higher-trust source — and a DECOY key in the project file does not make
-// the profile consistent (dotenv override:false can never displace a shell
-// export, so shell key + project URL is exactly what the engine would run
-// with). The check therefore resolves the EFFECTIVE source of each field —
-// using the pre-dotenv shell snapshot — and rejects when the endpoint is
-// project-local while the key is not.
-function assertWorkerTransportProvenance(workerShellEnv = captureWorkerShellSnapshot()) {
-  const files = activeEnvFiles();
-  const localFile = files.find((f) => f.scope === 'local');
-  const localVars = localFile && localFile.exists ? readEnvFile(localFile.path).vars : {};
-  const globalFile = files.find((f) => f.scope === 'global');
-  const globalVars = globalFile && globalFile.exists ? readEnvFile(globalFile.path).vars : {};
-  const effectiveSource = (key) => {
-    if (workerShellEnv[key] != null) return 'shell';
-    if (localVars[key] != null) return 'local';
-    if (globalVars[key] != null) return 'global';
-    return null;
-  };
-  const urlSource = effectiveSource('TRISS_WORKER_BASE_URL');
-  if (urlSource !== 'local') return;
-  const keySource = effectiveSource('TRISS_WORKER_API_KEY');
-  if (keySource === 'local' || keySource == null) return;
-  throw new Error(
-    `Worker credential provenance check failed: the effective TRISS_WORKER_BASE_URL comes from the project .triss.env while ` +
-      `the effective TRISS_WORKER_API_KEY comes from a higher-trust source (${keySource} — a key in the project ` +
-      'file cannot displace it). The worker endpoint the provider audit compares against would be ' +
-      'repository-controlled, so the key could be forwarded to an attacker URL. Move the key and the endpoint ' +
-      'into the same scope.',
-  );
+// The shared provider security policy applies before coder setup writes or
+// forwards credentials. It rejects unsafe URLs and lower-trust endpoint
+// overrides paired with higher-trust credentials.
+function assertOpenAICompatibleTransportProvenance() {
+  const profile = readProviderConfigSnapshot().providers['openai-compatible'];
+  validateProviderProfileSecurity('openai-compatible', profile);
 }
 
 // ── OpenCode 2 init ──────────────────────────────────────────────────────────//
@@ -1969,39 +1639,17 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   if (det.capabilities?.warning === 'service-process-snapshot-unavailable') {
     process.stderr.write(pc.yellow(`  ⚠ ${OPENCODE2_SERVICE_SNAPSHOT_WARNING}\n`));
   }
-  // (3) Credential + scope — the V1 head flow. The worker-shell snapshot is
-  // taken BEFORE loadEnvFiles() (invariant): snapshotting after the dotenv
-  // merge made a local .triss.env value indistinguishable from a genuine
-  // shell export, so `coder init --engine opencode2 --global --provider worker`
-  // run inside a project could silently satisfy the key check from the LOCAL
-  // env file and leave the global scope unset.
-  // Invariant: when dispatched from runCoderInit the env files are
-  // ALREADY loaded (the engine dispatch must see TRISS_CODER_ENGINE from
-  // .env), so the pre-dotenv snapshots come in via `precaptured` — the local
-  // captures below are the fallback for direct callers only.
-  const workerShellEnv = precaptured.workerShellEnv || captureWorkerShellSnapshot();
-  // Capture shell-export model pins before loadEnvFiles() so
-  // warnIfPinShadowed can see a shadowing export. V2 used to pass nothing,
-  // silently disabling the shell-export half of the pin-shadow check.
-  const inheritedModels = precaptured.inheritedModels || {
-    model: process.env.TRISS_CODER_MODEL,
-    smallModel: process.env.TRISS_CODER_SMALL_MODEL,
-  };
-  // Credential provenance is resolved from the
-  // PRE-DOTENV snapshot (a decoy key in the project .triss.env cannot
-  // displace a shell export), and only when the worker credential is
-  // actually in play — a non-worker init must not fail on an unrelated
-  // project-local TRISS_WORKER_BASE_URL.
+  // Resolve credentials from the canonical provider snapshot for the selected scope.
   loadEnvFiles();
   const provider = opts.provider ? normalizeProviderFlag(opts.provider) : await resolveInitProvider(opts, deps);
-  if (provider === 'worker') {
-    assertWorkerTransportProvenance(workerShellEnv);
+  if (provider === 'openai-compatible') {
+    assertOpenAICompatibleTransportProvenance();
   }
   const envPath = ensureEnvFile(scope);
-  const scopedWorker = provider === 'worker'
-    ? readWorkerConfigSnapshot({ scope, parentEnv: workerShellEnv })
+  const scopedProfile = provider === 'openai-compatible'
+    ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
-  await setupKey(envPath, provider, provider === 'worker' ? { existing: scopedWorker?.apiKey } : {});
+  await setupKey(envPath, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -2023,8 +1671,6 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
       provider,
       credentialMode,
       skipAgentTemplates: true,
-      inheritedModels,
-      workerShellEnv,
     },
     deps,
   );
@@ -2034,15 +1680,15 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   // walks the CANONICAL (realpath) directory (invariant), same as the run path.
   const postDir = realpathSync.native(deps.cwd || process.cwd());
   staticOpenCode2Preflight(postDir, credentialMode);
-  const pinnedModel = process.env.TRISS_CODER_MODEL || readOpencodeModels(opencodeConfigPath(scope)).model;
-  const postWorkerProfile = pinnedModel && pinnedModel.startsWith('triss-worker/')
-    ? workerCoderProfile()
+  const pinnedModel = readOpencodeModels(opencodeConfigPath(scope)).model || coderModel();
+  const postWorkerProfile = pinnedModel && pinnedModel.startsWith('openai-compatible/')
+    ? openAICompatibleCoderProfile()
     : null;
   auditOpenCode2Run(
     {
       cwd: postDir,
       modelUsed: pinnedModel,
-      expectedWorkerBaseURL: postWorkerProfile ? postWorkerProfile.baseUrl : null,
+      expectedProviderBaseURL: postWorkerProfile ? postWorkerProfile.baseUrl : null,
       credentialMode,
     },
     { enumerate: deps.enumerateOpenCodeSources },
@@ -2050,36 +1696,6 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   return setup;
 }
 
-function warnIfPinShadowed(scope, pinned, inherited) {
-  let shadowed = false;
-  const warn = (m) => {
-    shadowed = true;
-    process.stderr.write(pc.yellow(m));
-  };
-  // 1. Shell export — highest precedence of all, not fixable by writing files.
-  if (inherited.model && inherited.model !== pinned.model) {
-    warn(
-      `  ⚠ TRISS_CODER_MODEL=${inherited.model} is exported in your shell — it overrides the pinned ` +
-        `${pinned.model} in EVERY .env file, so the next run will use it (and likely the wrong ` +
-        'provider/key). Run `unset TRISS_CODER_MODEL TRISS_CODER_SMALL_MODEL`, or export the pinned value.\n',
-    );
-  }
-  // 2. A higher-precedence .env FILE. activeEnvFiles() is highest-first; stop at
-  //    the scope we wrote — anything after it is lower precedence and can't win.
-  for (const f of activeEnvFiles()) {
-    if (f.scope === scope) break;
-    if (!f.exists) continue;
-    const v = readEnvFile(f.path).vars.TRISS_CODER_MODEL;
-    if (v && v !== pinned.model) {
-      warn(
-        `  ⚠ ${f.path} (${f.scope} scope) sets TRISS_CODER_MODEL=${v}, which has higher precedence than ` +
-          `the ${scope} config just written (pin ${pinned.model}) and will win in the next run. Fix or ` +
-          `remove it, or re-run init with --${f.scope}.\n`,
-      );
-    }
-  }
-  return shadowed;
-}
 
 async function setupKey(path, provider = 'zai', opts = {}) {
   const info = coderProviderKeyInfo(provider);
@@ -2164,25 +1780,14 @@ async function runCoderSetupUnlocked(
     // No hidden default: callers must pass the already-resolved mode
     // (runCoderSetup resolves it via resolveCoderCredentialMode).
     credentialMode,
-    inheritedModels,
     allowUnsafeBash,
     allowUnverified,
-    workerShellEnv,
     skipAgentTemplates,
   } = {},
   deps = {},
 ) {
   assertCoderCredentialMode(credentialMode);
-  // `triss coder init` calls loadEnvFiles() itself before setupKey() runs,
-  // so the provider key is already in process.env by the time this function
-  // is reached from that path. But CODER_MANIFEST.postSetup (the
-  // `triss config wizard` path) calls runCoderSetup directly: the
-  // generic env-var loop writes the key to the .env FILE via setVar(),
-  // never to process.env. Without reloading here, detectAndReportZaiProvider
-  // below reads an unset ZHIPU_API_KEY on a first-time wizard setup,
-  // silently skips detection, and falls back to the default provider
-  // prefix. override:false + uncached (see config.js) makes this a safe,
-  // idempotent no-op when the key is already loaded.
+  // Reload values written by the config wizard before provider discovery.
   loadEnvFiles();
   const resolvedScope = scope || 'global';
   // OMP has no persistent engine config: both init paths verify the pinned
@@ -2217,7 +1822,7 @@ async function runCoderSetupUnlocked(
   if (engine === 'crush') {
     process.stderr.write('\n' + pc.bold('── coder (crush engine · Z.AI GLM) ──') + '\n');
     process.stderr.write(
-      pc.dim('  · crush speaks Z.AI GLM only (it bridges ZHIPU_API_KEY -> ZAI_API_KEY at run time)\n'),
+      pc.dim('  · crush speaks Z.AI GLM only (credential: ZHIPU_API_KEY)\n'),
     );
     const keyEnv = 'ZHIPU_API_KEY';
     if (!process.env[keyEnv]) {
@@ -2250,7 +1855,7 @@ async function runCoderSetupUnlocked(
   const sh = deps.spawnSync || nodeSpawnSync;
   const noun =
     {
-      worker: 'Triss worker',
+      'openai-compatible': 'OpenAI-compatible provider',
       'opencode-zen': 'OpenCode Zen',
       'opencode-go': 'OpenCode Go',
       moonshot: 'Moonshot Kimi',
@@ -2278,31 +1883,21 @@ async function runCoderSetupUnlocked(
   if (engine !== 'opencode2') {
     await ensureEngine(sh, deps.confirmInstall);
   }
-  // Z.AI plan detection only applies to the zai kind: Zen models resolve via
-  // opencode's built-in `opencode` provider, and the two Kimi kinds already
-  // name their endpoint through the credential env — nothing to probe.
-  const detectedZai =
+  const detectedZaiEndpoint =
     resolvedProvider === 'zai'
-      ? await detectAndReportZaiProvider(deps.fetch || globalThis.fetch)
+      ? await detectAndReportZaiEndpoint(deps.fetch || globalThis.fetch)
       : null;
+  if (detectedZaiEndpoint) {
+    persistDetectedZaiEndpoint(resolvedScope, detectedZaiEndpoint);
+  }
   const providerInfo = {
     kind: resolvedProvider,
-    detectedZai,
-    ...(resolvedProvider === 'worker'
-      ? {
-          workerProfile: workerCoderProfile(
-            readWorkerConfigSnapshot({ scope: resolvedScope, parentEnv: workerShellEnv }),
-          ),
-        }
+    detectedZaiEndpoint,
+    ...(resolvedProvider === 'openai-compatible'
+      ? { providerProfile: openAICompatibleCoderProfile(readOpenAICompatibleConfigSnapshot({ scope: resolvedScope })) }
       : {}),
   };
-  // Resolve the model ONCE, up front, honoring only presets/config that belong
-  // to the chosen provider — then write opencode.json (if absent) and pin
-  // TRISS_CODER_MODEL from the SAME resolved value. This has to happen even when
-  // opencode.json already exists: the run path reads the model from
-  // TRISS_CODER_MODEL, never from opencode.json, so skipping the pin would leave
-  // a bare run falling back to the GLM default (and demanding ZHIPU_API_KEY)
-  // right after a successful Zen setup.
+  // Resolve both canonical provider roles before writing engine configuration.
   const existing = readOpencodeModels(opencodeConfigPath(resolvedScope));
   const { model, smallModel, zenAvailable, providerAvailable } = await resolveInitModels(
     providerInfo,
@@ -2315,20 +1910,20 @@ async function runCoderSetupUnlocked(
     },
   );
   const projectCfg = opencodeConfigPath('local');
-  let projectWorkerAudit = null;
+  let projectProviderAudit = null;
   if (
-    resolvedProvider === 'worker' &&
+    resolvedProvider === 'openai-compatible' &&
     resolvedScope === 'global' &&
     existsSync(projectCfg) &&
     projectCfg !== opencodeConfigPath('global')
   ) {
-    projectWorkerAudit = auditExistingConfig(projectCfg, providerInfo, {
+    projectProviderAudit = auditExistingConfig(projectCfg, providerInfo, {
       note: '(project scope — higher precedence than the global config, so it governs runs)',
       allowUnsafeBash,
-      expectedWorkerProvider: workerProviderDefinition(providerInfo, model, smallModel),
-      workerModels: new Set(providerInfo.workerProfile.models.map((id) => `triss-worker/${id}`)),
+      expectedProvider: openAICompatibleProviderDefinition(providerInfo, model, smallModel),
+      providerModels: new Set(providerInfo.providerProfile.models.map((id) => `openai-compatible/${id}`)),
     });
-    if (projectWorkerAudit.blocking) {
+    if (projectProviderAudit.blocking) {
       throw new Error(
         'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
       );
@@ -2376,11 +1971,9 @@ async function runCoderSetupUnlocked(
   // from the global default is fine.
   if (resolvedScope === 'global') {
     if (existsSync(projectCfg) && projectCfg !== opencodeConfigPath('global')) {
-      // The stale-Zen incident most often lives in this higher-precedence
-      // project file (a previous init pinned opencode/hy3-free here before the
-      // promo model was retired). Report it with the same recovery commands.
+      // Report a stale higher-precedence project model before auditing it.
       emitZenStaleIncident(projectCfg, readOpencodeModels(projectCfg), { model, smallModel }, zenAvailable, 'local', deps);
-      const otherAudit = projectWorkerAudit || auditExistingConfig(projectCfg, providerInfo, {
+      const otherAudit = projectProviderAudit || auditExistingConfig(projectCfg, providerInfo, {
           note: '(project scope — higher precedence than the global config, so it governs runs)',
           allowUnsafeBash,
           zenAvailable,
@@ -2400,7 +1993,7 @@ async function runCoderSetupUnlocked(
       'Coder setup incomplete: fix the existing opencode.json issues reported above, then re-run `triss coder init`.',
     );
   }
-  persistCoderModels(resolvedScope, model, smallModel);
+  persistProviderModels(resolvedScope, resolvedProvider, model, smallModel);
   // V2 init does not scaffold V1 agent templates: the protected-mode static
   // preflight rejects those sources, and keeping init mode-neutral avoids
   // creating an executable surface just for one mode. skipAgentTemplates is
@@ -2415,8 +2008,8 @@ async function runCoderSetupUnlocked(
   // contradicts with "<KEY> is not set". Config + templates are already on
   // disk, so re-running after setting the key is a clean idempotent completion.
   const keyEnv = coderProviderKeyInfo(resolvedProvider).env;
-  const selectedKey = resolvedProvider === 'worker'
-    ? readWorkerConfigSnapshot({ scope: resolvedScope, parentEnv: workerShellEnv }).apiKey
+  const selectedKey = resolvedProvider === 'openai-compatible'
+    ? readOpenAICompatibleConfigSnapshot({ scope: resolvedScope }).apiKey
     : process.env[keyEnv];
   if (!selectedKey) {
     process.stderr.write(
@@ -2428,41 +2021,33 @@ async function runCoderSetupUnlocked(
       `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
     );
   }
-  // Pin-shadow check runs HERE (not only in runCoderInit) so the wizard's
-  // postSetup path is covered too. A shell export needs inheritedModels (only
-  // runCoderInit captures it pre-loadEnvFiles); the .env-file shadow is detected
-  // from disk regardless, so the wizard at least sees that.
-  if (warnIfPinShadowed(resolvedScope, { model, smallModel }, inheritedModels || {})) {
-    process.stderr.write(
-      '\n' +
-        pc.yellow('⚠ Setup incomplete: ') +
-        'the override flagged above wins over what was just written, so runs will NOT use this ' +
-        'config until you remove or fix it. Then re-run ' +
-        pc.cyan('triss coder init') +
-        '.\n',
-    );
-    throw new Error(
-      'Coder setup incomplete: remove or fix the higher-precedence model override reported above, then re-run `triss coder init`.',
-    );
-  }
   return { model, smallModel };
 }
 
-// Pin TRISS_CODER_MODEL / TRISS_CODER_SMALL_MODEL into the .env of `scope` (and
-// process.env, so an in-process run like the MCP server sees it immediately) so
-// the model chosen at init drives every later run — the run path resolves the
-// model from TRISS_CODER_MODEL, not from opencode.json. The values passed in are
-// already provider-correct (resolveInitModels rejected any cross-provider
-// preset), so we write them authoritatively rather than preserving a stale env
-// value that would send a Zen run to the GLM default.
-function persistCoderModels(scope, model, smallModel) {
+function persistDetectedZaiEndpoint(scope, endpointProfile) {
   const path = ensureEnvFile(scope);
-  setVar(path, 'TRISS_CODER_MODEL', model);
-  process.env.TRISS_CODER_MODEL = model;
-  setVar(path, 'TRISS_CODER_SMALL_MODEL', smallModel);
-  process.env.TRISS_CODER_SMALL_MODEL = smallModel;
+  const definition = getProviderDefinition('zai');
+  const baseUrl = endpointProfile === 'payg' ? ZAI_PAYG_BASE_URL : ZAI_CODING_PLAN_BASE_URL;
+  setVar(path, definition.fields.endpoint, baseUrl);
+  process.env[definition.fields.endpoint] = baseUrl;
+}
+
+// Persist exact provider role models in the selected canonical profile.
+function persistProviderModels(scope, providerId, model, smallModel) {
+  const path = ensureEnvFile(scope);
+  const definition = getProviderDefinition(providerId);
+  const nativeModel = String(model).slice(String(model).indexOf('/') + 1);
+  const nativeSmallModel = String(smallModel).slice(String(smallModel).indexOf('/') + 1);
+  setVar(path, definition.fields.model, nativeModel);
+  process.env[definition.fields.model] = nativeModel;
+  setVar(path, definition.fields.smallModel, nativeSmallModel);
+  process.env[definition.fields.smallModel] = nativeSmallModel;
+  setVar(path, 'TRISS_DEFAULT_PROVIDER', providerId);
+  process.env.TRISS_DEFAULT_PROVIDER = providerId;
+  setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
+  process.env.TRISS_CONFIG_SCHEMA = '2';
   process.stderr.write(
-    pc.dim(`  · pinned TRISS_CODER_MODEL=${model} (small_model=${smallModel}) so runs use it\n`),
+    pc.dim(`  · configured ${providerId} model=${nativeModel} smallModel=${nativeSmallModel}\n`),
   );
 }
 
@@ -2706,64 +2291,30 @@ export function resolveCrushRestrict(opts = {}) {
 // one-run token to the REAL upstream (guaranteed auth failure), so the run
 // fails closed before spawn instead.
 export function coderCredentialEndpoint(credEnv, modelUsed) {
-  switch (credEnv) {
-    case 'ZHIPU_API_KEY': {
-      // Coding-plan models go to the coding endpoint; everything else to PAYG.
-      // Both are OpenAI-compatible under their /api/.../v4 scope; the origin
-      // carries NO path (the prefix travels with the request).
-      const coding = /^(zai-coding-plan|glm-coding)\//.test(String(modelUsed || ''));
-      return coding
-        ? { endpoint: 'https://api.z.ai', pathPrefix: '/api/coding/paas/v4' }
-        : { endpoint: 'https://api.z.ai', pathPrefix: '/api/paas/v4' };
-    }
-    case 'OPENCODE_API_KEY':
-      // Zen/Go models are served by opencode's own OpenAI-compatible router.
-      return {
-        endpoint: 'https://opencode.ai',
-        pathPrefix: '/zen/v1',
-        engineRedirectEnv: 'OPENCODE_BASE_URL',
-      };
-    case 'MOONSHOT_API_KEY':
-      // PAYG Moonshot is OpenAI-compatible Bearer auth. The opencode built-in
-      // moonshot provider exposes no documented base-URL env override, so the
-      // engine cannot be pinned to the proxy — the run must fail closed.
-      return { endpoint: 'https://api.moonshot.ai', pathPrefix: '/v1', engineRedirect: 'none' };
-    case 'KIMI_API_KEY':
-      // Kimi for Coding is a SEPARATE service from PAYG Moonshot: it lives on
-      // api.kimi.com under /coding/v1 and speaks the ANTHROPIC protocol
-      // (x-api-key + anthropic-version; see src/moonshot.js). Routing it to
-      // the PAYG OpenAI endpoint with Bearer auth can never authenticate.
-      return {
-        endpoint: 'https://api.kimi.com',
-        pathPrefix: '/coding/v1',
-        authStyle: 'anthropic',
-        engineRedirect: 'none',
-      };
-    case 'TRISS_WORKER_API_KEY': {
-      // The worker profile pins its own base URL (default DeepSeek). A test
-      // or partial environment without TRISS_WORKER_BASE_URL falls back to
-      // the same default the worker client itself uses. The URL is split
-      // into origin + prefix so forwarding can never double the path.
-      const settings = readWorkerConfigSnapshot({ scope: 'effective' });
-      const baseUrl = settings.baseUrl || 'https://api.deepseek.com/v1';
-      if (!/^https:\/\//.test(String(baseUrl))) return null;
-      const parsed = new URL(baseUrl);
-      const prefix = parsed.pathname.replace(/\/+$/, '') || '/';
-      return {
-        endpoint: parsed.origin,
-        pathPrefix: prefix,
-      };
-    }
-    default:
-      return null;
+  const route = resolveCoderProviderRoute(modelUsed);
+  if (!route || route.credentialEnv !== credEnv) return null;
+  const configured = readProviderConfigSnapshot().providers[route.provider];
+  const baseUrl = configured?.endpoint?.value;
+  if (!baseUrl) return null;
+  const parsed = new URL(baseUrl);
+  const result = {
+    endpoint: parsed.origin,
+    pathPrefix: parsed.pathname.replace(/\/+$/, '') || '/',
+  };
+  if (route.provider === 'opencode-zen' || route.provider === 'opencode-go') {
+    result.engineRedirectEnv = 'OPENCODE_BASE_URL';
+  } else if (route.provider === 'moonshot') {
+    result.engineRedirect = 'none';
+  } else if (route.provider === 'kimi-for-coding') {
+    result.authStyle = 'anthropic';
+    result.engineRedirect = 'none';
   }
+  return result;
 }
 
-// Resolve the canonical route once for a run.  The worker is the only route
-// whose endpoint is operator-configurable; its snapshot has already been
-// validated by workerCoderProfile, so split that URL into the exact upstream
-// origin and path sent to the parent-owned proxy.
-function resolveRuntimeCoderProviderRoute(model, workerSettings, { requireAudited = true } = {}) {
+// Resolve the canonical route once for a run. Operator-configured endpoints
+// come from the immutable provider snapshot.
+function resolveRuntimeCoderProviderRoute(model, providerSettings, { requireAudited = true } = {}) {
   const route = resolveCoderRuntimeProviderRoute(model);
   if (!route) {
     throw new Error(
@@ -2778,8 +2329,8 @@ function resolveRuntimeCoderProviderRoute(model, workerSettings, { requireAudite
         'Protected mode refuses to guess Chat Completions. Rerun without --protect-credentials to use the built-in OpenCode provider under the default best_effort_raw mode, after auditing persistent provider overrides.',
     );
   }
-  if (route.provider !== 'worker') return route;
-  const profile = workerCoderProfile(workerSettings);
+  if (route.provider !== 'openai-compatible') return route;
+  const profile = openAICompatibleCoderProfile(providerSettings);
   const parsed = new URL(profile.baseUrl);
   return Object.freeze({
     ...route,
@@ -2838,16 +2389,23 @@ function auditTransientProviderAlias(cwd, configRoot, aliases = CODER_TRANSIENT_
   }
 }
 
-function auditProtectedRouteConfiguration({ model, route, smallModel, smallRoute, cwd, configRoot, workerSettings }) {
+function auditProtectedRouteConfiguration({ model, route, smallModel, smallRoute, cwd, configRoot, providerSettings }) {
   auditTransientProviderAlias(cwd, configRoot, [
     CODER_TRANSIENT_PROVIDER_ALIAS,
     ...(smallRoute && !coderRoutesShareTransport(smallRoute, route)
       ? [`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`]
       : []),
   ]);
-  const allowedProvider = route.provider === 'worker'
-    ? workerProviderDefinition(
-      { kind: 'worker', workerProfile: workerCoderProfile(workerSettings) },
+  const compatibleSettings = route.provider === 'openai-compatible'
+    ? providerSettings || {
+        baseUrl: `${route.endpoint}${route.pathPrefix === '/' ? '' : route.pathPrefix}`,
+        model: route.modelId,
+        smallModel: smallRoute?.modelId || route.modelId,
+      }
+    : null;
+  const allowedProvider = route.provider === 'openai-compatible'
+    ? openAICompatibleProviderDefinition(
+      { kind: 'openai-compatible', providerProfile: openAICompatibleCoderProfile(compatibleSettings) },
       model,
       smallModel,
     )
@@ -2857,7 +2415,7 @@ function auditProtectedRouteConfiguration({ model, route, smallModel, smallRoute
     projectRoot: configRoot,
     allowedProvider,
     requireAllowedProvider: false,
-    allowManagedWorkerProvider: route.provider === 'worker',
+    allowManagedOpenAICompatibleProvider: route.provider === 'openai-compatible',
   });
 }
 
@@ -2912,16 +2470,16 @@ function opencodeConfigTemplate(
       websearch: 'deny',
     },
   };
-  if (providerInfo?.kind === 'worker') {
+  if (providerInfo?.kind === 'openai-compatible') {
     config.provider = {
-      'triss-worker': workerProviderDefinition(providerInfo, model, smallModel),
+      'openai-compatible': openAICompatibleProviderDefinition(providerInfo, model, smallModel),
     };
   }
   return config;
 }
 
-function workerProviderDefinition(providerInfo, model, smallModel) {
-  const profile = providerInfo.workerProfile || workerCoderProfile();
+function openAICompatibleProviderDefinition(providerInfo, model, smallModel) {
+  const profile = providerInfo.providerProfile || openAICompatibleCoderProfile();
   const modelIds = [...new Set([
     ...profile.models,
     providerModelId(model),
@@ -2929,23 +2487,23 @@ function workerProviderDefinition(providerInfo, model, smallModel) {
   ].filter(Boolean))];
   return {
     npm: '@ai-sdk/openai-compatible',
-    name: 'Triss worker (OpenAI-compatible)',
+    name: 'OpenAI-compatible provider',
     options: {
       baseURL: profile.baseUrl,
-      apiKey: '{env:TRISS_WORKER_API_KEY}',
+      apiKey: '{env:TRISS_OPENAI_COMPATIBLE_API_KEY}',
     },
     models: Object.fromEntries(modelIds.map((id) => [id, { name: id }])),
   };
 }
 
-function isManagedWorkerProvider(value) {
+function isManagedOpenAICompatibleProvider(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   if (!isDeepStrictEqual(Object.keys(value).sort(), ['models', 'name', 'npm', 'options'])) return false;
   if (value.npm !== '@ai-sdk/openai-compatible') return false;
-  if (value.name !== 'Triss worker (OpenAI-compatible)') return false;
+  if (value.name !== 'OpenAI-compatible provider') return false;
   if (!value.options || typeof value.options !== 'object' || Array.isArray(value.options)) return false;
   if (!isDeepStrictEqual(Object.keys(value.options).sort(), ['apiKey', 'baseURL'])) return false;
-  if (value.options.apiKey !== '{env:TRISS_WORKER_API_KEY}') return false;
+  if (value.options.apiKey !== '{env:TRISS_OPENAI_COMPATIBLE_API_KEY}') return false;
   if (typeof value.options.baseURL !== 'string') return false;
   if (!value.models || typeof value.models !== 'object' || Array.isArray(value.models)) return false;
   return Object.entries(value.models).every(([id, model]) => (
@@ -3011,7 +2569,7 @@ function auditOneShotProviderConfiguration(model, {
   projectRoot: configRoot,
   allowedProvider,
   requireAllowedProvider = true,
-  allowManagedWorkerProvider = false,
+  allowManagedOpenAICompatibleProvider = false,
 } = {}) {
   const providerId = String(model).split('/')[0];
   let sawAllowedProvider = false;
@@ -3050,11 +2608,11 @@ function auditOneShotProviderConfiguration(model, {
       }
       if (!Object.prototype.hasOwnProperty.call(providerBlock || {}, providerId)) continue;
       const definition = providerBlock[providerId];
-      const compatibleManagedWorker = allowManagedWorkerProvider &&
+      const compatibleManagedProvider = allowManagedOpenAICompatibleProvider &&
         allowedProvider &&
-        isManagedWorkerProvider(definition) &&
+        isManagedOpenAICompatibleProvider(definition) &&
         definition.options.baseURL === allowedProvider.options.baseURL;
-      if (allowedProvider && (isDeepStrictEqual(definition, allowedProvider) || compatibleManagedWorker)) {
+      if (allowedProvider && (isDeepStrictEqual(definition, allowedProvider) || compatibleManagedProvider)) {
         sawAllowedProvider = true;
         continue;
       }
@@ -3169,7 +2727,7 @@ function auditEffectiveOpenCodeConfiguration(
   }
 }
 
-function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
+function mergeOpenAICompatibleProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
   const audit = auditExistingConfig(path, providerInfo, {
       allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
@@ -3186,16 +2744,16 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
   } catch {
     return { blocking: true };
   }
-  const expected = workerProviderDefinition(providerInfo, model, smallModel);
+  const expected = openAICompatibleProviderDefinition(providerInfo, model, smallModel);
   const providers = config.provider;
   const current = providers && typeof providers === 'object' && !Array.isArray(providers)
-    ? providers['triss-worker']
+    ? providers['openai-compatible']
     : undefined;
   if (current !== undefined) {
-    if (!isManagedWorkerProvider(current)) {
+    if (!isManagedOpenAICompatibleProvider(current)) {
       process.stderr.write(
         pc.yellow(
-          `  ⚠ ${path} contains a conflicting provider["triss-worker"] definition — refusing to overwrite it.\n`,
+          `  ⚠ ${path} contains a conflicting provider["openai-compatible"] definition — refusing to overwrite it.\n`,
         ),
       );
       return { blocking: true };
@@ -3212,12 +2770,12 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
   }
   config.model = model;
   config.small_model = smallModel;
-  config.provider = { ...(providers || {}), 'triss-worker': expected };
+  config.provider = { ...(providers || {}), 'openai-compatible': expected };
   const newline = raw.includes('\r\n') ? '\r\n' : '\n';
   const indent = raw.match(/\r?\n([ \t]+)"/)?.[1] || '  ';
   const trailing = raw.endsWith('\r\n') || raw.endsWith('\n');
   const rendered = JSON.stringify(config, null, indent).replace(/\n/g, newline) + (trailing ? newline : '');
-  const temp = `${path}.triss-worker-${randomBytes(6).toString('hex')}.tmp`;
+  const temp = `${path}.openai-compatible-${randomBytes(6).toString('hex')}.tmp`;
   const mode = statSync(path).mode & 0o777;
   try {
     writeFileSync(temp, rendered, { mode, flag: 'wx' });
@@ -3227,98 +2785,49 @@ function mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, 
     try { if (existsSync(temp)) rmSync(temp); } catch {}
     throw error;
   }
-  process.stderr.write(pc.green(`  ✓ configured provider["triss-worker"] in ${path}\n`));
+  process.stderr.write(pc.green(`  ✓ configured provider["openai-compatible"] in ${path}\n`));
   return { blocking: false };
 }
 
-// If the caller already has an opencode.json (the no-clobber path never
-// touches it), still tell them when its `model` provider prefix contradicts
-// the provider being configured — a mismatched prefix is exactly the
-// infinite-retry trap this whole feature exists to catch. `providerInfo` is
-// { kind: 'zai' | 'opencode-zen' | 'opencode-go', detectedZai }: for zai the
-// expected prefix is the detected plan (skip if detection couldn't confirm
-// one); the two OpenCode providers use fixed, distinct prefixes.
+// Warn when an existing engine configuration contradicts the selected
+// canonical provider.
 function warnIfProviderMismatch(path, providerInfo) {
-  // Prefixes that belong to the provider being configured. Empty means there
-  // is nothing to compare against (a zai kind whose plan probe failed).
-  const expected =
-    providerInfo.kind === 'worker'
-      ? ['triss-worker']
-      : providerInfo.kind === 'opencode-zen'
-      ? ['opencode']
-      : providerInfo.kind === 'opencode-go'
-        ? ['opencode-go']
-        : providerInfo.kind === 'moonshot'
-          ? ['moonshotai', 'moonshotai-cn']
-          : providerInfo.kind === 'kimi-for-coding'
-            ? ['kimi-for-coding']
-            : providerInfo.detectedZai
-              ? [providerInfo.detectedZai]
-              : [];
-  if (!expected.length) return; // nothing to compare against
   let existing;
   try {
     existing = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    return; // unreadable/malformed — not this function's job to fix that
+    return;
   }
   const existingModel = typeof existing.model === 'string' ? existing.model : '';
   const existingPrefix = existingModel.split('/')[0];
-  if (!existingPrefix || expected.includes(existingPrefix)) return;
-  if (providerInfo.kind !== 'zai') {
-    const cat = coderInitCatalogue(providerInfo);
-    process.stderr.write(
-      pc.yellow(
-        `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), which does not match ` +
-          `the ${cat.noun} provider you are configuring — the existing file is kept untouched. Set a ` +
-          `${cat.prefix}/<id> model (e.g. via TRISS_CODER_MODEL), or delete opencode.json and re-run init.\n`,
-      ),
-    );
-    return;
-  }
+  if (!existingPrefix || existingPrefix === providerInfo.kind) return;
+  const cat = coderInitCatalogue(providerInfo);
+  const modelField = getProviderDefinition(providerInfo.kind).fields.model;
   process.stderr.write(
     pc.yellow(
-      `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), but ZHIPU_API_KEY ` +
-        `just verified against the "${expected[0]}" endpoint instead — this is the exact ` +
-        "mismatch that makes opencode retry a model call it can never complete. Update the " +
-        'model/small_model fields, or unset ZHIPU_API_KEY and use a key for the right plan.\n',
+      `  ⚠ ${path} sets model="${existingModel}" (provider "${existingPrefix}"), which does not match ` +
+        `the ${cat.noun} provider. The existing file is unchanged. Configure ${modelField} and align ` +
+        `opencode.json with the canonical "${cat.prefix}/" prefix, or remove the file and re-run init.\n`,
     ),
   );
 }
 
-// Stale-Zen incident reporter. When an existing opencode.json (own OR the
-// higher-precedence project file) is pinned to an OpenCode Zen model the
-// AUTHENTICATED live catalogue (`zenAvailable`, a verified Set) no longer
-// lists, this prints a focused recovery block:
-//   - the stale field(s) (model / small_model) with their bare ids,
-//   - the CURRENT replacement id(s) triss just resolved from the catalogue,
-//   - the EXACT recovery commands (`triss coder model set --engine opencode
-//     --provider opencode-zen --<scope>` and the equivalent wizard form).
-// It deliberately does NOT mention selecting a fallback provider — provider
-// intent stays whatever the config/catalogue indicated (the post-incident
-// contract). Returns true when it emitted anything. No-clobber is preserved:
-// this only PRINTS; the user runs the printed command to recover (the blocking
-// throw that follows still uses the generic "existing opencode.json issues"
-// line so existing CLI diagnostic contracts keep matching, while
-// THIS block supplies the actionable recovery detail). `deps.outputs` (when an
-// array) receives the same lines so a headless wizard caller (e.g. an injected
-// deps bag) can read them without scraping stderr.
+// Report stale OpenCode Zen catalogue pins without changing user-owned engine
+// configuration.
 function emitZenStaleIncident(path, existingModels, resolved, zenAvailable, fileScope, deps = {}) {
   if (!zenAvailable || !existingModels) return false;
   const out = (s) => {
     process.stderr.write(s);
     if (Array.isArray(deps && deps.outputs)) deps.outputs.push(typeof s === 'string' ? s : String(s));
   };
-  const scopeFlag = fileScope === 'local' ? '--local' : '--global';
   const fields = [];
   const seen = new Set();
   const consider = (field, val) => {
     if (!val) return;
     const id = providerModelId(val);
     const prefix = String(val).split('/')[0];
-    // Only Zen models (opencode/* prefix) are in scope for this report, and
-    // only when the catalogue verifiably no longer offers their bare id.
-    if (prefix !== 'opencode' || !id) return;
+    // Only canonical Zen models are in scope for this report.
+    if (prefix !== 'opencode-zen' || !id) return;
     if (zenAvailable.has(id)) return;
     if (seen.has(field)) return;
     seen.add(field);
@@ -3344,48 +2853,20 @@ function emitZenStaleIncident(path, existingModels, resolved, zenAvailable, file
       ),
     );
   }
-  // Print exactly one executable persistent repair
-  // command — `triss coder model set <canonical-main> --small <canonical-small>
-  // --engine opencode --provider opencode-zen <scope> --yes` — built from the
-  // replacements triss just resolved, POSIX-quoted. The command must apply
-  // through the real CLI (it carries the resolved ids + --yes), must NOT loop
-  // back into the no-clobber wizard, and must not omit the required main. Do
-  // NOT print the repeat `triss config wizard coder` alternative.
   if (resolved && resolved.model && resolved.smallModel) {
-    out(pc.yellow('  Recover with:\n'));
     out(
-      pc.cyan(
-        `    triss coder model set ${posixSingleQuote(resolved.model)} --small ${posixSingleQuote(resolved.smallModel)} --engine opencode --provider opencode-zen ${scopeFlag} --yes\n`,
+      pc.yellow(
+        `  Update model and small_model in ${path} to ${resolved.model} and ${resolved.smallModel}, ` +
+          `then re-run \`triss coder init --provider opencode-zen ${fileScope === 'local' ? '--local' : '--global'}\`.\n`,
       ),
     );
   } else {
-    out(
-      pc.yellow(
-        '  Recover with `triss coder model set <main> --small <small> --engine opencode --provider opencode-zen ' +
-          `${scopeFlag} --yes` +
-          '` using a current id from `triss coder models --provider opencode-zen`.\n',
-      ),
-    );
+    out(pc.yellow('  Select current canonical opencode-zen models from https://opencode.ai/docs/zen/.\n'));
   }
   return true;
 }
 
-// Audits an existing opencode.json (the no-clobber path never rewrites it) for
-// what a fresh config would guarantee but a user's file might not:
-//   1. the deny-first bash policy — without permission.bash["*"]="deny" the
-//      agent (run with --auto, which auto-approves every "ask") can execute
-//      arbitrary shell commands;
-//   2. the small_model *provider* — opencode has no run-time small-model flag,
-//      so triss can't override a stale small_model; a cross-provider one is read
-//      straight from the file and won't authenticate with the run's key
-//      (blocking); and
-//   3. a small_model *plan-level* mismatch — same credential kind but a
-//      different prefix than the main model (e.g. `zai-coding-plan/*` main with
-//      a `zai/*` small): both use ZHIPU but hit different Z.AI bases, the
-//      original infinite-retry trap (warn).
-// `opts.note` is a short precedence description prepended to warnings when the
-// file audited isn't the one just written (see the cross-scope audit in
-// runCoderSetup). Emits a specific warning per problem; never edits the file.
+// Audit existing engine configuration without mutating user-owned files.
 function auditExistingConfig(path, providerInfo, opts = {}) {
   const where = opts.note ? `${path} ${opts.note}` : path;
   let existing;
@@ -3397,151 +2878,110 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
     );
     return { blocking: true };
   }
+
   let blocking = false;
-  // Deny-first is the ARBITRARY-EXECUTION gate, independent of credential
-  // mode: a missing wildcard deny is unsafe under --auto in every mode (fresh
-  // configs always carry it via opencodeConfigTemplate). Only the explicit
-  // --allow-unsafe-bash opt-out downgrades it to a warning.
   if (existing?.permission?.bash?.['*'] !== 'deny') {
-    // The coder agent runs with --auto (every "ask" permission auto-approved),
-    // so WITHOUT a deny-first allowlist it can run arbitrary shell commands.
-    // That's the whole safety layer, so a missing policy is BLOCKING by default;
-    // `--allow-unsafe-bash` is the explicit opt-in that downgrades it to a warning.
     if (opts.allowUnsafeBash) {
       process.stderr.write(
         pc.yellow(
           `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny") — proceeding because ` +
-            '--allow-unsafe-bash was passed. The coder agent runs with --auto and can run arbitrary shell ' +
-            'commands. Add the policy when you can.\n',
+            '--allow-unsafe-bash was passed. The coder agent can run arbitrary shell commands.\n',
         ),
       );
     } else {
       blocking = true;
       process.stderr.write(
         pc.yellow(
-          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). The coder agent runs ` +
-            'with --auto — every "ask" permission is auto-approved, so without an explicit deny-first ' +
-            'allowlist it can run arbitrary shell commands. Add the policy, delete opencode.json and re-run ' +
-            'init to regenerate it, or pass --allow-unsafe-bash to proceed without it.\n',
+          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). Add the policy, ` +
+            'remove opencode.json and re-run init, or pass --allow-unsafe-bash.\n',
         ),
       );
     }
   }
+
   const model = typeof existing.model === 'string' ? existing.model : '';
   const small = typeof existing.small_model === 'string' ? existing.small_model : '';
-  if (providerInfo.kind === 'worker' && opts.expectedWorkerProvider) {
+  if (providerInfo.kind === 'openai-compatible' && opts.expectedProvider) {
     const providers = existing.provider;
     const current = providers && typeof providers === 'object' && !Array.isArray(providers)
-      ? providers['triss-worker']
+      ? providers['openai-compatible']
       : undefined;
-    if (current !== undefined && !isDeepStrictEqual(current, opts.expectedWorkerProvider)) {
+    if (current !== undefined && !isDeepStrictEqual(current, opts.expectedProvider)) {
       blocking = true;
       process.stderr.write(
         pc.yellow(
-          `  ⚠ ${where} overrides provider["triss-worker"] with an endpoint, credential binding, package, ` +
-            'or model map that differs from the selected worker profile. Refresh that project config before ' +
-            'using the global worker key.\n',
+          `  ⚠ ${where} overrides provider["openai-compatible"] with a definition that differs from ` +
+            'the selected provider profile. Refresh that project configuration before using its credential.\n',
         ),
       );
     }
     for (const [role, value] of [['model', model], ['small_model', small]]) {
-      if (value && !opts.workerModels?.has(value)) {
+      if (value && !opts.providerModels?.has(value)) {
         blocking = true;
         process.stderr.write(
           pc.yellow(
-            `  ⚠ ${where} sets ${role}="${value}", which is outside the selected Triss worker ` +
-              'flash/pro allowlist. Re-run worker init for project scope or remove the override.\n',
+            `  ⚠ ${where} sets ${role}="${value}" outside the selected OpenAI-compatible role models.\n`,
           ),
         );
       }
     }
   }
-  if (opts.allowModelReplacement) {
-    return { blocking };
-  }
-  if (small && coderModelCredential(small).provider !== providerInfo.kind) {
+
+  if (opts.allowModelReplacement) return { blocking };
+
+  const smallRoute = resolveCoderProviderRoute(small);
+  if (small && smallRoute?.provider !== providerInfo.kind) {
     blocking = true;
     process.stderr.write(
       pc.yellow(
         `  ⚠ ${where} sets small_model="${small}", which is not a ${coderInitCatalogue(providerInfo).noun} ` +
-          "model. opencode reads small_model from this file (triss cannot override it at run time), so the " +
-          "run's key won't authenticate it. Update small_model, or delete opencode.json and re-run init.\n",
+          'model. Align it with the selected canonical provider or remove opencode.json and re-run init.\n',
       ),
     );
   } else if (model && small && model.split('/')[0] !== small.split('/')[0]) {
-    // Same credential kind but different plan/prefix (e.g. zai-coding-plan main
-    // + zai small). triss cannot override small_model at run time and the two
-    // Z.AI plans hit different bases, so a key serving one won't serve the other
-    // — a guaranteed-broken run. Blocking, like the cross-kind case.
     blocking = true;
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${where} sets model="${model}" but small_model="${small}" — different provider prefixes. ` +
-          'opencode reads small_model from this file (triss cannot override it at run time), so the ' +
-          "run's key likely can't serve both. Align small_model's prefix with the main model, or delete " +
-          'opencode.json and re-run init.\n',
+        `  ⚠ ${where} sets model="${model}" but small_model="${small}" — different canonical providers. ` +
+          'Align both role prefixes or remove opencode.json and re-run init.\n',
       ),
     );
   } else if (small && opts.resolvedSmall && small !== opts.resolvedSmall) {
-    // OWN-SCOPE ONLY (opts.resolvedSmall is the value init resolved for THIS
-    // scope). Same provider/plan, but the file's small_model isn't the resolved
-    // one — e.g. a previous init's opencode/hy3-free that the live Zen catalogue
-    // no longer lists, so resolveInitModels dropped it in favour of an available
-    // model. opencode reads small_model from THIS file (triss has no run-time
-    // small-model flag), so the stale/gone model keeps being used and the new
-    // pin is cosmetic. Blocking — no-clobber won't fix it silently.
     blocking = true;
-    const cat = coderInitCatalogue(providerInfo);
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${where} sets small_model="${small}", but init resolved small_model="${opts.resolvedSmall}" ` +
-          `(the old one is no longer selected — likely dropped from the ${cat.noun} catalogue). opencode ` +
-          'reads small_model from this file and triss cannot override it at run time, so runs keep using ' +
-          `the stale model. Set small_model="${opts.resolvedSmall}", or delete opencode.json and re-run init.\n`,
+        `  ⚠ ${where} sets small_model="${small}", but provider configuration resolves ` +
+          `small_model="${opts.resolvedSmall}". Update the engine configuration or re-run init.\n`,
       ),
     );
   } else if (
     small &&
     opts.providerAvailable &&
-    coderModelCredential(small).provider === providerInfo.kind &&
+    smallRoute?.provider === providerInfo.kind &&
     !opts.providerAvailable.has(providerModelId(small))
   ) {
-    // CROSS-SCOPE (opts.providerAvailable is the live provider catalogue). A DIFFERENT
-    // scope's file is being audited, so exact equality with the scope-under-
-    // config's resolvedSmall is meaningless — a valid in-catalogue small_model
-    // that merely differs from this init's default is fine. What DOES break a
-    // run is a Zen small_model the catalogue no longer lists (opencode reads it
-    // from this higher-precedence file and triss can't override it). Block that.
     blocking = true;
     const cat = coderInitCatalogue(providerInfo);
-    const temporary = providerInfo.kind === 'opencode-zen' ? ' (free models are temporary)' : '';
     process.stderr.write(
       pc.yellow(
-        `  ⚠ ${where} sets small_model="${small}", which the live ${cat.noun} catalogue no longer lists${temporary}. ` +
-          'opencode reads small_model from this file and triss cannot override ' +
-          'it at run time, so runs will fail. Update small_model to a listed model, or delete opencode.json ' +
-          'and re-run init.\n',
+        `  ⚠ ${where} sets small_model="${small}", which the live ${cat.noun} catalogue no longer lists. ` +
+          'Update small_model to a listed model or remove opencode.json and re-run init.\n',
       ),
     );
   }
   return { blocking };
 }
 
-// Writes opencode.json with the already-resolved `model`/`smallModel` (from
-// runCoderSetup's single resolveInitModels call) plus the deny-first bash
-// policy. Never clobbers an existing file — instead it audits that file (main
-// model provider, small_model provider, deny-first policy) and warns on any
-// problem. `providerInfo` carries the normalized provider kind and optional
-// detected Z.AI plan prefix.
+// Write a fresh engine configuration, or audit the existing one.
 function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) {
   const path = opencodeConfigPath(scope);
   if (existsSync(path)) {
     process.stderr.write(pc.dim(`  · ${path} already exists — not overwriting\n`));
     process.stderr.write(
-      pc.dim(`    (runs use TRISS_CODER_MODEL=${model}; auditing the existing file below)\n`),
+      pc.dim(`    (runs use the shared provider role model ${model}; auditing the existing file below)\n`),
     );
-    if (providerInfo.kind === 'worker') {
-      return mergeWorkerProviderIntoExisting(path, providerInfo, model, smallModel, opts);
+    if (providerInfo.kind === 'openai-compatible') {
+      return mergeOpenAICompatibleProviderIntoExisting(path, providerInfo, model, smallModel, opts);
     }
     warnIfProviderMismatch(path, providerInfo);
     return auditExistingConfig(path, providerInfo, {
@@ -3581,7 +3021,6 @@ function writeTemplateIfMissing(path, content) {
   writeFileSync(path, content);
   process.stderr.write(pc.green(`  ✓ wrote ${path}\n`));
 }
-
 function scaffoldAgentTemplates(scope) {
   const dir = agentsDir(scope);
   writeTemplateIfMissing(join(dir, 'coder.md'), CODER_AGENT_TEMPLATE);
@@ -3727,9 +3166,7 @@ export function describeCoderStatus(deps = {}) {
   const ompPolicy = ompEngine.resolveVersionPolicy(sh);
   // What a bare `triss coder run` (no --engine) resolves to right now.
   const defaultEngine = resolveCoderEngine({});
-  // The model a bare `triss coder run` on the opencode engine would use — i.e.
-  // TRISS_CODER_MODEL or the built-in default (NOT opencode.json, which the run
-  // path ignores). Surfacing it makes provider/model misconfiguration visible.
+  // Models resolved from the shared default provider roles.
   const defaultModel = coderModel();
   const defaultSmallModel = coderSmallModel();
   return {
@@ -3770,6 +3207,7 @@ export function describeCoderStatus(deps = {}) {
       satisfiesPin: oc2Detect.satisfiesPin,
       pin: opencode2VersionPin(),
       serviceProcessCheck: oc2Detect.capabilities?.serviceProcessCheck || null,
+      missingCapabilities: oc2Detect.capabilities?.missing || [],
     },
     omp: {
       found: ompPolicy.found,
@@ -4103,7 +3541,6 @@ export function foldEventLine(state, rawLine, { onToolUse, arrivedAt } = {}) {
 // process.env, so the engine only ever sees what it needs. `credEnv` is the
 // single provider key the resolved model requires (from coderModelCredential):
 // only that key is forwarded, so a Zen run never carries the Z.AI key and vice
-// versa, even when both are configured. Included only when actually set — an
 // unconfigured credential never appears.
 function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
   const env = {};
@@ -4116,7 +3553,7 @@ function buildEngineEnv(credEnv, credentialValue, opencodeConfigContent) {
   return env;
 }
 
-function buildOpencodeArgv({ prompt, agent, model, sessionRealId, cont, dir, pure = false }) {
+export function buildOpencodeArgv({ prompt, agent, model, effort, sessionRealId, cont, dir, pure = false }) {
   // --auto: headless runs must auto-approve every "ask" permission (deny
   // still blocks) — there is no human to answer the prompt.
   // --model is ALWAYS passed explicitly (the resolved model — override or
@@ -4125,6 +3562,7 @@ function buildOpencodeArgv({ prompt, agent, model, sessionRealId, cont, dir, pur
   // causes an infinite retry loop with nothing on stdout; an explicit
   // model makes this deterministic regardless of worktree config state.
   const argv = ['run', prompt, '--format', 'json', '--auto', '--model', model];
+  if (effort) argv.push('--variant', effort);
   if (pure) argv.push('--pure');
   if (agent) argv.push('--agent', agent);
   if (sessionRealId) argv.push('--session', sessionRealId);
@@ -5391,6 +4829,20 @@ function spawnCrush({
 // this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
 // / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
 // envelope shape as the opencode path so callers are engine-agnostic.
+function createCrushProtectedRuntimeConfig(proxy, nativeModel) {
+  const root = join(projectRoot(), '.triss', 'crush', 'runs', `run_${randomBytes(16).toString('hex')}`);
+  const configDir = join(root, 'config');
+  const dataDir = join(root, 'data');
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(configDir, 'crush.json'),
+    JSON.stringify(crushEngine.buildProtectedProviderConfig(proxy.scopedBaseUrl, nativeModel), null, 2) + '\n',
+    { mode: 0o600 },
+  );
+  return { root, configDir, dataDir };
+}
+
 async function runCrushFlow({
   opts,
   deps,
@@ -5403,6 +4855,7 @@ async function runCrushFlow({
   slug,
   timeoutSec,
   credentialProxy = null,
+  crushRuntimeConfig = null,
   sessionV2 = null,
   // Already resolved by runCoderRun — crush is always protected_proxy.
   credentialMode,
@@ -5410,10 +4863,12 @@ async function runCrushFlow({
   // effects. REQUIRED for a spawn to be reachable; the fallback re-resolve
   // only covers direct internal callers (tests).
   crushPolicy = null,
+  modelOverride = null,
+  canonicalModel = null,
 }) {
   assertCoderCredentialMode(credentialMode);
   let crushSpawnStartMs;
-  const modelOverride = opts.model || null;
+  const crushModelOverride = modelOverride;
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
   const isolate = _isolate;
   // crush sessions are native get-or-create with caller-supplied ids — pass the
@@ -5430,18 +4885,24 @@ async function runCrushFlow({
 
   const argv = crushEngine.buildRunArgv({
     prompt,
-    model: modelOverride, // only when an explicit override is given
+    model: crushModelOverride, // only when an explicit override is given
     session,
     continue: !!opts.continue,
     cwd: dir,
     timeoutSec,
     maxTokens: opts.maxTokens,
+    effort: opts.effort,
     restrict,
   });
   const env = crushEngine.buildSpawnEnv(
     undefined,
     credentialProxy
-      ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
+      ? {
+        token: credentialProxy.token,
+        baseUrl: credentialProxy.scopedBaseUrl,
+        configDir: crushRuntimeConfig?.configDir,
+        dataDir: crushRuntimeConfig?.dataDir,
+      }
       : deps.proxy || null,
   );
 
@@ -5456,7 +4917,7 @@ async function runCrushFlow({
   process.stderr.write(
     pc.dim(
       '[coder run] engine=crush' +
-        (modelOverride ? ` model=${modelOverride}` : '') +
+        (canonicalModel ? ` model=${canonicalModel}` : '') +
         (isolation ? ` isolate=${isolation.wtPath}` : '') +
         '\n',
     ),
@@ -5585,10 +5046,10 @@ async function runCrushFlow({
   // An explicit model replaces the stable 'crush' sentinel for pricing. The
   // sentinel is kept only when no model identity is known, and it is never
   // eligible for a component price estimate (see estimateCanonicalCost).
-  const crushBillingModel = modelOverride || 'crush';
+  const crushBillingModel = canonicalModel || 'crush';
   const logUsageFn = deps.logUsage || logUsage;
   logUsageFn({
-    model: modelOverride || 'crush',
+    model: canonicalModel || 'crush',
     billing_model: crushBillingModel,
     billing_mode: 'unknown',
     // The schema documents Crush runs as Z.AI (provider `zai`, engine
@@ -5781,56 +5242,21 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
         'same --session slug you used to start that session.',
     );
   }
-  const modelOverride = opts.model || null;
-  if (opts.smallModel && !opts.provider) {
+  const selection = validateModelSelectionInput({
+    provider: opts.provider,
+    model: opts.model,
+    engine,
+    effort: opts.effort,
+  });
+  if (opts.smallModel) {
     throw new Error(
-      '--small-model requires --provider <name> (MCP: small_model requires provider) — without an explicit provider, --model keeps its legacy main-only semantics.',
+      '--small-model has been removed; configure the selected provider smallModel role instead.',
     );
   }
-  let oneShotProvider = null;
-  let oneShotSmallModel = null;
-  if (opts.provider) {
-    if (engine === 'crush') {
-      throw new Error('--provider and --small-model are OpenCode-only; Crush remains fixed to Z.AI GLM.');
-    }
-    if (!modelOverride) {
-      throw new Error(
-        '--provider requires --model <provider/model> (MCP: provider requires model) so the one-shot model and Z.AI plan are explicit.',
-      );
-    }
-    oneShotProvider = normalizeProviderFlag(opts.provider);
-    oneShotSmallModel = opts.smallModel || modelOverride;
-    for (const [flag, value] of [
-      ['--model (MCP: model)', modelOverride],
-      ['--small-model (MCP: small_model)', oneShotSmallModel],
-    ]) {
-      if (!isQualifiedProviderModel(value)) {
-        throw new Error(
-          `${flag} must be a non-empty provider-qualified model (<provider>/<id>) without whitespace.`,
-        );
-      }
-      if (!isKnownProviderPrefix(value)) {
-        throw new Error(
-          `${flag} "${value}" must use a known provider prefix for a one-shot provider run.`,
-        );
-      }
-      const actualProvider = coderModelCredential(value).provider;
-      if (actualProvider !== oneShotProvider) {
-        throw new Error(`${flag} "${value}" does not belong to provider "${oneShotProvider}".`);
-      }
-    }
-    if (String(modelOverride).split('/')[0] !== String(oneShotSmallModel).split('/')[0]) {
-      throw new Error(
-        `--model and --small-model must use the same provider prefix for a one-shot run ` +
-          `(got "${String(modelOverride).split('/')[0]}" and "${String(oneShotSmallModel).split('/')[0]}").`,
-      );
-    }
-  }
-  if (engine === 'crush' && modelOverride && coderModelCredential(modelOverride).env !== 'ZHIPU_API_KEY') {
+  const selectedProvider = selection.model?.providerId || selection.provider;
+  if (engine === 'crush' && selectedProvider && selectedProvider !== 'zai') {
     throw new Error(
-      `The crush engine speaks Z.AI GLM only — it cannot run the non-GLM model "${modelOverride}". ` +
-        'Use the opencode engine (drop --engine crush) for triss-worker/*, opencode/*, opencode-go/*, moonshotai/*, or ' +
-        'kimi-for-coding/* models, or choose a GLM model.',
+      `The crush engine supports only provider "zai" (got "${selectedProvider}").`,
     );
   }
   // OMP has no --agent launch flag; fail-closed per plan §4.3.
@@ -5846,10 +5272,8 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     engine,
     maxTokens,
     isolate,
-    modelOverride,
-    oneShotProvider,
-    oneShotSmallModel,
-    smallModelUnused: engine === 'opencode2' && Boolean(opts.smallModel),
+    selection,
+    smallModelUnused: false,
     timeoutSec,
   };
 }
@@ -6493,17 +5917,31 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     engine,
     maxTokens,
     isolate,
-    modelOverride,
-    oneShotProvider,
-    oneShotSmallModel,
     smallModelUnused,
     timeoutSec,
   } = validateCoderRunOptions(opts, { prompt: promptArg });
   if (maxTokens !== undefined) {
     opts = { ...opts, maxTokens };
   }
-  const workerShellEnv = captureWorkerShellSnapshot();
   loadEnvFiles();
+  const providerSnapshot = deps.providerConfigSnapshot || readProviderConfigSnapshot();
+  const resolveSelection = deps.resolveModelRequest || resolveModelRequest;
+  const selectionProvider = engine === 'crush' && !opts.provider ? 'zai' : opts.provider;
+  const selectedModel = resolveSelection({
+    role: 'model',
+    provider: selectionProvider,
+    model: opts.model,
+    engine,
+    effort: opts.effort,
+  }, providerSnapshot);
+  const selectedSmallModel = resolveSelection({
+    role: 'smallModel',
+    provider: selectedModel.providerId,
+    engine,
+    effort: opts.effort,
+  }, providerSnapshot);
+  const oneShotProvider = selectedModel.providerId;
+  const oneShotSmallModel = selectedSmallModel.publicModel;
   const sh = deps.spawnSync || nodeSpawnSync;
   const spawnFn = deps.spawn || nodeSpawn;
   // A custom spawn seam usually returns an EventEmitter test double with an
@@ -6530,7 +5968,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     protectCredentials: opts.protectCredentials,
   });
   assertCoderCredentialMode(credentialMode);
-  warnLegacyCoderBestEffortEnv();
 
   // Effective --isolate. The two engines DEFAULT differently:
   //   - opencode: isolate-OFF (its deny-first opencode.json bash policy is the
@@ -6556,83 +5993,44 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // built-in primary agent instead.
   const agent = opts.agent || (engine === 'opencode2' || engine === 'omp' ? null : 'coder');
 
-  const modelUsed = modelOverride || coderModel();
+  const modelUsed = selectedModel.publicModel;
 
-  // Provider-aware credential gate. crush only speaks Z.AI (it bridges
-  // ZHIPU_API_KEY -> ZAI_API_KEY), so it always needs ZHIPU_API_KEY. For
-  // opencode the required key follows the resolved model's provider:
-  // `opencode/*` (OpenCode Zen) and `opencode-go/*` (OpenCode Go) need the
-  // shared OPENCODE_API_KEY; other provider prefixes use their own keys. Keeping the
-  // Z.AI message wording identical preserves the historical error text.
-  // crush speaks Z.AI GLM only. An explicit `--model opencode/*` would be
-  // forwarded to crush verbatim (buildCrushRunArgv) and fail at the engine
-  // with an opaque parse/timeout — reject it upfront with a clear message.
-  // (A bare TRISS_CODER_MODEL=opencode/* env default is fine: crush ignores it
-  // and runs its GLM atoms, so only the explicit override is a real mistake.)
+  // Credential selection follows the canonical provider route. Crush supports
+  // only Z.A.I and therefore always requires ZHIPU_API_KEY.
 
-  const cred = engine === 'crush' ? { env: 'ZHIPU_API_KEY' } : coderModelCredential(modelUsed);
+  const cred = engine === 'crush'
+    ? { env: 'ZHIPU_API_KEY', provider: 'zai' }
+    : coderModelCredential(modelUsed);
   const protectedRouting = engine !== 'crush' && credentialMode === 'protected_proxy';
-  // Raw Zen/Go models without an audited Triss transport intentionally use
-  // OpenCode's built-in provider metadata. Known audited models still use the
-  // transient overlay so their protocol/package can be pinned in protected
-  // and raw modes alike; other providers retain their existing overlay path.
-  let smallModelUsed = oneShotSmallModel || coderSmallModel();
-  // Classify both persisted roles before resolving runtime metadata. A stale
-  // cross-provider or cross-prefix small pin is not a real role for a
-  // non-one-shot run; map it to the main model before a worker profile or a
-  // second credential scope can be loaded for it. Distinct transports within
-  // one prefix (for example two opencode-go models) remain supported.
-  const mainProviderRoute = engine !== 'crush'
-    ? resolveCoderProviderRoute(modelUsed)
+  const smallModelUsed = oneShotSmallModel;
+  const baseRouteCandidate = engine !== 'crush'
+    ? resolveRuntimeCoderProviderRoute(modelUsed, undefined, { requireAudited: protectedRouting })
     : null;
-  const smallProviderRoute = engine !== 'crush' && engine !== 'opencode2'
-    ? resolveCoderProviderRoute(smallModelUsed)
-    : mainProviderRoute;
-  const sameProviderScope =
-    (!mainProviderRoute && !smallProviderRoute) ||
-    (
-      mainProviderRoute?.provider === smallProviderRoute?.provider &&
-      mainProviderRoute?.prefix === smallProviderRoute?.prefix
+  const routeCandidate = projectConfiguredEndpoint(
+    baseRouteCandidate,
+    selectedModel.route.endpoint.value,
+  );
+  const baseSmallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
+    ? resolveRuntimeCoderProviderRoute(smallModelUsed, undefined, { requireAudited: protectedRouting })
+    : baseRouteCandidate;
+  const smallRouteCandidate = projectConfiguredEndpoint(
+    baseSmallRouteCandidate,
+    selectedSmallModel.route.endpoint.value,
+  );
+  if (engine !== 'crush' && (!routeCandidate || !smallRouteCandidate)) {
+    throw new Error(
+      `The selected canonical provider route could not be projected: "${modelUsed}" / "${smallModelUsed}".`,
     );
-  if (engine === 'omp' && !sameProviderScope) {
-    if (oneShotSmallModel) {
-      throw new Error(
-        `OMP requires main and small models to use one provider credential scope; ` +
-          `"${modelUsed}" and "${smallModelUsed}" resolve to different providers.`,
-      );
-    }
-    smallModelUsed = modelUsed;
-  } else if (engine === 'opencode' && !oneShotProvider && !sameProviderScope) {
-    smallModelUsed = modelUsed;
   }
-  // The worker key and endpoint are resolved independently per field. Reject
-  // a repository-local endpoint paired with a higher-trust effective key for
-  // every OpenCode engine before route construction can hand that pair to the
-  // parent credential proxy (or to a raw best-effort child).
-  if (cred.provider === 'worker') {
-    assertWorkerTransportProvenance(workerShellEnv);
+  if (protectedRouting && (
+    !routeCandidate.transportAudited ||
+    (engine !== 'opencode2' && !smallRouteCandidate.transportAudited)
+  )) {
+    throw new Error(
+      `Protected routing has no audited transport for "${modelUsed}" / "${smallModelUsed}".`,
+    );
   }
-  const workerSettings = cred.provider === 'worker'
-    ? readWorkerConfigSnapshot({ scope: 'effective', parentEnv: workerShellEnv })
-    : null;
-  const credentialValue = workerSettings ? workerSettings.apiKey : process.env[cred.env];
-  const routeCandidate = engine !== 'crush'
-    ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: false })
-    : null;
-  let smallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
-    ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: false })
-    : routeCandidate;
-  // A stale persisted same-provider small pin must not brick an otherwise
-  // audited protected run. Explicit one-shot --small-model remains strict;
-  // only the implicit persisted role falls back to the main audited route.
-  if (
-    protectedRouting && engine === 'opencode' && !oneShotSmallModel &&
-    ['opencode-zen', 'opencode-go'].includes(smallRouteCandidate?.provider) &&
-    !smallRouteCandidate.transportAudited && routeCandidate?.transportAudited
-  ) {
-    smallModelUsed = modelUsed;
-    smallRouteCandidate = routeCandidate;
-  }
+  const credentialValue = selectedModel.route.credential.value;
   const rawBuiltInRoute = credentialMode === 'best_effort_raw' &&
     ['opencode-zen', 'opencode-go'].includes(routeCandidate?.provider) &&
     (!routeCandidate.transportAudited || (
@@ -6644,59 +6042,26 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const canonicalTransientRouting = engine !== 'crush' && (
     protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
   );
-  const runtimeRoute = canonicalTransientRouting
-    ? resolveRuntimeCoderProviderRoute(modelUsed, workerSettings, { requireAudited: protectedRouting })
-    : routeCandidate;
-  let runtimeSmallRoute = canonicalTransientRouting && engine !== 'opencode2'
-    ? resolveRuntimeCoderProviderRoute(smallModelUsed, workerSettings, { requireAudited: protectedRouting })
-    : (engine === 'opencode2' ? runtimeRoute : smallRouteCandidate);
-  if (canonicalTransientRouting && engine !== 'opencode2' &&
-      runtimeSmallRoute.provider !== runtimeRoute.provider) {
-    if (oneShotProvider) {
-      throw new Error(
-        `Protected OpenCode routing requires the main and small models to use one provider; ` +
-        `"${modelUsed}" and "${smallModelUsed}" resolve to different providers.`,
-      );
-    }
-    // A stale persisted small-model pin must not make the main run demand a
-    // different provider key or proxy route.  Keep the historical main-only
-    // semantics for non-one-shot runs and map the small role to that route.
-    smallModelUsed = modelUsed;
-    runtimeSmallRoute = runtimeRoute;
-  }
+  const runtimeRoute = routeCandidate;
+  const runtimeSmallRoute = engine === 'opencode2' ? runtimeRoute : smallRouteCandidate;
   const separateSmallTransport = Boolean(
     canonicalTransientRouting && (engine === 'opencode' || engine === 'omp') &&
     !coderRoutesShareTransport(runtimeSmallRoute, runtimeRoute),
   );
   if (!credentialValue) {
     const suffix =
-      cred.provider === 'worker'
-        ? ' (set TRISS_WORKER_API_KEY and run `triss coder init --provider worker` to use the existing OpenAI-compatible worker profile)'
+      cred.provider === 'openai-compatible'
+        ? ' (set TRISS_OPENAI_COMPATIBLE_API_KEY and configure the openai-compatible provider)'
         : cred.provider === 'opencode-go'
-        ? ' (set OPENCODE_API_KEY to use OpenCode Go models — run `triss coder models --provider opencode-go` to see current offerings)'
+        ? ' (set OPENCODE_API_KEY and configure canonical opencode-go role models)'
         : {
-            OPENCODE_API_KEY: ' (set OPENCODE_API_KEY to use OpenCode Zen models — run `triss coder models` to see current offerings)',
+            OPENCODE_API_KEY: ' (set OPENCODE_API_KEY and configure canonical opencode-zen role models)',
             MOONSHOT_API_KEY:
-              ' (set MOONSHOT_API_KEY to use Moonshot Kimi models like moonshotai/kimi-k2.7-code)',
+              ' (set MOONSHOT_API_KEY to use Moonshot models like moonshot/kimi-k2.7-code)',
             KIMI_API_KEY:
               ' (set KIMI_API_KEY to use Kimi for Coding subscription models like kimi-for-coding/k3)',
           }[cred.env] || '';
-    // A bare opencode-engine run resolves the GLM default model, so it demands
-    // ZHIPU_API_KEY even when another provider's key IS configured — and that
-    // key would serve a run today via an explicit model. Name that path
-    // instead of dead-ending a Kimi/Zen-only setup on a Z.AI message.
-    const ALT_MODEL_HINTS = {
-      OPENCODE_API_KEY: 'opencode/deepseek-v4-flash-free',
-      MOONSHOT_API_KEY: 'moonshotai/kimi-k2.7-code',
-      KIMI_API_KEY: 'kimi-for-coding/k3',
-    };
-    const altKey =
-      engine !== 'crush' && cred.env === 'ZHIPU_API_KEY'
-        ? Object.keys(ALT_MODEL_HINTS).find((k) => process.env[k])
-        : null;
-    const alt = altKey
-      ? ` ${altKey} is set, so a run works now with --model ${ALT_MODEL_HINTS[altKey]}; \`triss coder init\` makes it the default.`
-      : '';
+    const alt = '';
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
   const rawCredentialWarning = engine !== 'crush' && credentialMode === 'best_effort_raw'
@@ -6841,7 +6206,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         smallRoute: runtimeSmallRoute,
         cwd: runtimeDir,
         configRoot: opencodeProjectBoundary(runtimeDir),
-        workerSettings,
+        providerSettings: null,
       });
     } catch (err) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
@@ -7103,7 +6468,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // Isolation is set up above (engine-agnostic git worktrees), so runCrushFlow
   // reuses the same teardown helpers as the opencode path below.
   if (engine === 'crush') {
+    let crushRuntimeConfig;
     try {
+      if (credentialProxy) {
+        crushRuntimeConfig = createCrushProtectedRuntimeConfig(credentialProxy, selectedModel.nativeModel);
+      }
       // Pre-spawn revalidation: reserved -> running under the leases, and a
       // hijack/foreign-tuple claim fails closed before any engine spawn.
       await revalidateV2SessionRowBeforeSpawn(sessionV2);
@@ -7119,6 +6488,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         slug,
         timeoutSec,
         credentialProxy,
+        crushRuntimeConfig,
+        modelOverride: opts.model ? `zai/${selectedModel.nativeModel}` : null,
+        canonicalModel: opts.model ? selectedModel.publicModel : null,
         sessionV2,
         credentialMode,
         // Resolved + asserted in runCoderRun BEFORE any side effect; runCrushFlow
@@ -7130,6 +6502,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (!sessionV2?.finalizationAttempted) await releaseSessionRow(sessionV2);
       throw err;
     } finally {
+      if (crushRuntimeConfig?.root) {
+        try { rmSync(crushRuntimeConfig.root, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
       await releaseCredentialProxy();
     }
   }
@@ -7252,6 +6627,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         prompt,
         model: modelProjection.mainSelector,
         smallModel: modelProjection.smallSelector,
+        effort: opts.effort,
         sessionDir: ompSessionsDir,
         sessionRealId: sessionRealIdV1,
         cont: !!opts.continue,
@@ -7570,12 +6946,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       throw err;
     }
-    // Full effective-configuration audit BEFORE the credential is read:
-    // route fixture gate for the final model prefix, provider projection vs.
-    // the exact worker profile baseURL, deny-first permission proof including
-    // agents via the real last-match-wins evaluator, plus the existing
-    // plugin/agent source rejection. Any failure leaves NO worktree/branch
-    // behind.
+    // Full effective-configuration audit before reading the credential:
+    // canonical projection, endpoint, placeholder, permissions, and executable
+    // source gates. Failure leaves no worktree or branch behind.
     //
     // The audit must walk the canonical runtime
     // directory. A symlinked --cwd makes the child chdir to the PHYSICAL
@@ -7593,8 +6966,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         { cause: err },
       );
     }
-    const workerProfile = modelUsed.startsWith('triss-worker/')
-      ? workerCoderProfile()
+    const providerProfile = modelUsed.startsWith('openai-compatible/')
+      ? openAICompatibleCoderProfile()
       : null;
     let auditResult2;
     try {
@@ -7603,7 +6976,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           cwd: runtimeDirCanonical,
           modelUsed,
           agentName: agent,
-          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+          expectedProviderBaseURL: providerProfile ? providerProfile.baseUrl : null,
           credentialMode,
           allowManagedProviderAbsent: canonicalTransientRouting,
         },
@@ -7643,6 +7016,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
       model: canonicalTransientRouting ? transientModelName(runtimeRoute) : modelUsed,
+      effort: opts.effort,
       agent,
       sessionRealId: sessionRealIdArg2,
       cont: !!opts.continue,
@@ -7677,7 +7051,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           cwd: runtimeDirCanonical,
           modelUsed,
           agentName: agent,
-          expectedWorkerBaseURL: workerProfile ? workerProfile.baseUrl : null,
+          expectedProviderBaseURL: providerProfile ? providerProfile.baseUrl : null,
           credentialMode,
           allowManagedProviderAbsent: canonicalTransientRouting,
         },
@@ -7997,33 +7371,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     prompt,
     agent,
     model: canonicalTransientRouting ? transientModelName(runtimeRoute) : modelUsed,
+    effort: opts.effort,
     sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
     pure: openCodePureMode,
   });
-  // Credential-proxy integration: the child env carries the one-run token in
-  // the credential variable plus the loopback base URL — never the raw key.
-  // The OPENCODE_CONFIG_CONTENT overlay (one-shot mode) pins the model; for
-  // the triss-worker provider it additionally pins baseURL to the proxy.
-  let proxiedConfigContent = routingConfigContent;
-  if (!protectedRouting && oneShotProvider && cred.provider === 'worker' && credentialProxy) {
-    const overlay = routingConfigContent ? JSON.parse(routingConfigContent) : {};
-    proxiedConfigContent = JSON.stringify({
-      ...overlay,
-      provider: {
-        ...(overlay.provider || {}),
-        'triss-worker': {
-          ...(overlay.provider?.['triss-worker'] || {}),
-          options: {
-            ...(overlay.provider?.['triss-worker']?.options || {}),
-            baseURL: credentialProxy.scopedBaseUrl,
-            apiKey: credentialProxy.token,
-          },
-        },
-      },
-    });
-  }
+  const proxiedConfigContent = routingConfigContent;
   const env = buildEngineEnv(
     cred.env,
     credentialProxy ? credentialProxy.token : (canonicalTransientRouting ? credentialValue : undefined),

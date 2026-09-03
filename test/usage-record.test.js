@@ -122,7 +122,7 @@ test('logUsage fills in billing_model, provider, and billing_mode when omitted',
   });
   assert.equal(rec.billing_model, 'zai/glm-5.2');
   assert.equal(rec.provider, 'zai');
-  assert.equal(rec.billing_mode, 'payg');
+  assert.equal(rec.billing_mode, 'subscription');
 });
 
 test('logUsage returns undefined and writes nothing when neither model nor billing_model is known', () => {
@@ -367,36 +367,6 @@ test('normalizeUsageRecord treats cost unknown on a legacy record as unknown cos
   assert.equal(rec.cost.complete, false);
 });
 
-test('a legacy subscription cost is labelled plan, not estimated', () => {
-  // Pre-v2 zai-coding-plan records are subscription-metered; their known flat
-  // cost is a plan zero and must not render as an estimate.
-  const rec = normalizeUsageRecord({
-    model: 'zai-coding-plan/glm-5.2',
-    prompt_tokens: 100,
-    completion_tokens: 50,
-    cost_usd: 0,
-  });
-  assert.equal(rec.cost.total_usd, 0);
-  assert.equal(rec.cost.source, 'plan');
-  assert.equal(rec.cost.complete, true);
-});
-
-test('a legacy non-zero plan-prefixed estimate remains canonically incomplete', () => {
-  // A v1 plan-prefixed record can be non-zero when an explicit price
-  // override was active. That value was still computed from v1's
-  // incomplete token classes, so only a proven plan zero is complete.
-  const rec = normalizeUsageRecord({
-    model: 'zai-coding-plan/glm-5.2',
-    prompt_tokens: 100,
-    completion_tokens: 50,
-    cost_usd: 0.0001,
-  });
-  assert.equal(rec.cost.total_usd, null);
-  assert.equal(rec.cost.source, 'unknown');
-  assert.equal(rec.cost.complete, false);
-  assert.equal(rec.cost.legacy_estimate_usd, 0.0001);
-});
-
 test('a legacy kimi-for-coding cost is labelled plan too', () => {
   const rec = normalizeUsageRecord({
     model: 'kimi-for-coding/k3',
@@ -407,16 +377,6 @@ test('a legacy kimi-for-coding cost is labelled plan too', () => {
   assert.equal(rec.cost.source, 'plan');
 });
 
-test('a legacy record with a plan billing_model is labelled plan', () => {
-  const rec = normalizeUsageRecord({
-    model: 'glm-5.2',
-    billing_model: 'zai-coding-plan/glm-5.2',
-    prompt_tokens: 100,
-    completion_tokens: 50,
-    cost_usd: 0,
-  });
-  assert.equal(rec.cost.source, 'plan');
-});
 
 test('a legacy payg estimate remains compatibility evidence, not a complete canonical cost', () => {
   const rec = normalizeUsageRecord({
