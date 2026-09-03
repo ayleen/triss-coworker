@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `triss-dsh-provider-bundle` is version-aligned at 0.42.0; its catalogue
   routes are unchanged.
 
+### Fixed
+
+- Quoted values from external dotenv writers no longer disappear when they
+  contain literal backslashes or control characters that are invalid JSON;
+  Triss preserves the quoted payload while retaining JSON-compatible
+  round-tripping for values written by its own configuration commands.
+
 ### Removed
 
 - Legacy provider aliases, public `flash`/`pro` presets, worker-specific
