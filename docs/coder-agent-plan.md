@@ -1,5 +1,9 @@
 # `triss coder` — delegate coding tasks to a GLM agent (opencode engine)
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Implementation plan. Written to be executed by a mid-tier model (Sonnet/Opus):
 every step names the exact files, existing helpers to reuse, and acceptance
 criteria. Follow the repo conventions in `CLAUDE.md` at all times.

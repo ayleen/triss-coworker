@@ -26,12 +26,19 @@ import { join } from 'node:path';
 
 import { runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
-const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
-  prompt,
-  opts,
-  { effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig, ...deps },
-);
+const runCoderRun = (prompt, opts, deps = {}) => {
+  const spawnSync = deps.spawnSync;
+  return runCoderRunProduction(prompt, opts, {
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
+    ...deps,
+    spawnSync: (cmd, args, options) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : spawnSync?.(cmd, args, options) ?? { status: 1, stdout: '', stderr: '', error: null },
+  });
+};
 import { ensureEnvFile, setVar } from '../src/secrets.js';
 
 const CREDENTIAL_KEYS = [
@@ -39,15 +46,16 @@ const CREDENTIAL_KEYS = [
   'OPENCODE_API_KEY',
   'MOONSHOT_API_KEY',
   'KIMI_API_KEY',
-  'TRISS_WORKER_API_KEY',
+  'TRISS_OPENAI_COMPATIBLE_API_KEY',
 ];
 
 const CONFIG_KEYS = [
-  'TRISS_CODER_MODEL',
-  'TRISS_CODER_SMALL_MODEL',
-  'TRISS_WORKER_BASE_URL',
-  'TRISS_WORKER_FLASH_MODEL',
-  'TRISS_WORKER_PRO_MODEL',
+  'TRISS_DEFAULT_PROVIDER',
+  'TRISS_ZAI_MODEL',
+  'TRISS_ZAI_SMALL_MODEL',
+  'TRISS_OPENAI_COMPATIBLE_BASE_URL',
+  'TRISS_OPENAI_COMPATIBLE_MODEL',
+  'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL',
 ];
 
 function fakeSpawnReplaying(streamText, { code = 0 } = {}) {
@@ -85,6 +93,7 @@ async function withIsolatedStore(envContent, fn) {
   for (const key of CREDENTIAL_KEYS) delete process.env[key];
   for (const key of CONFIG_KEYS) delete process.env[key];
   process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
   try {
     await fn({ dir });
   } finally {
@@ -254,10 +263,10 @@ test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in
 
 for (const [label, content] of [
   ['empty', ''],
-  ['control-only', 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
-  ['model-pins', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\n'],
-  ['model-pins-and-control', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\nTRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION=0\n'],
-  ['worker-config', 'TRISS_CODER_MODEL=zai-coding-plan/glm-5.2\nTRISS_CODER_SMALL_MODEL=zai-coding-plan/glm-5-turbo\nTRISS_WORKER_BASE_URL=https://api.deepseek.com/v1\nTRISS_WORKER_FLASH_MODEL=deepseek-v4-flash\nTRISS_WORKER_PRO_MODEL=deepseek-v4-pro\n'],
+  ['provider-selection', 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\n'],
+  ['model-pins', 'TRISS_ZAI_MODEL=glm-5.2\nTRISS_ZAI_SMALL_MODEL=glm-5-turbo\n'],
+  ['model-pins-and-endpoint', 'TRISS_ZAI_BASE_URL=https://api.z.ai/api/coding/paas/v4\nTRISS_ZAI_MODEL=glm-5.2\nTRISS_ZAI_SMALL_MODEL=glm-5-turbo\n'],
+  ['openai-compatible-config', 'TRISS_OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com/v1\nTRISS_OPENAI_COMPATIBLE_MODEL=deepseek-v4-pro\nTRISS_OPENAI_COMPATIBLE_SMALL_MODEL=deepseek-v4-flash\n'],
 ]) {
   test(`ISOLATION-GATE-global-negative-${label}: a non-credential canonical global store does not block`, () => withIsolatedStore(null, async ({ dir }) => {
     writeCanonicalGlobalStore(dir, content);

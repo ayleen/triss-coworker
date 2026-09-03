@@ -20,6 +20,25 @@ import { runAskWithDeps } from '../src/commands/ask.js';
 import { runReviewWithDeps } from '../src/commands/review.js';
 import { askHandler, reviewHandler } from '../src/mcp/handlers.js';
 import { handleToolRequest } from '../src/mcp/server.js';
+import { createExecutionResult } from '../src/transports/result.js';
+
+function executionDeps(text = 'ok', capture) {
+  return {
+    executeModelTask: async (request) => {
+      capture?.(request);
+      request.input.onText?.(text);
+      return {
+        resolved: { providerId: 'openai-compatible', publicModel: 'test' },
+        result: createExecutionResult({
+          text,
+          finishReason: 'stop',
+          usage: { inputTokens: 10, outputTokens: 4 },
+        }),
+      };
+    },
+  };
+}
+
 
 test('response format defaults to text and rejects unknown values', () => {
   assert.equal(validateResponseFormat(undefined), 'text');
@@ -174,13 +193,9 @@ test('CLI ask evidence mode appends the shared suffix and validates before corpu
       question: 'q',
       format: 'evidence',
       stream: false,
-    }, {
-      resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-      chat: async (request) => {
-        captured = request;
-        return { final_text: 'Outcome: ok', usage: {} };
-      },
-    });
+    }, executionDeps('Outcome: ok', (request) => {
+      captured = request.input;
+    }));
   } finally {
     process.stdout.write = originalOut;
     process.stderr.write = originalErr;
@@ -191,7 +206,7 @@ test('CLI ask evidence mode appends the shared suffix and validates before corpu
   let resolved = false;
   await assert.rejects(
     () => runAskWithDeps({ paths: ['missing'], question: 'q', format: 'yaml' }, {
-      resolveModelRequest: () => { resolved = true; return { provider: 'worker', model: 'test' }; },
+      executeModelTask: () => { resolved = true; },
     }),
     /Invalid response format/,
   );
@@ -201,7 +216,7 @@ test('CLI ask evidence mode appends the shared suffix and validates before corpu
   let emptyResolved = false;
   await assert.rejects(
     () => runAskWithDeps({ paths: ['missing'], question: 'q', format: '' }, {
-      resolveModelRequest: () => { emptyResolved = true; return { provider: 'worker', model: 'test' }; },
+      executeModelTask: () => { emptyResolved = true; },
     }),
     /Invalid response format/,
   );
@@ -210,9 +225,8 @@ test('CLI ask evidence mode appends the shared suffix and validates before corpu
   let reviewResolved = false;
   await assert.rejects(
     () => runReviewWithDeps(undefined, { base: 'main', format: '' }, {
-      resolveModelRequest: () => {
+      executeModelTask: () => {
         reviewResolved = true;
-        return { provider: 'worker', model: 'test' };
       },
     }),
     /Invalid response format/,
@@ -233,13 +247,9 @@ test('CLI ask keeps text prompts unchanged and evidence works through streaming'
       system: 'Custom text contract.',
       format: 'text',
       noStream: true,
-    }, {
-      resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-      chat: async (request) => {
-        textRequest = request;
-        return { final_text: 'ok', usage: {} };
-      },
-    });
+    }, executionDeps('ok', (request) => {
+      textRequest = request.input;
+    }));
     assert.equal(textRequest.messages[0].content, 'Custom text contract.');
 
     let streamRequest;
@@ -248,16 +258,11 @@ test('CLI ask keeps text prompts unchanged and evidence works through streaming'
       question: 'q',
       format: 'evidence',
       stream: true,
-    }, {
-      resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-      chatStream: async (request) => {
-        streamRequest = request;
-        request.onChunk('Outcome: ok');
-        return { final_text: 'Outcome: ok', usage: {} };
-      },
-    });
+    }, executionDeps('Outcome: ok', (request) => {
+      streamRequest = request.input;
+    }));
     assert.match(streamRequest.messages[0].content, /Evidence:/);
-    assert.equal(typeof streamRequest.onChunk, 'function');
+    assert.equal(typeof streamRequest.onText, 'function');
   } finally {
     process.stdout.write = originalOut;
     process.stderr.write = originalErr;
@@ -270,20 +275,16 @@ test('MCP ask and review accept response_format and reject it before work', asyn
     paths: ['package.json'],
     question: 'q',
     response_format: 'evidence',
-  }, {
-    resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-    chat: async (request) => {
-      askRequest = request;
-      return { final_text: 'ok', usage: {} };
-    },
-  });
+  }, executionDeps('ok', (request) => {
+    askRequest = request.input;
+  }));
   assert.match(askRequest.messages[0].content, /Decision required:/);
   assert.match(askResult, /^ok/);
 
   let askWork = false;
   await assert.rejects(
     () => askHandler({ paths: ['missing'], question: 'q', response_format: 'yaml' }, {
-      resolveModelRequest: () => { askWork = true; return { provider: 'worker', model: 'test' }; },
+      executeModelTask: () => { askWork = true; },
     }),
     /Invalid response format/,
   );
@@ -293,7 +294,7 @@ test('MCP ask and review accept response_format and reject it before work', asyn
   let emptyWork = false;
   await assert.rejects(
     () => askHandler({ paths: ['missing'], question: 'q', response_format: '' }, {
-      resolveModelRequest: () => { emptyWork = true; return { provider: 'worker', model: 'test' }; },
+      executeModelTask: () => { emptyWork = true; },
     }),
     /Invalid response format/,
   );
@@ -341,13 +342,7 @@ test('MCP ask evidence returns the model-authored contract verbatim, never with 
     paths: ['package.json'],
     question: 'q',
     response_format: 'evidence',
-  }, {
-    resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-    chat: async () => ({
-      final_text: modelContract,
-      usage: { prompt_tokens: 10, completion_tokens: 4 },
-    }),
-  });
+  }, executionDeps(modelContract));
   assert.equal(result, modelContract);
   assert.ok(!result.includes('finish:'), `usage report must not be appended: ${result}`);
   assert.ok(result.trimEnd().endsWith('Decision required: none'));
@@ -358,13 +353,7 @@ test('MCP ask text mode (the default) still appends the usage report after the a
   const result = await askHandler({
     paths: ['package.json'],
     question: 'q',
-  }, {
-    resolveModelRequest: () => ({ provider: 'worker', model: 'test' }),
-    chat: async () => ({
-      final_text: answer,
-      usage: { prompt_tokens: 10, completion_tokens: 4 },
-    }),
-  });
+  }, executionDeps(answer));
   assert.ok(result.startsWith(answer), `text content must lead, got: ${result}`);
   assert.match(result, /finish:/, 'text mode keeps the historical appended usage report');
 });

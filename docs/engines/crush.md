@@ -1,73 +1,26 @@
 # Crush engine
 
-Status: experimental. Crush is an optional Z.AI coding engine for
-`triss coder`; OpenCode 1 remains the stable default.
-
-## Setup
-
-Crush requires a POSIX host (macOS/Linux), `ZHIPU_API_KEY`, and an
-`@phpcraftdream/crush` installation at or above Triss's hard supported floor
-(`0.1.6`). `TRISS_CODER_CRUSH_VERSION` may raise that minimum but can never
-lower it: below-floor values clamp up to the floor and malformed values fail
-closed, so an unsupported release is never admitted.
-
-The version check is enforced, not advisory: `triss coder run --engine crush`
-probes the installed binary (through a minimal sanitized environment — PATH
-plus deterministic locale/TZ only; no provider/cloud/GitHub credentials are
-inherited by a probe) and refuses to start before any isolation worktree,
-credential proxy, or session is created when the installed release is missing,
-unparsable, or below the effective minimum. `triss coder init --engine crush`
-offers to install the effective minimum for a found-but-incompatible binary
-(and fails closed in non-interactive shells); it never runs the model-role
-write against an incompatible build.
+Crush is a Z.A.I-only coder engine. It consumes the canonical `zai` provider profile and does not accept another provider.
 
 ```bash
-triss coder init --engine crush --provider glm
+triss coder init --engine crush --provider zai
 triss coder run --engine crush "Describe the task"
 ```
 
-`triss coder init` installs or verifies Crush, selects its large and fast GLM
-roles, and writes the selected project or global `crush.json`. A one-run
-`--model` override changes only the large role. Persistent model changes use
-`triss coder model set --engine crush`.
+Persistent Z.A.I role models are `TRISS_ZAI_MODEL` and `TRISS_ZAI_SMALL_MODEL`. Rerun `coder init` after changing them so the engine projection remains aligned.
 
-## Security boundary
+## Isolation and restriction
 
-Crush runs in an isolated disposable worktree by default. Keep isolation
-enabled for repositories whose contents matter: it is the reliable boundary
-against direct writes to the caller's worktree.
+Crush defaults to worktree isolation. `--restrict` opts into the engine CLI restriction flags; `--no-restrict` disables them for one run. `TRISS_CODER_CRUSH_RESTRICT=1` sets the default. The generated `permissions.run` block remains forward-compatible metadata; the CLI flags are the enforced path for supported versions.
 
-Restriction mode is an additional, limited layer and is off by default:
+## Credential boundary
+
+Crush receives only the selected Z.A.I credential. In protected mode, Triss replaces the raw credential with a run-scoped proxy token and loopback endpoint before spawn. Version, provider, endpoint, and model projection checks happen before the credential-bearing child starts.
+
+If engine configuration is stale, rerun:
 
 ```bash
-triss coder run --engine crush --restrict "Describe the task"
+triss coder init --engine crush --provider zai
 ```
 
-Triss passes `--restrict-run` and the configured `--allow-bash` and
-`--allow-tool` entries on every restricted invocation. The persistent
-`permissions.run` block written to `crush.json` is forward-compatible
-configuration, not an enforcement guarantee: verified Crush releases have
-ignored that block, while a denied command can wait until the run timeout.
-Do not combine `--no-restrict` with `--no-isolate` in a repository where
-unrestricted tool execution is unacceptable.
-
-The provider credential is delivered through Triss's one-run credential
-proxy. Repository content, task context, and tool results can be sent to the
-configured Z.AI provider when the engine runs. See
-[Data flows](../data-flows.md) and [Security model](../security-model.md).
-
-## Configuration and troubleshooting
-
-`TRISS_CODER_ENGINE=crush` selects the engine. The explicit `--engine` flag
-wins over environment and inferred configuration. `--restrict` /
-`--no-restrict` similarly override `TRISS_CODER_CRUSH_RESTRICT` and the
-persisted preference.
-
-If a restricted command stalls, cancel the run and inspect the configured
-allowlist. If the engine version or model configuration is stale, rerun
-`triss coder init --engine crush --provider glm` before retrying.
-
-For the full environment-variable and model-precedence reference, see
-[Configuration](../configuration.md). Historical upstream reproductions and
-maintainer reports remain in the source repository but are not distributed in
-the npm package or standalone artifact.
+See [Configuration](../configuration.md) for provider fields and precedence.

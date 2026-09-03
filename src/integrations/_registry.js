@@ -8,38 +8,39 @@ import { validateManifest } from './_contract.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// "Core" credentials live outside any single integration but should appear
-// in `triss config wizard`/`status` alongside integrations.
+// The generic configuration wizard exposes the default direct provider as a
+// core manifest. Other canonical providers are configured by the provider
+// wizard/coder surfaces.
 export const CORE_MANIFEST = {
-  name: 'worker',
-  description: 'Worker model (any OpenAI-compatible chat-completions endpoint; DeepSeek by default)',
+  name: 'openai-compatible',
+  description: 'Default OpenAI-compatible provider profile',
   isCore: true,
   envVars: [
     {
-      name: 'TRISS_WORKER_API_KEY',
+      name: 'TRISS_OPENAI_COMPATIBLE_API_KEY',
       required: true,
       secret: true,
-      doc: 'Get one at https://platform.deepseek.com/',
+      doc: 'API key for the configured OpenAI-compatible endpoint',
     },
     {
-      name: 'TRISS_WORKER_BASE_URL',
+      name: 'TRISS_OPENAI_COMPATIBLE_BASE_URL',
       required: false,
-      doc: 'Override endpoint (default https://api.deepseek.com/v1)',
+      doc: 'OpenAI-compatible API base URL',
     },
     {
-      name: 'TRISS_WORKER_FLASH_MODEL',
+      name: 'TRISS_OPENAI_COMPATIBLE_MODEL',
       required: false,
-      doc: 'Override the "flash" preset model id',
+      doc: 'Main model id for review, write, and coder tasks',
     },
     {
-      name: 'TRISS_WORKER_PRO_MODEL',
+      name: 'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL',
       required: false,
-      doc: 'Override the "pro" preset model id',
+      doc: 'Small model id for ask, chat, fetch, commit, and integration summaries',
     },
     {
-      name: 'TRISS_DEFAULT_MODEL',
+      name: 'TRISS_DEFAULT_PROVIDER',
       required: false,
-      doc: 'Default preset when no --model is passed: "flash" (cheap, default) or "pro"',
+      doc: 'Canonical provider selected when --provider is omitted',
     },
   ],
 };

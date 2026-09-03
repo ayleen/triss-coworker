@@ -26,7 +26,7 @@ function issueFull(i) {
   ].join('\n');
 }
 
-export async function searchCmd({ search, project, scope, limit, question, model, json }) {
+export async function searchCmd({ search, project, scope, limit, question, provider, model, engine, effort, json }) {
   const data = await gitlab.search({
     projectPath: project,
     search,
@@ -38,14 +38,14 @@ export async function searchCmd({ search, project, scope, limit, question, model
   if (!items.length) return printResult('(no issues)');
   const corpus = items.map(issueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, model });
+    const out = await summarize({ corpus, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(iid, { project, question, model, withComments, json }) {
+export async function issueCmd(iid, { project, question, provider, model, engine, effort, withComments, json }) {
   const p = resolveProject(project);
   const issue = await gitlab.getIssue(p, iid);
   if (json) return printResult(issue, { json: true });
@@ -59,7 +59,7 @@ export async function issueCmd(iid, { project, question, model, withComments, js
         : '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, model });
+    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(text);
@@ -114,6 +114,9 @@ export async function commentCmd(iid, opts) {
       corpus: corpus || '(no notes)',
       question: opts.question,
       model: opts.model,
+      provider: opts.provider,
+      engine: opts.engine,
+      effort: opts.effort,
     });
     printResult(out);
   } else {

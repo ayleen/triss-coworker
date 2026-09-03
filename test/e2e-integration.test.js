@@ -14,7 +14,6 @@ import {
   writeFileSync,
   rmSync,
   realpathSync,
-  mkdirSync,
   readFileSync,
   existsSync,
 } from 'node:fs';
@@ -41,85 +40,6 @@ function envSnapshot(keys) {
     }
   };
 }
-
-// ─── 1. Wizard write → status read ──────────────────────────────────────────
-//
-// Simulates `triss config set TRISS_WORKER_API_KEY=sk-foo` then verifies
-// getConfig() returns the value from the written file.
-
-test('config set TRISS_WORKER_API_KEY then getConfig returns it', async () => {
-  const tmp = makeTmp('triss-config-rw-');
-  const configDir = join(tmp, '.config', 'triss');
-  mkdirSync(configDir, { recursive: true });
-  const globalEnvFile = join(configDir, '.env');
-  writeFileSync(globalEnvFile, '');
-
-  // Run the body from a fresh project dir so a contributor's local
-  // .triss.env in the repo root does not leak into getConfig() and shadow
-  // the value we just wrote to the global file.
-  const projectDir = makeTmp('triss-config-rw-proj-');
-  const originalCwd = process.cwd();
-  const restore = envSnapshot(['TRISS_WORKER_API_KEY', 'HOME']);
-  // Point HOME to our tmp dir so getEnvFilePath('global') resolves there.
-  process.env.HOME = tmp;
-  delete process.env.TRISS_WORKER_API_KEY; // avoid process.env winning over file
-  process.chdir(projectDir);
-
-  try {
-    // Import setVar fresh so it picks up the redirected HOME.
-    const { setVar } = await import(`../src/secrets.js?config-rw-${Date.now()}`);
-    setVar(globalEnvFile, 'TRISS_WORKER_API_KEY', 'sk-foo');
-
-    // getConfig reads env files then overlays process.env.
-    const { getConfig } = await import(`../src/config.js?config-rw-${Date.now()}`);
-    const cfg = getConfig();
-    assert.equal(cfg.apiKey, 'sk-foo', `Expected apiKey=sk-foo, got ${cfg.apiKey}`);
-  } finally {
-    process.chdir(originalCwd);
-    restore();
-    rmSync(tmp, { recursive: true, force: true });
-    rmSync(projectDir, { recursive: true, force: true });
-  }
-});
-
-// ─── 2. Project-local override wins over global ───────────────────────────────
-//
-// Global env has TRISS_WORKER_API_KEY=global-key; project .triss.env has
-// TRISS_WORKER_API_KEY=local-key. getConfig() must return the local one.
-
-test('project .triss.env overrides global TRISS_WORKER_API_KEY', async () => {
-  const tmp = makeTmp('triss-local-override-');
-  const globalDir = join(tmp, '.config', 'triss');
-  mkdirSync(globalDir, { recursive: true });
-  const globalEnvFile = join(globalDir, '.env');
-  writeFileSync(globalEnvFile, 'TRISS_WORKER_API_KEY=global-key\n');
-
-  // Write a project-local .triss.env in a separate project dir.
-  const projectDir = makeTmp('triss-project-');
-  writeFileSync(join(projectDir, '.triss.env'), 'TRISS_WORKER_API_KEY=local-key\n');
-
-  const originalCwd = process.cwd();
-  const restore = envSnapshot(['TRISS_WORKER_API_KEY', 'HOME']);
-
-  process.env.HOME = tmp;
-  delete process.env.TRISS_WORKER_API_KEY;
-  process.chdir(projectDir);
-
-  try {
-    const { getConfig } = await import(`../src/config.js?local-override-${Date.now()}`);
-    const cfg = getConfig();
-    assert.equal(
-      cfg.apiKey,
-      'local-key',
-      `Expected project-local key "local-key", got "${cfg.apiKey}"`,
-    );
-  } finally {
-    process.chdir(originalCwd);
-    restore();
-    rmSync(tmp, { recursive: true, force: true });
-    rmSync(projectDir, { recursive: true, force: true });
-  }
-});
 
 // ─── 3. Init + MCP awareness: CLAUDE.md gets MCP hint when entry is installed ─
 

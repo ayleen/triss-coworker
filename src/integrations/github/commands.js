@@ -29,7 +29,7 @@ function issueFull(i) {
   ].join('\n');
 }
 
-export async function searchCmd({ query, limit, question, model, json }) {
+export async function searchCmd({ query, limit, question, provider, model, engine, effort, json }) {
   const data = await github.search({
     query,
     limit: parseInt(limit, 10) || 30,
@@ -39,14 +39,14 @@ export async function searchCmd({ query, limit, question, model, json }) {
   if (!items.length) return printResult('(no issues)');
   const corpus = items.map(issueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, model });
+    const out = await summarize({ corpus, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(number, { repo, question, model, withComments, json }) {
+export async function issueCmd(number, { repo, question, provider, model, engine, effort, withComments, json }) {
   const r = resolveRepo(repo);
   const issue = await github.getIssue(r, number);
   if (json) return printResult(issue, { json: true });
@@ -60,7 +60,7 @@ export async function issueCmd(number, { repo, question, model, withComments, js
         : '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, model });
+    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(text);
@@ -107,7 +107,14 @@ export async function commentCmd(number, opts) {
     .map((c) => `[${c.user?.login} @ ${c.created_at}]\n${c.body || ''}`)
     .join('\n---\n');
   if (opts.question) {
-    const out = await summarize({ corpus: corpus || '(no comments)', question: opts.question, model: opts.model });
+    const out = await summarize({
+      corpus: corpus || '(no comments)',
+      question: opts.question,
+      provider: opts.provider,
+      model: opts.model,
+      engine: opts.engine,
+      effort: opts.effort,
+    });
     printResult(out);
   } else {
     printResult(corpus || '(no comments)');

@@ -1,5 +1,9 @@
 # OpenCode Go support plan
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Implementation contract for using a paid OpenCode Go subscription from
 `triss coder` without changing the existing OpenCode Zen or Z.AI paths.
 

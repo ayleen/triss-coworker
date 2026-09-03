@@ -30,7 +30,10 @@ export async function runFetch(urls, opts) {
     const out = await summarize({
       corpus: joined,
       question: opts.question,
+      provider: opts.provider,
       model: opts.model,
+      engine: opts.engine,
+      effort: opts.effort,
       maxTokens,
     });
     printResult(out);

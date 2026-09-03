@@ -29,6 +29,7 @@ import { dirname, join } from 'node:path';
 import {
   buildCrushRunArgv,
   buildCrushSpawnEnv,
+  buildCrushProtectedProviderConfig,
   detectCrush,
   installHintCrush,
   parseCrushEnvelope,
@@ -98,7 +99,7 @@ test('buildCrushRunArgv: --model is omitted on a falsy override (rely on the con
 
 // ─── buildCrushSpawnEnv ─────────────────────────────────────────────────────────
 
-test('buildCrushSpawnEnv: forwards BOTH ZHIPU_API_KEY and ZAI_API_KEY (crush ≥0.1.1 reads ZHIPU natively; ZAI kept as a compat alias)', () => {
+test('buildCrushSpawnEnv: forwards only the canonical ZHIPU_API_KEY', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk-secret-key',
     PATH: '/bin',
@@ -111,31 +112,47 @@ test('buildCrushSpawnEnv: forwards BOTH ZHIPU_API_KEY and ZAI_API_KEY (crush ≥
   });
   // crush ≥0.1.1 reads ZHIPU_API_KEY directly — forward it verbatim.
   assert.equal(env.ZHIPU_API_KEY, 'zk-secret-key');
-  // Older crush binaries read ZAI_API_KEY — keep forwarding the same value as
-  // a compat alias so a single user-facing key works across versions.
-  assert.equal(env.ZAI_API_KEY, 'zk-secret-key');
   assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined, 'unrelated vars must not be spread');
 });
 
-test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets neither ZHIPU_API_KEY nor ZAI_API_KEY', () => {
+test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets no credential', () => {
   const env = buildCrushSpawnEnv({ PATH: '/bin', HOME: '/h' });
-  assert.equal('ZAI_API_KEY' in env, false);
   assert.equal('ZHIPU_API_KEY' in env, false);
 });
 
 // ─── Crush credential-proxy parity ──────────────────────────────────────────
 
-test('buildCrushSpawnEnv: with a proxy plan, the engine gets the token + loopback URL, never the real key', () => {
+test('buildCrushSpawnEnv: protected projection gives Crush only run-private proxy state', () => {
   const env = buildCrushSpawnEnv(
     { ZHIPU_API_KEY: 'zk-REAL-SECRET', PATH: '/bin', HOME: '/h' },
-    { token: 'proxy-token-123', baseUrl: 'http://127.0.0.1:51001' },
+    {
+      token: 'proxy-token-123',
+      baseUrl: 'http://127.0.0.1:51001/api/coding/paas/v4',
+      configDir: '/run/config',
+      dataDir: '/run/data',
+    },
   );
-  assert.equal(env.ZHIPU_API_KEY, 'proxy-token-123');
   assert.equal(env.ZAI_API_KEY, 'proxy-token-123');
-  assert.equal(env.ZAI_BASE_URL, 'http://127.0.0.1:51001');
-  // The real credential never reaches the engine environment.
-  assert.equal(env.ZHIPU_API_KEY.includes('REAL'), false);
-  assert.equal(env.ZAI_API_KEY.includes('REAL'), false);
+  assert.equal(env.CRUSH_GLOBAL_CONFIG, '/run/config');
+  assert.equal(env.CRUSH_GLOBAL_DATA, '/run/data');
+  assert.equal(env.ZHIPU_API_KEY, undefined);
+  assert.equal(JSON.stringify(env).includes('REAL'), false);
+});
+
+test('buildCrushProtectedProviderConfig pins zai to the loopback proxy', () => {
+  const config = buildCrushProtectedProviderConfig(
+    'http://127.0.0.1:51001/api/coding/paas/v4',
+    'glm-5.2',
+  );
+  assert.equal(config.providers.zai.base_url, 'http://127.0.0.1:51001/api/coding/paas/v4');
+  assert.equal(config.providers.zai.api_key, '$ZAI_API_KEY');
+  assert.equal(config.options.disable_provider_auto_update, true);
+  assert.deepEqual(config.models.large, { model: 'glm-5.2', provider: 'zai' });
+  assert.equal(config.providers.zai.models[0].id, 'glm-5.2');
+  assert.throws(
+    () => buildCrushProtectedProviderConfig('https://attacker.invalid/v1', 'glm-5.2'),
+    /loopback proxy URL/,
+  );
 });
 
 test('buildCrushSpawnEnv: without a proxy, the real key is forwarded as before', () => {
@@ -144,7 +161,7 @@ test('buildCrushSpawnEnv: without a proxy, the real key is forwarded as before',
   assert.equal(env.ZAI_BASE_URL, undefined);
 });
 
-test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PATH/HOME/TMPDIR/LANG/LC_ALL/ZHIPU_API_KEY/ZAI_API_KEY)', () => {
+test('buildCrushSpawnEnv: result only ever contains keys from the allowlist', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk',
     PATH: '/bin',
@@ -156,7 +173,7 @@ test('buildCrushSpawnEnv: result only ever contains keys from the allowlist (PAT
     DEBUG: '*',
     SHELL: '/bin/zsh',
   });
-  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY', 'ZAI_API_KEY']);
+  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY']);
   for (const key of Object.keys(env)) {
     assert.ok(allowed.has(key), `unexpected key in crush env: ${key}`);
   }

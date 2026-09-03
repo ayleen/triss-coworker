@@ -136,11 +136,10 @@ function hasTokenValue(tokens) {
   return false;
 }
 
-// The DeepSeek-compatible contract, applied whenever the response itself
-// proves the shape — a provider canonicalized to 'worker' must not miss rules
-// a 'deepseek'-labeled call gets. Shared by both branches so they cannot
-// drift. Never guesses the provider from the endpoint.
-function applyDeepseekContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning }) {
+// Some OpenAI-compatible responses expose explicit cache-hit/cache-miss
+// counters. Apply their consistency rules from the response shape rather than
+// inferring an upstream service from the selected canonical provider.
+function applyCachePairContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning }) {
   // DeepSeek documents reasoning as a subset of the completion count, so the
   // visible remainder is only meaningful when that subtraction is valid; a
   // negative remainder is a broken report, not a number to persist.
@@ -201,22 +200,9 @@ export function normalizeApiUsage(resp, { provider } = {}) {
   const details = usage.completion_tokens_details;
   const reasoning = tokenNum(details && details.reasoning_tokens, 'reasoning_tokens', warnings);
 
-  if (provider === 'deepseek') {
-    tokens.input_uncached = tokenNum(usage.prompt_cache_miss_tokens, 'prompt_cache_miss_tokens', warnings);
-    tokens.cache_read = tokenNum(usage.prompt_cache_hit_tokens, 'prompt_cache_hit_tokens', warnings);
-    tokens.reasoning = reasoning;
-    applyDeepseekContract({
-      tokens,
-      warnings,
-      hit: tokens.cache_read,
-      miss: tokens.input_uncached,
-      inputTotal,
-      outputTotal,
-      reasoning,
-    });
-  } else if (provider === 'zai' || provider === 'kimi') {
-    // Z.AI nests the cached count in prompt_tokens_details; Kimi reports it
-    // top-level. Both derive the uncached remainder the same way.
+  if (provider === 'zai' || provider === 'moonshot') {
+    // Z.A.I nests the cached count in prompt_tokens_details; Moonshot reports
+    // it top-level. Both derive the uncached remainder the same way.
     const cached =
       provider === 'zai'
         ? tokenNum(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens, 'cached_tokens', warnings)
@@ -230,8 +216,8 @@ export function normalizeApiUsage(resp, { provider } = {}) {
       }
     }
   } else {
-    // Generic worker: recognise the documented aliases without assuming the
-    // endpoint agrees with any single provider's shape.
+    // Generic OpenAI-compatible response: recognise documented token aliases
+    // from the payload without assuming a particular upstream service.
     const hit = tokenNum(usage.prompt_cache_hit_tokens, 'prompt_cache_hit_tokens', warnings);
     const miss = tokenNum(usage.prompt_cache_miss_tokens, 'prompt_cache_miss_tokens', warnings);
     const nestedCached = tokenNum(
@@ -241,9 +227,8 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     );
     const topCached = tokenNum(usage.cached_tokens, 'cached_tokens', warnings);
 
-    // The deepseek pair is the only alias that splits the input into both
-    // halves. Each half is recognised on its own: a response reporting only one
-    // still keeps that half rather than discarding it as unknown.
+    // The cache hit/miss pair splits the input into both halves. Each reported
+    // half survives independently.
     if (hit !== null) tokens.cache_read = hit;
     if (miss !== null) tokens.input_uncached = miss;
 
@@ -279,10 +264,8 @@ export function normalizeApiUsage(resp, { provider } = {}) {
     }
 
     tokens.reasoning = reasoning;
-    // A worker response that proves the DeepSeek-compatible shape gets the
-    // same two rules as the dedicated branch — derived from the response, not
-    // from any assumed endpoint.
-    applyDeepseekContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning });
+    // Apply the cache-pair consistency rules from the response itself.
+    applyCachePairContract({ tokens, warnings, hit, miss, inputTotal, outputTotal, reasoning });
   }
 
   // Runs once for every provider path.

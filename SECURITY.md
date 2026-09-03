@@ -111,8 +111,8 @@ committed in `.github/keys/` before anything is published; npm packages
 carry provenance attestations. This provides a reviewable source-to-artifact
 pipeline; it does not mean every installed byte is a verbatim repository file.
 Install a pinned version or use a reviewed checkout if policy requires it.
-See [docs/releasing.md](docs/releasing.md) for the signing setup and release
-procedure.
+Signing setup and release procedure are documented in the source repository's
+maintainer guide.
 
 ## Credentials
 
@@ -149,8 +149,9 @@ How the project itself handles secrets and credentials:
   API keys at least yearly; rotate CI secrets when maintainer access
   changes; release-signing key rotation replaces the committed public key
   via pull request first, then signs the next release with the new key (see
-  [docs/releasing.md](docs/releasing.md), *One-time signing setup*). When a
-  secret is rotated, the old value is revoked — not just replaced.
+  [docs/releasing.md](https://github.com/ayleen/triss-coworker/blob/main/docs/releasing.md),
+  *One-time signing setup*). When a secret is rotated, the old value is revoked
+  — not just replaced.
 
 ## Filesystem access
 

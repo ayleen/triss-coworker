@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 ayleen
 
-// Cost tracker. Appends one JSONL record per worker call to
+// Cost tracker. Appends one JSONL record per provider call to
 // ~/.cache/triss/usage.jsonl, then `triss usage` aggregates.
 
 import {
@@ -43,9 +43,8 @@ export function maybeRotate(file) {
   }
 }
 
-// Subscription calls (Z.AI Coding Plan, Kimi for Coding) are metered by the
-// plan rather than billed per token. PAYG `zai/...` prices remain unknown
-// unless explicitly configured.
+// Subscription calls are metered by the plan rather than billed per token.
+// The canonical route determines the billing identity.
 const CODING_PLAN_PRICE = {
   input_uncached: 0,
   cache_read: 0,
@@ -63,12 +62,12 @@ export const DEEPSEEK_PRICING = Object.freeze({
   peakMultiplier: 2,
   peakWindowsUtc: Object.freeze([[1, 4], [6, 10]]),
   legacy: Object.freeze({
-    flash: Object.freeze({ input_uncached: 0.14, cache_read: 0.0028, output: 0.28 }),
-    pro: Object.freeze({ input_uncached: 0.435, cache_read: 0.003625, output: 0.87 }),
+    standard: Object.freeze({ input_uncached: 0.14, cache_read: 0.0028, output: 0.28 }),
+    advanced: Object.freeze({ input_uncached: 0.435, cache_read: 0.003625, output: 0.87 }),
   }),
   offPeak: Object.freeze({
-    flash: Object.freeze({ input_uncached: 0.22, cache_read: 0.007, output: 0.66 }),
-    pro: Object.freeze({ input_uncached: 0.66, cache_read: 0.022, output: 1.98 }),
+    standard: Object.freeze({ input_uncached: 0.22, cache_read: 0.007, output: 0.66 }),
+    advanced: Object.freeze({ input_uncached: 0.66, cache_read: 0.022, output: 1.98 }),
   }),
   source: Object.freeze({
     notice: 'https://api-docs.deepseek.com/news/news260813',
@@ -92,33 +91,17 @@ const DEFAULT_PRICES = {
   'zai/glm-5.2': { input_uncached: 1.4e-6, cache_read: 0.26e-6, output: 4.4e-6 },
   // Kimi (Moonshot) list prices re-verified 2026-08-09 against the official
   // global pricing pages (platform.kimi.ai/docs/pricing/chat-*), USD per token.
-  // Keyed bare — the single Moonshot endpoint returns bare model ids, and a
-  // worker pointed at api.moonshot.ai logs the same ids, so one row prices both
-  // routes.
+  // Keyed bare because the canonical Moonshot transport reports bare model
+  // ids while engine routes carry the canonical provider prefix.
   'kimi-k3': { input_uncached: 3.0e-6, cache_read: 0.3e-6, output: 15.0e-6 },
   'kimi-k2.7-code': { input_uncached: 0.95e-6, cache_read: 0.19e-6, output: 4.0e-6 },
   'kimi-k2.7-code-highspeed': { input_uncached: 1.9e-6, cache_read: 0.38e-6, output: 8.0e-6 },
   'kimi-k2.6': { input_uncached: 0.95e-6, cache_read: 0.16e-6, output: 4.0e-6 },
 };
 
-// Shared TRISS_PRICE_<MODEL_ID> override parser. Coder runs log Moonshot models
-// with opencode's provider prefix (moonshotai/kimi-k3, moonshotai-cn/…);
-// ask/review logs the same ids bare. Strip the prefix FIRST so one
-// DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers both
-// routes. The model key is the uppercased id with non-alphanumerics → '_'.
-//
-// Strips the engine/provider prefixes of the OpenCode engine family so one
-// bare DEFAULT_PRICES row — and one TRISS_PRICE_<MODEL_ID> override — covers
-// both routes. The model key is the uppercased id with non-alphanumerics → '_'.
-//
-// OpenCode Go uses reseller-specific pricing. Do not strip its provider
-// prefix because doing so would apply unrelated direct-provider rates and
-// silently repoint the documented
-// TRISS_PRICE_OPENCODE_GO_<MODEL> override key. A Go route prices as null
-// (unknown cost) unless the user sets the prefixed override explicitly.
-// Unknown prefixes are left intact (fail-closed pricing: an unrecognized
-// prefixed id prices as null, never as a guess).
-const OPENCODE_FAMILY_PREFIXES = /^(?:moonshotai(?:-cn)?)\//;
+// Strip the canonical Moonshot prefix so direct and engine routes share one
+// pricing row. OpenCode Go retains its prefix because reseller pricing differs.
+const OPENCODE_FAMILY_PREFIXES = /^moonshot\//;
 function stripModelPrefix(billingModel) {
   return String(billingModel).replace(OPENCODE_FAMILY_PREFIXES, '');
 }
@@ -171,11 +154,12 @@ function perMillionToToken(rate) {
 }
 
 function deepSeekPriceFor(bare, timestamp) {
-  const model = bare === 'deepseek-v4-flash' ? 'flash' : bare === 'deepseek-v4-pro' ? 'pro' : null;
-  if (!model) return null;
+  const priceClass =
+    bare === 'deepseek-v4-flash' ? 'standard' : bare === 'deepseek-v4-pro' ? 'advanced' : null;
+  if (!priceClass) return null;
   const date = parseTimestamp(timestamp);
   const usesCurrentSchedule = !date || date.getTime() >= Date.parse(DEEPSEEK_PRICING.effectiveAt);
-  const row = usesCurrentSchedule ? DEEPSEEK_PRICING.offPeak[model] : DEEPSEEK_PRICING.legacy[model];
+  const row = usesCurrentSchedule ? DEEPSEEK_PRICING.offPeak[priceClass] : DEEPSEEK_PRICING.legacy[priceClass];
   const multiplier = usesCurrentSchedule && date && isDeepSeekPeak(date) ? DEEPSEEK_PRICING.peakMultiplier : 1;
   return {
     input_uncached: perMillionToToken(row.input_uncached) * multiplier,
@@ -200,7 +184,7 @@ export function priceFor(billingModel, timestamp = undefined) {
   // Subscription use is metered by the plan, regardless of the particular
   // model id. Keep this after the override so a user can explicitly
   // account for a plan model if their contract changes elsewhere.
-  if (bare.startsWith('zai-coding-plan/')) return { ...CODING_PLAN_PRICE };
+  if (bare.startsWith('zai/')) return { ...CODING_PLAN_PRICE };
   if (bare.startsWith('kimi-for-coding/')) return { ...CODING_PLAN_PRICE };
   const deepSeekPrice = deepSeekPriceFor(bare, timestamp);
   if (deepSeekPrice) return deepSeekPrice;
@@ -701,13 +685,11 @@ const finite = (v) => (Number.isFinite(v) ? v : null);
 // price selection; a bare id has no provider.
 export function resolveProvider(model) {
   if (!model) return null;
-  if (model.startsWith('triss-worker/')) return 'worker';
-  if (model.startsWith('zai/') || model.startsWith('zai-coding-plan/')) return 'zai';
-  if (model.startsWith('opencode-go/')) return 'opencode-go';
-  if (model.startsWith('opencode/')) return 'opencode-zen';
-  if (model.startsWith('moonshotai/') || model.startsWith('moonshotai-cn/')) return 'moonshot';
-  if (model.startsWith('kimi-for-coding/')) return 'kimi-for-coding';
-  return null;
+  const prefix = String(model).split('/')[0];
+  return ['openai-compatible', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']
+    .includes(prefix)
+    ? prefix
+    : null;
 }
 
 // The OpenCode engine family (docs/opencode2-engine-plan.md §"Event, error,
@@ -723,16 +705,14 @@ const isOpenCodeUsageSource = (source) => OPENCODE_USAGE_FAMILY.has(source);
 export function resolveBillingMode({ billing_model, engine, freeModels } = {}) {
   if (engine === 'crush') return 'unknown';
   const m = billing_model || '';
-  if (m.startsWith('zai/')) return 'payg';
-  if (m.startsWith('zai-coding-plan/')) return 'subscription';
-  if (m.startsWith('moonshotai/') || m.startsWith('moonshotai-cn/')) return 'payg';
+  if (m.startsWith('zai/')) return 'subscription';
+  if (m.startsWith('moonshot/')) return 'payg';
   if (m.startsWith('kimi-for-coding/')) return 'subscription';
   if (m.startsWith('opencode-go/')) return 'unknown';
-  if (m.startsWith('opencode/')) {
-    const id = m.slice('opencode/'.length);
+  if (m.startsWith('opencode-zen/')) {
+    const id = m.slice('opencode-zen/'.length);
     return freeModels && freeModels.has(id) ? 'free' : 'unknown';
   }
-  if (m.startsWith('triss-worker/')) return 'unknown';
   return 'unknown';
 }
 
@@ -956,7 +936,7 @@ export function normalizeUsageRecord(record) {
   const known = r.cost_usd_known !== false && Number.isFinite(r.cost_usd);
   const legacyModel = r.billing_model || r.model || '';
   const isPlan =
-    legacyModel.startsWith('zai-coding-plan/') ||
+    legacyModel.startsWith('zai/') ||
     legacyModel.startsWith('kimi-for-coding/');
   const planKnown = known && isPlan && r.cost_usd === 0;
   const cost = {

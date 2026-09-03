@@ -10,8 +10,8 @@ control plane.
 | --- | --- | --- |
 | CLI layer | Argument parsing, command routing, human and JSON output | `bin/triss.js`, `src/commands/` |
 | MCP layer | Tool schemas, request handlers, cancellation, host installation | `src/mcp/` |
-| Provider clients | Model selection, OpenAI-compatible transports, usage normalization | `src/client.js`, `src/models.js`, `src/zai.js`, `src/moonshot.js` |
-| Coder engines | OpenCode and Crush process adapters and model configuration | `src/commands/coder.js`, `src/coder-engines/`, `src/coder-models.js` |
+| Provider runtime | Canonical registry, immutable config snapshot, role/model resolution, effort mapping, transports, and normalized results | `src/provider-*.js`, `src/model-*.js`, `src/transport-*.js`, `src/transports/` |
+| Coder engines | OpenCode, OpenCode 2, Crush, and OMP projections of the shared provider runtime | `src/commands/coder.js`, `src/coder-engines/`, `src/coder-providers.js` |
 | Credential proxy | Parent-owned, short-lived credential mediation for child engines | `src/coder-credential-proxy.js` |
 | Isolation policy | Worktree isolation, capability reporting, process ownership, bounded writes | `src/coder-sandbox.js`, `src/managed-root.js`, `src/coder-process-supervisor.js` |
 | State and result stores | Session, run, result, lease, ownership, and recovery state machines | `src/coder-*.js`, `src/owned-process-*.js` |

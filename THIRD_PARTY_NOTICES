@@ -4,6 +4,7 @@ Triss Coworker third-party notices
 The npm package installs the following direct runtime dependencies. Their
 license texts and transitive notices are distributed with those packages:
 
+- @anthropic-ai/sdk — MIT
 - @modelcontextprotocol/sdk — MIT
 - commander — MIT
 - dotenv — BSD-2-Clause

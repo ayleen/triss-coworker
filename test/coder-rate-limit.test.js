@@ -29,15 +29,19 @@ import {
   runCoderRun as runCoderRunProduction,
 } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
 
-const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
-  prompt,
-  opts,
-  {
+const runCoderRun = (prompt, opts, deps = {}) => {
+  const spawnSync = deps.spawnSync;
+  return runCoderRunProduction(prompt, opts, {
     effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env }),
     ...deps,
-  },
-);
+    spawnSync: (cmd, args, options) => cmd === 'opencode' && args?.[0] === '--version'
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : spawnSync?.(cmd, args, options) ?? { status: 1, stdout: '', stderr: '', error: null },
+  });
+};
 
 const LIMIT_MSG =
   'AI_APICallError: Usage limit reached for 5 hour. Your limit will reset at 2026-07-04 19:39:04';
@@ -182,6 +186,7 @@ function withEnv(vars, fn) {
       HOME: tempHome,
       TRISS_PROJECT_ROOT: tempHome,
       TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION: '1',
+      TRISS_DEFAULT_PROVIDER: 'zai',
       ...vars,
     };
     const saved = {};

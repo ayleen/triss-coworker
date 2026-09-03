@@ -6,10 +6,11 @@
 // credentials don't surface their actions to the agent.
 
 import { envReadiness, loadIntegrations } from '../integrations/_registry.js';
-import { getConfig } from '../config.js';
+import { loadEnvFiles } from '../config.js';
 // Shared provider metadata keeps MCP exposure aligned with `triss status`.
 import { coderCredentialReady } from '../coder-providers.js';
 import { NODE_TIMER_MAX_MS } from '../option-validation.js';
+import { CANONICAL_PROVIDER_IDS, MODEL_EFFORT_LEVELS } from '../provider-contract.js';
 import {
   askHandler,
   chatHandler,
@@ -84,19 +85,39 @@ const TEXT_WITH_REASONING_OUTPUT_SCHEMA = {
   additionalProperties: false,
 };
 
+const MODEL_SELECTION_PROPERTIES = Object.freeze({
+  provider: {
+    type: 'string',
+    enum: CANONICAL_PROVIDER_IDS,
+    description: 'Canonical provider id',
+  },
+  model: {
+    type: 'string',
+    description: 'Provider-qualified model id, or a bare id with provider',
+  },
+  engine: {
+    type: 'string',
+    enum: ['direct', 'opencode', 'opencode2', 'omp', 'crush'],
+    description: 'Execution engine',
+  },
+  effort: {
+    type: 'string',
+    enum: MODEL_EFFORT_LEVELS,
+    description: 'Reasoning effort',
+  },
+});
+
 const CORE_TOOLS = [
   {
     name: 'triss_chat',
     description:
-      'Bare prompt to the worker model — no corpus, no retrieval. Use for ' +
-      'one-shot lookups (definitions, transformations, ideation) so the ' +
-      'primary model\'s tokens stay on real work.',
+      'Bare prompt through the configured provider runtime — no corpus or retrieval.',
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         prompt: { type: 'string', description: 'Prompt to send' },
         system: { type: 'string', description: 'Optional system prompt / persona' },
-        model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: 'Token budget (default 4096)' },
       },
       required: ['prompt'],
@@ -112,16 +133,10 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         paths: { type: 'array', items: { type: 'string' }, description: 'File paths or globs' },
         urls: { type: 'array', items: { type: 'string' }, description: 'http(s) URLs' },
         question: { type: 'string', description: 'Specific question to answer' },
-        provider: {
-          type: 'string',
-          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
-          description:
-            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
-        },
-        model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
         timeout_ms: {
           type: 'integer',
@@ -144,15 +159,14 @@ const CORE_TOOLS = [
   {
     name: 'triss_fetch',
     description:
-      'Fetch one or more URL(s) as readable markdown. Without `question` ' +
-      'returns the raw markdown; with `question` returns a DeepSeek summary. ' +
-      'Prefer this over WebFetch for any potentially-large page.',
+      'Fetch one or more URL(s) as readable markdown. Without `question` returns raw markdown; ' +
+      'with `question` uses the configured provider runtime.',
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         urls: { type: 'array', items: { type: 'string' }, description: 'http(s) URLs' },
         question: { type: 'string' },
-        model: { type: 'string' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
       },
       required: ['urls'],
@@ -162,23 +176,16 @@ const CORE_TOOLS = [
   {
     name: 'triss_review',
     description:
-      'Code review via the worker model, GLM, or Kimi. Without `pr` reviews the current branch vs ' +
-      'auto-detected base; with `pr` uses GitHub CLI. Linked issues load ONLY from the explicit ' +
-      '`issue` argument (PR prose never triggers tracker access). Defaults to the pro preset.',
+      'Code review through the configured provider runtime. Without `pr` reviews the current branch; ' +
+      'with `pr` uses GitHub CLI. Linked issues load only from the explicit `issue` argument.',
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         pr: { type: ['string', 'number'], description: 'GitHub PR number' },
         base: { type: 'string', description: 'Base branch (default: auto-detect)' },
         skip_issue: { type: 'boolean', description: 'Skip linked-ticket lookup' },
         question: { type: 'string', description: 'Override the review question' },
-        provider: {
-          type: 'string',
-          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
-          description:
-            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
-        },
-        model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
         timeout_ms: {
           type: 'integer',
@@ -222,16 +229,10 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         pr: { type: ['string', 'number'], description: 'GitHub PR number' },
         base: { type: 'string', description: 'Base branch (default: auto-detect)' },
         question: { type: 'string', description: 'Override the review question' },
-        provider: {
-          type: 'string',
-          enum: ['worker', 'deepseek', 'glm', 'kimi', 'moonshot'],
-          description:
-            'Inference provider (default: worker; deepseek aliases worker, moonshot aliases kimi)',
-        },
-        model: { type: 'string', description: 'Default: pro' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
         timeout_ms: {
           type: 'integer',
@@ -252,8 +253,7 @@ const CORE_TOOLS = [
   {
     name: 'triss_status',
     description:
-      'Show worker model + integration readiness. Useful when an integration ' +
-      'tool is missing — tells you which credential is unset.',
+      'Show provider runtime and integration readiness, including missing credentials.',
     inputSchema: { type: 'object', properties: {} },
     handler: statusHandler,
   },
@@ -266,10 +266,10 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         type: { type: 'string', description: 'Force conventional type (feat, fix, …)' },
         scope: { type: 'string' },
         conventional: { type: 'boolean', description: 'Default true' },
-        model: { type: 'string' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
       },
     },
@@ -285,10 +285,10 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...MODEL_SELECTION_PROPERTIES,
         spec: { type: 'string', description: 'What to write (free-form description)' },
         target: { type: 'string', description: 'Output file path (optional). When set, Triss writes the file.' },
         context: { type: 'string', description: 'Optional reference file to mimic in style' },
-        model: { type: 'string', description: 'flash | pro | <model id>' },
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: 'Token budget (default 16384)' },
       },
       required: ['spec'],
@@ -307,7 +307,7 @@ const JIRA_TOOLS = [
         jql: { type: 'string', description: 'JQL query' },
         question: { type: 'string' },
         limit: { type: 'number' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['jql'],
@@ -323,7 +323,7 @@ const JIRA_TOOLS = [
         key: { type: 'string', description: 'Issue key, e.g. PROJ-123' },
         with_comments: { type: 'boolean' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['key'],
@@ -429,7 +429,7 @@ const LINEAR_TOOLS = [
         term: { type: 'string' },
         question: { type: 'string' },
         limit: { type: 'number' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['term'],
@@ -445,7 +445,7 @@ const LINEAR_TOOLS = [
         id: { type: 'string' },
         with_comments: { type: 'boolean' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['id'],
@@ -684,7 +684,7 @@ const GITHUB_TOOLS = [
         query: { type: 'string', description: 'Same syntax as github.com search (e.g. "is:issue is:open repo:owner/x")' },
         limit: { type: 'number' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['query'],
@@ -705,7 +705,7 @@ const GITHUB_TOOLS = [
         },
         with_comments: { type: 'boolean' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['number'],
@@ -772,7 +772,7 @@ const CONFLUENCE_TOOLS = [
         cql: { type: 'string', description: 'CQL string, e.g. "type = page AND space = ENG"' },
         limit: { type: 'number' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['cql'],
@@ -787,7 +787,7 @@ const CONFLUENCE_TOOLS = [
       properties: {
         id: { type: 'string' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['id'],
@@ -850,7 +850,7 @@ const GITLAB_TOOLS = [
         scope: { type: 'string' },
         limit: { type: 'number' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
     },
@@ -866,7 +866,7 @@ const GITLAB_TOOLS = [
         project: { type: 'string' },
         with_comments: { type: 'boolean' },
         question: { type: 'string' },
-        model: { type: 'string' },
+        ...MODEL_SELECTION_PROPERTIES,
         max_tokens: { type: 'number' },
       },
       required: ['iid'],
@@ -921,16 +921,14 @@ const GITLAB_TOOLS = [
   },
 ];
 
-// Pseudo-manifest tool (see src/commands/coder.js's CODER_MANIFEST) — not
-// a tracker integration, so it's gated on coderCredentialReady() directly
-// below (TRISS_WORKER_API_KEY, ZHIPU_API_KEY, OPENCODE_API_KEY, MOONSHOT_API_KEY, or KIMI_API_KEY)
-// rather than via loadIntegrations()'s `ready` set.
+// Pseudo-manifest tools are gated directly on canonical provider credential
+// readiness, independent of tracker integration readiness.
 const CODER_TOOLS = [
   {
     name: 'triss_coder_run',
     description:
-      'Delegate an implementation task to a coding agent — GLM, the OpenAI-compatible Triss worker, Kimi, or ' +
-      'OpenCode Zen or OpenCode Go models (opencode engine, set up via `triss coder init`). ' +
+      'Delegate an implementation task to a coding agent through the configured provider runtime. ' +
+      'OpenCode, OpenCode2, OMP, and Crush engine projections are supported. ' +
       'Returns a JSON envelope: ' +
       '{engine, engine_version, session_id, exit_reason, final_text, ' +
       'files_changed, diff_stat, worktree, usage, warnings}. The envelope\'s ' +
@@ -964,13 +962,9 @@ const CODER_TOOLS = [
         },
         continue: { type: 'boolean', description: 'Continue the most recent session of the resolved engine (opencode/opencode2 keep separate session maps)' },
         agent: { type: 'string', description: 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)' },
-        provider: {
-          type: 'string',
-          enum: ['zai', 'worker', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding'],
-          description: 'OpenCode only: select a provider for this run; requires model and does not modify persistent config',
-        },
-        model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'Override the model for this run only, as <provider>/<id> — e.g. Triss worker (triss-worker/deepseek-v4-flash), Z.AI GLM (zai-coding-plan/glm-5.2), OpenCode Zen (opencode/deepseek-v4-flash-free), OpenCode Go (opencode-go/deepseek-v4-flash), Moonshot Kimi (moonshotai/kimi-k2.7-code), or Kimi for Coding (kimi-for-coding/k3)' },
-        small_model: { type: 'string', pattern: '^[^\\s/]+/[^\\s/](?:[^\\s]*[^\\s/])?$', description: 'With provider, override small_model for this run; defaults to model' },
+        provider: MODEL_SELECTION_PROPERTIES.provider,
+        model: MODEL_SELECTION_PROPERTIES.model,
+        effort: MODEL_SELECTION_PROPERTIES.effort,
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         allow_best_effort_caller_worktree: { type: 'boolean', description: 'Snake-case alias of allowBestEffortCallerWorktree (the handler already accepts it; declared so schema-filtering clients forward it).' },
@@ -986,11 +980,8 @@ const CODER_TOOLS = [
   {
     name: 'triss_coder_status',
     description:
-      'Show the coding agent setup: provider key presence (TRISS_WORKER_API_KEY / ZHIPU_API_KEY / ' +
-      'OPENCODE_API_KEY / MOONSHOT_API_KEY / KIMI_API_KEY), ' +
-      'the default engine, each engine (opencode + crush) version/install ' +
-      'state, which opencode.json / crush.json config files exist, and how ' +
-      'many isolation worktrees are currently live.',
+      'Show coding-agent setup: canonical provider credential readiness, default engine, ' +
+      'engine versions/install state, configured engine files, and active isolation worktrees.',
     inputSchema: { type: 'object', properties: {} },
     handler: coderStatusHandler,
   },
@@ -1021,7 +1012,7 @@ const CODER_TOOLS = [
 export async function listTools() {
   // Defensive: ensure env files are loaded even when listTools is called
   // outside the server lifecycle (e.g. from tests).
-  getConfig();
+  loadEnvFiles();
   const integrations = await loadIntegrations();
   const ready = new Set(integrations.filter((m) => envReadiness(m).ready).map((m) => m.name));
   const tools = [...CORE_TOOLS];
@@ -1030,12 +1021,7 @@ export async function listTools() {
   if (ready.has('github')) tools.push(...GITHUB_TOOLS);
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
-  // Coder tools surface once ANY provider credential is set: TRISS_WORKER_API_KEY
-  // (the existing OpenAI-compatible worker profile), ZHIPU_API_KEY
-  // (Z.AI GLM, the default), OPENCODE_API_KEY (OpenCode Zen or Go), MOONSHOT_API_KEY
-  // (Moonshot Kimi), or KIMI_API_KEY (Kimi for Coding). envReadiness only
-  // tracks the required ZHIPU key, so a user on any other single provider
-  // would otherwise never see triss_coder_run.
+  // Coder tools surface once any canonical provider credential is configured.
   if (coderCredentialReady()) tools.push(...CODER_TOOLS);
   return tools;
 }

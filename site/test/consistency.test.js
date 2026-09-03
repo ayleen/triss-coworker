@@ -24,14 +24,14 @@ test("calculator clients receive the canonical pricing data", () => {
     sonnet: { input: 3, output: 15 },
     opus: { input: 5, output: 25 },
   });
-  assert.deepEqual(DEEPSEEK.flash, { input: 0.22, cache: 0.007, output: 0.66 });
+  assert.deepEqual(DEEPSEEK.standard, { input: 0.22, cache: 0.007, output: 0.66 });
   for (const file of ["src/pages/index.astro", "src/pages/cost.astro"]) {
     const source = read(file);
     assert.match(source, /type="application\/json" id="pricing-data" set:html=\{JSON\.stringify\(\{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS \}\)\}/);
     assert.doesNotMatch(source, /const PROFILE = \{/);
-    assert.doesNotMatch(source, /const DEEPSEEK = \{\s*flash:/);
+    assert.doesNotMatch(source, /const DEEPSEEK = \{\s*standard:/);
   }
-  assert.deepEqual(DEFAULTS, { reqs: 40, share: 65, primary: "sonnet", worker: "flash", cacheHit: 77 });
+  assert.deepEqual(DEFAULTS, { reqs: 40, share: 65, primary: "sonnet", providerModel: "standard", cacheHit: 77 });
 });
 
 test("website and CLI DeepSeek schedules stay in sync", () => {
@@ -40,28 +40,28 @@ test("website and CLI DeepSeek schedules stay in sync", () => {
     cache: cache_read,
     output,
   });
-  assert.deepEqual(DEEPSEEK.flash, toWebsiteRow(DEEPSEEK_PRICING.offPeak.flash));
-  assert.deepEqual(DEEPSEEK.pro, toWebsiteRow(DEEPSEEK_PRICING.offPeak.pro));
-  assert.deepEqual(DEEPSEEK.flashPeak, {
-    input: DEEPSEEK.flash.input * DEEPSEEK_PRICING.peakMultiplier,
-    cache: DEEPSEEK.flash.cache * DEEPSEEK_PRICING.peakMultiplier,
-    output: DEEPSEEK.flash.output * DEEPSEEK_PRICING.peakMultiplier,
+  assert.deepEqual(DEEPSEEK.standard, toWebsiteRow(DEEPSEEK_PRICING.offPeak.standard));
+  assert.deepEqual(DEEPSEEK.advanced, toWebsiteRow(DEEPSEEK_PRICING.offPeak.advanced));
+  assert.deepEqual(DEEPSEEK.standardPeak, {
+    input: DEEPSEEK.standard.input * DEEPSEEK_PRICING.peakMultiplier,
+    cache: DEEPSEEK.standard.cache * DEEPSEEK_PRICING.peakMultiplier,
+    output: DEEPSEEK.standard.output * DEEPSEEK_PRICING.peakMultiplier,
   });
-  assert.deepEqual(DEEPSEEK.proPeak, {
-    input: DEEPSEEK.pro.input * DEEPSEEK_PRICING.peakMultiplier,
-    cache: DEEPSEEK.pro.cache * DEEPSEEK_PRICING.peakMultiplier,
-    output: DEEPSEEK.pro.output * DEEPSEEK_PRICING.peakMultiplier,
+  assert.deepEqual(DEEPSEEK.advancedPeak, {
+    input: DEEPSEEK.advanced.input * DEEPSEEK_PRICING.peakMultiplier,
+    cache: DEEPSEEK.advanced.cache * DEEPSEEK_PRICING.peakMultiplier,
+    output: DEEPSEEK.advanced.output * DEEPSEEK_PRICING.peakMultiplier,
   });
   assert.equal(DEEPSEEK_EFFECTIVE_AT, DEEPSEEK_PRICING.effectiveAt);
   assert.deepEqual(DEEPSEEK_SOURCE, DEEPSEEK_PRICING.source);
 });
 
-test("historical benchmark keeps its May 2026 list-price result", () => {
+test("README presents the canonical 0.42 provider migration", () => {
   const readme = read("../README.md");
-  assert.match(readme, /May 6–13, 2026, all at the list price then in effect/);
-  assert.match(readme, /\*\*\\\$2\.22\*\*/);
-  assert.doesNotMatch(readme, /off-peak window[\s\S]{0,100}75%/);
-  assert.doesNotMatch(readme, /DeepSeek \(pro, -75%\)/);
+  assert.match(readme, /one configurable provider runtime/);
+  assert.match(readme, /Upgrading from Triss < 0\.42\.0/);
+  assert.match(readme, /triss migrate/);
+  assert.doesNotMatch(readme, /--small-model/);
 });
 
 test("website coder engines and OMP quickstart match repository contracts", () => {
@@ -83,7 +83,7 @@ test("website coder engines and OMP quickstart match repository contracts", () =
   assert.match(coder.flags.join(" "), /opencode\|opencode2\|crush\|omp/);
   assert.equal(
     coder.example,
-    '$ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"',
+    '$ triss coder run --engine omp --model opencode-go/deepseek-v4-flash --effort high "Create result.txt"',
   );
 
   assert.equal(pkg.name, "triss-coworker");
@@ -94,5 +94,5 @@ test("website coder engines and OMP quickstart match repository contracts", () =
   assert.match(gettingStarted, new RegExp(`OMP ${floor.replaceAll(".", "\\.")} or newer`));
   assert.match(gettingStarted, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);
   assert.match(readme, new RegExp(`supported floor of \`${floor.replaceAll(".", "\\.")}\``));
-  assert.match(readme, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);
+  assert.match(readme, /triss coder run --engine omp \\\n\s+--model opencode-go\/deepseek-v4-flash/);
 });

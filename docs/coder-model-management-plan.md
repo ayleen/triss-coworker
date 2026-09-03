@@ -1,5 +1,9 @@
 # Coder model management and recovery UX
 
+> **Historical pre-0.42 design record.** Legacy provider names, environment
+> variables, model selectors, and commands below are migration history, not
+> valid runtime guidance. See [`configuration.md`](configuration.md).
+
 Implementation plan for making model selection, persistent model changes, and
 recovery from retired or incompatible models understandable and safe for Triss
 users.

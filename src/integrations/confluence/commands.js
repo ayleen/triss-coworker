@@ -13,7 +13,7 @@ function searchLine(r) {
   return `${r.content?.id ?? r.id ?? '?'}\t[${space}]\t${title}\t${url}`;
 }
 
-export async function searchCmd({ cql, limit, question, model, json }) {
+export async function searchCmd({ cql, limit, question, provider, model, engine, effort, json }) {
   const data = await confluence.search({
     cql,
     limit: parseInt(limit, 10) || 25,
@@ -23,7 +23,7 @@ export async function searchCmd({ cql, limit, question, model, json }) {
   if (!results.length) return printResult('(no results)');
   const corpus = results.map(searchLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, model });
+    const out = await summarize({ corpus, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(corpus);
@@ -54,12 +54,12 @@ function safeParse(s) {
   }
 }
 
-export async function pageCmd(id, { question, model, json }) {
+export async function pageCmd(id, { question, provider, model, engine, effort, json }) {
   const page = await confluence.getPage(id);
   if (json) return printResult(page, { json: true });
   const text = pageFull(page);
   if (question) {
-    const out = await summarize({ corpus: text, question, model });
+    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
     printResult(out);
   } else {
     printResult(text);

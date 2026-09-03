@@ -107,14 +107,14 @@ function isConnectionLike(err, body) {
  *
  * @param {Error} err the original error (cause retained)
  * @param {object} [ctx]
- * @param {string} [ctx.provider] worker|glm|kimi|opencode-zen|opencode-go
- * @param {string} [ctx.baseUrl] for GLM route hints
+ * @param {string} [ctx.provider] canonical provider id
+ * @param {string} [ctx.baseUrl] for provider route hints
  * @param {object} [ctx.signalEvidence] {streamOpened?: boolean}
  * @returns {object} {code, kind, policy, retryable, endpoint_hop, requests,
  *   cause, message}
  */
 export function classifyProviderError(err, ctx = {}) {
-  const provider = ctx.provider || 'worker';
+  const provider = ctx.provider || 'openai-compatible';
   const status = statusOf(err);
   const body = bodyOf(err);
   const policy = policyEvidenceFrom(body);
@@ -151,7 +151,7 @@ export function classifyProviderError(err, ctx = {}) {
     };
   }
   if (status === 401 || status === 403) {
-    const recognizedMismatch = provider === 'glm' && isGlmRouteMismatch(err);
+    const recognizedMismatch = provider === 'zai' && isGlmRouteMismatch(err);
     return {
       code: PROVIDER_ERROR_CODES.AUTH,
       kind: 'auth',
@@ -201,7 +201,7 @@ export function classifyProviderError(err, ctx = {}) {
     };
   }
   if (status === 404 || /model.*not.*found|unknown model/i.test(body)) {
-    const recognizedMismatch = provider === 'glm' && isGlmRouteMismatch(err);
+    const recognizedMismatch = provider === 'zai' && isGlmRouteMismatch(err);
     return {
       code: PROVIDER_ERROR_CODES.NOT_FOUND,
       kind: 'not_found',

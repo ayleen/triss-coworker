@@ -240,7 +240,7 @@ test('AGENT-HELP-07: both full cookbooks teach the one-host/one-coder workflow c
 test('AGENT-HELP-08: task packets are complete and acceptance fences stay in the list item', () => {
   const repoRoot = resolve(dirname(TRISS_BIN), '..');
   const read = (file) => readFileSync(join(repoRoot, file), 'utf8');
-  const packetFiles = ['README.md', 'templates/claude-full.md', 'templates/codex-full.md'];
+  const packetFiles = ['templates/claude-full.md', 'templates/codex-full.md'];
   for (const file of packetFiles) {
     const content = read(file);
     const packet = content.match(/triss coder run --stdin --isolate <<'TASK'\n([\s\S]*?)\nTASK\n```/);

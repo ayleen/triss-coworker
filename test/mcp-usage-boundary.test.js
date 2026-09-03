@@ -13,6 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createExecutionResult } from '../src/transports/result.js';
 
 // These handlers persist usage, and src/usage.js binds its log path from
 // homedir() at module load. Redirect HOME before the first import that reaches
@@ -71,6 +72,18 @@ function snapshot(vars) {
     }
   };
 }
+function modelDeps(content) {
+  return {
+    executeModelTask: async () => ({
+      result: createExecutionResult({
+        text: content,
+        finishReason: 'stop',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+    }),
+  };
+}
+
 
 const MCP_VARS = [
   'TRISS_WORKER_API_KEY',
@@ -93,7 +106,7 @@ test('writeHandler writes only generated content to the file, never a usage repo
   const target = join(dir, 'out.js');
   const { writeHandler } = await import(`../src/mcp/handlers.js?mub-1=${Date.now()}`);
   try {
-    await writeHandler({ spec: 'a hello script', target });
+    await writeHandler({ spec: 'a hello script', target }, modelDeps('console.log("hello")\n'));
     const written = readFileSync(target, 'utf8');
     assert.ok(!/\[triss/.test(written), `file must not contain a usage report, got: ${written}`);
     assert.ok(!written.includes('finish:'), `file must not contain 'finish:', got: ${written}`);
@@ -114,7 +127,7 @@ test('writeHandler returns the usage report exactly once in its status', async (
   const target = join(dir, 'out.js');
   const { writeHandler } = await import(`../src/mcp/handlers.js?mub-2=${Date.now()}`);
   try {
-    const result = await writeHandler({ spec: 'a hello script', target });
+    const result = await writeHandler({ spec: 'a hello script', target }, modelDeps('console.log("hello")\n'));
     const count = (result.match(/finish:/g) || []).length;
     assert.equal(count, 1, `usage must appear exactly once, got ${count}: ${result}`);
   } finally {
@@ -131,7 +144,7 @@ test('writeHandler without a target returns content plus the usage report exactl
   process.env.TRISS_WORKER_BASE_URL = mock.baseUrl;
   const { writeHandler } = await import(`../src/mcp/handlers.js?mub-3=${Date.now()}`);
   try {
-    const result = await writeHandler({ spec: 'a hello script' });
+    const result = await writeHandler({ spec: 'a hello script' }, modelDeps('console.log("hello")\n'));
     assert.match(result, /console\.log\("hello"\)/);
     const count = (result.match(/finish:/g) || []).length;
     assert.equal(count, 1, `usage must appear exactly once, got ${count}: ${result}`);
@@ -151,7 +164,7 @@ test('writeHandler unwraps fences and writes exactly the content to the file', a
   const target = join(dir, 'out.js');
   const { writeHandler } = await import(`../src/mcp/handlers.js?mub-4=${Date.now()}`);
   try {
-    await writeHandler({ spec: 'log 42', target });
+    await writeHandler({ spec: 'log 42', target }, modelDeps('```js\nconsole.log(42)\n```'));
     const written = readFileSync(target, 'utf8');
     assert.equal(written, 'console.log(42)\n', `file must be exactly the content, got: ${JSON.stringify(written)}`);
   } finally {
@@ -174,7 +187,7 @@ test('a model-generated line that looks like a usage report is preserved, not st
   const target = join(dir, 'out.txt');
   const { writeHandler } = await import(`../src/mcp/handlers.js?mub-5=${Date.now()}`);
   try {
-    await writeHandler({ spec: 'write a note', target });
+    await writeHandler({ spec: 'write a note', target }, modelDeps(`${modelLine}\n`));
     const written = readFileSync(target, 'utf8');
     assert.ok(written.includes(modelLine), `the model's own line must survive, got: ${JSON.stringify(written)}`);
     assert.ok(

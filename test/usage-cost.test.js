@@ -7,7 +7,6 @@ import {
   DEEPSEEK_PRICING,
   priceFor,
   priceIsOverride,
-  resolveProvider,
   resolveBillingMode,
   estimateCost,
   estimateCanonicalCost,
@@ -139,22 +138,6 @@ test('explicit DeepSeek overrides have priority over peak adjustment', () => {
   }
 });
 
-test('priceFor returns the Z.AI PAYG row with a null cache_write rate', () => {
-  const p = priceFor('zai/glm-5.2');
-  close(p.input_uncached, 1.4e-6);
-  close(p.cache_read, 0.26e-6);
-  close(p.output, 4.4e-6);
-  assert.equal(p.cache_write, null);
-});
-
-test('priceFor returns all-zero rates for the Z.AI coding plan, including cache_write 0', () => {
-  const p = priceFor('zai-coding-plan/glm-5.2');
-  assert.equal(p.input_uncached, 0);
-  assert.equal(p.cache_read, 0);
-  assert.equal(p.cache_write, 0);
-  assert.equal(p.output, 0);
-});
-
 test('priceFor returns all-zero rates for the Kimi for Coding plan', () => {
   const p = priceFor('kimi-for-coding/k3');
   assert.equal(p.input_uncached, 0);
@@ -165,13 +148,6 @@ test('priceFor returns all-zero rates for the Kimi for Coding plan', () => {
 
 test('priceFor returns null for an unknown model', () => {
   assert.equal(priceFor('mystery-model'), null);
-});
-
-test('priceFor resolves a moonshotai-prefixed id to the same bare Kimi row', () => {
-  const bare = priceFor('kimi-k3');
-  const prefixed = priceFor('moonshotai/kimi-k3');
-  assert.deepEqual(prefixed, bare);
-  assert.notEqual(prefixed, null);
 });
 
 test('priceFor keeps every re-verified Kimi PAYG row at the published USD rates', () => {
@@ -272,39 +248,10 @@ test('whitespace-only override fields are rejected the same way', () => {
   }
 });
 
-test('resolveProvider maps every prefix in the table and bare ids to null', () => {
-  assert.equal(resolveProvider('triss-worker/flash'), 'worker');
-  assert.equal(resolveProvider('zai/glm-5.2'), 'zai');
-  assert.equal(resolveProvider('zai-coding-plan/glm-5.2'), 'zai');
-  assert.equal(resolveProvider('opencode/deepseek-v4-flash-free'), 'opencode-zen');
-  assert.equal(resolveProvider('opencode-go/deepseek-v4-flash'), 'opencode-go');
-  assert.equal(resolveProvider('moonshotai/kimi-k3'), 'moonshot');
-  assert.equal(resolveProvider('moonshotai-cn/kimi-k3'), 'moonshot');
-  assert.equal(resolveProvider('kimi-for-coding/k3'), 'kimi-for-coding');
-  assert.equal(resolveProvider('deepseek-v4-flash'), null);
-});
-
-test('resolveBillingMode classifies the plan-bound and PAYG prefixes', () => {
-  assert.equal(resolveBillingMode({ billing_model: 'zai/glm-5.2' }), 'payg');
-  assert.equal(resolveBillingMode({ billing_model: 'zai-coding-plan/glm-5.2' }), 'subscription');
-  assert.equal(resolveBillingMode({ billing_model: 'kimi-for-coding/k3' }), 'subscription');
-  assert.equal(resolveBillingMode({ billing_model: 'moonshotai/kimi-k3' }), 'payg');
-});
-
 test('an opencode model without freeModels is unknown, not free', () => {
   assert.equal(
     resolveBillingMode({ billing_model: 'opencode/deepseek-v4-flash-free' }),
     'unknown',
-  );
-});
-
-test('an opencode model listed in freeModels is proven free', () => {
-  assert.equal(
-    resolveBillingMode({
-      billing_model: 'opencode/deepseek-v4-flash-free',
-      freeModels: new Set(['deepseek-v4-flash-free']),
-    }),
-    'free',
   );
 });
 

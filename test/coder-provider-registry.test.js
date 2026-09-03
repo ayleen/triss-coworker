@@ -5,7 +5,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CODER_CREDENTIAL_MODES,
-  CODER_PROVIDER_REGISTRY,
   CODER_TRANSIENT_PROVIDER_ALIAS,
   assertCoderCredentialMode,
   buildCoderTransientProviderOverlay,
@@ -73,78 +72,42 @@ test('credential modes are the closed best_effort_raw | protected_proxy set and 
   }
 });
 
-test('runtime resolver preserves the historical bare-model Z.AI route', () => {
-  const route = resolveCoderRuntimeProviderRoute('deepseek-v4-flash');
-  assert.equal(route.model, 'deepseek-v4-flash');
-  assert.equal(route.provider, 'zai');
-  assert.equal(route.endpoint, 'https://api.z.ai');
+test('runtime resolver requires a canonical provider-qualified model', () => {
+  assert.equal(resolveCoderRuntimeProviderRoute('deepseek-v4-flash'), null);
   assert.equal(resolveCoderRuntimeProviderRoute('unknown/prefixed'), null);
+  assert.equal(resolveCoderRuntimeProviderRoute('worker/model'), null);
 });
 
-test('canonical registry covers every advertised provider prefix and transport', () => {
+test('canonical registry covers every provider and credential projection', () => {
   const cases = [
-    ['triss-worker/model', 'worker', 'TRISS_WORKER_API_KEY', 'openai_chat'],
-    ['zai-coding-plan/model', 'zai', 'ZHIPU_API_KEY', 'openai_chat'],
-    ['zai/model', 'zai', 'ZHIPU_API_KEY', 'openai_chat'],
-    ['opencode/model', 'opencode-zen', 'OPENCODE_API_KEY', 'openai_chat'],
-    ['opencode-go/model', 'opencode-go', 'OPENCODE_API_KEY', 'openai_chat'],
-    ['moonshotai/model', 'moonshot', 'MOONSHOT_API_KEY', 'openai_chat'],
-    ['moonshotai-cn/model', 'moonshot', 'MOONSHOT_API_KEY', 'openai_chat'],
-    ['kimi-for-coding/model', 'kimi-for-coding', 'KIMI_API_KEY', 'anthropic_messages'],
+    ['openai-compatible/deepseek-v4-flash', 'openai-compatible', 'TRISS_OPENAI_COMPATIBLE_API_KEY', 'https://api.deepseek.com', '/v1', 'openai_chat'],
+    ['zai/glm-5.2', 'zai', 'ZHIPU_API_KEY', 'https://api.z.ai', '/api/coding/paas/v4', 'openai_chat'],
+    ['opencode-zen/deepseek-v4-flash', 'opencode-zen', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/v1', 'openai_chat'],
+    ['opencode-go/deepseek-v4-flash', 'opencode-go', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_chat'],
+    ['moonshot/kimi-k2.7-code', 'moonshot', 'MOONSHOT_API_KEY', 'https://api.moonshot.ai', '/v1', 'openai_chat'],
+    ['kimi-for-coding/k3', 'kimi-for-coding', 'KIMI_API_KEY', 'https://api.kimi.com', '/coding/v1', 'anthropic_messages'],
   ];
-  for (const [model, kind, env, protocol] of cases) {
-    const prefix = model.split('/')[0];
-    const entry = Object.values(CODER_PROVIDER_REGISTRY).find((candidate) => candidate.prefixes.includes(prefix));
-    assert.equal(entry.kind, kind);
-    assert.equal(entry.credentialEnv, env);
-    assert.equal(entry.protocol, protocol);
-  }
-  assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['muse-spark-1.2-contributor'].protocol, 'openai_responses');
-  assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['grok-4.5'].protocol, 'openai_responses');
-  assert.equal(CODER_PROVIDER_REGISTRY['opencode-go'].modelOverrides['grok-4.5'].package, '@ai-sdk/openai');
-});
-
-test('canonical resolver derives endpoint, transport, and credential for every prefix', () => {
-  const cases = [
-    ['triss-worker/deepseek-v4-flash', 'TRISS_WORKER_API_KEY', 'https://api.deepseek.com', '/v1', 'openai_chat'],
-    ['zai-coding-plan/glm-5.2', 'ZHIPU_API_KEY', 'https://api.z.ai', '/api/coding/paas/v4', 'openai_chat'],
-    ['zai/glm-5.2', 'ZHIPU_API_KEY', 'https://api.z.ai', '/api/paas/v4', 'openai_chat'],
-    ['opencode/deepseek-v4-flash', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/v1', 'openai_chat'],
-    ['opencode-go/deepseek-v4-flash', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_chat'],
-    ['moonshotai/kimi-k2.7-code', 'MOONSHOT_API_KEY', 'https://api.moonshot.ai', '/v1', 'openai_chat'],
-    ['moonshotai-cn/kimi-k2.7-code', 'MOONSHOT_API_KEY', 'https://api.moonshot.cn', '/v1', 'openai_chat'],
-    ['kimi-for-coding/k3', 'KIMI_API_KEY', 'https://api.kimi.com', '/coding/v1', 'anthropic_messages'],
-    ['opencode-go/muse-spark-1.2-contributor', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_responses'],
-    ['opencode-go/grok-4.5', 'OPENCODE_API_KEY', 'https://opencode.ai', '/zen/go/v1', 'openai_responses'],
-  ];
-  for (const [model, credentialEnv, endpoint, pathPrefix, protocol] of cases) {
+  for (const [model, provider, credentialEnv, endpoint, pathPrefix, protocol] of cases) {
     const route = resolveCoderProviderRoute(model);
     assert.deepEqual(
-      { credentialEnv: route.credentialEnv, endpoint: route.endpoint, pathPrefix: route.pathPrefix, protocol: route.protocol },
-      { credentialEnv, endpoint, pathPrefix, protocol },
+      {
+        provider: route.provider,
+        credentialEnv: route.credentialEnv,
+        endpoint: route.endpoint,
+        pathPrefix: route.pathPrefix,
+        protocol: route.protocol,
+      },
+      { provider, credentialEnv, endpoint, pathPrefix, protocol },
       model,
     );
   }
-  assert.equal(resolveCoderProviderRoute('unknown/model'), null);
-  assert.equal(resolveCoderProviderRoute('zai/too/many/slashes'), null);
 });
 
-test('secure Zen offline fallback candidates are all transport-audited', () => {
-  for (const model of [
-    'opencode/deepseek-v4-flash-free',
-    'opencode/nemotron-3-ultra-free',
-    'opencode/mimo-v2.5-free',
-  ]) {
-    assert.equal(resolveCoderProviderRoute(model).transportAudited, true, model);
-  }
-  assert.equal(resolveCoderProviderRoute('opencode/north-mini-code-free').transportAudited, false);
-});
-
-test('Zen and Go transport metadata is model-specific and fail-closed', () => {
+test('Zen and Go transport metadata stays model-specific and fail-closed', () => {
   const cases = [
-    ['opencode/deepseek-v4-flash-free', 'openai_chat', '@ai-sdk/openai-compatible'],
-    ['opencode/gpt-5.6-sol', 'openai_responses', '@ai-sdk/openai'],
-    ['opencode/claude-sonnet-4-5', 'anthropic_messages', '@ai-sdk/anthropic'],
+    ['opencode-zen/deepseek-v4-flash-free', 'openai_chat', '@ai-sdk/openai-compatible'],
+    ['opencode-zen/gpt-5.6-sol', 'openai_responses', '@ai-sdk/openai'],
+    ['opencode-zen/claude-sonnet-4-5', 'anthropic_messages', '@ai-sdk/anthropic'],
     ['opencode-go/deepseek-v4-flash', 'openai_chat', '@ai-sdk/openai-compatible'],
     ['opencode-go/gpt-5.6-luna', 'openai_responses', '@ai-sdk/openai'],
     ['opencode-go/minimax-m3', 'anthropic_messages', '@ai-sdk/anthropic'],
@@ -155,59 +118,15 @@ test('Zen and Go transport metadata is model-specific and fail-closed', () => {
     assert.equal(route.protocol, protocol, model);
     assert.equal(route.package, packageName, model);
   }
-  for (const model of ['opencode/gemini-3.7-flash', 'opencode-go/gemini-3.7-flash', 'opencode/new-model', 'opencode-go/new-model']) {
+  for (const model of [
+    'opencode-zen/gemini-3.7-flash',
+    'opencode-go/gemini-3.7-flash',
+    'opencode-zen/new-model',
+    'opencode-go/new-model',
+  ]) {
     const route = resolveCoderProviderRoute(model);
     assert.equal(route.transportAudited, false, model);
     assert.equal(route.protocol, undefined, model);
-  }
-});
-
-test('published 2026-08-22 Zen and Go endpoint tables are fully audited', () => {
-  const published = {
-    openai_chat: [
-      'opencode/deepseek-v4-pro', 'opencode/deepseek-v4-flash',
-      'opencode/minimax-m3', 'opencode/minimax-m2.7', 'opencode/minimax-m2.5',
-      'opencode/glm-5.2', 'opencode/glm-5.1', 'opencode/glm-5',
-      'opencode/kimi-k2.5', 'opencode/kimi-k2.6', 'opencode/kimi-k2.7-code', 'opencode/kimi-k3',
-      'opencode/big-pickle', 'opencode/x-preview-f-free', 'opencode/mimo-v2.5-free',
-      'opencode/hy3-free', 'opencode/nemotron-3-ultra-free', 'opencode/nemotron-3.5-lightning-free',
-      'opencode-go/glm-5.3', 'opencode-go/glm-5.2', 'opencode-go/glm-5.1',
-      'opencode-go/kimi-k3', 'opencode-go/kimi-k2.7-code', 'opencode-go/kimi-k2.6',
-      'opencode-go/deepseek-v4-pro', 'opencode-go/deepseek-v4-flash',
-      'opencode-go/deepseek-v4-flash-vision-exp', 'opencode-go/mimo-v2.5',
-      'opencode-go/mimo-v2.5-pro', 'opencode-go/hy3', 'opencode-go/ox-alpha-free',
-    ],
-    openai_responses: [
-      'opencode/gpt-5.6-sol', 'opencode/gpt-5.6-terra', 'opencode/gpt-5.6-luna',
-      'opencode/gpt-5.5', 'opencode/gpt-5.5-pro', 'opencode/gpt-5.4',
-      'opencode/gpt-5.4-pro', 'opencode/gpt-5.4-mini', 'opencode/gpt-5.4-nano',
-      'opencode/gpt-5.3-codex', 'opencode/gpt-5.3-codex-spark',
-      'opencode/gpt-5.2', 'opencode/gpt-5.2-codex', 'opencode/gpt-5.1',
-      'opencode/gpt-5.1-codex', 'opencode/gpt-5.1-codex-max', 'opencode/gpt-5.1-codex-mini',
-      'opencode/gpt-5', 'opencode/gpt-5-codex', 'opencode/gpt-5-nano',
-      'opencode/grok-4.6', 'opencode/grok-4.5', 'opencode/grok-build-0.1',
-      'opencode/muse-spark-1.2', 'opencode/muse-spark-1.2-contributor-free',
-      'opencode-go/grok-4.5', 'opencode-go/gpt-5.6-luna',
-      'opencode-go/muse-spark-1.2-contributor',
-    ],
-    anthropic_messages: [
-      'opencode/claude-fable-5', 'opencode/claude-opus-5', 'opencode/claude-opus-4-8',
-      'opencode/claude-opus-4-7', 'opencode/claude-opus-4-6', 'opencode/claude-opus-4-5',
-      'opencode/claude-sonnet-5', 'opencode/claude-sonnet-4-6',
-      'opencode/claude-sonnet-4-5', 'opencode/claude-haiku-4-5',
-      'opencode/qwen3.7-max', 'opencode/qwen3.7-plus',
-      'opencode/qwen3.6-plus', 'opencode/qwen3.5-plus',
-      'opencode-go/minimax-m3', 'opencode-go/minimax-m2.7', 'opencode-go/minimax-m2.5',
-      'opencode-go/qwen3.8-max', 'opencode-go/qwen3.7-max',
-      'opencode-go/qwen3.7-plus', 'opencode-go/qwen3.6-plus',
-    ],
-  };
-  for (const [protocol, models] of Object.entries(published)) {
-    for (const model of models) {
-      const route = resolveCoderProviderRoute(model);
-      assert.equal(route.transportAudited, true, model);
-      assert.equal(route.protocol, protocol, model);
-    }
   }
 });
 

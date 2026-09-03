@@ -2,8 +2,8 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 
 export class IntegrationError extends Error {
   constructor(message, { status, body } = {}) {
@@ -146,27 +146,45 @@ const SUMMARY_SYSTEM =
   'docs, etc.) for a coding agent. Be concise and faithful. Use bullets, ' +
   'preserve IDs/keys/URLs verbatim, and omit fluff.';
 
-export async function summarize({ corpus, question, model: modelInput, maxTokens = 4096 }) {
+export async function summarize({
+  corpus,
+  question,
+  provider,
+  model,
+  engine,
+  effort,
+  maxTokens = 4096,
+}, deps = {}) {
   if (!question) return corpus;
-  const model = resolveModel(modelInput);
-  process.stderr.write(pc.dim(`[triss/summary] model=${model} bytes=${corpus.length}\n`));
-  const resp = await chat({
+  const execute = deps.executeModelTask || executeModelTask;
+  const output = await execute({
+    task: 'integration-summary',
+    provider,
     model,
-    maxTokens,
-    messages: [
-      { role: 'system', content: SUMMARY_SYSTEM },
-      { role: 'user', content: `<data>\n${corpus}\n</data>` },
-      { role: 'user', content: question },
-    ],
-  });
-  const out = resp.choices?.[0]?.message?.content;
-  if (!out) {
-    throw new IntegrationError(
-      'DeepSeek returned empty content. Try larger --max-tokens.',
-    );
+    engine,
+    effort,
+    signal: deps.signal,
+    timeout: deps.timeout,
+    input: {
+      maxOutputTokens: maxTokens,
+      messages: [
+        { role: 'system', content: SUMMARY_SYSTEM },
+        { role: 'user', content: `<data>\n${corpus}\n</data>` },
+        { role: 'user', content: question },
+      ],
+      label: 'triss/summary',
+    },
+  }, deps.runtimeDeps);
+  process.stderr.write(
+    pc.dim(
+      `[triss/summary] provider=${output.resolved.providerId} model=${output.resolved.publicModel} bytes=${corpus.length}\n`,
+    ),
+  );
+  if (!output.result.text) {
+    throw new IntegrationError('Model returned empty content. Try larger --max-tokens.');
   }
-  process.stderr.write(pc.dim(reportUsage(resp, 'triss/summary') + '\n'));
-  return out;
+  process.stderr.write(pc.dim(reportNormalizedUsage(output.result, 'triss/summary') + '\n'));
+  return output.result.text;
 }
 
 export function printResult(text, { json = false } = {}) {

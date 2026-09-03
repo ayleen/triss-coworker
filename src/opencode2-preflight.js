@@ -16,16 +16,10 @@
  *      advertised routes AND have a deterministic supported-beta translation
  *      fixture; an unproven route fails closed even when selected through
  *      persistent configuration rather than a one-shot flag.
- *   2. PROVIDER GATE: the effective provider projection for the selected
- *      model must match the fixture exactly — provider id, endpoint/package/
- *      settings, the credential placeholder — and contain no unrelated
- *      providers a project layer smuggled in. Otherwise untrusted repository
- *      configuration could redirect the forwarded API key to an attacker.
- *      The managed baseURL must equal the Triss worker profile
- *      endpoint EXACTLY (a same-package/same-placeholder override with an
- *      attacker URL failed before), `provider.<id>.api` (higher V1 migration
- *      precedence than options.baseURL) is tracked, and model-level
- *      transport overrides (models.<id>.provider.{api,npm}) are rejected.
+ *   2. PROVIDER GATE: the effective provider projection must match the
+ *      selected fixture exactly and contain no unrelated provider definition.
+ *      The managed endpoint, package, credential placeholder, and model-level
+ *      transport fields are audited before credentials are forwarded.
  *   3. PERMISSION GATE: protected_proxy requires the final ordered permission
  *      policy for the primary agent and every reachable subagent to be deny-
  *      everything for shell. best_effort_raw is an explicit operator opt-in:
@@ -67,52 +61,40 @@ import { enumerateOpenCodeSources, parseOpenCodeDocument } from './opencode-conf
 // a config layer DEFINING that provider id is an override and fails closed.
 
 export const OPENCODE2_ROUTE_FIXTURES = Object.freeze({
-  'triss-worker': {
-    credentialEnv: 'TRISS_WORKER_API_KEY',
+  'openai-compatible': {
+    credentialEnv: 'TRISS_OPENAI_COMPATIBLE_API_KEY',
     managedProvider: true,
-    fixtureComment: 'Managed V1 shape: npm @ai-sdk/openai-compatible + options.{baseURL,apiKey:{env:T...}}; baseURL pinned to the Triss worker profile endpoint',
-  },
-  'zai-coding-plan': {
-    credentialEnv: 'ZHIPU_API_KEY',
-    managedProvider: false,
-    expectedProviders: null,
-    fixtureComment: 'Engine built-in zai-coding-plan route; a defining layer is an override',
+    fixtureComment: 'Managed OpenAI-compatible provider with an exact endpoint and env credential placeholder',
   },
   zai: {
     credentialEnv: 'ZHIPU_API_KEY',
     managedProvider: false,
     expectedProviders: null,
-    fixtureComment: 'Engine built-in zai route; a defining layer is an override',
+    fixtureComment: 'Canonical Z.A.I route',
   },
-  opencode: {
+  'opencode-zen': {
     credentialEnv: 'OPENCODE_API_KEY',
     managedProvider: false,
     expectedProviders: null,
-    fixtureComment: 'Engine built-in opencode zen route; a defining layer is an override',
+    fixtureComment: 'Canonical OpenCode Zen route',
   },
   'opencode-go': {
     credentialEnv: 'OPENCODE_API_KEY',
     managedProvider: false,
     expectedProviders: null,
-    fixtureComment: 'Engine built-in opencode-go route; a defining layer is an override',
+    fixtureComment: 'Canonical OpenCode Go route',
   },
-  moonshotai: {
+  moonshot: {
     credentialEnv: 'MOONSHOT_API_KEY',
     managedProvider: false,
     expectedProviders: null,
-    fixtureComment: 'Engine built-in moonshotai route; a defining layer is an override',
-  },
-  'moonshotai-cn': {
-    credentialEnv: 'MOONSHOT_API_KEY',
-    managedProvider: false,
-    expectedProviders: null,
-    fixtureComment: 'Engine built-in moonshotai-cn route; a defining layer is an override',
+    fixtureComment: 'Canonical Moonshot route',
   },
   'kimi-for-coding': {
     credentialEnv: 'KIMI_API_KEY',
     managedProvider: false,
     expectedProviders: null,
-    fixtureComment: 'Engine built-in kimi-for-coding route; a defining layer is an override',
+    fixtureComment: 'Canonical Kimi for Coding route',
   },
 });
 
@@ -403,14 +385,9 @@ export function projectEffectiveProviders({ layerDocs } = {}) {
 }
 
 /**
- * The managed triss-worker provider shape written by `triss coder init`
- * (workerProviderDefinition). The audit passes in the expected
- * worker profile (exact baseURL from the live Triss worker config) and the
- * definition must match it exactly — package id, settings keys, the
- * credential placeholder, the baseURL value, AND no provider.api /
- * model-level transport override that could redirect the key.
+ * Validate the managed OpenAI-compatible provider translation exactly.
  */
-export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
+export function isManagedOpenAICompatibleTranslation(translated, expectedBaseURL) {
   if (!translated || typeof translated !== 'object') return { ok: false, reason: 'not-an-object' };
   if (translated.api != null) return { ok: false, reason: 'provider-api-override' };
   if (translated.package !== 'aisdk:@ai-sdk/openai-compatible') return { ok: false, reason: 'package' };
@@ -418,7 +395,7 @@ export function isManagedTrissWorkerTranslation(translated, expectedBaseURL) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { ok: false, reason: 'settings-shape' };
   const keys = Object.keys(settings).sort();
   if (keys.length !== 2 || keys[0] !== 'apiKey' || keys[1] !== 'baseURL') return { ok: false, reason: 'settings-keys' };
-  if (settings.apiKey !== '{env:TRISS_WORKER_API_KEY}') return { ok: false, reason: 'credential-placeholder' };
+  if (settings.apiKey !== '{env:TRISS_OPENAI_COMPATIBLE_API_KEY}') return { ok: false, reason: 'credential-placeholder' };
   if (typeof settings.baseURL !== 'string') return { ok: false, reason: 'baseurl-type' };
   if (expectedBaseURL != null && settings.baseURL !== expectedBaseURL) {
     return { ok: false, reason: 'baseurl-value', actual: settings.baseURL, expected: expectedBaseURL };
@@ -585,13 +562,9 @@ export function assertV2DocumentShape(doc, layerPath, { credentialMode } = {}) {
  * @param {object} input
  * @param {string} input.cwd — the EXACT child runtime directory (isolation
  *   worktree or resolved --cwd), never a test seam.
- * @param {string} input.modelUsed — the finally selected model (--model,
- *   TRISS_CODER_MODEL, or the configured default; the gate applies to the
- *   final value regardless of how it was chosen).
- * @param {string} [input.expectedWorkerBaseURL] — the Triss worker profile
- *   endpoint for this run; managed-provider baseURL must equal it exactly
- *   endpoint for this run. A same-shape override with an attacker URL must
- *   fail before credential forwarding.
+ * @param {string} input.modelUsed — the finally selected canonical model
+ * @param {string} [input.expectedProviderBaseURL] — the selected provider
+ *   endpoint for this run; managed-provider baseURL must equal it exactly.
  * @param {object} [input.deps] — { enumerate } seams for tests.
  * @returns {{ sources, projection, policy }} for envelope/logging use.
  * @throws on ANY gate failure, before a credential is forwarded.
@@ -665,7 +638,7 @@ export function verifyOpenCode2ContentHashes(contentHashes) {
   }
 }
 
-export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBaseURL, credentialMode, allowManagedProviderAbsent = false }, deps = {}) {
+export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedProviderBaseURL, credentialMode, allowManagedProviderAbsent = false }, deps = {}) {
   if (!cwd) throw new Error('auditOpenCode2Run: cwd is required');
   if (!modelUsed) throw new Error('auditOpenCode2Run: modelUsed is required');
   if (credentialMode !== 'protected_proxy' && credentialMode !== 'best_effort_raw') {
@@ -688,9 +661,8 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
   const { providers, sourceLayers } = projectEffectiveProviders({ layerDocs });
   // Invariant: a provider definition's npm/package field tells the
   // engine to LOAD CODE inside the credential-bearing process — an unrelated
-  // provider id is as much an executable surface as a plugin. The beta gate
-  // allows exactly ONE provider definition: the managed triss-worker fixture
-  // (worker route) or none at all (built-in routes).
+  // An unrelated provider definition is an executable surface inside the
+  // credential-bearing process; only the selected canonical route is allowed.
   for (const id of Object.keys(providers)) {
     if (id !== prefix) {
       throw new Error(
@@ -710,18 +682,18 @@ export function auditOpenCode2Run({ cwd, modelUsed, agentName, expectedWorkerBas
     if ((!translated || Object.keys(translated).length === 0) && !allowManagedProviderAbsent) {
       throw new Error(
         `OpenCode 2 preflight aborted: the managed provider "${prefix}" is not defined in any auditable ` +
-          'config layer — run `triss coder init --engine opencode --provider worker` first.',
+          'config layer — run `triss coder init --engine opencode --provider openai-compatible` first.',
       );
     }
     const check = !translated || Object.keys(translated).length === 0
       ? { ok: allowManagedProviderAbsent }
-      : isManagedTrissWorkerTranslation(translated, expectedWorkerBaseURL);
+      : isManagedOpenAICompatibleTranslation(translated, expectedProviderBaseURL);
     if (!check.ok) {
       const detail = check.actual != null ? ` (baseURL "${check.actual}" != expected "${check.expected}")` : '';
       throw new Error(
         `OpenCode 2 preflight aborted: provider["${prefix}"] in ${sourceLayers[prefix]} does not match the ` +
           `managed translation fixture (${check.reason}${detail ? ': ' + detail : ''}). Remove the override or ` +
-          're-run `triss coder init`. Triss refuses to forward TRISS_WORKER_API_KEY to a redirected endpoint.',
+          're-run `triss coder init`. Triss refuses to forward the selected credential to a redirected endpoint.',
       );
     }
   } else if (Object.prototype.hasOwnProperty.call(providers, prefix)) {

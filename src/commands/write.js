@@ -4,8 +4,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import pc from 'picocolors';
-import { chat, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { assertSafePath } from '../safety.js';
 import { positiveIntegerOption } from '../option-validation.js';
 
@@ -15,7 +15,11 @@ const SYSTEM_PROMPT =
   'contents.';
 
 export async function runWrite(opts) {
-  const { spec, context, target, maxTokens, model: modelInput } = opts;
+  return runWriteWithDeps(opts);
+}
+
+export async function runWriteWithDeps(opts, deps = {}) {
+  const { spec, context, target, maxTokens } = opts;
   if (!spec) throw new Error('--spec is required');
   if (!target) throw new Error('--target is required');
   const validatedMaxTokens = positiveIntegerOption(maxTokens, '--max-tokens', 16384);
@@ -23,33 +27,40 @@ export async function runWrite(opts) {
   assertSafePath(target, { kind: 'write' });
   if (context) assertSafePath(context, { kind: 'read' });
 
-  const model = resolveModel(modelInput);
   const ctx = context ? `<reference path='${context}'>\n${readFileSync(context, 'utf8')}\n</reference>\n` : '';
+  const execute = deps.executeModelTask || executeModelTask;
 
-  process.stderr.write(pc.dim(`[triss/write] model=${model} target=${target}\n`));
+  const output = await execute({
+    task: 'write',
+    provider: opts.provider,
+    model: opts.model,
+    engine: opts.engine,
+    effort: opts.effort,
+    signal: deps.signal,
+    timeout: opts.timeoutMs,
+    input: {
+      maxOutputTokens: validatedMaxTokens,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: `${ctx}Write: ${spec}` },
+      ],
+      label: 'triss/write',
+    },
+  }, deps.runtimeDeps);
+  process.stderr.write(
+    pc.dim(
+      `[triss/write] provider=${output.resolved.providerId} model=${output.resolved.publicModel} target=${target}\n`,
+    ),
+  );
+  let content = output.result.text;
 
-  const resp = await chat({
-    model,
-    maxTokens: validatedMaxTokens,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `${ctx}Write: ${spec}` },
-    ],
-  });
-
-  let content = resp.choices?.[0]?.message?.content;
-  if (!content) {
-    process.stderr.write(
-      pc.red('[triss/write] empty response — try --max-tokens 32768\n'),
-    );
-    process.exit(1);
-  }
+  if (!content) throw new Error('[triss/write] model returned empty content — try --max-tokens 32768');
   content = stripFences(content);
 
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content);
   process.stderr.write(pc.dim(`Wrote ${target} (${content.length} chars)\n`));
-  process.stderr.write(pc.dim(reportUsage(resp, 'triss/write') + '\n'));
+  process.stderr.write(pc.dim(reportNormalizedUsage(output.result, 'triss/write') + '\n'));
 }
 
 function stripFences(s) {

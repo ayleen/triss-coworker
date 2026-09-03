@@ -60,21 +60,21 @@ export default {
     claude: CLAUDE_INSTRUCTIONS,
     codex: CLAUDE_INSTRUCTIONS,
   },
-  register(program, { wrap }) {
-    program
+  register(program, { wrap, addModelSelectionOptions }) {
+    const search = program
       .command('search <term>')
-      .description('Full-text search; pass --question to summarise the result list')
+      .description('Full-text search; pass --question to summarize the result list')
       .option('-l, --limit <n>', 'max results', '50')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(search)
       .option('--json', 'raw JSON output')
       .action(wrap(async (term, opts) => searchCmd({ term, ...opts })));
 
-    program
+    const issue = program
       .command('issue <id>')
       .description('Read an issue by identifier (TEAM-42) or UUID')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(issue)
       .option('--with-comments', 'include comments in the summary corpus')
       .option('--json', 'raw JSON output')
       .action(wrap(issueCmd));
@@ -111,12 +111,12 @@ export default {
       .option('--json', 'print created issue as JSON')
       .action(wrap(createCmd));
 
-    program
+    const comments = program
       .command('comments <id>')
-      .description('List comments (with --question summarise) or post one with --post')
+      .description('List comments (with --question summarize) or post one with --post')
       .option('--post <text>', 'post a new comment (markdown)')
-      .option('-q, --question <text>', 'summarise via DeepSeek')
-      .option('-m, --model <name>', 'flash | pro | <model id>')
+      .option('-q, --question <text>', 'summarize through the configured provider runtime');
+    addModelSelectionOptions(comments)
       .option('--json', 'raw JSON output')
       .action(wrap(commentsCmd));
 

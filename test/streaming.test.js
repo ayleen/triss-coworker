@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldStream } from '../src/commands/chat.js';
-import { assembleStreamResponse } from '../src/client.js';
+import { assembleStreamResponse } from '../src/transports/result.js';
 
 test('STR-03: shouldStream is false when --no-stream is set', () => {
   assert.equal(shouldStream({ noStream: true }), false);

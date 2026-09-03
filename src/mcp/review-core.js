@@ -33,6 +33,8 @@ export async function runReviewCore({
   question,
   provider,
   model,
+  engine,
+  effort,
   maxTokens,
   timeoutMs,
   responseFormat: responseFormatInput = 'text',
@@ -200,6 +202,8 @@ export async function runReviewCore({
         const response = await callModel({
           provider,
           model,
+          engine,
+          effort,
           maxTokens: validatedMaxTokens,
           timeoutMs,
           purpose: 'review',

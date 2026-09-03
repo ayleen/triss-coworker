@@ -2,8 +2,8 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { chat, chatStream, reportUsage } from '../client.js';
-import { resolveModel } from '../models.js';
+import { executeModelTask } from '../model-runtime.js';
+import { reportNormalizedUsage } from '../model-usage.js';
 import { readStdin } from '../secrets.js';
 import { positiveIntegerOption } from '../option-validation.js';
 
@@ -16,6 +16,10 @@ export function validateChatOptions(opts = {}, prompt) {
 }
 
 export async function runChat(prompt, opts) {
+  return runChatWithDeps(prompt, opts);
+}
+
+export async function runChatWithDeps(prompt, opts, deps = {}) {
   const { maxTokens } = validateChatOptions(opts, prompt);
   let resolved = prompt;
   if (opts.stdin) {
@@ -30,39 +34,44 @@ export async function runChat(prompt, opts) {
     throw new Error('Pass a prompt as argument or via --stdin');
   }
 
-  const model = resolveModel(opts.model);
   const messages = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
   messages.push({ role: 'user', content: resolved });
 
-  process.stderr.write(pc.dim(`[triss/chat] model=${model} prompt-bytes=${resolved.length}\n`));
+  process.stderr.write(pc.dim(`[triss/chat] prompt-bytes=${resolved.length}\n`));
 
   const useStream = shouldStream(opts);
-  const resp = useStream
-    ? await chatStream({
-        model,
-        maxTokens,
-        messages,
-        label: 'triss/chat',
-        onChunk: (d) => process.stdout.write(d),
-      })
-    : await chat({
-        model,
-        maxTokens,
-        messages,
-        label: 'triss/chat',
-      });
+  const execute = deps.executeModelTask || executeModelTask;
+  const { resolved: selection, result } = await execute({
+    task: 'chat',
+    provider: opts.provider,
+    model: opts.model,
+    engine: opts.engine,
+    effort: opts.effort,
+    signal: deps.signal,
+    timeout: opts.timeoutMs,
+    input: {
+      messages,
+      maxOutputTokens: maxTokens,
+      stream: useStream,
+      onText: useStream ? (chunk) => process.stdout.write(chunk) : undefined,
+      onReasoning: deps.onReasoning,
+      label: 'triss/chat',
+    },
+  }, deps.runtimeDeps);
 
-  const out = resp.choices?.[0]?.message?.content;
+  const out = result.text;
   if (!out) {
-    process.stderr.write(
-      pc.red('[triss/chat] empty response — try larger --max-tokens (pro models reason internally)\n'),
-    );
-    process.exit(1);
+    throw new Error('[triss/chat] model returned empty content — try larger --max-tokens');
   }
   if (!useStream) process.stdout.write(out + '\n');
   else process.stdout.write('\n');
-  process.stderr.write(pc.dim('\n' + reportUsage(resp, 'triss/chat') + '\n'));
+  process.stderr.write(
+    pc.dim(
+      `\n${reportNormalizedUsage(result, 'triss/chat')} provider=${selection.providerId} model=${selection.publicModel}\n`,
+    ),
+  );
+  return out;
 }
 
 export function shouldStream(opts) {

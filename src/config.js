@@ -5,21 +5,7 @@ import dotenv from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles } from './secrets.js';
 
-// Every reloadable setting served by the snapshot below — provider values plus
-// the DEPRECATED legacy credential-mode acknowledgement (read solely to emit a
-// one-time migration warning; it never selects behavior anymore).
-const PROVIDER_ENV_KEYS = [
-  'TRISS_CODER_MODEL',
-  'TRISS_REQUEST_TIMEOUT_MS',
-  'ZHIPU_API_KEY',
-  'MOONSHOT_API_KEY',
-  'TRISS_KIMI_BASE_URL',
-  'TRISS_WORKER_API_KEY',
-  'TRISS_WORKER_BASE_URL',
-  'TRISS_WORKER_FLASH_MODEL',
-  'TRISS_WORKER_PRO_MODEL',
-  'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION',
-];
+const PROVIDER_ENV_KEYS = ['TRISS_REQUEST_TIMEOUT_MS'];
 
 // This snapshot is taken before this module ever calls loadEnvFiles(), so it
 // contains only values inherited by the process. The reloadable provider path
@@ -72,59 +58,6 @@ function readProviderEnvSnapshot({
   return { pick };
 }
 
-export function readGlmConfigSnapshot(seams = {}) {
-  const { pick } = readProviderEnvSnapshot(seams);
-  return {
-    coderModel: pick('TRISS_CODER_MODEL'),
-    apiKey: pick('ZHIPU_API_KEY'),
-  };
-}
-
-export function readKimiConfigSnapshot(seams = {}) {
-  const { pick } = readProviderEnvSnapshot(seams);
-  return {
-    apiKey: pick('MOONSHOT_API_KEY'),
-    baseUrl: pick('TRISS_KIMI_BASE_URL'),
-  };
-}
-
-export function captureWorkerShellSnapshot() {
-  return Object.fromEntries(
-    [
-      'TRISS_WORKER_API_KEY',
-      'TRISS_WORKER_BASE_URL',
-      'TRISS_WORKER_FLASH_MODEL',
-      'TRISS_WORKER_PRO_MODEL',
-    ].map((key) => [key, process.env[key]]),
-  );
-}
-
-export function readWorkerConfigSnapshot({ scope = 'effective', ...seams } = {}) {
-  const { pick } = readProviderEnvSnapshot({ ...seams, scope });
-  return {
-    apiKey: pick('TRISS_WORKER_API_KEY'),
-    baseUrl: pick('TRISS_WORKER_BASE_URL'),
-    flashModel: pick('TRISS_WORKER_FLASH_MODEL'),
-    proModel: pick('TRISS_WORKER_PRO_MODEL'),
-  };
-}
-
-export const LEGACY_CODER_BEST_EFFORT_ENV_KEY = 'TRISS_CODER_ALLOW_BEST_EFFORT_ISOLATION';
-
-// DEPRECATED migration reader. Credential handling no longer depends on this
-// variable at all: --protect-credentials selects protected_proxy and the
-// default is best_effort_raw regardless of what the old acknowledgement said
-// ('1' is an accepted no-op; '0' must NOT enable protected mode). This exists
-// only so a command can detect a still-configured legacy value and emit a
-// one-time migration warning before the variable is removed in a cleanup
-// release. Same snapshot rules as before: an immutable parent environment
-// plus a fresh read of the requested file scope — never process.env after
-// loadEnvFiles().
-export function readLegacyCoderBestEffortEnv({ scope = 'effective', ...seams } = {}) {
-  const key = LEGACY_CODER_BEST_EFFORT_ENV_KEY;
-  const { pick } = readProviderEnvSnapshot({ ...seams, scope, keys: [key] });
-  return pick(key);
-}
 
 // Node timers clamp values above 2^31 - 1 ms, so reject those alongside
 // malformed and non-positive values. Returning undefined deliberately leaves
@@ -139,22 +72,6 @@ export function requestTimeoutMs(seams = {}) {
   return Number.isSafeInteger(timeout) && timeout <= 2_147_483_647 ? timeout : undefined;
 }
 
-export function getConfig() {
-  loadEnvFiles();
-  const apiKey = process.env.TRISS_WORKER_API_KEY || '';
-  return {
-    apiKey,
-    baseUrl: process.env.TRISS_WORKER_BASE_URL || 'https://api.deepseek.com/v1',
-    flashModel: process.env.TRISS_WORKER_FLASH_MODEL || 'deepseek-v4-flash',
-    proModel: process.env.TRISS_WORKER_PRO_MODEL || 'deepseek-v4-pro',
-    defaultPreset: (process.env.TRISS_DEFAULT_MODEL || 'flash').toLowerCase(),
-    envSources: {
-      // Backwards-compatible shape for `triss status`.
-      userEnv: existsForScope('global'),
-      projectEnv: existsForScope('local'),
-    },
-  };
-}
 
 // ─── review limit configuration (shared contract) ────────────────────
 
@@ -255,41 +172,4 @@ export function reviewLimitConfig(seams = {}) {
     };
   }
   return { limits: parsed, warning: null };
-}
-
-function existsForScope(scope) {
-  const f = activeEnvFiles().find((x) => x.scope === scope);
-  return f && f.exists ? f.path : null;
-}
-
-export function requireApiKey(cfg = getConfig()) {
-  if (!cfg.apiKey) {
-    const msg =
-      'No worker API key found.\n' +
-      'Run `triss config wizard worker` to set one, or export TRISS_WORKER_API_KEY.';
-    throw new Error(msg);
-  }
-  return cfg;
-}
-
-export function requireGlmApiKey() {
-  const { apiKey } = readGlmConfigSnapshot();
-  if (!apiKey) {
-    throw new Error(
-      'No GLM API key found.\n' +
-        'Run `triss config set ZHIPU_API_KEY` to set one, or export ZHIPU_API_KEY.',
-    );
-  }
-  return apiKey;
-}
-
-export function requireKimiApiKey() {
-  const { apiKey } = readKimiConfigSnapshot();
-  if (!apiKey) {
-    throw new Error(
-      'No Kimi (Moonshot) API key found.\n' +
-        'Run `triss config set MOONSHOT_API_KEY` to set one, or export MOONSHOT_API_KEY.',
-    );
-  }
-  return apiKey;
 }

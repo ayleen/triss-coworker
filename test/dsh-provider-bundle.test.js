@@ -111,6 +111,7 @@ test('workspace declares the companion without entangling the root package', () 
   assert.deepEqual(root.files, [
     'bin/',
     'src/',
+    'ARCHITECTURE.md',
     'templates/',
     'docs/configuration.md',
     'docs/mcp.md',
@@ -121,6 +122,7 @@ test('workspace declares the companion without entangling the root package', () 
     'docs/reliable-delegation-contract.md',
     'docs/data-flows.md',
     'docs/compatibility.md',
+    'docs/extending.md',
     'docs/deprecations.md',
     'docs/troubleshooting.md',
     'docs/integrations/',
@@ -128,6 +130,7 @@ test('workspace declares the companion without entangling the root package', () 
     '!docs/website/',
     'README.md',
     'CHANGELOG.md',
+    'SECURITY.md',
     'LICENSE',
     'THIRD_PARTY_NOTICES',
   ]);

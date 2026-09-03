@@ -61,10 +61,10 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
             </div>
           </div>
           <div>
-            <div style="font-size: 14px; color: var(--color-text-secondary); margin-bottom: 11px;">Worker</div>
+            <div style="font-size: 14px; color: var(--color-text-secondary); margin-bottom: 11px;">Delegated model class</div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-              <button id="c-flash" aria-pressed="true" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-accent); color: var(--color-accent);">flash</button>
-              <button id="c-pro" aria-pressed="false" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">pro</button>
+              <button id="c-standard" aria-pressed="true" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-accent); color: var(--color-accent);">standard</button>
+              <button id="c-advanced" aria-pressed="false" style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">advanced</button>
             </div>
             <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">DeepSeek off-peak: 01:00–04:00 and 06:00–10:00 UTC peak, rest off-peak 50% off — calculator uses off-peak.</div>
           </div>
@@ -74,7 +74,7 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
               <span id="c-cache" style="font-family: var(--font-mono); font-size: 14px; color: var(--color-text-heading);">77%</span>
             </div>
             <input id="c-cache-slider" type="range" min="0" max="99" step="1" value="77" style="width: 100%;" aria-label="Cache hit rate" />
-            <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">average 90–95% now, week 18.5% overall (28.9% on pro)</div>
+            <div style="font-size: 11.5px; color: var(--color-text-label); margin-top: 6px;">average 90–95% now, week 18.5% overall (28.9% on the advanced model)</div>
           </div>
         </div>
         <div style="padding: 28px; background: #08090b; display: flex; flex-direction: column; gap: 18px;">
@@ -96,11 +96,11 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
     <!-- Measured week -->
     <div style="margin-top: 48px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;">
       <h2 style="margin: 0; font-size: 18px; color: var(--color-text-heading);">One measured week — not a projection</h2>
-      <p style="margin: 8px 0 0; color: var(--color-text-secondary); font-size: 13.5px;">209 calls on the Triss codebase itself. Flash for bulk reads, pro for reviews.</p>
+      <p style="margin: 8px 0 0; color: var(--color-text-secondary); font-size: 13.5px;">209 calls on the Triss codebase itself. A lower-cost model handled bulk reads; a higher-capability model handled reviews.</p>
       <div class="cost-table cost-table--measured" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 18px; font-family: var(--font-mono); font-size: 12.5px;">
         <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label);">metric</div>
-        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">pro</div>
-        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">flash</div>
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">advanced</div>
+        <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">standard</div>
         <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">total</div>
         <div style="background: #0f1114; padding: 10px; color: var(--color-text);">Requests</div>
         <div style="background: #0f1114; padding: 10px; text-align: right; color: var(--color-text);">143</div>
@@ -128,7 +128,7 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
         <div style="background: var(--color-bg-raised); padding: 10px; text-align: right; color: var(--color-accent);">$2.22</div>
       </div>
       <p style="margin: 14px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">
-        <span style="color: var(--color-accent); font-weight: 600;">Cache read 1.08M</span> — 18.5% of input tokens were cache hits (mostly on pro). Without cache the week would have cost ≈$2.69 instead of $2.22. Cache is the main lever after delegation.
+        <span style="color: var(--color-accent); font-weight: 600;">Cache read 1.08M</span> — 18.5% of input tokens were cache hits (mostly on the advanced model). Without cache the week would have cost ≈$2.69 instead of $2.22. Cache is the main lever after delegation.
       </p>
 
       <div style="margin-top: 32px; border: 1px solid var(--color-border); background: var(--color-bg); padding: 20px;">
@@ -136,17 +136,17 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
         <p style="margin: 6px 0 0; font-size: 12px; color: var(--color-text-label);">Source: DeepSeek's <a class="source-link" href="https://api-docs.deepseek.com/news/news260813">official pricing notice</a> and <a class="source-link" href="https://api-docs.deepseek.com/img/v4_260813_price_en.png">price card</a>; effective 2026-08-16 16:00 UTC. CLI source: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">src/usage.js DEEPSEEK_PRICING</code> — override via <code style="font-family: var(--font-mono); color: var(--color-text-muted);">TRISS_PRICE_&lt;MODEL&gt;</code>. Peak: 01:00–04:00/06:00–10:00 UTC; rest off-peak.</p>
         <div class="cost-table cost-table--pricing" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 14px; font-family: var(--font-mono); font-size: 12px;">
           <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-text-label);">metric</div>
-          <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-accent); text-align: right;">flash — $0.22 / $0.007 / $0.66</div>
-          <div style="background: var(--color-bg-raised); padding: 8px; color: #e0a458; text-align: right;">pro — $0.66 / $0.022 / $1.98</div>
+          <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-accent); text-align: right;">standard — $0.22 / $0.007 / $0.66</div>
+          <div style="background: var(--color-bg-raised); padding: 8px; color: #e0a458; text-align: right;">advanced — $0.66 / $0.022 / $1.98</div>
           <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">input uncached / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.22</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.66</div>
           <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">cache read / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right; color: var(--color-accent);">$0.007</div><div style="background: var(--color-bg); padding: 8px; text-align: right; color: var(--color-accent);" title="0.022">$0.022</div>
           <div style="background: var(--color-bg); padding: 8px; color: var(--color-text-muted);">output / 1M</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$0.66</div><div style="background: var(--color-bg); padding: 8px; text-align: right;">$1.98</div>
         </div>
-        <p style="margin: 10px 0 0; font-size: 11.5px; color: var(--color-text-label);">Calculator is honest: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">workerCost = IN*(1-hit)*inputPrice + IN*hit*cachePrice + OUT*outputPrice</code> — previously cache was ignored and averaged as $0.0052/$0.0131. <span style="color: var(--color-text-muted);">Cache write for DeepSeek = $0.</span></p>
+        <p style="margin: 10px 0 0; font-size: 11.5px; color: var(--color-text-label);">Calculator is honest: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">providerCost = IN*(1-hit)*inputPrice + IN*hit*cachePrice + OUT*outputPrice</code> — previously cache was ignored and averaged as $0.0052/$0.0131. <span style="color: var(--color-text-muted);">Cache write for DeepSeek = $0.</span></p>
       </div>
       <div style="margin-top: 16px; display: flex; gap: 12px; font-size: 12.5px; flex-wrap: wrap;">
-        <span style="background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 6px 10px; font-family: var(--font-mono);">Worker avg $0.0106/call measured</span>
-        <span style="background: var(--color-accent); color: #0b0d10; padding: 6px 10px; font-family: var(--font-mono);">DeepSeek flash off-peak $0.22/$0.007/$0.66 per 1M (peak $0.44/$0.014/$1.32)</span>
+        <span style="background: var(--color-bg-code); border: 1px solid var(--color-border-strong); padding: 6px 10px; font-family: var(--font-mono);">Provider avg $0.0106/call measured</span>
+        <span style="background: var(--color-accent); color: #0b0d10; padding: 6px 10px; font-family: var(--font-mono);">DeepSeek standard off-peak $0.22/$0.007/$0.66 per 1M (peak $0.44/$0.014/$1.32)</span>
       </div>
     </div>
 

@@ -22,7 +22,6 @@ const {
   normalizeUsageRecord,
   summarize,
 } = await import('../src/usage.js');
-const { reportUsage } = await import('../src/client.js');
 const { renderUsage } = await import('../src/commands/usage.js');
 const { stripAnsi } = await import('./_ansi.js');
 
@@ -111,20 +110,6 @@ test('a non-zero legacy plan override stays evidence instead of becoming a known
   assert.equal(record.cost.legacy_estimate_usd, 0.0001);
 });
 
-test('per-call output keeps the authoritative total when the atomic split disagrees', () => {
-  const line = reportUsage({
-    usage: {
-      prompt_tokens: 1000,
-      prompt_cache_miss_tokens: 800,
-      prompt_cache_hit_tokens: 300,
-      completion_tokens: 50,
-      total_tokens: 1050,
-    },
-    choices: [{ finish_reason: 'stop' }],
-  }, 'triss/ask', { provider: 'deepseek' });
-  assert.match(line, /1,000 input \(split inconsistent: 800 uncached input \+ 300 cache-read\)/);
-  assert.doesNotMatch(line, /^\[triss\/ask: 800 uncached input \+ 300 cache-read \//);
-});
 
 test('aggregate output keeps the authoritative total and marks an inconsistent split', () => {
   const records = [{

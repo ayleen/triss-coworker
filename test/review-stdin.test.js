@@ -8,8 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runReviewWithDeps } from '../src/commands/review.js';
-import { assembleStreamResponse } from '../src/client.js';
-import { glmReviewMaxTokens, GLM_REVIEW_TIMEOUT_MS } from '../src/review-defaults.js';
+import { assembleStreamResponse } from '../src/transports/result.js';
 import { gitDiff } from '../src/git.js';
 import { stripAnsi } from './_ansi.js';
 
@@ -22,7 +21,7 @@ function makeDeps(raw, events = {}) {
   events.streams ??= [];
   events.linkedIssueCalls ??= [];
   events.stdinOptions ??= [];
-  return {
+  const deps = {
     isTTY: false,
     reviewBoundaryId: 'test-boundary',
     readStdin: async (options) => {
@@ -31,8 +30,7 @@ function makeDeps(raw, events = {}) {
       return raw;
     },
     resolveModelRequest(input) {
-      events.resolutions.push(input);
-      return { provider: input.provider || 'worker', model: input.model || 'pro' };
+      return { provider: input.provider || 'openai-compatible', model: input.model || 'test-model' };
     },
     async chat(input) {
       events.chats.push(input);
@@ -48,6 +46,61 @@ function makeDeps(raw, events = {}) {
       return '<linked-issue source="test">injected</linked-issue>';
     },
   };
+  deps.runtimeDeps = {
+    snapshot: {},
+    resolveRequest(input) {
+      const selectionInput = { provider: input.provider, model: input.model };
+      events.resolutions.push(selectionInput);
+      const selection = deps.resolveModelRequest(selectionInput);
+      return {
+        providerId: selection.provider,
+        modelId: selection.model,
+        engine: 'direct',
+        effort: input.effort ?? null,
+        route: {
+          providerId: selection.provider,
+          modelId: selection.model,
+          transport: 'openai-chat',
+          credential: { value: 'test-key' },
+          endpoint: { value: 'https://example.test/v1' },
+        },
+      };
+    },
+    async executeTransport(request) {
+      const input = {
+        ...request,
+        provider: request.route.providerId,
+        model: request.route.modelId,
+        maxTokens: request.maxOutputTokens,
+        ...(request.timeout !== undefined ? { timeoutMs: request.timeout } : {}),
+        onChunk: request.onText,
+      };
+      const response = request.stream
+        ? await deps.chatStream(input)
+        : await deps.chat(input);
+      const choice = response?.choices?.[0] || {};
+      const message = choice.message || {};
+      const usage = response?.usage || {};
+      return {
+        text: response?.final_text ?? message.content ?? '',
+        reasoning: response?.reasoning_content ?? message.reasoning_content ?? '',
+        finishReason: response?.finish_reason ?? choice.finish_reason ?? null,
+        usage: response?.usage ? {
+          inputTokens: usage.input_tokens ?? usage.prompt_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? usage.completion_tokens ?? 0,
+          cacheReadTokens: usage.cache_read_tokens ?? 0,
+          cacheWriteTokens: usage.cache_write_tokens ?? 0,
+          totalTokens: usage.total_tokens ?? (
+            (usage.input_tokens ?? usage.prompt_tokens ?? 0) +
+            (usage.output_tokens ?? usage.completion_tokens ?? 0)
+          ),
+        } : null,
+        rawMetadata: { response },
+      };
+    },
+    recordUsage: false,
+  };
+  return deps;
 }
 
 async function captureOutput(fn) {
@@ -118,7 +171,7 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
     process.stdout.write = () => true;
     let diagnostic = '';
     process.stderr.write = (chunk) => { diagnostic += String(chunk); return true; };
-    await runReviewWithDeps('42', { provider: 'glm', model: 'pro', noStream: true, issue: 'PROJ-42' }, {
+    await runReviewWithDeps('42', { provider: 'zai', model: 'glm-5.2', noStream: true, issue: 'PROJ-42' }, {
       acquireScopedDiff: async () => ({
         ok: true,
         diff: 'diff --git a/pr.js b/pr.js\\n--- a/pr.js\\n+++ b/pr.js\\n@@ -1 +1 @@\\n+export const reviewed = true;\\n',
@@ -127,14 +180,20 @@ test('REV-STDIN-PR-01: PR mode keeps metadata and the full untrusted-data review
         changed_files: ['pr.js'],
         unmatched: [],
       }),
-      resolveModelRequest: (input) => ({ provider: input.provider, model: 'glm-5.2' }),
       loadLinkedIssue: async (key) => {
         linkedIssue = key;
         return '<linked-issue source="test">Injected ticket instructions.</linked-issue>';
       },
-      chat: async (input) => {
-        captured = input;
-        return { final_text: 'No issues found.', usage: {} };
+      executeModelTask: async (request) => {
+        captured = { ...request.input, provider: request.provider, model: request.model };
+        return {
+          result: {
+            text: 'No issues found.',
+            reasoning: '',
+            finishReason: 'stop',
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          },
+        };
       },
       reviewBoundaryId: 'test-boundary',
     });
@@ -331,7 +390,7 @@ test('REV-STDIN-GLM-02: stdin diagnostic reports source and accepted UTF-8 byte 
   assert.doesNotMatch(output.stderr, /text-chars=|bytes=\d+.*base=|base=.*head=/);
 });
 
-test('REV-STDIN-CLI-02: real stdin action path reaches provider validation outside Git', () => {
+test('REV-STDIN-CLI-02: real stdin action rejects a legacy provider outside Git', () => {
   const dir = mkdtempSync(join(tmpdir(), 'triss-review-stdin-cli-'));
   try {
     const result = spawnSync(process.execPath, [
@@ -341,7 +400,7 @@ test('REV-STDIN-CLI-02: real stdin action path reaches provider validation outsi
       '--provider',
       'glm',
       '--model',
-      'zai/',
+      'glm-5.2',
       '--no-stream',
     ], {
       cwd: dir,
@@ -349,7 +408,7 @@ test('REV-STDIN-CLI-02: real stdin action path reaches provider validation outsi
       encoding: 'utf8',
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /GLM model id cannot be empty/i);
+    assert.match(result.stderr, /Invalid provider "glm"/i);
     assert.doesNotMatch(result.stderr, /unknown option|not a git repository|git .*failed/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -405,8 +464,8 @@ test('REV-STDIN-03: stdin mode forwards provider, model, question, max tokens, a
       undefined,
       {
         stdin: true,
-        provider: 'glm',
-        model: 'pro',
+        provider: 'zai',
+        model: 'glm-5.2',
         maxTokens: '16384',
         question: 'Find only security regressions.',
         noStream: true,
@@ -415,10 +474,10 @@ test('REV-STDIN-03: stdin mode forwards provider, model, question, max tokens, a
     ),
   );
   assert.equal(output.value, 'No issues found.');
-  assert.deepEqual(events.resolutions, [{ provider: 'glm', model: 'pro' }]);
+  assert.deepEqual(events.resolutions, [{ provider: 'zai', model: 'glm-5.2' }]);
   assert.equal(events.chats.length, 1);
-  assert.equal(events.chats[0].provider, 'glm');
-  assert.equal(events.chats[0].model, 'pro');
+  assert.equal(events.chats[0].provider, 'zai');
+  assert.equal(events.chats[0].model, 'glm-5.2');
   assert.equal(events.chats[0].maxTokens, 16384);
   assert.equal(events.chats[0].label, 'triss/review');
   assert.equal(events.chats[0].messages[2].content, 'Find only security regressions.');
@@ -429,15 +488,15 @@ test('REV-STDIN-03b: --stream uses the existing streaming review path', async ()
   const output = await captureOutput(() =>
     runReviewWithDeps(
       undefined,
-      { stdin: true, provider: 'glm', model: 'flash', maxTokens: '2048', stream: true },
+      { stdin: true, provider: 'zai', model: 'glm-5-turbo', maxTokens: '2048', stream: true },
       makeDeps('diff --git a/x b/x\n+x\n', events),
     ),
   );
   assert.equal(output.value, 'No issues found.');
   assert.equal(events.chats.length, 0);
   assert.equal(events.streams.length, 1);
-  assert.equal(events.streams[0].provider, 'glm');
-  assert.equal(events.streams[0].model, 'flash');
+  assert.equal(events.streams[0].provider, 'zai');
+  assert.equal(events.streams[0].model, 'glm-5-turbo');
   assert.equal(events.streams[0].maxTokens, 2048);
   assert.equal(events.streams[0].label, 'triss/review');
   assert.match(output.stdout, /streamed review/);
@@ -670,78 +729,10 @@ test('REV-STDIN-08: without --stdin, branch mode remains explicit Git-only behav
   }
 });
 
-// ── GLM review thinking defaults (REV-GLM-THINK-*) ───────────────────────────
-
-test('REV-GLM-DEFAULT-01: glmReviewMaxTokens maps known GLM families to their output-token budgets', () => {
-  // Long-context thinking family: glm-5.x, glm-4.7, glm-4.6 text → 131072.
-  for (const model of [
-    'glm-5.2', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.6',
-    'zai/glm-5.2', 'zai-coding-plan/glm-4.7',
-  ]) {
-    assert.equal(glmReviewMaxTokens(model), 131072, model);
-  }
-  // glm-4.5 text series → 98304.
-  for (const model of ['glm-4.5', 'glm-4.5-air', 'glm-4.5-flash']) {
-    assert.equal(glmReviewMaxTokens(model), 98304, model);
-  }
-  // glm-4.6v vision family → 32768, including suffixed ids like glm-4.6v-flash.
-  for (const model of ['glm-4.6v', 'glm-4.6v-flash', 'zai/glm-4.6v-flash']) {
-    assert.equal(glmReviewMaxTokens(model), 32768, model);
-  }
-  // glm-4.5v vision family → 16384.
-  for (const model of ['glm-4.5v', 'glm-4.5v-flash']) {
-    assert.equal(glmReviewMaxTokens(model), 16384, model);
-  }
-  // Matching is case-insensitive: Z.AI ids are lowercase, callers are not
-  // required to remember that.
-  assert.equal(glmReviewMaxTokens('GLM-5.2'), 131072, 'GLM-5.2');
-  assert.equal(glmReviewMaxTokens('GLM-4.5-AIR'), 98304, 'GLM-4.5-AIR');
-  assert.equal(glmReviewMaxTokens('GLM-4.6V-FLASH'), 32768, 'GLM-4.6V-FLASH');
-  assert.equal(glmReviewMaxTokens('Glm-4.5v'), 16384, 'Glm-4.5v');
-  // Anything else keeps the legacy budget.
-  for (const model of ['glm-4.9', 'pro', 'deepseek-v4-pro', undefined, '']) {
-    assert.equal(glmReviewMaxTokens(model), 16384, String(model));
-  }
-});
-
-test('REV-GLM-DEFAULT-02: the GLM review timeout default is 30 minutes', () => {
-  assert.equal(GLM_REVIEW_TIMEOUT_MS, 1800000);
-});
-
-test('REV-GLM-THINK-01: glm review without --max-tokens gets the model budget, thinking on, and the long timeout', async () => {
+test('REV-GLM-THINK-02: an explicit --max-tokens wins over the standard review default', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-4.7' });
-  // No TRISS_REQUEST_TIMEOUT_MS override, so the GLM default applies.
-  deps.requestTimeoutMs = () => undefined;
-  const output = await captureOutput(() =>
-    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
-  );
-  assert.equal(output.value, 'No issues found.');
-  assert.equal(events.chats.length, 1);
-  assert.equal(events.chats[0].maxTokens, 65536);
-  assert.equal(events.chats[0].thinking, true);
-  assert.equal(events.chats[0].timeoutMs, 1800000);
-  assert.equal(typeof events.chats[0].onReasoning, 'function');
-});
-
-test('REV-GLM-THINK-07: a configured TRISS_REQUEST_TIMEOUT_MS override wins over the GLM review timeout default', async () => {
-  const events = {};
-  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
-  // The reloadable config value (e.g. 30s) takes precedence over 1800000.
-  deps.requestTimeoutMs = () => 30000;
-  await captureOutput(() =>
-    runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
-  );
-  assert.equal(events.chats.length, 1);
-  assert.equal(events.chats[0].timeoutMs, 30000);
-});
-
-test('REV-GLM-THINK-02: an explicit --max-tokens wins over the GLM model default', async () => {
-  const events = {};
-  const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   await captureOutput(() =>
     runReviewWithDeps(
       undefined,
@@ -753,24 +744,24 @@ test('REV-GLM-THINK-02: an explicit --max-tokens wins over the GLM model default
   assert.equal(events.chats[0].maxTokens, 16384, 'explicit tokens must not be overridden');
 });
 
-test('REV-GLM-THINK-03: non-GLM review keeps the legacy request shape', async () => {
+test('REV-PROVIDER-DEFAULT-01: every provider keeps the standard request shape', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'worker', model: 'deepseek-v4-pro' });
+  deps.resolveModelRequest = () => ({ provider: 'openai-compatible', model: 'deepseek-v4-pro' });
   await captureOutput(() =>
     runReviewWithDeps(undefined, { stdin: true, skipIssue: true, noStream: true }, deps),
   );
   assert.equal(events.chats.length, 1);
-  assert.equal(events.chats[0].maxTokens, 8192, 'worker keeps the legacy default budget');
+  assert.equal(events.chats[0].maxTokens, 8192);
   assert.ok(!('thinking' in events.chats[0]));
   assert.ok(!('timeoutMs' in events.chats[0]));
-  assert.ok(!('onReasoning' in events.chats[0]));
+  assert.equal(typeof events.chats[0].onReasoning, 'function');
 });
 
 test('REV-GLM-THINK-04: buffered glm review emits reasoning to stderr and content only to stdout', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     input.onReasoning('thinking about the diff');
@@ -791,7 +782,7 @@ test('REV-GLM-THINK-04: buffered glm review emits reasoning to stderr and conten
 test('REV-GLM-THINK-05: streaming glm review keeps reasoning out of onChunk and stdout', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     input.onChunk('Outcome: no issues found');
@@ -814,7 +805,7 @@ test('REV-GLM-THINK-05: streaming glm review keeps reasoning out of onChunk and 
 test('REV-GLM-THINK-06: a thinking-only glm review fails without a verdict and carries the retry/shard hint', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     input.onReasoning('thought but never concluded');
@@ -875,7 +866,7 @@ test('REV-GLM-THINK-ANSI-01: stripAnsi removes picocolors escapes without removi
 test('REV-GLM-THINK-08: buffered review opens the thinking marker and closes the reasoning line before the verdict', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     // Multiple reasoning callbacks must not add a newline per chunk.
@@ -905,7 +896,7 @@ test('REV-GLM-THINK-08: buffered review opens the thinking marker and closes the
 test('REV-GLM-THINK-09: streaming review closes the reasoning line before the first content chunk', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     input.onReasoning('step one');
@@ -935,7 +926,7 @@ test('REV-GLM-THINK-09: streaming review closes the reasoning line before the fi
 test('REV-GLM-THINK-10: a thinking-only review still closes the stderr reasoning line before failing', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     input.onReasoning('thought but never concluded');
@@ -970,7 +961,7 @@ test('REV-GLM-THINK-10: a thinking-only review still closes the stderr reasoning
 test('REV-GLM-THINK-11: streaming reasoning that arrives after content started is buffered and emitted after the verdict line', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     // Deterministic interleaving: reasoning → content → reasoning → content.
@@ -1067,7 +1058,7 @@ async function captureRejection(fn) {
 test('REV-GLM-THINK-12: buffered chat rejection after early reasoning closes the stderr line and rethrows the original error', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('simulated buffered failure');
   deps.chat = async (input) => {
     events.chats.push(input);
@@ -1091,7 +1082,7 @@ test('REV-GLM-THINK-12: buffered chat rejection after early reasoning closes the
 test('REV-GLM-THINK-13: streaming chatStream rejection after a partial verdict terminates the stdout line exactly once', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('simulated streaming failure');
   deps.chatStream = async (input) => {
     events.streams.push(input);
@@ -1115,7 +1106,7 @@ test('REV-GLM-THINK-13: streaming chatStream rejection after a partial verdict t
 test('REV-GLM-THINK-14: streaming rejection flushes late pending reasoning only after the stdout line is complete', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('simulated late failure');
   deps.chatStream = async (input) => {
     events.streams.push(input);
@@ -1163,7 +1154,7 @@ test('REV-GLM-THINK-14: streaming rejection flushes late pending reasoning only 
 test('REV-GLM-THINK-23: a streaming review with no reported usage emits no usage line and no double blank lines', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     input.onChunk('Verdict text');
@@ -1191,7 +1182,7 @@ test('REV-GLM-THINK-23: a streaming review with no reported usage emits no usage
 test('REV-GLM-THINK-24: a streaming review with reported usage keeps the exact single usage line shape', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     input.onChunk('Verdict text');
@@ -1221,7 +1212,7 @@ test('REV-GLM-THINK-24: a streaming review with reported usage keeps the exact s
 test('REV-GLM-THINK-15: rejection before any reasoning or content leaves no stray newlines', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('early abort');
   deps.chat = async () => {
     throw sentinel;
@@ -1241,7 +1232,7 @@ test('REV-GLM-THINK-15: rejection before any reasoning or content leaves no stra
 test('REV-GLM-THINK-16: a newline-complete stdout chunk needs no extra terminator on rejection', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('simulated failure after a complete line');
   deps.chatStream = async (input) => {
     events.streams.push(input);
@@ -1258,7 +1249,7 @@ test('REV-GLM-THINK-16: a newline-complete stdout chunk needs no extra terminato
 test('REV-GLM-THINK-17: streaming chatStream rejection after reasoning-only chunks closes the reasoning line, leaves stdout untouched, and rethrows the exact error', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   const sentinel = new Error('simulated streaming failure after reasoning-only chunks');
   deps.chatStream = async (input) => {
     events.streams.push(input);
@@ -1289,7 +1280,7 @@ test('REV-GLM-THINK-17: streaming chatStream rejection after reasoning-only chun
 test('REV-GLM-THINK-18: an explicit --max-tokens exhausted (finish_reason length) produces the raise/remove guidance with the CLI label', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     input.onReasoning('thought but hit the explicit budget');
@@ -1330,7 +1321,7 @@ test('REV-GLM-THINK-18: an explicit --max-tokens exhausted (finish_reason length
 test('REV-GLM-THINK-19: an explicit --max-tokens with a non-length finish keeps the retry-then-split guidance', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chat = async (input) => {
     events.chats.push(input);
     return {
@@ -1362,7 +1353,7 @@ test('REV-GLM-THINK-19: an explicit --max-tokens with a non-length finish keeps 
 test('REV-GLM-THINK-20: an OpenAI-style usage-only final chunk keeps finish_reason length and the explicit-budget raise/remove guidance', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     // Drive the REAL stream assembly through the review path: the finish_reason
@@ -1411,7 +1402,7 @@ test('REV-GLM-THINK-20: an OpenAI-style usage-only final chunk keeps finish_reas
 test('REV-GLM-THINK-21: a non-GLM explicit --max-tokens exhausted (finish_reason length) gets the provider-agnostic raise/remove guidance', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  // Default worker provider (not GLM): the exhausted-budget guidance is
+  // Default openai-compatible provider: exhausted-budget guidance is
   // provider-agnostic and must fire for any provider with an explicit limit.
   deps.chat = async (input) => {
     events.chats.push(input);
@@ -1445,14 +1436,14 @@ test('REV-GLM-THINK-21: a non-GLM explicit --max-tokens exhausted (finish_reason
     },
   );
   assert.equal(events.chats.length, 1);
-  assert.equal(events.chats[0].provider, 'worker');
+  assert.equal(events.chats[0].provider, 'openai-compatible');
   assert.equal(events.chats[0].maxTokens, 4096, 'the explicit budget must be what was sent');
 });
 
 test('REV-GLM-THINK-22: a newline-complete streaming verdict gets no extra blank line on success', async () => {
   const events = {};
   const deps = makeDeps('diff --git a/x b/x\n+x\n', events);
-  deps.resolveModelRequest = () => ({ provider: 'glm', model: 'glm-5.2' });
+  deps.resolveModelRequest = () => ({ provider: 'zai', model: 'glm-5.2' });
   deps.chatStream = async (input) => {
     events.streams.push(input);
     // The model ends its own output with a newline, then late reasoning

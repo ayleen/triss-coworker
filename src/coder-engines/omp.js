@@ -266,6 +266,7 @@ export function buildOmpRunArgv({
   prompt,
   model,
   smallModel,
+  effort,
   sessionDir,
   sessionRealId,
   cont = false,
@@ -287,6 +288,7 @@ export function buildOmpRunArgv({
     '--approval-mode', 'write',
     '--tools', toolList,
   ];
+  if (effort) argv.push('--thinking', effort);
   if (smallModel) argv.push('--smol', smallModel);
   if (noSession) argv.push('--no-session');
   else if (sessionRealId) argv.push('--resume', sessionRealId);

@@ -126,7 +126,7 @@ test('zai response with cached_tokens of 0 keeps cache_read 0 and input_uncached
   assert.equal(tokens.input_uncached, 500);
 });
 
-test('kimi response derives input_uncached from top-level cached_tokens', () => {
+test('moonshot response derives input_uncached from top-level cached_tokens', () => {
   const resp = {
     usage: {
       prompt_tokens: 500,
@@ -135,7 +135,7 @@ test('kimi response derives input_uncached from top-level cached_tokens', () => 
       total_tokens: 600,
     },
   };
-  const { tokens } = normalizeApiUsage(resp, { provider: 'kimi' });
+  const { tokens } = normalizeApiUsage(resp, { provider: 'moonshot' });
   assert.equal(tokens.cache_read, 120);
   assert.equal(tokens.input_uncached, 380);
   assert.equal(tokens.cache_write, null);
@@ -215,7 +215,7 @@ test('output_visible never goes negative when reasoning exceeds completion_token
 
 for (const [provider, cachedShape] of [
   ['zai', { prompt_tokens_details: { cached_tokens: 501 } }],
-  ['kimi', { cached_tokens: 501 }],
+  ['moonshot', { cached_tokens: 501 }],
 ]) {
   test(`${provider} warns when cached_tokens exceeds prompt_tokens`, () => {
     const { tokens, warnings } = normalizeApiUsage({

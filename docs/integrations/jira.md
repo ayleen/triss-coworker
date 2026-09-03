@@ -25,8 +25,8 @@ ATLASSIAN_* lines should show a `[local]` or `[global]` source tag.
 
 **Different Jira instances per project?** Use `--local` in each project
 root. The MCP server picks up whichever `.triss.env` is in your current
-working directory; a worker on `~/proj-a` hits proj-a's Jira, a worker
-on `~/proj-b` hits proj-b's. See the [recipes in docs/configuration.md](../configuration.md#recipes--common-setups-end-to-end)
+working directory; a session rooted at `~/proj-a` hits proj-a's Jira, while one
+rooted at `~/proj-b` hits proj-b's. See the [recipes in docs/configuration.md](../configuration.md#recipes--common-setups-end-to-end)
 for the full step-by-step.
 
 ## Commands

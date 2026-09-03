@@ -13,9 +13,9 @@ interface Command {
 
 interface Props { command: Command; }
 const { command } = Astro.props;
-const tierColor = command.tier === "pro"
+const tierColor = command.tier === "main"
   ? "#e0a458"
-  : command.tier === "flash"
+  : command.tier === "small"
     ? "var(--color-accent)"
     : "var(--color-text-muted)";
 ---

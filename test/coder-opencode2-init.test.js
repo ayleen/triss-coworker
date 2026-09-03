@@ -87,7 +87,7 @@ const fakeSh = () => (cmd, args) => {
     return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
   if ((args || [])[0] === 'run' && (args || [])[1] === '--help') {
-    return { status: 0, stdout: '--standalone --format --auto --model\n', stderr: '' };
+    return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
   }
   if (cmd !== 'opencode' && (args || [])[0] === '--version') {
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
@@ -149,7 +149,7 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     await runInit(commands, home);
     assert.equal(readFileSync(cfg, 'utf8'), before, 'existing safe config stays byte-identical');
     // The resolved model pair is pinned into the scoped .env instead.
-    assert.equal(process.env.TRISS_CODER_MODEL, 'opencode-go/deepseek-v4-flash');
+    assert.equal(process.env.TRISS_OPENCODE_GO_MODEL, 'deepseek-v4-flash');
   }));
 
   await t.test('a configured plugin reference fails the static gate before any spawn', () => withHome(async ({ home }) => {
