@@ -126,6 +126,33 @@ Triss reads configuration from:
 permissions, and adds it to `.gitignore` when possible. Do not commit local
 credential files. `triss status` masks secret values before printing them.
 
+### Secrets management policy
+
+How the project itself handles secrets and credentials:
+
+- **Storing.** User-facing secrets live only in environment variables or the
+  `.triss.env` files described above (mode 0600). Project infrastructure
+  secrets live in GitHub Actions encrypted secrets; the release pipeline
+  holds no long-lived npm tokens at all — publication authenticates through
+  OpenID Connect, and packages carry Sigstore provenance attestations. The
+  GPG release-signing key is stored only on the maintainer's machines; the
+  repository deliberately holds just its public half
+  (`.github/keys/release-tag-signing.asc`).
+- **Access.** Infrastructure secrets are readable only to the workflows that
+  need them, in jobs whose permissions are scoped to the minimum required
+  (see the per-job `permissions:` blocks in `.github/workflows/`). Secrets
+  are never echoed into logs; `gitleaks` scans every pull request and push
+  to keep accidental commits out.
+- **Rotating.** Rotate any credential immediately on suspicion of exposure
+  (a leaked log line, a compromised machine, an advisories report that
+  references it). Beyond incident-driven rotation: change personal provider
+  API keys at least yearly; rotate CI secrets when maintainer access
+  changes; release-signing key rotation replaces the committed public key
+  via pull request first, then signs the next release with the new key (see
+  [docs/releasing.md](https://github.com/ayleen/triss-coworker/blob/main/docs/releasing.md),
+  *One-time signing setup*). When a secret is rotated, the old value is revoked
+  — not just replaced.
+
 ## Filesystem access
 
 The CLI can read paths you pass to it. In MCP mode, file access is sandboxed
@@ -147,6 +174,51 @@ Known residual risk: Triss checks DNS before fetching, and the underlying HTTP
 connection performs its own lookup. That leaves a narrow DNS-rebinding window.
 For high-trust environments, use network-level egress filtering as the primary
 control.
+
+## Security findings policy
+
+Thresholds for acting on automated security findings, and how they gate
+releases.
+
+### Dependency findings (SCA — vulnerabilities and licenses)
+
+| Severity | Required action |
+|---|---|
+| Critical / High | Fix or upgrade before the next release; blocks a release until resolved |
+| Medium | Fix within 30 days of detection; upgrades ride the next Dependabot PR |
+| Low | Best effort, fixed alongside related work |
+
+License findings follow the same release-blocking rule: every dependency
+must be MIT-compatible, as recorded in
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). A dependency with an
+incompatible license is replaced before release.
+
+Enforcement: `dependency-review` runs on every pull request and fails on
+known-vulnerable or license-violating changes; Dependabot opens weekly
+upgrade pull requests against both npm and GitHub Actions dependencies.
+No release is published while a Critical/High dependency finding is open —
+the tag-driven publish pipeline reruns the same test and review gates that
+ran on the merged commits.
+
+Findings that are believed not to affect the project (unreachable code
+path, wrong architecture) must be recorded with the reason in the tracking
+issue or PR that dismisses them — dismissal without a written rationale is
+not accepted.
+
+### Code findings (SAST)
+
+CodeQL (`javascript-typescript` and `actions` suites) runs on every pull
+request and push.
+
+| Severity | Required action |
+|---|---|
+| Critical / High | Blocks merge — the repository ruleset rejects pull requests that introduce new High/Critical code-scanning alerts |
+| Medium | Triaged within 90 days: fixed, or suppressed with a written justification |
+| Low | Best effort |
+
+Suppressions use CodeQL's inline directives or alert dismissals and must
+carry a comment stating why the finding is not exploitable. Dismissed
+alerts are re-reviewed when the surrounding code changes.
 
 ## Development expectations
 
