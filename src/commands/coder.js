@@ -167,6 +167,7 @@ import {
   opencode2 as opencode2Engine,
   opencode2VersionPin,
   detectOpenCode2,
+  compareOpenCode2Versions,
   installHintOpenCode2,
   ensureOpenCode2RuntimeDirs,
   createOpenCode2EventFolder,
@@ -3107,19 +3108,44 @@ function gitBranchDeleteSafe(sh, repoRoot, branch) {
 }
 
 function openCode2CompatibilityError(detected, operation) {
-  const identity = detected.found
-    ? detected.version
-      ? `v${detected.version}`
-      : `found at ${detected.path || '(unknown path)'}, version unavailable`
-    : 'not found';
-  const reason = detected.capabilities?.reason;
-  const recovery = reason === 'capability-probe-unavailable'
-    ? `Fix the temporary-directory/probe environment and retry (${detected.capabilities.detail || 'probe unavailable'}); ` +
-      'reinstalling the CLI does not repair this host error.'
-    : `Install a compatible beta (${installHintOpenCode2()}) and retry.`;
+  const identity = detected.version
+    ? `v${detected.version}`
+    : detected.path
+      ? `found at ${detected.path}, version unavailable`
+      : 'not found';
+  const minimum = detected.minimumVersion || opencode2VersionPin();
+  const versionOrder = detected.version
+    ? compareOpenCode2Versions(detected.version, minimum)
+    : null;
+  if (versionOrder !== null && versionOrder < 0) {
+    return new Error(
+      `opencode2 ${identity} is below the minimum v${minimum} required for managed V2 ${operation}. ` +
+        `Install a compatible beta (${installHintOpenCode2()}) and retry.`,
+    );
+  }
+  const capabilities = detected.capabilities;
+  if (capabilities?.reason === 'capability-probe-unavailable') {
+    return new Error(
+      `opencode2 ${identity} capability probe is unavailable for managed V2 ${operation}. ` +
+        `Fix the temporary-directory/probe environment and retry (${capabilities.detail || 'probe unavailable'}); ` +
+        'reinstalling the CLI does not repair this host error.',
+    );
+  }
+  if (capabilities && !capabilities.ok) {
+    const missing = capabilities.missing?.length
+      ? ` Missing required options: ${capabilities.missing.join(', ')}.`
+      : ` Probe result: ${capabilities.reason || 'incompatible CLI contract'}.`;
+    const versionState = versionOrder !== null && versionOrder >= 0
+      ? ` meets minimum v${minimum} but`
+      : '';
+    return new Error(
+      `opencode2 ${identity}${versionState} failed the required CLI capability check for managed V2 ${operation}.` +
+        `${missing} Upgrade to a compatible beta (${installHintOpenCode2()}) and retry.`,
+    );
+  }
   return new Error(
-    `opencode2 ${identity} does not satisfy the minimum v${opencode2VersionPin()} and capability contract ` +
-      `required for managed V2 ${operation}. ${recovery}`,
+    `opencode2 ${identity} is unavailable or has no supported version for managed V2 ${operation}. ` +
+      `Install a compatible beta (${installHintOpenCode2()}) and retry.`,
   );
 }
 

@@ -92,7 +92,7 @@ function withStatusEnv(fn) {
 }
 
 test(
-  'status renders beta-19059 compatible when --model owns provider/model#variant',
+  'status renders beta-19059 compatible when the required option surface is present',
   withStatusEnv(async () => {
     const fake = statusSpawnSync(COMPATIBLE_HELP);
     const output = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fake.spawnSync }))());
@@ -103,11 +103,11 @@ test(
 );
 
 test(
-  'status reports model#variant when the --model record lacks variant grammar',
+  'status reports the specific required option missing from the CLI surface',
   withStatusEnv(async () => {
-    const fake = statusSpawnSync(COMPATIBLE_HELP.replace('provider/model#variant', 'provider/model'));
+    const fake = statusSpawnSync(COMPATIBLE_HELP.replace('  --auto\n', ''));
     const output = stripAnsi(await captureStdout(() => runStatus({ spawnSync: fake.spawnSync }))());
-    assert.match(output, /opencode2\s+0\.0\.0-beta-19059 \(incompatible CLI; missing model#variant\)/u);
-    assert.doesNotMatch(output, /missing --variant/u);
+    assert.match(output, /opencode2\s+0\.0\.0-beta-19059 \(incompatible CLI; missing --auto\)/u);
+    assert.doesNotMatch(output, /model#variant/u);
   }),
 );

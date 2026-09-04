@@ -15,12 +15,14 @@ triss coder run --engine opencode2 \
 build. It always supports the current qualified version and every newer
 parseable version. The built-in floor is currently
 `0.0.0-beta-19059`; `TRISS_CODER_OPENCODE2_VERSION` can only raise that floor,
-never lower it. A newer version is not rejected merely for being newer.
+never lower it. Lower or malformed overrides fall back to the built-in floor.
+A newer version is not rejected merely for being newer.
 
-The lightweight capability probe verifies the required CLI surface before a
-credential-bearing run. Unsupported development/TUI channels still fail
-closed, and detection verifies that its read-only probes leave no resident
-service.
+The lightweight capability probe verifies only the required option surface:
+`--standalone`, `--format`, `--auto`, and `--model`. Help prose, examples, and
+the exact spelling used to explain model variants are not compatibility gates.
+Unsupported development/TUI channels still fail closed, and detection verifies
+that its read-only probes leave no resident service.
 
 ## Reasoning effort and model variants
 

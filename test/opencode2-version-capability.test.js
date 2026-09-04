@@ -30,11 +30,15 @@ test('OpenCode 2 accepts beta versions at or above the supported floor', () => {
 
 test('capability probe checks the version and run help without debug/service commands', () => {
   const calls = [];
-  const sh = (file, args) => {
+  const probeEnvs = [];
+  const sh = (file, args, options = {}) => {
     calls.push([file, ...args]);
     if (file === 'which') return { status: 0, stdout: '/tmp/opencode2\n' };
     if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n' };
-    if (args[0] === 'run') return { status: 0, stdout: BETA_19059_RUN_HELP };
+    if (args[0] === 'run') {
+      probeEnvs.push(options.env);
+      return { status: 0, stdout: BETA_19059_RUN_HELP };
+    }
     return { status: 1, stdout: '' };
   };
   const fs = {
@@ -51,111 +55,77 @@ test('capability probe checks the version and run help without debug/service com
     ['run', '--help'],
   ]);
   assert.equal(calls.some((call) => call.includes('debug')), false);
+  assert.equal(probeEnvs[0].NO_COLOR, '1');
 });
 
-test('capability probe binds provider/model#variant to the --model option record', () => {
-  const version = '0.0.0-beta-19059';
-  assert.equal(
-    probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
-      status: 0,
-      stdout: [
-        'FLAGS',
-        '  --standalone',
-        '  --format choice',
-        '  --auto',
-        '  --model, -m string',
-        '      Model to use in the format provider/model#variant',
-      ].join('\n'),
-    })).ok,
-    true,
-  );
-
-  for (const modelRecord of [
-    '  --model, -m string  Model selector in provider/model#variant format',
-    '  --model, -m provider/model#variant  Select a model',
-    '  --model, -m string  Model uses provider/model#variant; provider variants are optional',
-  ]) {
-    const compatibleHelp = [
-      'FLAGS',
-      '  --standalone',
-      '  --format choice',
-      '  --auto',
-      modelRecord,
-    ].join('\n');
-    assert.equal(
-      probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
-        status: 0,
-        stdout: compatibleHelp,
-      })).ok,
-      true,
-    );
-  }
-
-  const markerOutsideModel = [
-    'FLAGS',
+test('capability probe requires real option records without pinning help wording', () => {
+  const version = '0.0.0-beta-25000';
+  const compatibleHelp = (heading, records) => [
+    heading,
+    ...records,
+  ].join('\n');
+  const requiredRecords = (modelRecord = '  --model, -m string  Select a model') => [
     '  --standalone',
     '  --format choice',
     '  --auto',
-    '  --model, -m string  Model to use in the format provider/model',
-    '',
-    'EXAMPLES',
-    '  Legacy syntax: provider/model#variant',
-  ].join('\n');
-  assert.deepEqual(
-    probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
-      status: 0,
-      stdout: markerOutsideModel,
-    })).missing,
-    ['model#variant'],
-  );
+    modelRecord,
+  ];
 
-  const modelPrefixOnly = markerOutsideModel.replace(
-    '--model, -m string  Model to use in the format provider/model',
-    '--model-old string  Model to use in the format provider/model',
-  );
+  for (const help of [
+    compatibleHelp('Flags:', requiredRecords()),
+    compatibleHelp('FLAGS:', requiredRecords(
+      '  --model, -m string  Model to use in format provider/model#variant (variants are not supported by every model)',
+    )),
+    compatibleHelp('\u001b[1mFLAGS\u001b[0m', requiredRecords(
+      '  --model, -m string  Model to use in the format provider/model[#variant]',
+    )),
+    compatibleHelp('Global Flags:', requiredRecords(
+      '  --model, -m string  Model to use, e.g. anthropic/claude-sonnet-4#high',
+    )),
+    compatibleHelp('FLAGS', [
+      ' --standalone',
+      '    --format choice',
+      '  --auto',
+      '      --model, -m string  Select a model',
+    ]),
+  ]) {
+    const result = probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
+      status: 0,
+      stdout: help,
+    }));
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.missing, []);
+  }
+
+  const modelPrefixOnly = compatibleHelp('FLAGS', [
+    '  --standalone',
+    '  --format choice',
+    '  --auto',
+    '  --model-old string  Old model selector',
+  ]);
   assert.deepEqual(
     probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
       status: 0,
       stdout: modelPrefixOnly,
     })).missing,
-    ['--model', 'model#variant'],
+    ['--model'],
   );
 
-  for (const misleadingModelRecord of [
-    '  --model, -m string  Legacy provider/model#variant is no longer supported',
-    '  --model, -m string  Reject provider/model#variant; use a base model',
-    '  --model, -m string  Removed; previous description "Model to use in the format provider/model#variant"',
-    '  --model, -m string\n      Removed; previous description "Model to use in the format provider/model#variant"',
-    '  --model, -m string  Do not use provider/model#variant',
-  ]) {
-    const misleadingHelp = markerOutsideModel.replace(
-      '  --model, -m string  Model to use in the format provider/model',
-      misleadingModelRecord,
-    );
-    assert.deepEqual(
-      probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
-        status: 0,
-        stdout: misleadingHelp,
-      })).missing,
-      ['model#variant'],
-    );
-  }
-
   for (const declarationSpoof of [
-    '  --legacy string  Replaces --standalone --format --auto; --model: Model to use in the format provider/model#variant',
-    '- Removed --standalone --format --auto --model: Model to use in the format provider/model#variant',
-    '--model: removed; previous description "Model to use in the format provider/model#variant"',
+    '  --legacy string  Replaces --standalone --format --auto and --model',
+    '- Removed --standalone --format --auto --model',
+    '--model: removed option',
     [
       'FLAGS',
       '  --legacy string  Compatibility notes:',
-      '      --standalone, --format, --auto, --model  Model to use in the format provider/model#variant',
+      '      --standalone, --format, --auto, --model  Removed options',
     ].join('\n'),
     [
       'EXAMPLES',
       '  --standalone            Old invocation',
       '  --format choice         Old invocation',
       '  --auto                  Old invocation',
-      '  --model, -m string      Model to use in the format provider/model#variant',
+      '  --model, -m string      Old invocation',
     ].join('\n'),
   ]) {
     assert.deepEqual(
@@ -163,25 +133,9 @@ test('capability probe binds provider/model#variant to the --model option record
         status: 0,
         stdout: declarationSpoof,
       })).missing,
-      ['--standalone', '--format', '--auto', '--model', 'model#variant'],
+      ['--standalone', '--format', '--auto', '--model'],
     );
   }
-
-  const separateVariantFlag = [
-    'FLAGS',
-    '  --standalone',
-    '  --format choice',
-    '  --auto',
-    '  --model, -m string  Model to use in the format provider/model',
-    '  --variant string  Reasoning effort',
-  ].join('\n');
-  assert.deepEqual(
-    probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
-      status: 0,
-      stdout: separateVariantFlag,
-    })).missing,
-    ['model#variant'],
-  );
 
   const failedHelp = probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
     status: 2,

@@ -235,6 +235,47 @@ test('coder init --engine opencode2 (Phase 4)', async (t) => {
     }
   }));
 
+  await t.test('compatibility errors distinguish a newer missing option from a below-floor version', () => withHome(async ({ home }) => {
+    const commands = await loadCommands();
+    const spawnFor = (version, help) => (cmd, args) => {
+      if (cmd === 'which' && (args || [])[0] === 'opencode2') {
+        return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
+      }
+      if ((args || [])[0] === 'run' && (args || [])[1] === '--help') {
+        return { status: 0, stdout: help, stderr: '' };
+      }
+      if (cmd !== 'opencode' && (args || [])[0] === '--version') {
+        return { status: 0, stdout: `opencode2 v${version}\n`, stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'not found' };
+    };
+    const completeHelp = 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string\n';
+    const missingAutoHelp = completeHelp.replace('  --auto\n', '');
+
+    await assert.rejects(
+      runInit(commands, home, {}, {
+        spawnSync: spawnFor('0.0.0-beta-25000', missingAutoHelp),
+      }),
+      (err) => {
+        assert.match(err.message, /v0\.0\.0-beta-25000 meets minimum v0\.0\.0-beta-19059/u);
+        assert.match(err.message, /Missing required options: --auto/u);
+        assert.doesNotMatch(err.message, /does not satisfy the minimum/u);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      runInit(commands, home, {}, {
+        spawnSync: spawnFor('0.0.0-beta-19058', completeHelp),
+      }),
+      (err) => {
+        assert.match(err.message, /v0\.0\.0-beta-19058 is below the minimum v0\.0\.0-beta-19059/u);
+        assert.doesNotMatch(err.message, /Missing required options/u);
+        return true;
+      },
+    );
+  }));
+
   await t.test('credential-mode init follows the explicit flag, never the retired env values', async (scopeTest) => {
     const cases = [
       {

@@ -53,14 +53,14 @@ The following decisions are intentional for this recovery and are not release
 blockers:
 
 - Triss does not retain an exact-version pin or add a denylist/rollback switch
-  for a future broken OpenCode 2 beta above the supported floor. The capability
-  probe and release qualification reduce this risk; they do not eliminate it.
+  for a future broken OpenCode 2 beta above the supported floor. The required
+  option probe and release qualification reduce this risk; they do not
+  eliminate it.
 - Backward compatibility for the obsolete
   `TRISS_CODER_OPENCODE2_VERSION=0.0.0-next-17430` exact-pin override is not
-  preserved. Updated installation and configuration guidance replaces that
-  value with the beta channel and the current minimum. A stale legacy override
-  may fail until the operator removes or updates it; this migration risk is
-  accepted.
+  preserved as a pin. Lower or malformed minimum overrides now fall back to the
+  built-in floor; an installed binary on an unsupported prerelease channel
+  still fails closed.
 - `best_effort_raw` does not protect a credential from repository code,
   plugins, tools, shell commands, or other same-UID processes. It protects only
   Triss's provider/model/endpoint selection from accidental configuration

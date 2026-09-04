@@ -12,7 +12,8 @@ resident-service проверки.
 
 План прошёл независимый CLI-contract review, security review, test review и
 дополнительный adversarial review через `/ar`. Замечания включены ниже:
-capability marker привязан к записи `--model`; добавлены engine-boundary
+capability check привязан только к реальным required option declarations;
+help prose не используется как behavioral proof. Добавлены engine-boundary
 validation, normalized-effort forwarding, orchestration/status tests и
 loopback qualification реального beta; model-specific variant availability
 больше не представлена как универсальная поддержка пяти значений.
@@ -70,33 +71,26 @@ Upstream beta source для опубликованной линии дополн
 
 ### 1. Capability contract
 
-Проверка делится на:
+Capability probe требует отдельные option declarations: `--standalone`,
+`--format`, `--auto`, `--model`.
 
-- отдельные обязательные option records: `--standalone`, `--format`, `--auto`,
-  `--model`;
-- variant semantics: option record `--model`/`-m`, включая его wrapped
-  continuation lines до следующего option record, должен объявлять
-  `provider/model#variant`.
+Поддержка `provider/model#variant` квалифицирована поведением текущего floor
+`0.0.0-beta-19059`. Все более новые parseable версии принимаются по умолчанию;
+точная фраза в help, spelling metavar и examples не являются compatibility
+gate. Это исключает ложные отказы после безопасной правки upstream help.
 
-Проверять whole option tokens/records, а не произвольные substrings во всём
-help. `--model-old` не удовлетворяет `--model`; упоминание
-`provider/model#variant` в example/footer/другой option не удовлетворяет
-variant semantic gate.
+Парсер проверяет whole option tokens внутри `FLAGS`/`GLOBAL FLAGS`, а не
+произвольные substrings. `--model-old` не удовлетворяет `--model`;
+example/footer/описание другой option не создают required records. Регистр
+heading, необязательное двоеточие, ANSI styling и неодинаковый отступ option
+records считаются presentation details.
 
-`--variant` удаляется из списка обязательных flags. Если variant grammar не
-привязана к `--model`, результат остаётся:
+`--variant` удаляется из списка обязательных flags. Missing list содержит
+только реально отсутствующие required options.
 
-```text
-reason: unsupported-cli-contract
-missing: ["model#variant"]
-```
-
-`triss status` использует существующий renderer; новая special-case ветка ему
-не нужна.
-
-Совместимость status означает совместимость executable/CLI surface. Она не
-обещает, что каждая конкретная пара model/effort существует в upstream model
-catalog.
+`triss status` использует существующий renderer. Совместимость status означает
+совместимость executable/required CLI surface; она не обещает, что каждая
+конкретная пара model/effort существует в upstream model catalog.
 
 ### 2. Runtime argv
 
@@ -174,8 +168,9 @@ model/effort пары.
    `opencode2 serve --service`.
 5. Absolute canonical executable, regular executable file и same-binary
    post-run проверки не меняются.
-6. Отсутствие complete `--standalone`, `--format`, `--auto`, `--model` option
-   records или variant grammar внутри `--model` остаётся fail-closed.
+6. Отсутствие complete `--standalone`, `--format`, `--auto` или `--model`
+   option declarations остаётся fail-closed; help description text не является
+   compatibility gate.
 7. Explicit effort нормализуется, не теряется и не понижается молча.
 8. Unsupported model-specific variant возвращает явную execution error.
 9. Omitted effort сохраняет native default и не добавляет `#`.
@@ -205,10 +200,9 @@ model/effort пары.
 
 - исправить verified-contract comments;
 - удалить `--variant` из списка отдельных required options;
-- распознавать complete option records;
-- привязать `provider/model#variant` к `--model`/`-m` record с поддержкой line
-  wrapping;
-- возвращать `model#variant` в `capabilities.missing`;
+- распознавать required option declarations при разных presentation formats;
+- не использовать `provider/model#variant` help prose как compatibility gate;
+- возвращать отсутствующие option names в `capabilities.missing`;
 - добавлять `#<effort>` к значению `--model`, не создавая отдельный flag;
 - сохранить argument order и session checks.
 
@@ -228,12 +222,12 @@ capture command, package version, Darwin arm64 и дату. Fixture не сод�
 ### `test/opencode2-version-capability.test.js`
 
 - positive probe читает beta-19059 fixture;
-- help без отдельного `--variant`, но с variant grammar в `--model`, проходит;
-- marker вне `--model` record не проходит;
+- help без отдельного `--variant` и без фиксированной variant-фразы проходит;
+- `Flags:`, `FLAGS:`, ANSI heading и неодинаковые отступы проходят;
 - `--model-old` без `--model` не проходит;
-- отдельный `--variant` без model-selector grammar не проходит;
+- option-like examples/prose не создают required records;
 - nonzero `run --help` не проходит даже с валидным text;
-- missing variant semantic возвращает `missing: ["model#variant"]`;
+- missing option возвращается по имени;
 - version/channel/service-process regressions используют реальный surface
   shape.
 
@@ -284,7 +278,7 @@ provenance семантики.
 - isolated fake credential включает блок;
 - injected binary/version/help возвращают beta-19059 surface;
 - compatible строка отображается;
-- missing `model#variant` отображается как incompatible;
+- реально отсутствующий required option отображается как incompatible;
 - тест доказывает, что status действительно вызвал OpenCode 2 probe.
 
 ### `docs/engines/opencode2.md`

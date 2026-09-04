@@ -53,11 +53,10 @@ const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
-const MODEL_VARIANT_GRAMMAR = 'provider/model#variant';
-const MODEL_VARIANT_NEGATION_RE =
-  /\b(?:legacy|deprecated|obsolete|removed?|reject(?:ed|s)?|unsupported)\b|\b(?:do|does|is|are|was|were)\s+not\b|\bno\s+longer\b/iu;
 const OPTION_ALIAS_LIST_RE =
   /^(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9])(?:\s*,\s*(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9]))*(?=\s|$)/iu;
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'gu');
+const HELP_SECTION_HEADING_RE = /^[A-Z][A-Z ]*:?\s*$/iu;
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -98,9 +97,8 @@ export function opencode2MinimumVersion() {
   const configured = process.env.TRISS_CODER_OPENCODE2_VERSION;
   if (!configured) return OPENCODE2_MIN_VERSION_DEFAULT;
   const configuredVersion = parseOpenCode2Version(configured);
-  const supportedFloor = parseOpenCode2Version(OPENCODE2_MIN_VERSION_DEFAULT);
-  if (!configuredVersion) return configured;
-  return compareOpenCode2Versions(configuredVersion, supportedFloor) >= 0
+  if (!configuredVersion) return OPENCODE2_MIN_VERSION_DEFAULT;
+  return compareOpenCode2Versions(configuredVersion, OPENCODE2_MIN_VERSION_DEFAULT) >= 0
     ? configuredVersion.raw
     : OPENCODE2_MIN_VERSION_DEFAULT;
 }
@@ -115,59 +113,31 @@ export function opencode2VersionPin() {
 
 export { OPENCODE2_PIN_DEFAULT };
 
-// Parse complete option records instead of searching arbitrary help substrings:
-// `--model-old` is not `--model`, and a variant example outside the --model
-// record must not qualify a credential-bearing binary. Wrapped descriptions
-// stay attached until a blank, section heading, or the next option record.
-function openCode2OptionRecords(help) {
-  const records = new Map();
+// Parse actual option declarations inside FLAGS/GLOBAL FLAGS instead of
+// searching arbitrary help substrings. Heading case, an optional colon, ANSI
+// styling, and per-record indentation are presentation details and must not
+// reject a newer compatible build. Each declaration may expose one long option
+// plus short aliases; lists of unrelated long options in prose do not qualify.
+function openCode2OptionNames(help) {
+  const options = new Set();
   let inOptionSection = false;
-  let current = null;
-  let optionIndent = null;
-  for (const line of String(help || '').split(/\r?\n/u)) {
+  const plainHelp = String(help || '').replace(ANSI_ESCAPE_RE, '');
+  for (const line of plainHelp.split(/\r?\n/u)) {
     const trimmed = line.trim();
     const indent = /^\s*/u.exec(line)?.[0].length || 0;
-    if (indent === 0 && /^[A-Z][A-Z ]*$/u.test(trimmed)) {
-      inOptionSection = trimmed === 'FLAGS' || trimmed === 'GLOBAL FLAGS';
-      current = null;
-      optionIndent = null;
+    if (indent === 0 && HELP_SECTION_HEADING_RE.test(trimmed)) {
+      const heading = trimmed.replace(/:\s*$/u, '').toUpperCase();
+      inOptionSection = heading === 'FLAGS' || heading === 'GLOBAL FLAGS';
       continue;
     }
-    if (!trimmed) {
-      current = null;
-      optionIndent = null;
-      continue;
-    }
-    if (!inOptionSection) continue;
-    if (current && optionIndent !== null && indent > optionIndent) {
-      current.description = `${current.description} ${trimmed}`.trim();
-      continue;
-    }
+    if (!inOptionSection || !trimmed) continue;
     const aliasList = OPTION_ALIAS_LIST_RE.exec(trimmed)?.[0];
-    if (aliasList && (optionIndent === null || indent === optionIndent)) {
-      optionIndent ??= indent;
-      const flags = [...aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)]
-        .map((match) => match[0]);
-      const [valueDeclaration, ...descriptionColumns] =
-        trimmed.slice(aliasList.length).split(/\s{2,}/u);
-      current = {
-        valueDeclaration: valueDeclaration.trim(),
-        description: descriptionColumns.join(' ').trim(),
-      };
-      for (const flag of flags) records.set(flag, current);
-      continue;
-    }
-    current = null;
-    optionIndent = null;
+    if (!aliasList) continue;
+    const longOptions = [...aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)]
+      .map((match) => match[0]);
+    if (longOptions.length === 1) options.add(longOptions[0]);
   }
-  return records;
-}
-
-function modelRecordDeclaresVariant(record) {
-  if (!record) return false;
-  if (record.valueDeclaration.includes(MODEL_VARIANT_GRAMMAR)) return true;
-  return record.description.includes(MODEL_VARIANT_GRAMMAR) &&
-    !MODEL_VARIANT_NEGATION_RE.test(record.description);
+  return options;
 }
 
 export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
@@ -178,11 +148,8 @@ export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, en
     helpResult = { status: 1, error: err, stdout: '', stderr: '' };
   }
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
-  const records = openCode2OptionRecords(help);
-  const missing = REQUIRED_CAPABILITIES.filter((flag) => !records.has(flag));
-  if (!modelRecordDeclaresVariant(records.get('--model'))) {
-    missing.push('model#variant');
-  }
+  const options = openCode2OptionNames(help);
+  const missing = REQUIRED_CAPABILITIES.filter((flag) => !options.has(flag));
   return !parseOpenCode2Version(version)
     ? { ok: false, version, reason: 'unsupported-version', missing: [], help: '' }
     : !helpResult || helpResult.error || helpResult.status !== 0 || missing.length
@@ -203,6 +170,7 @@ function isolatedCapabilityEnv(baseEnv, fs = {}) {
       XDG_CONFIG_HOME: join(root, 'config'),
       XDG_DATA_HOME: join(root, 'data'),
       XDG_STATE_HOME: join(root, 'state'),
+      NO_COLOR: '1',
     };
     for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME]) {
       makeDir(path, { recursive: true, mode: 0o700 });
@@ -353,7 +321,8 @@ export function detectOpenCode2(
     } else {
       probe.serviceProcessCheck = 'passed';
     }
-    const minimum = parseOpenCode2Version(opencode2MinimumVersion());
+    const minimumVersion = opencode2MinimumVersion();
+    const minimum = parseOpenCode2Version(minimumVersion);
     const installed = parseOpenCode2Version(version);
     const satisfiesMinimum = !!(
       probe.ok && minimum && installed && compareOpenCode2Versions(installed, minimum) >= 0
@@ -362,7 +331,7 @@ export function detectOpenCode2(
       found: true,
       path: realPath,
       version,
-      minimumVersion: opencode2MinimumVersion(),
+      minimumVersion,
       satisfiesMinimum,
       meetsMinimum: satisfiesMinimum,
       // Compatibility alias for older status/tests.  It deliberately follows

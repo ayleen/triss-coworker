@@ -185,6 +185,8 @@ test('OPENCODE2 minimum is the current supported floor and overrides are raise-o
     assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
     process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19058';
     assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = 'garbage';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
     process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19060';
     assert.equal(opencode2VersionPin(), '0.0.0-beta-19060');
   } finally {
