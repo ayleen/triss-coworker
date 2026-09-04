@@ -9,10 +9,14 @@ import {
   CODER_TRANSIENT_PROVIDER_ALIAS,
   assertCoderCredentialMode,
   buildCoderTransientProviderOverlay,
+  createCoderTransientRoutingContext,
   resolveCoderCredentialMode,
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
 } from '../src/coder-providers.js';
+
+const OPENCODE_ROUTING_CONTEXT = createCoderTransientRoutingContext('opencode');
+const OPENCODE2_ROUTING_CONTEXT = createCoderTransientRoutingContext('opencode2');
 
 test('credential mode resolver: explicit --protect-credentials matrix over engines', () => {
   // Default (no options): OpenCode/OpenCode2 are best_effort_raw; crush is
@@ -142,7 +146,7 @@ test('V1 OpenCode Go and Zen routes preserve the OpenCode request identity names
       model,
       baseURL: 'http://127.0.0.1:4321/zen/go/v1',
       credentialEnv: 'OPENCODE_API_KEY',
-      preserveOpenCodeRequestIdentity: true,
+      routingContext: OPENCODE_ROUTING_CONTEXT,
     });
     assert.equal(
       overlay.model,
@@ -151,6 +155,19 @@ test('V1 OpenCode Go and Zen routes preserve the OpenCode request identity names
     );
     assert.ok(overlay.provider[CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS], model);
   }
+});
+
+test('transient provider overlays require explicit engine routing context', () => {
+  const route = resolveCoderProviderRoute('opencode-go/deepseek-v4-flash');
+  assert.throws(
+    () => buildCoderTransientProviderOverlay({
+      route,
+      model: 'opencode-go/deepseek-v4-flash',
+      baseURL: 'http://127.0.0.1:4321/zen/go/v1',
+      credentialEnv: 'OPENCODE_API_KEY',
+    }),
+    /routingContext is required/,
+  );
 });
 
 test('distinct V1 main/small transports produce separate transient providers', () => {
@@ -164,7 +181,7 @@ test('distinct V1 main/small transports produce separate transient providers', (
     baseURL: 'http://127.0.0.1:4321/zen/go/v1',
     smallBaseURL: 'http://127.0.0.1:4322/zen/go/v1',
     credentialEnv: 'OPENCODE_API_KEY',
-    preserveOpenCodeRequestIdentity: true,
+    routingContext: OPENCODE_ROUTING_CONTEXT,
   });
   const mainAlias = 'opencode-triss-coder-transient';
   const smallAlias = `${mainAlias}-small`;
@@ -185,7 +202,7 @@ test('distinct V1 models sharing one transport remain in the main transient prov
     smallRoute,
     baseURL: 'http://127.0.0.1:4321/zen/go/v1',
     credentialEnv: 'OPENCODE_API_KEY',
-    preserveOpenCodeRequestIdentity: true,
+    routingContext: OPENCODE_ROUTING_CONTEXT,
   });
   const providerAlias = 'opencode-triss-coder-transient';
   assert.equal(overlay.model, `${providerAlias}/deepseek-v4-flash`);
@@ -207,6 +224,7 @@ test('transient protected overlay pins package, proxy URL, env reference, and ma
     smallModel: small,
     baseURL: 'http://127.0.0.1:4321/coding/v1',
     credentialEnv: route.credentialEnv,
+    routingContext: OPENCODE_ROUTING_CONTEXT,
   });
   const provider = overlay.provider[CODER_TRANSIENT_PROVIDER_ALIAS];
   assert.equal(overlay.model, `${CODER_TRANSIENT_PROVIDER_ALIAS}/k3`);
@@ -231,6 +249,7 @@ test('V2 transient overlay intentionally omits the unused small-model role', () 
     baseURL: 'http://127.0.0.1:4321/zen/go/v1',
     credentialEnv: route.credentialEnv,
     includeSmallModel: false,
+    routingContext: OPENCODE2_ROUTING_CONTEXT,
   });
   assert.equal(overlay.small_model, undefined);
   assert.equal(

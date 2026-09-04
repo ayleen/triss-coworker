@@ -318,6 +318,9 @@ OMP `message_end.message.usage` reports `input`, `output`, `cacheRead`,
 components directly, preserves the reported total, and stores the original
 public Triss selector as `billing_model`; the transient child selector
 `triss-coder-transient/<model-id>` never changes pricing/provider identity.
+OMP deliberately keeps this generic child selector. OpenCode V1 Go/Zen runs use
+`opencode-triss-coder-transient/<model-id>` to select native OpenCode behavior;
+the public selector still remains the billing identity in both cases.
 Retries are additive across completed assistant messages. Missing or malformed
 components remain unknown rather than being fabricated as zero.
 

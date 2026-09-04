@@ -52,6 +52,7 @@ import {
   resolveCoderCredentialMode,
   assertCoderCredentialMode,
   coderRoutesShareTransport,
+  createCoderTransientRoutingContext,
   coderTransientProviderAlias,
   buildCoderTransientProviderOverlay,
   CODER_TRANSIENT_PROVIDER_ALIAS,
@@ -2341,8 +2342,8 @@ function resolveRuntimeCoderProviderRoute(model, providerSettings, { requireAudi
   });
 }
 
-function transientModelName(route, preserveOpenCodeRequestIdentity = false) {
-  return `${coderTransientProviderAlias(route, { preserveOpenCodeRequestIdentity })}/${route.modelId}`;
+function transientModelName(route, routingContext) {
+  return `${coderTransientProviderAlias(route, routingContext)}/${route.modelId}`;
 }
 
 // Public, non-secret routing identity for OpenCode envelopes.  Keep the
@@ -2354,7 +2355,7 @@ function buildOpenCodeEnvelopeRouting({
   credential,
   route,
   canonical,
-  preserveOpenCodeRequestIdentity = false,
+  routingContext,
 }) {
   const requestedProvider = route?.provider || credential?.provider || 'zai';
   const usesTransient = Boolean(canonical && route);
@@ -2362,10 +2363,10 @@ function buildOpenCodeEnvelopeRouting({
     requested_model: modelUsed,
     requested_provider: requestedProvider,
     engine_model: usesTransient
-      ? transientModelName(route, preserveOpenCodeRequestIdentity)
+      ? transientModelName(route, routingContext)
       : modelUsed,
     engine_provider: usesTransient
-      ? coderTransientProviderAlias(route, { preserveOpenCodeRequestIdentity })
+      ? coderTransientProviderAlias(route, routingContext)
       : requestedProvider,
   };
 }
@@ -2409,12 +2410,12 @@ function auditProtectedRouteConfiguration({
   cwd,
   configRoot,
   providerSettings,
-  preserveOpenCodeRequestIdentity = false,
+  routingContext,
 }) {
   auditTransientProviderAlias(cwd, configRoot, [
-    coderTransientProviderAlias(route, { preserveOpenCodeRequestIdentity }),
+    coderTransientProviderAlias(route, routingContext),
     ...(smallRoute && !coderRoutesShareTransport(smallRoute, route)
-      ? [`${coderTransientProviderAlias(smallRoute, { preserveOpenCodeRequestIdentity })}-small`]
+      ? [`${coderTransientProviderAlias(smallRoute, routingContext)}-small`]
       : []),
   ]);
   const compatibleSettings = route.provider === 'openai-compatible'
@@ -6094,7 +6095,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const canonicalTransientRouting = engine !== 'crush' && (
     protectedRouting || (credentialMode === 'best_effort_raw' && !rawBuiltInRoute)
   );
-  const preserveOpenCodeRequestIdentity = engine === 'opencode';
+  const transientRoutingContext = canonicalTransientRouting
+    ? createCoderTransientRoutingContext(engine)
+    : null;
   const runtimeRoute = routeCandidate;
   const runtimeSmallRoute = engine === 'opencode2' ? runtimeRoute : smallRouteCandidate;
   const separateSmallTransport = Boolean(
@@ -6260,7 +6263,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         cwd: runtimeDir,
         configRoot: opencodeProjectBoundary(runtimeDir),
         providerSettings: null,
-        preserveOpenCodeRequestIdentity,
+        routingContext: transientRoutingContext,
       });
     } catch (err) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
@@ -6386,10 +6389,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       credentialProxy = await startCredentialProxy({
         provider: cred.provider || cred.env,
         model: protectedRouting
-          ? transientModelName(runtimeRoute, preserveOpenCodeRequestIdentity)
+          ? transientModelName(runtimeRoute, transientRoutingContext)
           : modelUsed,
         smallModel: protectedRouting && engine !== 'opencode2' && !separateSmallTransport
-          ? transientModelName(runtimeSmallRoute, preserveOpenCodeRequestIdentity)
+          ? transientModelName(runtimeSmallRoute, transientRoutingContext)
           : undefined,
         models: protectedRouting
           ? [runtimeRoute.modelId, ...(engine === 'opencode2' || separateSmallTransport
@@ -6411,7 +6414,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       if (separateSmallTransport) {
         smallCredentialProxy = await startCredentialProxy({
           provider: cred.provider || cred.env,
-          model: transientModelName(runtimeSmallRoute, preserveOpenCodeRequestIdentity),
+          model: transientModelName(runtimeSmallRoute, transientRoutingContext),
           models: [runtimeSmallRoute.modelId],
           endpoint: runtimeSmallRoute.endpoint,
           pathPrefix: runtimeSmallRoute.pathPrefix,
@@ -6459,7 +6462,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       baseURL: transientBaseURL,
       smallBaseURL: transientSmallBaseURL,
       credentialEnv: runtimeRoute.credentialEnv,
-      preserveOpenCodeRequestIdentity,
+      routingContext: transientRoutingContext,
       includeSmallModel: engine !== 'opencode2',
     }))
     : oneShotConfigContent;
@@ -7073,7 +7076,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
       model: canonicalTransientRouting
-        ? transientModelName(runtimeRoute, preserveOpenCodeRequestIdentity)
+        ? transientModelName(runtimeRoute, transientRoutingContext)
         : modelUsed,
       effort: selectedModel.effort,
       agent,
@@ -7365,7 +7368,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         modelUsed,
         credential: cred,
         route: runtimeRoute,
-        preserveOpenCodeRequestIdentity,
+        routingContext: transientRoutingContext,
         canonical: canonicalTransientRouting,
       }),
       session_id: result2.sessionRealId || null,
@@ -7431,7 +7434,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     prompt,
     agent,
     model: canonicalTransientRouting
-      ? transientModelName(runtimeRoute, preserveOpenCodeRequestIdentity)
+      ? transientModelName(runtimeRoute, transientRoutingContext)
       : modelUsed,
     effort: opts.effort,
     sessionRealId: sessionRealIdV1,
@@ -7686,7 +7689,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       modelUsed,
       credential: cred,
       route: runtimeRoute,
-      preserveOpenCodeRequestIdentity,
+      routingContext: transientRoutingContext,
       canonical: canonicalTransientRouting,
     }),
     session_id: result.sessionRealId || null,

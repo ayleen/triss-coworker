@@ -63,13 +63,15 @@ const ANTHROPIC_VERSION_DEFAULT = '2023-06-01';
 const REQUEST_IDENTITY_HEADERS = Object.freeze([
   'user-agent',
   'x-opencode-client',
-  'x-opencode-project',
   'x-opencode-request',
   'x-opencode-session',
 ]);
 const MAX_REQUEST_IDENTITY_HEADER_BYTES = 1024;
 
-function copyRequestIdentityHeaders(requestHeaders, upstreamHeaders) {
+function copyRequestIdentityHeaders(provider, requestHeaders, upstreamHeaders) {
+  if (provider !== 'opencode-go' && provider !== 'opencode-zen') return;
+  // x-opencode-project is deliberately excluded: its root-commit value is a
+  // stable repository fingerprint and is not needed for request correlation.
   for (const name of REQUEST_IDENTITY_HEADERS) {
     const value = requestHeaders[name];
     if (
@@ -89,14 +91,15 @@ const RETRY_RESPONSE_HEADERS = Object.freeze([
 const MAX_RETRY_RESPONSE_HEADER_BYTES = 1024;
 const IMF_FIXDATE_PATTERN =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+const UNSIGNED_DECIMAL_INTEGER_PATTERN = /^\d+$/;
 
-function isNonNegativeFiniteNumber(value) {
-  const number = Number(value);
-  return value.trim().length > 0 && Number.isFinite(number) && number >= 0;
+function isUnsignedDecimalInteger(value) {
+  if (!UNSIGNED_DECIMAL_INTEGER_PATTERN.test(value)) return false;
+  return Number.isFinite(Number(value));
 }
 
 function isValidRetryAfter(value) {
-  if (isNonNegativeFiniteNumber(value)) return true;
+  if (isUnsignedDecimalInteger(value)) return true;
   if (!IMF_FIXDATE_PATTERN.test(value)) return false;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) && new Date(timestamp).toUTCString() === value;
@@ -113,7 +116,7 @@ function copyRetryHeaders(upstreamHeaders, downstreamHeaders) {
       continue;
     }
     const valid = name === 'retry-after-ms'
-      ? isNonNegativeFiniteNumber(value)
+      ? isUnsignedDecimalInteger(value)
       : isValidRetryAfter(value);
     if (valid) downstreamHeaders[name] = value;
   }
@@ -316,7 +319,10 @@ export async function startCoderCredentialProxy(opts = {}) {
 
     // Rate cap.
     if (!rateAllowed()) {
-      res.writeHead(429, { 'content-type': 'application/json' });
+      res.writeHead(429, {
+        'content-type': 'application/json',
+        'retry-after': '1',
+      });
       res.end(JSON.stringify({ error: { message: 'credential proxy rate cap exceeded' } }));
       return;
     }
@@ -384,7 +390,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     let responseBytes = 0;
     try {
       const headers = { 'content-type': 'application/json' };
-      copyRequestIdentityHeaders(req.headers, headers);
+      copyRequestIdentityHeaders(provider, req.headers, headers);
       if (authStyle === 'anthropic') {
         headers['x-api-key'] = credential;
         headers['anthropic-version'] =

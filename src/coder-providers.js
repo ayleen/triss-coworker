@@ -28,17 +28,38 @@ function providerRoute(id, overrides = {}) {
 // OPENCODE_CONFIG_CONTENT for one run; persistent config layers defining it
 // are rejected before a credential-bearing child is spawned.
 export const CODER_TRANSIENT_PROVIDER_ALIAS = 'triss-coder-transient';
-// OpenCode V1 only emits its dynamic x-opencode-* request identity when the
-// effective provider id begins with "opencode". Audited Zen/Go routes still
-// need a private collision-resistant namespace, so keep a dedicated prefix
-// rather than falling back to the generic transient alias.
+// OpenCode V1 keys native Go/Zen request behavior — dynamic x-opencode-*
+// identity, provider options, support classification, and model defaults —
+// off an effective provider id beginning with "opencode". Keep a dedicated,
+// private collision-resistant namespace for that deliberate native behavior.
 export const CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS = 'opencode-triss-coder-transient';
 
-export function coderTransientProviderAlias(
-  route,
-  { preserveOpenCodeRequestIdentity = false } = {},
-) {
-  return preserveOpenCodeRequestIdentity &&
+const CODER_TRANSIENT_ROUTING_ENGINES = new Set(['opencode', 'opencode2', 'omp']);
+
+export function createCoderTransientRoutingContext(engine) {
+  if (!CODER_TRANSIENT_ROUTING_ENGINES.has(engine)) {
+    throw new TypeError(`createCoderTransientRoutingContext: unsupported engine "${engine}"`);
+  }
+  return freeze({
+    engine,
+    useNativeOpenCodeProviderSemantics: engine === 'opencode',
+  });
+}
+
+function assertCoderTransientRoutingContext(routingContext) {
+  if (
+    !routingContext ||
+    typeof routingContext !== 'object' ||
+    typeof routingContext.useNativeOpenCodeProviderSemantics !== 'boolean'
+  ) {
+    throw new TypeError('coder transient routingContext is required');
+  }
+  return routingContext;
+}
+
+export function coderTransientProviderAlias(route, routingContext) {
+  const context = assertCoderTransientRoutingContext(routingContext);
+  return context.useNativeOpenCodeProviderSemantics &&
     (route?.provider === 'opencode-zen' || route?.provider === 'opencode-go')
     ? CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS
     : CODER_TRANSIENT_PROVIDER_ALIAS;
@@ -235,14 +256,15 @@ export function buildCoderTransientProviderOverlay({
   smallBaseURL,
   credentialEnv,
   includeSmallModel = true,
-  preserveOpenCodeRequestIdentity = false,
+  routingContext,
 } = {}) {
   if (!route || typeof route !== 'object') throw new TypeError('buildCoderTransientProviderOverlay: route is required');
   if (typeof model !== 'string' || !model) throw new TypeError('buildCoderTransientProviderOverlay: model is required');
   if (typeof baseURL !== 'string' || !baseURL) throw new TypeError('buildCoderTransientProviderOverlay: baseURL is required');
   if (typeof credentialEnv !== 'string' || !credentialEnv) throw new TypeError('buildCoderTransientProviderOverlay: credentialEnv is required');
+  assertCoderTransientRoutingContext(routingContext);
   const modelId = route.modelId || model.slice(model.indexOf('/') + 1);
-  const mainAlias = coderTransientProviderAlias(route, { preserveOpenCodeRequestIdentity });
+  const mainAlias = coderTransientProviderAlias(route, routingContext);
   const main = `${mainAlias}/${modelId}`;
   const smallId = typeof smallModel === 'string' && smallModel.includes('/')
     ? smallModel.slice(smallModel.indexOf('/') + 1)
@@ -253,7 +275,7 @@ export function buildCoderTransientProviderOverlay({
   );
   if (includeSmallModel && smallId && !separateSmall) models[smallId] = { name: smallId };
   const smallAlias = separateSmall
-    ? `${coderTransientProviderAlias(smallRoute, { preserveOpenCodeRequestIdentity })}-small`
+    ? `${coderTransientProviderAlias(smallRoute, routingContext)}-small`
     : mainAlias;
   const smallProvider = separateSmall
     ? {

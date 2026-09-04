@@ -119,7 +119,7 @@ test('a valid token forwards to the pinned endpoint with the real credential', a
 
 test('proxy preserves only bounded OpenCode request identity headers upstream', async () => {
   const stub = stubFetch();
-  const { proxy } = await startProxy({}, stub);
+  const { proxy } = await startProxy({ provider: 'opencode-go' }, stub);
   try {
     const res = await post(proxy, {
       headers: {
@@ -139,7 +139,6 @@ test('proxy preserves only bounded OpenCode request identity headers upstream', 
       {
         'user-agent': 'opencode/1.18.22',
         'x-opencode-client': 'cli',
-        'x-opencode-project': 'project_test',
         'x-opencode-request': 'msg_test',
         'x-opencode-session': 'ses_test',
       },
@@ -151,6 +150,30 @@ test('proxy preserves only bounded OpenCode request identity headers upstream', 
     assert.equal(stub.calls[1].headers['x-opencode-session'], undefined);
   } finally {
     proxy.revoke();
+  }
+});
+
+test('non-OpenCode providers do not forward OpenCode identity metadata', async () => {
+  for (const provider of ['zai', 'moonshot', 'kimi-for-coding']) {
+    const stub = stubFetch();
+    const { proxy } = await startProxy({ provider }, stub);
+    try {
+      const res = await post(proxy, {
+        headers: {
+          'user-agent': 'opencode/1.18.22',
+          'x-opencode-session': 'ses_test',
+          'x-opencode-request': 'msg_test',
+          'x-opencode-client': 'cli',
+        },
+      });
+      assert.equal(res.status, 200, provider);
+      assert.equal(stub.calls[0].headers['user-agent'], undefined, provider);
+      assert.equal(stub.calls[0].headers['x-opencode-session'], undefined, provider);
+      assert.equal(stub.calls[0].headers['x-opencode-request'], undefined, provider);
+      assert.equal(stub.calls[0].headers['x-opencode-client'], undefined, provider);
+    } finally {
+      proxy.revoke();
+    }
   }
 });
 
@@ -190,6 +213,8 @@ test('proxy accepts an HTTP-date Retry-After and drops invalid retry metadata', 
     [{ 'retry-after': validDate }, validDate, null],
     [{ 'retry-after': '-1', 'retry-after-ms': '-1' }, null, null],
     [{ 'retry-after': 'later', 'retry-after-ms': 'NaN' }, null, null],
+    [{ 'retry-after': '0x10', 'retry-after-ms': '1e3' }, null, null],
+    [{ 'retry-after': '.5', 'retry-after-ms': '+5' }, null, null],
     [{ 'retry-after': '1'.repeat(1025), 'retry-after-ms': '1'.repeat(1025) }, null, null],
   ];
   for (const [headers, expectedAfter, expectedAfterMs] of cases) {
@@ -659,6 +684,7 @@ test('request-count cap rejects further requests', async () => {
     assert.equal((await post(proxy)).status, 200);
     const third = await post(proxy);
     assert.equal(third.status, 429);
+    assert.equal(third.headers.get('retry-after'), null);
     assert.equal(stub.calls.length, 2);
   } finally {
     proxy.revoke();
@@ -682,15 +708,16 @@ test('rate cap rejects bursts beyond the sustained rate', async () => {
   const stub = stubFetch();
   const { proxy } = await startProxy({ maxRatePerSec: 3 }, stub);
   try {
-    const statuses = [];
+    const responses = [];
     for (let i = 0; i < 8; i += 1) {
-      statuses.push((await post(proxy)).status);
+      responses.push(await post(proxy));
     }
-    const ok = statuses.filter((s) => s === 200).length;
-    const limited = statuses.filter((s) => s === 429).length;
-    assert.ok(ok <= 3, `at most 3 accepted, got ${ok}`);
-    assert.ok(limited >= 5, `at least 5 rate-limited, got ${limited}`);
-    assert.equal(ok + limited, 8);
+    const accepted = responses.filter((res) => res.status === 200);
+    const limited = responses.filter((res) => res.status === 429);
+    assert.ok(accepted.length <= 3, `at most 3 accepted, got ${accepted.length}`);
+    assert.ok(limited.length >= 5, `at least 5 rate-limited, got ${limited.length}`);
+    assert.equal(accepted.length + limited.length, 8);
+    for (const res of limited) assert.equal(res.headers.get('retry-after'), '1');
   } finally {
     proxy.revoke();
   }
