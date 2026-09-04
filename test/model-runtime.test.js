@@ -70,15 +70,26 @@ test('every execution engine has an explicit read-only projection policy', () =>
   }
 });
 
-test('run-scoped projection agent is primary and denies mutation tools', () => {
+test('run-scoped projection agent is primary and exposes only an explicit read-only allowlist', () => {
   const config = JSON.parse(withReadOnlyProjectionAgent('{"model":"provider/model"}'));
   assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
     description: 'Triss run-scoped read-only model projection agent.',
     mode: 'primary',
-    permission: { edit: 'deny', bash: 'deny' },
+    permission: {
+      '*': 'deny',
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+      list: 'allow',
+      task: 'deny',
+      skill: 'deny',
+      edit: 'deny',
+      bash: 'deny',
+      external_directory: 'deny',
+    },
     prompt:
-      'You are a read-only Triss model projection. Answer the supplied request using read-only tools only. ' +
-      'Never edit files and never run shell commands.',
+      'You are a read-only Triss model projection. Answer the supplied request using only the explicitly ' +
+      'allowed read-only tools. Never edit files, run shell commands, load skills, or delegate to subagents.',
   });
 });
 
@@ -203,6 +214,7 @@ test('production engine adapter projects the resolved route through coder and no
     request: {
       task: 'review',
       protectCredentials: true,
+      timeout: 5000,
       messages: [
         { role: 'system', content: 'Return plain text.' },
         { role: 'user', content: 'Answer now.' },
@@ -241,6 +253,7 @@ test('production engine adapter projects the resolved route through coder and no
     modelProjectionTask: 'review',
     isolate: false,
     protectCredentials: true,
+    timeout: 5,
   });
   assert.equal(call.deps.providerConfigSnapshot, snapshot);
   assert.equal(call.streamed, 'done');

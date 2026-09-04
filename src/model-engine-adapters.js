@@ -52,6 +52,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   }
   const policy = resolveModelProjectionPolicy(request?.task, engine);
   const runCoderRun = deps.runCoderRun || (await import('./commands/coder.js')).runCoderRun;
+  const timeoutSeconds = request.timeout === undefined ? undefined : request.timeout / 1000;
   let stdout = '';
   await runCoderRun(promptFromRequest(request), {
     engine,
@@ -61,6 +62,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     modelProjectionTask: request.task,
     isolate: policy.isolate,
     protectCredentials: request.protectCredentials === true,
+    timeout: timeoutSeconds,
   }, {
     abortSignal: request.signal,
     providerConfigSnapshot: snapshot,

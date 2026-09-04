@@ -3,11 +3,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { handleToolRequest, MCP_SERVER_VERSION } from '../src/mcp/server.js';
 import { emptyReviewResponseMessage } from '../src/review-defaults.js';
 import { createExecutionResult } from '../src/transports/result.js';
+import { reviewShardHandler, writeHandler } from '../src/mcp/handlers.js';
+import { listTools } from '../src/mcp/tools.js';
 
 test('MCP server advertises the package version', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -148,7 +151,7 @@ test('MCP server publishes projected-engine warnings and safe credential intent'
         },
         handler: async (_args, deps) => {
           assert.equal(deps.modelProtectCredentials, true);
-          deps.onWarnings(['credential warning', 'engine warning']);
+          deps.onWarnings(['credential warning', 'credential warning', 'engine warning']);
           return 'final verdict';
         },
       }),
@@ -159,6 +162,82 @@ test('MCP server publishes projected-engine warnings and safe credential intent'
     content: 'final verdict',
     warnings: ['credential warning', 'engine warning'],
   });
+});
+
+test('triss_write publishes warnings as metadata without writing them into the target', async () => {
+  const dir = mkdtempSync(join(process.cwd(), '.triss-mcp-write-'));
+  const target = join(dir, 'generated.js');
+  const warning = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: raw credential exposed';
+  const tool = (await listTools()).find((entry) => entry.name === 'triss_write');
+  try {
+    const result = await handleToolRequest(
+      {
+        params: {
+          name: 'triss_write',
+          arguments: { spec: 'export one constant', target, protect_credentials: true },
+        },
+      },
+      {},
+      {
+        findTool: async () => ({
+          ...tool,
+          handler: (args, serverDeps) => writeHandler(args, {
+            ...serverDeps,
+            executeModelTask: async (request) => {
+              assert.equal(request.protectCredentials, true);
+              return {
+                resolved: { providerId: 'opencode-go', publicModel: 'opencode-go/test' },
+                result: createExecutionResult({
+                  text: 'export const one = 1;\n',
+                  finishReason: 'stop',
+                  warnings: [warning, warning],
+                }),
+              };
+            },
+          }),
+        }),
+      },
+    );
+    assert.deepEqual(result.structuredContent.warnings, [warning]);
+    assert.doesNotMatch(result.content[0].text, /TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED/);
+    assert.equal(readFileSync(target, 'utf8'), 'export const one = 1;\n');
+    assert.doesNotMatch(readFileSync(target, 'utf8'), /\[triss warnings\]|TRISS_CODER_CREDENTIAL/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('triss_review_shard deduplicates projected warnings outside shard verdicts', async () => {
+  const warning = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED: raw credential exposed';
+  const diff = [
+    'diff --git a/a.js b/a.js',
+    '--- a/a.js',
+    '+++ b/a.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const tool = (await listTools()).find((entry) => entry.name === 'triss_review_shard');
+  const result = await handleToolRequest(
+    { params: { name: 'triss_review_shard', arguments: { base: 'main' } } },
+    {},
+    {
+      findTool: async () => ({
+        ...tool,
+        handler: (args, serverDeps) => reviewShardHandler(args, {
+          ...serverDeps,
+          gitDiff: () => diff,
+          callModel: async (_input, modelDeps) => {
+            modelDeps.onWarnings([warning, warning]);
+            return { content: 'shard verdict' };
+          },
+        }),
+      }),
+    },
+  );
+  assert.deepEqual(result.structuredContent.warnings, [warning]);
+  assert.match(result.content[0].text, /--- shard 1 ---\nshard verdict/);
+  assert.doesNotMatch(result.content[0].text, /TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED/);
 });
 
 test('MCP server always includes structuredContent for tools that declare an outputSchema, even without reasoning', async () => {

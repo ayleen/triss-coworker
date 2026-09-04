@@ -21,7 +21,10 @@ Setting `TRISS_DEFAULT_ENGINE=opencode` makes bare model-backed commands start
 OpenCode with a Triss-owned, run-scoped primary `triss-readonly-projection`
 agent. Before forwarding the selected credential, Triss resolves OpenCode's
 final effective configuration and requires that agent to remain primary with
-`edit` and `bash` denied; missing, changed, or unresolvable policy fails closed.
+an exact deny-by-default permission object: only `read`, `glob`, `grep`, and
+`list` are allowed, while delegation, skills, edits, shell execution, and
+external-directory access are explicitly denied. Missing, changed, or
+unresolvable policy fails closed before any credential is forwarded.
 The process still runs as the current OS user and is not a filesystem sandbox.
 `opencode2`, `omp`, and `crush` do not currently expose a verified read-only
 projection and are rejected before engine launch for non-coder model tasks.

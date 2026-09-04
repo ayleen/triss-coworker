@@ -67,16 +67,14 @@ import {
   gitlabCommentHandler,
 } from './handlers.js';
 
-// Output schema shared by the two tools that surface model metadata. When a
-// tool declares an outputSchema, the MCP server always attaches matching
-// structuredContent to successful results: content mirrors content[0].text,
-// reasoning_content carries model thinking, and warnings carries engine and
-// credential-safety warnings. Optional fields are omitted when empty.
-// Tools without an outputSchema keep their old plain { content: [...] } shape.
-// On error (isError:true) the server projects the stable allowlisted
-// TRISS_* code as {content, code} — the optional code field is part of the
-// closed schema so a real MCP Client validating error structuredContent does
-// not reject the result (the SDK validates even on isError; see Client.callTool).
+// Output schema shared by every model-backed tool. The MCP server always
+// attaches matching structuredContent on success: content mirrors
+// content[0].text, reasoning_content carries model thinking, and warnings
+// carries deduplicated engine and credential-safety warnings. Optional fields
+// are omitted when empty. On error (isError:true), the server projects the
+// stable allowlisted TRISS_* code as {content, code}; the optional code field
+// is part of the closed schema because the SDK validates structuredContent
+// even on errors.
 const TEXT_WITH_REASONING_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -140,6 +138,7 @@ const CORE_TOOLS = [
       },
       required: ['prompt'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: chatHandler,
   },
   {
@@ -189,6 +188,7 @@ const CORE_TOOLS = [
       },
       required: ['urls'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: fetchHandler,
   },
   {
@@ -266,6 +266,7 @@ const CORE_TOOLS = [
         },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: reviewShardHandler,
   },
   {
@@ -291,6 +292,7 @@ const CORE_TOOLS = [
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: commitMsgHandler,
   },
   {
@@ -311,6 +313,7 @@ const CORE_TOOLS = [
       },
       required: ['spec'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: writeHandler,
   },
 ];
@@ -330,6 +333,7 @@ const JIRA_TOOLS = [
       },
       required: ['jql'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: jiraSearchHandler,
   },
   {
@@ -346,6 +350,7 @@ const JIRA_TOOLS = [
       },
       required: ['key'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: jiraIssueHandler,
   },
   {
@@ -452,6 +457,7 @@ const LINEAR_TOOLS = [
       },
       required: ['term'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: linearSearchHandler,
   },
   {
@@ -468,6 +474,7 @@ const LINEAR_TOOLS = [
       },
       required: ['id'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: linearIssueHandler,
   },
   {
@@ -707,6 +714,7 @@ const GITHUB_TOOLS = [
       },
       required: ['query'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: githubSearchHandler,
   },
   {
@@ -728,6 +736,7 @@ const GITHUB_TOOLS = [
       },
       required: ['number'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: githubIssueHandler,
   },
   {
@@ -795,6 +804,7 @@ const CONFLUENCE_TOOLS = [
       },
       required: ['cql'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: confluenceSearchHandler,
   },
   {
@@ -810,6 +820,7 @@ const CONFLUENCE_TOOLS = [
       },
       required: ['id'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: confluencePageHandler,
   },
   {
@@ -872,6 +883,7 @@ const GITLAB_TOOLS = [
         max_tokens: { type: 'number' },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: gitlabSearchHandler,
   },
   {
@@ -889,6 +901,7 @@ const GITLAB_TOOLS = [
       },
       required: ['iid'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: gitlabIssueHandler,
   },
   {

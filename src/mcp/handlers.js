@@ -88,13 +88,11 @@ export async function callModel(
   };
 }
 
-// Compose a text-returning handler's output without hiding projected-engine
-// warnings in MCP server stderr.
-function withUsage({ content, usageReport, warnings = [] }) {
-  const warningReport = warnings.length
-    ? `[triss warnings]\n${warnings.map((warning) => `- ${warning}`).join('\n')}`
-    : '';
-  return [content, warningReport, usageReport].filter(Boolean).join('\n\n');
+// Compose human-readable content and usage only. Engine warnings travel
+// separately through deps.onWarnings into MCP structuredContent, so generated
+// content and target files can never contain warning metadata.
+function withUsage({ content, usageReport }) {
+  return [content, usageReport].filter(Boolean).join('\n\n');
 }
 
 // ─── core handlers ──────────────────────────────────────────────────────────
@@ -364,7 +362,7 @@ export async function writeHandler({ spec, target, context, provider, model, eng
 
 // ─── jira handlers ──────────────────────────────────────────────────────────
 
-export async function jiraSearchHandler({ jql, question, limit = 50, provider, model, engine, effort, max_tokens }) {
+export async function jiraSearchHandler({ jql, question, limit = 50, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { jira } = await import('../integrations/jira/client.js');
   const res = await jira.search({
     jql,
@@ -387,7 +385,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, provider, m
       { role: 'user', content: `<jira-issues jql="${jql}">\n${corpus}\n</jira-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function jiraIssueHandler({ key, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
@@ -542,7 +540,7 @@ export async function jiraWhoamiHandler() {
 
 // ─── linear handlers ────────────────────────────────────────────────────────
 
-export async function linearSearchHandler({ term, question, limit = 50, provider, model, engine, effort, max_tokens }) {
+export async function linearSearchHandler({ term, question, limit = 50, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { linear } = await import('../integrations/linear/client.js');
   const issues = await linear.search({ term, limit });
   const corpus = issues
@@ -557,10 +555,10 @@ export async function linearSearchHandler({ term, question, limit = 50, provider
       { role: 'user', content: `<linear-issues term="${term}">\n${corpus}\n</linear-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function linearIssueHandler({ id, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function linearIssueHandler({ id, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { linear } = await import('../integrations/linear/client.js');
   const i = await linear.getIssue(id);
   const lines = [
@@ -590,7 +588,7 @@ export async function linearIssueHandler({ id, with_comments, question, provider
       { role: 'user', content: `<linear-issue>\n${text}\n</linear-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function linearCreateHandler({
@@ -806,7 +804,7 @@ export async function linearAttachmentsHandler({ id }) {
 
 // ─── github handlers ────────────────────────────────────────────────────────
 
-export async function githubSearchHandler({ query, limit = 30, question, provider, model, engine, effort, max_tokens }) {
+export async function githubSearchHandler({ query, limit = 30, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { github } = await import('../integrations/github/client.js');
   const data = await github.search({ query, limit });
   const items = data.items || [];
@@ -825,10 +823,10 @@ export async function githubSearchHandler({ query, limit = 30, question, provide
       { role: 'user', content: `<github-issues query="${query}">\n${corpus}\n</github-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function githubIssueHandler({ repo, number, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function githubIssueHandler({ repo, number, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { github, resolveRepo } = await import('../integrations/github/client.js');
   const r = resolveRepo(repo);
   const issue = await github.getIssue(r, number);
@@ -858,7 +856,7 @@ export async function githubIssueHandler({ repo, number, with_comments, question
       { role: 'user', content: `<github-issue>\n${text}\n</github-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function githubCreateHandler({ repo, title, body, labels, assignees }) {
@@ -891,7 +889,7 @@ export async function githubCommentHandler({ repo, number, body }) {
 
 // ─── confluence handlers ────────────────────────────────────────────────────
 
-export async function confluenceSearchHandler({ cql, limit = 25, question, provider, model, engine, effort, max_tokens }) {
+export async function confluenceSearchHandler({ cql, limit = 25, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const data = await confluence.search({ cql, limit });
   const results = data.results || [];
@@ -910,10 +908,10 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, provi
       { role: 'user', content: `<confluence-results cql="${cql}">\n${corpus}\n</confluence-results>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function confluencePageHandler({ id, question, provider, model, engine, effort, max_tokens }) {
+export async function confluencePageHandler({ id, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const { adfToText } = await import('../integrations/jira/adf.js');
   const page = await confluence.getPage(id);
@@ -945,7 +943,7 @@ export async function confluencePageHandler({ id, question, provider, model, eng
       { role: 'user', content: `<confluence-page>\n${text}\n</confluence-page>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function confluenceCreateHandler({ space, title, body, parent }) {
@@ -978,7 +976,7 @@ export async function confluenceSpacesHandler({ limit = 100 } = {}) {
 
 // ─── gitlab handlers ────────────────────────────────────────────────────────
 
-export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, provider, model, engine, effort, max_tokens }) {
+export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { gitlab } = await import('../integrations/gitlab/client.js');
   const items = await gitlab.search({ projectPath: project, search, scope, limit });
   const corpus = (Array.isArray(items) ? items : [])
@@ -996,10 +994,10 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
       { role: 'user', content: `<gitlab-issues search="${search}">\n${corpus}\n</gitlab-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function gitlabIssueHandler({ project, iid, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function gitlabIssueHandler({ project, iid, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
   const p = resolveProject(project);
   const issue = await gitlab.getIssue(p, iid);
@@ -1029,7 +1027,7 @@ export async function gitlabIssueHandler({ project, iid, with_comments, question
       { role: 'user', content: `<gitlab-issue>\n${text}\n</gitlab-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function gitlabCreateHandler({ project, title, body, labels }) {

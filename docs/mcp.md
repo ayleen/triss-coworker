@@ -41,12 +41,14 @@ triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
 triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
 ```
 
-Bare `triss_ask` and `triss_review` requests then use a run-scoped primary
-`triss-readonly-projection` agent whose effective `edit` and `bash`
-permissions are verified as denied before launch. Set `protect_credentials`
-to request the parent-owned credential proxy. Projected-engine warnings are
-returned in structured `warnings`. Restart the MCP host after changing
-persisted defaults.
+Bare model-backed requests then use a run-scoped primary
+`triss-readonly-projection` agent. Its final effective permission object is
+verified against an exact deny-by-default contract: only `read`, `glob`,
+`grep`, and `list` are allowed, while `task`, `skill`, `edit`, `bash`, and
+external-directory access are explicitly denied. Set `protect_credentials`
+to request the parent-owned credential proxy. Every model-backed MCP tool
+returns projected-engine warnings separately in structured `warnings`.
+Restart the MCP host after changing persisted defaults.
 
 ## Core tools
 

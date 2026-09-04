@@ -2686,8 +2686,7 @@ function auditEffectiveOpenCodeConfiguration(
     if (
       !actualAgent ||
       actualAgent.mode !== 'primary' ||
-      actualAgent.permission?.edit !== 'deny' ||
-      actualAgent.permission?.bash !== 'deny' ||
+      !isDeepStrictEqual(actualAgent.permission, expectedProjectionAgent.permission) ||
       actualAgent.prompt !== expectedProjectionAgent.prompt
     ) {
       throw new Error(

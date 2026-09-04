@@ -6,8 +6,16 @@ import { MODEL_EXECUTION_ENGINES } from './provider-contract.js';
 export const READ_ONLY_PROJECTION_AGENT = 'triss-readonly-projection';
 
 const READ_ONLY_AGENT_PERMISSION = Object.freeze({
+  '*': 'deny',
+  read: 'allow',
+  glob: 'allow',
+  grep: 'allow',
+  list: 'allow',
+  task: 'deny',
+  skill: 'deny',
   edit: 'deny',
   bash: 'deny',
+  external_directory: 'deny',
 });
 
 export const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
@@ -15,8 +23,8 @@ export const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
   mode: 'primary',
   permission: READ_ONLY_AGENT_PERMISSION,
   prompt:
-    'You are a read-only Triss model projection. Answer the supplied request using read-only tools only. ' +
-    'Never edit files and never run shell commands.',
+    'You are a read-only Triss model projection. Answer the supplied request using only the explicitly ' +
+    'allowed read-only tools. Never edit files, run shell commands, load skills, or delegate to subagents.',
 });
 
 const POLICIES = Object.freeze({
