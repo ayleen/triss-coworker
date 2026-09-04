@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { resolveCoderEngine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import { createProviderConfigSnapshot } from '../src/provider-config.js';
+import { startCoderCredentialProxy } from '../src/coder-credential-proxy.js';
 
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
@@ -118,7 +119,7 @@ const pinSh = () => (cmd, args) => {
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
   }
   if (args && args[0] === 'run' && args[1] === '--help') {
-    return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
+    return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
   }
   return { status: 1, stdout: '', stderr: '', error: null };
 };
@@ -204,7 +205,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
       return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     }
     assert.equal(cmd, '/resolved/bin/opencode2');
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null };
     assert.deepEqual(argv, ['--version']);
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null };
   };
@@ -216,7 +217,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null };
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17000\n', error: null };
   }, fsOk);
   assert.equal(detOld.found, true);
@@ -241,7 +242,7 @@ test('detectOpenCode2 invariant #6: relative which output, realpath failure, and
     argv && argv[0] === '--version'
       ? { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null }
       : argv && argv[0] === 'run'
-        ? { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null }
+        ? { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null }
       : { status: 1, stdout: '', error: null }
   );
   // A relative PATH entry makes `which` print a relative path — the parent
@@ -314,6 +315,18 @@ test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt
   assert.equal(base.includes('--pure'), false);
   assert.equal(base.includes('--dir'), false);
 
+  const withEffort = buildOpenCode2RunArgv({
+    prompt: 'do it',
+    model: 'zai/glm-5.2',
+    effort: 'high',
+  });
+  assert.deepEqual(withEffort, [
+    'run', '--standalone', '--format', 'json', '--auto',
+    '--model', 'zai/glm-5.2#high',
+    'do it',
+  ]);
+  assert.equal(withEffort.includes('--variant'), false);
+
   assert.deepEqual(
     buildOpenCode2RunArgv({ prompt: 'p', model: 'm', agent: 'build', sessionRealId: 'ses_v2_x' }),
     ['run', '--standalone', '--format', 'json', '--auto', '--model', 'm', '--agent', 'build', '--session', 'ses_v2_x', 'p'],
@@ -328,6 +341,38 @@ test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt
     /--session and --continue/,
   );
 });
+
+test(
+  'runCoderRun rejects an explicit pre-suffixed OpenCode 2 model before side effects',
+  withEnv({ TRISS_USAGE_LOG: '0' }, async () => {
+    let sideEffects = 0;
+    await assert.rejects(
+      () => runCoderRun('x', { engine: 'opencode2', model: 'zai/glm-5.2#low' }, {
+        spawn: () => { sideEffects += 1; },
+        spawnSync: () => { sideEffects += 1; },
+        startCredentialProxy: () => { sideEffects += 1; },
+      }),
+      /must not include a #variant suffix/u,
+    );
+    assert.equal(sideEffects, 0);
+  }),
+);
+
+test(
+  'runCoderRun rejects a configured pre-suffixed OpenCode 2 model before side effects',
+  withEnv({ TRISS_ZAI_MODEL: 'glm-5.2#low', TRISS_USAGE_LOG: '0' }, async () => {
+    let sideEffects = 0;
+    await assert.rejects(
+      () => runCoderRun('x', { engine: 'opencode2' }, {
+        spawn: () => { sideEffects += 1; },
+        spawnSync: () => { sideEffects += 1; },
+        startCredentialProxy: () => { sideEffects += 1; },
+      }),
+      /must not include a #variant suffix/u,
+    );
+    assert.equal(sideEffects, 0);
+  }),
+);
 
 // ─── spawn env: XDG isolation + auto-update disable ─────────────────────────
 
@@ -480,6 +525,44 @@ test(
 );
 
 test(
+  'runCoderRun --engine opencode2: unavailable effort is forwarded once and never retried or downgraded',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-v2-test',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const stream = JSON.stringify({
+        type: 'error',
+        sessionID: 'ses_v2_variant',
+        error: {
+          type: 'VariantUnavailableError',
+          message: 'Variant "low" is unavailable for model "triss-coder-transient/glm-5.2"',
+        },
+      }) + '\n';
+      const rec = recordingSpawn(stream, { code: 0 });
+      const capture = stdoutCapture();
+      await runCoderRun('x', { engine: 'opencode2', effort: 'low' }, {
+        spawn: rec.spawnFn,
+        spawnSync: pinSh(),
+        stdoutWrite: capture.stdoutWrite,
+      });
+
+      assert.equal(rec.calls.length, 1);
+      assert.equal(
+        rec.calls[0].argv[rec.calls[0].argv.indexOf('--model') + 1],
+        'triss-coder-transient/glm-5.2#low',
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.exit_reason, 'error');
+      assert.ok(envelope.warnings.some((warning) => warning.includes('Variant "low" is unavailable')));
+    },
+  ),
+);
+
+
+test(
   'runCoderRun --engine opencode2: no step_finish -> usage_status "missing", null counters, V2 warning; never zeros',
   withEnv(
     {
@@ -527,10 +610,19 @@ test(
     async () => {
       const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
       const capture = stdoutCapture();
+      let proxyInput;
+      let usageInput;
       // The proxy-token assertions below are PROTECTED-mode behavior.
-      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true }, {
+      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true, effort: ' HIGH ' }, {
         spawn: rec.spawnFn,
         spawnSync: pinSh(),
+        startCredentialProxy: (input) => {
+          proxyInput = input;
+          return startCoderCredentialProxy(input);
+        },
+        logUsage: (input) => {
+          usageInput = input;
+        },
         stdoutWrite: capture.stdoutWrite,
       });
       const { cmd, argv, options } = rec.calls[0];
@@ -545,7 +637,7 @@ test(
       // agent-source preflight).
       assert.deepEqual(argv, [
         'run', '--standalone', '--format', 'json', '--auto',
-        '--model', 'triss-coder-transient/glm-5.2',
+        '--model', 'triss-coder-transient/glm-5.2#high',
         'x',
       ]);
       assert.equal(options.env.OPENCODE_DISABLE_AUTOUPDATE, '1');
@@ -563,6 +655,8 @@ test(
       assert.deepEqual(overlay.provider['triss-coder-transient'].models, {
         'glm-5.2': { name: 'glm-5.2' },
       });
+      assert.equal(proxyInput.model, 'triss-coder-transient/glm-5.2');
+      assert.deepEqual(proxyInput.models, ['glm-5.2']);
       assert.equal(options.cwd !== undefined, true, 'child cwd is passed explicitly');
 
       const envelope = JSON.parse(capture.text().trim());
@@ -573,6 +667,10 @@ test(
       assert.equal(envelope.final_text, 'hello');
       assert.equal(envelope.usage.usage_status, 'reported');
       assert.equal(envelope.usage.tokens.input_uncached, 3141);
+      assert.equal(envelope.requested_model, 'zai/glm-5.2');
+      assert.equal(envelope.engine_model, 'triss-coder-transient/glm-5.2');
+      assert.equal(usageInput.model, 'zai/glm-5.2');
+      assert.equal(usageInput.billing_model, 'zai/glm-5.2');
     },
   ),
 );

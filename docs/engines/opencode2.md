@@ -13,6 +13,23 @@ triss coder run --engine opencode2 \
 
 The installed binary must satisfy the raise-only `TRISS_CODER_OPENCODE2_VERSION` minimum and the required capability probe. Unsupported development/TUI variants fail closed. Detection also verifies that read-only probes leave no resident service.
 
+## Reasoning effort and model variants
+
+The supported beta encodes an explicit effort in the runtime model selector:
+`provider/model#variant`; it does not expose a separate `--variant` flag.
+Keep `--model` on the base canonical model and pass the logical value through
+`--effort low|medium|high|xhigh|max`. Triss adds the private suffix only to the
+OpenCode 2 subprocess argument, while routing, credential proxy, usage, and
+result identities remain on the base model.
+
+Variant availability is model-specific. A compatible CLI supports the selector
+grammar, but a selected model may not implement every logical effort. OpenCode
+2 returns an explicit `VariantUnavailableError` in that case; Triss does not
+silently retry with a different effort. The current beta generates `high` and
+`max` for transient OpenAI-compatible GLM-5.2 models. A model value already
+containing `#variant` is rejected before engine side effects—use `--effort`
+instead.
+
 ## Shared configuration
 
 OpenCode 1 and OpenCode 2 share the same engine configuration file. Protected OpenCode 2 requires deny-everything shell permissions; a normal OpenCode 1 allowlist is intentionally rejected at the beta credential boundary. Reinitializing one engine can therefore change whether the shared file is acceptable to the other. Triss reports this explicitly.

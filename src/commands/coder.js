@@ -5994,6 +5994,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const agent = opts.agent || (engine === 'opencode2' || engine === 'omp' ? null : 'coder');
 
   const modelUsed = selectedModel.publicModel;
+  if (engine === 'opencode2' && modelUsed.includes('#')) {
+    throw new Error(
+      `OpenCode 2 model "${modelUsed}" must not include a #variant suffix — ` +
+        'pass the variant through --effort (or the effort field) instead.',
+    );
+  }
 
   // Credential selection follows the canonical provider route. Crush supports
   // only Z.A.I and therefore always requires ZHIPU_API_KEY.
@@ -7016,7 +7022,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const argv2 = opencode2Engine.buildRunArgv({
       prompt,
       model: canonicalTransientRouting ? transientModelName(runtimeRoute) : modelUsed,
-      effort: opts.effort,
+      effort: selectedModel.effort,
       agent,
       sessionRealId: sessionRealIdArg2,
       cont: !!opts.continue,

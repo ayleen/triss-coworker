@@ -100,7 +100,7 @@ const makeSh = () => {
       return { status: 0, stdout: `${OC2_BIN}\n`, stderr: '' };
     }
     if (args && args[0] === 'run' && args[1] === '--help') {
-      return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
+      return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
     }
     if (args && args[0] === '--version' && cmd === 'opencode') {
       return { status: 0, stdout: '1.18.22\n', stderr: '' };

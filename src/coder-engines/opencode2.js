@@ -10,9 +10,10 @@
 //
 // Verified-against-the-supported-beta facts encoded here (live recon against
 // the current beta line; see the routing recovery plan):
-//   - CLI surface: `run --standalone --format json --auto --model <m>
-//     --variant <effort> [--agent <a>] [--session <id> | --continue] <prompt>`;
-//     NO --pure and NO --dir (child cwd selects the project).
+//   - CLI surface: `run --standalone --format json --auto
+//     --model <provider/model#variant> [--agent <a>]
+//     [--session <id> | --continue] <prompt>`; NO separate --variant, NO
+//     --pure and NO --dir (child cwd selects the project).
 //   - Events on stdout are ndjson with the SAME event vocabulary as V1
 //     (step_start/tool_use/step_finish/text/error) but TWO differences the
 //     fold must handle: (1) `error.message` is populated (V1 parsers read
@@ -50,7 +51,7 @@ export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
 const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model', '--variant']);
+const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -101,6 +102,35 @@ export function opencode2VersionPin() {
 
 export { OPENCODE2_PIN_DEFAULT };
 
+// Parse complete option records instead of searching arbitrary help substrings:
+// `--model-old` is not `--model`, and a variant example outside the --model
+// record must not qualify a credential-bearing binary. Wrapped descriptions
+// stay attached until a blank, section heading, or the next option record.
+function openCode2OptionRecords(help) {
+  const records = new Map();
+  let current = [];
+  for (const line of String(help || '').split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      current = [];
+      continue;
+    }
+    if (/^\s*-/u.test(line)) {
+      const flags = [...trimmed.matchAll(/(?:^|[,\s])(--[a-z0-9][a-z0-9-]*)(?=[,\s]|$)/giu)]
+        .map((match) => match[1]);
+      current = flags;
+      for (const flag of flags) records.set(flag, trimmed);
+      continue;
+    }
+    if (current.length > 0 && /^\s+\S/u.test(line)) {
+      for (const flag of current) records.set(flag, `${records.get(flag)} ${trimmed}`);
+      continue;
+    }
+    current = [];
+  }
+  return records;
+}
+
 export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
   let helpResult;
   try {
@@ -109,7 +139,11 @@ export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, en
     helpResult = { status: 1, error: err, stdout: '', stderr: '' };
   }
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
-  const missing = REQUIRED_CAPABILITIES.filter((flag) => !help.includes(flag));
+  const records = openCode2OptionRecords(help);
+  const missing = REQUIRED_CAPABILITIES.filter((flag) => !records.has(flag));
+  if (!String(records.get('--model') || '').includes('provider/model#variant')) {
+    missing.push('model#variant');
+  }
   return !parseOpenCode2Version(version)
     ? { ok: false, version, reason: 'unsupported-version', missing: [], help: '' }
     : !helpResult || helpResult.error || helpResult.status !== 0 || missing.length
@@ -335,8 +369,8 @@ export function installHintOpenCode2() {
 //  - `--format json --auto`: ndjson events on stdout; headless auto-approve.
 //  - `--model <m>` ALWAYS explicit — same determinism argument as V1 (the
 //    wrong config-file default loops forever with nothing on stdout).
-//  - `--variant <effort>` carries explicit logical effort on the supported
-//    beta contract; its absence is a capability mismatch, never downgraded.
+//  - `--model <model#effort>` carries explicit logical effort on the supported
+//    beta contract; there is no separate --variant flag.
 //  - `--session <real-id>` XOR `--continue` — the CLI accepts both together
 //    but the semantics are ambiguous (which session does --continue resume
 //    when --session also names one?), so the adapter refuses the combo
@@ -351,8 +385,8 @@ export function buildOpenCode2RunArgv({ prompt, model, effort, agent, sessionRea
         'passing both states an ambiguous resume intent.',
     );
   }
-  const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', model];
-  if (effort) argv.push('--variant', effort);
+  const modelSelector = effort ? `${model}#${effort}` : model;
+  const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', modelSelector];
   if (agent) argv.push('--agent', agent);
   if (sessionRealId) argv.push('--session', sessionRealId);
   if (cont) argv.push('--continue');
