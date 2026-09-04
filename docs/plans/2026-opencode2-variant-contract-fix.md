@@ -337,7 +337,7 @@ node --test \
 Они доказывают:
 
 - beta-19059 help квалифицируется;
-- decoy substrings и неверный model record не квалифицируются;
+- option-like text вне FLAGS sections и `--model-old` не квалифицируются;
 - normalized explicit effort попадает только в runtime selector;
 - omitted effort оставляет base selector;
 - route/overlay/proxy/envelope/usage identities остаются base-only;

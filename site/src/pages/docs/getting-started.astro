@@ -83,6 +83,13 @@ triss status</pre>
   [C]laude / Code[X] / [B]oth                                 → B
 ✓ registered MCP server (claude + codex)
 ✓ wrote agent rules (CLAUDE.md + AGENTS.md)</pre>
+        <div data-opencode2-quickstart style="margin-top: 22px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
+          <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Optional: use the OpenCode 2 beta engine</div>
+          <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ npm install -g @opencode-ai/cli@beta
+$ triss coder init --engine opencode2 --provider opencode-zen
+$ triss coder run --engine opencode2 --model opencode-zen/deepseek-v4-flash-free "Implement the task"</pre>
+          <p style="margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">OpenCode 2 0.0.0-beta-19059 or newer is accepted by default. Triss never pins an exact build and checks required option declarations rather than help-description wording. Lower or malformed <code style="font-family: var(--font-mono);">TRISS_CODER_OPENCODE2_VERSION</code> values fall back to that floor.</p>
+        </div>
         <div data-omp-quickstart style="margin-top: 22px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
           <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Optional: use the native OMP coder engine</div>
           <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ curl https://omp.sh/install | sh
