@@ -52,6 +52,9 @@ const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
+const MODEL_VARIANT_DESCRIPTION = 'Model to use in the format provider/model#variant';
+const OPTION_ALIAS_LIST_RE =
+  /^(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9])(?:\s*,\s*(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9]))*(?=\s|$)/iu;
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -108,25 +111,40 @@ export { OPENCODE2_PIN_DEFAULT };
 // stay attached until a blank, section heading, or the next option record.
 function openCode2OptionRecords(help) {
   const records = new Map();
-  let current = [];
+  let inOptionSection = false;
+  let current = null;
+  let optionIndent = null;
   for (const line of String(help || '').split(/\r?\n/u)) {
     const trimmed = line.trim();
+    const indent = /^\s*/u.exec(line)?.[0].length || 0;
+    if (indent === 0 && /^[A-Z][A-Z ]*$/u.test(trimmed)) {
+      inOptionSection = trimmed === 'FLAGS' || trimmed === 'GLOBAL FLAGS';
+      current = null;
+      optionIndent = null;
+      continue;
+    }
     if (!trimmed) {
-      current = [];
+      current = null;
+      optionIndent = null;
       continue;
     }
-    if (/^\s*-/u.test(line)) {
-      const flags = [...trimmed.matchAll(/(?:^|[,\s])(--[a-z0-9][a-z0-9-]*)(?=[,\s]|$)/giu)]
-        .map((match) => match[1]);
-      current = flags;
-      for (const flag of flags) records.set(flag, trimmed);
+    if (!inOptionSection) continue;
+    if (current && optionIndent !== null && indent > optionIndent) {
+      current.description = `${current.description} ${trimmed}`.trim();
       continue;
     }
-    if (current.length > 0 && /^\s+\S/u.test(line)) {
-      for (const flag of current) records.set(flag, `${records.get(flag)} ${trimmed}`);
+    const aliasList = OPTION_ALIAS_LIST_RE.exec(trimmed)?.[0];
+    if (aliasList && (optionIndent === null || indent === optionIndent)) {
+      optionIndent ??= indent;
+      const flags = [...aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)]
+        .map((match) => match[0]);
+      const [, ...descriptionColumns] = trimmed.slice(aliasList.length).split(/\s{2,}/u);
+      current = { description: descriptionColumns.join(' ').trim() };
+      for (const flag of flags) records.set(flag, current);
       continue;
     }
-    current = [];
+    current = null;
+    optionIndent = null;
   }
   return records;
 }
@@ -141,7 +159,7 @@ export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, en
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
   const records = openCode2OptionRecords(help);
   const missing = REQUIRED_CAPABILITIES.filter((flag) => !records.has(flag));
-  if (!String(records.get('--model') || '').includes('provider/model#variant')) {
+  if (records.get('--model')?.description !== MODEL_VARIANT_DESCRIPTION) {
     missing.push('model#variant');
   }
   return !parseOpenCode2Version(version)

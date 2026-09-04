@@ -87,7 +87,7 @@ const fakeSh = () => (cmd, args) => {
     return { status: 0, stdout: `${FAKE_OC2}\n`, stderr: '' };
   }
   if ((args || [])[0] === 'run' && (args || [])[1] === '--help') {
-    return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
+    return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
   }
   if (cmd !== 'opencode' && (args || [])[0] === '--version') {
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };

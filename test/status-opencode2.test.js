@@ -12,10 +12,11 @@ import { stripAnsi } from './_ansi.js';
 
 const BETA_VERSION = '0.0.0-beta-19059';
 const COMPATIBLE_HELP = [
-  '--standalone',
-  '--format choice',
-  '--auto',
-  '--model, -m string  Model to use in the format provider/model#variant',
+  'FLAGS',
+  '  --standalone',
+  '  --format choice',
+  '  --auto',
+  '  --model, -m string  Model to use in the format provider/model#variant',
 ].join('\n');
 
 function captureStdout(fn) {

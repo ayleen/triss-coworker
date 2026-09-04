@@ -96,7 +96,7 @@ const makeSh = () => {
       return { status: 0, stdout: `${makeFakeBinary()}\n`, stderr: '' };
     }
     if (args && args[0] === 'run' && args[1] === '--help') {
-      return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
+      return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
     }
     if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
       return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };

@@ -100,7 +100,53 @@ test('capability probe binds provider/model#variant to the --model option record
     ['--model', 'model#variant'],
   );
 
+  for (const misleadingModelRecord of [
+    '  --model, -m string  Legacy provider/model#variant is no longer supported',
+    '  --model, -m string  Reject provider/model#variant; use a base model',
+    '  --model, -m string  Removed; previous description "Model to use in the format provider/model#variant"',
+    '  --model, -m string\n      Removed; previous description "Model to use in the format provider/model#variant"',
+  ]) {
+    const misleadingHelp = markerOutsideModel.replace(
+      '  --model, -m string  Model to use in the format provider/model',
+      misleadingModelRecord,
+    );
+    assert.deepEqual(
+      probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
+        status: 0,
+        stdout: misleadingHelp,
+      })).missing,
+      ['model#variant'],
+    );
+  }
+
+  for (const declarationSpoof of [
+    '  --legacy string  Replaces --standalone --format --auto; --model: Model to use in the format provider/model#variant',
+    '- Removed --standalone --format --auto --model: Model to use in the format provider/model#variant',
+    '--model: removed; previous description "Model to use in the format provider/model#variant"',
+    [
+      'FLAGS',
+      '  --legacy string  Compatibility notes:',
+      '      --standalone, --format, --auto, --model  Model to use in the format provider/model#variant',
+    ].join('\n'),
+    [
+      'EXAMPLES',
+      '  --standalone            Old invocation',
+      '  --format choice         Old invocation',
+      '  --auto                  Old invocation',
+      '  --model, -m string      Model to use in the format provider/model#variant',
+    ].join('\n'),
+  ]) {
+    assert.deepEqual(
+      probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
+        status: 0,
+        stdout: declarationSpoof,
+      })).missing,
+      ['--standalone', '--format', '--auto', '--model', 'model#variant'],
+    );
+  }
+
   const separateVariantFlag = [
+    'FLAGS',
     '  --standalone',
     '  --format choice',
     '  --auto',

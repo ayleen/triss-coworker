@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode 2 now qualifies the published beta CLI against its real
+  `--model provider/model#variant` contract instead of requiring a nonexistent
+  standalone `--variant` flag. Explicit effort is appended only to the runtime
+  selector, and pre-suffixed public/configured OpenCode 2 models are rejected
+  before engine side effects.
+
 ## [0.42.0] — 2026-08-29
 
 ### Added
@@ -35,12 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routes are unchanged.
 
 ### Fixed
-
-- OpenCode 2 now qualifies the published beta CLI against its real
-  `--model provider/model#variant` contract instead of requiring a nonexistent
-  standalone `--variant` flag. Explicit effort is appended only to the runtime
-  selector, and pre-suffixed public/configured OpenCode 2 models are rejected
-  before engine side effects.
 
 - Quoted values from external dotenv writers no longer disappear when they
   contain literal backslashes or control characters that are invalid JSON;

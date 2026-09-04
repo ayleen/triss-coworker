@@ -19,7 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -119,7 +119,7 @@ const pinSh = () => (cmd, args) => {
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
   }
   if (args && args[0] === 'run' && args[1] === '--help') {
-    return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
+    return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
   }
   return { status: 1, stdout: '', stderr: '', error: null };
 };
@@ -205,7 +205,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
       return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     }
     assert.equal(cmd, '/resolved/bin/opencode2');
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
     assert.deepEqual(argv, ['--version']);
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null };
   };
@@ -217,7 +217,7 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
     return { status: 0, stdout: 'opencode2 v0.0.0-beta-17000\n', error: null };
   }, fsOk);
   assert.equal(detOld.found, true);
@@ -242,7 +242,7 @@ test('detectOpenCode2 invariant #6: relative which output, realpath failure, and
     argv && argv[0] === '--version'
       ? { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null }
       : argv && argv[0] === 'run'
-        ? { status: 0, stdout: '--standalone\n--format choice\n--auto\n--model, -m string  Model to use in the format provider/model#variant\n', error: null }
+        ? { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null }
       : { status: 1, stdout: '', error: null }
   );
   // A relative PATH entry makes `which` print a relative path — the parent
@@ -343,11 +343,16 @@ test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt
 });
 
 test(
-  'runCoderRun rejects an explicit pre-suffixed OpenCode 2 model before side effects',
+  'runCoderRun rejects an explicit pre-suffixed OpenCode 2 model before isolation, session, or process side effects',
   withEnv({ TRISS_USAGE_LOG: '0' }, async () => {
     let sideEffects = 0;
     await assert.rejects(
-      () => runCoderRun('x', { engine: 'opencode2', model: 'zai/glm-5.2#low' }, {
+      () => runCoderRun('x', {
+        engine: 'opencode2',
+        model: 'zai/glm-5.2#low',
+        isolate: true,
+        session: 'suffix-reject',
+      }, {
         spawn: () => { sideEffects += 1; },
         spawnSync: () => { sideEffects += 1; },
         startCredentialProxy: () => { sideEffects += 1; },
@@ -355,6 +360,7 @@ test(
       /must not include a #variant suffix/u,
     );
     assert.equal(sideEffects, 0);
+    assert.equal(existsSync(join(process.env.TRISS_PROJECT_ROOT, '.triss')), false);
   }),
 );
 
