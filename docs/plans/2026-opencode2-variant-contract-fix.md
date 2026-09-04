@@ -81,9 +81,13 @@ gate. Это исключает ложные отказы после безоп�
 
 Парсер проверяет whole option tokens внутри `FLAGS`/`GLOBAL FLAGS`, а не
 произвольные substrings. `--model-old` не удовлетворяет `--model`;
-example/footer/описание другой option не создают required records. Регистр
-heading, необязательное двоеточие, ANSI styling и неодинаковый отступ option
-records считаются presentation details.
+option-like text вне этих sections не создаёт required records. Внутри section
+каждая option-shaped строка считается declaration, все long aliases
+учитываются, а indentation игнорируется. Поэтому вложенная option-shaped prose
+неотличима от declaration и может квалифицировать option; это осознанный
+forward-compatibility tradeoff для help локально установленного binary.
+Регистр heading, необязательное двоеточие, ANSI styling и неодинаковый отступ
+option records считаются presentation details.
 
 `--variant` удаляется из списка обязательных flags. Missing list содержит
 только реально отсутствующие required options.
@@ -224,8 +228,9 @@ capture command, package version, Darwin arm64 и дату. Fixture не сод�
 - positive probe читает beta-19059 fixture;
 - help без отдельного `--variant` и без фиксированной variant-фразы проходит;
 - `Flags:`, `FLAGS:`, ANSI heading и неодинаковые отступы проходят;
+- declarations с несколькими long aliases проходят;
 - `--model-old` без `--model` не проходит;
-- option-like examples/prose не создают required records;
+- option-like text вне FLAGS sections не создаёт required records;
 - nonzero `run --help` не проходит даже с валидным text;
 - missing option возвращается по имени;
 - version/channel/service-process regressions используют реальный surface

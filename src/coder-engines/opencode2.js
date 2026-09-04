@@ -116,8 +116,11 @@ export { OPENCODE2_PIN_DEFAULT };
 // Parse actual option declarations inside FLAGS/GLOBAL FLAGS instead of
 // searching arbitrary help substrings. Heading case, an optional colon, ANSI
 // styling, and per-record indentation are presentation details and must not
-// reject a newer compatible build. Each declaration may expose one long option
-// plus short aliases; lists of unrelated long options in prose do not qualify.
+// reject a newer compatible build. Every option-shaped line in these sections
+// is authoritative and all long aliases qualify. Because indentation is
+// intentionally ignored, nested option-shaped prose is indistinguishable from
+// a declaration; accepting it is the forward-compatible choice for help emitted
+// by the locally installed binary.
 function openCode2OptionNames(help) {
   const options = new Set();
   let inOptionSection = false;
@@ -133,9 +136,9 @@ function openCode2OptionNames(help) {
     if (!inOptionSection || !trimmed) continue;
     const aliasList = OPTION_ALIAS_LIST_RE.exec(trimmed)?.[0];
     if (!aliasList) continue;
-    const longOptions = [...aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)]
-      .map((match) => match[0]);
-    if (longOptions.length === 1) options.add(longOptions[0]);
+    for (const match of aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)) {
+      options.add(match[0]);
+    }
   }
   return options;
 }

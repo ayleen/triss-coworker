@@ -88,6 +88,12 @@ test('capability probe requires real option records without pinning help wording
       '  --auto',
       '      --model, -m string  Select a model',
     ]),
+    compatibleHelp('FLAGS', [
+      '  --standalone, --no-service',
+      '  --format, --output-format choice',
+      '  --auto, --auto-approve',
+      '  --model, --model-id, -m string  Select a model',
+    ]),
   ]) {
     const result = probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
       status: 0,
@@ -112,14 +118,12 @@ test('capability probe requires real option records without pinning help wording
   );
 
   for (const declarationSpoof of [
-    '  --legacy string  Replaces --standalone --format --auto and --model',
-    '- Removed --standalone --format --auto --model',
-    '--model: removed option',
     [
       'FLAGS',
-      '  --legacy string  Compatibility notes:',
-      '      --standalone, --format, --auto, --model  Removed options',
+      '  --legacy string  Replaces --standalone --format --auto and --model',
     ].join('\n'),
+    '- Removed --standalone --format --auto --model',
+    '--model: removed option',
     [
       'EXAMPLES',
       '  --standalone            Old invocation',
