@@ -79,7 +79,7 @@ const makeSh = () => {
       return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
     }
     if (args && args[0] === '--version' && cmd === 'opencode2') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-19059\n', stderr: '' };
     }
     if (cmd === 'opencode' && args[0] === '--version') {
       return { status: 0, stdout: '1.18.22\n', stderr: '' };

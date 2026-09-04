@@ -33,9 +33,9 @@
  *      not shadowed by a later wildcard deny fails the gate regardless of
  *      how narrow it is. Only dead (shadowed) allows are tolerated.
  *
- * Translation semantics verified live against the supported beta's
- * v0.0.0-beta-17793 compatibility floor and capability contract
- * (minimum-version plus `run --help` probe; recovery-plan contract):
+ * Translation semantics verified live against the current supported beta
+ * floor v0.0.0-beta-19059 and its capability contract (minimum-version plus
+ * `run --help` probe; newer compatible versions remain supported):
  *   V1 `permission.bash` entries  -> V2 `permissions` ordered rules
  *                                    {action:"shell", resource, effect}
  *   V1 `provider.<id>.npm`        -> V2 `providers.<id>.package`

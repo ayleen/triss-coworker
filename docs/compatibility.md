@@ -15,3 +15,8 @@
 
 Node.js 22 and 24 are tested. Provider availability, model identifiers, and
 third-party CLI behavior can change independently of Triss.
+
+OpenCode 2 follows an immutable minimum-version rule: never an exact build pin.
+Triss supports the current qualified version and every newer parseable version;
+the capability gate checks only the required runtime surface. The configured
+minimum may raise the current floor but cannot lower it.

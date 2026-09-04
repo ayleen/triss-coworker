@@ -106,7 +106,7 @@ const makeSh = () => {
       return { status: 0, stdout: '1.18.22\n', stderr: '' };
     }
     if (args && args[0] === '--version' && cmd !== 'npm') {
-      return { status: 0, stdout: 'opencode2 v0.0.0-beta-17793\n', stderr: '' };
+      return { status: 0, stdout: 'opencode2 v0.0.0-beta-19059\n', stderr: '' };
     }
     if (cmd === 'git' && args[0] === '-C' && args.includes('rev-parse') && args.includes('--show-toplevel')) {
       return { status: 0, stdout: `${args[1]}\n`, stderr: '' };

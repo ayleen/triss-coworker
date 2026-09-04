@@ -39,9 +39,10 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
 import { parseRateLimitReset } from '../commands/coder.js';
 
-// Supported OpenCode 2 beta floor.  Runtime compatibility also requires the
-// capability probe below; version text alone is never sufficient.
-export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-17793';
+// Minimum supported OpenCode 2 release. Compatibility is never an exact pin:
+// every parseable version at or above this floor remains eligible when its
+// required CLI capabilities are present.
+export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-19059';
 export const OPENCODE2_SMALL_MODEL_UNUSED_WARNING =
   'OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.';
 export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
@@ -52,7 +53,9 @@ const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
-const MODEL_VARIANT_DESCRIPTION = 'Model to use in the format provider/model#variant';
+const MODEL_VARIANT_GRAMMAR = 'provider/model#variant';
+const MODEL_VARIANT_NEGATION_RE =
+  /\b(?:legacy|deprecated|obsolete|removed?|reject(?:ed|s)?|unsupported)\b|\b(?:do|does|is|are|was|were)\s+not\b|\bno\s+longer\b/iu;
 const OPTION_ALIAS_LIST_RE =
   /^(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9])(?:\s*,\s*(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9]))*(?=\s|$)/iu;
 
@@ -92,7 +95,14 @@ export function compareOpenCode2Versions(a, b) {
 }
 
 export function opencode2MinimumVersion() {
-  return process.env.TRISS_CODER_OPENCODE2_VERSION || OPENCODE2_MIN_VERSION_DEFAULT;
+  const configured = process.env.TRISS_CODER_OPENCODE2_VERSION;
+  if (!configured) return OPENCODE2_MIN_VERSION_DEFAULT;
+  const configuredVersion = parseOpenCode2Version(configured);
+  const supportedFloor = parseOpenCode2Version(OPENCODE2_MIN_VERSION_DEFAULT);
+  if (!configuredVersion) return configured;
+  return compareOpenCode2Versions(configuredVersion, supportedFloor) >= 0
+    ? configuredVersion.raw
+    : OPENCODE2_MIN_VERSION_DEFAULT;
 }
 
 export function installChannelOpenCode2() {
@@ -138,8 +148,12 @@ function openCode2OptionRecords(help) {
       optionIndent ??= indent;
       const flags = [...aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)]
         .map((match) => match[0]);
-      const [, ...descriptionColumns] = trimmed.slice(aliasList.length).split(/\s{2,}/u);
-      current = { description: descriptionColumns.join(' ').trim() };
+      const [valueDeclaration, ...descriptionColumns] =
+        trimmed.slice(aliasList.length).split(/\s{2,}/u);
+      current = {
+        valueDeclaration: valueDeclaration.trim(),
+        description: descriptionColumns.join(' ').trim(),
+      };
       for (const flag of flags) records.set(flag, current);
       continue;
     }
@@ -147,6 +161,13 @@ function openCode2OptionRecords(help) {
     optionIndent = null;
   }
   return records;
+}
+
+function modelRecordDeclaresVariant(record) {
+  if (!record) return false;
+  if (record.valueDeclaration.includes(MODEL_VARIANT_GRAMMAR)) return true;
+  return record.description.includes(MODEL_VARIANT_GRAMMAR) &&
+    !MODEL_VARIANT_NEGATION_RE.test(record.description);
 }
 
 export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
@@ -159,7 +180,7 @@ export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, en
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
   const records = openCode2OptionRecords(help);
   const missing = REQUIRED_CAPABILITIES.filter((flag) => !records.has(flag));
-  if (records.get('--model')?.description !== MODEL_VARIANT_DESCRIPTION) {
+  if (!modelRecordDeclaresVariant(records.get('--model'))) {
     missing.push('model#variant');
   }
   return !parseOpenCode2Version(version)

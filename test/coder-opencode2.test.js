@@ -7,10 +7,10 @@
  * implementation exists (src/coder-engines/opencode2.js lands in Phase 3).
  *
  * Fixtures under test/fixtures/opencode2-*.ndjson are sanitized captures from
- * the supported beta floor `0.0.0-beta-17793` (taken from the routing recovery
- * compatibility contract, live Z.AI
- * coding-plan route). Every RED assertion names a plan requirement; when this
- * suite turns GREEN the adapter satisfies the pinned-build contract.
+ * an earlier supported beta (taken from the routing recovery compatibility
+ * contract, live Z.AI coding-plan route). Every assertion names an adapter
+ * requirement; when this suite is green the adapter satisfies the minimum-plus-
+ * capability contract without pinning execution to that captured build.
  *
  * No live network, no real opencode2/npm calls.
  */
@@ -116,7 +116,7 @@ const pinSh = () => (cmd, args) => {
     return { status: 0, stdout: '1.18.22\n', stderr: '' };
   }
   if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', stderr: '' };
   }
   if (args && args[0] === 'run' && args[1] === '--help') {
     return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
@@ -177,14 +177,16 @@ test('opencode2 resolves as a valid engine; default stays opencode; order is ope
   }
 });
 
-test('OPENCODE2 minimum is the supported beta floor with a minimum override', () => {
-  assert.equal(OPENCODE2_PIN_DEFAULT, '0.0.0-beta-17793');
+test('OPENCODE2 minimum is the current supported floor and overrides are raise-only', () => {
+  assert.equal(OPENCODE2_PIN_DEFAULT, '0.0.0-beta-19059');
   const prev = process.env.TRISS_CODER_OPENCODE2_VERSION;
   try {
     delete process.env.TRISS_CODER_OPENCODE2_VERSION;
-    assert.equal(opencode2VersionPin(), '0.0.0-beta-17793');
-    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-18000';
-    assert.equal(opencode2VersionPin(), '0.0.0-beta-18000');
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19058';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19060';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19060');
   } finally {
     if (prev === undefined) delete process.env.TRISS_CODER_OPENCODE2_VERSION;
     else process.env.TRISS_CODER_OPENCODE2_VERSION = prev;
@@ -192,7 +194,7 @@ test('OPENCODE2 minimum is the supported beta floor with a minimum override', ()
 });
 
 test('detectOpenCode2 runs version and capability probes and parses the beta string', () => {
-  // `opencode2 v0.0.0-beta-17794` — compatible beta above the floor.
+  // `opencode2 v0.0.0-beta-19060` — compatible beta above the floor.
   // The detector requires an absolute `which` output and canonicalizes
   // with Node realpathSync, and verifies a regular executable file — the fs
   // seams below keep the unit hermetic.
@@ -207,18 +209,18 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
     assert.equal(cmd, '/resolved/bin/opencode2');
     if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
     assert.deepEqual(argv, ['--version']);
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', error: null };
   };
   const det = detectOpenCode2(shOk, fsOk);
   assert.equal(det.found, true);
-  assert.equal(det.version, '0.0.0-beta-17794');
+  assert.equal(det.version, '0.0.0-beta-19060');
   assert.equal(det.satisfiesPin, true);
   assert.equal(det.path, '/resolved/bin/opencode2'); // resolved absolute path (invariant #5)
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17000\n', error: null };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19058\n', error: null };
   }, fsOk);
   assert.equal(detOld.found, true);
   assert.equal(detOld.satisfiesPin, false);
@@ -240,7 +242,7 @@ test('detectOpenCode2 invariant #6: relative which output, realpath failure, and
   });
   const versionOk = (cmd, argv) => (
     argv && argv[0] === '--version'
-      ? { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null }
+      ? { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', error: null }
       : argv && argv[0] === 'run'
         ? { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null }
       : { status: 1, stdout: '', error: null }
@@ -284,7 +286,7 @@ test('installHintOpenCode2 names the beta channel', () => {
   assert.equal(installHintOpenCode2(), 'npm install -g @opencode-ai/cli@beta');
   const prev = process.env.TRISS_CODER_OPENCODE2_VERSION;
   try {
-    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-18000';
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-20000';
     assert.equal(installHintOpenCode2(), 'npm install -g @opencode-ai/cli@beta');
   } finally {
     if (prev === undefined) delete process.env.TRISS_CODER_OPENCODE2_VERSION;
@@ -667,7 +669,7 @@ test(
 
       const envelope = JSON.parse(capture.text().trim());
       assert.equal(envelope.engine, 'opencode2');
-      assert.equal(envelope.engine_version, '0.0.0-beta-17794');
+      assert.equal(envelope.engine_version, '0.0.0-beta-19060');
       assert.equal(envelope.session_id, 'ses_ffee9d054ffeNR4h3krJcPcg1j');
       assert.equal(envelope.exit_reason, 'end_turn');
       assert.equal(envelope.final_text, 'hello');

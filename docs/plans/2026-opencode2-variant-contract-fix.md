@@ -165,7 +165,9 @@ model/effort пары.
 
 ## Инварианты
 
-1. Версия ниже `OPENCODE2_MIN_VERSION_DEFAULT` по-прежнему отклоняется.
+1. OpenCode 2 не фиксируется на exact build: текущий floor
+   `0.0.0-beta-19059` и все более новые parseable версии поддерживаются при
+   наличии required CLI surface; configured minimum может только повысить floor.
 2. `next`, `dev` и `tui` prerelease channels по-прежнему отклоняются.
 3. Probe запускает только `--version` и `run --help` в изолированном HOME/XDG.
 4. Probe не запускает `debug config` и не оставляет новый
@@ -184,7 +186,8 @@ model/effort пары.
 
 ## Нецели
 
-- изменение minimum version `0.0.0-beta-17793`;
+- exact version pinning или отклонение совместимой версии только потому, что
+  она новее текущего floor;
 - поддержка `dev`, `next` или `tui-v2` channels;
 - изменение общего списка effort levels;
 - сохранение pre-suffixed model как public OpenCode 2 API;

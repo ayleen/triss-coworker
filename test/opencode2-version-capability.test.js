@@ -20,12 +20,12 @@ const BETA_19059_RUN_HELP = readFileSync(
 );
 
 test('OpenCode 2 accepts beta versions at or above the supported floor', () => {
-  assert.equal(compareOpenCode2Versions('0.0.0-beta-17792', '0.0.0-beta-17793'), -1);
-  assert.equal(compareOpenCode2Versions('0.0.0-beta-17793', '0.0.0-beta-17793'), 0);
-  assert.equal(compareOpenCode2Versions('0.0.0-beta-17794', '0.0.0-beta-17793'), 1);
+  assert.equal(compareOpenCode2Versions('0.0.0-beta-19058', '0.0.0-beta-19059'), -1);
+  assert.equal(compareOpenCode2Versions('0.0.0-beta-19059', '0.0.0-beta-19059'), 0);
+  assert.equal(compareOpenCode2Versions('0.0.0-beta-19060', '0.0.0-beta-19059'), 1);
   assert.equal(parseOpenCode2Version('0.0.0-next-99999'), null);
   assert.equal(parseOpenCode2Version('0.0.0-dev-99999'), null);
-  assert.equal(parseOpenCode2Version('0.0.0-beta-17793').channel, 'beta');
+  assert.equal(parseOpenCode2Version('0.0.0-beta-19059').channel, 'beta');
 });
 
 test('capability probe checks the version and run help without debug/service commands', () => {
@@ -33,7 +33,7 @@ test('capability probe checks the version and run help without debug/service com
   const sh = (file, args) => {
     calls.push([file, ...args]);
     if (file === 'which') return { status: 0, stdout: '/tmp/opencode2\n' };
-    if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n' };
+    if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n' };
     if (args[0] === 'run') return { status: 0, stdout: BETA_19059_RUN_HELP };
     return { status: 1, stdout: '' };
   };
@@ -43,7 +43,7 @@ test('capability probe checks the version and run help without debug/service com
   };
   const result = detectOpenCode2(sh, fs, { snapshot: () => new Set(), graceMs: 0 });
   assert.equal(result.found, true);
-  assert.equal(result.version, '0.0.0-beta-17794');
+  assert.equal(result.version, '0.0.0-beta-19060');
   assert.equal(result.satisfiesMinimum, true);
   assert.deepEqual(calls.map((call) => call.slice(1)), [
     ['opencode2'],
@@ -69,6 +69,27 @@ test('capability probe binds provider/model#variant to the --model option record
     })).ok,
     true,
   );
+
+  for (const modelRecord of [
+    '  --model, -m string  Model selector in provider/model#variant format',
+    '  --model, -m provider/model#variant  Select a model',
+    '  --model, -m string  Model uses provider/model#variant; provider variants are optional',
+  ]) {
+    const compatibleHelp = [
+      'FLAGS',
+      '  --standalone',
+      '  --format choice',
+      '  --auto',
+      modelRecord,
+    ].join('\n');
+    assert.equal(
+      probeOpenCode2Capabilities('/tmp/opencode2', version, () => ({
+        status: 0,
+        stdout: compatibleHelp,
+      })).ok,
+      true,
+    );
+  }
 
   const markerOutsideModel = [
     'FLAGS',
@@ -105,6 +126,7 @@ test('capability probe binds provider/model#variant to the --model option record
     '  --model, -m string  Reject provider/model#variant; use a base model',
     '  --model, -m string  Removed; previous description "Model to use in the format provider/model#variant"',
     '  --model, -m string\n      Removed; previous description "Model to use in the format provider/model#variant"',
+    '  --model, -m string  Do not use provider/model#variant',
   ]) {
     const misleadingHelp = markerOutsideModel.replace(
       '  --model, -m string  Model to use in the format provider/model',
@@ -195,12 +217,12 @@ test('detectOpenCode2 parses the complete version token and rejects unsupported 
   }
 
   const beta = detectOpenCode2(
-    detectVersionFixture('/tmp/opencode2-valid-beta', 'opencode2 v0.0.0-beta-17794\n'),
+    detectVersionFixture('/tmp/opencode2-valid-beta', 'opencode2 v0.0.0-beta-19060\n'),
     probeFs,
     { snapshot: () => new Set(), graceMs: 0 },
   );
   assert.equal(beta.found, true);
-  assert.equal(beta.version, '0.0.0-beta-17794');
+  assert.equal(beta.version, '0.0.0-beta-19060');
   assert.equal(beta.satisfiesMinimum, true);
 
   const stable = detectOpenCode2(
@@ -218,15 +240,15 @@ test('installation guidance uses the beta channel', () => {
 });
 
 test('unsupported prerelease channels cannot enter ordering', () => {
-  assert.equal(compareOpenCode2Versions('0.0.0-next-99999', '0.0.0-beta-17793'), null);
-  assert.equal(compareOpenCode2Versions('0.0.0-beta-17793', '0.0.0-dev-99999'), null);
-  assert.equal(compareOpenCode2Versions('garbage', '0.0.0-beta-17793'), null);
+  assert.equal(compareOpenCode2Versions('0.0.0-next-99999', '0.0.0-beta-19059'), null);
+  assert.equal(compareOpenCode2Versions('0.0.0-beta-19059', '0.0.0-dev-99999'), null);
+  assert.equal(compareOpenCode2Versions('garbage', '0.0.0-beta-19059'), null);
 });
 
 test('non-zero version probe never qualifies even when stdout is parseable', () => {
   const sh = (file, args) => {
     if (file === 'which') return { status: 0, stdout: '/tmp/opencode2\n' };
-    if (args[0] === '--version') return { status: 7, stdout: 'opencode2 v0.0.0-beta-17794\n' };
+    if (args[0] === '--version') return { status: 7, stdout: 'opencode2 v0.0.0-beta-19060\n' };
     throw new Error('help must not run after a failed version probe');
   };
   const result = detectOpenCode2(sh, { realpathSync: (p) => p, statSync: () => ({ isFile: () => true, mode: 0o755 }) });
@@ -234,7 +256,7 @@ test('non-zero version probe never qualifies even when stdout is parseable', () 
   assert.equal(result.satisfiesMinimum, false);
 });
 
-function probeFixture(path, version = '0.0.0-beta-17794') {
+function probeFixture(path, version = '0.0.0-beta-19060') {
   return (file, args) => {
     if (file === 'which') return { status: 0, stdout: `${path}\n` };
     if (args[0] === '--version') return { status: 0, stdout: `opencode2 v${version}\n` };
@@ -305,7 +327,7 @@ test('same path and version are re-probed so a replaced build cannot remain cach
   let helpCalls = 0;
   const sh = (file, args) => {
     if (file === 'which') return { status: 0, stdout: '/tmp/opencode2-replaced\n' };
-    if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n' };
+    if (args[0] === '--version') return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n' };
     if (args[0] === 'run') {
       helpCalls += 1;
       return helpCalls === 1
