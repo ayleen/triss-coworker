@@ -7,10 +7,10 @@
  * implementation exists (src/coder-engines/opencode2.js lands in Phase 3).
  *
  * Fixtures under test/fixtures/opencode2-*.ndjson are sanitized captures from
- * the supported beta floor `0.0.0-beta-17793` (taken from the routing recovery
- * compatibility contract, live Z.AI
- * coding-plan route). Every RED assertion names a plan requirement; when this
- * suite turns GREEN the adapter satisfies the pinned-build contract.
+ * an earlier supported beta (taken from the routing recovery compatibility
+ * contract, live Z.AI coding-plan route). Every assertion names an adapter
+ * requirement; when this suite is green the adapter satisfies the minimum-plus-
+ * capability contract without pinning execution to that captured build.
  *
  * No live network, no real opencode2/npm calls.
  */
@@ -19,13 +19,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveCoderEngine, runCoderRun as runCoderRunProduction } from '../src/commands/coder.js';
 import { fakeEffectiveOpenCodeConfig } from './_opencode-effective-config.js';
 import { createProviderConfigSnapshot } from '../src/provider-config.js';
+import { startCoderCredentialProxy } from '../src/coder-credential-proxy.js';
 
 const runCoderRun = (prompt, opts, deps = {}) => runCoderRunProduction(
   prompt,
@@ -115,10 +116,10 @@ const pinSh = () => (cmd, args) => {
     return { status: 0, stdout: '1.18.22\n', stderr: '' };
   }
   if (args && args[0] === '--version' && cmd !== 'opencode' && cmd !== 'npm') {
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', stderr: '' };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', stderr: '' };
   }
   if (args && args[0] === 'run' && args[1] === '--help') {
-    return { status: 0, stdout: '--standalone --format --auto --model --variant\n', stderr: '' };
+    return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', stderr: '' };
   }
   return { status: 1, stdout: '', stderr: '', error: null };
 };
@@ -176,14 +177,18 @@ test('opencode2 resolves as a valid engine; default stays opencode; order is ope
   }
 });
 
-test('OPENCODE2 minimum is the supported beta floor with a minimum override', () => {
-  assert.equal(OPENCODE2_PIN_DEFAULT, '0.0.0-beta-17793');
+test('OPENCODE2 minimum is the current supported floor and overrides are raise-only', () => {
+  assert.equal(OPENCODE2_PIN_DEFAULT, '0.0.0-beta-19059');
   const prev = process.env.TRISS_CODER_OPENCODE2_VERSION;
   try {
     delete process.env.TRISS_CODER_OPENCODE2_VERSION;
-    assert.equal(opencode2VersionPin(), '0.0.0-beta-17793');
-    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-18000';
-    assert.equal(opencode2VersionPin(), '0.0.0-beta-18000');
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19058';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = 'garbage';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19059');
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-19060';
+    assert.equal(opencode2VersionPin(), '0.0.0-beta-19060');
   } finally {
     if (prev === undefined) delete process.env.TRISS_CODER_OPENCODE2_VERSION;
     else process.env.TRISS_CODER_OPENCODE2_VERSION = prev;
@@ -191,7 +196,7 @@ test('OPENCODE2 minimum is the supported beta floor with a minimum override', ()
 });
 
 test('detectOpenCode2 runs version and capability probes and parses the beta string', () => {
-  // `opencode2 v0.0.0-beta-17794` — compatible beta above the floor.
+  // `opencode2 v0.0.0-beta-19060` — compatible beta above the floor.
   // The detector requires an absolute `which` output and canonicalizes
   // with Node realpathSync, and verifies a regular executable file — the fs
   // seams below keep the unit hermetic.
@@ -204,20 +209,20 @@ test('detectOpenCode2 runs version and capability probes and parses the beta str
       return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
     }
     assert.equal(cmd, '/resolved/bin/opencode2');
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
     assert.deepEqual(argv, ['--version']);
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', error: null };
   };
   const det = detectOpenCode2(shOk, fsOk);
   assert.equal(det.found, true);
-  assert.equal(det.version, '0.0.0-beta-17794');
+  assert.equal(det.version, '0.0.0-beta-19060');
   assert.equal(det.satisfiesPin, true);
   assert.equal(det.path, '/resolved/bin/opencode2'); // resolved absolute path (invariant #5)
   // mismatched version is found but flagged
   const detOld = detectOpenCode2((cmd, argv) => {
     if (cmd === 'which' && argv[0] === 'opencode2') return { status: 0, stdout: '/resolved/bin/opencode2\n', error: null };
-    if (argv[0] === 'run') return { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null };
-    return { status: 0, stdout: 'opencode2 v0.0.0-beta-17000\n', error: null };
+    if (argv[0] === 'run') return { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null };
+    return { status: 0, stdout: 'opencode2 v0.0.0-beta-19058\n', error: null };
   }, fsOk);
   assert.equal(detOld.found, true);
   assert.equal(detOld.satisfiesPin, false);
@@ -239,9 +244,9 @@ test('detectOpenCode2 invariant #6: relative which output, realpath failure, and
   });
   const versionOk = (cmd, argv) => (
     argv && argv[0] === '--version'
-      ? { status: 0, stdout: 'opencode2 v0.0.0-beta-17794\n', error: null }
+      ? { status: 0, stdout: 'opencode2 v0.0.0-beta-19060\n', error: null }
       : argv && argv[0] === 'run'
-        ? { status: 0, stdout: '--standalone --format --auto --model --variant\n', error: null }
+        ? { status: 0, stdout: 'FLAGS\n  --standalone\n  --format choice\n  --auto\n  --model, -m string  Model to use in the format provider/model#variant\n', error: null }
       : { status: 1, stdout: '', error: null }
   );
   // A relative PATH entry makes `which` print a relative path — the parent
@@ -283,7 +288,7 @@ test('installHintOpenCode2 names the beta channel', () => {
   assert.equal(installHintOpenCode2(), 'npm install -g @opencode-ai/cli@beta');
   const prev = process.env.TRISS_CODER_OPENCODE2_VERSION;
   try {
-    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-18000';
+    process.env.TRISS_CODER_OPENCODE2_VERSION = '0.0.0-beta-20000';
     assert.equal(installHintOpenCode2(), 'npm install -g @opencode-ai/cli@beta');
   } finally {
     if (prev === undefined) delete process.env.TRISS_CODER_OPENCODE2_VERSION;
@@ -314,6 +319,18 @@ test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt
   assert.equal(base.includes('--pure'), false);
   assert.equal(base.includes('--dir'), false);
 
+  const withEffort = buildOpenCode2RunArgv({
+    prompt: 'do it',
+    model: 'zai/glm-5.2',
+    effort: 'high',
+  });
+  assert.deepEqual(withEffort, [
+    'run', '--standalone', '--format', 'json', '--auto',
+    '--model', 'zai/glm-5.2#high',
+    'do it',
+  ]);
+  assert.equal(withEffort.includes('--variant'), false);
+
   assert.deepEqual(
     buildOpenCode2RunArgv({ prompt: 'p', model: 'm', agent: 'build', sessionRealId: 'ses_v2_x' }),
     ['run', '--standalone', '--format', 'json', '--auto', '--model', 'm', '--agent', 'build', '--session', 'ses_v2_x', 'p'],
@@ -328,6 +345,44 @@ test('V2 argv: run --standalone --format json --auto --model <m> [flags] <prompt
     /--session and --continue/,
   );
 });
+
+test(
+  'runCoderRun rejects an explicit pre-suffixed OpenCode 2 model before isolation, session, or process side effects',
+  withEnv({ TRISS_USAGE_LOG: '0' }, async () => {
+    let sideEffects = 0;
+    await assert.rejects(
+      () => runCoderRun('x', {
+        engine: 'opencode2',
+        model: 'zai/glm-5.2#low',
+        isolate: true,
+        session: 'suffix-reject',
+      }, {
+        spawn: () => { sideEffects += 1; },
+        spawnSync: () => { sideEffects += 1; },
+        startCredentialProxy: () => { sideEffects += 1; },
+      }),
+      /must not include a #variant suffix/u,
+    );
+    assert.equal(sideEffects, 0);
+    assert.equal(existsSync(join(process.env.TRISS_PROJECT_ROOT, '.triss')), false);
+  }),
+);
+
+test(
+  'runCoderRun rejects a configured pre-suffixed OpenCode 2 model before side effects',
+  withEnv({ TRISS_ZAI_MODEL: 'glm-5.2#low', TRISS_USAGE_LOG: '0' }, async () => {
+    let sideEffects = 0;
+    await assert.rejects(
+      () => runCoderRun('x', { engine: 'opencode2' }, {
+        spawn: () => { sideEffects += 1; },
+        spawnSync: () => { sideEffects += 1; },
+        startCredentialProxy: () => { sideEffects += 1; },
+      }),
+      /must not include a #variant suffix/u,
+    );
+    assert.equal(sideEffects, 0);
+  }),
+);
 
 // ─── spawn env: XDG isolation + auto-update disable ─────────────────────────
 
@@ -480,6 +535,44 @@ test(
 );
 
 test(
+  'runCoderRun --engine opencode2: unavailable effort is forwarded once and never retried or downgraded',
+  withEnv(
+    {
+      ZHIPU_API_KEY: 'zk-v2-test',
+      TRISS_USAGE_LOG: '0',
+      TRISS_CODER_MODEL: 'zai-coding-plan/glm-5.2',
+    },
+    async () => {
+      const stream = JSON.stringify({
+        type: 'error',
+        sessionID: 'ses_v2_variant',
+        error: {
+          type: 'VariantUnavailableError',
+          message: 'Variant "low" is unavailable for model "triss-coder-transient/glm-5.2"',
+        },
+      }) + '\n';
+      const rec = recordingSpawn(stream, { code: 0 });
+      const capture = stdoutCapture();
+      await runCoderRun('x', { engine: 'opencode2', effort: 'low' }, {
+        spawn: rec.spawnFn,
+        spawnSync: pinSh(),
+        stdoutWrite: capture.stdoutWrite,
+      });
+
+      assert.equal(rec.calls.length, 1);
+      assert.equal(
+        rec.calls[0].argv[rec.calls[0].argv.indexOf('--model') + 1],
+        'triss-coder-transient/glm-5.2#low',
+      );
+      const envelope = JSON.parse(capture.text().trim());
+      assert.equal(envelope.exit_reason, 'error');
+      assert.ok(envelope.warnings.some((warning) => warning.includes('Variant "low" is unavailable')));
+    },
+  ),
+);
+
+
+test(
   'runCoderRun --engine opencode2: no step_finish -> usage_status "missing", null counters, V2 warning; never zeros',
   withEnv(
     {
@@ -527,10 +620,19 @@ test(
     async () => {
       const rec = recordingSpawn(readFixture('opencode2-run-no-tool.ndjson'), { code: 0 });
       const capture = stdoutCapture();
+      let proxyInput;
+      let usageInput;
       // The proxy-token assertions below are PROTECTED-mode behavior.
-      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true }, {
+      await runCoderRun('x', { engine: 'opencode2', protectCredentials: true, effort: ' HIGH ' }, {
         spawn: rec.spawnFn,
         spawnSync: pinSh(),
+        startCredentialProxy: (input) => {
+          proxyInput = input;
+          return startCoderCredentialProxy(input);
+        },
+        logUsage: (input) => {
+          usageInput = input;
+        },
         stdoutWrite: capture.stdoutWrite,
       });
       const { cmd, argv, options } = rec.calls[0];
@@ -545,7 +647,7 @@ test(
       // agent-source preflight).
       assert.deepEqual(argv, [
         'run', '--standalone', '--format', 'json', '--auto',
-        '--model', 'triss-coder-transient/glm-5.2',
+        '--model', 'triss-coder-transient/glm-5.2#high',
         'x',
       ]);
       assert.equal(options.env.OPENCODE_DISABLE_AUTOUPDATE, '1');
@@ -563,16 +665,22 @@ test(
       assert.deepEqual(overlay.provider['triss-coder-transient'].models, {
         'glm-5.2': { name: 'glm-5.2' },
       });
+      assert.equal(proxyInput.model, 'triss-coder-transient/glm-5.2');
+      assert.deepEqual(proxyInput.models, ['glm-5.2']);
       assert.equal(options.cwd !== undefined, true, 'child cwd is passed explicitly');
 
       const envelope = JSON.parse(capture.text().trim());
       assert.equal(envelope.engine, 'opencode2');
-      assert.equal(envelope.engine_version, '0.0.0-beta-17794');
+      assert.equal(envelope.engine_version, '0.0.0-beta-19060');
       assert.equal(envelope.session_id, 'ses_ffee9d054ffeNR4h3krJcPcg1j');
       assert.equal(envelope.exit_reason, 'end_turn');
       assert.equal(envelope.final_text, 'hello');
       assert.equal(envelope.usage.usage_status, 'reported');
       assert.equal(envelope.usage.tokens.input_uncached, 3141);
+      assert.equal(envelope.requested_model, 'zai/glm-5.2');
+      assert.equal(envelope.engine_model, 'triss-coder-transient/glm-5.2');
+      assert.equal(usageInput.model, 'zai/glm-5.2');
+      assert.equal(usageInput.billing_model, 'zai/glm-5.2');
     },
   ),
 );

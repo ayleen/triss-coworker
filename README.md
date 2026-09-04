@@ -141,11 +141,14 @@ Use `triss <command> --help` for exact arguments.
 Supported engines:
 
 - `opencode` — default OpenCode engine
-- `opencode2` — OpenCode 2 beta
+- `opencode2` — OpenCode 2 beta, current-or-newer compatibility
 - `crush` — Z.A.I-only engine
 - `omp` — native Oh My Pi adapter
 
-OMP has a supported floor of `18.0.6`.
+OpenCode 2 has a supported floor of `0.0.0-beta-19059` and accepts every newer
+parseable version by default when the required CLI options are present. It is
+never pinned to one exact build or help-description sentence. OMP has a
+supported floor of `18.0.6`.
 
 Setup examples:
 

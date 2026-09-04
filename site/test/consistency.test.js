@@ -64,19 +64,26 @@ test("README presents the canonical 0.42 provider migration", () => {
   assert.doesNotMatch(readme, /--small-model/);
 });
 
-test("website coder engines and OMP quickstart match repository contracts", () => {
+test("website coder engines and quickstarts match repository contracts", () => {
   const pkg = JSON.parse(read("../package.json"));
   const coderPage = read("src/pages/coder.astro");
   const gettingStarted = read("src/pages/docs/getting-started.astro");
   const readme = read("../README.md");
   const ompAdapter = read("../src/coder-engines/omp.js");
+  const opencode2Adapter = read("../src/coder-engines/opencode2.js");
   const floor = ompAdapter.match(/OMP_SUPPORTED_FLOOR = '([^']+)'/)?.[1];
   assert.ok(floor, "OMP supported floor must be parseable from the adapter");
+  const opencode2Floor = opencode2Adapter.match(/OPENCODE2_MIN_VERSION_DEFAULT = '([^']+)'/)?.[1];
+  assert.ok(opencode2Floor, "OpenCode 2 supported floor must be parseable from the adapter");
 
   for (const engine of ["opencode", "opencode2", "crush", "omp"]) {
     assert.match(coderPage, new RegExp(`data-engine="${engine}"`));
   }
   assert.match(coderPage, /data-engine="harness"[\s\S]*DSH plugin, not --engine/);
+  const escapedOpenCode2Floor = opencode2Floor.replaceAll(".", "\\.");
+  assert.match(coderPage, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
+  assert.match(gettingStarted, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
+  assert.match(readme, new RegExp(`OpenCode 2 has a supported floor of \`${escapedOpenCode2Floor}\``));
 
   const coder = COMMANDS.find((command) => command.name === "coder");
   assert.ok(coder);

@@ -151,6 +151,12 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   const runtimeErrors = collectRuntimeErrors(page);
   await page.goto("/coder/", { waitUntil: "networkidle" });
 
+  const opencode2 = page.locator('[data-engine="opencode2"]');
+  await opencode2.click();
+  await expect(opencode2).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#engine-body")).toContainText("0.0.0-beta-19059 or newer");
+  await expect(page.locator("#engine-body")).toContainText("not help descriptions or an exact build");
+
   const crush = page.locator('[data-engine="crush"]');
   const omp = page.locator('[data-engine="omp"]');
   await crush.focus();

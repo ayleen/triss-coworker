@@ -10,9 +10,10 @@
 //
 // Verified-against-the-supported-beta facts encoded here (live recon against
 // the current beta line; see the routing recovery plan):
-//   - CLI surface: `run --standalone --format json --auto --model <m>
-//     --variant <effort> [--agent <a>] [--session <id> | --continue] <prompt>`;
-//     NO --pure and NO --dir (child cwd selects the project).
+//   - CLI surface: `run --standalone --format json --auto
+//     --model <provider/model#variant> [--agent <a>]
+//     [--session <id> | --continue] <prompt>`; NO separate --variant, NO
+//     --pure and NO --dir (child cwd selects the project).
 //   - Events on stdout are ndjson with the SAME event vocabulary as V1
 //     (step_start/tool_use/step_finish/text/error) but TWO differences the
 //     fold must handle: (1) `error.message` is populated (V1 parsers read
@@ -38,9 +39,10 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { emptyOpencodeUsage, foldOpencodeStep, finalizeOpencodeUsage } from '../usage-schema.js';
 import { parseRateLimitReset } from '../commands/coder.js';
 
-// Supported OpenCode 2 beta floor.  Runtime compatibility also requires the
-// capability probe below; version text alone is never sufficient.
-export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-17793';
+// Minimum supported OpenCode 2 release. Compatibility is never an exact pin:
+// every parseable version at or above this floor remains eligible when its
+// required CLI capabilities are present.
+export const OPENCODE2_MIN_VERSION_DEFAULT = '0.0.0-beta-19059';
 export const OPENCODE2_SMALL_MODEL_UNUSED_WARNING =
   'OPENCODE2_SMALL_MODEL_UNUSED: --small-model was validated but is not used by OpenCode 2.';
 export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
@@ -50,7 +52,11 @@ export const OPENCODE2_SERVICE_SNAPSHOT_WARNING =
 const OPENCODE2_PIN_DEFAULT = OPENCODE2_MIN_VERSION_DEFAULT;
 const BETA_VERSION_RE = /^(0\.0\.0)-beta-(\d+)$/;
 const STABLE_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model', '--variant']);
+const REQUIRED_CAPABILITIES = Object.freeze(['--standalone', '--format', '--auto', '--model']);
+const OPTION_ALIAS_LIST_RE =
+  /^(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9])(?:\s*,\s*(?:--[a-z0-9][a-z0-9-]*|-[a-z0-9]))*(?=\s|$)/iu;
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'gu');
+const HELP_SECTION_HEADING_RE = /^[A-Z][A-Z ]*:?\s*$/iu;
 
 // `opencode2 --version` prefixes the version with the executable name. Keep
 // the token extraction deliberately broader than the set of supported
@@ -88,7 +94,13 @@ export function compareOpenCode2Versions(a, b) {
 }
 
 export function opencode2MinimumVersion() {
-  return process.env.TRISS_CODER_OPENCODE2_VERSION || OPENCODE2_MIN_VERSION_DEFAULT;
+  const configured = process.env.TRISS_CODER_OPENCODE2_VERSION;
+  if (!configured) return OPENCODE2_MIN_VERSION_DEFAULT;
+  const configuredVersion = parseOpenCode2Version(configured);
+  if (!configuredVersion) return OPENCODE2_MIN_VERSION_DEFAULT;
+  return compareOpenCode2Versions(configuredVersion, OPENCODE2_MIN_VERSION_DEFAULT) >= 0
+    ? configuredVersion.raw
+    : OPENCODE2_MIN_VERSION_DEFAULT;
 }
 
 export function installChannelOpenCode2() {
@@ -101,6 +113,36 @@ export function opencode2VersionPin() {
 
 export { OPENCODE2_PIN_DEFAULT };
 
+// Parse actual option declarations inside FLAGS/GLOBAL FLAGS instead of
+// searching arbitrary help substrings. Heading case, an optional colon, ANSI
+// styling, and per-record indentation are presentation details and must not
+// reject a newer compatible build. Every option-shaped line in these sections
+// is authoritative and all long aliases qualify. Because indentation is
+// intentionally ignored, nested option-shaped prose is indistinguishable from
+// a declaration; accepting it is the forward-compatible choice for help emitted
+// by the locally installed binary.
+function openCode2OptionNames(help) {
+  const options = new Set();
+  let inOptionSection = false;
+  const plainHelp = String(help || '').replace(ANSI_ESCAPE_RE, '');
+  for (const line of plainHelp.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    const indent = /^\s*/u.exec(line)?.[0].length || 0;
+    if (indent === 0 && HELP_SECTION_HEADING_RE.test(trimmed)) {
+      const heading = trimmed.replace(/:\s*$/u, '').toUpperCase();
+      inOptionSection = heading === 'FLAGS' || heading === 'GLOBAL FLAGS';
+      continue;
+    }
+    if (!inOptionSection || !trimmed) continue;
+    const aliasList = OPTION_ALIAS_LIST_RE.exec(trimmed)?.[0];
+    if (!aliasList) continue;
+    for (const match of aliasList.matchAll(/--[a-z0-9][a-z0-9-]*/giu)) {
+      options.add(match[0]);
+    }
+  }
+  return options;
+}
+
 export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, env = {}) {
   let helpResult;
   try {
@@ -109,7 +151,8 @@ export function probeOpenCode2Capabilities(path, version, sh = nodeSpawnSync, en
     helpResult = { status: 1, error: err, stdout: '', stderr: '' };
   }
   const help = `${helpResult?.stdout || ''}\n${helpResult?.stderr || ''}`;
-  const missing = REQUIRED_CAPABILITIES.filter((flag) => !help.includes(flag));
+  const options = openCode2OptionNames(help);
+  const missing = REQUIRED_CAPABILITIES.filter((flag) => !options.has(flag));
   return !parseOpenCode2Version(version)
     ? { ok: false, version, reason: 'unsupported-version', missing: [], help: '' }
     : !helpResult || helpResult.error || helpResult.status !== 0 || missing.length
@@ -130,6 +173,7 @@ function isolatedCapabilityEnv(baseEnv, fs = {}) {
       XDG_CONFIG_HOME: join(root, 'config'),
       XDG_DATA_HOME: join(root, 'data'),
       XDG_STATE_HOME: join(root, 'state'),
+      NO_COLOR: '1',
     };
     for (const path of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME]) {
       makeDir(path, { recursive: true, mode: 0o700 });
@@ -280,7 +324,8 @@ export function detectOpenCode2(
     } else {
       probe.serviceProcessCheck = 'passed';
     }
-    const minimum = parseOpenCode2Version(opencode2MinimumVersion());
+    const minimumVersion = opencode2MinimumVersion();
+    const minimum = parseOpenCode2Version(minimumVersion);
     const installed = parseOpenCode2Version(version);
     const satisfiesMinimum = !!(
       probe.ok && minimum && installed && compareOpenCode2Versions(installed, minimum) >= 0
@@ -289,7 +334,7 @@ export function detectOpenCode2(
       found: true,
       path: realPath,
       version,
-      minimumVersion: opencode2MinimumVersion(),
+      minimumVersion,
       satisfiesMinimum,
       meetsMinimum: satisfiesMinimum,
       // Compatibility alias for older status/tests.  It deliberately follows
@@ -335,8 +380,8 @@ export function installHintOpenCode2() {
 //  - `--format json --auto`: ndjson events on stdout; headless auto-approve.
 //  - `--model <m>` ALWAYS explicit — same determinism argument as V1 (the
 //    wrong config-file default loops forever with nothing on stdout).
-//  - `--variant <effort>` carries explicit logical effort on the supported
-//    beta contract; its absence is a capability mismatch, never downgraded.
+//  - `--model <model#effort>` carries explicit logical effort on the supported
+//    beta contract; there is no separate --variant flag.
 //  - `--session <real-id>` XOR `--continue` — the CLI accepts both together
 //    but the semantics are ambiguous (which session does --continue resume
 //    when --session also names one?), so the adapter refuses the combo
@@ -351,8 +396,8 @@ export function buildOpenCode2RunArgv({ prompt, model, effort, agent, sessionRea
         'passing both states an ambiguous resume intent.',
     );
   }
-  const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', model];
-  if (effort) argv.push('--variant', effort);
+  const modelSelector = effort ? `${model}#${effort}` : model;
+  const argv = ['run', '--standalone', '--format', 'json', '--auto', '--model', modelSelector];
   if (agent) argv.push('--agent', agent);
   if (sessionRealId) argv.push('--session', sessionRealId);
   if (cont) argv.push('--continue');

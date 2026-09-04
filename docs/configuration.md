@@ -111,7 +111,7 @@ Engine settings:
 |---|---|
 | `TRISS_CODER_ENGINE` | Default engine: `opencode`, `opencode2`, `crush`, or `omp` |
 | `TRISS_CODER_OPENCODE_VERSION` | Raise the OpenCode minimum |
-| `TRISS_CODER_OPENCODE2_VERSION` | Raise the OpenCode 2 beta minimum |
+| `TRISS_CODER_OPENCODE2_VERSION` | Raise the OpenCode 2 minimum above its immutable current-version floor; lower or malformed values fall back to that floor |
 | `TRISS_CODER_OMP_VERSION` | Raise the OMP minimum |
 | `TRISS_CODER_CRUSH_VERSION` | Raise the Crush minimum |
 | `TRISS_CODER_CRUSH_RESTRICT` | Opt into Crush CLI restriction flags |

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode 2 now qualifies the published beta CLI against its current
+  `0.0.0-beta-19059` floor and required option declarations, accepting every
+  newer compatible version without pinning a build or help-description
+  sentence. `provider/model#variant` remains the runtime transport for explicit
+  effort, but help prose is not a compatibility gate. Capability errors now
+  name missing options separately from below-minimum versions. Pre-suffixed
+  public/configured OpenCode 2 models are rejected before engine side effects.
+
 ## [0.42.0] — 2026-08-29
 
 ### Added

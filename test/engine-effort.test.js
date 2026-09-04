@@ -27,7 +27,8 @@ for (const effort of MODEL_EFFORT_LEVELS) {
     });
 
     assert.equal(valueAfter(openCode, '--variant'), effort);
-    assert.equal(valueAfter(openCode2, '--variant'), effort);
+    assert.equal(valueAfter(openCode2, '--model'), `zai/glm-5.2#${effort}`);
+    assert.equal(openCode2.includes('--variant'), false);
     assert.equal(valueAfter(omp, '--thinking'), effort);
     if (['low', 'medium', 'high'].includes(effort)) {
       const crush = buildCrushRunArgv({ prompt: 'p', effort, restrict: false });
@@ -43,7 +44,7 @@ for (const effort of MODEL_EFFORT_LEVELS) {
 
 test('ENGINE-EFFORT-native: omitted effort preserves every engine native default', () => {
   assert.equal(buildOpencodeArgv({ prompt: 'p', model: 'zai/glm-5.2' }).includes('--variant'), false);
-  assert.equal(buildOpenCode2RunArgv({ prompt: 'p', model: 'zai/glm-5.2' }).includes('--variant'), false);
+  assert.equal(valueAfter(buildOpenCode2RunArgv({ prompt: 'p', model: 'zai/glm-5.2' }), '--model'), 'zai/glm-5.2');
   assert.equal(buildOmpRunArgv({ prompt: 'p', model: 'zai/glm-5.2', sessionDir: '/tmp/sessions', noSession: true }).includes('--thinking'), false);
   assert.equal(buildCrushRunArgv({ prompt: 'p', restrict: false }).includes('--effort'), false);
 });

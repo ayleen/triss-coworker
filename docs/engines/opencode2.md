@@ -11,7 +11,35 @@ triss coder run --engine opencode2 \
 
 ## Version and capability gate
 
-The installed binary must satisfy the raise-only `TRISS_CODER_OPENCODE2_VERSION` minimum and the required capability probe. Unsupported development/TUI variants fail closed. Detection also verifies that read-only probes leave no resident service.
+**Immutable compatibility rule:** Triss never pins OpenCode 2 to one exact
+build. It always supports the current qualified version and every newer
+parseable version. The built-in floor is currently
+`0.0.0-beta-19059`; `TRISS_CODER_OPENCODE2_VERSION` can only raise that floor,
+never lower it. Lower or malformed overrides fall back to the built-in floor.
+A newer version is not rejected merely for being newer.
+
+The lightweight capability probe verifies only the required option surface:
+`--standalone`, `--format`, `--auto`, and `--model`. Help prose, examples, and
+the exact spelling used to explain model variants are not compatibility gates.
+Unsupported development/TUI channels still fail closed, and detection verifies
+that its read-only probes leave no resident service.
+
+## Reasoning effort and model variants
+
+The supported beta encodes an explicit effort in the runtime model selector:
+`provider/model#variant`; it does not expose a separate `--variant` flag.
+Keep `--model` on the base canonical model and pass the logical value through
+`--effort low|medium|high|xhigh|max`. Triss adds the private suffix only to the
+OpenCode 2 subprocess argument, while routing, credential proxy, usage, and
+result identities remain on the base model.
+
+Variant availability is model-specific. A compatible CLI supports the selector
+grammar, but a selected model may not implement every logical effort. OpenCode
+2 returns an explicit `VariantUnavailableError` in that case; Triss does not
+silently retry with a different effort. The current beta generates `high` and
+`max` for transient OpenAI-compatible GLM-5.2 models. A model value already
+containing `#variant` is rejected before engine side effects—use `--effort`
+instead.
 
 ## Shared configuration
 
