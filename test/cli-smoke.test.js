@@ -63,6 +63,7 @@ test('cli: status without configuration still renders the full report and exits 
   const out = runCli(['status']);
   assert.match(out.stdout, /Triss Coworker — status/);
   assert.match(out.stdout, /Default provider: openai-compatible/);
+  assert.match(out.stdout, /Default engine\s+: direct/);
   assert.match(out.stdout, /Provider profiles/);
   assert.match(out.stdout, /credential\s+: missing/);
 });

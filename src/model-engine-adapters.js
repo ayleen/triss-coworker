@@ -2,8 +2,11 @@
 // Copyright (c) 2026 ayleen
 
 import { createExecutionResult } from './transports/result.js';
+import { MODEL_EXECUTION_ENGINES } from './provider-contract.js';
 
-const SUPPORTED_ENGINES = Object.freeze(['opencode', 'opencode2', 'omp', 'crush']);
+const SUPPORTED_ENGINES = Object.freeze(
+  MODEL_EXECUTION_ENGINES.filter((engine) => engine !== 'direct'),
+);
 
 function promptFromRequest(request = {}) {
   if (typeof request.prompt === 'string' && request.prompt.length > 0) return request.prompt;
@@ -53,6 +56,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     provider: resolved.providerId,
     model: resolved.nativeModel,
     effort: resolved.effort,
+    ...(engine === 'opencode' ? { agent: 'researcher' } : {}),
     isolate: false,
   }, {
     abortSignal: request.signal,

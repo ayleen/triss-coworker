@@ -8,7 +8,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runChatWithDeps } from '../src/commands/chat.js';
 import { runWriteWithDeps } from '../src/commands/write.js';
-import { CANONICAL_PROVIDER_IDS, MODEL_EFFORT_LEVELS } from '../src/provider-contract.js';
+import {
+  CANONICAL_PROVIDER_IDS,
+  MODEL_EFFORT_LEVELS,
+  MODEL_EXECUTION_ENGINES,
+} from '../src/provider-contract.js';
 import { listTools } from '../src/mcp/tools.js';
 
 function runtimeResponse(request, text) {
@@ -113,7 +117,7 @@ test('CMD-RUNTIME-03: every core MCP model tool exposes one canonical selection 
     assert.ok(tool, name);
     assert.deepEqual(tool.inputSchema.properties.provider.enum, CANONICAL_PROVIDER_IDS, name);
     assert.deepEqual(tool.inputSchema.properties.effort.enum, MODEL_EFFORT_LEVELS, name);
-    assert.deepEqual(tool.inputSchema.properties.engine.enum, ['direct', 'opencode', 'opencode2', 'omp', 'crush'], name);
+    assert.deepEqual(tool.inputSchema.properties.engine.enum, MODEL_EXECUTION_ENGINES, name);
     assert.equal(tool.inputSchema.properties.model.type, 'string', name);
     assert.equal('preset' in tool.inputSchema.properties, false, name);
   }

@@ -1275,6 +1275,7 @@ export async function statusHandler(_args = {}, deps = {}) {
   const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
     `Default provider: ${snapshot.defaultProvider.value}`,
+    `Default engine: ${snapshot.defaultEngine.value}`,
     `Project root: ${root} (from ${rootSource})`,
     `Path sandbox: ${safetyModule.pathsRestricted() ? 'on' : 'off'}`,
     'Env files:',

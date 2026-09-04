@@ -75,6 +75,7 @@ triss status</pre>
 
   Where to save?  [G]lobal ~/.config/triss/.env / [L]ocal ./.triss.env → G
   Default provider                                            → zai
+  Default engine                                              → direct
   Z.A.I API key (masked)                                      → ••••••••
   Native model                                                → glm-5.2
 
@@ -96,6 +97,16 @@ $ triss coder run --engine opencode2 --model opencode-zen/deepseek-v4-flash-free
 $ triss coder init --engine omp --provider opencode-go
 $ triss coder run --engine omp --model opencode-go/deepseek-v4-flash "Create result.txt containing OMP_OK"</pre>
           <p style="margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">OMP 18.0.6 or newer must already be installed; Triss only probes it and never runs the installer. OMP defaults to worktree isolation, but that is not host-filesystem confinement. Default credential mode is <code style="font-family: var(--font-mono);">best_effort_raw</code>; add <code style="font-family: var(--font-mono);">--protect-credentials</code> when the selected key must stay behind the parent-owned proxy.</p>
+        </div>
+        <div style="margin-top: 22px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 16px;">
+          <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent);">Optional: use OpenCode Go Muse for ask and review</div>
+          <pre style="margin: 8px 0 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; color: var(--color-text-code);">$ triss config set TRISS_DEFAULT_PROVIDER opencode-go
+$ triss config set TRISS_DEFAULT_ENGINE opencode
+$ triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+$ triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+$ triss ask --paths src --question "find correctness defects"
+$ triss review</pre>
+          <p style="margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);">Bare model-backed commands now inherit OpenCode Go and Muse. Explicit provider, model, and engine flags still win. OpenCode selects its read-only <code style="font-family: var(--font-mono);">researcher</code> agent for these calls, but the child process runs as your OS user and is not a filesystem sandbox. Restart MCP hosts after changing persisted defaults.</p>
         </div>
       </section>
 

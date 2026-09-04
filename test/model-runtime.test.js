@@ -12,6 +12,16 @@ import {
 } from '../src/model-runtime.js';
 
 const snapshot = createProviderConfigSnapshot({ parentEnv: {}, files: [] });
+const museSnapshot = createProviderConfigSnapshot({
+  parentEnv: {},
+  files: [{ scope: 'local', path: '/project/.triss.env', exists: true }],
+  readFile: () => [
+    'TRISS_DEFAULT_PROVIDER=opencode-go',
+    'TRISS_DEFAULT_ENGINE=opencode',
+    'TRISS_OPENCODE_GO_MODEL=muse-spark-1.3-contributor',
+    'TRISS_OPENCODE_GO_SMALL_MODEL=muse-spark-1.3-contributor',
+  ].join('\n'),
+});
 
 test('model runtime owns the complete main and small task-role matrix', () => {
   assert.equal(resolveTaskRole('ask'), 'smallModel');
@@ -20,6 +30,44 @@ test('model runtime owns the complete main and small task-role matrix', () => {
   assert.equal(resolveTaskRole('coder'), 'model');
   assert.throws(() => resolveTaskRole('unknown'), /Unknown model task/);
   assert.equal(listModelTaskRoles().length, 11);
+});
+
+test('persistent OpenCode Go defaults route ask and review through Muse without request flags', async () => {
+  const calls = [];
+  for (const task of ['ask', 'review']) {
+    const output = await executeModelTask({
+      task,
+      input: { messages: [{ role: 'user', content: task }] },
+    }, {
+      snapshot: museSnapshot,
+      executeTransport: async () => {
+        throw new Error('direct transport must not run');
+      },
+      engines: {
+        opencode: async (projection) => {
+          calls.push(projection.resolved);
+          return { text: `${task}-ok` };
+        },
+      },
+    });
+    assert.equal(output.result.text, `${task}-ok`);
+  }
+  assert.deepEqual(calls.map(({ providerId, nativeModel, engine }) => ({
+    providerId,
+    nativeModel,
+    engine,
+  })), [
+    {
+      providerId: 'opencode-go',
+      nativeModel: 'muse-spark-1.3-contributor',
+      engine: 'opencode',
+    },
+    {
+      providerId: 'opencode-go',
+      nativeModel: 'muse-spark-1.3-contributor',
+      engine: 'opencode',
+    },
+  ]);
 });
 
 test('direct runtime resolves selection before invoking one transport adapter', async () => {
@@ -88,7 +136,7 @@ test('runtime rejects invalid options before transport or engine execution', asy
   assert.equal(executed, false);
   await assert.rejects(
     () => executeModelTask({ task: 'review', engine: 'missing' }, { snapshot }),
-    /Unsupported execution engine/,
+    /Invalid engine "missing"/,
   );
 });
 
@@ -96,7 +144,7 @@ test('production engine adapter projects the resolved route through coder and no
   let call;
   const result = await executeProjectedEngineTask({
     resolved: {
-      engine: 'omp',
+      engine: 'opencode',
       providerId: 'moonshot',
       nativeModel: 'kimi-k2.7-code',
       effort: 'xhigh',
@@ -132,10 +180,11 @@ test('production engine adapter projects the resolved route through coder and no
   assert.match(call.prompt, /SYSTEM:\nReturn plain text\./);
   assert.match(call.prompt, /USER:\nAnswer now\./);
   assert.deepEqual(call.opts, {
-    engine: 'omp',
+    engine: 'opencode',
     provider: 'moonshot',
     model: 'kimi-k2.7-code',
     effort: 'xhigh',
+    agent: 'researcher',
     isolate: false,
   });
   assert.equal(call.deps.providerConfigSnapshot, snapshot);
@@ -151,7 +200,7 @@ test('production engine adapter projects the resolved route through coder and no
     totalTokens: 15,
   });
   assert.deepEqual(result.rawMetadata, {
-    engine: 'omp',
+    engine: 'opencode',
     engineVersion: '1.2.3',
     runId: 'run_test',
   });

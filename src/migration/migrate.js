@@ -141,6 +141,13 @@ export function planEnvMigration(text, { path = '<env>' } = {}) {
     chooseDefaultProvider(values, derivedProfiles, hasLegacyOpenAI, path),
     path,
   );
+  mergeCanonicalField(
+    values,
+    additions,
+    'TRISS_DEFAULT_ENGINE',
+    values.TRISS_DEFAULT_ENGINE ?? 'direct',
+    path,
+  );
 
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
   const trailing = text.endsWith('\n');

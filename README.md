@@ -64,7 +64,7 @@ Every provider has an endpoint, credential, `model` role, and `smallModel` role.
 4. global `~/.config/triss/.env`;
 5. registry defaults.
 
-`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`.
+`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`.
 
 Shared reasoning effort values:
 
@@ -92,12 +92,30 @@ Omit `--model` to use the command's provider role. There are no public model pre
 triss config wizard
 triss config wizard --local
 triss config set TRISS_DEFAULT_PROVIDER zai
+triss config set TRISS_DEFAULT_ENGINE direct
 triss config get TRISS_ZAI_MODEL
 triss config list
 triss config path
 triss config edit
 triss config unset TRISS_ZAI_MODEL
 ```
+
+To route bare `ask`, `review`, and other model-backed calls through OpenCode Go
+with Muse:
+
+```bash
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+
+triss ask --paths src --question "Find correctness defects"
+triss review
+```
+
+Explicit request flags still win. OpenCode-backed non-coder calls select the
+read-only `researcher` agent, but that child process runs as the current OS user
+and is not a filesystem sandbox.
 
 Provider fields:
 

@@ -42,6 +42,7 @@ test('registry contains exactly the six canonical provider profiles', () => {
   assert.throws(() => getProviderDefinition('worker'), /Invalid provider/);
   assert.ok(Object.isFrozen(getProviderDefinition('zai')));
   assert.ok(PROVIDER_CONFIG_ENV_KEYS.includes('TRISS_DEFAULT_PROVIDER'));
+  assert.ok(PROVIDER_CONFIG_ENV_KEYS.includes('TRISS_DEFAULT_ENGINE'));
   assert.equal(new Set(PROVIDER_CONFIG_ENV_KEYS).size, PROVIDER_CONFIG_ENV_KEYS.length);
 });
 
@@ -49,6 +50,7 @@ test('snapshot preserves shell local global and registry-default provenance', ()
   const value = snapshot({
     shell: {
       TRISS_DEFAULT_PROVIDER: 'zai',
+      TRISS_DEFAULT_ENGINE: 'opencode',
       TRISS_ZAI_MODEL: 'shell-main',
     },
     local: [
@@ -65,6 +67,9 @@ test('snapshot preserves shell local global and registry-default provenance', ()
 
   assert.deepEqual(value.defaultProvider, {
     value: 'zai', source: 'shell', scope: 'shell', path: null,
+  });
+  assert.deepEqual(value.defaultEngine, {
+    value: 'opencode', source: 'shell', scope: 'shell', path: null,
   });
   assert.deepEqual(value.providers.zai.model, {
     value: 'shell-main', source: 'shell', scope: 'shell', path: null,

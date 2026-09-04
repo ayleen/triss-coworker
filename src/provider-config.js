@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { activeEnvFiles, parseEnvText } from './secrets.js';
-import { DEFAULT_PROVIDER_ID } from './provider-contract.js';
+import { DEFAULT_MODEL_ENGINE, DEFAULT_PROVIDER_ID } from './provider-contract.js';
 import {
   PROVIDER_CONFIG_ENV_KEYS,
   getProviderDefinition,
@@ -78,6 +78,10 @@ export function createProviderConfigSnapshot({
     defaultProvider: sourceValue('TRISS_DEFAULT_PROVIDER', {
       ...sourceOptions,
       defaultValue: DEFAULT_PROVIDER_ID,
+    }),
+    defaultEngine: sourceValue('TRISS_DEFAULT_ENGINE', {
+      ...sourceOptions,
+      defaultValue: DEFAULT_MODEL_ENGINE,
     }),
     providers,
   });

@@ -23,11 +23,18 @@ Model-backed tools share these optional fields:
 |---|---|---|
 | `provider` | `openai-compatible`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`, `kimi-for-coding` | Canonical provider id |
 | `model` | native provider model id | One-call role override |
+| `engine` | `direct`, `opencode`, `opencode2`, `omp`, `crush` | One-call execution-engine override |
 | `effort` | `minimal`, `low`, `medium`, `high`, `max` | Shared reasoning control |
 | `max_tokens` | positive integer | Explicit output cap |
 | `timeout_ms` | positive integer | Request timeout override |
 
-When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER` and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
+When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER`, `TRISS_DEFAULT_ENGINE`, and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
+
+For example, setting `TRISS_DEFAULT_PROVIDER=opencode-go`,
+`TRISS_DEFAULT_ENGINE=opencode`, and both OpenCode Go model roles to
+`muse-spark-1.3-contributor` routes bare `triss_ask` and `triss_review`
+requests through the OpenCode `researcher` agent. Restart the MCP host after
+changing persisted defaults.
 
 ## Core tools
 

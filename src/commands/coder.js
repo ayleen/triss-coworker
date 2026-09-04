@@ -74,6 +74,7 @@ const CREDENTIAL_ISOLATION_DOWNGRADED_WARNING =
 const NON_SECRET_CODER_STORE_KEYS = new Set([
   'TRISS_CONFIG_SCHEMA',
   'TRISS_DEFAULT_PROVIDER',
+  'TRISS_DEFAULT_ENGINE',
   ...listProviderDefinitions().flatMap((definition) => Object.values(definition.fields)),
   'TRISS_CODER_ENGINE',
   'TRISS_CODER_OPENCODE_VERSION',

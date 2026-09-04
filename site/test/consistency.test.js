@@ -64,6 +64,19 @@ test("README presents the canonical 0.42 provider migration", () => {
   assert.doesNotMatch(readme, /--small-model/);
 });
 
+test("website documents persistent engine defaults for ask and review", () => {
+  const gettingStarted = read("src/pages/docs/getting-started.astro");
+  for (const name of ["ask", "review"]) {
+    const command = COMMANDS.find((entry) => entry.name === name);
+    assert.ok(command);
+    assert.ok(command.flags.includes("--engine <id>"));
+  }
+  assert.match(gettingStarted, /TRISS_DEFAULT_PROVIDER opencode-go/);
+  assert.match(gettingStarted, /TRISS_DEFAULT_ENGINE opencode/);
+  assert.match(gettingStarted, /muse-spark-1\.3-contributor/);
+  assert.match(gettingStarted, /read-only[\s\S]*researcher/);
+});
+
 test("website coder engines and quickstarts match repository contracts", () => {
   const pkg = JSON.parse(read("../package.json"));
   const coderPage = read("src/pages/coder.astro");

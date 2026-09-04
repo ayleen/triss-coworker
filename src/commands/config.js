@@ -349,6 +349,7 @@ async function runStandardWizard(path, current) {
   if (model) setVar(path, 'TRISS_OPENAI_COMPATIBLE_MODEL', model);
   if (smallModel) setVar(path, 'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL', smallModel);
   setVar(path, 'TRISS_DEFAULT_PROVIDER', 'openai-compatible');
+  setVar(path, 'TRISS_DEFAULT_ENGINE', 'direct');
   setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
 
   process.stdout.write(

@@ -16,3 +16,9 @@ fail-closed GPG tag-signature checks (see
 This document does not redefine those sources. Update them together whenever a
 new provider, automatic network path, child engine, credential route, or
 release artifact is introduced.
+
+Setting `TRISS_DEFAULT_ENGINE` to a non-`direct` value makes bare model-backed
+commands start that local child engine. The OpenCode projection selects the
+read-only `researcher` agent and disables worktree isolation; it still runs as
+the current OS user and must not be treated as a filesystem sandbox. Other
+engines retain their documented runtime permission and credential policies.

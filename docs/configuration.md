@@ -67,6 +67,7 @@ Global runtime fields:
 |---|---|---|
 | `TRISS_CONFIG_SCHEMA` | `2` | Persisted configuration schema |
 | `TRISS_DEFAULT_PROVIDER` | `openai-compatible` | Provider selected when a request omits `provider` |
+| `TRISS_DEFAULT_ENGINE` | `direct` | Execution engine selected when a model request omits `engine` |
 | `TRISS_REQUEST_TIMEOUT_MS` | SDK default | Model request timeout |
 
 ## Model roles and request selection
@@ -75,11 +76,15 @@ Model-backed commands declare either the `model` role or the `smallModel` role. 
 
 - `provider` selects one canonical provider.
 - `model` is a native model id for direct CLI/MCP commands.
+- `engine` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush`; when omitted, `TRISS_DEFAULT_ENGINE` applies.
 - coder `--model` accepts a canonical `<provider>/<model-id>` selector; the small role comes from that provider's `*_SMALL_MODEL` field.
 - `effort` accepts `minimal`, `low`, `medium`, `high`, or `max`.
 - `max_tokens` remains a separate output cap.
 
 There are no public model presets. Omit `model` to use the selected provider role.
+
+Provider and engine defaults resolve independently. Registry-backed providers such as `opencode-go`
+require an engine-backed default (`opencode`, `opencode2`, or `omp`) instead of `direct`.
 
 Examples:
 
@@ -89,10 +94,21 @@ triss ask --provider zai --model glm-5.2 --effort high \
 
 triss review --provider moonshot --model kimi-k3 --effort max
 
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+
 triss coder run --engine omp \
   --model opencode-go/deepseek-v4-flash \
   "Implement the task"
 ```
+
+After the four `config set` commands above, bare `triss ask`, `triss review`,
+and equivalent MCP calls use `opencode-go/muse-spark-1.3-contributor` through
+OpenCode. OpenCode projections select the read-only `researcher` agent for
+these calls. An explicit request `provider`, `model`, or `engine` retains
+highest precedence.
 
 ## Coder engines
 

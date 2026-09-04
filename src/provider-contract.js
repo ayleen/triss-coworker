@@ -2,6 +2,7 @@
 // Copyright (c) 2026 ayleen
 
 export const DEFAULT_PROVIDER_ID = 'openai-compatible';
+export const DEFAULT_MODEL_ENGINE = 'direct';
 
 export const CANONICAL_PROVIDER_IDS = Object.freeze([
   'openai-compatible',
@@ -15,10 +16,18 @@ export const CANONICAL_PROVIDER_IDS = Object.freeze([
 export const PROVIDER_MODEL_ROLES = Object.freeze(['model', 'smallModel']);
 export const MODEL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const MODEL_SELECTION_FIELDS = Object.freeze(['provider', 'model', 'engine', 'effort']);
+export const MODEL_EXECUTION_ENGINES = Object.freeze([
+  'direct',
+  'opencode',
+  'opencode2',
+  'omp',
+  'crush',
+]);
 
 const PROVIDER_IDS = new Set(CANONICAL_PROVIDER_IDS);
 const MODEL_ROLES = new Set(PROVIDER_MODEL_ROLES);
 const EFFORT_LEVELS = new Set(MODEL_EFFORT_LEVELS);
+const EXECUTION_ENGINES = new Set(MODEL_EXECUTION_ENGINES);
 
 export function isCanonicalProviderId(value) {
   return typeof value === 'string' && PROVIDER_IDS.has(value);
@@ -39,6 +48,16 @@ export function assertProviderModelRole(value) {
   }
   return value;
 }
+
+export function assertModelExecutionEngine(value, field = 'engine') {
+  if (typeof value !== 'string' || !EXECUTION_ENGINES.has(value)) {
+    throw new Error(
+      `Invalid ${field} "${String(value)}". Valid values: ${MODEL_EXECUTION_ENGINES.join(', ')}`,
+    );
+  }
+  return value;
+}
+
 
 export function normalizeModelEffort(value) {
   if (value === undefined || value === null || value === '') return undefined;
@@ -89,11 +108,14 @@ export function validateModelSelectionInput(input = {}) {
   if (input.engine !== undefined && (typeof input.engine !== 'string' || input.engine.length === 0)) {
     throw new Error('Engine must be a non-empty string');
   }
+  const engine = input.engine === undefined
+    ? undefined
+    : assertModelExecutionEngine(input.engine);
 
   return Object.freeze({
     provider,
     model,
-    engine: input.engine,
+    engine,
     effort,
   });
 }

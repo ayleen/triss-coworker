@@ -10,7 +10,11 @@ import { loadEnvFiles } from '../config.js';
 // Shared provider metadata keeps MCP exposure aligned with `triss status`.
 import { coderCredentialReady } from '../coder-providers.js';
 import { NODE_TIMER_MAX_MS } from '../option-validation.js';
-import { CANONICAL_PROVIDER_IDS, MODEL_EFFORT_LEVELS } from '../provider-contract.js';
+import {
+  CANONICAL_PROVIDER_IDS,
+  MODEL_EFFORT_LEVELS,
+  MODEL_EXECUTION_ENGINES,
+} from '../provider-contract.js';
 import {
   askHandler,
   chatHandler,
@@ -97,7 +101,7 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
   },
   engine: {
     type: 'string',
-    enum: ['direct', 'opencode', 'opencode2', 'omp', 'crush'],
+    enum: MODEL_EXECUTION_ENGINES,
     description: 'Execution engine',
   },
   effort: {

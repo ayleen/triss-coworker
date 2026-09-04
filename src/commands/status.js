@@ -44,6 +44,7 @@ export async function runStatus(deps = {}) {
     pc.bold('Triss Coworker — status'),
     '',
     `  Default provider: ${pc.cyan(snapshot.defaultProvider.value)}`,
+    `  Default engine  : ${pc.cyan(snapshot.defaultEngine.value)}`,
     `  Project root    : ${root} ${rootSource}`,
     `  Path sandbox    : ${pathsRestricted() ? pc.green('on') : pc.dim('off (CLI mode)')}`,
     '',

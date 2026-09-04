@@ -36,6 +36,36 @@ test('resolver uses configured default provider and main role', () => {
   assert.ok(Object.isFrozen(result));
 });
 
+test('configured default engine is persistent and lower precedence than request defaults', () => {
+  const snapshot = config({
+    local: 'TRISS_DEFAULT_ENGINE=opencode\n',
+  });
+  const configured = resolveModelSelection({}, snapshot);
+  assert.equal(configured.engine, 'opencode');
+  assert.equal(configured.provenance.engine.source, 'config');
+  assert.equal(configured.provenance.engine.scope, 'local');
+
+  const commandDefault = resolveModelSelection({ defaultEngine: 'omp' }, snapshot);
+  assert.equal(commandDefault.engine, 'omp');
+  assert.equal(commandDefault.provenance.engine.source, 'command-default');
+
+  const explicit = resolveModelSelection({ defaultEngine: 'omp', engine: 'direct' }, snapshot);
+  assert.equal(explicit.engine, 'direct');
+  assert.equal(explicit.provenance.engine.source, 'explicit');
+});
+
+test('resolver rejects invalid configured and command-default engines', () => {
+  const invalid = config({ local: 'TRISS_DEFAULT_ENGINE=missing\n' });
+  assert.throws(
+    () => resolveModelSelection({}, invalid),
+    /Invalid configured default engine "missing"/,
+  );
+  assert.throws(
+    () => resolveModelSelection({ defaultEngine: 'missing' }, config()),
+    /Invalid command default engine "missing"/,
+  );
+});
+
 test('explicit provider with bare model preserves the native id', () => {
   const result = resolveModelSelection({
     provider: 'zai',
