@@ -37,10 +37,12 @@ project are serialized, isolated runs are bounded by the four session slots,
 and every run has a finite timeout (900 seconds by default). The supervisor
 terminates the process group on the deadline or a detected provider rate-limit
 response; Triss does not restart or resubmit the completed run automatically.
-The supported OpenCode runtime honors `Retry-After`, uses exponential backoff
-with jitter, and stops after five retries for retryable provider failures.
-Protected-proxy execution adds hard per-run limits of 20 requests per second
-and 1,000 requests total.
+The supported OpenCode runtime honors bounded, valid `Retry-After` and
+`Retry-After-Ms` response metadata, uses exponential backoff with jitter when
+the provider supplies neither header, and stops after five retries for
+retryable provider failures. Protected-proxy execution preserves those retry
+headers while adding hard per-run limits of 20 requests per second and 1,000
+requests total.
 
 Acceptance criteria:
 
@@ -49,8 +51,9 @@ Acceptance criteria:
 - unrelated providers retain the private `triss-coder-transient` namespace;
 - persistent OpenCode configuration cannot redefine any generated transient
   provider ID;
-- protected-proxy execution forwards only the bounded OpenCode identity header
-  allowlist and replaces the loopback token with the real upstream credential;
+- protected-proxy execution forwards only the bounded OpenCode identity
+  request-header allowlist, preserves only bounded and valid retry response
+  metadata, and replaces the loopback token with the real upstream credential;
 - focused provider-routing and coder-run tests cover the generated selectors,
   effective configuration, and public envelope identity.
 

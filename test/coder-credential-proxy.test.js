@@ -154,6 +154,84 @@ test('proxy preserves only bounded OpenCode request identity headers upstream', 
   }
 });
 
+test('proxy preserves only valid retry response metadata from a 429 upstream', async () => {
+  const fetchImpl = async () => new Response(
+    JSON.stringify({ error: { message: 'rate limited' } }),
+    {
+      status: 429,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': '120',
+        'retry-after-ms': '1500',
+        authorization: 'must-not-forward',
+        'set-cookie': 'must-not-forward=1',
+        'x-untrusted-metadata': 'must-not-forward',
+      },
+    },
+  );
+  const { proxy } = await startProxy({ fetchImpl });
+  try {
+    const res = await post(proxy);
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get('content-type'), 'application/json');
+    assert.equal(res.headers.get('retry-after'), '120');
+    assert.equal(res.headers.get('retry-after-ms'), '1500');
+    assert.equal(res.headers.get('authorization'), null);
+    assert.equal(res.headers.get('set-cookie'), null);
+    assert.equal(res.headers.get('x-untrusted-metadata'), null);
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('proxy accepts an HTTP-date Retry-After and drops invalid retry metadata', async () => {
+  const validDate = 'Sat, 05 Sep 2026 08:00:00 GMT';
+  const cases = [
+    [{ 'retry-after': validDate }, validDate, null],
+    [{ 'retry-after': '-1', 'retry-after-ms': '-1' }, null, null],
+    [{ 'retry-after': 'later', 'retry-after-ms': 'NaN' }, null, null],
+    [{ 'retry-after': '1'.repeat(1025), 'retry-after-ms': '1'.repeat(1025) }, null, null],
+  ];
+  for (const [headers, expectedAfter, expectedAfterMs] of cases) {
+    const fetchImpl = async () => new Response('rate limited', { status: 429, headers });
+    const { proxy } = await startProxy({ fetchImpl });
+    try {
+      const res = await post(proxy);
+      assert.equal(res.headers.get('retry-after'), expectedAfter);
+      assert.equal(res.headers.get('retry-after-ms'), expectedAfterMs);
+    } finally {
+      proxy.revoke();
+    }
+  }
+});
+
+test('protected OpenCode Go and Zen paths preserve Retry-After on 429 responses', async () => {
+  for (const provider of ['opencode-go', 'opencode-zen']) {
+    const proxy = await startCoderCredentialProxy({
+      provider,
+      model: 'deepseek-v4-flash',
+      endpoint: ENDPOINT,
+      credential: REAL_CREDENTIAL,
+      protocol: 'openai_chat',
+      pathPrefix: '/zen/go/v1',
+      fetchImpl: async () => new Response(
+        JSON.stringify({ error: { message: 'rate limited' } }),
+        { status: 429, headers: { 'retry-after': '300' } },
+      ),
+    });
+    try {
+      const res = await post(proxy, {
+        path: '/zen/go/v1/chat/completions',
+        body: '{"model":"deepseek-v4-flash","messages":[]}',
+      });
+      assert.equal(res.status, 429, provider);
+      assert.equal(res.headers.get('retry-after'), '300', provider);
+    } finally {
+      proxy.revoke();
+    }
+  }
+});
+
 test('scopedBaseUrl is the loopback origin plus the pinned prefix', async () => {
   const { proxy } = await startProxy({ pathPrefix: '/api/coding/paas/v4' });
   try {

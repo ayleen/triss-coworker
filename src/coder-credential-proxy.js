@@ -26,7 +26,9 @@
  *    logged, or placed in engine env/argv/config by this module;
  *  - bounded request identity: the specific user agent and OpenCode request
  *    correlation headers survive the proxy without admitting arbitrary
- *    client-controlled upstream headers.
+ *    client-controlled upstream headers;
+ *  - bounded retry metadata: only valid `retry-after` and `retry-after-ms`
+ *    response values survive the proxy.
  *
  * URL contract (Invariant): `endpoint` is the upstream ORIGIN
  * (`https://host[:port]`, no path). The engine's base URL points at
@@ -77,6 +79,43 @@ function copyRequestIdentityHeaders(requestHeaders, upstreamHeaders) {
     ) {
       upstreamHeaders[name] = value;
     }
+  }
+}
+
+const RETRY_RESPONSE_HEADERS = Object.freeze([
+  'retry-after',
+  'retry-after-ms',
+]);
+const MAX_RETRY_RESPONSE_HEADER_BYTES = 1024;
+const IMF_FIXDATE_PATTERN =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+function isNonNegativeFiniteNumber(value) {
+  const number = Number(value);
+  return value.trim().length > 0 && Number.isFinite(number) && number >= 0;
+}
+
+function isValidRetryAfter(value) {
+  if (isNonNegativeFiniteNumber(value)) return true;
+  if (!IMF_FIXDATE_PATTERN.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toUTCString() === value;
+}
+
+function copyRetryHeaders(upstreamHeaders, downstreamHeaders) {
+  for (const name of RETRY_RESPONSE_HEADERS) {
+    const value = upstreamHeaders.get(name);
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      Buffer.byteLength(value, 'utf8') > MAX_RETRY_RESPONSE_HEADER_BYTES
+    ) {
+      continue;
+    }
+    const valid = name === 'retry-after-ms'
+      ? isNonNegativeFiniteNumber(value)
+      : isValidRetryAfter(value);
+    if (valid) downstreamHeaders[name] = value;
   }
 }
 
@@ -369,9 +408,11 @@ export async function startCoderCredentialProxy(opts = {}) {
       // Bounded response relay: stream through with a hard byte cap instead
       // of buffering the whole body; overflow aborts the upstream fetch and
       // fails the response closed.
-      res.writeHead(upstream.status, {
+      const responseHeaders = {
         'content-type': upstream.headers.get('content-type') || 'application/json',
-      });
+      };
+      copyRetryHeaders(upstream.headers, responseHeaders);
+      res.writeHead(upstream.status, responseHeaders);
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.end();

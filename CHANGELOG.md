@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public/configured OpenCode 2 models are rejected before engine side effects.
 - OpenCode Go and Zen coder transports now retain an OpenCode-prefixed
   transient provider identity, and the protected credential proxy preserves
-  the bounded OpenCode request identity headers and specific user agent
-  upstream.
+  the bounded OpenCode request identity headers, specific user agent, and
+  validated retry response metadata upstream.
 
 ## [0.42.0] — 2026-08-29
 
