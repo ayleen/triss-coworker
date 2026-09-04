@@ -48,7 +48,23 @@ jobs:
         run: npm ci
       - name: Dependency audit
         working-directory: site
-        run: npm run audit:dependencies
+        env:
+          NPM_CONFIG_FETCH_RETRIES: 1
+          NPM_CONFIG_FETCH_TIMEOUT: 60000
+        run: |
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/site-npm-audit-$attempt.log"
+            if npm run audit:dependencies 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if ! grep -Eq 'audit endpoint returned an error|network timeout|503 Service Unavailable' "$log"; then
+              exit 1
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
       - name: Install Chromium
         working-directory: site
         run: npx playwright install --with-deps chromium

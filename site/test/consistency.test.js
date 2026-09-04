@@ -64,6 +64,14 @@ test("README presents the canonical 0.42 provider migration", () => {
   assert.doesNotMatch(readme, /--small-model/);
 });
 
+test("site CI retries transient npm audit outages without weakening the audit", () => {
+  const workflow = read("../.github/workflows/site.yml");
+  assert.match(workflow, /NPM_CONFIG_FETCH_TIMEOUT: 60000/);
+  assert.match(workflow, /for attempt in 1 2 3/);
+  assert.match(workflow, /audit endpoint returned an error\|network timeout\|503 Service Unavailable/);
+  assert.match(workflow, /npm run audit:dependencies/);
+});
+
 test("website coder engines and quickstarts match repository contracts", () => {
   const pkg = JSON.parse(read("../package.json"));
   const coderPage = read("src/pages/coder.astro");
@@ -84,6 +92,11 @@ test("website coder engines and quickstarts match repository contracts", () => {
   assert.match(coderPage, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(gettingStarted, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(readme, new RegExp(`OpenCode 2 has a supported floor of \`${escapedOpenCode2Floor}\``));
+  assert.match(
+    coderPage,
+    /Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local\./,
+  );
+  assert.match(readme, /project fingerprint stays local/);
 
   const coder = COMMANDS.find((command) => command.name === "coder");
   assert.ok(coder);
