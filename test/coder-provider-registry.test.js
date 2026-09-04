@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CODER_CREDENTIAL_MODES,
+  CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS,
   CODER_TRANSIENT_PROVIDER_ALIAS,
   assertCoderCredentialMode,
   buildCoderTransientProviderOverlay,
@@ -130,6 +131,28 @@ test('Zen and Go transport metadata stays model-specific and fail-closed', () =>
   }
 });
 
+test('V1 OpenCode Go and Zen routes preserve the OpenCode request identity namespace', () => {
+  for (const model of [
+    'opencode-go/deepseek-v4-flash',
+    'opencode-zen/deepseek-v4-flash-free',
+  ]) {
+    const route = resolveCoderProviderRoute(model);
+    const overlay = buildCoderTransientProviderOverlay({
+      route,
+      model,
+      baseURL: 'http://127.0.0.1:4321/zen/go/v1',
+      credentialEnv: 'OPENCODE_API_KEY',
+      preserveOpenCodeRequestIdentity: true,
+    });
+    assert.equal(
+      overlay.model,
+      `${CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS}/${route.modelId}`,
+      model,
+    );
+    assert.ok(overlay.provider[CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS], model);
+  }
+});
+
 test('distinct V1 main/small transports produce separate transient providers', () => {
   const mainRoute = resolveCoderProviderRoute('opencode-go/deepseek-v4-flash');
   const smallRoute = resolveCoderProviderRoute('opencode-go/muse-spark-1.2-contributor');
@@ -141,11 +164,15 @@ test('distinct V1 main/small transports produce separate transient providers', (
     baseURL: 'http://127.0.0.1:4321/zen/go/v1',
     smallBaseURL: 'http://127.0.0.1:4322/zen/go/v1',
     credentialEnv: 'OPENCODE_API_KEY',
+    preserveOpenCodeRequestIdentity: true,
   });
-  assert.equal(overlay.small_model, `${CODER_TRANSIENT_PROVIDER_ALIAS}-small/muse-spark-1.2-contributor`);
-  assert.equal(overlay.provider[CODER_TRANSIENT_PROVIDER_ALIAS].npm, '@ai-sdk/openai-compatible');
-  assert.equal(overlay.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`].npm, '@ai-sdk/openai');
-  assert.equal(overlay.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`].options.baseURL, 'http://127.0.0.1:4322/zen/go/v1');
+  const mainAlias = 'opencode-triss-coder-transient';
+  const smallAlias = `${mainAlias}-small`;
+  assert.equal(overlay.model, `${mainAlias}/deepseek-v4-flash`);
+  assert.equal(overlay.small_model, `${smallAlias}/muse-spark-1.2-contributor`);
+  assert.equal(overlay.provider[mainAlias].npm, '@ai-sdk/openai-compatible');
+  assert.equal(overlay.provider[smallAlias].npm, '@ai-sdk/openai');
+  assert.equal(overlay.provider[smallAlias].options.baseURL, 'http://127.0.0.1:4322/zen/go/v1');
 });
 
 test('distinct V1 models sharing one transport remain in the main transient provider', () => {
@@ -158,10 +185,13 @@ test('distinct V1 models sharing one transport remain in the main transient prov
     smallRoute,
     baseURL: 'http://127.0.0.1:4321/zen/go/v1',
     credentialEnv: 'OPENCODE_API_KEY',
+    preserveOpenCodeRequestIdentity: true,
   });
-  assert.equal(overlay.small_model, `${CODER_TRANSIENT_PROVIDER_ALIAS}/deepseek-v4-pro`);
-  assert.equal(overlay.provider[`${CODER_TRANSIENT_PROVIDER_ALIAS}-small`], undefined);
-  assert.deepEqual(overlay.provider[CODER_TRANSIENT_PROVIDER_ALIAS].models, {
+  const providerAlias = 'opencode-triss-coder-transient';
+  assert.equal(overlay.model, `${providerAlias}/deepseek-v4-flash`);
+  assert.equal(overlay.small_model, `${providerAlias}/deepseek-v4-pro`);
+  assert.equal(overlay.provider[`${providerAlias}-small`], undefined);
+  assert.deepEqual(overlay.provider[providerAlias].models, {
     'deepseek-v4-flash': { name: 'deepseek-v4-flash' },
     'deepseek-v4-pro': { name: 'deepseek-v4-pro' },
   });
@@ -203,5 +233,8 @@ test('V2 transient overlay intentionally omits the unused small-model role', () 
     includeSmallModel: false,
   });
   assert.equal(overlay.small_model, undefined);
-  assert.equal(overlay.provider[CODER_TRANSIENT_PROVIDER_ALIAS].npm, '@ai-sdk/openai-compatible');
+  assert.equal(
+    overlay.provider[CODER_TRANSIENT_PROVIDER_ALIAS].npm,
+    '@ai-sdk/openai-compatible',
+  );
 });

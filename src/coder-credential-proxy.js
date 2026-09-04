@@ -23,7 +23,10 @@
  *    and aborts every in-flight upstream fetch;
  *  - no body logging, no CONNECT/general forward-proxy route;
  *  - exact-secret non-disclosure: the real credential is never returned,
- *    logged, or placed in engine env/argv/config by this module.
+ *    logged, or placed in engine env/argv/config by this module;
+ *  - bounded request identity: the specific user agent and OpenCode request
+ *    correlation headers survive the proxy without admitting arbitrary
+ *    client-controlled upstream headers.
  *
  * URL contract (Invariant): `endpoint` is the upstream ORIGIN
  * (`https://host[:port]`, no path). The engine's base URL points at
@@ -54,6 +57,28 @@ const DEFAULT_DEADLINE_MS = 30 * 60 * 1000;
 // Anthropic-protocol requests must carry an api-version header; forward the
 // engine's own value when present, otherwise pin the documented default.
 const ANTHROPIC_VERSION_DEFAULT = '2023-06-01';
+
+const REQUEST_IDENTITY_HEADERS = Object.freeze([
+  'user-agent',
+  'x-opencode-client',
+  'x-opencode-project',
+  'x-opencode-request',
+  'x-opencode-session',
+]);
+const MAX_REQUEST_IDENTITY_HEADER_BYTES = 1024;
+
+function copyRequestIdentityHeaders(requestHeaders, upstreamHeaders) {
+  for (const name of REQUEST_IDENTITY_HEADERS) {
+    const value = requestHeaders[name];
+    if (
+      typeof value === 'string' &&
+      value.length > 0 &&
+      Buffer.byteLength(value, 'utf8') <= MAX_REQUEST_IDENTITY_HEADER_BYTES
+    ) {
+      upstreamHeaders[name] = value;
+    }
+  }
+}
 
 function generateToken() {
   return randomBytes(16).toString('hex');
@@ -320,6 +345,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     let responseBytes = 0;
     try {
       const headers = { 'content-type': 'application/json' };
+      copyRequestIdentityHeaders(req.headers, headers);
       if (authStyle === 'anthropic') {
         headers['x-api-key'] = credential;
         headers['anthropic-version'] =

@@ -117,6 +117,43 @@ test('a valid token forwards to the pinned endpoint with the real credential', a
   }
 });
 
+test('proxy preserves only bounded OpenCode request identity headers upstream', async () => {
+  const stub = stubFetch();
+  const { proxy } = await startProxy({}, stub);
+  try {
+    const res = await post(proxy, {
+      headers: {
+        'user-agent': 'opencode/1.18.22',
+        'x-opencode-session': 'ses_test',
+        'x-opencode-request': 'msg_test',
+        'x-opencode-client': 'cli',
+        'x-opencode-project': 'project_test',
+        'x-untrusted-metadata': 'must-not-forward',
+      },
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(stub.calls[0].headers).filter(([name]) => (
+        name === 'user-agent' || name.startsWith('x-')
+      ))),
+      {
+        'user-agent': 'opencode/1.18.22',
+        'x-opencode-client': 'cli',
+        'x-opencode-project': 'project_test',
+        'x-opencode-request': 'msg_test',
+        'x-opencode-session': 'ses_test',
+      },
+    );
+    const oversized = await post(proxy, {
+      headers: { 'x-opencode-session': `ses_${'x'.repeat(1024)}` },
+    });
+    assert.equal(oversized.status, 200);
+    assert.equal(stub.calls[1].headers['x-opencode-session'], undefined);
+  } finally {
+    proxy.revoke();
+  }
+});
+
 test('scopedBaseUrl is the loopback origin plus the pinned prefix', async () => {
   const { proxy } = await startProxy({ pathPrefix: '/api/coding/paas/v4' });
   try {

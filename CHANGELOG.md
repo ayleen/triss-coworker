@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effort, but help prose is not a compatibility gate. Capability errors now
   name missing options separately from below-minimum versions. Pre-suffixed
   public/configured OpenCode 2 models are rejected before engine side effects.
+- OpenCode Go and Zen coder transports now retain an OpenCode-prefixed
+  transient provider identity, and the protected credential proxy preserves
+  the bounded OpenCode request identity headers and specific user agent
+  upstream.
 
 ## [0.42.0] — 2026-08-29
 

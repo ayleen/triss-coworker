@@ -28,6 +28,21 @@ function providerRoute(id, overrides = {}) {
 // OPENCODE_CONFIG_CONTENT for one run; persistent config layers defining it
 // are rejected before a credential-bearing child is spawned.
 export const CODER_TRANSIENT_PROVIDER_ALIAS = 'triss-coder-transient';
+// OpenCode V1 only emits its dynamic x-opencode-* request identity when the
+// effective provider id begins with "opencode". Audited Zen/Go routes still
+// need a private collision-resistant namespace, so keep a dedicated prefix
+// rather than falling back to the generic transient alias.
+export const CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS = 'opencode-triss-coder-transient';
+
+export function coderTransientProviderAlias(
+  route,
+  { preserveOpenCodeRequestIdentity = false } = {},
+) {
+  return preserveOpenCodeRequestIdentity &&
+    (route?.provider === 'opencode-zen' || route?.provider === 'opencode-go')
+    ? CODER_OPENCODE_TRANSIENT_PROVIDER_ALIAS
+    : CODER_TRANSIENT_PROVIDER_ALIAS;
+}
 
 const OPENAI_CHAT_ROUTE = freeze({ protocol: 'openai_chat', package: '@ai-sdk/openai-compatible' });
 const OPENAI_RESPONSES_ROUTE = freeze({ protocol: 'openai_responses', package: '@ai-sdk/openai' });
@@ -220,13 +235,15 @@ export function buildCoderTransientProviderOverlay({
   smallBaseURL,
   credentialEnv,
   includeSmallModel = true,
+  preserveOpenCodeRequestIdentity = false,
 } = {}) {
   if (!route || typeof route !== 'object') throw new TypeError('buildCoderTransientProviderOverlay: route is required');
   if (typeof model !== 'string' || !model) throw new TypeError('buildCoderTransientProviderOverlay: model is required');
   if (typeof baseURL !== 'string' || !baseURL) throw new TypeError('buildCoderTransientProviderOverlay: baseURL is required');
   if (typeof credentialEnv !== 'string' || !credentialEnv) throw new TypeError('buildCoderTransientProviderOverlay: credentialEnv is required');
   const modelId = route.modelId || model.slice(model.indexOf('/') + 1);
-  const main = `${CODER_TRANSIENT_PROVIDER_ALIAS}/${modelId}`;
+  const mainAlias = coderTransientProviderAlias(route, { preserveOpenCodeRequestIdentity });
+  const main = `${mainAlias}/${modelId}`;
   const smallId = typeof smallModel === 'string' && smallModel.includes('/')
     ? smallModel.slice(smallModel.indexOf('/') + 1)
     : null;
@@ -235,7 +252,9 @@ export function buildCoderTransientProviderOverlay({
     includeSmallModel && smallId && smallRoute && !coderRoutesShareTransport(smallRoute, route),
   );
   if (includeSmallModel && smallId && !separateSmall) models[smallId] = { name: smallId };
-  const smallAlias = separateSmall ? `${CODER_TRANSIENT_PROVIDER_ALIAS}-small` : CODER_TRANSIENT_PROVIDER_ALIAS;
+  const smallAlias = separateSmall
+    ? `${coderTransientProviderAlias(smallRoute, { preserveOpenCodeRequestIdentity })}-small`
+    : mainAlias;
   const smallProvider = separateSmall
     ? {
       npm: smallRoute.package,
@@ -251,7 +270,7 @@ export function buildCoderTransientProviderOverlay({
     model: main,
     ...(includeSmallModel && smallId ? { small_model: `${smallAlias}/${smallId}` } : {}),
     provider: {
-      [CODER_TRANSIENT_PROVIDER_ALIAS]: {
+      [mainAlias]: {
         npm: route.package,
         name: `Triss transient ${route.provider}`,
         options: {
