@@ -22,7 +22,7 @@ function runTriss(args, options = {}) {
     env: {
       ...process.env,
       NO_COLOR: '1',
-      TRISS_NO_UPDATE_CHECK: '1',
+      TRISS_UPDATE_CHECK: '0',
       TRISS_PROJECT_ROOT: options.cwd,
     },
     encoding: 'utf8',
