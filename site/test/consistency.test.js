@@ -84,6 +84,11 @@ test("website coder engines and quickstarts match repository contracts", () => {
   assert.match(coderPage, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(gettingStarted, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(readme, new RegExp(`OpenCode 2 has a supported floor of \`${escapedOpenCode2Floor}\``));
+  assert.match(
+    coderPage,
+    /Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local\./,
+  );
+  assert.match(readme, /project fingerprint stays local/);
 
   const coder = COMMANDS.find((command) => command.name === "coder");
   assert.ok(coder);
