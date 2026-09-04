@@ -82,6 +82,7 @@ test('OpenAI Chat buffered adapter owns request shape, options, and normalized r
       reasoningTokens: null,
       totalTokens: 18,
     },
+    warnings: [],
     rawMetadata: { id: 'chat-1', model: 'nested/model-id', systemFingerprint: undefined },
   });
   assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));

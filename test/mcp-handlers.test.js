@@ -311,6 +311,47 @@ test('MCP-H-14: reviewHandler validates negative timeout_ms before any git work'
   }
 });
 
+test('MCP model calls preserve raw warnings and forward protected credential intent', async () => {
+  const { callModel } = await import(
+    `../src/mcp/handlers.js?mcp-projection-security=${Date.now()}`
+  );
+  const observed = [];
+  const publishedWarnings = [];
+  const executeModelTask = async (input) => {
+    observed.push(input.protectCredentials);
+    return {
+      result: {
+        text: 'ok',
+        finishReason: 'completed',
+        usage: null,
+        warnings: input.protectCredentials ? [] : ['raw credential warning'],
+      },
+    };
+  };
+
+  const raw = await callModel(
+    { task: 'ask', messages: [{ role: 'user', content: 'raw' }] },
+    {
+      executeModelTask,
+      onWarnings: (warnings) => publishedWarnings.push(...warnings),
+    },
+  );
+  assert.deepEqual(raw.warnings, ['raw credential warning']);
+  assert.deepEqual(publishedWarnings, ['raw credential warning']);
+
+  const protectedResult = await callModel(
+    {
+      task: 'ask',
+      protectCredentials: false,
+      protect_credentials: true,
+      messages: [{ role: 'user', content: 'protected' }],
+    },
+    { executeModelTask },
+  );
+  assert.deepEqual(observed, [false, true]);
+  assert.deepEqual(protectedResult.warnings, []);
+});
+
 // ── empty / reasoning-only responses (PR #49 review) ──────────────────────────
 //
 // For purpose=review with a RESOLVED glm provider, callModel must surface the

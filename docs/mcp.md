@@ -24,17 +24,29 @@ Model-backed tools share these optional fields:
 | `provider` | `openai-compatible`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`, `kimi-for-coding` | Canonical provider id |
 | `model` | native provider model id | One-call role override |
 | `engine` | `direct`, `opencode`, `opencode2`, `omp`, `crush` | One-call execution-engine override |
+| `protect_credentials` | boolean | Request parent-owned credential protection for a supported projected engine |
 | `effort` | `minimal`, `low`, `medium`, `high`, `max` | Shared reasoning control |
 | `max_tokens` | positive integer | Explicit output cap |
 | `timeout_ms` | positive integer | Request timeout override |
 
 When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER`, `TRISS_DEFAULT_ENGINE`, and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
 
-For example, setting `TRISS_DEFAULT_PROVIDER=opencode-go`,
-`TRISS_DEFAULT_ENGINE=opencode`, and both OpenCode Go model roles to
-`muse-spark-1.3-contributor` routes bare `triss_ask` and `triss_review`
-requests through the OpenCode `researcher` agent. Restart the MCP host after
-changing persisted defaults.
+For a complete OpenCode Go setup, first run:
+
+```bash
+triss coder init --engine opencode --provider opencode-go
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+```
+
+Bare `triss_ask` and `triss_review` requests then use a run-scoped primary
+`triss-readonly-projection` agent whose effective `edit` and `bash`
+permissions are verified as denied before launch. Set `protect_credentials`
+to request the parent-owned credential proxy. Projected-engine warnings are
+returned in structured `warnings`. Restart the MCP host after changing
+persisted defaults.
 
 ## Core tools
 

@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effort, but help prose is not a compatibility gate. Capability errors now
   name missing options separately from below-minimum versions. Pre-suffixed
   public/configured OpenCode 2 models are rejected before engine side effects.
-- Added `TRISS_DEFAULT_ENGINE` so `ask`, `review`, and other model-backed commands can persist an OpenCode, OpenCode 2, OMP, or Crush execution route; OpenCode projections select the read-only `researcher` agent.
+- Added `TRISS_DEFAULT_ENGINE` so model-backed commands can persist a direct or verified OpenCode route. OpenCode projections use a run-scoped primary agent with `edit` and `bash` denied, fail closed if effective policy changes, preserve engine warnings, and expose explicit credential protection; unverified OpenCode 2, OMP, and Crush projections are rejected before launch.
 
 ## [0.42.0] — 2026-08-29
 

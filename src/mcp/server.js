@@ -40,9 +40,13 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     // without reasoning. Every other tool keeps its old plain result shape.
     const toolHasOutputSchema = Boolean(tool.outputSchema);
     const reasoningChunks = [];
+    const warningChunks = [];
     const text = await withCall(() =>
       tool.handler(args, {
         signal: extra.signal,
+        modelProtectCredentials:
+          Boolean(args.protectCredentials) || Boolean(args.protect_credentials),
+        onWarnings: (warnings) => warningChunks.push(...warnings),
         ...(toolHasOutputSchema
           ? { onReasoning: (chunk) => reasoningChunks.push(chunk) }
           : {}),
@@ -53,6 +57,7 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     if (toolHasOutputSchema) {
       const structuredContent = { content: finalText };
       if (reasoningChunks.length) structuredContent.reasoning_content = reasoningChunks.join('');
+      if (warningChunks.length) structuredContent.warnings = warningChunks;
       return { content, structuredContent };
     }
     return { content };

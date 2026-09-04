@@ -167,7 +167,7 @@ test('ask and review MCP tools accept timeout_ms within Node timer bounds', asyn
   }
 });
 
-test('ask and review declare an exact outputSchema for {content, reasoning_content?, code?}; other tools keep none', async () => {
+test('ask and review declare an exact outputSchema for content, reasoning, warnings, and errors', async () => {
   const tools = await listTools();
   for (const name of ['triss_ask', 'triss_review']) {
     const tool = tools.find((entry) => entry.name === name);
@@ -175,6 +175,8 @@ test('ask and review declare an exact outputSchema for {content, reasoning_conte
     assert.equal(tool.outputSchema.type, 'object');
     assert.equal(tool.outputSchema.properties.content.type, 'string');
     assert.equal(tool.outputSchema.properties.reasoning_content.type, 'string');
+    assert.equal(tool.outputSchema.properties.warnings.type, 'array');
+    assert.equal(tool.outputSchema.properties.warnings.items.type, 'string');
     assert.equal(tool.outputSchema.properties.code.type, 'string');
     assert.equal(tool.outputSchema.properties.code.pattern, '^TRISS_[A-Z0-9_]+$');
     assert.deepEqual(tool.outputSchema.required, ['content']);
@@ -183,7 +185,7 @@ test('ask and review declare an exact outputSchema for {content, reasoning_conte
       'reasoning_content stays optional',
     );
     // The schema is exact: structuredContent never carries anything beyond
-    // content/reasoning_content/code, so unknown keys must be rejected.
+    // content/reasoning_content/warnings/code, so unknown keys must be rejected.
     assert.equal(
       tool.outputSchema.additionalProperties,
       false,
@@ -191,12 +193,16 @@ test('ask and review declare an exact outputSchema for {content, reasoning_conte
     );
     assert.deepEqual(
       Object.keys(tool.outputSchema.properties).sort(),
-      ['code', 'content', 'reasoning_content'],
-      `${name} outputSchema must declare only content/reasoning_content/code`,
+      ['code', 'content', 'reasoning_content', 'warnings'],
+      `${name} outputSchema must declare only content/reasoning_content/warnings/code`,
     );
     assert.ok(
       !(tool.outputSchema.required || []).includes('code'),
       'code stays optional',
+    );
+    assert.ok(
+      !(tool.outputSchema.required || []).includes('warnings'),
+      'warnings stay optional',
     );
   }
   // Tools without an outputSchema keep their old shape — nothing new added.
@@ -218,6 +224,7 @@ test('toMcpToolList carries outputSchema only when a tool declares one', async (
       'code',
       'content',
       'reasoning_content',
+      'warnings',
     ]);
     assert.equal(tool.outputSchema.properties.code.type, 'string');
     assert.equal(tool.outputSchema.properties.code.pattern, '^TRISS_[A-Z0-9_]+$');

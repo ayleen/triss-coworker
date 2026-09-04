@@ -17,8 +17,14 @@ This document does not redefine those sources. Update them together whenever a
 new provider, automatic network path, child engine, credential route, or
 release artifact is introduced.
 
-Setting `TRISS_DEFAULT_ENGINE` to a non-`direct` value makes bare model-backed
-commands start that local child engine. The OpenCode projection selects the
-read-only `researcher` agent and disables worktree isolation; it still runs as
-the current OS user and must not be treated as a filesystem sandbox. Other
-engines retain their documented runtime permission and credential policies.
+Setting `TRISS_DEFAULT_ENGINE=opencode` makes bare model-backed commands start
+OpenCode with a Triss-owned, run-scoped primary `triss-readonly-projection`
+agent. Before forwarding the selected credential, Triss resolves OpenCode's
+final effective configuration and requires that agent to remain primary with
+`edit` and `bash` denied; missing, changed, or unresolvable policy fails closed.
+The process still runs as the current OS user and is not a filesystem sandbox.
+`opencode2`, `omp`, and `crush` do not currently expose a verified read-only
+projection and are rejected before engine launch for non-coder model tasks.
+Callers may request the existing protected credential proxy explicitly;
+raw-mode and engine warnings remain first-class execution-result fields and
+are published by MCP.

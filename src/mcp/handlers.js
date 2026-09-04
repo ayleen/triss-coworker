@@ -33,6 +33,8 @@ export async function callModel(
     model,
     engine,
     effort,
+    protectCredentials,
+    protect_credentials: protectCredentialsSnake,
     messages,
     maxTokens,
     timeoutMs,
@@ -49,6 +51,10 @@ export async function callModel(
     model,
     engine,
     effort,
+    protectCredentials:
+      Boolean(protectCredentials) ||
+      Boolean(protectCredentialsSnake) ||
+      deps.modelProtectCredentials === true,
     signal: deps.signal,
     timeout: timeoutMs,
     input: {
@@ -73,17 +79,22 @@ export async function callModel(
     }
     assertProviderText(text);
   }
+  const warnings = output.result.warnings || [];
+  deps.onWarnings?.(warnings);
   return {
     content: text,
     usageReport: reportNormalizedUsage(output.result, 'triss'),
+    warnings,
   };
 }
 
-// Compose a text-returning handler's output from the two callModel fields.
-// The report joins only when present, so an empty report never leaves a
-// dangling blank line.
-function withUsage({ content, usageReport }) {
-  return usageReport ? `${content}\n\n${usageReport}` : content;
+// Compose a text-returning handler's output without hiding projected-engine
+// warnings in MCP server stderr.
+function withUsage({ content, usageReport, warnings = [] }) {
+  const warningReport = warnings.length
+    ? `[triss warnings]\n${warnings.map((warning) => `- ${warning}`).join('\n')}`
+    : '';
+  return [content, warningReport, usageReport].filter(Boolean).join('\n\n');
 }
 
 // ─── core handlers ──────────────────────────────────────────────────────────

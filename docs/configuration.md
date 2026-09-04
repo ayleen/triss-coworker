@@ -83,8 +83,10 @@ Model-backed commands declare either the `model` role or the `smallModel` role. 
 
 There are no public model presets. Omit `model` to use the selected provider role.
 
-Provider and engine defaults resolve independently. Registry-backed providers such as `opencode-go`
-require an engine-backed default (`opencode`, `opencode2`, or `omp`) instead of `direct`.
+Provider and engine defaults resolve independently. Registry-backed providers
+such as `opencode-go` require an engine-backed default instead of `direct`.
+Read-only model projection is currently verified only for `opencode`;
+`opencode2`, `omp`, and `crush` are rejected before launch for non-coder tasks.
 
 Examples:
 
@@ -94,6 +96,7 @@ triss ask --provider zai --model glm-5.2 --effort high \
 
 triss review --provider moonshot --model kimi-k3 --effort max
 
+triss coder init --engine opencode --provider opencode-go
 triss config set TRISS_DEFAULT_PROVIDER opencode-go
 triss config set TRISS_DEFAULT_ENGINE opencode
 triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
@@ -104,11 +107,14 @@ triss coder run --engine omp \
   "Implement the task"
 ```
 
-After the four `config set` commands above, bare `triss ask`, `triss review`,
-and equivalent MCP calls use `opencode-go/muse-spark-1.3-contributor` through
-OpenCode. OpenCode projections select the read-only `researcher` agent for
-these calls. An explicit request `provider`, `model`, or `engine` retains
-highest precedence.
+After `coder init` and the four `config set` commands above, bare `triss ask`,
+`triss review`, and equivalent MCP calls use
+`opencode-go/muse-spark-1.3-contributor` through OpenCode. Every run installs
+and verifies a transient primary `triss-readonly-projection` agent with
+`edit` and `bash` denied. An explicit request `provider`, `model`, or `engine`
+retains highest precedence. `--protect-credentials` requests the parent-owned
+credential proxy; otherwise the raw credential warning is retained in the
+execution result and MCP structured output.
 
 ## Coder engines
 

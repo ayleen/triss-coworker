@@ -67,10 +67,11 @@ import {
   gitlabCommentHandler,
 } from './handlers.js';
 
-// Output schema shared by the two tools that surface model reasoning. When a
+// Output schema shared by the two tools that surface model metadata. When a
 // tool declares an outputSchema, the MCP server always attaches matching
-// structuredContent to successful results: content mirrors content[0].text and
-// reasoning_content carries any GLM thinking (omitted when there is none).
+// structuredContent to successful results: content mirrors content[0].text,
+// reasoning_content carries model thinking, and warnings carries engine and
+// credential-safety warnings. Optional fields are omitted when empty.
 // Tools without an outputSchema keep their old plain { content: [...] } shape.
 // On error (isError:true) the server projects the stable allowlisted
 // TRISS_* code as {content, code} — the optional code field is part of the
@@ -81,11 +82,16 @@ const TEXT_WITH_REASONING_OUTPUT_SCHEMA = {
   properties: {
     content: { type: 'string' },
     reasoning_content: { type: 'string' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Engine and credential-safety warnings',
+    },
     code: { type: 'string', pattern: '^TRISS_[A-Z0-9_]+$' },
   },
   required: ['content'],
-  // Exact schema: structuredContent never carries anything beyond these three
-  // keys, so hosts can rely on the shape being closed.
+  // Exact schema: structuredContent never carries unknown keys, so hosts can
+  // rely on the shape being closed.
   additionalProperties: false,
 };
 
@@ -103,6 +109,14 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
     type: 'string',
     enum: MODEL_EXECUTION_ENGINES,
     description: 'Execution engine',
+  },
+  protectCredentials: {
+    type: 'boolean',
+    description: 'Use parent-owned credential protection for supported projected engines',
+  },
+  protect_credentials: {
+    type: 'boolean',
+    description: 'Snake-case alias of protectCredentials; either true value enables protection',
   },
   effort: {
     type: 'string',

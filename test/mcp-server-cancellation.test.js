@@ -127,6 +127,40 @@ test('MCP server collects onReasoning into structuredContent without changing th
   });
 });
 
+test('MCP server publishes projected-engine warnings and safe credential intent', async () => {
+  const result = await handleToolRequest(
+    {
+      params: {
+        name: 'triss_ask',
+        arguments: { question: 'q', paths: ['package.json'], protect_credentials: true },
+      },
+    },
+    {},
+    {
+      findTool: async () => ({
+        outputSchema: {
+          type: 'object',
+          properties: {
+            content: { type: 'string' },
+            warnings: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['content'],
+        },
+        handler: async (_args, deps) => {
+          assert.equal(deps.modelProtectCredentials, true);
+          deps.onWarnings(['credential warning', 'engine warning']);
+          return 'final verdict';
+        },
+      }),
+    },
+  );
+  assert.equal(result.content[0].text, 'final verdict');
+  assert.deepEqual(result.structuredContent, {
+    content: 'final verdict',
+    warnings: ['credential warning', 'engine warning'],
+  });
+});
+
 test('MCP server always includes structuredContent for tools that declare an outputSchema, even without reasoning', async () => {
   const result = await handleToolRequest(
     { params: { name: 'triss_ask', arguments: { question: 'q', paths: ['package.json'] } } },

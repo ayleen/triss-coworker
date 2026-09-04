@@ -4,6 +4,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executeProjectedEngineTask } from '../src/model-engine-adapters.js';
+import {
+  MODEL_PROJECTION_POLICIES,
+  READ_ONLY_PROJECTION_AGENT,
+  resolveModelProjectionPolicy,
+  withReadOnlyProjectionAgent,
+} from '../src/model-projection-policy.js';
 import { createProviderConfigSnapshot } from '../src/provider-config.js';
 import {
   executeModelTask,
@@ -30,6 +36,50 @@ test('model runtime owns the complete main and small task-role matrix', () => {
   assert.equal(resolveTaskRole('coder'), 'model');
   assert.throws(() => resolveTaskRole('unknown'), /Unknown model task/);
   assert.equal(listModelTaskRoles().length, 11);
+});
+
+test('every execution engine has an explicit read-only projection policy', () => {
+  assert.deepEqual(
+    MODEL_PROJECTION_POLICIES.map(({ engine, supported, agent, isolate, credentialMode }) => ({
+      engine,
+      supported,
+      agent,
+      isolate,
+      credentialMode,
+    })),
+    [
+      { engine: 'direct', supported: true, agent: null, isolate: null, credentialMode: 'transport' },
+      {
+        engine: 'opencode',
+        supported: true,
+        agent: READ_ONLY_PROJECTION_AGENT,
+        isolate: false,
+        credentialMode: 'caller-selectable',
+      },
+      { engine: 'opencode2', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
+      { engine: 'omp', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
+      { engine: 'crush', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
+    ],
+  );
+  assert.equal(resolveModelProjectionPolicy('review', 'opencode').agent, READ_ONLY_PROJECTION_AGENT);
+  for (const engine of ['opencode2', 'omp', 'crush']) {
+    assert.throws(
+      () => resolveModelProjectionPolicy('review', engine),
+      new RegExp(`engine "${engine}" does not provide a verified read-only projection`),
+    );
+  }
+});
+
+test('run-scoped projection agent is primary and denies mutation tools', () => {
+  const config = JSON.parse(withReadOnlyProjectionAgent('{"model":"provider/model"}'));
+  assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
+    description: 'Triss run-scoped read-only model projection agent.',
+    mode: 'primary',
+    permission: { edit: 'deny', bash: 'deny' },
+    prompt:
+      'You are a read-only Triss model projection. Answer the supplied request using read-only tools only. ' +
+      'Never edit files and never run shell commands.',
+  });
 });
 
 test('persistent OpenCode Go defaults route ask and review through Muse without request flags', async () => {
@@ -78,7 +128,7 @@ test('direct runtime resolves selection before invoking one transport adapter', 
     provider: 'zai',
     model: 'glm-5.2',
     effort: 'high',
-    input: { messages: [{ role: 'user', content: 'q' }], maxOutputTokens: 100 },
+    input: { task: 'coder', messages: [{ role: 'user', content: 'q' }], maxOutputTokens: 100 },
   }, {
     snapshot,
     executeTransport: async (request) => {
@@ -93,6 +143,7 @@ test('direct runtime resolves selection before invoking one transport adapter', 
   assert.equal(output.resolved.engine, 'direct');
   assert.equal(transportRequest.route.nativeModel, 'glm-5.2');
   assert.equal(transportRequest.effort, 'high');
+  assert.equal(transportRequest.task, 'ask');
   assert.deepEqual(transportRequest.messages, [{ role: 'user', content: 'q' }]);
   assert.equal(output.result.text, 'answer');
   assert.equal(usageRecords, 1);
@@ -150,6 +201,8 @@ test('production engine adapter projects the resolved route through coder and no
       effort: 'xhigh',
     },
     request: {
+      task: 'review',
+      protectCredentials: true,
       messages: [
         { role: 'system', content: 'Return plain text.' },
         { role: 'user', content: 'Answer now.' },
@@ -166,6 +219,7 @@ test('production engine adapter projects the resolved route through coder and no
         exit_reason: 'completed',
         engine_version: '1.2.3',
         run_id: 'run_test',
+        warnings: ['engine warning'],
         usage: {
           tokens: {
             input_total: 11,
@@ -184,8 +238,9 @@ test('production engine adapter projects the resolved route through coder and no
     provider: 'moonshot',
     model: 'kimi-k2.7-code',
     effort: 'xhigh',
-    agent: 'researcher',
+    modelProjectionTask: 'review',
     isolate: false,
+    protectCredentials: true,
   });
   assert.equal(call.deps.providerConfigSnapshot, snapshot);
   assert.equal(call.streamed, 'done');
@@ -199,9 +254,27 @@ test('production engine adapter projects the resolved route through coder and no
     reasoningTokens: null,
     totalTokens: 15,
   });
+  assert.deepEqual(result.warnings, ['engine warning']);
   assert.deepEqual(result.rawMetadata, {
     engine: 'opencode',
     engineVersion: '1.2.3',
     runId: 'run_test',
   });
+});
+
+test('unsupported projected engines fail before coder execution', async () => {
+  for (const engine of ['opencode2', 'omp', 'crush']) {
+    let ran = false;
+    await assert.rejects(
+      () => executeProjectedEngineTask({
+        resolved: { engine, providerId: 'zai', nativeModel: 'glm-5.2' },
+        request: { task: 'review', prompt: 'review' },
+        snapshot,
+      }, {
+        runCoderRun: async () => { ran = true; },
+      }),
+      /does not provide a verified read-only projection/,
+    );
+    assert.equal(ran, false);
+  }
 });

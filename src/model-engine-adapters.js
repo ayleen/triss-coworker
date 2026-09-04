@@ -3,6 +3,7 @@
 
 import { createExecutionResult } from './transports/result.js';
 import { MODEL_EXECUTION_ENGINES } from './provider-contract.js';
+import { resolveModelProjectionPolicy } from './model-projection-policy.js';
 
 const SUPPORTED_ENGINES = Object.freeze(
   MODEL_EXECUTION_ENGINES.filter((engine) => engine !== 'direct'),
@@ -49,6 +50,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   if (!SUPPORTED_ENGINES.includes(engine)) {
     throw new Error(`Unsupported execution engine "${String(engine)}"`);
   }
+  const policy = resolveModelProjectionPolicy(request?.task, engine);
   const runCoderRun = deps.runCoderRun || (await import('./commands/coder.js')).runCoderRun;
   let stdout = '';
   await runCoderRun(promptFromRequest(request), {
@@ -56,8 +58,9 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     provider: resolved.providerId,
     model: resolved.nativeModel,
     effort: resolved.effort,
-    ...(engine === 'opencode' ? { agent: 'researcher' } : {}),
-    isolate: false,
+    modelProjectionTask: request.task,
+    isolate: policy.isolate,
+    protectCredentials: request.protectCredentials === true,
   }, {
     abortSignal: request.signal,
     providerConfigSnapshot: snapshot,
@@ -81,6 +84,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     text,
     finishReason: envelope.exit_reason,
     usage: executionUsage(envelope),
+    warnings: envelope.warnings,
     rawMetadata: {
       engine,
       engineVersion: envelope.engine_version || null,

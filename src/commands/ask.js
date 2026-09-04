@@ -52,6 +52,7 @@ export async function runAskWithDeps(opts, deps = {}) {
     provider,
     engine,
     effort,
+    protectCredentials,
     system,
   } = opts;
   const execute = deps.executeModelTask || executeModelTask;
@@ -107,6 +108,7 @@ export async function runAskWithDeps(opts, deps = {}) {
     model,
     engine,
     effort,
+    protectCredentials,
     signal: deps.signal,
     timeout: opts.timeoutMs,
     input: {

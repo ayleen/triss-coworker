@@ -153,6 +153,7 @@ export async function summarize({
   model,
   engine,
   effort,
+  protectCredentials,
   maxTokens = 4096,
 }, deps = {}) {
   if (!question) return corpus;
@@ -163,6 +164,7 @@ export async function summarize({
     model,
     engine,
     effort,
+    protectCredentials,
     signal: deps.signal,
     timeout: deps.timeout,
     input: {

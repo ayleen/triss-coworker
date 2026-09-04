@@ -39,6 +39,7 @@
     "test": "node scripts/check-lockfile-gate.cjs && npm run test:secure-default && npm run test:best-effort",
     "test:secure-default": "node scripts/run-tests.js secure-default",
     "test:best-effort": "node --test test/best-effort-*.test.js",
+    "test:live-opencode-projection": "node scripts/run-live-opencode-projection.js",
     "test:coverage": "c8 --include 'src/**' --include 'bin/**' --check-coverage --statements 87 --branches 77 --functions 91 --lines 87 --reporter=text --reporter=text-summary npm test",
     "start": "node bin/triss.js",
     "lint": "eslint . --max-warnings=0",

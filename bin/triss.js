@@ -106,6 +106,7 @@ function addModelSelectionOptions(command) {
     .option('--provider <id>', 'canonical provider id')
     .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
     .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
+    .option('--protect-credentials', PROTECT_HELP)
     .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort);
 }
 

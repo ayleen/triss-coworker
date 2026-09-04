@@ -64,7 +64,7 @@ Every provider has an endpoint, credential, `model` role, and `smallModel` role.
 4. global `~/.config/triss/.env`;
 5. registry defaults.
 
-`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`.
+`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`. Read-only non-coder projection is currently verified only for `opencode`; `opencode2`, `omp`, and `crush` fail before launch instead of running a write-capable agent.
 
 Shared reasoning effort values:
 
@@ -104,6 +104,7 @@ To route bare `ask`, `review`, and other model-backed calls through OpenCode Go
 with Muse:
 
 ```bash
+triss coder init --engine opencode --provider opencode-go
 triss config set TRISS_DEFAULT_PROVIDER opencode-go
 triss config set TRISS_DEFAULT_ENGINE opencode
 triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
@@ -113,9 +114,13 @@ triss ask --paths src --question "Find correctness defects"
 triss review
 ```
 
-Explicit request flags still win. OpenCode-backed non-coder calls select the
-read-only `researcher` agent, but that child process runs as the current OS user
-and is not a filesystem sandbox.
+Explicit request flags still win. OpenCode-backed non-coder calls install and
+verify a run-scoped primary `triss-readonly-projection` agent before forwarding
+the selected credential. The agent denies `edit` and `bash`, but its process
+still runs as the current OS user and is not a filesystem sandbox. Add
+`--protect-credentials` to a model command when the selected credential can be
+kept behind the parent-owned proxy; raw-mode warnings are preserved in MCP
+structured results.
 
 Provider fields:
 
