@@ -228,6 +228,7 @@ export function planEnvPatch(rawText, edits) {
     const formatted = formatLine(key, value);
     if (idx === -1) {
       appends.push(formatted + cr);
+      touched.push(key);
       continue;
     }
     // Rewrite only when the content actually differs, so a no-op SET keeps
