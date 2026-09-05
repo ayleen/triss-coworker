@@ -42,6 +42,7 @@ test('readFilesAsCorpus reports missing files inline without throwing', () => {
   const { corpus, skipped, readFileCount } = readFilesAsCorpus(['/nonexistent/triss/file']);
   assert.equal(skipped, 0);
   assert.equal(readFileCount, 0);
+  assert.match(corpus, /not found/);
 });
 
 test('readFilesAsCorpus refuses paths outside the project root when restricted', () => {
