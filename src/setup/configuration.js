@@ -672,6 +672,11 @@ function describeEditKind(kind) {
   return '';
 }
 
+// Runtime knobs whose readers disable on the literal '0' only (src/usage.js):
+// wizard validation mirrors the reader instead of accepting generic booleans
+// the runtime would ignore.
+const ZERO_OPT_OUT_KEYS = new Set(['TRISS_USAGE_LOG', 'TRISS_USAGE_LOG_CWD']);
+
 function validateDraftValue(descriptor, value) {
   const raw = value === undefined || value === null ? '' : String(value);
   switch (descriptor.kind) {
@@ -687,6 +692,18 @@ function validateDraftValue(descriptor, value) {
     }
     case 'boolean': {
       const normalized = raw.trim().toLowerCase();
+      if (ZERO_OPT_OUT_KEYS.has(descriptor.key)) {
+        // These runtime readers only disable on the literal '0'; anything
+        // else keeps the behavior ON, so accepting 'false' here would store
+        // a value the reader silently ignores.
+        if (normalized !== '0' && normalized !== '1' && normalized !== '') {
+          throw new Error(
+            `"${descriptor.key}" is a literal opt-out knob: use "0" to disable (any other value keeps it on); ` +
+              `got ${JSON.stringify(raw)}`,
+          );
+        }
+        return normalized === '0' ? '0' : '1';
+      }
       const valid = BOOLEAN_TRUE_WORDS.includes(normalized)
         || BOOLEAN_FALSE_WORDS.includes(normalized);
       if (!valid) {

@@ -216,10 +216,25 @@ export function planEnvPatch(rawText, edits) {
     // Key validation above guarantees no regex metacharacters, so the same
     // unescaped interpolation setVar uses is safe here.
     const lineRe = new RegExp(`^\\s*${key}\\s*=`, 'i');
-    const idx = lines.findIndex((line) => line !== REMOVED_LINE && lineRe.test(line));
+    // Target the LAST surviving occurrence for SET: dotenv parsing is
+    // last-wins, so the final match is the effective assignment a reader
+    // resolves — patching an earlier duplicate would leave the stale later
+    // line in charge. UNSET removes every surviving occurrence, otherwise an
+    // earlier duplicate would silently become the new effective value.
+    let idx = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (lines[i] !== REMOVED_LINE && lineRe.test(lines[i])) {
+        idx = i;
+        break;
+      }
+    }
     if (value === null || value === undefined) {
       if (idx !== -1) {
-        lines[idx] = REMOVED_LINE;
+        for (let i = 0; i < lines.length; i += 1) {
+          if (lines[i] !== REMOVED_LINE && lineRe.test(lines[i])) {
+            lines[i] = REMOVED_LINE;
+          }
+        }
         removedAny = true;
         touched.push(key);
       }

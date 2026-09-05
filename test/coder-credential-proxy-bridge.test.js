@@ -115,8 +115,18 @@ test('bridge: upstream provider errors pass through with the real status', async
   }
 });
 
-test('bridge: tool-bearing requests are refused with a precise limitation, not degraded', async () => {
-  const stub = stubResponsesFetch({ payload: responsesPayload() });
+test('bridge: chat tool definitions and tool-call history translate to Responses input', async () => {
+  const stub = stubResponsesFetch({
+    payload: {
+      id: 'resp-tools-1',
+      model: 'muse-spark-1.2-contributor',
+      status: 'completed',
+      output: [
+        { type: 'function_call', call_id: 'call_1', name: 'edit', arguments: '{"path":"a.txt"}' },
+      ],
+      usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 },
+    },
+  });
   const proxy = await startBridgedProxy(stub);
   try {
     const res = await fetch(`${proxy.baseUrl}/v1/chat/completions`, {
@@ -124,14 +134,73 @@ test('bridge: tool-bearing requests are refused with a precise limitation, not d
       headers: { authorization: `Bearer ${proxy.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: 'muse-spark-1.2-contributor',
-        messages: [{ role: 'user', content: 'q' }],
-        tools: [{ type: 'function', function: { name: 'edit' } }],
+        messages: [
+          { role: 'user', content: 'fix it' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'call_0', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+          { role: 'tool', tool_call_id: 'call_0', content: 'file body' },
+        ],
+        tools: [{ type: 'function', function: { name: 'edit', description: 'edit a file', parameters: { type: 'object' } } }],
+        tool_choice: 'auto',
       }),
     });
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 200);
+    const sent = stub.calls[0].body;
+    assert.deepEqual(sent.input, [
+      { role: 'user', content: 'fix it' },
+      { type: 'function_call', call_id: 'call_0', name: 'read', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_0', output: 'file body' },
+    ]);
+    assert.deepEqual(sent.tools, [{ type: 'function', name: 'edit', description: 'edit a file', parameters: { type: 'object' } }]);
+    assert.equal(sent.tool_choice, 'auto');
+
     const payload = await res.json();
-    assert.match(payload.error.message, /tool definitions are not translated/);
-    assert.equal(stub.calls.length, 0, 'no upstream call may leave the proxy for a refused bridge request');
+    const call = payload.choices[0].message.tool_calls[0];
+    assert.equal(call.id, 'call_1');
+    assert.equal(call.function.name, 'edit');
+    assert.equal(payload.choices[0].finish_reason, 'tool_calls');
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('bridge: streamed tool-call responses emit chat tool_calls delta chunks', async () => {
+  const stub = stubResponsesFetch({
+    payload: {
+      id: 'resp-tools-2',
+      model: 'muse-spark-1.2-contributor',
+      status: 'completed',
+      output: [
+        { type: 'message', content: [{ type: 'output_text', text: 'editing' }] },
+        { type: 'function_call', call_id: 'call_9', name: 'write', arguments: '{"p":1}' },
+      ],
+      usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 },
+    },
+  });
+  const proxy = await startBridgedProxy(stub);
+  try {
+    const res = await post(proxy, null, { stream: true });
+    const raw = await res.text();
+    const events = raw.split('\n\n').filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]')
+      .map((line) => JSON.parse(line.slice('data: '.length)));
+    const toolChunk = events.find((e) => e.choices?.[0]?.delta?.tool_calls);
+    assert.ok(toolChunk, 'a tool_calls delta chunk must be emitted');
+    assert.equal(toolChunk.choices[0].delta.tool_calls[0].function.name, 'write');
+    assert.equal(events.at(-1).choices[0].finish_reason, 'tool_calls');
+  } finally {
+    proxy.revoke();
+  }
+});
+
+test('bridge: failed/cancelled Responses statuses are errors, never normal completions', async () => {
+  const stub = stubResponsesFetch({
+    payload: { id: 'resp-failed', status: 'failed', error: { message: 'server exploded' }, output: [] },
+  });
+  const proxy = await startBridgedProxy(stub);
+  try {
+    const res = await post(proxy);
+    assert.equal(res.status, 502);
+    const payload = await res.json();
+    assert.match(payload.error.message, /server exploded/);
   } finally {
     proxy.revoke();
   }

@@ -403,8 +403,6 @@ coder
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
   .option('--provider <name>', 'canonical model provider id')
-  .option('--allow-unverified', 'requires explicit --provider opencode-go: allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
-  .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .option('--protect-credentials', PROTECT_HELP)
   .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this setup/run')
   .action(wrap(runCoderInit));

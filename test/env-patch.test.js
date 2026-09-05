@@ -10,14 +10,14 @@ import { planEnvPatch, applyEnvPatch } from '../src/secrets.js';
 
 // ─── planEnvPatch (pure) ─────────────────────────────────────────────────────
 
-test('planEnvPatch replaces only the first matching line and preserves the rest byte-for-byte', () => {
+test('planEnvPatch patches the LAST matching line (the effective one) and preserves the rest byte-for-byte', () => {
   const raw = '# top comment\nA=1\nTARGET=old\n\nB=2\nTARGET=second\n';
   const { text, changed, touched } = planEnvPatch(raw, [{ key: 'TARGET', value: 'new' }]);
   assert.equal(changed, true);
   assert.deepEqual(touched, ['TARGET']);
-  // Comments, blank lines, order, the duplicate later line, and quoting of
-  // untouched lines survive unchanged.
-  assert.equal(text, '# top comment\nA=1\nTARGET=new\n\nB=2\nTARGET=second\n');
+  // Dotenv parsing is last-wins, so the final assignment is the effective
+  // one; patching it (not the stale first occurrence) is what readers see.
+  assert.equal(text, '# top comment\nA=1\nTARGET=old\n\nB=2\nTARGET=new\n');
 });
 
 test('planEnvPatch matches keys case-insensitively like setVar', () => {
@@ -70,12 +70,14 @@ test('planEnvPatch is a no-op for identical values, missing keys, and blank-only
   assert.deepEqual(planEnvPatch(raw, []), { text: raw, changed: false, touched: [] });
 });
 
-test('planEnvPatch unsets the first matching line only', () => {
+test('planEnvPatch unsets the LAST matching line (the effective one) only', () => {
   const raw = 'KEEP=1\nDROP=2\nDROP=3\n';
   const { text, changed, touched } = planEnvPatch(raw, [{ key: 'DROP', value: null }]);
   assert.equal(changed, true);
   assert.deepEqual(touched, ['DROP']);
-  assert.equal(text, 'KEEP=1\nDROP=3\n');
+  // Unsetting removes EVERY occurrence — leaving an earlier duplicate would
+  // silently become the new effective value.
+  assert.equal(text, 'KEEP=1\n');
 });
 
 test('planEnvPatch unsetting the last content line leaves a clean file', () => {

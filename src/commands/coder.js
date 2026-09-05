@@ -38,7 +38,8 @@ import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
 import { readProviderConfigSnapshot } from '../provider-config.js';
 import { getProviderDefinition, listProviderDefinitions } from '../provider-registry.js';
-import { assertCanonicalProviderId, normalizeModelEffort, validateModelSelectionInput } from '../provider-contract.js';
+import { parseModelTransportsOverride } from '../provider-model-transport.js';
+import { CANONICAL_PROVIDER_IDS, assertCanonicalProviderId, isCanonicalProviderId, normalizeModelEffort, validateModelSelectionInput } from '../provider-contract.js';
 import { resolveModelRequest } from '../model-selection.js';
 import { projectConfiguredEndpoint, validateProviderProfileSecurity } from '../provider-security.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
@@ -455,7 +456,7 @@ async function fetchOpenCodeCatalogue(url, fetchImpl = globalThis.fetch, { stric
   return { kind: 'available', ids };
 }
 
-function resolveGoCatalogue(outcome, { allowUnverified = false, scope = 'global' } = {}) {
+function resolveGoCatalogue(outcome) {
   if (outcome.kind === 'missing-key') {
     throw new Error(
       'Coder setup incomplete: OPENCODE_API_KEY is not set, so the OpenCode Go catalogue cannot be verified.',
@@ -486,18 +487,12 @@ function resolveGoCatalogue(outcome, { allowUnverified = false, scope = 'global'
   }
   if (outcome.kind === 'transient') {
     const detail = outcome.reason === 'http' ? `HTTP ${outcome.status}` : 'network or timeout failure';
-    if (!allowUnverified) {
-      const scopeFlag = scope === 'local' ? '--local' : '--global';
-      throw new Error(
-        `Coder setup incomplete: OpenCode Go catalogue is temporarily unavailable (${detail}); retry, or intentionally accept an unverified built-in model fallback with: triss coder init --provider opencode-go --allow-unverified ${scopeFlag}`,
-      );
-    }
     process.stderr.write(
       pc.yellow(
         `  ⚠ OpenCode Go catalogue is temporarily unavailable (${detail}) — ` +
-          'using the built-in DeepSeek V4 Flash default because --allow-unverified was set; ' +
-          'availability is NOT verified. Check the subscription and workspace settings at ' +
-          'https://opencode.ai/docs/go/.\n',
+          'continuing with the built-in DeepSeek V4 Flash default (best effort: availability is ' +
+          'NOT verified). Check the subscription and workspace settings at ' +
+          'https://opencode.ai/docs/go/ and re-run setup to verify.\n',
       ),
     );
     return {
@@ -739,7 +734,7 @@ async function resolveInitModels(
   providerInfo,
   deps = {},
   existing = {},
-  { allowUnverified = false, allowUnaudited = false, scope = 'global' } = {},
+  { allowUnaudited = false } = {},
 ) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
@@ -747,10 +742,7 @@ async function resolveInitModels(
     providerInfo.kind === 'opencode-zen'
       ? resolveZenCatalogue(await fetchZenModelIds(deps.fetch || globalThis.fetch), { allowUnaudited })
       : providerInfo.kind === 'opencode-go'
-        ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch), {
-            allowUnverified,
-            scope,
-          })
+        ? resolveGoCatalogue(await fetchGoCatalogue(deps.fetch || globalThis.fetch))
         : undefined;
   const cat = coderInitCatalogue(providerInfo, openCodeCatalogue);
   const choose = deps.promptChoice || promptChoice;
@@ -1271,15 +1263,6 @@ export async function runCoderInit(opts = {}, deps = {}) {
     return runOpenCode2Init(opts, deps);
   }
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
-  if (
-    opts.allowUnverified
-    && explicitProvider !== 'opencode-go'
-  ) {
-    throw new Error(
-      '`--allow-unverified` on `triss coder init` requires explicit `--provider opencode-go` ' +
-        '(alias: `--provider go`).',
-    );
-  }
   const provider = explicitProvider || await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
@@ -1291,6 +1274,14 @@ export async function runCoderInit(opts = {}, deps = {}) {
     ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
   await setupKey(path, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
+  // Persist the CODING-ONLY defaults the user selected: the engine under
+  // TRISS_CODER_ENGINE and the provider under TRISS_CODER_PROVIDER. The
+  // shared default provider is deliberately NOT rewritten — a coding setup
+  // must not change what ask/review resolve (plan §4.2).
+  setVar(path, 'TRISS_CODER_ENGINE', engine);
+  setVar(path, 'TRISS_CODER_PROVIDER', provider);
+  process.env.TRISS_CODER_ENGINE = engine;
+  process.env.TRISS_CODER_PROVIDER = provider;
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -1465,8 +1456,6 @@ export async function runCoderInit(opts = {}, deps = {}) {
         scope,
         provider,
         credentialMode,
-        allowUnsafeBash: opts.allowUnsafeBash,
-        allowUnverified: opts.allowUnverified,
       },
       deps,
     );
@@ -1805,8 +1794,6 @@ async function runCoderSetupUnlocked(
     // No hidden default: callers must pass the already-resolved mode
     // (runCoderSetup resolves it via resolveCoderCredentialMode).
     credentialMode,
-    allowUnsafeBash,
-    allowUnverified,
     skipAgentTemplates,
   } = {},
   deps = {},
@@ -1933,7 +1920,6 @@ async function runCoderSetupUnlocked(
     deps,
     existing,
     {
-      allowUnverified,
       allowUnaudited: credentialMode === 'best_effort_raw',
       scope: resolvedScope,
     },
@@ -1948,8 +1934,7 @@ async function runCoderSetupUnlocked(
   ) {
     projectProviderAudit = auditExistingConfig(projectCfg, providerInfo, {
       note: '(project scope — higher precedence than the global config, so it governs runs)',
-      allowUnsafeBash,
-      expectedProvider: openAICompatibleProviderDefinition(providerInfo, model, smallModel),
+        expectedProvider: openAICompatibleProviderDefinition(providerInfo, model, smallModel),
       providerModels: new Set(providerInfo.providerProfile.models.map((id) => `openai-compatible/${id}`)),
     });
     if (projectProviderAudit.blocking) {
@@ -1960,7 +1945,6 @@ async function runCoderSetupUnlocked(
   }
   const writeResult = writeOpencodeConfig(resolvedScope, providerInfo, model, smallModel, {
     credentialMode,
-    allowUnsafeBash,
     providerAvailable,
     engine,
   });
@@ -2004,7 +1988,6 @@ async function runCoderSetupUnlocked(
       emitZenStaleIncident(projectCfg, readOpencodeModels(projectCfg), { model, smallModel }, zenAvailable, 'local', deps);
       const otherAudit = projectProviderAudit || auditExistingConfig(projectCfg, providerInfo, {
           note: '(project scope — higher precedence than the global config, so it governs runs)',
-          allowUnsafeBash,
           zenAvailable,
           providerAvailable,
         });
@@ -2312,7 +2295,11 @@ export function resolveCrushRestrict(opts = {}) {
 // Resolve the canonical route once for a run. Operator-configured endpoints
 // come from the immutable provider snapshot.
 function resolveRuntimeCoderProviderRoute(model, providerSettings, { requireAudited = true } = {}) {
-  const route = resolveCoderRuntimeProviderRoute(model);
+  // Manual TRISS_MODEL_TRANSPORTS overrides reach the native routing too:
+  // a new model with an explicit transport runs instead of being refused
+  // with advice to set the very override that is already set.
+  const manualOverrides = parseModelTransportsOverride(readProviderConfigSnapshot().modelTransports?.value);
+  const route = resolveCoderRuntimeProviderRoute(model, undefined, manualOverrides);
   if (!route) {
     throw new Error(
       `No protected OpenCode transport route is registered for model "${model}"; ` +
@@ -2769,7 +2756,6 @@ function auditEffectiveOpenCodeConfiguration(
 
 function mergeOpenAICompatibleProviderIntoExisting(path, providerInfo, model, smallModel, opts) {
   const audit = auditExistingConfig(path, providerInfo, {
-      allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
       allowModelReplacement: true,
@@ -2921,22 +2907,12 @@ function auditExistingConfig(path, providerInfo, opts = {}) {
 
   let blocking = false;
   if (existing?.permission?.bash?.['*'] !== 'deny') {
-    if (opts.allowUnsafeBash) {
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny") — proceeding because ` +
-            '--allow-unsafe-bash was passed. The coder agent can run arbitrary shell commands.\n',
-        ),
-      );
-    } else {
-      blocking = true;
-      process.stderr.write(
-        pc.yellow(
-          `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny"). Add the policy, ` +
-            'remove opencode.json and re-run init, or pass --allow-unsafe-bash.\n',
-        ),
-      );
-    }
+    process.stderr.write(
+      pc.yellow(
+        `  ⚠ ${where} has no deny-first bash policy (permission.bash["*"]="deny") — continuing best effort. ` +
+          'The coder agent can run arbitrary shell commands; add the policy to restrict it.\n',
+      ),
+    );
   }
 
   const model = typeof existing.model === 'string' ? existing.model : '';
@@ -3025,7 +3001,6 @@ function writeOpencodeConfig(scope, providerInfo, model, smallModel, opts = {}) 
     }
     warnIfProviderMismatch(path, providerInfo);
     return auditExistingConfig(path, providerInfo, {
-      allowUnsafeBash: opts.allowUnsafeBash,
       resolvedSmall: smallModel,
       providerAvailable: opts.providerAvailable,
     });
@@ -3299,6 +3274,11 @@ export function describeCoderStatus(deps = {}) {
     }),
     defaultModel,
     defaultSmallModel,
+    // Coding-only defaults (TRISS_CODER_PROVIDER / TRISS_CODER_ENGINE) as
+    // persisted — they drive bare `coder run` independently of the shared
+    // model-task engine.
+    coderEngine: readProviderConfigSnapshot().coderEngine?.value || null,
+    coderProvider: readProviderConfigSnapshot().coderProvider?.value || null,
   };
 }
 
@@ -5190,7 +5170,7 @@ async function runCrushFlow({
     usage_status,
     tokens,
     cost: crushCost,
-    label: 'coder',
+    label: opts?.modelProjectionTask || 'coder',
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
   });
@@ -6047,6 +6027,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     throw new Error('triss coder run is POSIX-only for now (Windows is not supported).');
   }
 
+  // Env files load BEFORE engine resolution: a persisted TRISS_CODER_ENGINE
+  // (or TRISS_CODER_PROVIDER) must drive bare coder runs, not only runs that
+  // spell the engine out (review finding).
+  loadEnvFiles();
   const {
     engine,
     maxTokens,
@@ -6058,7 +6042,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (maxTokens !== undefined) {
     opts = { ...opts, maxTokens };
   }
-  loadEnvFiles();
   const providerSnapshot = deps.providerConfigSnapshot || readProviderConfigSnapshot();
   const resolveSelection = deps.resolveModelRequest || resolveModelRequest;
   // Coding provider precedence: explicit provider/model selector >
@@ -6066,10 +6049,23 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // resolveModelSelection. A coding-only change never rewrites the shared
   // default.
   const coderProviderAtom = providerSnapshot.coderProvider;
+  // An explicit provider-qualified --model wins over the persisted coding
+  // provider (explicit > configured default); passing both into the selector
+  // validation would turn an override into a conflict error.
+  const explicitModelPrefix = typeof opts.model === 'string' && opts.model.includes('/')
+    ? opts.model.slice(0, opts.model.indexOf('/'))
+    : null;
+  if (explicitModelPrefix && !isCanonicalProviderId(explicitModelPrefix)) {
+    throw new Error(
+      `Invalid model provider "${explicitModelPrefix}". Valid values: ${CANONICAL_PROVIDER_IDS.join(', ')}`,
+    );
+  }
   const selectionProvider = opts.provider
-    || (coderProviderAtom?.source !== 'absent' && coderProviderAtom?.value
-      ? assertCanonicalProviderId(coderProviderAtom.value, 'TRISS_CODER_PROVIDER')
-      : undefined);
+    || (explicitModelPrefix
+      ? undefined
+      : (coderProviderAtom?.source !== 'absent' && coderProviderAtom?.value
+        ? assertCanonicalProviderId(coderProviderAtom.value, 'TRISS_CODER_PROVIDER')
+        : undefined));
   // Coding effort precedence: explicit --effort > TRISS_CODER_EFFORT >
   // TRISS_DEFAULT_EFFORT (handled by resolveModelSelection) > native default.
   const coderEffortAtom = providerSnapshot.coderEffort;
@@ -6514,7 +6510,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // choice (CLI --no-protect-credentials, MCP boolean false, persisted
   // tri-state false) runs raw through the same run-scoped native config with
   // the real selected credential in the child env.
-  const proxyRequired = (engine === 'crush' && credentialMode === 'protected_proxy') || protectedRouting;
   // Crush speaks Chat Completions natively against custom providers; when the
   // model's audited upstream wire protocol is the Responses API, the proxy
   // provides the bounded chat→responses bridge instead of substituting a
@@ -6522,6 +6517,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const crushBridge = engine === 'crush' && routeCandidate.protocol === 'openai_responses'
     ? 'chat-to-responses'
     : null;
+
+  // The chat→responses bridge is a PROTOCOL necessity, not a protection
+  // choice: a raw-mode crush run on a Responses-protocol model still needs
+  // the translating loopback, so bridging keeps the proxy required.
+  const proxyRequired = (engine === 'crush' && (credentialMode === 'protected_proxy' || Boolean(crushBridge)))
+    || protectedRouting;
   if (proxyRequired && !deps.disableCredentialProxy && proxyTarget) {
     try {
       credentialProxy = await startCredentialProxy({
@@ -6942,23 +6943,37 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         toolCalls: (ompFinalized.toolActivity || []).map((t) => ({ name: t.toolName, count: 1 })),
       });
 
-      const ompUsage = ompFinalized.usage || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, _rawCosts: [] };
-      const ompTokens = {
-        input_uncached: ompUsage.input || 0,
-        input_cached: ompUsage.cacheRead || 0,
-        cache_read: ompUsage.cacheRead || 0,
-        cache_write: ompUsage.cacheWrite || 0,
-        output_visible: ompUsage.output || 0,
-        reasoning: null,
-        combined: ompUsage.totalTokens || 0,
-        total: ompUsage.totalTokens || 0,
-      };
-      const ompReportedTotalUsd = Array.isArray(ompUsage._rawCosts) && ompUsage._rawCosts.length > 0
+      // Missing OMP usage stays missing — never fabricated zeros. The fold
+      // reports null counts until a real message_end carries them.
+      const ompUsageRaw = ompFinalized.usage || null;
+      const ompUsageKnown = ompUsageRaw !== null && (
+        Number.isFinite(ompUsageRaw.input) ||
+        Number.isFinite(ompUsageRaw.output) ||
+        Number.isFinite(ompUsageRaw.totalTokens)
+      );
+      const ompUsage = ompUsageKnown ? ompUsageRaw : null;
+      const ompTokens = ompUsage
+        ? {
+          input_uncached: ompUsage.input || 0,
+          input_cached: ompUsage.cacheRead || 0,
+          cache_read: ompUsage.cacheRead || 0,
+          cache_write: ompUsage.cacheWrite || 0,
+          output_visible: ompUsage.output || 0,
+          reasoning: null,
+          combined: ompUsage.totalTokens || 0,
+          total: ompUsage.totalTokens || 0,
+        }
+        : null;
+      const ompReportedTotalUsd = ompUsage && Array.isArray(ompUsage._rawCosts) && ompUsage._rawCosts.length > 0
         ? ompUsage._rawCosts.reduce((a, b) => a + b, 0)
         : null;
 
       const ompUsageTimestamp = new Date().toISOString();
-      const ompUsageStatus = ompReportedTotalUsd !== null ? 'reported' : 'estimated';
+      // Unknown usage is 'unknown' — an estimate over zero tokens would be a
+      // fabricated cost, not a real one.
+      const ompUsageStatus = !ompUsage
+        ? 'unknown'
+        : ompReportedTotalUsd !== null ? 'reported' : 'estimated';
       const ompBillingModel = modelUsed;
       const ompCost = estimateCanonicalCost({
         billing_model: ompBillingModel,
@@ -6983,7 +6998,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         timestamp: ompUsageTimestamp,
         tokens: ompTokens,
         cost: ompCost,
-        label: 'coder',
+        label: opts?.modelProjectionTask || 'coder',
         call_id: ompCtx?.callId,
         parent_call_id: ompCtx?.parentCallId,
       });
@@ -7493,7 +7508,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       timestamp: usageTimestamp2,
       tokens: tokens2,
       cost: cost2,
-      label: 'coder',
+      label: opts?.modelProjectionTask || 'coder',
       call_id: ctx2?.callId,
       parent_call_id: ctx2?.parentCallId,
     });
@@ -7817,7 +7832,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     timestamp: usageTimestamp,
     tokens,
     cost,
-    label: 'coder',
+    label: opts?.modelProjectionTask || 'coder',
     call_id: ctx?.callId,
     parent_call_id: ctx?.parentCallId,
   });

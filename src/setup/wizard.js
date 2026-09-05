@@ -14,6 +14,7 @@ import {
   promptChoice,
   yesNo,
 } from '../secrets.js';
+import { homedir } from 'node:os';
 import { CANONICAL_PROVIDER_IDS } from '../provider-contract.js';
 import { getProviderDefinition } from '../provider-registry.js';
 import { loadIntegrations } from '../integrations/_registry.js';
@@ -200,14 +201,11 @@ async function runAdvancedFlow({ draft, state, scope, opts, deps, integrations }
     { value: 'maintenance', label: 'Maintenance — validation and repair' },
     { value: 'done', label: 'Done — review and apply' },
   ];
-  const seen = new Set();
   while (true) {
     const section = await (deps.promptChoice || promptChoice)('Advanced setup — which section?', sections, {
       defaultIndex: sections.length - 1,
     });
     if (section === 'done') break;
-    if (seen.has(section)) continue;
-    seen.add(section);
     if (section === 'providers') await sectionProviders({ draft, state, deps });
     if (section === 'execution') await sectionExecution({ draft, state, deps, opts });
     if (section === 'connections') await sectionConnections({ draft, state, deps, scope, opts });
@@ -220,10 +218,27 @@ async function runAdvancedFlow({ draft, state, scope, opts, deps, integrations }
 async function sectionProviders({ draft, state, deps }) {
   const provider = await (deps.promptChoice || promptChoice)(
     'Provider profile to configure?',
-    [...CANONICAL_PROVIDER_IDS.map((id) => ({ value: id, label: id })), { value: 'back', label: 'Back' }],
+    [
+      ...CANONICAL_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
+      { value: 'shared-default', label: 'Set the shared default provider (TRISS_DEFAULT_PROVIDER)' },
+      { value: 'back', label: 'Back' },
+    ],
     { defaultIndex: 0 },
   );
   if (provider === 'back') return;
+  if (provider === 'shared-default') {
+    const current = fieldFor(state, 'TRISS_DEFAULT_PROVIDER')?.current;
+    const action = await (deps.promptChoice || promptChoice)(
+      `  Shared default provider (current: ${current?.value ?? 'openai-compatible'} [${current?.source || 'registry-default'}])`,
+      [
+        { value: 'keep', label: 'Keep' },
+        ...CANONICAL_PROVIDER_IDS.map((id) => ({ value: id, label: id })),
+      ],
+      { defaultIndex: 0 },
+    );
+    if (action !== 'keep' && action !== current?.value) draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: action });
+    return;
+  }
   const definition = getProviderDefinition(provider);
   await collectProviderCredential(draft, state, provider, { ...deps, force: true });
   const keys = [definition.fields.endpoint, definition.fields.model, definition.fields.smallModel];
@@ -255,36 +270,35 @@ async function sectionProviders({ draft, state, deps }) {
 }
 
 async function sectionExecution({ draft, state, deps }) {
-  const sharedEngine = fieldFor(state, 'TRISS_DEFAULT_ENGINE');
-  const sharedEngineValue = await (deps.prompt || prompt)('Default engine for model tasks (direct/opencode/opencode2/omp/crush)', {
-    defaultValue: sharedEngine?.current?.value || 'direct',
-  });
-  if (sharedEngineValue) draft.set.push({ key: 'TRISS_DEFAULT_ENGINE', value: sharedEngineValue });
+  // Enter preserves the EFFECTIVE value and its inheritance: a field whose
+  // current source is registry-default stays unset instead of gaining a
+  // local override that merely restates the default (review finding).
+  const editEnumField = async (key, label, valid) => {
+    const current = fieldFor(state, key)?.current;
+    const value = await (deps.prompt || prompt)(
+      `${label} (current: ${current?.value ?? 'native default'} [${current?.source || 'registry-default'}]; Enter = keep, '-' = remove override)`,
+      { defaultValue: '' },
+    );
+    if (value === '' || value === undefined) return;
+    if (value === '-') {
+      if (current?.source === 'shell') out(deps, '  · shell value cannot be unset from here\n');
+      else draft.unset.push(key);
+      return;
+    }
+    if (valid && !valid.includes(value)) {
+      throw new Error(`${label} must be one of ${valid.join(', ')} (got "${value}").`);
+    }
+    if (value === current?.value && (current?.source === 'registry-default' || current?.source === 'absent')) return;
+    draft.set.push({ key, value });
+  };
 
-  const coderEngine = await (deps.prompt || prompt)('Coding engine (opencode/opencode2/crush/omp)', {
-    defaultValue: fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode',
-  });
-  if (coderEngine && !CODER_ENGINES.includes(coderEngine)) {
-    throw new Error(`Coding engine must be one of ${CODER_ENGINES.join(', ')} (got "${coderEngine}").`);
-  }
-  draft.set.push({ key: 'TRISS_CODER_ENGINE', value: coderEngine });
-  draft.engineId = coderEngine;
-
-  const coderProvider = await (deps.prompt || prompt)('Coding provider (empty = inherit the shared default)', {
-    defaultValue: fieldFor(state, 'TRISS_CODER_PROVIDER')?.current?.value || '',
-  });
-  if (coderProvider) draft.set.push({ key: 'TRISS_CODER_PROVIDER', value: coderProvider });
-  else if (fieldFor(state, 'TRISS_CODER_PROVIDER')?.current?.source === 'config') draft.unset.push('TRISS_CODER_PROVIDER');
-
-  for (const [key, label] of [
-    ['TRISS_DEFAULT_EFFORT', 'Default effort for model tasks (low/medium/high/xhigh/max, empty = native default)'],
-    ['TRISS_CODER_EFFORT', 'Coding effort override (empty = inherit)'],
-  ]) {
-    const value = await (deps.prompt || prompt)(label, {
-      defaultValue: fieldFor(state, key)?.current?.value || '',
-    });
-    if (value) draft.set.push({ key, value });
-  }
+  await editEnumField('TRISS_DEFAULT_ENGINE', 'Default engine for model tasks', ['direct', 'opencode', 'opencode2', 'omp', 'crush']);
+  await editEnumField('TRISS_CODER_ENGINE', 'Coding engine', CODER_ENGINES);
+  draft.engineId = draft.set.find((e) => e.key === 'TRISS_CODER_ENGINE')?.value
+    || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
+  await editEnumField('TRISS_CODER_PROVIDER', 'Coding provider', CANONICAL_PROVIDER_IDS);
+  await editEnumField('TRISS_DEFAULT_EFFORT', 'Default effort for model tasks', ['low', 'medium', 'high', 'xhigh', 'max']);
+  await editEnumField('TRISS_CODER_EFFORT', 'Coding effort override', ['low', 'medium', 'high', 'xhigh', 'max']);
 
   const protection = await (deps.promptChoice || promptChoice)(
     'Credential protection',
@@ -315,7 +329,7 @@ async function sectionConnections({ draft, deps, scope, opts }) {
   }
 }
 
-async function sectionIntegrations({ draft, state, deps, integrations }) {
+async function sectionIntegrations({ draft, state, deps, integrations, preselected = [] }) {
   const choices = integrations
     .filter((integration) => integration.envVars?.length)
     .map((integration) => {
@@ -326,11 +340,14 @@ async function sectionIntegrations({ draft, state, deps, integrations }) {
     out(deps, '  · no integrations found\n');
     return;
   }
-  const picked = await (deps.prompt || prompt)(
-    `Configure which integrations (comma-separated names, empty to skip)? ${choices.map((c) => c.value).join(', ')}`,
-    { defaultValue: '' },
-  );
-  const pickedNames = String(picked || '').split(/[,\s]+/).filter(Boolean);
+  // A targeted integration run names its target: asking "which integrations"
+  // again would be a redundant re-entry of information already on the CLI.
+  const pickedNames = preselected.length > 0
+    ? preselected
+    : String(await (deps.prompt || prompt)(
+      `Configure which integrations (comma-separated names, empty to skip)? ${choices.map((c) => c.value).join(', ')}`,
+      { defaultValue: '' },
+    )).split(/[,\s]+/).filter(Boolean);
   // Shared credential groups: Atlassian asks once for Jira+Confluence.
   const asked = new Set();
   for (const integration of integrations) {
@@ -387,6 +404,8 @@ async function runTargetedFlow({ kind, names, draft, state, opts, deps, integrat
         || providerRecommendation(state).providerId;
     draft.set.push({ key: 'TRISS_CODER_PROVIDER', value: providerId });
     if (opts.coderEngine) draft.set.push({ key: 'TRISS_CODER_ENGINE', value: opts.coderEngine });
+    if (opts.coderProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'true' });
+    if (opts.coderNoProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'false' });
     draft.engineId = opts.coderEngine || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
     await collectProviderCredential(draft, state, providerId, { ...deps, force: deps.force });
     return;
@@ -398,13 +417,17 @@ async function runTargetedFlow({ kind, names, draft, state, opts, deps, integrat
     // Provider endpoints/models stay editable without being asked here.
     return;
   }
-  // integration target
-  await sectionIntegrations({ draft, state, deps, integrations: integrations.filter((i) => names.includes(i.name)) });
+  // integration target: the section is preselected by the target argument
+  await sectionIntegrations({ draft, state, deps, preselected: names, integrations: integrations.filter((i) => names.includes(i.name)) });
 }
 
 // ─── Headless ────────────────────────────────────────────────────────────────
 
-function headlessAssemble({ draft, state, opts }) {
+function headlessAssemble({ draft, state, opts, targets }) {
+  // An explicit target narrows the headless apply to that section.
+  if (targets?.kind === 'provider') {
+    draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: targets.names[0] });
+  }
   if (opts.coderProvider) draft.set.push({ key: 'TRISS_CODER_PROVIDER', value: String(opts.coderProvider).toLowerCase() });
   if (opts.coderEngine) {
     if (!CODER_ENGINES.includes(opts.coderEngine)) {
@@ -419,8 +442,14 @@ function headlessAssemble({ draft, state, opts }) {
   }
   // Completeness: the selected (or default) provider must have its credential
   // from an existing file or shell; --yes never turns a missing key into ok.
-  const providerId = opts.coderProvider || state.snapshot.defaultProvider.value;
-  const credential = state.snapshot.providers[providerId]?.credential?.value;
+  const providerId = targets?.kind === 'provider'
+    ? targets.names[0]
+    : (opts.coderProvider && (targets?.kind === 'coder' || targets?.kind === 'none')
+      ? String(opts.coderProvider).toLowerCase()
+      : state.snapshot.defaultProvider.value);
+  const credential = targets?.kind === 'integration'
+    ? true // integration targets carry no provider credential requirement
+    : state.snapshot.providers[providerId]?.credential?.value;
   if (!credential) {
     throw new Error(
       `Headless setup incomplete: ${getProviderDefinition(providerId).credential} is not set for provider "${providerId}". ` +
@@ -452,20 +481,49 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     );
   }
 
+  // Migration gate BEFORE any draft is assembled: schema-2 writes must never
+  // land on top of unmigrated legacy data (plan §P10.6).
+  const inspectMigration = deps.inspectMigration
+    || (async (options) => (await import('../migration/migrate.js')).inspectMigration(options));
+  const migration = await inspectMigration({
+    cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
+    home: homedir(),
+  });
+  if (migration.state === 'required') {
+    if (!interactive) {
+      throw new Error(
+        'Legacy configuration detected — run `triss migrate` first; the wizard refuses to write schema 2 over unmigrated data.',
+      );
+    }
+    const migrateNow = await (deps.yesNo || yesNo)(
+      'Legacy configuration found. Run the canonical migration now (recommended)?',
+      true,
+    );
+    if (!migrateNow) {
+      throw new Error('Setup cancelled — run `triss migrate` before configuring.');
+    }
+    const runMigration = deps.runMigration
+      || (async (options) => (await import('../migration/migrate.js')).runMigration(options));
+    await runMigration({
+      cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
+      home: homedir(),
+    });
+  }
+
   const scope = await chooseScope(opts, deps);
-  const state = readSetupState({ scope, ...(deps.readSetupState ? { } : {}) });
+  const state = readSetupState({ scope, integrations });
   const draft = createDraft();
   draft.scope = scope;
 
   let easyProvider = null;
   if (opts.yes) {
-    headlessAssemble({ draft, state, scope, opts });
+    headlessAssemble({ draft, state, opts, targets });
   } else if (targets.kind !== 'none') {
-    await runTargetedFlow({ ...targets, draft, state, scope, opts, deps, integrations });
+    await runTargetedFlow({ ...targets, draft, state, opts, deps, integrations });
   } else if (mode === 'advanced') {
     await runAdvancedFlow({ draft, state, scope, opts, deps, integrations });
   } else {
-    const easy = await runEasyFlow({ draft, state, scope, opts, deps, integrations });
+    const easy = await runEasyFlow({ draft, state, opts, deps });
     easyProvider = easy.providerId;
     if (interactive) {
       const goAdvanced = await (deps.yesNo || yesNo)('Fine-tune anything else in Advanced?', false);
@@ -473,20 +531,23 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     }
   }
 
-  // Engine plan: probe only the engine this setup will use. Installs run
-  // BEFORE the file transaction, only with consent (--install headless, the
-  // summary confirmation interactive).
+  // Engine plan: only flows that configure coding execution plan an engine
+  // install/setup — provider and integration targets must not drag a coder
+  // engine along (plan §3.3).
+  const plansCodingEngine = targets.kind === 'none' || targets.kind === 'coder';
   const engineId = draft.engineId || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
   // Headless runs install only with --install; interactive runs fold the
   // install into the summary confirmation.
   const engineInstallChoice = opts.install || interactive ? 'install' : 'skip';
-  const enginePlan = await planEngineSetup({
-    engine: CODER_ENGINES.includes(engineId) ? engineId : 'opencode',
-    scope,
-    installChoice: engineInstallChoice,
-  }, {
-    probeEngine: deps.probeEngine || ((engine) => probeEngineVersionPolicy(engine)),
-  });
+  const enginePlan = plansCodingEngine
+    ? await planEngineSetup({
+      engine: CODER_ENGINES.includes(engineId) ? engineId : 'opencode',
+      scope,
+      installChoice: engineInstallChoice,
+    }, {
+      probeEngine: deps.probeEngine || ((engine) => probeEngineVersionPolicy(engine)),
+    })
+    : null;
 
   const plan = buildSetupPlan({
     scope,
@@ -495,10 +556,11 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     enginePlan,
     hostActions: agentHostActions(draft.agent, scope),
     requestedValidation: draft.validate === 'static',
+    integrations,
   });
 
   if (!opts.yes) {
-    const confirmed = await confirmPlan(plan, { deps, install: enginePlan, opts });
+    const confirmed = await confirmPlan(plan, { deps, install: enginePlan });
     if (!confirmed) {
       out(deps, '\nCancelled — nothing was written.\n');
       return { status: 'cancelled', applied: [], warnings: [] };
@@ -512,28 +574,102 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   const result = await applySetupPlan(plan, {
     installMcp: deps.installMcp,
     writeRules: deps.writeRules,
-    rereadState: () => readSetupState({ scope }),
+    rereadState: () => readSetupState({ scope, integrations }),
   });
 
-  const engineResult = await applyEngineSetup(enginePlan, {
-    installChoice: engineInstallChoice,
-    runInstall: deps.runInstall,
-    runCoderSetup: deps.runCoderSetup,
-  });
+  const engineResult = enginePlan
+    ? await applyEngineSetup(enginePlan, {
+      installChoice: engineInstallChoice,
+      runInstall: deps.runInstall,
+      runCoderSetup: deps.runCoderSetup,
+    })
+    : null;
 
-  printResult({ result, engineResult, state, providerId: easyProvider || draft.set.find((e) => e.key === 'TRISS_DEFAULT_PROVIDER')?.value, deps, scope });
-  if (result.status !== 'ready') process.exitCode = 1;
-  return result;
+  // Honest final status: ready only when the file transaction AND the engine
+  // setup AND every required credential succeeded (plan §1.1/§P06 acceptance).
+  const staticValidation = draft.validate === 'static'
+    ? await runStaticValidation({ deps })
+    : null;
+  const finalResult = finalizeResult({ result, engineResult, draft, staticValidation });
+  printResult({
+    result: finalResult,
+    engineResult,
+    state,
+    providerId: easyProvider || draft.set.find((e) => e.key === 'TRISS_DEFAULT_PROVIDER')?.value,
+    deps,
+  });
+  if (finalResult.status !== 'ready') process.exitCode = 1;
+  return finalResult;
+}
+
+// Static validation: the effective configuration must resolve real model
+// requests for both roles of the default provider — no network involved.
+async function runStaticValidation({ deps }) {
+  const problems = [];
+  const readSnapshot = deps.readProviderConfigSnapshot
+    || (await import('../provider-config.js')).readProviderConfigSnapshot;
+  const { resolveModelRequest } = await import('../model-selection.js');
+  let snapshot;
+  try {
+    snapshot = readSnapshot();
+  } catch (error) {
+    return { problems: [`configuration cannot be read: ${error.message}`] };
+  }
+  for (const role of ['model', 'smallModel']) {
+    try {
+      resolveModelRequest({ role }, snapshot);
+    } catch (error) {
+      problems.push(`${role}: ${error.message}`);
+    }
+  }
+  return { problems };
+}
+
+// The wizard's own result: never a green "complete" over a failed engine
+// setup, a skipped required credential, or failed static validation.
+function finalizeResult({ result, engineResult, draft, staticValidation }) {
+  const warnings = [...result.warnings];
+  const failures = [...result.failed];
+  if (engineResult && engineResult.status === 'incomplete') {
+    for (const outcome of engineResult.outcomes || []) {
+      if (outcome.status === 'failed') failures.push(`${outcome.kind} (${outcome.engine}): ${outcome.reason}`);
+      if (outcome.status === 'skipped' && outcome.kind === 'engine-install') {
+        failures.push(`engine-install (${outcome.engine}) skipped: ${outcome.reason}`);
+      }
+    }
+  }
+  for (const incomplete of draft.incomplete || []) {
+    failures.push(`${incomplete.reason} — ${incomplete.remedy}`);
+  }
+  if (staticValidation) {
+    for (const problem of staticValidation.problems) failures.push(`validation: ${problem}`);
+  }
+  const status = result.status === 'ready' && failures.length === 0 ? 'ready' : 'incomplete';
+  return Object.freeze({
+    ...result,
+    status,
+    failed: Object.freeze(failures),
+    warnings: Object.freeze(warnings),
+  });
 }
 
 function agentHostActions(agent, scope) {
   if (!agent || agent === 'none') return [];
-  const targets = agent === 'both' ? ['claude', 'codex'] : [agent];
-  return targets.map((target) => ({
-    kind: 'mcp',
-    target,
-    scope: target === 'codex' ? 'global' : (scope || 'global'),
-  }));
+  const hosts = agent === 'both' ? ['claude', 'codex'] : [agent];
+  // The promised integration is BOTH surfaces: the MCP server entry and the
+  // managed rules block, each through its existing writer.
+  return hosts.flatMap((target) => [
+    {
+      kind: 'mcp',
+      target,
+      scope: target === 'codex' ? 'global' : (scope || 'global'),
+    },
+    {
+      kind: 'rules',
+      target,
+      scope: scope || 'global',
+    },
+  ]);
 }
 
 

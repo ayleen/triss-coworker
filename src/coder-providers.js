@@ -5,6 +5,7 @@ import { getProviderDefinition } from './provider-registry.js';
 import {
   OPENCODE_GO_MODEL_TRANSPORTS,
   OPENCODE_ZEN_MODEL_TRANSPORTS,
+  transportRouteForId,
 } from './provider-model-transport.js';
 
 const freeze = (value) => Object.freeze(value);
@@ -155,7 +156,7 @@ export function assertCoderCredentialMode(credentialMode) {
  * deliberately pure: callers still decide whether the route is protected by
  * the credential proxy or uses the explicitly acknowledged raw mode.
  */
-export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
+export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGISTRY, overrides = null) {
   const qualified = String(model || '').trim();
   const slash = qualified.indexOf('/');
   if (slash <= 0 || slash === qualified.length - 1 || qualified.slice(slash + 1).includes('/')) return null;
@@ -163,6 +164,25 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   const modelId = qualified.slice(slash + 1);
   const provider = Object.values(registry).find((candidate) => candidate.prefixes.includes(prefix));
   if (!provider) return null;
+  // Manual TRISS_MODEL_TRANSPORTS overrides apply to the exact model in the
+  // native routing too — not only to the direct HTTP transports.
+  const manualOverride = overrides ? transportRouteForId(overrides[`${provider.kind}/${modelId}`]) : null;
+  if (manualOverride) {
+    return Object.freeze({
+      model: qualified,
+      modelId,
+      prefix,
+      provider: provider.kind,
+      credentialEnv: provider.credentialEnv,
+      endpoint: provider.endpointByPrefix?.[prefix] || provider.endpoint,
+      pathPrefix: provider.pathPrefixByPrefix?.[prefix] || provider.pathPrefix,
+      protocol: manualOverride.protocol,
+      package: manualOverride.package,
+      authStyle: manualOverride.authStyle || provider.authStyle,
+      transportAudited: true,
+      unsupportedTransport: null,
+    });
+  }
   const override = provider.modelOverrides?.[modelId] || null;
   const modelSpecificTransport = provider.kind === 'opencode-zen' || provider.kind === 'opencode-go';
   const transport = modelSpecificTransport ? override : (override || provider);
@@ -182,8 +202,8 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   });
 }
 
-export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
-  return resolveCoderProviderRoute(model, registry);
+export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY, overrides = null) {
+  return resolveCoderProviderRoute(model, registry, overrides);
 }
 
 export function coderRoutesShareTransport(left, right) {

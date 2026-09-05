@@ -27,6 +27,17 @@ export const UNSUPPORTED_GOOGLE_ROUTE = freeze({
 
 export const DIRECT_TRANSPORT_IDS = freeze(['openai-chat', 'openai-responses', 'anthropic-messages']);
 
+/**
+ * Protocol route metadata for one direct transport id — shared by the direct
+ * HTTP transports and the native engine routing so a manual
+ * TRISS_MODEL_TRANSPORTS override reaches BOTH execution families.
+ */
+export function transportRouteForId(id) {
+  const route = TRANSPORT_ID_TO_PROTOCOL[id];
+  if (!route) return null;
+  return freeze({ ...route, transportId: id });
+}
+
 const TRANSPORT_ID_TO_PROTOCOL = freeze({
   'openai-chat': OPENAI_CHAT_ROUTE,
   'openai-responses': OPENAI_RESPONSES_ROUTE,

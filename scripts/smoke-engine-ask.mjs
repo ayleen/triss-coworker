@@ -14,7 +14,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-const BIN = '/Volumes/Orange/Projects/.worktrees/triss/wizard-full-setup-plan/bin/triss.js';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+const BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin', 'triss.js');
 const MARKER = 'engine-smoke-42';
 
 const hits = [];
@@ -86,10 +88,14 @@ for (const engine of engines) {
   });
   const engineHits = hits.slice(before);
   const stdout = run.stdout || '';
-  const ok = stdout.includes(MARKER);
+  // PASS requires a zero exit, the fixture marker in the answer, AND proof
+  // the engine really called the fixture endpoint — a cached or fabricated
+  // answer without upstream hits is not evidence.
+  const ok = run.status === 0 && stdout.includes(MARKER) && engineHits.length > 0;
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ask --engine ${engine}: exit=${run.status} marker=${ok} upstream=${engineHits.length}h${engineHits.length ? ` ${engineHits[0].url}` : ''}`);
   if (!ok) {
+    console.log('  exit:', run.status, 'signal:', run.signal);
     console.log('  stdout:', stdout.slice(0, 400).replace(/\n/g, ' | '));
     console.log('  stderr FULL:', (run.stderr || '').slice(-1500));
   }

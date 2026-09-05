@@ -150,20 +150,86 @@ function bridgeUnsupported(res, detail) {
   }));
 }
 
-function bridgeChatBodyToResponses(body) {
-  if (body.tools !== undefined || body.tool_choice !== undefined) {
-    throw new Error('tool definitions are not translated by the bridge yet; use a chat- or anthropic-protocol model for tool-using runs on this engine');
-  }
-  for (const message of Array.isArray(body.messages) ? body.messages : []) {
-    if (message?.role === 'tool' || (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0)) {
-      throw new Error('tool-call history is not translated by the bridge yet; use a chat- or anthropic-protocol model for tool-using runs on this engine');
+function bridgeChatTools(tools) {
+  if (!Array.isArray(tools)) return undefined;
+  return tools.map((tool) => {
+    if (tool?.type !== 'function' || !tool.function?.name) {
+      throw new Error(`tool definition of type "${tool?.type}" is not translated by the bridge`);
     }
+    return {
+      type: 'function',
+      name: tool.function.name,
+      ...(tool.function.description !== undefined ? { description: tool.function.description } : {}),
+      ...(tool.function.parameters !== undefined ? { parameters: tool.function.parameters } : {}),
+    };
+  });
+}
+
+function bridgeChatToolChoice(toolChoice) {
+  if (toolChoice === undefined) return undefined;
+  if (toolChoice === 'auto' || toolChoice === 'none') return toolChoice;
+  if (toolChoice?.type === 'function' && toolChoice.function?.name) {
+    return { type: 'function', name: toolChoice.function.name };
   }
+  throw new Error('tool_choice shape is not translated by the bridge');
+}
+
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((part) => typeof part?.text === 'string')
+      .map((part) => part.text)
+      .join('');
+  }
+  return '';
+}
+
+function bridgeChatMessagesToInput(messages) {
+  const input = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    if (message?.role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: String(message.tool_call_id ?? ''),
+        output: contentToText(message.content),
+      });
+      continue;
+    }
+    if (message?.role === 'assistant' && toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        if (call?.type !== 'function' || !call.function?.name) {
+          throw new Error('tool_call shape is not translated by the bridge');
+        }
+        input.push({
+          type: 'function_call',
+          call_id: String(call.id ?? ''),
+          name: call.function.name,
+          arguments: String(call.function.arguments ?? '{}'),
+        });
+      }
+      // An assistant turn can carry text alongside its tool calls.
+      const text = contentToText(message.content);
+      if (text) input.push({ role: 'assistant', content: text });
+      continue;
+    }
+    input.push({ role: message?.role ?? 'user', content: message?.content ?? '' });
+  }
+  return input;
+}
+
+function bridgeChatBodyToResponses(body) {
   const translated = {
     model: body.model,
-    input: body.messages,
+    input: bridgeChatMessagesToInput(body.messages),
     stream: false,
   };
+  const tools = bridgeChatTools(body.tools);
+  if (tools !== undefined) translated.tools = tools;
+  const toolChoice = bridgeChatToolChoice(body.tool_choice);
+  if (toolChoice !== undefined) translated.tool_choice = toolChoice;
+  if (body.parallel_tool_calls !== undefined) translated.parallel_tool_calls = body.parallel_tool_calls;
   if (body.max_tokens !== undefined) translated.max_output_tokens = body.max_tokens;
   if (body.temperature !== undefined) translated.temperature = body.temperature;
   if (body.reasoning_effort !== undefined) translated.reasoning = { effort: body.reasoning_effort };
@@ -181,15 +247,33 @@ function bridgeResponsesText(response) {
     .join('');
 }
 
+function bridgeResponsesToolCalls(response) {
+  if (!Array.isArray(response?.output)) return undefined;
+  const calls = response.output
+    .filter((item) => item?.type === 'function_call')
+    .map((item, index) => ({
+      index,
+      id: String(item.call_id ?? item.id ?? `call_${index}`),
+      type: 'function',
+      function: { name: item.name, arguments: String(item.arguments ?? '{}') },
+    }));
+  return calls.length ? calls : undefined;
+}
+
 function bridgeResponsesToChatPayload(response) {
   const usage = response?.usage || {};
+  const toolCalls = bridgeResponsesToolCalls(response);
   return {
     id: response?.id || 'bridge-response',
     model: response?.model,
     choices: [{
       index: 0,
-      message: { role: 'assistant', content: bridgeResponsesText(response) },
-      finish_reason: response?.status === 'incomplete' ? 'length' : 'stop',
+      message: {
+        role: 'assistant',
+        content: bridgeResponsesText(response),
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      },
+      finish_reason: toolCalls ? 'tool_calls' : 'stop',
     }],
     usage: {
       prompt_tokens: usage.input_tokens ?? null,
@@ -201,7 +285,8 @@ function bridgeResponsesToChatPayload(response) {
 
 function sseChunksForPayload(payload, includeUsage = true) {
   const events = [];
-  const content = payload.choices?.[0]?.message?.content;
+  const choice = payload.choices?.[0];
+  const content = choice?.message?.content;
   if (typeof content === 'string' && content.length > 0) {
     events.push({
       id: payload.id,
@@ -209,10 +294,23 @@ function sseChunksForPayload(payload, includeUsage = true) {
       choices: [{ index: 0, delta: { role: 'assistant', content } }],
     });
   }
+  for (const call of choice?.message?.tool_calls || []) {
+    events.push({
+      id: payload.id,
+      model: payload.model,
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [{ index: call.index, id: call.id, type: 'function', function: call.function }],
+        },
+      }],
+    });
+  }
   events.push({
     id: payload.id,
     model: payload.model,
-    choices: [{ index: 0, delta: {}, finish_reason: payload.choices?.[0]?.finish_reason || 'stop' }],
+    choices: [{ index: 0, delta: {}, finish_reason: choice?.finish_reason || 'stop' }],
     ...(includeUsage ? { usage: payload.usage } : {}),
   });
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
@@ -239,17 +337,43 @@ async function forwardBridged(req, res, parsedBody, context) {
     body: JSON.stringify(translated),
     signal: controller.signal,
   });
-  const raw = await upstream.text();
-  if (Buffer.byteLength(raw, 'utf8') > maxResponseBytes) {
+  // Bounded read: count bytes WHILE streaming the upstream body instead of
+  // buffering it all first; overflow aborts the fetch and fails closed.
+  const reader = upstream.body?.getReader();
+  const chunks = [];
+  let received = 0;
+  let overflow = false;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maxResponseBytes) {
+        overflow = true;
+        controller.abort();
+        break;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  if (overflow) {
     if (!res.headersSent) {
       res.writeHead(502, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'upstream response exceeds proxy cap' } }));
     }
     return;
   }
+  const raw = Buffer.concat(chunks).toString('utf8');
   let payload;
   try {
     const parsed = JSON.parse(raw);
+    // Non-success terminal statuses are failures, never normal completions.
+    if (parsed?.status && parsed.status !== 'completed' && parsed.status !== 'incomplete') {
+      const message = parsed?.error?.message || `upstream response status "${parsed.status}"`;
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
+      if (!res.writableEnded) res.end(JSON.stringify({ error: { message } }));
+      return;
+    }
     if (!upstream.ok) {
       const message = parsed?.error?.message || `upstream status ${upstream.status}`;
       if (!res.headersSent) {

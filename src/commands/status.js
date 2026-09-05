@@ -138,6 +138,11 @@ export async function runStatus(deps = {}) {
     lines.push(pc.bold('Coder'));
     const coder = describeCoderStatus(deps);
     lines.push(`  default engine                ${pc.cyan(coder.defaultEngine)}`);
+    if (coder.coderEngine) {
+      lines.push(`  coding engine                 ${pc.cyan(coder.coderEngine)}${coder.coderProvider ? ` (provider ${pc.cyan(coder.coderProvider)})` : ''}`);
+    } else if (coder.coderProvider) {
+      lines.push(`  coding provider               ${pc.cyan(coder.coderProvider)} (engine inherits ${coder.defaultEngine})`);
+    }
     // Credential mode comes from describeCoderStatus, which resolves it via
     // the same single resolver as runCoderRun — this file never re-implements
     // the engine x flag matrix.

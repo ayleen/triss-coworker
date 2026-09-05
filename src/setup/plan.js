@@ -365,7 +365,48 @@ export async function applySetupPlan(plan, deps = {}) {
   const failed = [];
   const warnings = [];
 
-  // 1. Env file edits — one applyEnvPatch call, guarded by the raw hash.
+  // .gitignore FIRST and fail-closed: a local secret file must never be
+  // written while its ignore entry is missing, and an ignore update failure
+  // must stop the env write rather than leave the secret committable.
+  const gitignorePlanned = (plan.summary.filesToChange ?? []).some((f) => f.kind === 'gitignore');
+  let gitignoreFailed = null;
+  if (gitignorePlanned) {
+    try {
+      const add = deps.addToGitignore ?? addToGitignore;
+      const added = add('.triss.env');
+      if (added) {
+        recordAction(applied, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), detail: 'added .triss.env' });
+      } else {
+        recordAction(unchanged, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), detail: '.triss.env already ignored' });
+      }
+    } catch (err) {
+      gitignoreFailed = err.message;
+      recordAction(failed, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), reason: err.message });
+    }
+  }
+  if (gitignoreFailed && plan.env.editCount > 0) {
+    recordAction(failed, {
+      kind: 'env',
+      path: plan.env.path,
+      reason: `skipped — .gitignore could not be updated (${gitignoreFailed}); refusing to write an unignored secret file`,
+    });
+    const reread = deps.rereadState ?? ((options) => readSetupState(options));
+    const state = await reread({ scope: plan.scope });
+    return freeze({
+      status: 'incomplete',
+      perComponent: freeze([
+        perComponent('gitignore', { configured: false, available: false, reasons: [gitignoreFailed] }),
+        perComponent('env-file', { configured: false, available: false, reasons: ['skipped until .gitignore is writable'] }),
+      ]),
+      applied: freeze(applied),
+      unchanged: freeze(unchanged),
+      failed: freeze(failed),
+      warnings: freeze(warnings),
+      state,
+    });
+  }
+
+  // Env file edits — one applyEnvPatch call, guarded by the raw hash.
   if (plan.env.editCount > 0) {
     const readRaw = deps.readRaw ?? defaultReadRaw;
     const current = readRaw(plan.env.path);
@@ -415,24 +456,6 @@ export async function applySetupPlan(plan, deps = {}) {
       } catch (err) {
         recordAction(failed, { kind: 'rules', path: action.path, reason: err.message });
       }
-    }
-  }
-
-  // 3. .gitignore for the local scope — same apply, idempotent, never
-  // deferred behind a successful later step (a failed env patch must not
-  // leave an unignored secret either — the wizard reports both).
-  const gitignorePlanned = (plan.summary.filesToChange ?? []).some((f) => f.kind === 'gitignore');
-  if (gitignorePlanned) {
-    try {
-      const add = deps.addToGitignore ?? addToGitignore;
-      const added = add('.triss.env');
-      if (added) {
-        recordAction(applied, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), detail: 'added .triss.env' });
-      } else {
-        recordAction(unchanged, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), detail: '.triss.env already ignored' });
-      }
-    } catch (err) {
-      recordAction(failed, { kind: 'gitignore', path: join(projectRoot(), '.gitignore'), reason: err.message });
     }
   }
 

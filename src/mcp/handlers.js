@@ -1159,12 +1159,13 @@ export async function coderRunHandler(
       allowBestEffortCallerWorktree: allowDowngrade,
       // `protectCredentials` is the documented legacy spelling for this
       // coder-only field; merge it with the snake-case alias before dispatch.
-      // The merge is tri-state: an explicit false survives instead of being
-      // collapsed onto an implicit "unprotected" default, so it can override
-      // a persisted protection choice.
-      protectCredentials: [protectCredentials, protectCredentialsSnake].find(
-        (value) => value === true || value === false,
-      ),
+      // Tri-state merge in the SAFE direction: a conflicting pair resolves to
+      // protection (true), an explicit false survives when nothing
+      // contradicts it, and absence stays undefined for the persisted
+      // tri-state to resolve downstream.
+      protectCredentials: [protectCredentials, protectCredentialsSnake].includes(true)
+        ? true
+        : [protectCredentials, protectCredentialsSnake].includes(false) ? false : undefined,
     },
     {
       spawn: deps.spawn,

@@ -3,7 +3,7 @@
 
 import { spawnSync } from 'node:child_process';
 import pc from 'picocolors';
-import { executeModelTask } from '../model-runtime.js';
+import { executeModelTask, printModelResultWarnings } from '../model-runtime.js';
 import { reportNormalizedUsage } from '../model-usage.js';
 import { git } from '../git.js';
 import { positiveIntegerOption } from '../option-validation.js';
@@ -85,6 +85,7 @@ export async function runCommitMsgWithDeps(opts, deps = {}) {
     ),
   );
 
+  printModelResultWarnings(output.result, { color: pc.yellow });
   let message = output.result.text.trim();
   if (!message) throw new Error('Model returned empty message — try larger --max-tokens');
   // Defensive: strip accidental triple-backtick fences if the model adds them.

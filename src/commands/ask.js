@@ -132,6 +132,11 @@ export async function runAskWithDeps(opts, deps = {}) {
     },
   }, deps.runtimeDeps);
   const answer = assertProviderText(result.text);
+  // Warnings (e.g. best-effort projection limitations) go to stderr only;
+  // stdout keeps its machine-readable/text contract.
+  for (const warning of result.warnings || []) {
+    process.stderr.write(pc.yellow(`  ⚠ ${warning}\n`));
+  }
   if (!useStream) process.stdout.write(answer + '\n');
   else process.stdout.write('\n');
   process.stderr.write(

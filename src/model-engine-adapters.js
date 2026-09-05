@@ -70,6 +70,21 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   });
   const envelope = parseEnvelope(stdout, engine);
   const text = typeof envelope.final_text === 'string' ? envelope.final_text : '';
+  // A terminal engine failure is a failure even when partial text exists —
+  // never report a successful projection over an error/timeout/kill envelope.
+  if (['error', 'timeout', 'killed'].includes(envelope.exit_reason)) {
+    const detail = envelope.error?.message ||
+      (typeof envelope.error === 'string' ? envelope.error : null) ||
+      envelope.process_status ||
+      text.slice(0, 300) ||
+      'unknown engine outcome';
+    const failure = new Error(
+      `${engine} run ended with exit_reason "${envelope.exit_reason}": ${String(detail).slice(0, 500)}`,
+    );
+    failure.warnings = envelope.warnings?.filter((w) => typeof w === 'string') || [];
+    if (text) failure.partialText = text;
+    throw failure;
+  }
   const warnings = Array.isArray(envelope.warnings)
     ? envelope.warnings.filter((warning) => typeof warning === 'string')
     : [];
