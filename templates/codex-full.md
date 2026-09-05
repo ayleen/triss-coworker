@@ -1,8 +1,14 @@
-# Triss — Provider-Backed Delegation
+# Triss — managed delegation for AI development
 
-You have provider-backed delegation available as the `triss` CLI on PATH.
-Delegate token-heavy I/O through a configured provider so the primary model's
-tokens stay on reasoning and edits.
+You have managed delegation available as the `triss` CLI on PATH for focused
+research, diff and PR review, and bounded implementation. Choose the provider,
+model, and engine for each task; inspect returned evidence and artifacts before
+accepting them. Triss does not promise particular savings or outcomes.
+See the public workflow guides: research at
+https://triss.work/workflows/research/, review at
+https://triss.work/workflows/review/, and bounded implementation at
+https://triss.work/workflows/implementation/.
+Setup and provider selection: https://triss.work/docs/getting-started/.
 
 ## Commands
 
@@ -58,12 +64,12 @@ raises the same reason as an error.
 ## When to delegate
 
 Delegate any read >400 lines or 3+ files for one question, any web fetch,
-any code review on a real diff. Delegate boilerplate generation against a
+or any code review on a real diff. Delegate boilerplate generation against a
 reference. Do **not** delegate:
 
 - architectural decisions or hard debugging,
 - edits that need exact line numbers (use direct read/edit instead),
-- tasks under ~2000 tokens (delegation overhead costs more).
+- tasks under ~2000 tokens (keep small, local tasks in the host).
 
 ## Recommended host-agent workflow
 
@@ -234,7 +240,7 @@ selection, commands use `TRISS_DEFAULT_PROVIDER` and that profile's `model` or
 `smallModel` role. For GLM 5.2 review, omit `--max-tokens` to use the
 model-sized budget; if explicit, use at least 16384.
 
-## `triss coder` — delegate a coding task to a cheap coding agent (default opencode engine)
+## `triss coder` — bounded implementation through a selected engine
 
 Setup once per machine/project: `triss coder init` (installs the opencode
 engine, configures the selected provider key, writes `opencode.json` with a deny-first bash
@@ -304,8 +310,8 @@ Windows. `triss coder init`/`clean` are unaffected.
 
 `triss jira / linear / github / gitlab / confluence` expose `search`,
 `issue`/`page`, `create`, `update`, `comment`. Each subcommand accepts
-`--question "<q>"` to summarise via DeepSeek instead of dumping raw API
-output. Configure with `triss config wizard <name>`.
+`--question "<q>"` to summarise through the selected provider/model instead of
+dumping raw API output. Configure with `triss config wizard <name>`.
 
 {{INTEGRATIONS}}
 

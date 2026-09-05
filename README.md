@@ -5,34 +5,72 @@
 [![Tests](https://github.com/ayleen/triss-coworker/actions/workflows/test.yml/badge.svg)](https://github.com/ayleen/triss-coworker/actions/workflows/test.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14266/badge)](https://www.bestpractices.dev/en/projects/14266)
 [![Node.js](https://img.shields.io/node/v/triss-coworker.svg)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/ayleen/triss-coworker/blob/main/LICENSE)
 
-Triss is a managed delegation layer for AI development: a local, open-source CLI and MCP server. Your coding agent (or you) delegates codebase research, second reviews, and bounded implementation tasks through one configurable provider runtime — choosing the provider, model, and coding engine for each route and inspecting the result before accepting it. CLI commands, MCP tools, and coder engines use the same provider ids, model roles, effort levels, credentials, endpoints, and precedence rules.
+**Give your coding agent a coworker.**
+
+Triss is a managed delegation layer for AI development: a local, open-source CLI and MCP server. Delegate codebase research, second reviews, and bounded implementation through one configurable provider runtime. Choose supported providers, models, and coding engines; inspect the result before accepting it.
 
 **Website:** [triss.work](https://triss.work/) · **Workflows:** [triss.work/workflows](https://triss.work/workflows/) · **Quickstart:** [triss.work/docs/getting-started](https://triss.work/docs/getting-started/)
 
+## When to use Triss
+
+| Task | What you delegate | What you inspect |
+|---|---|---|
+| [Understand unfamiliar code](https://triss.work/workflows/research/) | Selected files and a focused question | Findings with source references |
+| [Get a second review](https://triss.work/workflows/review/) | A branch, PR, or diff | Concrete findings to verify before changing code |
+| [Delegate a bounded change](https://triss.work/workflows/implementation/) | A complete task, constraints, and checks | Worktree changes, execution results, and checks before accepting |
+
+### Why add it to Claude Code or Codex?
+
+Keep your primary agent focused on decisions while Triss provides a common CLI/MCP interface for delegated work, provider and engine selection, retained coding results, and usage accounting. It complements your host's tools and subagents rather than replacing them. You can also use the CLI directly without an agent host.
+
+Delegation can reduce primary-agent context and inference costs, but savings depend on the selected models and repeated work; they are not guaranteed. A completed run is not proof that its result is correct.
+
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js **22.12.0 or newer**
 - macOS or Linux for `triss coder run`
 - one supported provider credential
 
-## Install
+## Quickstart
 
 ```bash
 npm install -g triss-coworker
-triss config wizard
-triss status
 ```
 
-Connect Claude Code, Codex, or both:
+**Claude Code or Codex:** run `triss config wizard --standard`. The current Standard path configures the `openai-compatible` API key, main model, and small model, then asks whether to connect Claude Code, Codex, or both. It installs MCP and agent rules for your selection; this version has no Skip option in Standard. Use `triss config wizard --advanced` for another provider or granular setup.
+
+**Terminal only:** configure the same profile without installing host integration. Omit values to enter them interactively; secret input is masked:
 
 ```bash
-triss init --target claude --global
-triss init --target codex --global
-triss mcp install --target claude --global
-triss mcp install --target codex --global
+triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY
+triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL
+triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL
 ```
+
+Check the credential and selected defaults with `triss status`. Existing provider and engine choices are not changed by these three profile-field commands; use `triss config wizard --advanced` to adjust them if needed.
+
+For an installed host, run `triss mcp status` and restart that host's session. There is no need to repeat `triss init` or `triss mcp install` if the wizard already connected it. Terminal users skip this step.
+
+From a project containing `README.md`, try one focused task:
+
+```bash
+triss ask --paths README.md \
+  --question "What does this project do, and which setup steps does its README require? Cite the relevant lines."
+```
+
+Inspect the answer against the file. Then try the [research](https://triss.work/workflows/research/), [review](https://triss.work/workflows/review/), or [implementation](https://triss.work/workflows/implementation/) workflow.
+
+Full setup and manual host-connection commands: [Quickstart](https://triss.work/docs/getting-started/).
+
+### What stays under your control
+
+- Selected context is sent to your configured model provider; local execution does not mean that code stays on your machine.
+- Coding engines can modify files and run commands. A worktree separates changes; it is **not an OS sandbox**.
+- Review findings, inspect diffs, and run appropriate checks before accepting a result.
+
+Read the [security guide](https://triss.work/security/) before using confidential repositories.
 
 ## Upgrading from Triss < 0.42.0
 
@@ -136,7 +174,7 @@ Provider fields:
 | `moonshot` | `MOONSHOT_API_KEY` | `TRISS_MOONSHOT_BASE_URL` | `TRISS_MOONSHOT_MODEL` | `TRISS_MOONSHOT_SMALL_MODEL` |
 | `kimi-for-coding` | `KIMI_API_KEY` | `TRISS_KIMI_FOR_CODING_BASE_URL` | `TRISS_KIMI_FOR_CODING_MODEL` | `TRISS_KIMI_FOR_CODING_SMALL_MODEL` |
 
-Project values are stored in `./.triss.env`, are mode `0600`, and override global values. Full reference: [docs/configuration.md](docs/configuration.md).
+Project values are stored in `./.triss.env`, are mode `0600`, and override global values. Full reference: [configuration](https://github.com/ayleen/triss-coworker/blob/main/docs/configuration.md).
 
 ## Commands
 
@@ -207,22 +245,19 @@ headers reach the provider; the project fingerprint stays local.
 
 Engine details:
 
-- [OpenCode Zen](docs/engines/opencode-zen.md)
-- [OpenCode Go](docs/engines/opencode-go.md)
-- [OpenCode 2](docs/engines/opencode2.md)
-- [Crush](docs/engines/crush.md)
-- [OMP](docs/engines/omp.md)
+- [OpenCode Zen](https://github.com/ayleen/triss-coworker/blob/main/docs/engines/opencode-zen.md)
+- [OpenCode Go](https://github.com/ayleen/triss-coworker/blob/main/docs/engines/opencode-go.md)
+- [OpenCode 2](https://github.com/ayleen/triss-coworker/blob/main/docs/engines/opencode2.md)
+- [Crush](https://github.com/ayleen/triss-coworker/blob/main/docs/engines/crush.md)
+- [OMP](https://github.com/ayleen/triss-coworker/blob/main/docs/engines/omp.md)
 
 ## MCP
 
-```bash
-triss mcp install --target claude --global
-triss mcp install --target codex --global
-```
+If the wizard has not already connected your host, choose Claude Code or Codex in the [host-connection guide](https://triss.work/docs/getting-started/#step-4). Only run setup for the host you intend to use.
 
 Core tools include `triss_ask`, `triss_chat`, `triss_fetch`, `triss_review`, `triss_write`, `triss_commit_msg`, `triss_status`, and the migration/update surfaces. Coder tools appear when any canonical provider credential is configured. Tracker tools appear only when their integration credential is ready.
 
-The MCP schemas use the same `provider`, `model`, `effort`, and engine contracts as the CLI. Full reference: [docs/mcp.md](docs/mcp.md).
+The MCP schemas use the same `provider`, `model`, `effort`, and engine contracts as the CLI. Full reference: [MCP](https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md).
 
 ## Integrations
 
@@ -231,7 +266,7 @@ The MCP schemas use the same `provider`, `model`, `effort`, and engine contracts
 - GitHub Issues: `GITHUB_TOKEN` or `gh auth token`
 - GitLab Issues: `GITLAB_TOKEN`
 
-Integration clients apply response-size bounds, request timeouts, redirect policy, and path sandboxing. Extension guide: [docs/extending.md](docs/extending.md).
+Integration clients apply response-size bounds, request timeouts, redirect policy, and path sandboxing. [Extension guide](https://github.com/ayleen/triss-coworker/blob/main/docs/extending.md).
 
 ## Usage and pricing
 
@@ -244,7 +279,7 @@ triss usage --json
 triss usage --reset
 ```
 
-Usage records preserve provider, model, token-class provenance, billing mode, and whether cost is complete. Unknown prices remain unknown. `TRISS_PRICE_<MODEL_ID>` can override a model price without changing routing. See [docs/usage-accounting.md](docs/usage-accounting.md).
+Usage records preserve provider, model, token-class provenance, billing mode, and whether cost is complete. Unknown prices remain unknown. `TRISS_PRICE_<MODEL_ID>` can override a model price without changing routing. See [usage accounting](https://github.com/ayleen/triss-coworker/blob/main/docs/usage-accounting.md).
 
 ## Updates
 
@@ -265,7 +300,7 @@ Package-managed installs receive update notices but update through their package
 - coder engine configuration is audited before credential forwarding;
 - migration uses compare-and-swap writes, private backups, rollback, and cleanup resume.
 
-Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+Report vulnerabilities privately according to [SECURITY.md](https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md).
 
 ## Development
 
@@ -276,8 +311,8 @@ npm run typecheck
 npm test
 ```
 
-Architecture: [ARCHITECTURE.md](ARCHITECTURE.md).
+Architecture: [ARCHITECTURE.md](https://github.com/ayleen/triss-coworker/blob/main/ARCHITECTURE.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/ayleen/triss-coworker/blob/main/LICENSE).

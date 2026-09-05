@@ -1,7 +1,14 @@
-## Triss — Provider-Backed Delegation
+## Triss — managed delegation for AI development
 
-Use the `triss` CLI to delegate token-heavy I/O so this conversation stays
-focused on reasoning.
+Use the `triss` CLI as a managed delegation layer for focused research, diff
+and PR review, and bounded implementation. You choose the provider, model, and
+engine for each task; inspect the returned evidence and artifacts yourself.
+Triss does not promise particular savings or outcomes.
+See the public workflow guides: research at
+https://triss.work/workflows/research/, review at
+https://triss.work/workflows/review/, and bounded implementation at
+https://triss.work/workflows/implementation/.
+Setup and provider selection: https://triss.work/docs/getting-started/.
 
 ### `triss ask` — bulk reading
 Use instead of reading files yourself when:
@@ -44,9 +51,8 @@ triss commit-msg            # prints Conventional Commits message
 triss commit-msg --apply    # prints + runs `git commit -m`
 ```
 
-Use this whenever the user asks you to commit work — much cheaper than
-the primary model writing the message itself, and the format is
-consistent.
+Use this whenever the user asks you to commit work, for consistent
+provider-backed drafting. Review the generated message before applying it.
 
 ### `triss chat <prompt>` — bare provider prompt
 For one-shot lookups / transformations where there is **no corpus** —
@@ -59,8 +65,7 @@ echo "long prompt..." | triss chat --stdin
 triss chat --system "ты Postgres эксперт" "explain MVCC"
 ```
 
-Use it for trivial offload (definitions, rephrasings, ideation) so the
-primary model's tokens stay on actual code work. Do NOT use for code
+Use it for definitions, rephrasings, and ideation. Do NOT use it for code
 review (`triss review`), file analysis (`triss ask`), or anything that
 needs your reasoning.
 
@@ -77,13 +82,17 @@ docker logs container 2>&1 | triss ask --stdin --question "errors and their caus
 
 Prefer this over reading the same output yourself when it's >2K tokens.
 
-### `triss review [PR]` — code review via DeepSeek
+### `triss review [PR]` — code review through the selected provider
 For reviewing a branch, PR, or an explicitly piped diff. Branch reviews use
 the git diff and may include a linked Jira/Linear issue from the branch name;
 PR reviews use `gh pr diff`, PR metadata, and may include a linked issue from
 the PR title (`PROJ-NNN`). Stdin reviews use only the explicitly piped UTF-8
 diff text and never infer Git, PR, branch, changed-file, or ticket metadata.
-Defaults to the `pro` preset because review needs reasoning.
+The selected provider/model performs the bounded inspection and returns
+concrete bullets with file:line citations; inspect relevant files and the
+actual diff before accepting its findings.
+Review resolves the configured provider/model by default; pass explicit
+provider/model/effort options when you need a different route.
 
 ```bash
 triss review                 # current branch vs auto-detected base
@@ -103,10 +112,8 @@ per-request boundary markers keep marker-like diff text inside the untrusted
 diff section. `--skip-issue` remains accepted for compatibility but has no
 effect in stdin mode because there is no linked-ticket lookup.
 
-**Use over reading diffs yourself** — token savings on diffs are usually
-10-20× since DeepSeek does the inspection and returns concrete bullets
-with file:line citations. If you still need to look at a specific file
-after the review, do so via Read.
+**Use over reading diffs yourself** for a focused second review. Verify
+findings against the actual diff; read specific files when needed.
 
 ### `triss exec` — deterministic routing
 Use `triss exec --explain [task]` to inspect a stable JSON decision without
@@ -123,12 +130,9 @@ for the narrow case where you genuinely need raw markup** — e.g. extracting
 an exact regex/CSS-selector hit, copying a precise JSON shape, or you've
 already loaded the same URL in this session.
 
-You cannot tell whether a page is "short" until you've fetched it. Treat
-that as a non-decision: the rule is *who pays for the bytes*.
-
 | You want…                                | Use            | Why                                          |
 | ---------------------------------------- | -------------- | -------------------------------------------- |
-| Answer to a question about the page      | `triss fetch --question "…"` | DeepSeek pays for the body; you get ~300 tokens back |
+| Answer to a question about the page      | `triss fetch --question "…"` | Selected provider returns a focused summary |
 | Compare a page against local files       | `triss ask --urls … --paths …` | One round-trip, mixed corpus       |
 | Clean markdown on disk                   | `triss fetch <url> > /tmp/x.md` | No LLM at all                     |
 | Exact raw HTML / unprocessed text        | WebFetch       | Triss strips noise; you'd lose what you need |
@@ -152,7 +156,7 @@ triss fetch https://api-docs.example.com/changelog
 
 1. `triss extract <latest-session.jsonl> -o /tmp/chat.txt`
 2. `triss ask --paths /tmp/chat.txt <doc-files> --question "read chat, give exact changes for docs"`
-3. Apply the provider's suggested edits via the Edit tool.
+3. Apply the provider's suggested edits via the Edit tool and inspect the diff.
 
 ### Models
 - Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
@@ -165,7 +169,7 @@ triss fetch https://api-docs.example.com/changelog
 - For GLM 5.2 review, omit `--max-tokens` to use the model-sized auto-budget;
   if explicit, use at least 16384.
 
-### `triss coder` — delegate a coding task to a coding agent (default opencode engine)
+### `triss coder` — bounded implementation through a selected engine
 Setup once per machine/project:
 
 ```bash
@@ -174,7 +178,9 @@ triss coder init             # installs the opencode engine, configures the sele
                               # .opencode/agents/{coder,researcher}.md
 ```
 
-Then hand off implementation work instead of writing it yourself:
+Then hand off a bounded implementation task instead of writing it yourself.
+Pass the complete task packet; keep architecture, authorization, final
+inspection, and acceptance with the host.
 
 ```bash
 triss coder run "<task>"
@@ -469,7 +475,7 @@ owns the whole stream — parallel fan-out you cannot verify is usually slower
 and harder to accept than a single focused run.
 
 ### When NOT to delegate
-- Tasks under ~2000 tokens of work — delegation overhead costs more than it saves.
+- Tasks under ~2000 tokens of work — keep small, local tasks in the host.
 - Architectural decisions, hard debugging, safety-critical code.
 - Anything requiring careful step-by-step reasoning you must own.
 - When you need exact line numbers to make a precise Edit — read the file yourself.
