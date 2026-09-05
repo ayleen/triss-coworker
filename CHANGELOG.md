@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Website rendering no longer waits on a separate shared stylesheet request.
+  Optional font display prevents late font swaps from moving visible text;
+  slow first loads may retain the system fallback for that page view.
+
 - OpenCode 2 now qualifies the published beta CLI against its current
   `0.0.0-beta-19059` floor and required option declarations, accepting every
   newer compatible version without pinning a build or help-description

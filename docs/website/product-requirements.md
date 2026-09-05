@@ -135,6 +135,8 @@ and `#install` must remain meaningful.
   Best Practices, and SEO on the production build, while treating specific
   audit findings rather than the score alone as the acceptance evidence.
 - Fonts must be self-hosted; no runtime third-party font service.
+- Late web-font loading must not move already visible text. Use optional font
+  display: a slow first visit may retain a system fallback for that page view.
 
 ## SEO and sharing requirements
 
