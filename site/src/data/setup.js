@@ -33,9 +33,11 @@ export const SOURCE_INSTALL_COMMANDS = [
 ];
 
 // Provider configuration and verification (step 3). Standard mode is the
-// factual default: it configures the openai-compatible profile and then wires
-// MCP + rules for both hosts without asking. Other providers go through the
-// advanced wizard; a terminal-only setup can set the same profile directly.
+// factual default: it configures the openai-compatible profile, then asks
+// which host to connect (Claude Code, Codex, or both) and installs MCP +
+// agent rules for that selection; this version offers no Skip option in
+// Standard mode. Other providers go through the advanced wizard; a
+// terminal-only setup can set the same profile directly.
 export const WIZARD_COMMAND = "triss config wizard";
 export const STANDARD_WIZARD_COMMAND = "triss config wizard --standard";
 export const ADVANCED_WIZARD_COMMAND = "triss config wizard --advanced";
