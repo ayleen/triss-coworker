@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import pc from 'picocolors';
+import { join } from 'node:path';
 import {
   getEnvFilePath,
   ensureEnvFile,
@@ -16,12 +17,10 @@ import {
   maskValue,
   addToGitignore,
   readStdin,
-  yesNo,
 } from '../secrets.js';
-import { multiSelect } from '../picker.js';
+import { assertModelExecutionEngine } from '../provider-contract.js';
 import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
 import { CODER_MANIFEST } from './coder.js';
-import { DEFAULT_MODEL_ENGINE, assertModelExecutionEngine } from '../provider-contract.js';
 
 // Exported for reuse by coder.js (`--global`/`--local` mean the same
 // thing everywhere in triss) — see the identical logic that used to live
@@ -48,23 +47,19 @@ export async function chooseScope(message = 'Where to save?') {
   );
 }
 
+function isSecretKey(name) {
+  return /TOKEN|KEY|SECRET|PASS/i.test(name);
+}
+
 async function listManifests() {
   const integrations = await loadIntegrations();
   return [getCoreManifest(), CODER_MANIFEST, ...integrations];
 }
 
-function findManifest(name, manifests) {
-  const m = manifests.find((x) => x.name === name);
-  if (!m) {
-    throw new Error(
-      `Unknown target "${name}". Try one of: ${manifests.map((x) => x.name).join(', ')}`,
-    );
-  }
-  return m;
-}
-
-function isSecretKey(name) {
-  return /TOKEN|KEY|SECRET|PASS/i.test(name);
+function maybeAddGitignore() {
+  const root = process.env.TRISS_PROJECT_ROOT || process.cwd();
+  if (!existsSync(join(root, '.gitignore')) && !existsSync(join(root, '.git'))) return;
+  addToGitignore('.triss.env');
 }
 
 // ─── wizard ──────────────────────────────────────────────────────────────────
@@ -79,421 +74,15 @@ export function resolveMode(opts) {
   return null;
 }
 
-// Exported for tests — falls back to "standard" in non-TTY environments
-// so wizard works in CI / piped contexts without hanging.
-export async function chooseMode() {
-  if (!process.stdin.isTTY) return 'standard';
-  return promptChoice(
-    'Setup mode?',
-    [
-      {
-        label: 'Standard  — default provider, API key, main and small models.',
-        value: 'standard',
-      },
-      {
-        label: 'Advanced  — configure additional providers and integrations.',
-        value: 'advanced',
-      },
-    ],
-    { defaultIndex: 0 },
-  );
+// The wizard machinery (Easy/Advanced/targeted/headless) lives in
+// src/setup/wizard.js; this entry point keeps the historical import path and
+// the historical flags.
+export async function runWizard(target, opts = {}, deps = {}) {
+  // The wizard machinery (Easy/Advanced/targeted/headless) lives in
+  // src/setup/wizard.js; this entry point keeps the historical import path.
+  const { runSetupWizard } = await import('../setup/wizard.js');
+  return runSetupWizard(target, opts, deps);
 }
-
-export async function runWizard(target, opts, deps) {
-  const manifests = await listManifests();
-  const explicit = !!target;
-  const inheritedModels = {};
-
-  let scope = resolveScope(opts);
-  if (!scope) scope = await chooseScope();
-  const path = ensureEnvFile(scope);
-  const current = readEnvFile(path).vars;
-
-  // Targeted invocation skips the standard/advanced choice entirely —
-  // the user has already said "configure exactly this".
-  if (explicit) {
-    if (resolveMode(opts)) {
-      throw new Error('--standard / --advanced cannot be combined with a target argument');
-    }
-    process.stdout.write(pc.dim(`\nSaving to ${path}\n`));
-    await runFullWizard([findManifest(target, manifests)], path, current, {
-      explicit: true,
-      force: !!opts.force,
-      scope,
-      inheritedModels,
-      wizardOpts: opts || {},
-      deps: deps || {},
-    });
-    process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
-    if (scope === 'local') maybeAddGitignore();
-    return;
-  }
-
-  const mode = resolveMode(opts) || (await chooseMode());
-  process.stdout.write(pc.dim(`\nSaving to ${path}\n`));
-
-  if (mode === 'standard') {
-    await runStandardWizard(path, current);
-    await silentlyInstallBoth(scope);
-  } else {
-    await runFullWizard(manifests, path, current, {
-      explicit: false,
-      force: !!opts.force,
-      scope,
-      inheritedModels,
-      wizardOpts: opts || {},
-      deps: deps || {},
-    });
-    process.stdout.write('\n' + pc.green('Done.') + ' Run ' + pc.cyan('triss status') + ' to verify.\n');
-    await offerClaudeCodeIntegration(scope);
-  }
-  if (scope === 'local') maybeAddGitignore();
-}
-
-// Ask which agent(s) to wire Triss into. Returns 'claude' | 'codex' |
-// 'both' | 'skip'. Falls back to 'claude' silently in non-TTY.
-async function chooseAgentTarget(opts = {}) {
-  if (!process.stdin.isTTY) return 'claude';
-  const choices = [
-    { label: 'Claude — ~/.claude.json + ~/.claude/CLAUDE.md', value: 'claude' },
-    { label: 'Codex  — ~/.codex/config.toml + ~/.codex/AGENTS.md', value: 'codex' },
-    { label: 'Both   — wire Triss into Claude and Codex', value: 'both' },
-  ];
-  if (opts.allowSkip) {
-    choices.push({
-      label: 'Skip   — I will run `triss init` / `triss mcp install` later',
-      value: 'skip',
-    });
-  }
-  return promptChoice(opts.question || 'Which agent(s) should Triss integrate with?', choices, {
-    defaultIndex: 0,
-  });
-}
-
-function expandAgentTargets(target) {
-  return target === 'both' ? ['claude', 'codex'] : [target];
-}
-
-function sessionLabel(target) {
-  if (target === 'codex') return 'Codex';
-  if (target === 'both') return 'Claude / Codex';
-  return 'Claude Code';
-}
-
-// Standard mode wires both paths (MCP + agent rules) without asking
-// about granularity — but it does ask which agent to wire into.
-//
-// `wizardScope` is the global/local choice the user already made for the
-// .env file. We honour it here too: a "Project" wizard run wires Triss into
-// ./.mcp.json (and ./CLAUDE.md), not into the global agent config. That's
-// what the user expects — without it, picking "Project" for the env file
-// silently installed MCP globally and pinned the sandbox to the install-time
-// cwd, breaking every other Claude Code session.
-async function silentlyInstallBoth(wizardScope) {
-  const agent = await chooseAgentTarget({
-    question: 'Wire Triss into which agent?',
-  });
-  process.stdout.write(
-    '\n' +
-      pc.bold(`Wiring Triss into ${sessionLabel(agent)}`) +
-      pc.dim(
-        ' (Standard installs MCP + rules — re-run with --advanced for granular control)',
-      ) +
-      '\n',
-  );
-
-  const { installEntry } = await import('../mcp/install.js');
-  for (const t of expandAgentTargets(agent)) {
-    // Codex has no project-local MCP config — fall back to global there.
-    const scope = t === 'codex' ? 'global' : wizardScope || 'global';
-    const r = installEntry(scope, { target: t });
-    process.stdout.write(
-      pc.green(`  ✓ MCP server "triss" ${r.status} in ${r.path}`) +
-        pc.dim(` (${t}, scope=${scope})`) +
-        '\n',
-    );
-    if (r.migratedFrom) {
-      process.stdout.write(
-        pc.yellow(
-          `    ⚠ dropped stale TRISS_PROJECT_ROOT=${r.migratedFrom} ` +
-            `— global installs no longer pin a sandbox path.\n`,
-        ),
-      );
-    }
-  }
-
-  const { runInit } = await import('./init.js');
-  // For agent rules, "global" lives in ~/.claude/CLAUDE.md and "local" in
-  // ./CLAUDE.md — runInit's --global flag selects between them. Reuse the
-  // same scope so both halves of the install land in the same place.
-  await runInit({ global: wizardScope !== 'local', target: agent });
-
-  process.stdout.write(
-    '\n  ' +
-      pc.dim(
-        `Restart your ${sessionLabel(agent)} session to pick up the new server / rules.`,
-      ) +
-      '\n',
-  );
-}
-
-// Advanced mode's optional MCP/rules wiring. Like silentlyInstallBoth(),
-// inherits the wizard's scope so a "Project" wizard run wires MCP into
-// ./.mcp.json — see that function's comment for the rationale.
-async function offerClaudeCodeIntegration(wizardScope) {
-  if (!process.stdin.isTTY) return; // CI / piped runs: stay silent
-
-  process.stdout.write('\n' + pc.bold('Wire Triss into your agent?') + '\n');
-  process.stdout.write(
-    pc.dim(
-      '  · MCP server         — agent calls Triss tools natively\n' +
-        '                         (faster, per-tool permissions)\n' +
-        '  · Agent rules file   — agent calls Triss via shell\n' +
-        '                         (universal, simple, also acts as MCP fallback)\n\n' +
-        '  Most users want both — they cooperate (MCP primary, rules fallback).\n',
-    ),
-  );
-
-  const agent = await chooseAgentTarget({
-    question: 'Which agent should Triss integrate with?',
-    allowSkip: true,
-  });
-
-  if (agent === 'skip') {
-    process.stdout.write(
-      pc.dim(
-        '\n  Hint: ' +
-          pc.cyan('triss mcp install') +
-          pc.dim(' to register as MCP, ') +
-          pc.cyan('triss init') +
-          pc.dim(' for the agent rules file.\n'),
-      ),
-    );
-    return;
-  }
-
-  const paths = await promptChoice(
-    'How should Triss integrate?',
-    [
-      { label: 'Both (recommended) — MCP server + agent rules file', value: 'both' },
-      { label: 'MCP server only', value: 'mcp' },
-      { label: 'Agent rules only', value: 'rules' },
-    ],
-    { defaultIndex: 0 },
-  );
-
-  process.stdout.write('\n');
-  if (paths === 'both' || paths === 'mcp') {
-    const { installEntry } = await import('../mcp/install.js');
-    for (const t of expandAgentTargets(agent)) {
-      const scope = t === 'codex' ? 'global' : wizardScope || 'global';
-      const r = installEntry(scope, { target: t });
-      process.stdout.write(
-        pc.green(`✓ MCP server "triss" ${r.status} in ${r.path}`) +
-          pc.dim(` (${t}, scope=${scope})`) +
-          '\n',
-      );
-      if (r.migratedFrom) {
-        process.stdout.write(
-          pc.yellow(
-            `  ⚠ dropped stale TRISS_PROJECT_ROOT=${r.migratedFrom} ` +
-              `— global installs no longer pin a sandbox path.\n`,
-          ),
-        );
-      }
-    }
-  }
-  if (paths === 'both' || paths === 'rules') {
-    const { runInit } = await import('./init.js');
-    await runInit({ global: wizardScope !== 'local', target: agent });
-  }
-  process.stdout.write(
-    '\n  ' +
-      pc.dim(
-        `Restart your ${sessionLabel(agent)} session to pick up the new server / rules.`,
-      ) +
-      '\n',
-  );
-}
-
-async function runStandardWizard(path, current) {
-  process.stdout.write('\n' + pc.bold('── Standard setup ──') + '\n');
-  process.stdout.write(pc.dim('Configure the default OpenAI-compatible provider profile.\n'));
-
-  const existingKey = current.TRISS_OPENAI_COMPATIBLE_API_KEY;
-  let proceedKey = true;
-  if (existingKey) {
-    proceedKey = await yesNo(
-      `\nAPI key is already set (${maskValue(existingKey)}). Replace?`,
-      false,
-    );
-  }
-  if (proceedKey) {
-    process.stdout.write('\n  ' + pc.yellow('TRISS_OPENAI_COMPATIBLE_API_KEY') + ' (required)\n');
-    const key = await prompt('  value', { hidden: true, defaultValue: existingKey });
-    if (key) {
-      setVar(path, 'TRISS_OPENAI_COMPATIBLE_API_KEY', key);
-      process.stdout.write(pc.green('  ✓ saved\n'));
-    } else if (!existingKey) {
-      process.stdout.write(
-        pc.yellow("  ⚠ skipped — set later via 'triss config set TRISS_OPENAI_COMPATIBLE_API_KEY'\n"),
-      );
-    }
-  }
-
-  const existingModel = current.TRISS_OPENAI_COMPATIBLE_MODEL || '';
-  const existingSmallModel = current.TRISS_OPENAI_COMPATIBLE_SMALL_MODEL || '';
-  process.stdout.write('\n  ' + pc.dim('Main model') + '\n');
-  const model = await prompt('  value', { defaultValue: existingModel || 'deepseek-v4-pro' });
-  process.stdout.write('\n  ' + pc.dim('Small model') + '\n');
-  const smallModel = await prompt('  value', { defaultValue: existingSmallModel || 'deepseek-v4-flash' });
-  if (model) setVar(path, 'TRISS_OPENAI_COMPATIBLE_MODEL', model);
-  if (smallModel) setVar(path, 'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL', smallModel);
-  setVar(path, 'TRISS_DEFAULT_PROVIDER', 'openai-compatible');
-  setVar(path, 'TRISS_DEFAULT_ENGINE', DEFAULT_MODEL_ENGINE);
-  setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
-
-  process.stdout.write(
-    '\n' +
-      pc.green('Done.') +
-      ' Run ' +
-      pc.cyan('triss status') +
-      pc.dim(' to verify. Configure more providers with ') +
-      pc.cyan('triss config wizard --advanced') +
-      '\n',
-  );
-}
-
-async function runFullWizard(targets, path, current, { explicit, force, scope, inheritedModels, wizardOpts, deps }) {
-  // For non-targeted runs, let the user pick which integrations to walk
-  // through with one multi-select instead of N sequential y/N prompts.
-  let selected = null;
-  if (!explicit) {
-    const integrationItems = targets
-      .filter((m) => !m.isCore && m.envVars?.length)
-      .map((m) => {
-        const ready = m.envVars
-          .filter((v) => v.required)
-          .every((v) => current[v.name]);
-        return {
-          value: m.name,
-          label: m.name,
-          hint: ready ? `${m.description || ''} (already configured)` : m.description || '',
-          checked: false,
-        };
-      });
-    if (integrationItems.length) {
-      try {
-        selected = new Set(
-          await multiSelect(integrationItems, {
-            title: 'Which integrations to configure?',
-          }),
-        );
-      } catch {
-        // user cancelled; treat as empty selection — only core gets walked
-        selected = new Set();
-      }
-    }
-  }
-
-  let postSetupError = null;
-  for (const m of targets) {
-    if (!m.envVars?.length) continue;
-
-    // For non-targeted runs, only walk integrations the user explicitly
-    // ticked in the multi-select (core is always included).
-    if (selected && !m.isCore && !selected.has(m.name)) {
-      continue;
-    }
-
-    // A manifest may want to NARROW the env vars walked based on the wizard
-    // flags / current state before prompting (only `coder` does today: when
-    // the provider intent is, say, OpenCode Zen, it walks ONLY OPENCODE_API_KEY
-    // and never asks for ZHIPU_API_KEY). It also resolves an engine/provider
-    // pair (engine first, provider second) that postSetup needs. A throw here
-    // (e.g. a crush engine/provider conflict) is treated like a post-setup
-    // failure: recorded, re-thrown after the loop so the wizard still walks
-    // the OTHER manifests first.
-    let envVarsToWalk = m.envVars;
-    let postSetupCtx = { scope, path, inheritedModels };
-    if (typeof m.resolveWizardCtx === 'function') {
-      try {
-        const resolved = await m.resolveWizardCtx(wizardOpts || {}, current, deps || {}, { scope, path });
-        envVarsToWalk = resolved.envVars || m.envVars;
-        postSetupCtx = { scope, path, inheritedModels, ...(resolved.ctx || {}) };
-      } catch (err) {
-        process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
-        if (m.description) process.stdout.write(pc.dim(m.description + '\n'));
-        process.stdout.write(pc.yellow(`  ⚠ ${m.name} setup could not proceed: ${err.message}\n`));
-        postSetupError = postSetupError || err;
-        continue;
-      }
-    }
-
-    process.stdout.write('\n' + pc.bold(`── ${m.name} ──`) + '\n');
-    if (m.description) process.stdout.write(pc.dim(m.description + '\n'));
-
-    for (const v of envVarsToWalk) {
-      const secret = v.secret || isSecretKey(v.name);
-      const existing = current[v.name];
-      if (existing && !force) {
-        const overwrite = await yesNo(
-          `${v.name} is already set (${maskValue(existing)}). Overwrite?`,
-          false,
-        );
-        if (!overwrite) continue;
-      }
-
-      const labelParts = [v.name];
-      labelParts.push(v.required ? pc.yellow('(required)') : pc.dim('(optional, Enter to skip)'));
-      process.stdout.write('  ' + labelParts.join(' ') + '\n');
-      if (v.doc) process.stdout.write(pc.dim('  ' + v.doc + '\n'));
-
-      const answer = await prompt('  value', { hidden: secret, defaultValue: existing });
-      if (!answer) {
-        if (v.required && !existing) {
-          process.stdout.write(
-            pc.yellow(
-              `  ⚠ Skipped — ${v.name} is required, set it later via 'triss config set ${v.name}'\n`,
-            ),
-          );
-        }
-        continue;
-      }
-      setVar(path, v.name, answer);
-      process.stdout.write(pc.green(`  ✓ saved\n`));
-    }
-
-    // Optional post-setup hook (only `CODER_MANIFEST` defines this today —
-    // other manifests are unaffected). A failure must not abort the OTHER
-    // manifests' setup, so it's caught here — but it is remembered and
-    // re-thrown after the loop so the wizard exits non-zero (a blocking coder
-    // conflict is a real "setup incomplete", not a cosmetic warning).
-    // `inheritedModels` (shell overrides captured before any .env load) flows in
-    // so runCoderSetup's pin-shadow check works on the wizard path too. `deps`
-    // (injected fetch/spawnSync/outputs/isTTY) threads through so a testable
-    // wizard can drive the coder catalogue probe and engine detect without
-    // touching the real network or PATH.
-    if (typeof m.postSetup === 'function') {
-      try {
-        await m.postSetup(postSetupCtx, deps || {});
-      } catch (err) {
-        process.stdout.write(pc.yellow(`  ⚠ ${m.name} post-setup failed: ${err.message}\n`));
-        postSetupError = postSetupError || err;
-      }
-    }
-  }
-  if (postSetupError) throw postSetupError;
-}
-
-function maybeAddGitignore() {
-  if (!existsSync('.gitignore') && !existsSync('.git')) return;
-  if (addToGitignore('.triss.env')) {
-    process.stdout.write(pc.dim('  · added .triss.env to .gitignore\n'));
-  }
-}
-
-// ─── set / get / list / path / edit / unset ──────────────────────────────────
 
 export async function runSet(key, value, opts) {
   if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) {

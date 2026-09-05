@@ -3,7 +3,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveMode, chooseMode } from '../src/commands/config.js';
+import { resolveMode } from '../src/commands/config.js';
+import { resolveWizardTargets } from '../src/setup/wizard.js';
+import { CANONICAL_PROVIDER_IDS } from '../src/provider-contract.js';
 
 test('resolveMode picks the explicit flag', () => {
   assert.equal(resolveMode({ standard: true }), 'standard');
@@ -22,13 +24,14 @@ test('resolveMode rejects both flags together', () => {
   );
 });
 
-test('chooseMode silently defaults to standard in non-TTY', async () => {
-  const original = process.stdin.isTTY;
-  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
-  try {
-    const mode = await chooseMode();
-    assert.equal(mode, 'standard');
-  } finally {
-    Object.defineProperty(process.stdin, 'isTTY', { value: original, configurable: true });
+
+test('bare invocation opens Easy without a mode prompt; targets cover providers and integrations', () => {
+  // §3.1: no Easy/Advanced question — --advanced is the explicit path.
+  assert.equal(resolveMode({}), null);
+  for (const providerId of CANONICAL_PROVIDER_IDS) {
+    assert.deepEqual(resolveWizardTargets(providerId, { integrations: [] }), { kind: 'provider', names: [providerId] });
   }
+  assert.deepEqual(resolveWizardTargets('coder', { integrations: [], coderManifest: { name: 'coder' } }), { kind: 'coder', names: ['coder'] });
+  assert.deepEqual(resolveWizardTargets('jira', { integrations: [{ name: 'jira' }] }), { kind: 'integration', names: ['jira'] });
+  assert.throws(() => resolveWizardTargets('deepseek', { integrations: [] }), /Unknown target "deepseek"/);
 });

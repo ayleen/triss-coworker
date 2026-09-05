@@ -50,8 +50,6 @@ export async function runInit(opts) {
   for (const plan of plans) mkdirSync(dirname(plan.targetPath), { recursive: true });
   applyFileTransaction(plans);
   for (const plan of plans) reportPlan(plan, opts);
-
-  await postInit(opts);
 }
 
 async function chooseTarget() {
