@@ -1,11 +1,17 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "triss",
+  "main": "./src/worker/index.js",
   "compatibility_date": "2026-08-20",
   "workers_dev": true,
   "preview_urls": true,
   "assets": {
     "directory": "./dist/",
+    "binding": "ASSETS",
+    // Every request flows through the worker: it adds markdown content
+    // negotiation for agents, markdown 404s, and JSON /api error handling
+    // on top of the static assets.
+    "run_worker_first": true,
     "not_found_handling": "404-page",
     "html_handling": "auto-trailing-slash"
   }

@@ -99,9 +99,18 @@ test("security headers and web manifest remain complete", { skip: !hasDist }, ()
 test("site stays within explicit static asset budgets", { skip: !hasDist }, () => {
   const files = filesUnder(dist);
   const sizes = files.map((file) => ({ file: path.relative(dist, file), size: fs.statSync(file).size }));
+  // Agent-facing machine-readable files (markdown mirrors, llms-full.txt,
+  // the OpenAPI spec, /api responses) are never loaded by a browser, so
+  // they carry their own budget and stay out of the user-facing page-weight
+  // total. Per-type budgets below are unchanged.
+  const isAgentFile = (file) => /\.md$/.test(file) || /\.txt$/.test(file) || file === "openapi.json" || file.startsWith("api/");
+  const userTotal = sizes.filter(({ file }) => !isAgentFile(file)).reduce((sum, entry) => sum + entry.size, 0);
+  const agentTotal = sizes.filter(({ file }) => isAgentFile(file)).reduce((sum, entry) => sum + entry.size, 0);
   const total = sizes.reduce((sum, entry) => sum + entry.size, 0);
   const totalJavaScript = sizes.filter(({ file }) => file.endsWith(".js")).reduce((sum, entry) => sum + entry.size, 0);
-  assert.ok(total <= 2 * 1024 * 1024, `dist is ${total} bytes; budget is 2 MiB`);
+  assert.ok(userTotal <= 2 * 1024 * 1024, `user-facing dist is ${userTotal} bytes; budget is 2 MiB`);
+  assert.ok(agentTotal <= 512 * 1024, `agent-readable files are ${agentTotal} bytes; budget is 512 KiB`);
+  assert.ok(total <= 2.5 * 1024 * 1024, `dist is ${total} bytes; budget is 2.5 MiB`);
   assert.ok(totalJavaScript <= 150 * 1024, `client JavaScript is ${totalJavaScript} bytes; budget is 150 KiB`);
 
   for (const { file, size } of sizes) {

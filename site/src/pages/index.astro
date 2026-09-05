@@ -7,11 +7,53 @@ import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 import DelegationExample from "../components/DelegationExample.astro";
 import { WORKFLOWS } from "../data/workflows.js";
+import pkg from "../../../package.json";
+
+const SITE = (Astro.site?.toString().replace(/\/$/, "")) || "https://triss.work";
+const REPO = "https://github.com/ayleen/triss-coworker";
+const orgId = `${SITE}/#organization`;
+// Machine-readable identity for AI agents (parsed from the homepage).
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      name: "Triss",
+      description:
+        "Delegate codebase research, reviews, and implementation through a local CLI and MCP server. Choose your models and engines. Keep control of what ships.",
+      url: `${SITE}/`,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Node.js >= 22.12",
+      softwareVersion: pkg.version,
+      isAccessibleForFree: true,
+      license: `${REPO}/blob/main/LICENSE`,
+      downloadUrl: "https://www.npmjs.com/package/triss-coworker",
+      author: { "@id": orgId },
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    },
+    {
+      "@type": "Organization",
+      "@id": orgId,
+      name: "Triss",
+      url: `${SITE}/`,
+      logo: `${SITE}/icon-512.png`,
+      sameAs: [REPO, "https://www.npmjs.com/package/triss-coworker"],
+      contactPoint: [
+        {
+          "@type": "ContactPoint",
+          contactType: "technical support",
+          url: `${REPO}/issues`,
+        },
+      ],
+    },
+  ],
+};
 ---
 
 <Base
   title="Triss — Managed delegation for AI development"
   description="Delegate codebase research, reviews, and implementation through a local CLI and MCP server. Choose your models and engines. Keep control of what ships."
+  jsonLd={jsonLd}
 >
   <Header />
 
