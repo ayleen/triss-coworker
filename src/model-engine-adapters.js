@@ -73,6 +73,11 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   const warnings = Array.isArray(envelope.warnings)
     ? envelope.warnings.filter((warning) => typeof warning === 'string')
     : [];
+  // Best-effort engines disclose their concrete projection limitation in the
+  // normalized result — once, not on every internal step.
+  for (const limitation of policy.limitations || []) {
+    if (!warnings.includes(limitation)) warnings.push(limitation);
+  }
   if (!text) {
     const detail = envelope.error?.message ||
       (typeof envelope.error === 'string' ? envelope.error : null) ||

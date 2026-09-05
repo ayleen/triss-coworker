@@ -38,36 +38,24 @@ test('model runtime owns the complete main and small task-role matrix', () => {
   assert.equal(listModelTaskRoles().length, 11);
 });
 
-test('every execution engine has an explicit read-only projection policy', () => {
-  assert.deepEqual(
-    MODEL_PROJECTION_POLICIES.map(({ engine, supported, agent, isolate, credentialMode }) => ({
-      engine,
-      supported,
-      agent,
-      isolate,
-      credentialMode,
-    })),
-    [
-      { engine: 'direct', supported: true, agent: null, isolate: null, credentialMode: 'transport' },
-      {
-        engine: 'opencode',
-        supported: true,
-        agent: READ_ONLY_PROJECTION_AGENT,
-        isolate: false,
-        credentialMode: 'caller-selectable',
-      },
-      { engine: 'opencode2', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
-      { engine: 'omp', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
-      { engine: 'crush', supported: false, agent: null, isolate: null, credentialMode: 'unsupported' },
-    ],
-  );
-  assert.equal(resolveModelProjectionPolicy('review', 'opencode').agent, READ_ONLY_PROJECTION_AGENT);
-  for (const engine of ['opencode2', 'omp', 'crush']) {
-    assert.throws(
-      () => resolveModelProjectionPolicy('review', engine),
-      new RegExp(`engine "${engine}" does not provide a verified read-only projection`),
-    );
+test('every execution engine resolves a projection policy with honest guarantees', () => {
+  // All engines are eligible (behavioral contract, not a pinned table): each
+  // policy names its engine, its available guarantee, and any limitation.
+  for (const policy of MODEL_PROJECTION_POLICIES) {
+    assert.equal(policy.supported, true, policy.engine);
+    assert.ok(policy.readOnlyGuarantee, `${policy.engine} must name its guarantee level`);
+    assert.ok(Array.isArray(policy.limitations));
   }
+  assert.equal(resolveModelProjectionPolicy('review', 'opencode').agent, READ_ONLY_PROJECTION_AGENT);
+  assert.equal(resolveModelProjectionPolicy('review', 'opencode2').agent, READ_ONLY_PROJECTION_AGENT);
+  for (const engine of ['omp', 'crush']) {
+    const policy = resolveModelProjectionPolicy('review', engine);
+    assert.equal(policy.agent, null, `${engine} has no OpenCode agent`);
+    assert.ok(policy.limitations.length > 0, `${engine} must disclose its best-effort limitation`);
+  }
+  // Coder tasks are never projections, and unknown engines stay errors.
+  assert.throws(() => resolveModelProjectionPolicy('coder', 'opencode'), /not eligible/);
+  assert.throws(() => resolveModelProjectionPolicy('review', 'typo-engine'), /Unsupported execution engine/);
 });
 
 test('run-scoped projection agent is active, context-only, and cannot read ambient files', () => {
@@ -299,19 +287,37 @@ test('projected engine filters malformed warning metadata without failing a succ
   assert.deepEqual(result.warnings, ['kept']);
 });
 
-test('unsupported projected engines fail before coder execution', async () => {
-  for (const engine of ['opencode2', 'omp', 'crush']) {
-    let ran = false;
-    await assert.rejects(
-      () => executeProjectedEngineTask({
-        resolved: { engine, providerId: 'zai', nativeModel: 'glm-5.2' },
-        request: { task: 'review', prompt: 'review' },
-        snapshot,
-      }, {
-        runCoderRun: async () => { ran = true; },
-      }),
-      /does not provide a verified read-only projection/,
-    );
-    assert.equal(ran, false);
+test('every native engine projection dispatches to the coder runner on its own engine', async () => {
+  for (const engine of ['opencode', 'opencode2', 'omp', 'crush']) {
+    const dispatched = [];
+    const result = await executeProjectedEngineTask({
+      resolved: { engine, providerId: 'zai', nativeModel: 'glm-5.2' },
+      request: { task: 'review', prompt: 'review' },
+      snapshot,
+    }, {
+      runCoderRun: async (prompt, opts, runDeps) => {
+        dispatched.push({ engine: opts.engine, projection: opts.modelProjectionTask });
+        runDeps.stdoutWrite(JSON.stringify({
+          exit_reason: 'end_turn',
+          final_text: `${engine}-projection-ok`,
+          warnings: [],
+        }) + '\n');
+      },
+    });
+    assert.deepEqual(dispatched, [{ engine, projection: 'review' }]);
+    assert.equal(result.text, `${engine}-projection-ok`);
   }
+  // An unknown engine string still fails before any dispatch.
+  let ran = false;
+  await assert.rejects(
+    () => executeProjectedEngineTask({
+      resolved: { engine: 'typo-engine', providerId: 'zai', nativeModel: 'glm-5.2' },
+      request: { task: 'review', prompt: 'review' },
+      snapshot,
+    }, {
+      runCoderRun: async () => { ran = true; },
+    }),
+    /does not provide|Unsupported|typo-engine/,
+  );
+  assert.equal(ran, false);
 });

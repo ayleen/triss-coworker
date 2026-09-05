@@ -6606,7 +6606,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       includeSmallModel: engine !== 'opencode2',
     }))
     : oneShotConfigContent;
-  const routingConfigContent = projectionPolicy
+  // The deny-everything projection agent is an OpenCode-config concept: it
+  // rides OPENCODE_CONFIG_CONTENT for both OpenCode engines. OMP restricts
+  // via its run-private policy overlay and crush via CLI restrict flags, so
+  // injecting OpenCode JSON there would be inert noise.
+  const routingConfigContent = projectionPolicy && usesOpenCodeConfig
     ? withReadOnlyProjectionAgent(baseRoutingConfigContent)
     : baseRoutingConfigContent;
   const openCodePureMode = engine === 'opencode' && Boolean(oneShotProvider);
@@ -6690,6 +6694,12 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // Pre-spawn revalidation: reserved -> running under the leases, and a
       // hijack/foreign-tuple claim fails closed before any engine spawn.
       await revalidateV2SessionRowBeforeSpawn(sessionV2);
+      // Read-only projections opt into the restrict allowlist (crush CLI
+      // flags are the only working enforcement) unless the user chose
+      // explicitly via --restrict/--no-restrict.
+      if (projectionPolicy?.restrict === true && opts.restrict === undefined) {
+        opts = { ...opts, restrict: true };
+      }
       return await runCrushFlow({
         opts,
         deps,
