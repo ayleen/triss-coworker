@@ -84,6 +84,11 @@ export function createProviderConfigSnapshot({
       defaultValue: DEFAULT_MODEL_ENGINE,
     }),
     modelTransports: sourceValue('TRISS_MODEL_TRANSPORTS', sourceOptions),
+    defaultEffort: sourceValue('TRISS_DEFAULT_EFFORT', sourceOptions),
+    coderProvider: sourceValue('TRISS_CODER_PROVIDER', sourceOptions),
+    coderEffort: sourceValue('TRISS_CODER_EFFORT', sourceOptions),
+    protectCredentials: sourceValue('TRISS_PROTECT_CREDENTIALS', sourceOptions),
+    coderProtectCredentials: sourceValue('TRISS_CODER_PROTECT_CREDENTIALS', sourceOptions),
     providers,
   });
 }

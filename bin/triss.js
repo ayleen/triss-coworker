@@ -107,21 +107,23 @@ function addModelSelectionOptions(command) {
     .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
     .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
     .option('--protect-credentials', MODEL_PROTECT_HELP)
+    .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
     .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort);
 }
 
 // Shared help text for model-backed credential protection.
 const MODEL_PROTECT_HELP =
-  'Use the parent-owned credential proxy for the OpenCode model projection.\n' +
-  'Fails closed when protected credential isolation cannot be enforced.\n' +
-  'OpenCode2, OMP, and Crush are rejected for model-backed commands.';
+  'Use the parent-owned credential proxy for the model projection.\n' +
+  'Falls back to a best-effort raw run with a warning when a verified\n' +
+  'protected route is unavailable for the selected engine.';
 
 // Shared help text for the credential-mode flag (`coder init` and `coder run`;
 // `triss exec --code` forwards it under its own shorter description).
 const PROTECT_HELP =
-  'Use the parent-owned credential proxy and strict executable-surface gates.\n' +
-  'Fails closed when protected credential isolation cannot be enforced.\n' +
-  'OpenCode, OpenCode2, and OMP support this option; Crush is always protected.';
+  'Use the parent-owned credential proxy and strict executable-surface gates\n' +
+  'where the selected engine supports them; otherwise run best-effort with a\n' +
+  'warning. An explicit --no-protect-credentials overrides a persisted\n' +
+  'TRISS_*_PROTECT_CREDENTIALS=true choice for this run.';
 
 const program = new Command();
 program
@@ -243,6 +245,7 @@ program
   .option('--no-isolate', 'disable coder isolation')
   .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
   .option('--protect-credentials', 'forward protected credential mode for model-backed and coder routes')
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')
@@ -341,6 +344,7 @@ config
   .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine')
   .option('--coder-provider <name>', 'coder target only: canonical provider id. `coder init` uses --provider')
   .option('--coder-protect-credentials', 'coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials')
+  .option('--coder-no-protect-credentials', 'coder target only: persist/forward an explicit unprotected choice that overrides TRISS_PROTECT_CREDENTIALS=true')
   .action(wrap(runWizard));
 
 config
@@ -399,6 +403,7 @@ coder
   .option('--allow-unverified', 'requires explicit --provider opencode-go: allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
   .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .option('--protect-credentials', PROTECT_HELP)
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this setup/run')
   .action(wrap(runCoderInit));
 
 coder
@@ -419,6 +424,7 @@ coder
   .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
   .option('--allow-best-effort-caller-worktree', 'allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)')
   .option('--protect-credentials', PROTECT_HELP)
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));

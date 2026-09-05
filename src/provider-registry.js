@@ -132,7 +132,12 @@ export const PROVIDER_CONFIG_ENV_KEYS = Object.freeze([
   'TRISS_CONFIG_SCHEMA',
   'TRISS_DEFAULT_PROVIDER',
   'TRISS_DEFAULT_ENGINE',
+  'TRISS_DEFAULT_EFFORT',
   'TRISS_MODEL_TRANSPORTS',
+  'TRISS_CODER_PROVIDER',
+  'TRISS_CODER_EFFORT',
+  'TRISS_PROTECT_CREDENTIALS',
+  'TRISS_CODER_PROTECT_CREDENTIALS',
   ...CANONICAL_PROVIDER_IDS.flatMap((id) => {
     const definition = DEFINITIONS[id];
     return [definition.credential, ...Object.values(definition.fields)];

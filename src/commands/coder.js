@@ -38,7 +38,7 @@ import pc from 'picocolors';
 import { loadEnvFiles } from '../config.js';
 import { readProviderConfigSnapshot } from '../provider-config.js';
 import { getProviderDefinition, listProviderDefinitions } from '../provider-registry.js';
-import { assertCanonicalProviderId, validateModelSelectionInput } from '../provider-contract.js';
+import { assertCanonicalProviderId, normalizeModelEffort, validateModelSelectionInput } from '../provider-contract.js';
 import { resolveModelRequest } from '../model-selection.js';
 import { projectConfiguredEndpoint, validateProviderProfileSecurity } from '../provider-security.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
@@ -58,6 +58,17 @@ import {
   CODER_TRANSIENT_PROVIDER_ALIAS,
 } from '../coder-providers.js';
 export { coderCredentialReady } from '../coder-providers.js';
+
+// Persisted tri-state credential-protection choices for the shared resolver.
+// Reading the immutable snapshot keeps this a pure lookup: no process.env
+// mutation, and shell captures stay at their module-load values.
+function persistedCredentialProtectionChoices(deps = {}) {
+  const snapshot = deps.providerConfigSnapshot || readProviderConfigSnapshot();
+  return {
+    coderProtectCredentials: snapshot.coderProtectCredentials?.value,
+    sharedProtectCredentials: snapshot.protectCredentials?.value,
+  };
+}
 import { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES, CODER_ENGINE_REGISTRY } from '../coder-engine-registry.js';
 export { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES };
 import {
@@ -1439,11 +1450,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // check (shell export needs inheritedModels; .env-file shadow is read from
     // disk), throwing "Coder setup incomplete" on any blocking problem so both
     // this path and the wizard's postSetup path fail the same way.
-    // Credential mode comes from ONE resolver over explicit intent — no env
-    // fallback. Tests may inject opts.credentialMode directly.
+    // Credential mode comes from ONE resolver over explicit intent plus the
+    // persisted tri-state choice — tests may inject opts.credentialMode.
     const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
       engine,
       protectCredentials: opts.protectCredentials,
+      ...persistedCredentialProtectionChoices(deps),
     });
     assertCoderCredentialMode(credentialMode);
     await runCoderSetup(
@@ -1571,12 +1583,13 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
   let scope = precaptured.scope || resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   // Credential mode is resolved ONCE here from explicit --protect-credentials
-  // intent via the shared resolver (no environment fallback; tests may inject
-  // opts.credentialMode directly). Scope no longer changes the mode — the old
-  // env acknowledgement was the reason it ever did.
+  // intent plus the persisted tri-state choice via the shared resolver (tests
+  // may inject opts.credentialMode directly). Scope no longer changes the
+  // mode — the old env acknowledgement was the reason it ever did.
   const credentialMode = opts.credentialMode ?? resolveCoderCredentialMode({
     engine: 'opencode2',
     protectCredentials: opts.protectCredentials,
+    ...persistedCredentialProtectionChoices(deps),
   });
   assertCoderCredentialMode(credentialMode);
   // The V2 init path owns its complete flow:
@@ -1748,6 +1761,7 @@ export async function runCoderSetup(input = {}, deps = {}) {
   const resolvedCredentialMode = input.credentialMode ?? resolveCoderCredentialMode({
     engine: input.engine,
     protectCredentials: input.protectCredentials,
+    ...persistedCredentialProtectionChoices(deps),
   });
   assertCoderCredentialMode(resolvedCredentialMode);
   if (input.engine === 'crush' || input.engine === 'omp') {
@@ -3305,7 +3319,10 @@ export function describeCoderStatus(deps = {}) {
     // The credential mode a bare run would use RIGHT NOW, resolved through
     // the same single resolver as runCoderRun — status consumers (CLI and
     // MCP) must never re-implement the matrix themselves.
-    defaultCredentialMode: resolveCoderCredentialMode({ engine: defaultEngine }),
+    defaultCredentialMode: resolveCoderCredentialMode({
+      engine: defaultEngine,
+      ...persistedCredentialProtectionChoices(deps),
+    }),
     defaultModel,
     defaultSmallModel,
   };
@@ -6015,19 +6032,35 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   loadEnvFiles();
   const providerSnapshot = deps.providerConfigSnapshot || readProviderConfigSnapshot();
   const resolveSelection = deps.resolveModelRequest || resolveModelRequest;
-  const selectionProvider = engine === 'crush' && !opts.provider ? 'zai' : opts.provider;
+  // Coding provider precedence: explicit provider/model selector >
+  // TRISS_CODER_PROVIDER > the shared default provider handled inside
+  // resolveModelSelection. A coding-only change never rewrites the shared
+  // default.
+  const coderProviderAtom = providerSnapshot.coderProvider;
+  const selectionProvider = opts.provider
+    || (coderProviderAtom?.source !== 'absent' && coderProviderAtom?.value
+      ? assertCanonicalProviderId(coderProviderAtom.value, 'TRISS_CODER_PROVIDER')
+      : undefined);
+  // Coding effort precedence: explicit --effort > TRISS_CODER_EFFORT >
+  // TRISS_DEFAULT_EFFORT (handled by resolveModelSelection) > native default.
+  const coderEffortAtom = providerSnapshot.coderEffort;
+  const coderDefaultEffort = coderEffortAtom?.source !== 'absent' && coderEffortAtom?.value
+    ? normalizeModelEffort(coderEffortAtom.value)
+    : undefined;
   const selectedModel = resolveSelection({
     role: 'model',
     provider: selectionProvider,
     model: opts.model,
     engine,
     effort: opts.effort,
+    defaultEffort: opts.effort === undefined ? coderDefaultEffort : undefined,
   }, providerSnapshot);
   const selectedSmallModel = resolveSelection({
     role: 'smallModel',
     provider: selectedModel.providerId,
     engine,
     effort: opts.effort,
+    defaultEffort: opts.effort === undefined ? coderDefaultEffort : undefined,
   }, providerSnapshot);
   const oneShotProvider = selectedModel.providerId;
   const oneShotSmallModel = selectedSmallModel.publicModel;
@@ -6045,16 +6078,17 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
 
   const prompt = await resolveCoderPrompt(promptArg, opts);
   const allowBestEffortCallerWorktree = opts.allowBestEffortCallerWorktree === true;
-  // ONE resolver over explicit intent: opts.protectCredentials (CLI / exec /
-  // MCP) selects protected_proxy, everything else resolves through
-  // resolveCoderCredentialMode — best_effort_raw by default for
-  // OpenCode/OpenCode2, always protected_proxy for crush. There is
-  // deliberately NO environment fallback. Tests may inject the already
-  // resolved mode to characterize one routing branch without depending on
-  // ambient process environment shared by the full test runner.
+  // ONE resolver over explicit intent plus the persisted tri-state choice:
+  // opts.protectCredentials (CLI / exec / MCP, true OR false) >
+  // TRISS_CODER_PROTECT_CREDENTIALS > TRISS_PROTECT_CREDENTIALS >
+  // per-engine default. Tests may inject the already-resolved mode to
+  // characterize one routing branch without depending on ambient process
+  // environment shared by the full test runner.
   const credentialMode = deps.credentialMode ?? resolveCoderCredentialMode({
     engine,
     protectCredentials: opts.protectCredentials,
+    coderProtectCredentials: providerSnapshot.coderProtectCredentials?.value,
+    sharedProtectCredentials: providerSnapshot.protectCredentials?.value,
   });
   assertCoderCredentialMode(credentialMode);
 

@@ -54,6 +54,29 @@ test('configured default engine is persistent and lower precedence than request 
   assert.equal(explicit.provenance.engine.source, 'explicit');
 });
 
+test('effort precedence: explicit > command default > configured > native default', () => {
+  const snapshot = config({ local: 'TRISS_DEFAULT_EFFORT=high\n' });
+  assert.equal(resolveModelSelection({}, snapshot).effort, 'high');
+  assert.equal(resolveModelSelection({}, snapshot).provenance.effort.source, 'config');
+
+  const commandDefault = resolveModelSelection({ defaultEffort: 'low' }, snapshot);
+  assert.equal(commandDefault.effort, 'low');
+  assert.equal(commandDefault.provenance.effort.source, 'command-default');
+
+  const explicit = resolveModelSelection({ effort: 'max' }, snapshot);
+  assert.equal(explicit.effort, 'max');
+  assert.equal(explicit.provenance.effort.source, 'explicit');
+
+  const absent = config();
+  assert.equal(resolveModelSelection({}, absent).effort, undefined);
+  assert.equal(resolveModelSelection({}, absent).provenance.effort.source, 'engine-native-default');
+
+  assert.throws(
+    () => resolveModelSelection({}, config({ local: 'TRISS_DEFAULT_EFFORT=turbo\n' })),
+    /Invalid configured default effort in \/local/,
+  );
+});
+
 test('resolver rejects invalid configured and command-default engines', () => {
   const invalid = config({ local: 'TRISS_DEFAULT_ENGINE=missing\n' });
   assert.throws(

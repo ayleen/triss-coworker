@@ -45,16 +45,23 @@ export async function callModel(
   deps = {},
 ) {
   const execute = deps.executeModelTask || executeModelTask;
+  // Tri-state merge: an explicit boolean (either spelling, or the server-wide
+  // default) is forwarded as-is so an explicit false can override a persisted
+  // protection choice; an absent value stays undefined and the persisted
+  // tri-state resolves downstream.
+  const explicitProtection = [protectCredentials, protectCredentialsSnake].find(
+    (value) => value === true || value === false,
+  );
+  const modelProtection = explicitProtection !== undefined
+    ? explicitProtection
+    : (deps.modelProtectCredentials === true ? true : undefined);
   const output = await execute({
     task: task || (purpose === 'review' ? 'review' : 'integration-summary'),
     provider,
     model,
     engine,
     effort,
-    protectCredentials:
-      Boolean(protectCredentials) ||
-      Boolean(protectCredentialsSnake) ||
-      deps.modelProtectCredentials === true,
+    protectCredentials: modelProtection,
     signal: deps.signal,
     timeout: timeoutMs,
     input: {
@@ -1152,7 +1159,12 @@ export async function coderRunHandler(
       allowBestEffortCallerWorktree: allowDowngrade,
       // `protectCredentials` is the documented legacy spelling for this
       // coder-only field; merge it with the snake-case alias before dispatch.
-      protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
+      // The merge is tri-state: an explicit false survives instead of being
+      // collapsed onto an implicit "unprotected" default, so it can override
+      // a persisted protection choice.
+      protectCredentials: [protectCredentials, protectCredentialsSnake].find(
+        (value) => value === true || value === false,
+      ),
     },
     {
       spawn: deps.spawn,

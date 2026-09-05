@@ -91,27 +91,51 @@ export const CODER_PROVIDER_REGISTRY = freeze({
 // Credential mode is independent from caller-worktree isolation. Every entry
 // point resolves explicit user intent here; no environment fallback exists.
 //
-//   | engine    | without the flag | with --protect-credentials        |
-//   |-----------|------------------|-----------------------------------|
-//   | opencode  | best_effort_raw  | protected_proxy                   |
-//   | opencode2 | best_effort_raw  | protected_proxy                   |
-//   | crush     | protected_proxy  | protected_proxy (flag is a no-op) |
+//   | engine    | without any protection choice | with protection chosen true |
+//   |-----------|------------------------------|----------------------------|
+//   | opencode  | best_effort_raw              | protected_proxy            |
+//   | opencode2 | best_effort_raw              | protected_proxy            |
+//   | omp       | best_effort_raw              | protected_proxy            |
+//   | crush     | protected_proxy (default)    | protected_proxy            |
+//
+// An explicit `false` (CLI --no-protect-credentials, MCP boolean false, or a
+// persisted `TRISS_*_PROTECT_CREDENTIALS=false`) is honored for every engine
+// including crush: the proxy is a recommendation there, not a ban on the raw
+// native alternative.
 export const CODER_CREDENTIAL_MODES = Object.freeze(['best_effort_raw', 'protected_proxy']);
 
+const PERSISTED_TRUTHY = new Set(['true', '1', 'yes', 'on']);
+const PERSISTED_FALSY = new Set(['false', '0', 'no', 'off']);
+
+/**
+ * Parse one credential-protection value into a tri-state. `undefined` keeps
+ * the "no choice" state; `false` is a real value, never collapsed into the
+ * default. Persisted strings are compared case-insensitively so that the
+ * string "false" can never act as a truthy opt-in.
+ */
+export function parseCredentialProtection(value, field = 'credential protection value') {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true) return true;
+  if (value === false) return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (PERSISTED_TRUTHY.has(normalized)) return true;
+  if (PERSISTED_FALSY.has(normalized)) return false;
+  throw new Error(`${field} must be true or false; got ${JSON.stringify(String(value))}`);
+}
+
 export function resolveCoderCredentialMode({
-  protectCredentials = false,
+  protectCredentials,
+  coderProtectCredentials,
+  sharedProtectCredentials,
   engine,
 } = {}) {
-  if (engine === 'crush') return 'protected_proxy';
+  const explicit = parseCredentialProtection(protectCredentials, 'protect-credentials choice');
+  const persisted = parseCredentialProtection(coderProtectCredentials, 'TRISS_CODER_PROTECT_CREDENTIALS')
+    ?? parseCredentialProtection(sharedProtectCredentials, 'TRISS_PROTECT_CREDENTIALS');
+  const requested = explicit !== undefined ? explicit : persisted;
 
-  // Truthy on purpose, and the normalization is INTENTIONALLY centralized
-  // here: callers pass the raw user-supplied value through unchanged, so any
-  // plausible affirmative (true, 'true', 1) selects protection instead of
-  // silently falling through to the insecure default. Only genuinely negative
-  // values (false, undefined, '', 0) resolve to best_effort_raw.
-  return protectCredentials
-    ? 'protected_proxy'
-    : 'best_effort_raw';
+  if (engine === 'crush' && requested === undefined) return 'protected_proxy';
+  return requested === true ? 'protected_proxy' : 'best_effort_raw';
 }
 
 // Internal helpers must never invent a mode. Validate the already-resolved

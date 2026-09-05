@@ -148,6 +148,164 @@ function formatLine(key, value) {
   return `${key}=${escaped}`;
 }
 
+// ─── Multi-key env patch (setup plan transactions) ───────────────────────────
+
+// Marker for a line removed by an UNSET edit. Kept in place (instead of an
+// eager splice) so indices stay stable while later edits and the tail
+// hygiene pass decide what the final content line is.
+const REMOVED_LINE = Symbol('removed env line');
+
+// Dominant line ending: CRLF only when CR-terminated newlines outnumber
+// bare LF ones. Files without newlines default to LF.
+function detectEol(text) {
+  let crlf = 0;
+  let lf = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '\n') continue;
+    if (i > 0 && text[i - 1] === '\r') crlf += 1;
+    else lf += 1;
+  }
+  return crlf > lf ? '\r\n' : '\n';
+}
+
+// A truly empty line (as it appears in a '\n' split): '' for LF files,
+// '\r' for CRLF files. Whitespace-only lines are content-ish and stay put.
+function isBlankLine(line) {
+  return line === '' || line === '\r';
+}
+
+// Pure, multi-key companion to setVar/unsetVar for the setup-plan
+// transaction: computes the patched env-file content without touching the
+// filesystem. `edits` is an array of { key, value } applied in order —
+// a string value SETs the key (first matching line is replaced, same
+// case-insensitive semantics as setVar; missing keys are appended following
+// setVar's blank-line hygiene), null/undefined UNSETs it (first matching
+// line removed, same semantics as unsetVar). Untouched lines are preserved
+// byte-for-byte. Returns { text, changed, touched }.
+export function planEnvPatch(rawText, edits) {
+  if (!Array.isArray(edits)) {
+    throw new TypeError('env patch edits must be an array');
+  }
+  const seen = new Set();
+  for (const edit of edits) {
+    if (typeof edit !== 'object' || edit === null) {
+      throw new TypeError('each env patch edit must be an object');
+    }
+    const { key, value } = edit;
+    if (typeof key !== 'string' || !/^[A-Z_][A-Z0-9_]*$/i.test(key)) {
+      throw new TypeError(`invalid env patch key ${JSON.stringify(key)}`);
+    }
+    if (value !== null && value !== undefined && typeof value !== 'string') {
+      throw new TypeError(`env patch value for "${key}" must be a string, null, or undefined`);
+    }
+    // Line matching is case-insensitive (like setVar), so keys differing
+    // only in case still target the same line and count as duplicates.
+    const canonical = key.toLowerCase();
+    if (seen.has(canonical)) throw new TypeError('duplicate env patch key');
+    seen.add(canonical);
+  }
+
+  const eol = detectEol(rawText);
+  const cr = eol === '\r\n' ? '\r' : '';
+  const lines = rawText.split('\n');
+  const touched = [];
+  const appends = [];
+  let removedAny = false;
+
+  for (const { key, value } of edits) {
+    // Key validation above guarantees no regex metacharacters, so the same
+    // unescaped interpolation setVar uses is safe here.
+    const lineRe = new RegExp(`^\\s*${key}\\s*=`, 'i');
+    const idx = lines.findIndex((line) => line !== REMOVED_LINE && lineRe.test(line));
+    if (value === null || value === undefined) {
+      if (idx !== -1) {
+        lines[idx] = REMOVED_LINE;
+        removedAny = true;
+        touched.push(key);
+      }
+      continue;
+    }
+    const formatted = formatLine(key, value);
+    if (idx === -1) {
+      appends.push(formatted + cr);
+      continue;
+    }
+    // Rewrite only when the content actually differs, so a no-op SET keeps
+    // the original line byte-for-byte (idempotent re-runs do not rewrite).
+    const current = lines[idx].endsWith('\r') ? lines[idx].slice(0, -1) : lines[idx];
+    if (current !== formatted || lines[idx] !== formatted + cr) {
+      lines[idx] = formatted + cr;
+      touched.push(key);
+    }
+  }
+
+  // Unset tail hygiene: removing the last content line must not leave
+  // trailing blank garbage. Markers keep the original indices stable while
+  // we check where the surviving content actually ends.
+  if (removedAny) {
+    let lastContent = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (lines[i] !== REMOVED_LINE && !isBlankLine(lines[i])) {
+        lastContent = i;
+        break;
+      }
+    }
+    if (lastContent === -1) {
+      // No content line survives: emit an empty file.
+      lines.length = 0;
+    } else {
+      let removedAfterContent = false;
+      for (let i = lastContent + 1; i < lines.length; i += 1) {
+        if (lines[i] === REMOVED_LINE) {
+          removedAfterContent = true;
+          break;
+        }
+      }
+      if (removedAfterContent) {
+        // Keep everything up to the last content line and end the file
+        // with exactly one newline.
+        lines.length = lastContent + 1;
+        lines.push('');
+      }
+    }
+  }
+
+  const kept = lines.filter((line) => line !== REMOVED_LINE);
+  // Append hygiene follows setVar: appended keys land after a single blank
+  // separator line (never doubled) and the file ends with exactly one
+  // newline. A previously empty file gains no leading blank line.
+  if (appends.length) {
+    while (kept.length && isBlankLine(kept[kept.length - 1])) kept.pop();
+    if (kept.length) kept.push(cr); // one blank separator ('' for LF, '\r' for CRLF)
+    for (const line of appends) kept.push(line);
+    kept.push(''); // trailing newline
+  }
+  return { text: kept.join('\n'), changed: touched.length > 0, touched };
+}
+
+// Filesystem wrapper around planEnvPatch mirroring setVar's durability
+// behavior: ensure the env file exists (same scope detection as setVar),
+// write the patched text only when something changed, and keep the
+// permissions tight afterwards. Returns { changed, touched }.
+export function applyEnvPatch(path, edits) {
+  ensureEnvFile(path === getEnvFilePath('local') ? 'local' : 'global');
+  // A verbatim path matching neither scope just gets touched, like setVar.
+  if (!existsSync(path)) writeFileSync(path, '');
+
+  // A missing file reads as empty content, matching readEnvFile's behavior.
+  const raw = readFileSync(path, 'utf8');
+  const { text, changed, touched } = planEnvPatch(raw, edits);
+  if (changed) {
+    writeFileSync(path, text);
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      /* best-effort; chmod may fail on Windows */
+    }
+  }
+  return { changed, touched };
+}
+
 // Add a pattern to .gitignore in the project root, creating the file
 // if needed. Idempotent — does nothing if already present.
 export function addToGitignore(pattern) {
