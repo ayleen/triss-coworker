@@ -2,7 +2,10 @@
 
 > **Archived pre-0.42 reference.** Legacy provider names, environment
 > variables, model selectors, and commands below are migration history, not
-> valid runtime guidance. See [`configuration.md`](configuration.md).
+> valid runtime guidance. Engine availability statements below are also
+> superseded: every engine now accepts every canonical provider (crush is
+> provider-neutral), and non-coder projections run on all engines best-effort.
+> See [`configuration.md`](configuration.md).
 
 This document is the single reference for **every way Triss interacts with
 GLM** (Z.AI's GLM-5.2 / GLM-5-turbo / GLM-4.7 models). It covers the four
@@ -40,9 +43,10 @@ isolation, roles, restrict, model override, health-check, …).
 
 Triss never speaks the GLM HTTP protocol itself (except a tiny key-probe —
 see §3). It drives one of four local agent binaries behind the shared coder
-contract: OpenCode V1, the OpenCode 2 beta, Crush, or OMP. Crush is always fed
-`ZHIPU_API_KEY` (bridged to `ZAI_API_KEY`); the other engines receive only the
-credential selected by the public model prefix. OMP uses a run-private
+contract: OpenCode V1, the OpenCode 2 beta, Crush, or OMP. Every engine
+receives only the credential selected by the public model prefix — including
+Crush, which is provider-neutral and projects the selected provider onto a
+run-scoped config. OMP uses a run-private
 `PI_CODING_AGENT_DIR`, an audited transient model route, and either one raw
 provider credential or the protected proxy token.
 
@@ -56,8 +60,8 @@ provider credential or the protected proxy token.
 | Status | stable | beta | stable | supported — see [omp.md](engines/omp.md) |
 | Distribution | npm `opencode-ai` (supported floor `1.18.22`) | npm `@opencode-ai/cli@beta` | npm `@phpcraftdream/crush` (floor `0.1.6`) | compiled `omp` binary (floor `18.0.6` plus capability probe) |
 | Minimum version env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_OPENCODE2_VERSION` | `TRISS_CODER_CRUSH_VERSION` | `TRISS_CODER_OMP_VERSION` |
-| Key it reads | selected public model's provider key | same keys as opencode | `ZHIPU_API_KEY` bridged to `ZAI_API_KEY` | selected public model's provider key |
-| Providers | Worker, Z.AI, Moonshot, Kimi for Coding; Go/Zen use run-private `opencode-triss-coder-transient` | V1-resolved provider routes | Z.AI GLM only | same public providers as OpenCode, projected through run-private `triss-coder-transient` |
+| Key it reads | selected public model's provider key | same keys as opencode | selected public model's provider key (legacy `zai` runs bridge `ZHIPU_API_KEY` to `ZAI_API_KEY`) | selected public model's provider key |
+| Providers | Worker, Z.AI, Moonshot, Kimi for Coding; Go/Zen use run-private `opencode-triss-coder-transient` | V1-resolved provider routes | every canonical provider (provider-neutral; superseded from the historical Z.AI-only design) | same public providers as OpenCode, projected through run-private `triss-coder-transient` |
 | Provider config | `opencode.json` | shares V1 config | `crush.json` models block | Triss env pins plus run-private `models.yml` |
 | Output | NDJSON folded to one envelope | V2 NDJSON folded to one envelope | one terminal JSON object | OMP JSON events folded to one envelope |
 | Sessions | slug → native id mapping | versioned V2 mapping | native caller id | slug → OMP id under `.triss/omp/sessions` |
@@ -68,7 +72,8 @@ provider credential or the protected proxy token.
 
 **Rule of thumb:** prefer **opencode** for the established persistent policy;
 use **omp** for its native structured event/session runtime and run-private
-configuration; use **crush** for its simple Z.AI-only terminal envelope. Keep
+configuration; use **crush** for its simple single-envelope terminal output
+(provider-neutral). Keep
 Crush and OMP paired with their default worktree isolation, while remembering
 that a worktree is not an OS sandbox.
 
@@ -105,7 +110,7 @@ remains opencode (safety) vs crush (ergonomics).
 ## 3. How the key reaches GLM
 
 ### One user-facing key (per provider)
-Z.AI GLM — the default and crush's only provider — is configured from a
+Z.AI GLM — the historical default provider — is configured from a
 single secret, `ZHIPU_API_KEY` (get it at
 <https://z.ai/manage-apikey/apikey-list>). It is the only **required** env var
 for the coder subsystem (`CODER_MANIFEST`) when GLM is the chosen provider.
@@ -310,8 +315,13 @@ through every engine (opencode, opencode2, or crush).
 
 ### Crush canonical GLM mapping
 
-Crush is fixed to the Z.AI **coding-plan** endpoint and accepts only this
-verified public pair (the adapter owns the translation; atom names are never
+> **Superseded.** Crush is now provider-neutral: any canonical provider runs
+> through a run-scoped config projection with a native `$ENV` credential
+> reference. The fixed GLM atoms and the prefix rejection below describe the
+> historical pre-provider-neutral adapter, kept as migration history.
+
+Crush was fixed to the Z.AI **coding-plan** endpoint and accepted only this
+verified public pair (the adapter owned the translation; atom names were never
 derived from model ids):
 
 | Public Triss ID | Crush atom | Role |

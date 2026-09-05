@@ -133,8 +133,10 @@ test('a successful proxied run hands the child the token, never the raw key', as
     TRISS_USAGE_LOG: process.env.TRISS_USAGE_LOG,
     TRISS_CODER_MODEL: process.env.TRISS_CODER_MODEL,
     TRISS_PROJECT_ROOT: process.env.TRISS_PROJECT_ROOT,
+    TRISS_DEFAULT_PROVIDER: process.env.TRISS_DEFAULT_PROVIDER,
   };
   process.env.ZHIPU_API_KEY = RAW;
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
   delete process.env.OPENCODE_API_KEY;
   delete process.env.MOONSHOT_API_KEY;
   process.env.TRISS_USAGE_LOG = '0';

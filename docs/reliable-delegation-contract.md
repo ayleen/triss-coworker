@@ -225,9 +225,22 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
   `unavailable` and warns that same-UID code may read the selected raw
   credential); `--protect-credentials` (`protect_credentials: true` over MCP)
   selects the protected proxy mode, where unavailable credential isolation
-  ALWAYS blocks before spawn to protect the real provider key. Crush is always
-  protected. OMP's default worktree and run-private config limit repository
-  mutations and config inheritance; neither is an OS sandbox.
+  ALWAYS blocks before spawn to protect the real provider key. Crush defaults
+  to the protected proxy and is provider-neutral: any canonical provider
+  projects onto a run-scoped config whose `api_key` is a native `$ENV`
+  credential reference — the real key or the one-run proxy token never lands
+  in the JSON. An explicit `false` choice (CLI `--no-protect-credentials`, MCP
+  `protect_credentials: false`, persisted tri-state false) runs crush raw
+  through the same run-scoped config with the selected credential, warned as
+  best-effort. The protection choice is a persisted tri-state (explicit flag >
+  `TRISS_CODER_PROTECT_CREDENTIALS` > `TRISS_PROTECT_CREDENTIALS` > engine
+  default); an explicit `false` is a real value and never collapses into the
+  default. When the audited upstream wire protocol is OpenAI Responses, the
+  loopback credential proxy serves a bounded chat→responses bridge for crush
+  (message-only; tool rounds are refused with a precise error — use a chat- or
+  anthropic-protocol model for tool-using runs on that engine). OMP's default
+  worktree and run-private config limit repository mutations and config
+  inheritance; neither is an OS sandbox.
 - A best-effort envelope is advisory-only: `null` change lists, no
   explicit-expectation success, no persistent session.
 - The credential proxy is a loopback one-run-token proxy;

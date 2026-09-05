@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- All execution engines now run non-coder model projections (`ask`, `review`,
+  `chat`, `write`, `commit-msg`): `opencode` keeps its verified read-only
+  projection; `opencode2`, `omp`, and `crush` execute best-effort and attach a
+  warning naming the concrete limitation that is not verified, instead of
+  rejecting the run before launch.
+- `triss config wizard` now opens the Easy path directly (provider + key,
+  assistant hosts, summary, first command) and preserves existing explicit
+  choices on rerun. `--advanced` exposes the full sections; an optional target
+  argument accepts a canonical provider id, `coder`, or an integration name;
+  `--yes`, `--agent`, and `--install` support headless apply; `triss init
+  --setup` delegates to the same wizard after writing agent rules.
+- New persisted fields: `TRISS_CODER_PROVIDER`, `TRISS_DEFAULT_EFFORT`,
+  `TRISS_CODER_EFFORT`, `TRISS_PROTECT_CREDENTIALS`, and
+  `TRISS_CODER_PROTECT_CREDENTIALS` (credential protection is a tri-state:
+  absent, true, or false — the string `"false"` is never a truthy opt-in) and
+  `TRISS_MODEL_TRANSPORTS` (exact-model direct transport override map).
+- The `direct` engine now serves `opencode-zen` and `opencode-go` models
+  through audited per-model transports (OpenAI Chat, OpenAI Responses,
+  Anthropic Messages); a model without resolvable direct metadata fails with
+  the stable `TRISS_DIRECT_ENGINE_REQUIRED` code and an actionable
+  `TRISS_MODEL_TRANSPORTS` remedy instead of a generic registry error.
+- `--protect-credentials` / `--no-protect-credentials` on model-backed
+  commands: the former requests the parent-owned proxy and falls back to a
+  warned best-effort raw run when a protected route is unavailable; the latter
+  overrides a persisted protection choice for one run. MCP forwards
+  `protect_credentials` as the same tri-state.
+
+### Changed
+
+- Crush is provider-neutral: any canonical provider projects onto a run-scoped
+  config with `$ENV` credential references. Protected mode remains the crush
+  default; an explicit `--no-protect-credentials` runs crush raw through the
+  same run-scoped config as a disclosed best-effort choice. Responses-protocol
+  models ride a bounded chat→responses bridge in the credential proxy
+  (message-only; tool rounds are refused with a precise error).
+- `triss ask`, `triss review`, and other model-backed commands no longer
+  require engine-specific provider restrictions: provider and engine are
+  independent choices, honored as selected with truthful warnings for
+  best-effort routes.
+- The setup wizard no longer resets an existing provider/engine selection or
+  installs a Claude MCP server implicitly; Easy and Advanced share one setup
+  and resolution path.
+
 ### Fixed
 
 - OpenCode 2 now qualifies the published beta CLI against its current
@@ -16,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effort, but help prose is not a compatibility gate. Capability errors now
   name missing options separately from below-minimum versions. Pre-suffixed
   public/configured OpenCode 2 models are rejected before engine side effects.
-- Added `TRISS_DEFAULT_ENGINE` so model-backed commands can persist a direct or verified OpenCode route. OpenCode projections install and verify an active primary agent pinned as `default_agent`; its deny-by-default context-only policy provides no ambient file, delegation, skill, or executable tools, and the final merged agent state is audited before credentials are forwarded. Engine warnings remain structured across MCP model tools, explicit credential protection is available, and unverified OpenCode 2, OMP, and Crush projections are rejected before launch.
+- Added `TRISS_DEFAULT_ENGINE` so model-backed commands can persist a direct or verified OpenCode route. OpenCode projections install and verify an active primary agent pinned as `default_agent`; its deny-by-default context-only policy provides no ambient file, delegation, skill, or executable tools, and the final merged agent state is audited before credentials are forwarded. Engine warnings remain structured across MCP model tools, and explicit credential protection is available on every engine.
 - `triss_coder_run` retains the documented `protectCredentials` MCP spelling
   as a deprecated compatibility alias. It is OR-merged with
   `protect_credentials`, so either truthy spelling selects protected

@@ -25,10 +25,23 @@ triss config wizard
 triss status
 ```
 
+`triss config wizard` opens the Easy path directly: pick a provider, paste its
+key, choose the assistant hosts to register, and run your first command. It
+reuses existing configuration instead of resetting it. `--advanced` exposes the
+full sections (providers, execution, connections, integrations, runtime), and a
+target argument (`triss config wizard opencode-go`, `triss config wizard coder`,
+`triss config wizard jira`) sets up just that piece. Non-interactive shells add
+`--yes` to apply a complete configuration assembled from existing files, the
+environment, and explicit flags:
+
+```bash
+triss config wizard --yes --agent none
+```
+
 Connect Claude Code, Codex, or both:
 
 ```bash
-triss init --target claude --global
+triss init --target claude --global --setup   # writes rules, then runs the wizard
 triss init --target codex --global
 triss mcp install --target claude --global
 triss mcp install --target codex --global
@@ -64,12 +77,12 @@ Every provider has an endpoint, credential, `model` role, and `smallModel` role.
 4. global `~/.config/triss/.env`;
 5. registry defaults.
 
-`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`. Read-only non-coder projection is currently verified only for `opencode`; `opencode2`, `omp`, and `crush` fail before launch instead of running a write-capable agent.
+`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`. Every engine can execute non-coder model projections (`ask`, `review`, `chat`, …); what differs per engine is the available protection, not permission to run. `opencode` and `direct` have a verified read-only projection; `opencode2` runs the same deny-everything projection agent through its run-scoped config surface, `omp` uses its run-private policy overlay, and `crush` runs single-agent with the restrict allowlist. Engines without a verified projection report their concrete limitation as a warning on the result — never as a refusal.
 
 Shared reasoning effort values:
 
 ```text
-minimal | low | medium | high | max
+low | medium | high | xhigh | max
 ```
 
 Examples:
@@ -89,8 +102,10 @@ Omit `--model` to use the command's provider role. There are no public model pre
 ## Configuration
 
 ```bash
-triss config wizard
-triss config wizard --local
+triss config wizard                    # Easy setup (provider + key + hosts)
+triss config wizard --advanced         # full sections
+triss config wizard opencode-go        # targeted provider setup
+triss config wizard coder --coder-engine omp --coder-provider moonshot
 triss config set TRISS_DEFAULT_PROVIDER zai
 triss config set TRISS_DEFAULT_ENGINE direct
 triss config get TRISS_ZAI_MODEL
@@ -114,16 +129,20 @@ triss ask --paths 'src/**/*.js' --question "Find correctness defects"
 triss review
 ```
 
-Explicit request flags still win. OpenCode-backed non-coder calls install and
-verify a run-scoped active primary `triss-readonly-projection` agent and pin
-`default_agent` to it before forwarding the selected credential. Its permission
-contract denies every tool by default because the complete request context is
-already supplied in the prompt; it never gains ambient file, shell, edit,
-skill, or delegation access. The process still runs as the current OS user and
-is not a filesystem sandbox. Add `--protect-credentials` to a model command
-when the selected credential can be kept behind the parent-owned proxy;
-raw-mode warnings are preserved in MCP structured results for every
-model-backed tool.
+Explicit request flags still win. Engine-backed non-coder calls receive the
+complete request context in the prompt. OpenCode installs and verifies a
+run-scoped active primary `triss-readonly-projection` agent pinned as
+`default_agent`; its permission contract denies every tool by default, so it
+never gains ambient file, shell, edit, skill, or delegation access. The other
+engines apply their best-effort equivalents (run-scoped config surface,
+run-private policy overlay, or the restrict allowlist) and attach a warning
+that names exactly what is not verified. The process still runs as the current
+OS user and is not a filesystem sandbox. Add `--protect-credentials` to a model
+command when the selected credential can be kept behind the parent-owned proxy
+(it falls back to a best-effort raw run with a warning when a protected route
+is unavailable); `--no-protect-credentials` overrides a persisted
+`TRISS_PROTECT_CREDENTIALS=true` choice for one run. Raw-mode and engine
+warnings are preserved in MCP structured results for every model-backed tool.
 
 Provider fields:
 
@@ -168,7 +187,7 @@ Supported engines:
 
 - `opencode` — default OpenCode engine
 - `opencode2` — OpenCode 2 beta, current-or-newer compatibility
-- `crush` — Z.A.I-only engine
+- `crush` — provider-neutral single-envelope engine (any canonical provider)
 - `omp` — native Oh My Pi adapter
 
 OpenCode 2 has a supported floor of `0.0.0-beta-19059` and accepts every newer
@@ -181,8 +200,8 @@ Setup examples:
 ```bash
 triss coder init --engine opencode --provider openai-compatible
 triss coder init --engine opencode2 --provider opencode-zen
-triss coder init --engine crush --provider zai
-triss coder init --engine omp --provider opencode-go
+triss coder init --engine crush --provider opencode-go
+triss coder init --engine omp --provider moonshot
 ```
 
 Run examples:
@@ -199,7 +218,7 @@ triss coder run --isolate --session auth-fix \
   "Fix the authentication bug and run focused checks"
 ```
 
-Each run forwards only the selected provider credential. Protected routes use parent-owned loopback credential mediation and fail closed when an engine projection or endpoint cannot be audited. `--isolate` uses `.triss/wt/<slug>` for a reviewable worktree.
+Each run forwards only the selected provider credential. Protected routes use parent-owned loopback credential mediation and fail closed when a protected route cannot actually contain the real key; an explicit `--no-protect-credentials` runs crush raw through the same run-scoped config with the selected credential (best-effort, warned). `--isolate` uses `.triss/wt/<slug>` for a reviewable worktree.
 
 The `opencode` V1 engine preserves native OpenCode routing for Zen and Go. In
 protected mode, only `User-Agent` plus session, request, and client identity

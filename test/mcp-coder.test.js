@@ -513,18 +513,21 @@ test(
 
     await coderRunHandler({ prompt: 'legacy client', protectCredentials: true }, deps);
     await coderRunHandler({ prompt: 'canonical client', protect_credentials: true }, deps);
-    await coderRunHandler({ prompt: 'conflicting client', protectCredentials: false, protect_credentials: true }, deps);
+    await coderRunHandler({ prompt: 'explicit false client', protectCredentials: false }, deps);
     await coderRunHandler({ prompt: 'default client' }, deps);
 
+    // Tri-state: explicit booleans survive verbatim (an explicit false can
+    // override a persisted protection choice); an absent flag forwards
+    // undefined so the persisted tri-state resolves downstream.
     assert.deepEqual(
       seen.map((opts) => opts.protectCredentials),
-      [true, true, true, false],
+      [true, true, false, undefined],
     );
   }),
 );
 
 test(
-  'coderRunHandler forwards protect_credentials to runCoderRun (default false)',
+  'coderRunHandler forwards protect_credentials to runCoderRun (absent stays undefined)',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const seen = [];
     const spyRun = async (_prompt, opts) => {
@@ -540,7 +543,7 @@ test(
       { prompt: 'do something' },
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
-    assert.equal(seen[1].protectCredentials, false);
+    assert.equal(seen[1].protectCredentials, undefined);
   }),
 );
 

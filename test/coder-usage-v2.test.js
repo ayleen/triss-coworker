@@ -391,7 +391,7 @@ test(
 
 test(
   'crush envelope usage: tokens.combined and tokens.total carry delta_tokens; every split field is null; aliases map to 0 / delta_tokens',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({
         session_id: 'ses_crush_abc',
@@ -420,7 +420,7 @@ test(
 
 test(
   'crush run path: a native id different from the admitted slug fails closed before stdout',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine = JSON.stringify({
       session_id: 'foreign-native-id',
       exit_reason: 'end_turn',
@@ -462,7 +462,7 @@ test(
 
 test(
   'crush envelope usage: cost.total_usd mirrors delta_cost_usd with source "engine" and complete true (nonzero delta)',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({
         session_id: 'ses_crush_abc',
@@ -485,7 +485,7 @@ test(
 
 test(
   'crush envelope: an invalid delta_tokens surfaces an /invalid/i warning',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     // A negative delta_tokens is rejected by normalization; that warning must
     // reach the envelope's warnings instead of being dropped.
     const envelopeLine =
@@ -509,7 +509,7 @@ test(
 
 test(
   'crush envelope usage: a real delta_cost_usd of exactly 0 is reported as a complete engine-priced call',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({
         session_id: 'ses_crush_zero',
@@ -534,7 +534,7 @@ test(
 
 test(
   'crush envelope usage: an explicit model overrides the "crush" billing_model sentinel',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({
         session_id: 'ses_crush_model',
@@ -569,7 +569,7 @@ test(
 
 test(
   'a crush run persists provider "zai" even with no explicit model (the "crush" sentinel resolves to no provider prefix)',
-  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_USAGE_LOG: '0' }, async () => {
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key', TRISS_DEFAULT_PROVIDER: 'zai', TRISS_ZAI_MODEL: 'glm-5.2', TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo', TRISS_USAGE_LOG: '0' }, async () => {
     const envelopeLine =
       JSON.stringify({
         session_id: 'ses_crush_provider',

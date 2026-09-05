@@ -24,13 +24,14 @@ full task packet and always inspect the actual diff before accepting a
 result.
 
 **`triss coder run "<task>"`** hands an implementation subtask to a
-separate GLM coding agent instead of writing it yourself (setup once via
+separate coding agent instead of writing it yourself (setup once via
 `triss coder init`; default `opencode` V1 engine, `--engine opencode2` for
-the V2 beta — see docs/engines/opencode2.md — or `--engine crush`). The
+the V2 beta — see docs/engines/opencode2.md — `--engine crush`, or
+`--engine omp`). The
 default opencode engine enforces a working deny-first bash allowlist; crush
 (`--engine crush`, ≥0.1.3) defaults to worktree isolation (its
 `permissions.run` config is currently inert), with `--restrict` as an opt-in
-CLI-flag allowlist on top.
+CLI-flag allowlist on top. Every engine accepts every canonical provider.
 
 The canonical providers are `openai-compatible`, `zai`, `opencode-zen`,
 `opencode-go`, `moonshot`, and `kimi-for-coding`. Configure one with
@@ -38,7 +39,7 @@ The canonical providers are `openai-compatible`, `zai`, `opencode-zen`,
 `openai-compatible/deepseek-v4-pro`, `zai/glm-5.2`,
 `opencode-zen/deepseek-v4-flash-free`, or `moonshot/kimi-k2.7-code`.
 For direct analysis, pass the same canonical `provider`, optional native
-`model`, and optional `effort` (`minimal|low|medium|high|max`) to
+`model`, and optional `effort` (`low|medium|high|xhigh|max`) to
 `triss_ask` or `triss_review`. GLM 5.2 reviews should omit `max_tokens` to use
 the model-sized budget; if explicit, use at least 16384.
 See `triss agent-help --target codex` for flags and the envelope it

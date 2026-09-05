@@ -159,7 +159,7 @@ triss fetch https://api-docs.example.com/changelog
   `opencode-go`, `moonshot`, and `kimi-for-coding`.
 - `--model <native-id>` overrides the selected provider's role model for one
   call. Provider-qualified model selectors are reserved for coder engine runs.
-- `--effort minimal|low|medium|high|max` is the shared reasoning control.
+- `--effort low|medium|high|xhigh|max` is the shared reasoning control.
 - With neither `--provider` nor `--model`, commands resolve the configured
   `TRISS_DEFAULT_PROVIDER` and its `model` or `smallModel` role.
 - For GLM 5.2 review, omit `--max-tokens` to use the model-sized auto-budget;
@@ -178,7 +178,7 @@ Then hand off implementation work instead of writing it yourself:
 
 ```bash
 triss coder run "<task>"
-  --engine <name>     # opencode (default), opencode2 (beta — see docs/engines/opencode2.md), or crush
+  --engine <name>     # opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp
   --session <id>      # triss-side slug, mapped to a real opencode session id
                        # in .triss/sessions.json (first run creates it, later
                        # runs with the same slug continue that conversation)
@@ -190,9 +190,10 @@ triss coder run "<task>"
   --isolate            # run in a disposable git worktree (opencode default OFF, crush default ON)
   --no-isolate         # disable worktree isolation
   --protect-credentials # route the credential through Triss's parent-owned proxy
-                        # with strict executable-surface gates (OpenCode/OpenCode2;
-                        # default is best-effort raw credential handling; crush is
-                        # always protected)
+                        # with strict executable-surface gates (best-effort raw with
+                        # a warning when unavailable; crush defaults to protected;
+                        # --no-protect-credentials overrides a persisted
+                        # TRISS_PROTECT_CREDENTIALS=true choice for this run)
   --restrict           # crush only: opt into the CLI allowlist (--restrict-run + --allow-bash/--allow-tool)
   --no-restrict        # crush only: keep crush unrestricted (the default)
   --cwd <path>         # working dir (ignored with --isolate)
@@ -279,10 +280,12 @@ but today the working allowlist is the CLI flags: `--restrict` makes `triss
 coder run` emit `--restrict-run` plus `--allow-bash`/`--allow-tool` for each
 entry. Override per-run with `--restrict` / `--no-restrict`, or via
 `TRISS_CODER_CRUSH_RESTRICT=1` (CLI flag > env > crush.json
-`permissions.run.restrict` > default OFF). crush is simpler in other respects
-(one JSON envelope on stdout, native get-or-create session ids). Both engines
-share the single `ZHIPU_API_KEY` — crush ≥0.1.1 reads it natively; triss also
-forwards it as `ZAI_API_KEY` for older binaries. See
+`permissions.run.restrict` > default OFF). Every engine accepts every
+canonical provider: crush projects the selected provider onto a run-scoped
+config with `$ENV` credential references (Responses-protocol models ride a
+message-only chat→responses bridge; `--no-protect-credentials` runs it raw as
+an explicit choice). crush is simpler in other respects
+(one JSON envelope on stdout, native get-or-create session ids). See
 `docs/engines/crush.md` for the supported configuration, safety boundaries,
 and current upstream limitations.
 

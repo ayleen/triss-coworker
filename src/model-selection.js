@@ -52,6 +52,7 @@ function configuredEffortFrom(snapshot) {
   } catch (error) {
     throw new Error(
       `Invalid configured default effort${atom.path ? ` in ${atom.path}` : ''} (${atom.scope ?? 'shell'}): ${error.message}`,
+      { cause: error },
     );
   }
 }

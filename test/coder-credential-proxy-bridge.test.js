@@ -151,7 +151,7 @@ test('bridge: misconfiguration fails closed at construction', async () => {
 
 test('bridge: non-bridge proxy still relays /responses verbatim for native responses clients', async () => {
   const calls = [];
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = async (url) => {
     calls.push({ url });
     return new Response(JSON.stringify(responsesPayload()), {
       status: 200,

@@ -229,7 +229,7 @@ and harder to accept than a single focused run.
 Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
 `opencode-go`, `moonshot`, and `kimi-for-coding`. `--model <native-id>`
 overrides the selected provider role for one call; `--effort
-minimal|low|medium|high|max` controls reasoning consistently. With no explicit
+low|medium|high|xhigh|max` controls reasoning consistently. With no explicit
 selection, commands use `TRISS_DEFAULT_PROVIDER` and that profile's `model` or
 `smallModel` role. For GLM 5.2 review, omit `--max-tokens` to use the
 model-sized budget; if explicit, use at least 16384.
@@ -259,7 +259,7 @@ Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 carries `total_usd` plus `complete`, and an unreported class is `null`, never
 `0`; `prompt_tokens`/`completion_tokens` remain as deprecated aliases.
 `--engine <name>` selects
-`opencode` (default) or `crush`. `--session <id>` is a triss-side slug
+`opencode` (default), `opencode2`, `crush`, or `omp`. `--session <id>` is a triss-side slug
 mapped to a real opencode session id in `.triss/sessions.json` (first run
 creates it, later runs with the same slug continue that conversation).
 On OpenCode, `--provider` plus a canonical provider-qualified `--model`
@@ -284,9 +284,12 @@ OFF). `triss coder init` still seeds a `permissions.run` block into crush.json
 as forward-compat, but today the working allowlist is the CLI flags: `--restrict`
 makes `triss coder run` emit `--restrict-run` plus `--allow-bash`/`--allow-tool`
 for each entry. Override per-run with `--restrict` / `--no-restrict`, or via
-`TRISS_CODER_CRUSH_RESTRICT=1`. crush is simpler otherwise (one JSON envelope,
-native session ids). Both share the single `ZHIPU_API_KEY` (crush ≥0.1.1 reads
-it natively; triss also forwards it as `ZAI_API_KEY` for older binaries). See
+`TRISS_CODER_CRUSH_RESTRICT=1`. Every engine accepts every canonical
+provider: crush projects the selected provider onto a run-scoped config with
+`$ENV` credential references (Responses-protocol models ride a message-only
+chat→responses bridge; `--no-protect-credentials` runs it raw as an explicit
+choice). crush is simpler otherwise (one JSON envelope,
+native session ids). See
 `docs/engines/crush.md` for the supported configuration, safety boundaries,
 and current upstream limitations.
 

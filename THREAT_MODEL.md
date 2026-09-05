@@ -28,17 +28,25 @@ CI dependencies may be compromised.
 
 - Repository and integration content is data, never authority to expand scope.
 - Raw provider credentials are not intentionally passed to supported child
-  engines when the credential proxy is required.
+  engines when the credential proxy is required. When a route executes
+  best-effort raw (the default for most engines, or an explicit
+  `--no-protect-credentials` choice), the result warns that same-UID code may
+  read the selected raw credential; best effort never silently drops a
+  protection the user explicitly requested.
 - File, response, process, and artifact operations are bounded and fail closed
   when required enforcement cannot be established.
-- The default coder isolation path does not silently downgrade. Best-effort
-  execution requires an explicit operator acknowledgement.
+- Engine availability is not gated on verified safety guarantees: executable
+  routes run best-effort and disclose their concrete limitations as warnings,
+  while a protection that was explicitly requested and cannot be provided
+  fails closed rather than silently downgrading.
+- The default coder isolation path does not silently downgrade. A best-effort
+  caller-worktree downgrade requires the explicit operator opt-in.
 - The SSRF address classifier and its literal parsers in `src/net.js` are
   exercised by property-based fuzz tests (`test/fuzz.test.js`) in addition to
   the example-based suite; changes there must keep the fuzz properties green
   and extend them for any newly enforced special-use range.
-- Release jobs minimize privileges, use OIDC for npm publication, verify
-  the bytes promoted between jobs, and require GPG-signed release tags —
+- Release jobs minimize privileges, use OIDC for npm publication, verify the
+  bytes promoted between jobs, and require GPG-signed release tags —
   the tag signature is checked fail-closed against the public key committed
   in the repository.
 

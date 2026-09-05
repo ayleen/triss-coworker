@@ -47,6 +47,14 @@ OpenCode 1 and OpenCode 2 share the same engine configuration file. Protected Op
 
 OpenCode 2 has no native small-model role in the supported beta. The canonical provider still owns a `smallModel` role for runtime parity, but the OpenCode 2 projection does not silently claim the engine consumed it.
 
+## Non-coder model projections
+
+OpenCode 2 also executes non-coder model tasks (`ask`, `review`, `chat`, …)
+best-effort. The run injects the deny-everything `triss-readonly-projection`
+agent through the run-scoped config surface; the beta engine itself is not
+independently verified to enforce it, so the run reports that limitation as a
+warning on the execution result instead of refusing.
+
 ## Preflight
 
 Before reading or forwarding a credential, Triss verifies:
