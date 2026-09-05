@@ -4,7 +4,7 @@
 import pc from 'picocolors';
 import { jira, setParentSmart } from './client.js';
 import { adfToText, textToAdf } from './adf.js';
-import { summarize, printResult, IntegrationError } from '../_contract.js';
+import { summarize, printResult, IntegrationError, modelExecutionOptions } from '../_contract.js';
 
 function formatIssueLine(issue) {
   const f = issue.fields || {};
@@ -35,7 +35,8 @@ function formatIssueFull(issue) {
   return lines.join('\n');
 }
 
-export async function searchCmd({ jql, limit, question, provider, model, engine, effort, json }) {
+export async function searchCmd(opts) {
+  const { jql, limit, question, json } = opts;
   const res = await jira.search({
     jql,
     fields: ['summary', 'status', 'assignee', 'issuetype', 'priority'],
@@ -46,14 +47,15 @@ export async function searchCmd({ jql, limit, question, provider, model, engine,
   if (!issues.length) return printResult('(no issues)');
   const corpus = issues.map(formatIssueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, provider, model, engine, effort });
+    const out = await summarize({ corpus, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(key, { question, provider, model, engine, effort, withComments, json }) {
+export async function issueCmd(key, opts) {
+  const { question, withComments, json } = opts;
   const expand = withComments ? ['renderedFields'] : undefined;
   const issue = await jira.getIssue(key, { expand });
   if (json) return printResult(issue, { json: true });
@@ -67,7 +69,7 @@ export async function issueCmd(key, { question, provider, model, engine, effort,
     text += '\n\n--- Comments ---' + (cmts.join('\n---') || '\n(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
+    const out = await summarize({ corpus: text, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(text);
@@ -117,7 +119,8 @@ export async function createCmd(opts) {
   if (opts.json) printResult(issue, { json: true });
 }
 
-export async function commentsCmd(key, { question, provider, model, engine, effort, json, post }) {
+export async function commentsCmd(key, opts) {
+  const { question, json, post } = opts;
   if (post) {
     await jira.addComment(key, textToAdf(post));
     process.stdout.write(pc.green(`✓ Comment posted to ${key}\n`));
@@ -132,10 +135,7 @@ export async function commentsCmd(key, { question, provider, model, engine, effo
     const out = await summarize({
       corpus: corpus || '(no comments)',
       question,
-      provider,
-      model,
-      engine,
-      effort,
+      ...modelExecutionOptions(opts),
     });
     printResult(out);
   } else {

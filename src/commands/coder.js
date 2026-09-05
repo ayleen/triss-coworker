@@ -2707,12 +2707,19 @@ function auditEffectiveOpenCodeConfiguration(
     if (
       !actualAgent ||
       actualAgent.mode !== 'primary' ||
+      actualAgent.disable !== false ||
       !isDeepStrictEqual(actualAgent.permission, expectedProjectionAgent.permission) ||
       actualAgent.prompt !== expectedProjectionAgent.prompt
     ) {
       throw new Error(
         `The final effective OpenCode agent["${READ_ONLY_PROJECTION_AGENT}"] is not the ` +
-        'Triss-managed primary read-only agent; Triss refuses to forward the selected credential.',
+        'Triss-managed active primary read-only agent; Triss refuses to forward the selected credential.',
+      );
+    }
+    if (config.default_agent !== READ_ONLY_PROJECTION_AGENT) {
+      throw new Error(
+        `The final effective OpenCode default_agent is ${JSON.stringify(config.default_agent)}, not ` +
+          `${JSON.stringify(READ_ONLY_PROJECTION_AGENT)}; Triss refuses to forward the selected credential.`,
       );
     }
   }

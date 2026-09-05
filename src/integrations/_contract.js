@@ -146,6 +146,16 @@ const SUMMARY_SYSTEM =
   'docs, etc.) for a coding agent. Be concise and faithful. Use bullets, ' +
   'preserve IDs/keys/URLs verbatim, and omit fluff.';
 
+export function modelExecutionOptions({
+  provider,
+  model,
+  engine,
+  effort,
+  protectCredentials,
+} = {}) {
+  return { provider, model, engine, effort, protectCredentials };
+}
+
 export async function summarize({
   corpus,
   question,

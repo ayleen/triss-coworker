@@ -5,12 +5,11 @@ import { MODEL_EXECUTION_ENGINES } from './provider-contract.js';
 
 export const READ_ONLY_PROJECTION_AGENT = 'triss-readonly-projection';
 
+// A projection receives its complete corpus in the prompt. It must not gain
+// ambient filesystem access: a broad read allow would override OpenCode's
+// built-in secret-file prompts and explicit user denies after config merge.
 const READ_ONLY_AGENT_PERMISSION = Object.freeze({
   '*': 'deny',
-  read: 'allow',
-  glob: 'allow',
-  grep: 'allow',
-  list: 'allow',
   task: 'deny',
   skill: 'deny',
   edit: 'deny',
@@ -21,10 +20,11 @@ const READ_ONLY_AGENT_PERMISSION = Object.freeze({
 export const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
   description: 'Triss run-scoped read-only model projection agent.',
   mode: 'primary',
+  disable: false,
   permission: READ_ONLY_AGENT_PERMISSION,
   prompt:
     'You are a read-only Triss model projection. Answer the supplied request using only the explicitly ' +
-    'allowed read-only tools. Never edit files, run shell commands, load skills, or delegate to subagents.',
+    'provided context. Never read files, edit files, run shell commands, load skills, or delegate to subagents.',
 });
 
 const POLICIES = Object.freeze({
@@ -98,6 +98,7 @@ export function withReadOnlyProjectionAgent(configContent) {
   }
   return JSON.stringify({
     ...config,
+    default_agent: READ_ONLY_PROJECTION_AGENT,
     agent: {
       ...(config.agent && typeof config.agent === 'object' && !Array.isArray(config.agent)
         ? config.agent

@@ -70,17 +70,21 @@ test('every execution engine has an explicit read-only projection policy', () =>
   }
 });
 
-test('run-scoped projection agent is primary and exposes only an explicit read-only allowlist', () => {
-  const config = JSON.parse(withReadOnlyProjectionAgent('{"model":"provider/model"}'));
+test('run-scoped projection agent is active, context-only, and cannot read ambient files', () => {
+  const config = JSON.parse(withReadOnlyProjectionAgent(JSON.stringify({
+    model: 'provider/model',
+    default_agent: 'coder',
+    agent: {
+      [READ_ONLY_PROJECTION_AGENT]: { disable: true },
+    },
+  })));
+  assert.equal(config.default_agent, READ_ONLY_PROJECTION_AGENT);
   assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
     description: 'Triss run-scoped read-only model projection agent.',
     mode: 'primary',
+    disable: false,
     permission: {
       '*': 'deny',
-      read: 'allow',
-      glob: 'allow',
-      grep: 'allow',
-      list: 'allow',
       task: 'deny',
       skill: 'deny',
       edit: 'deny',
@@ -89,7 +93,7 @@ test('run-scoped projection agent is primary and exposes only an explicit read-o
     },
     prompt:
       'You are a read-only Triss model projection. Answer the supplied request using only the explicitly ' +
-      'allowed read-only tools. Never edit files, run shell commands, load skills, or delegate to subagents.',
+      'provided context. Never read files, edit files, run shell commands, load skills, or delegate to subagents.',
   });
 });
 

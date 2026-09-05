@@ -538,20 +538,27 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
     assert.equal(spawned, true);
     assert.equal(capturedArgv[capturedArgv.indexOf('--agent') + 1], READ_ONLY_PROJECTION_AGENT);
     const config = JSON.parse(capturedEnv.OPENCODE_CONFIG_CONTENT);
-    assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT].permission, {
-      '*': 'deny',
-      read: 'allow',
-      glob: 'allow',
-      grep: 'allow',
-      list: 'allow',
-      task: 'deny',
-      skill: 'deny',
-      edit: 'deny',
-      bash: 'deny',
-      external_directory: 'deny',
+    assert.equal(config.default_agent, READ_ONLY_PROJECTION_AGENT);
+    assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
+      description: 'Triss run-scoped read-only model projection agent.',
+      mode: 'primary',
+      disable: false,
+      permission: {
+        '*': 'deny',
+        task: 'deny',
+        skill: 'deny',
+        edit: 'deny',
+        bash: 'deny',
+        external_directory: 'deny',
+      },
+      prompt:
+        'You are a read-only Triss model projection. Answer the supplied request using only the explicitly ' +
+        'provided context. Never read files, edit files, run shell commands, load skills, or delegate to subagents.',
     });
 
     const invalidPolicies = [
+      ['disabled agent', (agent) => { agent.disable = true; }],
+      ['default agent drift', (_agent, effective) => { effective.default_agent = 'coder'; }],
       ['subagent mode', (agent) => { agent.mode = 'subagent'; }],
       ['writable edits', (agent) => { agent.permission.edit = 'allow'; }],
       ['shell access', (agent) => { agent.permission.bash = 'allow'; }],
@@ -576,18 +583,71 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
             effectiveConfigSpawnSync: (cmd, args, options) =>
               fakeEffectiveOpenCodeConfig(cmd, args, options, {
                 mutate: (effective) => {
-                  mutateAgent(effective.agent[READ_ONLY_PROJECTION_AGENT]);
+                  mutateAgent(effective.agent[READ_ONLY_PROJECTION_AGENT], effective);
                   return effective;
                 },
               }),
             stdoutWrite: noopStdout(),
           },
         ),
-        /not the Triss-managed primary read-only agent/,
+        /refuses to forward the selected credential/,
         label,
       );
       assert.equal(spawned, false, label);
     }
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('protected projection rejects a disabled primary before credential-bearing spawn', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    let spawned = false;
+    let revoked = false;
+    await assert.rejects(
+      () => runCoderRun(
+        'protected review without mutation',
+        {
+          provider: 'zai',
+          model: 'glm-5.2',
+          modelProjectionTask: 'review',
+          isolate: false,
+          protectCredentials: true,
+        },
+        {
+          providerConfigSnapshot: createProviderConfigSnapshot({
+            parentEnv: process.env,
+            files: [],
+          }),
+          startCredentialProxy: async () => ({
+            token: 'proxy-token',
+            scopedBaseUrl: 'http://127.0.0.1:1/v1',
+            revoke: () => { revoked = true; },
+            closed: Promise.resolve(),
+          }),
+          spawn: () => {
+            spawned = true;
+            return fakeEngineWriting(null)('opencode', []);
+          },
+          spawnSync: pinnedOpencodeSpawnSync,
+          effectiveConfigSpawnSync: (cmd, args, options) =>
+            fakeEffectiveOpenCodeConfig(cmd, args, options, {
+              mutate: (effective) => {
+                effective.agent[READ_ONLY_PROJECTION_AGENT].disable = true;
+                return effective;
+              },
+            }),
+          stdoutWrite: noopStdout(),
+        },
+      ),
+      /active primary read-only agent/,
+    );
+    assert.equal(spawned, false);
+    assert.equal(revoked, true);
   });
   try {
     await run();

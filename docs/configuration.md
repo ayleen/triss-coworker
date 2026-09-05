@@ -110,14 +110,13 @@ triss coder run --engine omp \
 After `coder init` and the four `config set` commands above, bare `triss ask`,
 `triss review`, and equivalent MCP calls use
 `opencode-go/muse-spark-1.3-contributor` through OpenCode. Every run installs
-and verifies a transient primary `triss-readonly-projection` agent. Its
-effective permission object must exactly match a deny-by-default contract that
-allows only `read`, `glob`, `grep`, and `list`; delegation, skills, edits,
-shell execution, and external-directory access stay explicitly denied. An
-explicit request `provider`, `model`, or `engine` retains highest precedence.
-`--protect-credentials` requests the parent-owned credential proxy; otherwise
-the raw credential warning is retained in the execution result and MCP
-structured output.
+and verifies a transient active primary `triss-readonly-projection` agent and
+pins `default_agent` to it. Its effective permission object must exactly match
+a deny-by-default, context-only contract: no ambient file, shell, edit, skill,
+or delegation tools are available. An explicit request `provider`, `model`, or
+`engine` retains highest precedence. `--protect-credentials` requests the
+parent-owned credential proxy; otherwise the raw credential warning is
+retained in the execution result and MCP structured output.
 
 ## Coder engines
 

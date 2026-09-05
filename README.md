@@ -115,14 +115,15 @@ triss review
 ```
 
 Explicit request flags still win. OpenCode-backed non-coder calls install and
-verify a run-scoped primary `triss-readonly-projection` agent before forwarding
-the selected credential. Its permission contract denies every tool by default,
-allows only `read`, `glob`, `grep`, and `list`, and explicitly denies
-delegation, skills, edits, shell execution, and external-directory access. The
-process still runs as the current OS user and is not a filesystem sandbox. Add
-`--protect-credentials` to a model command when the selected credential can be
-kept behind the parent-owned proxy; raw-mode warnings are preserved in MCP
-structured results for every model-backed tool.
+verify a run-scoped active primary `triss-readonly-projection` agent and pin
+`default_agent` to it before forwarding the selected credential. Its permission
+contract denies every tool by default because the complete request context is
+already supplied in the prompt; it never gains ambient file, shell, edit,
+skill, or delegation access. The process still runs as the current OS user and
+is not a filesystem sandbox. Add `--protect-credentials` to a model command
+when the selected credential can be kept behind the parent-owned proxy;
+raw-mode warnings are preserved in MCP structured results for every
+model-backed tool.
 
 Provider fields:
 

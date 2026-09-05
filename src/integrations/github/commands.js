@@ -3,7 +3,7 @@
 
 import pc from 'picocolors';
 import { github, resolveRepo } from './client.js';
-import { summarize, printResult, IntegrationError } from '../_contract.js';
+import { summarize, printResult, IntegrationError, modelExecutionOptions } from '../_contract.js';
 
 function issueLine(i) {
   const repo = i.repository_url
@@ -29,7 +29,8 @@ function issueFull(i) {
   ].join('\n');
 }
 
-export async function searchCmd({ query, limit, question, provider, model, engine, effort, json }) {
+export async function searchCmd(opts) {
+  const { query, limit, question, json } = opts;
   const data = await github.search({
     query,
     limit: parseInt(limit, 10) || 30,
@@ -39,14 +40,15 @@ export async function searchCmd({ query, limit, question, provider, model, engin
   if (!items.length) return printResult('(no issues)');
   const corpus = items.map(issueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, provider, model, engine, effort });
+    const out = await summarize({ corpus, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(number, { repo, question, provider, model, engine, effort, withComments, json }) {
+export async function issueCmd(number, opts) {
+  const { repo, question, withComments, json } = opts;
   const r = resolveRepo(repo);
   const issue = await github.getIssue(r, number);
   if (json) return printResult(issue, { json: true });
@@ -60,7 +62,7 @@ export async function issueCmd(number, { repo, question, provider, model, engine
         : '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
+    const out = await summarize({ corpus: text, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(text);
@@ -110,10 +112,7 @@ export async function commentCmd(number, opts) {
     const out = await summarize({
       corpus: corpus || '(no comments)',
       question: opts.question,
-      provider: opts.provider,
-      model: opts.model,
-      engine: opts.engine,
-      effort: opts.effort,
+      ...modelExecutionOptions(opts),
     });
     printResult(out);
   } else {
