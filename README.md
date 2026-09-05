@@ -200,6 +200,10 @@ triss coder run --isolate --session auth-fix \
 
 Each run forwards only the selected provider credential. Protected routes use parent-owned loopback credential mediation and fail closed when an engine projection or endpoint cannot be audited. `--isolate` uses `.triss/wt/<slug>` for a reviewable worktree.
 
+The `opencode` V1 engine preserves native OpenCode routing for Zen and Go. In
+protected mode, only `User-Agent` plus session, request, and client identity
+headers reach the provider; the project fingerprint stays local.
+
 Engine details:
 
 - [OpenCode Zen](docs/engines/opencode-zen.md)

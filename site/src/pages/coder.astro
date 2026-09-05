@@ -73,7 +73,7 @@ import Footer from "../components/Footer.astro";
   <script>
 // @ts-nocheck
     const ENGINES = {
-      opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
+      opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced. Zen and Go runs keep native OpenCode provider behavior. Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
       opencode2: { body: "The V2 beta. OpenCode 2 0.0.0-beta-19059 or newer is accepted by default; Triss checks required option declarations, not help descriptions or an exact build. It shares the same opencode.json config and provider catalogue. Credential handling defaults to best_effort_raw; pass --protect-credentials for the parent-owned credential proxy.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
       crush: { body: "Supported with isolation ON by default. The disposable worktree is the layer Triss can guarantee.", flag: "--engine crush", isolation: "ON by default" },
       omp: { body: "Native OMP headless adapter with structured events and named sessions. Run-private config prevents profile inheritance. It defaults to worktree isolation and best_effort_raw credential handling; --protect-credentials uses the parent-owned proxy. A worktree is not an OS sandbox.", flag: "--engine omp", isolation: "ON by default" },

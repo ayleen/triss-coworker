@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name missing options separately from below-minimum versions. Pre-suffixed
   public/configured OpenCode 2 models are rejected before engine side effects.
 - Added `TRISS_DEFAULT_ENGINE` so model-backed commands can persist a direct or verified OpenCode route. OpenCode projections use a run-scoped deny-by-default primary agent with only `read`, `glob`, `grep`, and `list` allowed; delegation and executable tools are explicitly denied, the full effective permission object is audited before credentials are forwarded, engine warnings remain structured across MCP model tools, and explicit credential protection is available. Unverified OpenCode 2, OMP, and Crush projections are rejected before launch.
+- OpenCode Go and Zen coder transports now retain an OpenCode-prefixed
+  transient provider identity, selecting native OpenCode V1 request semantics.
+  The protected credential proxy preserves only bounded correlation headers,
+  specific user agent, and validated retry response metadata upstream while
+  dropping the repository fingerprint.
 
 ## [0.42.0] — 2026-08-29
 

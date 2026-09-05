@@ -57,7 +57,7 @@ provider credential or the protected proxy token.
 | Distribution | npm `opencode-ai` (supported floor `1.18.22`) | npm `@opencode-ai/cli@beta` | npm `@phpcraftdream/crush` (floor `0.1.6`) | compiled `omp` binary (floor `18.0.6` plus capability probe) |
 | Minimum version env | `TRISS_CODER_OPENCODE_VERSION` | `TRISS_CODER_OPENCODE2_VERSION` | `TRISS_CODER_CRUSH_VERSION` | `TRISS_CODER_OMP_VERSION` |
 | Key it reads | selected public model's provider key | same keys as opencode | `ZHIPU_API_KEY` bridged to `ZAI_API_KEY` | selected public model's provider key |
-| Providers | Worker, Z.AI, Zen, Go, Moonshot, Kimi for Coding | V1-resolved provider routes | Z.AI GLM only | same public providers as OpenCode, projected through run-private `triss-coder-transient` |
+| Providers | Worker, Z.AI, Moonshot, Kimi for Coding; Go/Zen use run-private `opencode-triss-coder-transient` | V1-resolved provider routes | Z.AI GLM only | same public providers as OpenCode, projected through run-private `triss-coder-transient` |
 | Provider config | `opencode.json` | shares V1 config | `crush.json` models block | Triss env pins plus run-private `models.yml` |
 | Output | NDJSON folded to one envelope | V2 NDJSON folded to one envelope | one terminal JSON object | OMP JSON events folded to one envelope |
 | Sessions | slug → native id mapping | versioned V2 mapping | native caller id | slug → OMP id under `.triss/omp/sessions` |

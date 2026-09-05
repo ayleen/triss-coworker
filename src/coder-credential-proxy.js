@@ -23,7 +23,12 @@
  *    and aborts every in-flight upstream fetch;
  *  - no body logging, no CONNECT/general forward-proxy route;
  *  - exact-secret non-disclosure: the real credential is never returned,
- *    logged, or placed in engine env/argv/config by this module.
+ *    logged, or placed in engine env/argv/config by this module;
+ *  - bounded request identity: the specific user agent and OpenCode request
+ *    correlation headers survive the proxy without admitting arbitrary
+ *    client-controlled upstream headers;
+ *  - bounded retry metadata: only valid `retry-after` and `retry-after-ms`
+ *    response values survive the proxy.
  *
  * URL contract (Invariant): `endpoint` is the upstream ORIGIN
  * (`https://host[:port]`, no path). The engine's base URL points at
@@ -54,6 +59,68 @@ const DEFAULT_DEADLINE_MS = 30 * 60 * 1000;
 // Anthropic-protocol requests must carry an api-version header; forward the
 // engine's own value when present, otherwise pin the documented default.
 const ANTHROPIC_VERSION_DEFAULT = '2023-06-01';
+
+const REQUEST_IDENTITY_HEADERS = Object.freeze([
+  'user-agent',
+  'x-opencode-client',
+  'x-opencode-request',
+  'x-opencode-session',
+]);
+const MAX_REQUEST_IDENTITY_HEADER_BYTES = 1024;
+
+function copyRequestIdentityHeaders(provider, requestHeaders, upstreamHeaders) {
+  if (provider !== 'opencode-go' && provider !== 'opencode-zen') return;
+  // x-opencode-project is deliberately excluded: its root-commit value is a
+  // stable repository fingerprint and is not needed for request correlation.
+  for (const name of REQUEST_IDENTITY_HEADERS) {
+    const value = requestHeaders[name];
+    if (
+      typeof value === 'string' &&
+      value.length > 0 &&
+      Buffer.byteLength(value, 'utf8') <= MAX_REQUEST_IDENTITY_HEADER_BYTES
+    ) {
+      upstreamHeaders[name] = value;
+    }
+  }
+}
+
+const RETRY_RESPONSE_HEADERS = Object.freeze([
+  'retry-after',
+  'retry-after-ms',
+]);
+const MAX_RETRY_RESPONSE_HEADER_BYTES = 1024;
+const IMF_FIXDATE_PATTERN =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+const UNSIGNED_DECIMAL_INTEGER_PATTERN = /^\d+$/;
+
+function isUnsignedDecimalInteger(value) {
+  if (!UNSIGNED_DECIMAL_INTEGER_PATTERN.test(value)) return false;
+  return Number.isFinite(Number(value));
+}
+
+function isValidRetryAfter(value) {
+  if (isUnsignedDecimalInteger(value)) return true;
+  if (!IMF_FIXDATE_PATTERN.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toUTCString() === value;
+}
+
+function copyRetryHeaders(upstreamHeaders, downstreamHeaders) {
+  for (const name of RETRY_RESPONSE_HEADERS) {
+    const value = upstreamHeaders.get(name);
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      Buffer.byteLength(value, 'utf8') > MAX_RETRY_RESPONSE_HEADER_BYTES
+    ) {
+      continue;
+    }
+    const valid = name === 'retry-after-ms'
+      ? isUnsignedDecimalInteger(value)
+      : isValidRetryAfter(value);
+    if (valid) downstreamHeaders[name] = value;
+  }
+}
 
 function generateToken() {
   return randomBytes(16).toString('hex');
@@ -252,7 +319,10 @@ export async function startCoderCredentialProxy(opts = {}) {
 
     // Rate cap.
     if (!rateAllowed()) {
-      res.writeHead(429, { 'content-type': 'application/json' });
+      res.writeHead(429, {
+        'content-type': 'application/json',
+        'retry-after': '1',
+      });
       res.end(JSON.stringify({ error: { message: 'credential proxy rate cap exceeded' } }));
       return;
     }
@@ -320,6 +390,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     let responseBytes = 0;
     try {
       const headers = { 'content-type': 'application/json' };
+      copyRequestIdentityHeaders(provider, req.headers, headers);
       if (authStyle === 'anthropic') {
         headers['x-api-key'] = credential;
         headers['anthropic-version'] =
@@ -343,9 +414,11 @@ export async function startCoderCredentialProxy(opts = {}) {
       // Bounded response relay: stream through with a hard byte cap instead
       // of buffering the whole body; overflow aborts the upstream fetch and
       // fails the response closed.
-      res.writeHead(upstream.status, {
+      const responseHeaders = {
         'content-type': upstream.headers.get('content-type') || 'application/json',
-      });
+      };
+      copyRetryHeaders(upstream.headers, responseHeaders);
+      res.writeHead(upstream.status, responseHeaders);
       const reader = upstream.body?.getReader();
       if (!reader) {
         res.end();
