@@ -118,17 +118,26 @@ export async function askHandler(
     throw new Error('Pass at least one of paths or urls');
   }
   let corpus = '';
+  let hasUsableContext = false;
   if (paths?.length) {
     const expanded = expandPaths(paths);
     const r = readFilesAsCorpus(expanded);
     corpus += r.corpus;
+    hasUsableContext = r.readFileCount > 0;
   }
   if (urls?.length) {
     for (const u of urls) {
       const { url, markdown, contentType } = await fetchAsMarkdown(u);
       corpus += (corpus ? '\n\n' : '') +
         `<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`;
+      hasUsableContext ||= Boolean(markdown);
     }
+  }
+  if (paths?.length && !hasUsableContext) {
+    throw new Error(
+      'No readable file content was collected from paths. Pass files or a glob such as "src/**/*.js"; ' +
+      'directories are not read recursively.',
+    );
   }
   const { content, usageReport } = await callModel(
     {

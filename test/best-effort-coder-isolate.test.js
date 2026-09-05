@@ -540,6 +540,7 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
     const config = JSON.parse(capturedEnv.OPENCODE_CONFIG_CONTENT);
     assert.equal(config.default_agent, READ_ONLY_PROJECTION_AGENT);
     assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
+      name: READ_ONLY_PROJECTION_AGENT,
       description: 'Triss run-scoped read-only model projection agent.',
       mode: 'primary',
       disable: false,
@@ -558,6 +559,9 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
 
     const invalidPolicies = [
       ['disabled agent', (agent) => { agent.disable = true; }],
+      ['runtime name build', (agent) => { agent.name = 'build'; }],
+      ['runtime name general', (agent) => { agent.name = 'general'; }],
+      ['runtime name missing', (agent) => { agent.name = 'missing-agent'; }],
       ['default agent drift', (_agent, effective) => { effective.default_agent = 'coder'; }],
       ['subagent mode', (agent) => { agent.mode = 'subagent'; }],
       ['writable edits', (agent) => { agent.permission.edit = 'allow'; }],
@@ -603,51 +607,55 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
   }
 });
 
-test('protected projection rejects a disabled primary before credential-bearing spawn', async () => {
+test('protected projection rejects runtime agent-name tampering before credential-bearing spawn', async () => {
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
-    let spawned = false;
-    let revoked = false;
-    await assert.rejects(
-      () => runCoderRun(
-        'protected review without mutation',
-        {
-          provider: 'zai',
-          model: 'glm-5.2',
-          modelProjectionTask: 'review',
-          isolate: false,
-          protectCredentials: true,
-        },
-        {
-          providerConfigSnapshot: createProviderConfigSnapshot({
-            parentEnv: process.env,
-            files: [],
-          }),
-          startCredentialProxy: async () => ({
-            token: 'proxy-token',
-            scopedBaseUrl: 'http://127.0.0.1:1/v1',
-            revoke: () => { revoked = true; },
-            closed: Promise.resolve(),
-          }),
-          spawn: () => {
-            spawned = true;
-            return fakeEngineWriting(null)('opencode', []);
+    const invalidNames = ['build', 'general', 'missing-agent'];
+    for (const invalidName of invalidNames) {
+      let spawned = false;
+      let revoked = false;
+      await assert.rejects(
+        () => runCoderRun(
+          `protected projection name ${invalidName}`,
+          {
+            provider: 'zai',
+            model: 'glm-5.2',
+            modelProjectionTask: 'review',
+            isolate: false,
+            protectCredentials: true,
           },
-          spawnSync: pinnedOpencodeSpawnSync,
-          effectiveConfigSpawnSync: (cmd, args, options) =>
-            fakeEffectiveOpenCodeConfig(cmd, args, options, {
-              mutate: (effective) => {
-                effective.agent[READ_ONLY_PROJECTION_AGENT].disable = true;
-                return effective;
-              },
+          {
+            providerConfigSnapshot: createProviderConfigSnapshot({
+              parentEnv: process.env,
+              files: [],
             }),
-          stdoutWrite: noopStdout(),
-        },
-      ),
-      /active primary read-only agent/,
-    );
-    assert.equal(spawned, false);
-    assert.equal(revoked, true);
+            startCredentialProxy: async () => ({
+              token: 'proxy-token',
+              scopedBaseUrl: 'http://127.0.0.1:1/v1',
+              revoke: () => { revoked = true; },
+              closed: Promise.resolve(),
+            }),
+            spawn: () => {
+              spawned = true;
+              return fakeEngineWriting(null)('opencode', []);
+            },
+            spawnSync: pinnedOpencodeSpawnSync,
+            effectiveConfigSpawnSync: (cmd, args, options) =>
+              fakeEffectiveOpenCodeConfig(cmd, args, options, {
+                mutate: (effective) => {
+                  effective.agent[READ_ONLY_PROJECTION_AGENT].name = invalidName;
+                  return effective;
+                },
+              }),
+            stdoutWrite: noopStdout(),
+          },
+        ),
+        /active primary read-only agent/,
+        invalidName,
+      );
+      assert.equal(spawned, false, invalidName);
+      assert.equal(revoked, true, invalidName);
+    }
   });
   try {
     await run();

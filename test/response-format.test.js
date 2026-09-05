@@ -84,6 +84,20 @@ test('MCP runtime boundary rejects non-string response_format before ask or revi
   }
 });
 
+test('MCP ask rejects error-only file paths before model execution', async () => {
+  let executed = false;
+  await assert.rejects(
+    () => askHandler({ paths: ['/nonexistent/triss/ask-source'], question: 'q' }, {
+      executeModelTask: async () => {
+        executed = true;
+        throw new Error('unreachable');
+      },
+    }),
+    /No readable file content.*directories are not read recursively/,
+  );
+  assert.equal(executed, false);
+});
+
 test('clean reviews preserve text compatibility and return the full evidence contract', async () => {
   const text = emptyReviewResponse('text');
   assert.equal(text, '(no changes between branches — nothing to review)');

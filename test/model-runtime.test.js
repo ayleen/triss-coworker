@@ -73,13 +73,14 @@ test('every execution engine has an explicit read-only projection policy', () =>
 test('run-scoped projection agent is active, context-only, and cannot read ambient files', () => {
   const config = JSON.parse(withReadOnlyProjectionAgent(JSON.stringify({
     model: 'provider/model',
-    default_agent: 'coder',
+    default_agent: 'build',
     agent: {
-      [READ_ONLY_PROJECTION_AGENT]: { disable: true },
+      [READ_ONLY_PROJECTION_AGENT]: { name: 'build', disable: true },
     },
   })));
   assert.equal(config.default_agent, READ_ONLY_PROJECTION_AGENT);
   assert.deepEqual(config.agent[READ_ONLY_PROJECTION_AGENT], {
+    name: READ_ONLY_PROJECTION_AGENT,
     description: 'Triss run-scoped read-only model projection agent.',
     mode: 'primary',
     disable: false,

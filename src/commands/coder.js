@@ -2706,6 +2706,7 @@ function auditEffectiveOpenCodeConfiguration(
     const actualAgent = config.agent?.[READ_ONLY_PROJECTION_AGENT];
     if (
       !actualAgent ||
+      actualAgent.name !== READ_ONLY_PROJECTION_AGENT ||
       actualAgent.mode !== 'primary' ||
       actualAgent.disable !== false ||
       !isDeepStrictEqual(actualAgent.permission, expectedProjectionAgent.permission) ||

@@ -110,7 +110,7 @@ triss config set TRISS_DEFAULT_ENGINE opencode
 triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
 triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
 
-triss ask --paths src --question "Find correctness defects"
+triss ask --paths 'src/**/*.js' --question "Find correctness defects"
 triss review
 ```
 

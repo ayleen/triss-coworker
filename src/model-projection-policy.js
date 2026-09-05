@@ -18,6 +18,7 @@ const READ_ONLY_AGENT_PERMISSION = Object.freeze({
 });
 
 export const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
+  name: READ_ONLY_PROJECTION_AGENT,
   description: 'Triss run-scoped read-only model projection agent.',
   mode: 'primary',
   disable: false,
