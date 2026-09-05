@@ -28,13 +28,13 @@
     "docs/troubleshooting.md",
     "docs/integrations/",
     "docs/engines/",
+    "docs/adr/2026-09-05-user-choice-and-easy-setup.md",
     "!docs/website/",
     "README.md",
     "CHANGELOG.md",
     "SECURITY.md",
     "LICENSE",
-    "THIRD_PARTY_NOTICES",
-    "docs/adr/2026-09-05-user-choice-and-easy-setup.md"
+    "THIRD_PARTY_NOTICES"
   ],
   "scripts": {
     "test": "node scripts/check-lockfile-gate.cjs && npm run test:secure-default && npm run test:best-effort",

@@ -498,7 +498,7 @@ test(
     assert.equal(legacy.type, 'boolean');
     assert.equal(canonical.type, 'boolean');
     assert.match(legacy.description, /Deprecated camelCase/u);
-    assert.match(canonical.description, /best_effort_raw/u);
+    assert.match(canonical.description, /Tri-state/u);
   }),
 );
 

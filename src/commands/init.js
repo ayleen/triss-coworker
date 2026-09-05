@@ -7,7 +7,6 @@ import { dirname, join } from 'node:path';
 import pc from 'picocolors';
 import { readProviderConfigSnapshot } from '../provider-config.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
-import { runWizard } from './config.js';
 import { promptChoice } from '../secrets.js';
 import {
   TARGETS,
@@ -25,6 +24,22 @@ import {
 const SUPPORTED = [...SUPPORTED_TARGETS, 'both'];
 
 export async function runInit(opts) {
+  // `init --setup` delegates to the wizard BEFORE any rules write: the setup
+  // owns which host files change, and the rules pass reuses the resolved
+  // agent/scope intent instead of guessing. The wizard's host actions call
+  // back into runInit WITHOUT the setup flag, so the loop terminates.
+  if (opts.setup) {
+    const agentIntent = opts.target && ['claude', 'codex', 'both'].includes(String(opts.target).toLowerCase())
+      ? String(opts.target).toLowerCase()
+      : undefined;
+    const { runSetupWizard } = await import('../setup/wizard.js');
+    await runSetupWizard(undefined, {
+      global: opts.global,
+      agent: agentIntent,
+      ...(opts.yes ? { yes: true } : {}),
+    });
+    return;
+  }
   let raw = opts.target ? String(opts.target).toLowerCase() : '';
   if (!raw) raw = await chooseTarget();
   if (!SUPPORTED.includes(raw)) {
@@ -78,15 +93,7 @@ function reportPlan(plan, opts) {
   }
 }
 
-async function postInit(opts) {
-  if (opts.setup) {
-    process.stdout.write('\n' + pc.bold('Running setup wizard…') + '\n');
-    // Don't conflate the `init` scope (where to write agent rules) with the
-    // `wizard` scope (where to write env files). Let the wizard ask
-    // (or default to global silently in non-TTY).
-    await runWizard(undefined, {});
-    return;
-  }
+async function postInit() {
 
   // Auto-detect missing credentials and print friendly next-step hints.
   const cfg = readProviderConfigSnapshot();

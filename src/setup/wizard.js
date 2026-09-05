@@ -23,7 +23,8 @@ import { buildSetupPlan, applySetupPlan } from './plan.js';
 
 const CODER_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush', 'omp']);
 
-function isInteractive() {
+function isInteractive(deps = {}) {
+  if (typeof deps.isInteractive === 'function') return Boolean(deps.isInteractive());
   return Boolean(process.stdin.isTTY);
 }
 
@@ -443,7 +444,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   const integrations = deps.integrations || await loadIntegrations();
   const coderManifest = deps.coderManifest || (await import('../commands/coder.js')).CODER_MANIFEST;
   const targets = resolveWizardTargets(targetArg, { integrations, coderManifest });
-  const interactive = isInteractive();
+  const interactive = isInteractive(deps);
   if (!interactive && !opts.yes) {
     throw new Error(
       'triss config wizard is interactive; in non-interactive shells pass --yes to apply a complete configuration ' +
@@ -529,7 +530,7 @@ function agentHostActions(agent, scope) {
   if (!agent || agent === 'none') return [];
   const targets = agent === 'both' ? ['claude', 'codex'] : [agent];
   return targets.map((target) => ({
-    kind: 'mcp-install',
+    kind: 'mcp',
     target,
     scope: target === 'codex' ? 'global' : (scope || 'global'),
   }));

@@ -1,3 +1,26 @@
+## 2026-09-06 — Concurrent subagents in one worktree silently lost an uncommitted edit
+
+**What happened:** During the wizard implementation, an uncommitted edit to
+`src/commands/init.js` (the `--setup` delegation) vanished before it could be
+committed; the later "wizard integration" commit captured the pre-edit file.
+It surfaced only when the `init --setup` non-TTY acceptance probe wrote a
+`CLAUDE.md` into the repo checkout. A second incident in the same session: a
+`git add -A` swept a sibling subagent's in-progress `src/secrets.js` work into
+an unrelated commit, and a python "delete a function" script accidentally
+duplicated the tail of `src/commands/coder.js` (14k lines) instead of
+removing it.
+
+**Root cause:** Multiple agents (main + background subagents) shared one
+worktree while the main agent did long-lived uncommitted edits and broad
+`git add -A`; nothing re-verified the edited file's content between the edit
+and the commit, and file surgery by string offsets was not length-checked.
+
+**Prevention:** In shared worktrees, commit or stash your own edits before
+launching background agents that may run git commands; never `git add -A` —
+stage explicit paths only; after any scripted file surgery, assert the file
+shrunk (or `node --check`/import it) before continuing; re-read a file before
+claiming a behavioral fix in acceptance notes.
+
 # MISTAKES — project log
 
 Meaningful mistakes made while working in this repo. Append new entries on
