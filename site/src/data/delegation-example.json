@@ -1,0 +1,33 @@
+{
+  "recordedAt": "2026-09-05T19:54:52Z",
+  "trissVersion": "0.42.0",
+  "sourceCommit": "3208b6d30fdd37de7990e69e4b7ec5a09646a27a",
+  "provider": "zai",
+  "model": "glm-5-turbo",
+  "engine": "opencode",
+  "command": "triss ask --provider zai --paths src/model-selection.js --question \"How are provider, model, and execution engine selected? Cite the relevant lines and distinguish explicit request values from configured defaults.\"",
+  "question": "How are provider, model, and execution engine selected? Cite the relevant lines and distinguish explicit request values from configured defaults.",
+  "findings": [
+    {
+      "excerpt": "Explicit — provider field: otherwise `validated.provider` (from `request.provider`) is used (line 51). … Configured default: if neither is set, `snapshot.defaultProvider.value` is canonicalized via `assertCanonicalProviderId` (lines 47–50) and used (line 51).",
+      "sourceUrl": "https://github.com/ayleen/triss-coworker/blob/3208b6d30fdd37de7990e69e4b7ec5a09646a27a/src/model-selection.js#L44-L52",
+      "verification": "Checked against the cited commit: line 51 resolves `modelProvider || validated.provider || defaultProvider`, and lines 65–69 record the same three provenance tiers."
+    },
+    {
+      "excerpt": "Explicit: if `validated.model` exists, `nativeModel = validated.model.nativeModel`, provenance `{ source: 'explicit' }` (lines 56–58). … Configured default: otherwise the atom `profile[role]` is taken from the provider profile and parsed by `parseConfiguredModel` (lines 60–62).",
+      "sourceUrl": "https://github.com/ayleen/triss-coworker/blob/3208b6d30fdd37de7990e69e4b7ec5a09646a27a/src/model-selection.js#L54-L62",
+      "verification": "Checked the explicit branch (lines 56–58) and the configured-role branch (lines 60–62), including the parseConfiguredModel guards at lines 25–37."
+    },
+    {
+      "excerpt": "Explicit request: `validated.engine` (line 78). Command default: `request.defaultEngine`, validated by `assertModelExecutionEngine` (lines 75–77) … Configured default: `snapshot.defaultEngine.value`; if the snapshot has none, registry fallback `DEFAULT_MODEL_ENGINE` with provenance source `'registry-default'` (lines 70–74).",
+      "sourceUrl": "https://github.com/ayleen/triss-coworker/blob/3208b6d30fdd37de7990e69e4b7ec5a09646a27a/src/model-selection.js#L70-L83",
+      "verification": "Checked the engine chain `validated.engine || commandDefaultEngine || configuredEngine` at lines 78–83 and the registry fallback at lines 70–74."
+    }
+  ],
+  "limitations": [
+    "Single-file corpus: the run read one source file. The findings describe the provided context, not the whole repository.",
+    "Executed through the configured default engine (opencode, one-shot read-only projection) with provider zai and model glm-5-turbo. Other providers, models, or engines may answer differently.",
+    "Line numbers refer to commit 3208b6d and can drift as the file changes.",
+    "A recorded answer is evidence for this corpus and question, not a guarantee of general correctness."
+  ]
+}

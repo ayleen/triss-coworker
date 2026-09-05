@@ -1,7 +1,7 @@
 {
   "name": "triss-coworker",
-  "version": "0.42.0",
-  "description": "Delegate model-backed analysis and coding tasks through unified provider profiles while keeping primary-agent context focused.",
+  "version": "0.43.0",
+  "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {
     "triss": "bin/triss.js"
@@ -54,8 +54,11 @@
     "check:license-headers": "node scripts/check-license-headers.js"
   },
   "keywords": [
+    "agent-delegation",
+    "ai-development",
+    "code-review",
+    "developer-tools",
     "claude-code",
-    "claude",
     "codex",
     "mcp",
     "model-context-protocol",
@@ -68,9 +71,7 @@
     "delegation",
     "ai",
     "cli",
-    "developer-tools",
-    "code-review",
-    "token-saving",
+    "coding-agents",
     "jira",
     "linear",
     "confluence"

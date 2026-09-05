@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-09-05
+
+### Changed
+
+- Website repositioned around managed delegation for AI development: a new
+  homepage with a real, recorded, manually verified research example, workflow
+  guides for research, review, and bounded implementation
+  (`/workflows/`), a shorter agent-aware quickstart, consistent secondary
+  pages, and a reproducibly generated social card. The inference-cost
+  calculator, its formulas, and its methodology remain unchanged on `/cost/`.
+- GitHub/npm-facing documentation and package metadata now describe managed
+  delegation consistently. The README leads with research, review, and bounded
+  implementation, followed by host-aware setup and result-inspection guidance.
+  Packaged quickstart and agent instructions use the same positioning without
+  guaranteed savings or a mandatory model brand. The documented Node.js minimum
+  is 22.12.0, matching the root package.
+- `triss-dsh-provider-bundle` is version-aligned at 0.43.0; its catalogue
+  routes are unchanged.
+
 ### Fixed
+
+- Website rendering no longer waits on a separate shared stylesheet request.
+  Optional font display prevents late font swaps from moving visible text;
+  slow first loads may retain the system fallback for that page view.
 
 - OpenCode 2 now qualifies the published beta CLI against its current
   `0.0.0-beta-19059` floor and required option declarations, accepting every
@@ -26,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The protected credential proxy preserves only bounded correlation headers,
   specific user agent, and validated retry response metadata upstream while
   dropping the repository fingerprint.
+
+### Artifact integrity (0.43.0)
+
+- `triss-dsh-provider-bundle-0.43.0.tgz` — sha256
+  `7c40016a7fe9eea6ffc0c494b90622cf9429d9fced5f33471e0f9519f17452be`
+  — `sha512-eP6Y88SKX7vvY6FWbYTzBfNHSn5FNgjZ3ZPWETQWToefkABS1pyJNEgH063AgPt5MNVy0S6/LwG07exVaOpJLQ==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.43.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.43.0`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
 
 ## [0.42.0] — 2026-08-29
 
@@ -1850,7 +1884,8 @@ pre-0.42 release after migration.
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/ayleen/triss-coworker/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...v0.42.0
 [0.41.1]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...v0.41.1
 [0.41.0]: https://github.com/ayleen/triss-coworker/compare/v0.40.0...v0.41.0

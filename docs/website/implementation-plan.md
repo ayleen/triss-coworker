@@ -1,5 +1,12 @@
 # Triss Website Implementation Plan
 
+> **Active product plan:** the current positioning and page work is defined by
+> [managed-delegation-implementation-plan.md](managed-delegation-implementation-plan.md)
+> (owner decision 2026-09-05: managed delegation for AI development). The
+> launch milestones below are historical record; the technical architecture,
+> repository layout, validation, and deployment contract in this document
+> remain in force.
+
 ## Technical decision
 
 Use Astro to generate a static website and deploy the generated output with

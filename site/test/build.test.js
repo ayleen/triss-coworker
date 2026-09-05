@@ -22,7 +22,19 @@ test('built site contains required entry points', () => {
   const robots = fs.readFileSync(path.join(dist, 'robots.txt'), 'utf8');
   assert.ok(robots.includes('Sitemap:'), 'robots.txt should reference a sitemap');
   // internal links: every top-level page has an index.html
-  const pages = ['cost', 'commands', 'coder', 'integrations', 'security', 'docs'];
+  const pages = [
+    'cost',
+    'commands',
+    'coder',
+    'integrations',
+    'security',
+    'docs',
+    'docs/getting-started',
+    'workflows',
+    'workflows/research',
+    'workflows/review',
+    'workflows/implementation',
+  ];
   for (const p of pages) {
     assert.ok(fs.existsSync(path.join(dist, p, 'index.html')), `missing dist/${p}/index.html`);
   }

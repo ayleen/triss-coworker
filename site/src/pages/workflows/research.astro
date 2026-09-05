@@ -1,0 +1,179 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+import Base from "../../layouts/Base.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+import DelegationExample from "../../components/DelegationExample.astro";
+---
+
+<Base
+  title="Delegate codebase research — Triss"
+  description="Ask focused questions about selected files, inspect source references, and use verified findings in your development workflow."
+>
+  <Header current="workflows" />
+
+  <main class="workflow-layout">
+    <div class="workflow-page-body">
+      <p class="workflow-eyebrow">Research workflow</p>
+      <h1 class="workflow-page-title">
+        Understand unfamiliar code without handing over the whole repository.
+      </h1>
+      <p class="workflow-lede">
+        Instead of pasting files into your main agent's context, delegate a focused
+        question: <code>triss ask</code> reads only the sources you name, sends them to
+        your selected provider, and returns findings with source references you can
+        verify yourself.
+      </p>
+    </div>
+
+    <div class="workflow-page-body">
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Use it when</h2>
+        <p>
+          You need an answer to a specific question about selected sources before you
+          start changing them — how a mechanism works, where a decision is made, what a
+          module enforces. The question is bounded, and so is the corpus: you choose
+          exactly which files Triss reads.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Provide</h2>
+        <ul>
+          <li>
+            A precise question. Ask for the specific behavior, precedence, or constraint
+            you need, and ask for cited lines.
+          </li>
+          <li>
+            The selected files or globs. Quote globs so your shell passes them through
+            to Triss instead of expanding them:
+          </li>
+        </ul>
+        <pre tabindex="0" class="code-block"><code>triss ask --paths "src/**/*.js" --question "Where is request validation handled, and what does it enforce? Cite the relevant lines."</code></pre>
+        <p>
+          Do not include secret files such as <code>.env</code> in the corpus — what you
+          select is what gets sent to your model provider. Directories are not an
+          automatic recursive corpus: pass files or a glob such as
+          <code>src/**/*.js</code>.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Run</h2>
+        <p>
+          The command below is the recorded run shown later on this page. It was
+          executed with <code>triss ask --provider zai</code> against a source file of
+          the Triss repository itself, at a public commit.
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss ask --provider zai --paths src/model-selection.js --question "How are provider, model, and execution engine selected? Cite the relevant lines and distinguish explicit request values from configured defaults."</code></pre>
+        <div class="callout">
+          <p>
+            This is an example recorded on Triss' own sources. In your own repository
+            you choose your own paths and your own question — no project needs to
+            contain <code>src/model-selection.js</code>. Use your configured provider
+            by omitting <code>--provider</code>, or pass the provider you selected.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Inspect</h2>
+        <ul>
+          <li>Open the cited files and lines and compare them with each claim.</li>
+          <li>
+            Identify what remains unknown: a focused answer about selected files is not
+            a map of the whole repository.
+          </li>
+          <li>
+            Keep the details your main agent needs — verified behavior, exact
+            identifiers, line references — and drop the rest.
+          </li>
+        </ul>
+      </section>
+
+      <section class="workflow-block">
+        <DelegationExample id="recorded-example" />
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Bring it back</h2>
+        <p>
+          When the findings have been verified, hand them to your main agent as context
+          for the change you are about to make:
+        </p>
+        <div class="callout">
+          <p class="workflow-example-label">Example instruction</p>
+          <p>
+            "Use these verified findings to plan the change. Re-open the relevant
+            source before editing."
+          </p>
+        </div>
+        <p>
+          This is an example instruction you write yourself — not command output, and
+          not a recorded result.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Limits</h2>
+        <ul>
+          <li>
+            The answer analyzes the context you passed. It is not proof that the whole
+            repository is understood.
+          </li>
+          <li>The model can be wrong, even when it cites real lines.</li>
+          <li>
+            A follow-up query may be needed: narrower files, or a more specific
+            question.
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <nav class="workflow-next" aria-label="Next steps">
+      <span class="workflow-next__label">Next:</span>
+      <a href="/workflows/review/">Review workflow</a>
+      <a href="/commands/">Commands</a>
+      <a href="/docs/getting-started/">Quickstart</a>
+    </nav>
+  </main>
+
+  <Footer />
+</Base>
+
+<style>
+  .workflow-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-label);
+    margin: 0 0 18px;
+  }
+  .workflow-page-title {
+    font-size: clamp(2rem, 3.6vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+    color: var(--color-text-strong);
+  }
+  .workflow-lede {
+    margin: 22px 0 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--color-text-secondary);
+  }
+  .workflow-example-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+    margin: 0 0 8px;
+  }
+  .workflow-next__label {
+    color: var(--color-text-faint);
+  }
+</style>
