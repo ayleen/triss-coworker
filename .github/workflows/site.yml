@@ -98,6 +98,7 @@ jobs:
         with:
           name: site-quality-evidence
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 7
           path: |
             site/dist
