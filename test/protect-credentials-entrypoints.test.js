@@ -5,15 +5,16 @@
  * protect-credentials-entrypoints.test.js — public contract for the
  * credential-mode switch (docs/plans/2025-protect-credentials-default.md):
  *
- *   | engine    | without the flag | with --protect-credentials        |
- *   |-----------|------------------|-----------------------------------|
- *   | opencode  | best_effort_raw  | protected_proxy                   |
- *   | opencode2 | best_effort_raw  | protected_proxy                   |
- *   | crush     | protected_proxy  | protected_proxy (flag is a no-op) |
+ *   | engine    | without a choice  | true / false explicit choice       |
+ *   |-----------|-------------------|------------------------------------|
+ *   | opencode  | best_effort_raw   | protected_proxy / best_effort_raw  |
+ *   | opencode2 | best_effort_raw   | protected_proxy / best_effort_raw  |
+ *   | crush     | protected_proxy   | protected_proxy / best_effort_raw  |
  *
  * Covers the user-facing entry points (--protect-credentials on `coder run`,
  * `coder init`, and `exec --code`; --coder-protect-credentials on
- * `config wizard coder`) and the crush engine's unchanged mandatory proxy.
+ * `config wizard coder`) and crush's recommended-by-default proxy that an
+ * explicit false choice overrides.
  */
 
 import test from 'node:test';
@@ -60,13 +61,13 @@ test('help: triss coder run documents --protect-credentials', () => {
   const out = help(['coder', 'run']);
   assert.match(out, /--protect-credentials/u);
   assert.match(out, /parent-owned credential proxy/u);
-  assert.match(out, /Crush is always protected/u);
+  assert.match(out, /--no-protect-credentials/u);
 });
 
 test('help: triss coder init documents --protect-credentials', () => {
   const out = help(['coder', 'init']);
   assert.match(out, /--protect-credentials/u);
-  assert.match(out, /Fails closed when protected credential isolation cannot be enforced/u);
+  assert.match(out, /best-effort with a/u);
 });
 
 test('help: triss exec forwards --protect-credentials for the coder route', () => {
@@ -80,7 +81,7 @@ test('help: config wizard documents --coder-protect-credentials', () => {
   assert.match(out, /coder init.*uses --protect-credentials/u);
 });
 
-// ─── Crush: the mandatory parent-owned proxy is unchanged by the flag ────────
+// ─── Crush: recommended-by-default proxy; explicit false runs raw ──────────
 
 const CRUSH_PIN_SH = (cmd, argv) => {
   if (cmd === 'crush' && argv?.[0] === '--version') {
@@ -90,25 +91,29 @@ const CRUSH_PIN_SH = (cmd, argv) => {
 };
 
 for (const [label, extraOpts] of [
-  ['without the flag (crush is always protected)', {}],
-  ['with --protect-credentials (a documented no-op for crush)', { protectCredentials: true }],
+  ['without a choice (crush defaults to the recommended proxy)', {}],
+  ['with --protect-credentials', { protectCredentials: true }],
 ]) {
-  test(`crush run still requires the parent-owned proxy ${label}`, async (t) => {
+  test(`crush run requires the parent-owned proxy ${label}`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'triss-crush-cred-'));
     const saved = {
       HOME: process.env.HOME,
       ROOT: process.env.TRISS_PROJECT_ROOT,
       ZHIPU: process.env.ZHIPU_API_KEY,
+      DEFAULT_PROVIDER: process.env.TRISS_DEFAULT_PROVIDER,
     };
     process.env.HOME = dir;
     process.env.TRISS_PROJECT_ROOT = dir;
     process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
+    process.env.TRISS_DEFAULT_PROVIDER = 'zai';
     t.after(() => {
       process.env.HOME = saved.HOME;
       if (saved.ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
       else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
       if (saved.ZHIPU === undefined) delete process.env.ZHIPU_API_KEY;
       else process.env.ZHIPU_API_KEY = saved.ZHIPU;
+      if (saved.DEFAULT_PROVIDER === undefined) delete process.env.TRISS_DEFAULT_PROVIDER;
+      else process.env.TRISS_DEFAULT_PROVIDER = saved.DEFAULT_PROVIDER;
       rmSync(dir, { recursive: true, force: true });
     });
 
@@ -135,9 +140,62 @@ for (const [label, extraOpts] of [
       }),
       /credential proxy.*failed to start|requires the parent-owned/iu,
     );
-    assert.equal(spawned, false, 'crush must never spawn with a raw credential');
+    assert.equal(spawned, false, 'the protected crush run must never reach a raw spawn');
   });
 }
+
+test('crush run with an explicit false choice proceeds without the proxy (raw native run)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-crush-raw-'));
+  const saved = {
+    HOME: process.env.HOME,
+    ROOT: process.env.TRISS_PROJECT_ROOT,
+    ZHIPU: process.env.ZHIPU_API_KEY,
+    DEFAULT_PROVIDER: process.env.TRISS_DEFAULT_PROVIDER,
+    USAGE: process.env.TRISS_USAGE_LOG,
+  };
+  process.env.HOME = dir;
+  process.env.TRISS_PROJECT_ROOT = dir;
+  process.env.ZHIPU_API_KEY = 'zk-fake-test-key';
+  process.env.TRISS_DEFAULT_PROVIDER = 'zai';
+  process.env.TRISS_USAGE_LOG = '0';
+  t.after(() => {
+    process.env.HOME = saved.HOME;
+    if (saved.ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
+    if (saved.ZHIPU === undefined) delete process.env.ZHIPU_API_KEY;
+    else process.env.ZHIPU_API_KEY = saved.ZHIPU;
+    if (saved.DEFAULT_PROVIDER === undefined) delete process.env.TRISS_DEFAULT_PROVIDER;
+    else process.env.TRISS_DEFAULT_PROVIDER = saved.DEFAULT_PROVIDER;
+    if (saved.USAGE === undefined) delete process.env.TRISS_USAGE_LOG;
+    else process.env.TRISS_USAGE_LOG = saved.USAGE;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const { runCoderRun } = await import('../src/commands/coder.js');
+  let spawned = false;
+  await assert.rejects(
+    () => runCoderRun('do work', {
+      engine: 'crush',
+      protectCredentials: false,
+      isolate: false,
+      timeout: 5,
+      cwd: dir,
+    }, {
+      spawnSync: CRUSH_PIN_SH,
+      providerConfigSnapshot: createProviderConfigSnapshot({ parentEnv: process.env, files: [] }),
+      // The spawn sentinel proves the run got PAST the proxy requirement and
+      // reached the raw native spawn with the run-scoped config.
+      spawn: () => {
+        spawned = true;
+        throw new Error('spawn-sentinel-reached');
+      },
+      credentialProxyOptions: { host: '256.256.256.256', port: -1 },
+      stdoutWrite: () => {},
+    }),
+    /spawn-sentinel-reached/u,
+  );
+  assert.equal(spawned, true, 'an explicit raw choice must reach the native spawn');
+});
 
 // ─── status surfaces report the RESOLVED mode, never a hardcoded one ──────────
 
@@ -173,7 +231,7 @@ test('MCP coderStatusHandler renders mode + MCP-specific remediation for both fa
   process.env.TRISS_CODER_ENGINE = 'crush';
   const crushOut = await coderStatusHandler();
   assert.match(crushOut, /Default credential mode: protected_proxy/u);
-  assert.match(crushOut, /Protected mode: always on \(crush is always protected\)/u);
+  assert.match(crushOut, /Protected mode: default on \(crush\)/u);
   assert.doesNotMatch(crushOut, /protectCredentials: true/u);
 
   process.env.TRISS_CODER_ENGINE = 'opencode';

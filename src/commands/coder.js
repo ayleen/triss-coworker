@@ -890,7 +890,18 @@ export function normalizeProviderFlag(raw) {
 
 // Coder shares the same explicit default provider as every model-backed command.
 function providerFromEnv() {
-  return readProviderConfigSnapshot().defaultProvider.value;
+  const snapshot = readProviderConfigSnapshot();
+  const configured = snapshot.defaultProvider;
+  // A single unambiguous configured provider is proposed without re-asking:
+  // when the configured default has no credential but exactly one canonical
+  // provider credential exists, that provider is the obvious setup target.
+  if (configured.source !== 'registry-default' || snapshot.providers[configured.value]?.credential?.value) {
+    return configured.value;
+  }
+  const withCredential = listProviderDefinitions()
+    .filter((definition) => snapshot.providers[definition.id]?.credential?.value)
+    .map((definition) => definition.id);
+  return withCredential.length === 1 ? withCredential[0] : configured.value;
 }
 
 function inferCoderProvider() {
@@ -926,18 +937,13 @@ function resolveWizardCoderEngine(opts = {}) {
 }
 
 async function resolveWizardCoderProvider(opts = {}, engine) {
-  if (engine === 'crush') {
-    const want = opts.coderProvider ? normalizeProviderFlag(opts.coderProvider) : 'zai';
-    if (want !== 'zai') {
-      throw new Error(
-        `The crush engine supports Z.A.I only — \`--coder-provider ${opts.coderProvider}\` requires another engine.`,
-      );
-    }
-    return 'zai';
-  }
   if (opts.coderProvider) return normalizeProviderFlag(opts.coderProvider);
   if (opts.coderModel) return coderModelCredential(opts.coderModel).provider;
-  return providerFromEnv();
+  const fromEnv = providerFromEnv();
+  if (fromEnv) return fromEnv;
+  // No configured default: the coding provider defaults to the shared
+  // provider snapshot's registry default rather than a hardcoded vendor.
+  return engine === 'crush' ? 'zai' : 'openai-compatible';
 }
 
 // Per-provider key descriptor for setupKey / the init prompt.
@@ -1265,16 +1271,6 @@ export async function runCoderInit(opts = {}, deps = {}) {
     return runOpenCode2Init(opts, deps);
   }
   const explicitProvider = opts.provider ? normalizeProviderFlag(opts.provider) : null;
-  // The provider choice applies to the opencode engine only — crush speaks
-  // Z.AI GLM exclusively using the canonical ZHIPU_API_KEY. A non-zai
-  // --provider with --engine crush is a contradiction, so reject
-  // it rather than silently ignoring the flag.
-  if (engine === 'crush' && explicitProvider && explicitProvider !== 'zai') {
-    throw new Error(
-      `The crush engine supports Z.AI GLM only — \`--provider ${opts.provider}\` requires the ` +
-        'opencode engine. Drop --engine crush (or use --provider zai).',
-    );
-  }
   if (
     opts.allowUnverified
     && explicitProvider !== 'opencode-go'
@@ -1284,9 +1280,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
         '(alias: `--provider go`).',
     );
   }
-  const provider = engine === 'crush'
-    ? 'zai'
-    : explicitProvider || await resolveInitProvider(opts, deps);
+  const provider = explicitProvider || await resolveInitProvider(opts, deps);
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope('Where to save the coder key and config?');
   if (provider === 'openai-compatible') {
@@ -1390,9 +1384,17 @@ export async function runCoderInit(opts = {}, deps = {}) {
         }
       }
     }
-    const hint = crushEngine.crushDefaultModelsHint();
+    // Pin the SELECTED provider's models (from the canonical profile — the
+    // key was just written by setupKey above) so `--role smart`/`--role fast`
+    // resolve deterministically for any provider, not just Z.AI.
+    const crushProfile = readProviderConfigSnapshot().providers[provider];
+    const bareAtom = (atom) => (typeof atom?.value === 'string' && atom.value.includes('/')
+      ? atom.value.slice(atom.value.indexOf('/') + 1)
+      : atom?.value);
+    const largeModel = bareAtom(crushProfile?.model) || getProviderDefinition(provider).defaults.model;
+    const smallModel = bareAtom(crushProfile?.smallModel) || getProviderDefinition(provider).defaults.smallModel;
     process.stderr.write(
-      pc.dim(`  · default models: ${hint.large} (large) / ${hint.small} (small)\n`),
+      pc.dim(`  · default models: ${largeModel} (large) / ${smallModel} (small)\n`),
     );
     // Only run the models write when the installed binary is actually READY
     // (present AND meets the effective minimum); otherwise the advisory above
@@ -1400,7 +1402,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // be exactly the drift this gate removes. Non-fatal: a non-zero exit
     // returns {ok:false} and is surfaced yellow, never thrown (init exits 0).
     if (crushReady) {
-      const res = crushEngine.configureCrushModels({ scope, sh });
+      const res = crushEngine.configureCrushModels({ scope, large: largeModel, small: smallModel, sh });
       process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
       // Seed permissions.run AFTER `crush models use` has written the models
       // block — read-modify-write so we MERGE, never clobber it. Skipped
@@ -1751,7 +1753,7 @@ async function setupKey(path, provider = 'zai', opts = {}) {
 export async function runCoderSetup(input = {}, deps = {}) {
   loadEnvFiles();
   const resolvedScope = input.scope || 'global';
-  const resolvedProvider = input.provider || (input.engine === 'crush' ? 'zai' : inferCoderProvider());
+  const resolvedProvider = input.provider || inferCoderProvider();
   // `config wizard coder` enters through this public boundary after writing
   // the selected credential to an env file. The mode is resolved by the ONE
   // shared resolver from explicit intent — the wizard forwards
@@ -2301,39 +2303,6 @@ export function resolveCrushRestrict(opts = {}) {
   return CRUSH_RESTRICT_DEFAULT;
 }
 
-// ─── credential proxy endpoint resolution ──────────────────────────────────
-//
-// The production run path must start the parent-owned loopback credential
-// proxy BEFORE spawning either engine and hand the child only the one-run
-// token + loopback base URL (never the raw credential). These helpers map
-// the resolved credential env key to the canonical upstream ORIGIN (no API
-// path — the engine sends the prefix verbatim, so a path here would double
-// it), the OpenAI-compatible path prefix the proxy pins, and the upstream
-// auth style. `engineRedirect` names whether the spawned engine can be
-// verifiably pinned to the proxy; 'none' means the engine would present the
-// one-run token to the REAL upstream (guaranteed auth failure), so the run
-// fails closed before spawn instead.
-export function coderCredentialEndpoint(credEnv, modelUsed) {
-  const route = resolveCoderProviderRoute(modelUsed);
-  if (!route || route.credentialEnv !== credEnv) return null;
-  const configured = readProviderConfigSnapshot().providers[route.provider];
-  const baseUrl = configured?.endpoint?.value;
-  if (!baseUrl) return null;
-  const parsed = new URL(baseUrl);
-  const result = {
-    endpoint: parsed.origin,
-    pathPrefix: parsed.pathname.replace(/\/+$/, '') || '/',
-  };
-  if (route.provider === 'opencode-zen' || route.provider === 'opencode-go') {
-    result.engineRedirectEnv = 'OPENCODE_BASE_URL';
-  } else if (route.provider === 'moonshot') {
-    result.engineRedirect = 'none';
-  } else if (route.provider === 'kimi-for-coding') {
-    result.authStyle = 'anthropic';
-    result.engineRedirect = 'none';
-  }
-  return result;
-}
 
 // Resolve the canonical route once for a run. Operator-configured endpoints
 // come from the immutable provider snapshot.
@@ -2377,7 +2346,7 @@ function buildOpenCodeEnvelopeRouting({
   canonical,
   routingContext,
 }) {
-  const requestedProvider = route?.provider || credential?.provider || 'zai';
+  const requestedProvider = route?.provider || credential?.provider || 'unknown';
   const usesTransient = Boolean(canonical && route);
   return {
     requested_model: modelUsed,
@@ -4923,18 +4892,67 @@ function spawnCrush({
 // this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
 // / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
 // envelope shape as the opencode path so callers are engine-agnostic.
-function createCrushProtectedRuntimeConfig(proxy, nativeModel) {
+// Run-scoped crush config for ANY canonical provider: protected mode pins the
+// loopback proxy, an explicit raw run pins the real configured upstream with
+// the real selected credential forwarded only through the native $ENV
+// reference. The provider key is the canonical Triss provider id.
+function createCrushRuntimeConfig({
+  proxy,
+  smallProxy,
+  rawCredentialValue,
+  route,
+  smallRoute,
+  nativeModel,
+  smallModelId,
+  providerId,
+  credentialEnv,
+}) {
   const root = join(projectRoot(), '.triss', 'crush', 'runs', `run_${randomBytes(16).toString('hex')}`);
   const configDir = join(root, 'config');
   const dataDir = join(root, 'data');
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const upstreamFor = (aRoute, aProxy) => (aProxy
+    ? aProxy.scopedBaseUrl
+    : `${aRoute.endpoint}${aRoute.pathPrefix === '/' ? '' : aRoute.pathPrefix}`);
+  const separateSmall = Boolean(
+    smallModelId && smallRoute && !coderRoutesShareTransport(smallRoute, route),
+  );
+  const sameProviderSmall = smallModelId && !separateSmall ? smallModelId : null;
+  const config = crushEngine.buildProtectedProviderConfig(
+    upstreamFor(route, proxy),
+    nativeModel,
+    {
+      providerId,
+      credentialEnv,
+      protocol: route.protocol,
+      smallModel: sameProviderSmall,
+    },
+  );
+  if (separateSmall) {
+    const smallProviderId = `${providerId}-small`;
+    const smallConfig = crushEngine.buildProtectedProviderConfig(
+      upstreamFor(smallRoute, smallProxy),
+      smallModelId,
+      { providerId: smallProviderId, credentialEnv, protocol: smallRoute.protocol },
+    );
+    config.providers[smallProviderId] = smallConfig.providers[smallProviderId];
+    config.models.small = smallConfig.models.large;
+  }
   writeFileSync(
     join(configDir, 'crush.json'),
-    JSON.stringify(crushEngine.buildProtectedProviderConfig(proxy.scopedBaseUrl, nativeModel), null, 2) + '\n',
+    JSON.stringify(config, null, 2) + '\n',
     { mode: 0o600 },
   );
-  return { root, configDir, dataDir };
+  return {
+    root,
+    configDir,
+    dataDir,
+    credentialEnv,
+    providerId,
+    nativeModel,
+    ...(rawCredentialValue !== undefined ? { rawCredentialValue } : {}),
+  };
 }
 
 async function runCrushFlow({
@@ -4951,7 +4969,8 @@ async function runCrushFlow({
   credentialProxy = null,
   crushRuntimeConfig = null,
   sessionV2 = null,
-  // Already resolved by runCoderRun — crush is always protected_proxy.
+  // Resolved by runCoderRun over the shared tri-state resolver; crush
+  // defaults to protected_proxy but honors an explicit raw choice.
   credentialMode,
   // Resolved AND asserted by runCoderRun BEFORE isolation/proxy/session side
   // effects. REQUIRED for a spawn to be reachable; the fallback re-resolve
@@ -4959,6 +4978,7 @@ async function runCrushFlow({
   crushPolicy = null,
   modelOverride = null,
   canonicalModel = null,
+  usageProvider = null,
 }) {
   assertCoderCredentialMode(credentialMode);
   let crushSpawnStartMs;
@@ -4996,8 +5016,17 @@ async function runCrushFlow({
         baseUrl: credentialProxy.scopedBaseUrl,
         configDir: crushRuntimeConfig?.configDir,
         dataDir: crushRuntimeConfig?.dataDir,
+        credentialEnv: crushRuntimeConfig?.credentialEnv,
       }
-      : deps.proxy || null,
+      : crushRuntimeConfig
+        ? {
+          rawCredentialValue: crushRuntimeConfig.rawCredentialValue,
+          rawBaseUrl: 'run-scoped',
+          configDir: crushRuntimeConfig.configDir,
+          dataDir: crushRuntimeConfig.dataDir,
+          credentialEnv: crushRuntimeConfig.credentialEnv,
+        }
+        : deps.proxy || null,
   );
 
   // Version policy was ASSERTED upstream (runCoderRun) before any side effect:
@@ -5012,6 +5041,7 @@ async function runCrushFlow({
     pc.dim(
       '[coder run] engine=crush' +
         (canonicalModel ? ` model=${canonicalModel}` : '') +
+        (usageProvider && usageProvider !== 'crush' ? ` provider=${usageProvider}` : '') +
         (isolation ? ` isolate=${isolation.wtPath}` : '') +
         '\n',
     ),
@@ -5146,10 +5176,10 @@ async function runCrushFlow({
     model: canonicalModel || 'crush',
     billing_model: crushBillingModel,
     billing_mode: 'unknown',
-    // The schema documents Crush runs as Z.AI (provider `zai`, engine
-    // `crush`). The `crush` sentinel model has no provider prefix for
-    // resolveProvider to read, so the provider must be forwarded explicitly.
-    provider: 'zai',
+    // The usage provider is the actually selected canonical provider — never
+    // a hardcoded Z.AI label. The `crush` sentinel model (no model identity
+    // known) keeps the engine-only provider.
+    provider: usageProvider || 'crush',
     usage_source: 'crush',
     engine: 'crush',
     usage_status,
@@ -5355,12 +5385,6 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   if (opts.smallModel) {
     throw new Error(
       '--small-model has been removed; configure the selected provider smallModel role instead.',
-    );
-  }
-  const selectedProvider = selection.model?.providerId || selection.provider;
-  if (engine === 'crush' && selectedProvider && selectedProvider !== 'zai') {
-    throw new Error(
-      `The crush engine supports only provider "zai" (got "${selectedProvider}").`,
     );
   }
   // OMP has no --agent launch flag; fail-closed per plan §4.3.
@@ -6126,29 +6150,26 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     );
   }
 
-  // Credential selection follows the canonical provider route. Crush supports
-  // only Z.A.I and therefore always requires ZHIPU_API_KEY.
-
-  const cred = engine === 'crush'
-    ? { env: 'ZHIPU_API_KEY', provider: 'zai' }
-    : coderModelCredential(modelUsed);
+  // Credential selection follows the canonical provider route for EVERY
+  // engine — crush included; its run-scoped native config maps any canonical
+  // provider onto a crush provider block with a native $ENV credential
+  // reference.
+  const cred = coderModelCredential(modelUsed);
   const protectedRouting = engine !== 'crush' && credentialMode === 'protected_proxy';
   const smallModelUsed = oneShotSmallModel;
-  const baseRouteCandidate = engine !== 'crush'
-    ? resolveRuntimeCoderProviderRoute(modelUsed, undefined, { requireAudited: protectedRouting })
-    : null;
+  const baseRouteCandidate = resolveRuntimeCoderProviderRoute(modelUsed, undefined, { requireAudited: false });
   const routeCandidate = projectConfiguredEndpoint(
     baseRouteCandidate,
     selectedModel.route.endpoint.value,
   );
-  const baseSmallRouteCandidate = engine !== 'crush' && engine !== 'opencode2'
-    ? resolveRuntimeCoderProviderRoute(smallModelUsed, undefined, { requireAudited: protectedRouting })
+  const baseSmallRouteCandidate = engine !== 'opencode2'
+    ? resolveRuntimeCoderProviderRoute(smallModelUsed, undefined, { requireAudited: false })
     : baseRouteCandidate;
   const smallRouteCandidate = projectConfiguredEndpoint(
     baseSmallRouteCandidate,
     selectedSmallModel.route.endpoint.value,
   );
-  if (engine !== 'crush' && (!routeCandidate || !smallRouteCandidate)) {
+  if (!routeCandidate || !smallRouteCandidate) {
     throw new Error(
       `The selected canonical provider route could not be projected: "${modelUsed}" / "${smallModelUsed}".`,
     );
@@ -6157,10 +6178,29 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     !routeCandidate.transportAudited ||
     (engine !== 'opencode2' && !smallRouteCandidate.transportAudited)
   )) {
+    const detail = routeCandidate.unsupportedTransport || 'the model has no audited protocol/package metadata';
     throw new Error(
-      `Protected routing has no audited transport for "${modelUsed}" / "${smallModelUsed}".`,
+      `Protected routing has no audited transport for "${modelUsed}" / "${smallModelUsed}"; ${detail}. ` +
+        'Rerun without --protect-credentials to use the built-in provider under the default best_effort_raw mode, ' +
+        'or set TRISS_MODEL_TRANSPORTS for the exact model.',
     );
   }
+  // Crush projects every provider onto its run-scoped native config, so the
+  // selected model must resolve a concrete wire protocol.
+  if (engine === 'crush' && !routeCandidate.protocol) {
+    const detail = routeCandidate.unsupportedTransport
+      || `model "${modelUsed}" has no transport metadata`;
+    throw new Error(
+      `The crush engine needs a concrete wire protocol and ${detail}. ` +
+        `Set TRISS_MODEL_TRANSPORTS='{"${modelUsed}": "openai-chat" | "openai-responses" | "anthropic-messages"}' ` +
+        'for this exact model, or run it on a model with known transport metadata.',
+    );
+  }
+  // Crush small model: when its audited transport differs from the main
+  // model's, it gets its own provider block + scoped proxy route instead of
+  // being silently rerouted through the main protocol.
+  const crushSeparateSmallTransport = engine === 'crush' &&
+    !coderRoutesShareTransport(smallRouteCandidate, routeCandidate);
   const credentialValue = selectedModel.route.credential.value;
   const rawBuiltInRoute = credentialMode === 'best_effort_raw' &&
     ['opencode-zen', 'opencode-go'].includes(routeCandidate?.provider) &&
@@ -6198,7 +6238,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const alt = '';
     throw new Error(`${cred.env} is not set — run \`triss coder init\` first.${suffix}${alt}`);
   }
-  const rawCredentialWarning = engine !== 'crush' && credentialMode === 'best_effort_raw'
+  const rawCredentialWarning = credentialMode === 'best_effort_raw'
     ? CREDENTIAL_ISOLATION_DOWNGRADED_WARNING
     : null;
   if (rawCredentialWarning) {
@@ -6417,8 +6457,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       const downgradeHint = engine !== 'crush'
         ? 'Move the credentials into your shell environment, or rerun without --protect-credentials ' +
           'to use the default best-effort mode.'
-        : 'Move the credentials into your shell environment — the crush engine always requires ' +
-          'protected credential routing.';
+        : 'Move the credentials into your shell environment, or pass --no-protect-credentials ' +
+          'to run crush with the selected raw credential (best-effort).';
       throw new Error(
         `credential isolation unavailable: the raw credential store(s) ${readableStores.join(', ')} ` +
           `are readable by the same-UID engine child, so the loopback token proxy alone cannot ` +
@@ -6428,7 +6468,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   }
 
   const proxyTarget = engine === 'crush'
-    ? coderCredentialEndpoint(cred.env, modelUsed)
+    ? {
+      endpoint: routeCandidate.endpoint,
+      pathPrefix: routeCandidate.pathPrefix,
+      protocol: routeCandidate.protocol,
+    }
     : protectedRouting
       ? runtimeRoute
       : null;
@@ -6461,7 +6505,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         `proxy token the upstream would reject`,
     );
   }
-  const proxyRequired = engine === 'crush' || protectedRouting;
+  // Crush defaults to the recommended protected proxy, but an explicit false
+  // choice (CLI --no-protect-credentials, MCP boolean false, persisted
+  // tri-state false) runs raw through the same run-scoped native config with
+  // the real selected credential in the child env.
+  const proxyRequired = (engine === 'crush' && credentialMode === 'protected_proxy') || protectedRouting;
+  // Crush speaks Chat Completions natively against custom providers; when the
+  // model's audited upstream wire protocol is the Responses API, the proxy
+  // provides the bounded chat→responses bridge instead of substituting a
+  // different engine or model.
+  const crushBridge = engine === 'crush' && routeCandidate.protocol === 'openai_responses'
+    ? 'chat-to-responses'
+    : null;
   if (proxyRequired && !deps.disableCredentialProxy && proxyTarget) {
     try {
       credentialProxy = await startCredentialProxy({
@@ -6479,7 +6534,8 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           : undefined,
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,
-        protocol: proxyTarget.protocol,
+        protocol: engine === 'crush' && !crushBridge ? proxyTarget.protocol : 'openai_chat',
+        bridge: crushBridge || undefined,
         authStyle: proxyTarget.authStyle,
         credential: credentialValue,
         deadlineMs: (timeoutSec + 60) * 1000,
@@ -6488,16 +6544,22 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       // OpenCode 1 and OMP can retain a distinct small-model role. If its
       // audited transport differs from main, give it a separate scoped
       // loopback route; both proxies intentionally share the one-run token
-      // because the child has one credential environment variable.
-      if (separateSmallTransport) {
+      // because the child has one credential environment variable. Crush does
+      // the same when its small model resolves a different wire protocol.
+      if (separateSmallTransport || crushSeparateSmallTransport) {
         smallCredentialProxy = await startCredentialProxy({
           provider: cred.provider || cred.env,
-          model: transientModelName(runtimeSmallRoute, transientRoutingContext),
-          models: [runtimeSmallRoute.modelId],
-          endpoint: runtimeSmallRoute.endpoint,
-          pathPrefix: runtimeSmallRoute.pathPrefix,
-          protocol: runtimeSmallRoute.protocol,
-          authStyle: runtimeSmallRoute.authStyle,
+          model: engine === 'crush' ? smallModelUsed : transientModelName(runtimeSmallRoute, transientRoutingContext),
+          models: [engine === 'crush' ? smallRouteCandidate.modelId : runtimeSmallRoute.modelId],
+          endpoint: smallRouteCandidate.endpoint,
+          pathPrefix: smallRouteCandidate.pathPrefix,
+          protocol: engine === 'crush' && smallRouteCandidate.protocol !== 'openai_responses'
+            ? smallRouteCandidate.protocol
+            : 'openai_chat',
+          bridge: engine === 'crush' && smallRouteCandidate.protocol === 'openai_responses'
+            ? 'chat-to-responses'
+            : undefined,
+          authStyle: smallRouteCandidate.authStyle,
           credential: credentialValue,
           token: credentialProxy.token,
           deadlineMs: (timeoutSec + 60) * 1000,
@@ -6611,9 +6673,20 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   if (engine === 'crush') {
     let crushRuntimeConfig;
     try {
-      if (credentialProxy) {
-        crushRuntimeConfig = createCrushProtectedRuntimeConfig(credentialProxy, selectedModel.nativeModel);
-      }
+      // Every crush run — protected OR explicitly raw — rides the same
+      // run-scoped native config; only the base URL and the credential value
+      // behind the $ENV reference differ.
+      crushRuntimeConfig = createCrushRuntimeConfig({
+        proxy: credentialProxy,
+        smallProxy: crushSeparateSmallTransport ? smallCredentialProxy : null,
+        rawCredentialValue: credentialMode === 'best_effort_raw' ? credentialValue : undefined,
+        route: routeCandidate,
+        smallRoute: smallRouteCandidate,
+        nativeModel: selectedModel.nativeModel,
+        smallModelId: selectedSmallModel.nativeModel,
+        providerId: selectedModel.providerId,
+        credentialEnv: cred.env,
+      });
       // Pre-spawn revalidation: reserved -> running under the leases, and a
       // hijack/foreign-tuple claim fails closed before any engine spawn.
       await revalidateV2SessionRowBeforeSpawn(sessionV2);
@@ -6629,9 +6702,11 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         slug,
         timeoutSec,
         credentialProxy,
+        smallCredentialProxy: crushSeparateSmallTransport ? smallCredentialProxy : null,
         crushRuntimeConfig,
-        modelOverride: opts.model ? `zai/${selectedModel.nativeModel}` : null,
+        modelOverride: opts.model ? selectedModel.publicModel : null,
         canonicalModel: opts.model ? selectedModel.publicModel : null,
+        usageProvider: selectedModel.providerId,
         sessionV2,
         credentialMode,
         // Resolved + asserted in runCoderRun BEFORE any side effect; runCrushFlow

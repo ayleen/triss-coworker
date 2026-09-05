@@ -146,7 +146,7 @@ export async function runStatus(deps = {}) {
     lines.push(
       credMode === 'best_effort_raw'
         ? '  protected credential mode     pass --protect-credentials'
-        : '  protected credential mode     always on (crush)',
+        : '  protected credential mode     default on (crush); --no-protect-credentials for raw',
     );
     // Shared provider roles used by an unqualified coder run.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);

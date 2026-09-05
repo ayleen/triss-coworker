@@ -1191,10 +1191,11 @@ export async function coderStatusHandler() {
     `Default engine: ${status.defaultEngine}`,
     `Default credential mode: ${status.defaultCredentialMode}`,
     // MCP-specific remediation: an MCP client passes the boolean input, not
-    // the CLI flag. Crush never accepts raw credentials.
+    // the CLI flag. Tri-state: absent keeps the engine default, an explicit
+    // boolean is honored for every engine including crush.
     status.defaultCredentialMode === 'best_effort_raw'
       ? 'Protected mode: set protect_credentials: true'
-      : 'Protected mode: always on (crush is always protected)',
+      : 'Protected mode: default on (crush); pass protect_credentials: false for an explicitly raw run',
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — resolved from the shared default provider roles`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${

@@ -12,7 +12,6 @@
 // means another engine can be added as a sibling with the same member shape.
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
-import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 
 // Hard supported floor for the npm package. The semver-parse fix landed in
 // 0.1.3 (crush ≥0.1.3 reports a clean `crush version vX.Y.Z`), so the shared
@@ -27,14 +26,6 @@ import { ZAI_CODING_PLAN_BASE_URL } from '../zai.js';
 const CRUSH_SUPPORTED_FLOOR = '0.1.6';
 
 // crush selects models by "atoms". For GLM the large atom is glm5_2 (GLM-5.2)
-// and the small atom is glm5_turbo (GLM-5-turbo). `crush models use <large>
-// <small> [--global|--local]` writes crush.json so `--role smart` -> large and
-// `--role fast` -> small deterministically. Without this, crush may resolve to
-// a non-GLM default atom (e.g. an Anthropic-via-local-claude-CLI atom) — so
-// pinning these atoms is the ONE thing crush init must do beyond the shared
-// ZHIPU_API_KEY setup. Kept as constants so a future model bump is one edit.
-const CRUSH_LARGE_ATOM = 'glm5_2';
-const CRUSH_SMALL_ATOM = 'glm5_turbo';
 
 // Configured-minimum policy, read from TRISS_CODER_CRUSH_VERSION ONLY (no
 // probing). THE single source both crushVersionPin() (display/install advice)
@@ -343,60 +334,105 @@ export function buildCrushRunArgv({
 // buildCrushSpawnEnv: minimal allowlist env for the crush subprocess. NEVER
 // spread process.env — only what crush needs.
 //
-// Canonical Triss configuration uses `ZHIPU_API_KEY`. Protected projection
-// creates a run-private Crush `zai` provider pointed at the credential proxy,
-// then places only the single-run token in Crush's engine-native ZAI_API_KEY.
-// The child never receives the real credential. NEVER log the value.
+// The run-scoped crush config references the selected provider's credential
+// through a native `$ENV_NAME` variable reference. Protected projection puts
+// ONLY the single-run proxy token there; an explicitly chosen raw run puts the
+// real selected credential there (selected-secret-only forwarding — no other
+// provider's key is ever placed in the child env). NEVER log the value.
 export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
   const env = {};
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) {
     if (baseEnv[key] != null) env[key] = baseEnv[key];
   }
-  // Credential proxy: when a proxy plan exists, the engine
-  // receives the single-run proxy token in the API-key variables plus the
-  // loopback base URL — never the real provider credential.
-  if (proxy && proxy.token && proxy.baseUrl) {
-    env.ZAI_API_KEY = proxy.token;
+  const credentialEnv = proxy?.credentialEnv || 'ZAI_API_KEY';
+  if (proxy && (proxy.token || proxy.rawCredentialValue) && (proxy.baseUrl || proxy.rawBaseUrl)) {
+    if (proxy.token) env[credentialEnv] = proxy.token;
+    else if (proxy.rawCredentialValue) env[credentialEnv] = proxy.rawCredentialValue;
     env.CRUSH_GLOBAL_CONFIG = proxy.configDir;
     env.CRUSH_GLOBAL_DATA = proxy.dataDir;
     return env;
   }
+  // No run-scoped plan: fall back to the canonical zai pairing only when the
+  // caller supplied nothing more specific.
   if (baseEnv.ZHIPU_API_KEY) {
-    env.ZHIPU_API_KEY = baseEnv.ZHIPU_API_KEY;
+    env.ZAI_API_KEY = baseEnv.ZHIPU_API_KEY;
   }
   return env;
 }
 
-export function buildCrushProtectedProviderConfig(baseUrl, model) {
-  if (typeof baseUrl !== 'string' || !baseUrl.startsWith('http://127.0.0.1:')) {
-    throw new Error('Crush protected provider config requires a loopback proxy URL');
+// Native provider `type` per wire protocol. Verified against the installed
+// @phpcraftdream/crush 0.1.6 with a local protocol mock: `openai-compat` and
+// `openai` both speak Chat Completions against a custom base_url, and
+// `anthropic` speaks Anthropic Messages. Responses-protocol upstreams ride a
+// chat→responses bridge in the credential proxy, so the engine-side type is
+// always openai-compat for OpenAI-family wire protocols.
+const CRUSH_TYPE_BY_PROTOCOL = Object.freeze({
+  openai_chat: 'openai-compat',
+  openai_responses: 'openai-compat',
+  anthropic_messages: 'anthropic',
+});
+
+export function crushProviderTypeForProtocol(protocol) {
+  const type = CRUSH_TYPE_BY_PROTOCOL[protocol];
+  if (!type) {
+    throw new Error(
+      `Crush has no native provider type for protocol "${String(protocol)}". ` +
+        'Set TRISS_MODEL_TRANSPORTS for this exact model or pick a model with known transport metadata.',
+    );
+  }
+  return type;
+}
+
+/**
+ * Build the run-scoped crush.json provider projection.
+ *
+ * The provider key is the canonical Triss provider id (crush allows arbitrary
+ * provider keys), the api_key is a native `$ENV_NAME` variable reference — the
+ * real key or proxy token never lands in the JSON — and the native provider
+ * `type` follows the resolved wire protocol. `baseUrl` is either the loopback
+ * proxy (protected mode) or the real configured upstream (explicit raw mode).
+ */
+export function buildCrushProtectedProviderConfig(baseUrl, model, {
+  providerId = 'zai',
+  credentialEnv = 'ZAI_API_KEY',
+  protocol = 'openai_chat',
+  smallModel = null,
+} = {}) {
+  if (typeof baseUrl !== 'string' || !/^https?:\/\//.test(baseUrl)) {
+    throw new Error('Crush provider config requires an http(s) base URL');
   }
   if (typeof model !== 'string' || !model.trim()) {
-    throw new Error('Crush protected provider config requires a native model');
+    throw new Error('Crush provider config requires a native model');
   }
+  const type = crushProviderTypeForProtocol(protocol);
+  const modelEntries = [model, ...(smallModel && smallModel !== model ? [smallModel] : [])]
+    .map((id) => ({
+      id,
+      name: id,
+      context_window: 200_000,
+      default_max_tokens: 65_536,
+      can_reason: true,
+      reasoning_levels: ['low', 'medium', 'high'],
+      default_reasoning_effort: 'high',
+    }));
   return {
     options: {
       disable_provider_auto_update: true,
       disable_metrics: true,
     },
     models: {
-      large: { model, provider: 'zai' },
-      small: { model, provider: 'zai' },
+      large: { model, provider: providerId },
+      ...(smallModel && smallModel !== model
+        ? { small: { model: smallModel, provider: providerId } }
+        : { small: { model, provider: providerId } }),
     },
     providers: {
-      zai: {
+      [providerId]: {
         base_url: baseUrl,
-        api_key: '$ZAI_API_KEY',
+        api_key: `$${credentialEnv}`,
+        type,
         discover_models: false,
-        models: [{
-          id: model,
-          name: model,
-          context_window: 200_000,
-          default_max_tokens: 65_536,
-          can_reason: true,
-          reasoning_levels: ['low', 'medium', 'high'],
-          default_reasoning_effort: 'high',
-        }],
+        models: modelEntries,
       },
     },
   };
@@ -460,18 +496,6 @@ export function mapCrushExitReason(crushReason) {
   return { triss, raw };
 }
 
-// crushDefaultModelsHint: the two crush model ATOMS to configure via
-// `crush models use <large> <small>`. Reuses the CRUSH_*_ATOM constants so a
-// model bump is one edit; configureCrushModels() actually runs the command.
-export function crushDefaultModelsHint() {
-  return {
-    large: CRUSH_LARGE_ATOM,
-    small: CRUSH_SMALL_ATOM,
-    note:
-      `Configure with \`crush models use ${CRUSH_LARGE_ATOM} ${CRUSH_SMALL_ATOM}\` (writes crush.json). ` +
-      `Provider: built-in zai (coding-plan endpoint, ${ZAI_CODING_PLAN_BASE_URL}).`,
-  };
-}
 
 // The shared read-only bash allowlist, mirroring opencode's `permission.bash`
 // allowlist in src/commands/coder.js (opencodeConfigTemplate). Kept in ONE
@@ -540,18 +564,19 @@ export function mergeCrushPermissionsRun(config = {}) {
   return { merged, hadRunPolicy };
 }
 
-// configureCrushModels: runs `crush models use glm5_2 glm5_turbo <scopeFlag>` so
-// crush's --role smart/fast resolve to GLM deterministically. This is the ONE
-// thing crush init does beyond the shared ZHIPU_API_KEY setup. It does NOT write
-// any api_key into crush.json; buildCrushSpawnEnv forwards the canonical key.
+// configureCrushModels: runs `crush models use <large> <small> <scopeFlag>`
+// so crush's --role smart/fast resolve to the SELECTED provider's models
+// deterministically. The model ids come from the caller (the canonical
+// provider profile); no vendor is hardcoded here. It does NOT write any
+// api_key into crush.json; run-scoped configs and spawn env own credentials.
 //
 // Idempotent + non-fatal: a missing binary, a non-zero exit, or a thrown
 // spawnSync all return {ok:false} with a short reason (stderr tail) so init
 // degrades gracefully instead of aborting. `sh` is the injected spawnSync the
 // rest of coder.js uses (tests fake it); NEVER shell:true — argv is an array.
-export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
+export function configureCrushModels({ scope, large, small, sh = nodeSpawnSync }) {
   const scopeFlag = scope === 'local' ? '--local' : '--global';
-  const argv = ['models', 'use', CRUSH_LARGE_ATOM, CRUSH_SMALL_ATOM, scopeFlag];
+  const argv = ['models', 'use', large, small, scopeFlag];
   let r;
   try {
     r = sh('crush', argv);
@@ -578,7 +603,7 @@ export function configureCrushModels({ scope, sh = nodeSpawnSync }) {
   }
   return {
     ok: true,
-    note: `set default models: ${CRUSH_LARGE_ATOM} (large) / ${CRUSH_SMALL_ATOM} (small)`,
+    note: `set default models: ${large} (large) / ${small} (small)`,
   };
 }
 
@@ -608,7 +633,6 @@ export const crush = {
   buildProtectedProviderConfig: buildCrushProtectedProviderConfig,
   parseEnvelope: parseCrushEnvelope,
   mapExitReason: mapCrushExitReason,
-  crushDefaultModelsHint,
   configureCrushModels,
   // permissions.run policy (crush 0.1.3+): the curated read-only bash
   // allowlist, the CLI tool allowlist, the block builder, and the no-clobber
