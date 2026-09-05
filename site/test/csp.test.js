@@ -48,16 +48,15 @@ test('built pages contain no executable inline scripts', () => {
 
 test('pricing data islands are valid, self-contained JSON', () => {
   if (!fs.existsSync(dist)) return;
-  for (const page of ['index.html', 'cost/index.html']) {
-    const html = fs.readFileSync(path.join(dist, page), 'utf8');
-    const m = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
-    assert.ok(m, `${page} must carry a pricing data island`);
-    const data = JSON.parse(m[1]);
-    for (const key of ['profile', 'anthropic', 'deepseek', 'defaults']) {
-      assert.ok(data[key], `${page} island missing ${key}`);
-    }
-    assert.ok(!m[1].includes('</script'), 'island must not contain a closing script tag');
+  // The homepage no longer carries pricing data; the Cost calculator does.
+  const html = fs.readFileSync(path.join(dist, 'cost', 'index.html'), 'utf8');
+  const m = html.match(/<script type="application\/json"[^>]*id="pricing-data"[^>]*>([\s\S]*?)<\/script>/);
+  assert.ok(m, 'cost/index.html must carry the pricing data island');
+  const data = JSON.parse(m[1]);
+  for (const key of ['profile', 'anthropic', 'deepseek', 'defaults']) {
+    assert.ok(data[key], `cost island missing ${key}`);
   }
+  assert.ok(!m[1].includes('</script'), 'island must not contain a closing script tag');
 });
 
 test('no inline event handlers anywhere in the built output', () => {

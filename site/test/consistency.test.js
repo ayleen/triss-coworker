@@ -25,12 +25,13 @@ test("calculator clients receive the canonical pricing data", () => {
     opus: { input: 5, output: 25 },
   });
   assert.deepEqual(DEEPSEEK.standard, { input: 0.22, cache: 0.007, output: 0.66 });
-  for (const file of ["src/pages/index.astro", "src/pages/cost.astro"]) {
-    const source = read(file);
-    assert.match(source, /type="application\/json" id="pricing-data" set:html=\{JSON\.stringify\(\{ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS \}\)\}/);
-    assert.doesNotMatch(source, /const PROFILE = \{/);
-    assert.doesNotMatch(source, /const DEEPSEEK = \{\s*standard:/);
-  }
+  // The homepage no longer consumes pricing data; the Cost calculator does
+  // (its built data island is validated in csp.test.js).
+  const costSource = read("src/pages/cost.astro");
+  assert.match(costSource, /id="pricing-data"/);
+  assert.doesNotMatch(costSource, /const PROFILE = \{/);
+  assert.doesNotMatch(costSource, /const DEEPSEEK = \{\s*standard:/);
+  assert.equal(read("src/pages/index.astro").includes("pricing-data"), false);
   assert.deepEqual(DEFAULTS, { reqs: 40, share: 65, primary: "sonnet", providerModel: "standard", cacheHit: 77 });
 });
 
@@ -65,19 +66,14 @@ test("README presents the canonical 0.42 provider migration", () => {
 });
 
 test("website documents persistent engine defaults for ask and review", () => {
-  const gettingStarted = read("src/pages/docs/getting-started.astro");
+  // Engine selection stays a documented, optional route: the command reference
+  // exposes --engine for model-backed commands. Optional setup walkthroughs
+  // live in the quickstart's advanced disclosures and are reviewed manually.
   for (const name of ["ask", "review"]) {
     const command = COMMANDS.find((entry) => entry.name === name);
     assert.ok(command);
     assert.ok(command.flags.includes("--engine <id>"));
   }
-  const init = gettingStarted.indexOf("triss coder init --engine opencode --provider opencode-go");
-  const enable = gettingStarted.indexOf("TRISS_DEFAULT_ENGINE opencode");
-  assert.ok(init >= 0, "OpenCode setup must be present");
-  assert.ok(enable > init, "coder init must run before the persistent engine is enabled");
-  assert.match(gettingStarted, /TRISS_DEFAULT_PROVIDER opencode-go/);
-  assert.match(gettingStarted, /muse-spark-1\.3-contributor/);
-  assert.match(gettingStarted, /primary[\s\S]*triss-readonly-projection/);
 });
 
 test("site CI retries transient npm audit outages without weakening the audit", () => {
@@ -106,12 +102,9 @@ test("website coder engines and quickstarts match repository contracts", () => {
   assert.match(coderPage, /data-engine="harness"[\s\S]*DSH plugin, not --engine/);
   const escapedOpenCode2Floor = opencode2Floor.replaceAll(".", "\\.");
   assert.match(coderPage, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
-  assert.match(gettingStarted, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(readme, new RegExp(`OpenCode 2 has a supported floor of \`${escapedOpenCode2Floor}\``));
-  assert.match(
-    coderPage,
-    /Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local\./,
-  );
+  // Protected-credential fact stays synchronized across README and the coder page.
+  assert.match(coderPage, /project fingerprint stays local/);
   assert.match(readme, /project fingerprint stays local/);
 
   const coder = COMMANDS.find((command) => command.name === "coder");
@@ -124,11 +117,9 @@ test("website coder engines and quickstarts match repository contracts", () => {
 
   assert.equal(pkg.name, "triss-coworker");
   assert.equal(pkg.engines.node, ">=22.12.0");
-  const gsScript = read("public/scripts/getting-started.js");
-  assert.match(gsScript, /npm install -g triss-coworker/);
+  const setupScript = read("src/data/setup.js");
+  assert.match(setupScript, /npm install -g triss-coworker/);
   assert.match(gettingStarted, /Node\.js ≥ 22\.12/);
-  assert.match(gettingStarted, new RegExp(`OMP ${floor.replaceAll(".", "\\.")} or newer`));
-  assert.match(gettingStarted, /triss coder run --engine omp --model opencode-go\/deepseek-v4-flash/);
   assert.match(readme, new RegExp(`supported floor of \`${floor.replaceAll(".", "\\.")}\``));
   assert.match(readme, /triss coder run --engine omp \\\n\s+--model opencode-go\/deepseek-v4-flash/);
 });

@@ -6,6 +6,15 @@ interface Props { current?: string; }
 const { current } = Astro.props;
 const linkStyle = (active: boolean) =>
   active ? "color: var(--color-accent); font-weight: 500;" : "color: var(--color-text-muted);";
+const navItems = [
+  { key: "workflows", href: "/workflows/", label: "Workflows" },
+  { key: "quickstart", href: "/docs/getting-started/", label: "Quickstart" },
+  { key: "docs", href: "/docs/", label: "Docs" },
+  { key: "coder", href: "/coder/", label: "Coder" },
+  { key: "integrations", href: "/integrations/", label: "Integrations" },
+  { key: "cost", href: "/cost/", label: "Cost" },
+  { key: "security", href: "/security/", label: "Security" },
+];
 ---
 <header
   style="position: sticky; top: 0; z-index: 50; background: var(--color-bg-header); backdrop-filter: blur(12px); border-bottom: 1px solid var(--color-border);"
@@ -32,14 +41,10 @@ const linkStyle = (active: boolean) =>
         <span style="font-size: 9px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint); margin-top: 1px;">coworker</span>
       </span>
     </a>
-    <nav id="main-nav" style="display: flex; align-items: center; gap: 28px; font-size: 13.5px;">
-      <a href="/#how" aria-current={current === "how" ? "page" : undefined} style={linkStyle(current === "how")}>How it works</a>
-      <a href="/coder" aria-current={current === "coder" ? "page" : undefined} style={linkStyle(current === "coder")}>Coder</a>
-      <a href="/integrations" aria-current={current === "integrations" ? "page" : undefined} style={linkStyle(current === "integrations")}>Integrations</a>
-      <a href="/docs/getting-started" aria-current={current === "quickstart" ? "page" : undefined} style={linkStyle(current === "quickstart")}>Quickstart</a>
-      <a href="/commands" aria-current={current === "commands" ? "page" : undefined} style={linkStyle(current === "commands")}>Commands</a>
-      <a href="/cost" aria-current={current === "cost" ? "page" : undefined} style={linkStyle(current === "cost")}>Cost</a>
-      <a href="/security" aria-current={current === "security" ? "page" : undefined} style={linkStyle(current === "security")}>Security</a>
+    <nav id="main-nav" style="display: flex; align-items: center; gap: 24px; font-size: 13.5px;">
+      {navItems.map((item) => (
+        <a href={item.href} aria-current={current === item.key ? "page" : undefined} style={linkStyle(current === item.key)}>{item.label}</a>
+      ))}
     </nav>
     <div style="display: flex; align-items: center; gap: 10px;">
       <a
@@ -51,13 +56,9 @@ const linkStyle = (active: boolean) =>
     </div>
   </div>
   <nav id="mobile-nav" style="display: none; flex-direction: column; gap: 0; background: var(--color-bg); border-top: 1px solid var(--color-border); padding: 12px var(--layout-gutter);">
-    <a href="/#how" aria-current={current === "how" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">How it works</a>
-    <a href="/coder" aria-current={current === "coder" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Coder</a>
-    <a href="/integrations" aria-current={current === "integrations" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Integrations</a>
-    <a href="/docs/getting-started" aria-current={current === "quickstart" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Quickstart</a>
-    <a href="/commands" aria-current={current === "commands" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Commands</a>
-    <a href="/cost" aria-current={current === "cost" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Cost</a>
-    <a href="/security" aria-current={current === "security" ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">Security</a>
+    {navItems.map((item) => (
+      <a href={item.href} aria-current={current === item.key ? "page" : undefined} style="padding: 10px 0; color: var(--color-text-muted); font-size: 14px;">{item.label}</a>
+    ))}
   </nav>
 </header>
 <style>

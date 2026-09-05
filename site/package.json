@@ -19,6 +19,7 @@
     "test:lighthouse": "node scripts/check-lighthouse.mjs",
     "audit:dependencies": "npm audit --audit-level=high",
     "cloudflare:check": "wrangler deploy --dry-run --outdir .wrangler/deploy-check",
+    "generate:og": "node scripts/generate-og.mjs",
     "cloudflare:deploy": "wrangler deploy",
     "cloudflare:preview": "wrangler versions upload"
   },

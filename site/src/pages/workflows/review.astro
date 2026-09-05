@@ -1,0 +1,165 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+import Base from "../../layouts/Base.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+---
+
+<Base
+  title="Get a second code review — Triss"
+  description="Review a branch or pull request with Triss, verify each finding, and decide which changes to make."
+>
+  <Header current="workflows" />
+
+  <main class="workflow-layout">
+    <div class="workflow-page-body">
+      <p class="workflow-eyebrow">Review workflow</p>
+      <h1 class="workflow-page-title">Get a second review. Verify every finding.</h1>
+      <p class="workflow-lede">
+        Ask Triss to review a branch, a staged diff, or a GitHub pull request through
+        your selected provider. You receive findings to check one by one — the decision
+        about what to change stays with you or your main agent.
+      </p>
+    </div>
+
+    <div class="workflow-page-body">
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Use it when</h2>
+        <p>
+          You want a second opinion on a change before it merges: possible correctness
+          defects, regressions, or missing coverage in the diff. This is an executable
+          recipe for running the review — it is not a published case study, and this
+          page shows no invented findings.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Prerequisites</h2>
+        <ul>
+          <li>Your selected provider is configured (check with <code>triss status</code>).</li>
+          <li>
+            A local branch comparison needs Git and a base ref that actually exists in
+            your repository (for example <code>origin/main</code> after a fetch).
+          </li>
+          <li>
+            The GitHub pull request path needs working <code>gh</code> access, per the
+            current CLI.
+          </li>
+        </ul>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Run</h2>
+        <p>
+          Review the current branch against a base branch:
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss review --base origin/main</code></pre>
+        <div class="callout">
+          <p>
+            The base must exist as a ref you have locally. This is a branch review:
+            committed changes on the current branch compared against the base — not a
+            review of arbitrary unstaged changes. Without <code>--base</code>, Triss
+            auto-detects <code>origin/HEAD</code> or <code>main</code>/<code>master</code>/<code>develop</code>.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Alternative sources</h2>
+        <p>
+          Review an explicitly piped staged diff:
+        </p>
+        <pre tabindex="0" class="code-block"><code>git diff --cached | triss review --stdin</code></pre>
+        <p>
+          Review a GitHub pull request by number:
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss review 123</code></pre>
+        <p>
+          <code>123</code> is an example PR number — replace it with your own pull
+          request. Do not point a verification run at a random PR.
+        </p>
+        <div class="callout">
+          <p>
+            Pick one source per invocation. Do not mix <code>--base</code>, a PR
+            number, and <code>--stdin</code> in a single command — the CLI rejects
+            these combinations. For linked-ticket context, use the explicit supported
+            flag <code>--issue &lt;key&gt;</code> (for example
+            <code>--issue PROJ-123</code>); pull request prose never triggers tracker
+            access on its own.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Inspect</h2>
+        <p>For each finding, check it before acting on it:</p>
+        <ul>
+          <li>Does the cited path and line exist, and does the code say what the finding claims?</li>
+          <li>Is the described defect real — is the faulty path reachable in practice?</li>
+          <li>Do existing guards or tests already cover it?</li>
+          <li>Reject findings you cannot confirm. An unverified finding is a lead, not a defect.</li>
+        </ul>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Use the result</h2>
+        <p>
+          You or your main agent choose which confirmed findings to fix, make the
+          changes, and test them. Running another review afterwards is a separate,
+          explicit decision — Triss does not chain reviews or approve anything for you.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Limits</h2>
+        <ul>
+          <li>A review is not a guarantee that no defects remain.</li>
+          <li>It is not automatic pull request approval — acceptance stays with you.</li>
+          <li>
+            A partial or sharded result (the <code>--payload-mode shard</code> option)
+            reviews sequential whole-file shards with no global verdict — do not present
+            it as a full review of the change.
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <nav class="workflow-next" aria-label="Next steps">
+      <span class="workflow-next__label">Next:</span>
+      <a href="/workflows/implementation/">Implementation workflow</a>
+      <a href="/commands/">Commands</a>
+      <a href="/security/">Security</a>
+    </nav>
+  </main>
+
+  <Footer />
+</Base>
+
+<style>
+  .workflow-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-label);
+    margin: 0 0 18px;
+  }
+  .workflow-page-title {
+    font-size: clamp(2rem, 3.6vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+    color: var(--color-text-strong);
+  }
+  .workflow-lede {
+    margin: 22px 0 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--color-text-secondary);
+  }
+  .workflow-next__label {
+    color: var(--color-text-faint);
+  }
+</style>

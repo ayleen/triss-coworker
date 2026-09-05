@@ -37,6 +37,10 @@ stored in the repository or exposed to browser code.
   verification, and rollback procedure.
 - [Brand direction](brand-direction.md) records the initial logo, favicon, and
   mascot concept, including its production-readiness limitations.
+- [Managed delegation implementation plan](managed-delegation-implementation-plan.md)
+  is the active, task-by-task plan for the owner-selected positioning:
+  managed delegation for AI development. It supersedes older cost-first
+  positioning and homepage requirements, not the deployment/security contracts.
 
 ## Development workflow
 
@@ -44,7 +48,7 @@ The production source belongs in `main`, but implementation work must not be
 performed directly on `main`.
 
 1. Create a short-lived branch from the latest `origin/main` in an isolated
-   worktree.
+   worktree under `/Volumes/Orange/Projects/.worktrees/triss/<task-name>/`.
 2. Implement and validate the change locally.
 3. Push the branch and, once Workers Builds is connected, inspect its
    versioned Worker preview deployment.
@@ -52,12 +56,18 @@ performed directly on `main`.
 5. Merge only after approval. A merge to `main` triggers the production site
    deployment.
 
-The initial planning worktree is:
+The owner requires new working Git worktrees for **all projects** to live under
+`/Volumes/Orange/Projects/.worktrees/<project-name>/<task-name>/` (decision:
+2026-09-05). Do not create new working checkouts beside the project or under
+`.claude/worktrees/`. Existing worktrees are not moved automatically. This
+checkout convention does not change Triss coder runtime storage.
+
+The managed-delegation planning worktree is:
 
 ```text
-Branch:   codex/project-website
-Worktree: .claude/worktrees/project-website
-Base:     origin/main
+Branch:   docs/website-managed-delegation
+Worktree: /Volumes/Orange/Projects/.worktrees/triss/website-managed-delegation
+Base:     origin/main (3208b6d at creation)
 ```
 
 Do not commit generated site output. Cloudflare Workers Builds must build it from the
@@ -98,7 +108,6 @@ integration is installed.
 
 These decisions do not block local implementation:
 
-- final custom domain and canonical hostname;
 - whether a later phase needs event-level product analytics in addition to
   Cloudflare Web Analytics;
 - whether the public documentation should eventually become a complete

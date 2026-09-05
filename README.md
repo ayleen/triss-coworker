@@ -7,9 +7,9 @@
 [![Node.js](https://img.shields.io/node/v/triss-coworker.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Triss delegates token-heavy reading, review, writing, tracker work, and coding-agent tasks through one configurable provider runtime. CLI commands, MCP tools, and coder engines use the same provider ids, model roles, effort levels, credentials, endpoints, and precedence rules.
+Triss is a managed delegation layer for AI development: a local, open-source CLI and MCP server. Your coding agent (or you) delegates codebase research, second reviews, and bounded implementation tasks through one configurable provider runtime — choosing the provider, model, and coding engine for each route and inspecting the result before accepting it. CLI commands, MCP tools, and coder engines use the same provider ids, model roles, effort levels, credentials, endpoints, and precedence rules.
 
-**Website:** [triss.work](https://triss.work/) · **Quickstart:** [triss.work/docs/getting-started](https://triss.work/docs/getting-started/)
+**Website:** [triss.work](https://triss.work/) · **Workflows:** [triss.work/workflows](https://triss.work/workflows/) · **Quickstart:** [triss.work/docs/getting-started](https://triss.work/docs/getting-started/)
 
 ## Requirements
 

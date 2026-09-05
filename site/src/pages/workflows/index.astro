@@ -1,0 +1,41 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+import Base from "../../layouts/Base.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+import { WORKFLOWS } from "../../data/workflows.js";
+---
+
+<Base
+  title="AI development workflows — Triss"
+  description="Learn how to delegate codebase research, code review, and bounded implementation tasks with Triss."
+>
+  <Header current="workflows" />
+
+  <main class="workflow-layout">
+    <h1>Choose a task to delegate.</h1>
+    <p class="workflow-page-body" style="margin-top: 18px;">
+      Start with a bounded question or change. These workflows show what to provide, what to
+      inspect, and when to keep the work with your main agent.
+    </p>
+
+    <div class="workflow-grid">
+      {WORKFLOWS.map((workflow) => (
+        <article class="workflow-card">
+          <h2 class="workflow-card__title">{workflow.title}</h2>
+          <p class="workflow-card__body">{workflow.description}</p>
+          <a class="workflow-card__cta" href={workflow.href}>{workflow.cta} →</a>
+        </article>
+      ))}
+    </div>
+
+    <p class="callout" style="margin-top: 40px;">
+      Triss can be called from your terminal or exposed to an agent through MCP. Your agent or
+      you coordinate the steps; Triss does not automatically run a multi-agent pipeline.
+    </p>
+  </main>
+
+  <Footer />
+</Base>

@@ -13,6 +13,10 @@ const routes = [
   "/security/",
   "/docs/",
   "/docs/getting-started/",
+  "/workflows/",
+  "/workflows/research/",
+  "/workflows/review/",
+  "/workflows/implementation/",
   "/404.html",
 ];
 
@@ -96,7 +100,7 @@ test("keyboard focus is visible on every route", async ({ page }) => {
 
 test("key pages reflow without horizontal overflow at 200% zoom", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
-  for (const route of ["/", "/commands/", "/docs/getting-started/"]) {
+  for (const route of ["/", "/commands/", "/docs/getting-started/", "/workflows/research/", "/workflows/implementation/"]) {
     await page.goto(route);
     const dimensions = await page.evaluate(() => {
       document.documentElement.style.zoom = "2";
@@ -155,7 +159,7 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   await opencode2.click();
   await expect(opencode2).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#engine-body")).toContainText("0.0.0-beta-19059 or newer");
-  await expect(page.locator("#engine-body")).toContainText("not help descriptions or an exact build");
+  await expect(page.locator("#engine-body")).toContainText("never one pinned build");
 
   const crush = page.locator('[data-engine="crush"]');
   const omp = page.locator('[data-engine="omp"]');
@@ -230,6 +234,67 @@ test("touch controls meet the 44px target on coarse pointers", async ({ browser 
     }).filter(({ width, height }) => width < 44 || height < 44));
   expect(undersizedOpenMenuTargets).toEqual([]);
   await context.close();
+});
+
+test("homepage install copy reports success only after a real clipboard write", async ({ context, page }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4876" });
+  await page.goto("/");
+  const button = page.locator("#copy-install-btn");
+  await button.click();
+  await expect(button).toHaveText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npm install -g triss-coworker");
+  await expect(page.locator("#install-command")).toBeVisible();
+});
+
+test("homepage install copy does not report success when the clipboard write fails", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+    });
+  });
+  await page.goto("/");
+  const button = page.locator("#copy-install-btn");
+  await button.click();
+  await expect(button).toHaveText("Select and copy the command");
+  await expect(page.locator("#install-command")).toBeVisible();
+});
+
+test("quickstart target switching preserves the package-manager selection", async ({ page }) => {
+  await page.goto("/docs/getting-started/");
+  await page.locator('[data-pm="pnpm"]').click();
+  await expect(page.locator('[data-install-panel="pnpm"]')).toBeVisible();
+  await expect(page.locator('[data-install-panel="npm"]')).toBeHidden();
+
+  await page.locator('[data-target="codex"]').click();
+  await expect(page.locator('[data-agent-panel="codex"]')).toBeVisible();
+  await expect(page.locator('[data-agent-panel="claude"]')).toBeHidden();
+  await expect(page.locator('[data-install-panel="pnpm"]')).toBeVisible();
+
+  await page.locator('[data-target="terminal"]').click();
+  await expect(page.locator('[data-agent-panel="terminal"]')).toBeVisible();
+});
+
+test("quickstart exposes every setup variant without JavaScript", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+  await page.goto("/docs/getting-started/");
+  for (const target of ["claude", "codex", "terminal"]) {
+    await expect(page.locator(`[data-agent-panel="${target}"]`)).toBeVisible();
+  }
+  for (const pm of ["npm", "pnpm", "yarn"]) {
+    await expect(page.locator(`[data-install-panel="${pm}"]`)).toBeVisible();
+  }
+  await context.close();
+});
+
+test("workflow pages link to the reference pages they depend on", async ({ page }) => {
+  await page.goto("/workflows/research/");
+  await expect(page.locator('.workflow-next a[href="/commands/"]')).toBeVisible();
+  await page.goto("/workflows/review/");
+  await expect(page.locator('.workflow-next a[href="/workflows/implementation/"]')).toBeVisible();
+  await page.goto("/workflows/implementation/");
+  await expect(page.locator('.workflow-next a[href="/coder/"]')).toBeVisible();
+  await expect(page.locator('.workflow-next a[href="/security/"]')).toBeVisible();
 });
 
 test("reduced-motion preference disables meaningful animation", async ({ browser }) => {

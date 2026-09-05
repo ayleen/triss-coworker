@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Website repositioned around managed delegation for AI development: a new
+  homepage with a real, recorded, manually verified research example, workflow
+  guides for research, review, and bounded implementation
+  (`/workflows/`), a shorter agent-aware quickstart, consistent secondary
+  pages, and a reproducibly generated social card. The inference-cost
+  calculator, its formulas, and its methodology remain unchanged on `/cost/`.
+
 ### Fixed
 
 - OpenCode 2 now qualifies the published beta CLI against its current

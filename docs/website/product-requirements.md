@@ -9,107 +9,102 @@ resources.
 The website is a presentation and documentation surface for the existing
 open-source project. It is not a hosted Triss service.
 
+## Positioning (owner decision, 2026-09-05)
+
+Triss is a **managed delegation layer for AI development**: a local,
+open-source CLI and MCP server. Users delegate bounded parts of AI
+development — codebase research, second reviews, and limited implementation —
+choose the models and coding engines for that work, and inspect the result
+before accepting it.
+
+Cost savings are a secondary, route-dependent benefit. They must never be
+presented as the product definition or as a universal guarantee.
+
 ## Primary audiences
 
-1. Developers using Codex, Claude Code, or another coding agent who want to
-   reduce expensive model-token usage.
-2. Existing Triss users looking for installation, configuration, provider, or
+1. Developers already using Claude Code or Codex who need to delegate
+   research, a second opinion on changes, or a bounded implementation task
+   through tools they choose.
+2. Maintainers and small teams who want repeatable workflows and one common
+   interface to supported models, engines, and trackers.
+3. Existing Triss users looking for installation, configuration, provider, or
    integration documentation.
-3. Contributors evaluating the project's capabilities, maintenance quality,
-   security posture, and source code.
+
+This revision does not extend the audience to marketers, non-developers,
+enterprise fleet management, or hosted-service buyers.
 
 ## Product goals
 
-- Explain the core value proposition within the first screen.
+- Communicate the managed-delegation promise within the first screen:
+  delegate research, review, and implementation; choose your models and
+  engines; keep control of what ships.
+- Show one real, recorded, manually verified example of delegated research
+  instead of invented demo output.
+- Make the three workflows (research, review, implementation) the primary
+  navigation metaphor, each explaining what to provide, what to inspect, and
+  when to keep the work in the main agent.
 - Provide a copyable installation command without requiring navigation.
-- Show how Triss fits between a coding agent and a cheaper delegated model.
-- Make supported workflows, providers, and integrations easy to discover.
-- Provide direct paths to documentation, npm, GitHub, releases, and issues.
-- Establish an official canonical web presence that can use a custom domain.
-- Collect privacy-oriented traffic and performance analytics.
+- Present model/engine choice, data boundaries, execution isolation, and
+  acceptance honestly, including current limitations.
+- Keep cost content available with its methodology, clearly scoped as one
+  part of the decision.
+- Provide direct paths to documentation, commands reference, npm, GitHub,
+  releases, and issues.
 
-## Non-goals for the first release
+## Non-goals
 
 - Authentication, user accounts, dashboards, billing, or payments.
 - Running Triss or accepting API keys in the browser.
 - Contact forms or other server-side features.
-- A custom content management system.
-- Replacing every Markdown document in `docs/` on the first release.
+- A custom content management system or a full migration of `docs/` onto the
+  site.
+- Automated model selection, schedulers, parallel agent teams, or automatic
+  task chains (product runtime scope, not website scope).
 - Event-level funnels, session replay, visitor profiling, or advertising
   analytics.
+- Comparative quality benchmarks across models. A single recorded case study
+  is not a benchmark.
 
-## Initial information architecture
+## Information architecture
 
-### Home (`/`)
+| Route | Content |
+| --- | --- |
+| `/` | Hero with category, headline, CTAs, copyable install, and a real recorded example; three workflow cards; how it works; why add Triss; controls and boundaries; cost summary; commands and install sections |
+| `/workflows/` | Catalog of the three delegation workflows |
+| `/workflows/research/` | Understand unfamiliar code: provide, run, inspect, recorded example, limits |
+| `/workflows/review/` | Second review: prerequisites, run variants (branch, PR, stdin), inspect, use the result, limits |
+| `/workflows/implementation/` | Bounded change: define, run isolated, locate and inspect the worktree, verify, accept or cleanly reject |
+| `/docs/getting-started/` | Short quickstart with Claude Code / Codex / Terminal instructions; advanced setup in optional disclosures below |
+| `/docs/` | Documentation entry point grouped by task |
+| `/coder/` | Coding engines, worktree isolation, execution results, verification |
+| `/integrations/` | Project context reading and explicit operations with setup links |
+| `/security/` | Trust-boundary summary and precise data-flow, logging, and credential documentation |
+| `/cost/` | Calculator, methodology, and the recorded historical usage example |
+| `/commands/` | Searchable command reference |
+| 404 | A real 404 response |
 
-The home page must include:
-
-- a concise headline and supporting description;
-- a primary install command: `npm install -g triss-coworker`;
-- primary calls to action for getting started and viewing the GitHub project;
-- a short explanation of delegation and token savings;
-- capability sections for bulk reading, reviews, content generation, coding
-  delegation, and tracker integrations;
-- a simple architecture or workflow explanation;
-- links to npm, GitHub, documentation, changelog, and license;
-- a clear statement that Triss is an open-source CLI/MCP tool, not a hosted
-  service.
-
-### Getting started (`/docs/getting-started/`)
-
-The first documentation page must cover:
-
-- Node.js requirements;
-- npm, standalone, and source installation paths;
-- basic provider configuration;
-- `triss status` verification;
-- one minimal `triss ask` example;
-- links to deeper configuration and MCP documentation;
-- an optional OMP engine path using the canonical public selector, supported
-  minimum version, and explicit credential/worktree isolation boundaries;
-
-The instructions must remain consistent with the canonical repository
-`README.md` and must not introduce a second, contradictory installation
-contract.
-
-### Documentation index (`/docs/`)
-
-The documentation index must group links by task:
-
-- installation and configuration;
-- agent and MCP setup;
-- model/provider guides;
-- coding delegation;
-- GitHub, GitLab, Jira, Linear, and Confluence integrations;
-- usage accounting;
-- extension and contribution guidance.
-
-For the first release, pages that have not been migrated may link to their
-canonical Markdown source on GitHub.
-
-### Project links
-
-The site must expose stable links to:
-
-- GitHub repository: `https://github.com/ayleen/triss-coworker`;
-- npm package: `https://www.npmjs.com/package/triss-coworker`;
-- GitHub releases, issues, license, and changelog.
+Do not rename existing URLs. Homepage anchors `#top`, `#how`, `#commands`,
+and `#install` must remain meaningful.
 
 ## Content principles
 
-- Use clear developer-oriented English for the initial release.
-- Prefer verifiable capability statements over broad marketing claims.
+- Use clear developer-oriented English.
+- Prefer verifiable capability statements over broad marketing claims; the
+  public-claims contract in the managed-delegation implementation plan is
+  binding for wording.
+- Recorded model output is published only as verified excerpts labeled as
+  excerpts, with source links to a public commit, and honest limitations.
 - Keep installation commands and compatibility requirements synchronized with
   the repository's canonical documentation.
-- Do not present historical token savings as a universal guarantee. When the
-  existing `60-70%` result is used, describe it as the project's observed or
-  intended savings claim and link to its supporting context.
-- Never publish provider keys, local paths, unpublished roadmap details, or
-  private operational information.
+- Present current technical limitations as limitations of the current version,
+  never as permanent prohibitions, and never silently replace a user's
+  provider or engine choice in examples.
+- Never publish provider keys, local paths, session IDs, unpublished roadmap
+  details, or private operational information.
 
 ## Visual and interaction requirements
 
-- Mobile-first responsive behavior must work from 320 px through large desktop
+- Mobile-first responsive behavior from 320 px through large desktop
   displays, with an explicit disclosure reset when the viewport crosses the
   900 px navigation breakpoint.
 - No horizontal overflow at 320 px, 375 px, 768 px, 900 px, or desktop widths.
@@ -119,102 +114,76 @@ The site must expose stable links to:
   notched mobile devices.
 - Touch targets should follow Apple HIG guidance (at least 44 CSS px where a
   control is intended for touch).
-- Semantic HTML with a logical heading hierarchy and visible focus states.
-- Text and interactive-control contrast and focus indicators must meet WCAG
-  2.2 AA (which subsumes WCAG 2.1 AA) targets.
+- Semantic HTML with a logical heading hierarchy and exactly one `h1` per
+  page.
+- Contrast and focus indicators must meet WCAG 2.2 AA targets.
 - Respect `prefers-reduced-motion`; core comprehension must not depend on
   animation.
 - User-provided strings (including search queries) must be inserted with safe
   DOM APIs such as `textContent`, never as executable HTML.
-- Copy buttons must provide visible success feedback and remain usable without
-  JavaScript through manual text selection.
-- Avoid a generic dashboard aesthetic. The site should feel like a focused
-  developer tool with a distinct but restrained identity.
+- Copy buttons must report success only after a successful clipboard write
+  and remain usable without JavaScript through manual text selection.
+- All meaningful content, commands, and links must be present in the built
+  HTML without JavaScript. Client scripts are progressive enhancement only.
 
 ## Performance requirements
 
-- Static output with no server runtime required for the first release.
+- Static build-time rendering (Astro); no server runtime.
 - Avoid unnecessary client-side JavaScript and third-party scripts.
 - Optimize images and fonts; do not ship large uncompressed media.
 - Target a Lighthouse score of at least 90 for Performance, Accessibility,
   Best Practices, and SEO on the production build, while treating specific
   audit findings rather than the score alone as the acceptance evidence.
-- Fonts must be pinned and bundled at build time or self-hosted; no runtime
-  third-party font service may be required.
+- Fonts must be self-hosted; no runtime third-party font service.
 
 ## SEO and sharing requirements
 
 - Unique title and description for every public page.
-- Canonical URL support configurable before the custom domain is attached.
-- Open Graph and social-card metadata for the home page.
-- `robots.txt` and an XML sitemap for production.
-- A useful 404 page.
-- Preview deployments must not be treated as canonical production content.
-  Workers version previews are public by default. Keep the production
-  canonical URL in their HTML and do not publish previews as permanent links.
-  After a custom domain becomes canonical, keep workers.dev hosts out of the
-  index with a host-specific `X-Robots-Tag: noindex` rule.
+- Canonical URLs on `https://triss.work` for production and previews.
+- Open Graph and social-card metadata, with a reproducible social card image
+  that matches the current positioning.
+- `robots.txt` and an XML sitemap for production, covering new routes.
+- A useful 404 page served with HTTP 404.
+- Workers version previews are public by default; keep the production
+  canonical URL in their HTML and keep workers.dev hosts out of the index
+  with a host-specific `X-Robots-Tag: noindex` rule.
 
 ## Analytics requirements
 
-Enable Cloudflare Web Analytics after the initial Worker is deployed.
-The first release needs only:
-
-- visits and page views;
-- entry pages and paths;
-- referring hosts;
-- country, device, browser, and operating-system dimensions;
-- page-load performance and Core Web Vitals.
-
-Cloudflare Web Analytics does not currently provide custom events or UTM
-parameter reporting. Consequently, outbound install, npm, and GitHub clicks
-are not conversion metrics in the first release. Add another analytics product
-only after a concrete event-level reporting requirement is approved.
-
-Analytics implementation must not add cookies, fingerprinting, session replay,
-or storage of visitor personal data in the first release.
+Cloudflare Web Analytics only, as configured for the first release:
+page-level visits, paths, referring hosts, device dimensions, and performance.
+It must not add cookies, fingerprinting, session replay, or storage of visitor
+personal data. Add another analytics product only after a concrete
+event-level reporting requirement is approved.
 
 ## Security and privacy requirements
 
 - No secrets in source, build arguments, generated HTML, or client-visible
   environment variables.
 - No user-supplied HTML or runtime content ingestion.
-- No forms, API routes, Worker scripts, or third-party embeds in the first
-  release unless separately reviewed.
+- No forms, API routes, Worker scripts, or third-party embeds unless
+  separately reviewed.
 - External scripts are limited to the Cloudflare Web Analytics beacon unless
   another script is explicitly approved.
-- Configure appropriate security headers and verify them on the deployed site.
-- Use HTTPS for the default and custom domains.
+- Security headers configured and verified on the deployed site.
+- HTTPS for all public origins.
 
-## Launch criteria
+## Acceptance (managed-delegation revision)
 
-The first production release is ready when:
+The repositioned site is ready when:
 
-- the required home, documentation index, and getting-started routes exist;
-- repository, npm, installation, and documentation links are valid;
-- the production build succeeds from a clean install;
-- relevant automated tests, linting, type checks, and link checks pass;
-- mobile and desktop layouts are visually inspected;
-- 320 px, 375 px, 768 px, 900 px, and desktop layouts are visually inspected;
-- keyboard and screen-reader navigation, text zoom, safe areas, touch targets,
-  and visible focus behavior are verified;
-- coder engine selection and copy controls remain keyboard-operable, include
-  OMP alongside OpenCode 1, OpenCode 2, and Crush, and wrap without overflow;
-- opening the mobile menu at 375 px and resizing above 900 px hides it and
-  resets internal disclosure state and `aria-expanded`;
-- hostile HTML entered into command search remains text and creates no DOM
-  elements or event handlers;
-- built CSS references the pinned local IBM Plex assets and contains no
-  runtime font-service dependency;
-- automated tests, production build, browser acceptance checks, and the
-  Lighthouse target are checked against the production build;
-- the pull-request preview is reviewed and approved;
-- Cloudflare Workers Builds deploys the merge commit from `main`;
-- HTTPS works on the production hostname;
-- Cloudflare Web Analytics receives a verified page view;
-- sitemap, robots directives, canonical metadata, social metadata, and the 404
-  page are verified on the deployed site.
-
-Attaching the final custom domain may follow the first successful
-`*.workers.dev` deployment, but the selected custom domain must become the
-canonical hostname before public promotion begins.
+- the three workflow routes, the catalog, and the reworked home and
+  quickstart pages exist and build cleanly;
+- the recorded research example is real, manually verified against its public
+  source commit, and its source links open;
+- every removed calculator/preview behavior is gone from the homepage while
+  the `/cost/` calculator keeps working;
+- automated site suites, browser acceptance (viewports, zoom, keyboard, touch,
+  reduced motion, hostile input), and Lighthouse >= 90 pass on the production
+  build, including the new routes;
+- the social card image is regenerated reproducibly and no old cheap-DeepSeek
+  messaging remains in metadata, manifest, or imagery;
+- no-JS rendering exposes all content, commands, and setup variants;
+- documentation pages, README, and CHANGELOG state one consistent
+  positioning;
+- production deployment itself still requires the owner's approval.
