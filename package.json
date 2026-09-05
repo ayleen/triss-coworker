@@ -49,9 +49,11 @@
     "check:config-docs": "node scripts/generate-config-defaults.js --check",
     "check:docs": "npm run check:config-docs && node scripts/check-doc-links.js",
     "check:package": "node scripts/check-package-contents.js",
-    "check": "npm run lint && npm run typecheck && npm test && npm run check:docs && npm run check:package && npm run check:license-headers",
+    "check": "npm run lint && npm run typecheck && npm test && npm run check:docs && npm run check:package && npm run check:license-headers && npm run check:vex",
     "prepublishOnly": "npm run check",
-    "check:license-headers": "node scripts/check-license-headers.js"
+    "check:license-headers": "node scripts/check-license-headers.js",
+    "vex:generate": "node scripts/vex-report.js generate",
+    "check:vex": "node scripts/vex-report.js verify"
   },
   "keywords": [
     "agent-delegation",

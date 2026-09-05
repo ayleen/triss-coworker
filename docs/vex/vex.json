@@ -1,0 +1,13 @@
+{
+  "@context": "https://openvex.dev/ns",
+  "@id": "https://github.com/ayleen/triss-coworker/blob/main/docs/vex/vex.json",
+  "author": "Triss maintainers",
+  "role": "project",
+  "timestamp": "2026-08-29T12:38:54.745Z",
+  "last_updated": "2026-08-29T12:38:54.745Z",
+  "tooling": "scripts/vex-report.js (OSV querybatch, 109 production dependencies)",
+  "products": [
+    "pkg:npm/triss-coworker@0.41.1"
+  ],
+  "statements": []
+}
