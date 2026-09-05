@@ -11,6 +11,10 @@ import {
 } from './provider-contract.js';
 import { resolveProviderProfile } from './provider-config.js';
 import { validateProviderProfileSecurity } from './provider-security.js';
+import {
+  parseModelTransportsOverride,
+  resolveProviderModelTransport,
+} from './provider-model-transport.js';
 
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -109,6 +113,12 @@ export function resolveProviderRoute(selection, snapshot) {
   const providerId = assertCanonicalProviderId(selection.providerId);
   const profile = resolveProviderProfile(snapshot, providerId);
   const endpointValue = validateProviderProfileSecurity(providerId, profile);
+  const modelTransports = parseModelTransportsOverride(snapshot?.modelTransports?.value);
+  const transportMetadata = resolveProviderModelTransport({
+    providerId,
+    nativeModel: selection.nativeModel,
+    overrides: modelTransports,
+  });
 
   return deepFreeze({
     providerId,
@@ -116,7 +126,10 @@ export function resolveProviderRoute(selection, snapshot) {
     nativeModel: selection.nativeModel,
     credential: profile.credential,
     endpoint: { ...profile.endpoint, value: endpointValue },
-    transport: profile.transport,
+    // A concrete transport id when the model resolves to one; the 'registry'
+    // sentinel remains only for models without resolvable direct metadata.
+    transport: transportMetadata.transportId || 'registry',
+    transportMetadata,
     policy: profile.policy,
     engineProjection: profile.engineProjection,
     billingIdentity: `${providerId}/${selection.nativeModel}`,

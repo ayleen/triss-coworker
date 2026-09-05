@@ -83,6 +83,7 @@ export function createProviderConfigSnapshot({
       ...sourceOptions,
       defaultValue: DEFAULT_MODEL_ENGINE,
     }),
+    modelTransports: sourceValue('TRISS_MODEL_TRANSPORTS', sourceOptions),
     providers,
   });
 }

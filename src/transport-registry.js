@@ -17,8 +17,15 @@ import { classifyProviderError, serializeProviderError } from './provider-errors
 
 function directEngineRequired(request) {
   const provider = request?.route?.providerId || 'registry';
+  const model = request?.route?.nativeModel || '';
+  const unsupported = request?.route?.transportMetadata?.unsupported;
+  const remedy = unsupported
+    ? `${unsupported}.`
+    : `Set an exact model override, e.g. TRISS_MODEL_TRANSPORTS='{"${provider}/${model}": "openai-responses"}' ` +
+      `(valid transports: openai-chat, openai-responses, anthropic-messages), ` +
+      `or run the model on a native engine via --engine opencode, opencode2, omp, or crush.`;
   const error = new Error(
-    `Provider "${provider}" is not available with engine "direct"; pass --engine opencode, opencode2, or omp.`,
+    `Provider "${provider}" has no direct HTTP transport metadata for model "${model}". ${remedy}`,
   );
   error.code = 'TRISS_DIRECT_ENGINE_REQUIRED';
   throw error;
