@@ -2067,10 +2067,11 @@ function persistProviderModels(scope, providerId, model, smallModel) {
   process.env[definition.fields.model] = nativeModel;
   setVar(path, definition.fields.smallModel, nativeSmallModel);
   process.env[definition.fields.smallModel] = nativeSmallModel;
-  setVar(path, 'TRISS_DEFAULT_PROVIDER', providerId);
-  process.env.TRISS_DEFAULT_PROVIDER = providerId;
-  setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
-  process.env.TRISS_CONFIG_SCHEMA = '2';
+  // Only the selected provider profile changes here. The shared default
+  // provider (TRISS_DEFAULT_PROVIDER), the coder default
+  // (TRISS_CODER_PROVIDER), and the managed schema marker are explicit
+  // separate actions owned by the setup plan — a coding-only setup must not
+  // rewrite what ask/review resolve.
   process.stderr.write(
     pc.dim(`  · configured ${providerId} model=${nativeModel} smallModel=${nativeSmallModel}\n`),
   );

@@ -504,16 +504,20 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     }
   }
 
-  const engineResult = await applyEngineSetup(enginePlan, {
-    installChoice: engineInstallChoice,
-    runInstall: deps.runInstall,
-    runCoderSetup: deps.runCoderSetup,
-  });
-
+  // File transaction FIRST: the env patch, host configs, and .gitignore land
+  // as one guarded apply. Engine installs and the engine provider setup run
+  // AFTER the file transaction (their own writers own their durability), so
+  // a post-apply failure never strands a half-written env file.
   const result = await applySetupPlan(plan, {
     installMcp: deps.installMcp,
     writeRules: deps.writeRules,
     rereadState: () => readSetupState({ scope }),
+  });
+
+  const engineResult = await applyEngineSetup(enginePlan, {
+    installChoice: engineInstallChoice,
+    runInstall: deps.runInstall,
+    runCoderSetup: deps.runCoderSetup,
   });
 
   printResult({ result, engineResult, state, providerId: easyProvider || draft.set.find((e) => e.key === 'TRISS_DEFAULT_PROVIDER')?.value, deps, scope });
