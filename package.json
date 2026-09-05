@@ -51,7 +51,8 @@
     "check:package": "node scripts/check-package-contents.js",
     "check": "npm run lint && npm run typecheck && npm test && npm run check:docs && npm run check:package && npm run check:license-headers",
     "prepublishOnly": "npm run check",
-    "check:license-headers": "node scripts/check-license-headers.js"
+    "check:license-headers": "node scripts/check-license-headers.js",
+    "smoke:engine-ask": "node scripts/smoke-engine-ask.mjs"
   },
   "keywords": [
     "claude-code",
