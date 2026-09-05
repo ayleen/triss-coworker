@@ -1838,41 +1838,45 @@ async function runCoderSetupUnlocked(
     );
     return { model, smallModel };
   }
-  // The wizard resolves engine FIRST, provider SECOND (resolveWizardCtx) and
-  // passes both in. crush fixes provider to Z.AI and rejects conflicts before
-  // this point; reaching here with engine=crush means Z.AI was agreed, so the
-  // crush path only needs the Z.AI credential gate (the full crush model +
-  // permissions setup lives in `triss coder init --engine crush`, which owns
-  // crush.json). opencode.json / agent templates do not apply to crush.
+  // Crush setup completes IN PLACE for any canonical provider: gate the
+  // selected provider's credential, pin its profile models through
+  // `crush models use`, and seed the forward-compatible permissions.run
+  // policy. No second `coder init` round-trip is required (plan §P06.3).
   if (engine === 'crush') {
-    process.stderr.write('\n' + pc.bold('── coder (crush engine · Z.AI GLM) ──') + '\n');
-    process.stderr.write(
-      pc.dim('  · crush speaks Z.AI GLM only (credential: ZHIPU_API_KEY)\n'),
-    );
-    const keyEnv = 'ZHIPU_API_KEY';
-    if (!process.env[keyEnv]) {
+    const resolvedCrushProvider = provider || inferCoderProvider();
+    const crushKeyInfo = coderProviderKeyInfo(resolvedCrushProvider);
+    process.stderr.write('\n' + pc.bold(`── coder (crush engine · ${resolvedCrushProvider}) ──`) + '\n');
+    if (!process.env[crushKeyInfo.env]) {
       process.stderr.write(
         pc.yellow(
-          `  ⚠ ${keyEnv} is not set — the config was written but runs will fail until you set it.\n`,
+          `  ⚠ ${crushKeyInfo.env} is not set — the config was written but runs will fail until you set it.\n`,
         ),
       );
       throw new Error(
-        `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
+        `Coder setup incomplete: ${crushKeyInfo.env} is not set. Set it (triss config set ${crushKeyInfo.env}) and re-run.`,
       );
     }
-    // The wizard configures the Z.AI credential but does NOT seed crush models
-    // (crush models use) or the permissions.run policy — those steps live in
-    // `triss coder init --engine crush`. Report a structured incomplete result
-    // and the EXACT next command instead of returning {} (which let the wizard
-    // print a generic green "Done." over an unconfigured engine).
-    // The recovery command MUST include the selected scope flag (--local or --global)
-    // for exact reproducibility.
-    const scopeFlag = scope === 'local' ? '--local' : '--global';
-    throw new Error(
-      'Coder (crush engine) setup incomplete: the wizard saved the Z.AI credential but did not ' +
-        'seed crush models or the permissions.run policy. Complete setup with the exact command:\n' +
-        `  triss coder init --engine crush ${scopeFlag}`,
-    );
+    const shCrush = deps.spawnSync || nodeSpawnSync;
+    const crushPolicy = crushEngine.resolveVersionPolicy(shCrush);
+    if (crushPolicy.configValid) {
+      // Version policy mirrors init: a found-but-incompatible binary still
+      // gets the permissions seed; the models write only runs when ready.
+      const crushProfile = readProviderConfigSnapshot().providers[resolvedCrushProvider];
+      const bareAtom = (atom) => (typeof atom?.value === 'string' && atom.value.includes('/')
+        ? atom.value.slice(atom.value.indexOf('/') + 1)
+        : atom?.value);
+      const crushLarge = bareAtom(crushProfile?.model) || getProviderDefinition(resolvedCrushProvider).defaults.model;
+      const crushSmall = bareAtom(crushProfile?.smallModel) || getProviderDefinition(resolvedCrushProvider).defaults.smallModel;
+      process.stderr.write(
+        pc.dim(`  · default models: ${crushLarge} (large) / ${crushSmall} (small)\n`),
+      );
+      if (crushPolicy.compatible) {
+        const res = crushEngine.configureCrushModels({ scope, large: crushLarge, small: crushSmall, sh: shCrush });
+        process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
+      }
+      seedCrushPermissions(scope);
+    }
+    return { provider: resolvedCrushProvider };
   }
   // The wizard postSetup path passes no provider — infer it from the
   // configured model/credential (no prompt) so a preset zen model is honored.

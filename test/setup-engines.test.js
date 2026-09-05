@@ -358,12 +358,10 @@ test('applyEngineSetup records a throwing runCoderSetup as a failed outcome', as
   assert.equal(result.providerResult, null);
 });
 
-test('applyEngineSetup routes crush through the real runCoderSetup and surfaces the recovery command (known gap)', async (t) => {
-  // The real runCoderSetup crush branch currently refuses to complete crush
-  // model/permission seeding and names the exact recovery command. This test
-  // pins that honest behavior: the refusal is RECORDED, never swallowed and
-  // never faked as success. Temp HOME/project keep loadEnvFiles() away from
-  // the developer's real env files.
+test('applyEngineSetup completes crush provider setup in place for any provider', async (t) => {
+  // The crush branch of runCoderSetup finishes setup itself: credential gate,
+  // profile-model pinning through `crush models use`, and the permissions.run
+  // seed. No second `coder init` round-trip is required.
   const home = mkdtempSync(join(tmpdir(), 'triss-setup-eng-home-'));
   const project = mkdtempSync(join(tmpdir(), 'triss-setup-eng-project-'));
   const prevHome = process.env.HOME;
@@ -371,7 +369,7 @@ test('applyEngineSetup routes crush through the real runCoderSetup and surfaces 
   const prevKey = process.env.ZHIPU_API_KEY;
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = project;
-  process.env.ZHIPU_API_KEY = 'sk-test-crush-gap-123456';
+  process.env.ZHIPU_API_KEY = 'sk-test-crush-setup-123456';
   t.after(() => {
     process.env.HOME = prevHome;
     if (prevRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
@@ -387,10 +385,9 @@ test('applyEngineSetup routes crush through the real runCoderSetup and surfaces 
     { probeEngine: () => compatiblePolicy('0.1.6', '0.1.6') },
   );
   const result = await applyEngineSetup(plan, { runInstall: async () => ({ ok: true }) });
-  assert.equal(result.status, 'incomplete');
+  assert.equal(result.status, 'applied');
   const providerOutcome = result.outcomes.find((o) => o.kind === 'provider-setup');
-  assert.equal(providerOutcome.status, 'failed');
-  assert.match(providerOutcome.reason, /triss coder init --engine crush/);
+  assert.equal(providerOutcome.status, 'applied');
 });
 
 test('applyEngineSetup validates its plan argument', async () => {
