@@ -84,6 +84,20 @@ test("site CI retries transient npm audit outages without weakening the audit", 
   assert.match(workflow, /npm run audit:dependencies/);
 });
 
+test("implementation workflow command is self-contained and cleans up from the project root", () => {
+  const page = read("src/pages/workflows/implementation.astro");
+  // The engine never sees the page: the run prompt must embed the concrete
+  // task it is supposed to implement.
+  assert.match(
+    page,
+    /triss coder run --isolate --session bounded-change "Add retries with exponential backoff to the HTTP client in src\/http\/client\.js/,
+  );
+  // Triss resolves project state from cwd: inventory and cleanup must run
+  // from the saved project root, never from inside the worktree.
+  assert.match(page, /PROJECT="\$PWD"/);
+  assert.match(page, /cd "\$PROJECT"\ntriss coder result clean/);
+});
+
 test("website coder engines and quickstarts match repository contracts", () => {
   const pkg = JSON.parse(read("../package.json"));
   const coderPage = read("src/pages/coder.astro");

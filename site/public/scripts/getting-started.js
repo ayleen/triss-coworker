@@ -43,6 +43,7 @@
     els = {
       pmControls: document.querySelector('[data-qs="pm-controls"]'),
       targetControls: document.querySelector('[data-qs="target-controls"]'),
+      doneControls: list('[data-qs="done-controls"]'),
       progress: document.querySelector('[data-qs="progress"]'),
       progressBar: document.getElementById("progress-bar"),
       progressLabel: document.getElementById("progress-label"),
@@ -61,6 +62,7 @@
       !els.progress ||
       !els.progressBar ||
       !els.progressLabel ||
+      !els.doneControls.length ||
       !pmButtons.length ||
       !targetButtons.length ||
       !doneButtons.length ||
@@ -114,6 +116,9 @@
 
     els.pmControls.hidden = false;
     els.targetControls.hidden = false;
+    els.doneControls.forEach(function (wrapper) {
+      wrapper.hidden = false;
+    });
     els.progress.hidden = false;
   }
 

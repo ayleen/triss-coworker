@@ -32,8 +32,18 @@ export const SOURCE_INSTALL_COMMANDS = [
   "triss --version && triss status",
 ];
 
-// Provider configuration and verification (step 3).
+// Provider configuration and verification (step 3). Standard mode is the
+// factual default: it configures the openai-compatible profile and then wires
+// MCP + rules for both hosts without asking. Other providers go through the
+// advanced wizard; a terminal-only setup can set the same profile directly.
 export const WIZARD_COMMAND = "triss config wizard";
+export const STANDARD_WIZARD_COMMAND = "triss config wizard --standard";
+export const ADVANCED_WIZARD_COMMAND = "triss config wizard --advanced";
+export const TERMINAL_PROVIDER_COMMANDS = [
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY <your key>",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL <main model>",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL <small model>",
+];
 export const STATUS_COMMAND = "triss status";
 
 // First delegated task (step 5). Example input for a project that has a

@@ -469,19 +469,19 @@ H1: `Delegate a bounded change. Inspect it before it ships.`
 
 1. **Prerequisites:** Git project, рабочий выбранный coding engine/provider, конкретные acceptance criteria. Ссылка на `/coder/` и setup; не выбирать за пользователя движок и не фиксировать одну модель.
 2. **Define:** цель, разрешённая область изменений, команды проверок проекта, что не менять. Показать marked `Example task`, не fabricated execution transcript.
-3. **Run:**
+3. **Run:** показать команду, в prompt которой встроена конкретная задача из блока Define (движок не видит страницу и предыдущий текст — имя сессии не передаёт контекст; рядом явно сказать «замените процитированный текст своим полным заданием»):
 
    ```sh
-   triss coder run --isolate --session bounded-change "Implement the agreed change, keep unrelated files untouched, and run the focused checks specified in the task. Report the changes, checks, and remaining limitations."
+   triss coder run --isolate --session bounded-change "Add retries with exponential backoff to the HTTP client in src/http/client.js. Do not change the public function signatures. Run the project's HTTP test suite and report the results. Do not touch files outside src/http/. Report the changes, checks, and remaining limitations."
    ```
 
 4. Объяснить: естественный язык задаёт задачу, не создаёт новую sandbox policy. `--isolate` не OS sandbox; explicit protection requirements не заменять best effort молча.
-5. **Locate the result:** читать фактический JSON envelope и доступную inventory (`triss coder result list`, `triss coder session list --engine opencode` — последняя команда отдельно отмечена примером для OpenCode; выбрать engine фактического запуска). Нельзя обещать retained artifact каждому успешному запуску: retention условна.
-6. **Inspect the actual worktree:** подставить путь, сообщённый реальным запуском. Показать команды `git -C "$WORKTREE" status --short`, `git -C "$WORKTREE" diff --cached`, `git -C "$WORKTREE" diff`, `git -C "$WORKTREE" ls-files --others --exclude-standard`. Рядом объяснить, что `$WORKTREE` назначается фактическому пути перед выполнением, не копируется из demo.
+5. **Locate the result:** читать фактический JSON envelope и доступную inventory (`triss coder result list`, `triss coder session list --engine opencode` — последняя команда отдельно отмечена примером для OpenCode; выбрать engine фактического запуска). Нельзя обещать retained artifact каждому успешному запуску: retention условна. Inventory выполняется из корня исходного проекта.
+6. **Inspect the actual worktree:** из корня проекта сохранить `PROJECT="$PWD"`, затем подставить путь, сообщённый реальным запуском. Показать команды `git -C "$WORKTREE" status --short`, `git -C "$WORKTREE" diff --cached`, `git -C "$WORKTREE" diff`, `git -C "$WORKTREE" ls-files --others --exclude-standard`. Рядом объяснить, что `$WORKTREE` назначается фактическому пути перед выполнением, не копируется из demo, а `$PROJECT` хранит исходный каталог для последующих шагов.
 7. Не ограничиваться `git diff`: Triss может stage deliverables. Проверить также untracked files, если они есть; diff-stat или files_changed не заменяет содержимое.
-8. **Verify:** перейти в фактический worktree и выполнить настоящие focused checks из задачи. Не подменять выполнение проверок пересказом engine output. Наличие exit code 0 не означает правильность результата.
+8. **Verify:** перейти в фактический worktree и выполнить настоящие focused checks из задачи, затем вернуться (`cd "$PROJECT"`). Inventory и cleanup выполнять только из корня исходного проекта: runtime определяет projectRoot через cwd, и изнутри `.triss/wt/...` эти команды увидят состояние worktree, а не проекта. Не подменять выполнение проверок пересказом engine output. Наличие exit code 0 не означает правильность результата.
 9. **Accept:** после проверки использовать обычный командный процесс Git (просмотр → осознанный commit/PR → review). Не заявлять автоматический merge, не показывать несуществующие `triss coder accept`, `result show`, `--expect`.
-10. **Reject/cleanup:** не удалять непросмотренный diff. После явного решения удалить конкретный retained result через `triss coder result clean <run-id>` либо конкретную неактивную session через `triss coder session clean <slug> --engine <actual-engine>`. В тексте отметить, что `<...>` — заменяемые значения из реального inventory, это не готовые literals для copy button.
+10. **Reject/cleanup:** не удалять непросмотренный diff. После явного решения, из корня исходного проекта (`cd "$PROJECT"`), удалить конкретный retained result через `triss coder result clean <run-id>` либо конкретную неактивную session через `triss coder session clean <slug> --engine <actual-engine>`. В тексте отметить, что `<...>` — заменяемые значения из реального inventory, это не готовые literals для copy button.
 11. Развести result cleanup и session cleanup: первое не удаляет persistent session. `triss coder clean` удаляет finished no-diff worktrees, не является универсальным reject. Не советовать `--all` или `--recover-live` как обычный путь.
 12. **Limits / Next:** execution/capability warnings, границы worktree, `/security/`, `/coder/`, полный reliable-delegation contract.
 
@@ -498,7 +498,7 @@ H1: `Delegate a bounded change. Inspect it before it ships.`
 3. Шаги:
    - `Check Node`: `node --version`, объяснение минимальной версии без закреплённого demo patch release.
    - `Install Triss`: `npm install -g triss-coworker`; альтернативы pnpm/yarn/curl/source в необязательном раскрытии после primary command.
-   - `Configure a provider`: `triss config wizard`; выбрать/сохранить свой provider, не показывать сочинённый пошаговый Easy transcript; `triss status` и объяснение готовности.
+   - `Configure a provider`: `triss config wizard`; выбрать/сохранить свой provider, не показывать сочинённый пошаговый Easy transcript; `triss status` и объяснение готовности. Описывать фактическое поведение текущего wizard: стандартный режим настраивает именно профиль `openai-compatible` (ключ + main model + small model) и без вопроса подключает оба host (Claude Code и Codex); другой провайдер — через `--advanced`; terminal-only путь без host — через `triss config set`. Текущие ограничения wizard не выдавать за постоянную политику продукта.
    - `Connect your agent`: соответствующая выбранному target инструкция ниже; если wizard уже подключил host — проверить, не требовать повторной настройки.
    - `Delegate a real task`: небольшая команда ask по явно существующим выбранным пользователем файлам, ссылка на runnable Triss-source case study. Не показывать выдуманные токены/стоимость для zai из тарифов DeepSeek.
 4. Target commands:

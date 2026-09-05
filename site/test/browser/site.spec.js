@@ -297,6 +297,47 @@ test("workflow pages link to the reference pages they depend on", async ({ page 
   await expect(page.locator('.workflow-next a[href="/security/"]')).toBeVisible();
 });
 
+test("quickstart checklist buttons are usable and update the progress counter", async ({ page }) => {
+  await page.goto("/docs/getting-started/");
+  const doneControls = page.locator('[data-qs="done-controls"]');
+  await expect(doneControls.first()).toBeVisible();
+  const label = page.locator("#progress-label");
+  await expect(label).toHaveText("0 / 5 done");
+
+  const stepOne = page.locator('[data-step="1"]');
+  await stepOne.click();
+  await expect(stepOne).toHaveAttribute("aria-pressed", "true");
+  await expect(label).toHaveText("1 / 5 done");
+
+  await stepOne.click();
+  await expect(stepOne).toHaveAttribute("aria-pressed", "false");
+  await expect(label).toHaveText("0 / 5 done");
+});
+
+test("primary call-to-action keeps readable text color on hover", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  const cta = page.locator(".home-hero__actions .btn-primary");
+  await cta.hover();
+  const colors = await cta.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(colors.color).toBe("rgb(11, 13, 16)");
+  expect(colors.background).not.toBe(colors.color);
+});
+
+test("mobile menu highlights the current section", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/workflows/");
+  await page.locator("#mobile-menu-btn").click();
+  const active = page.locator('#mobile-nav a[href="/workflows/"]');
+  const inactive = page.locator('#mobile-nav a[href="/cost/"]');
+  await expect(active).toHaveCSS("color", "rgb(95, 180, 100)");
+  const inactiveColor = await inactive.evaluate((element) => getComputedStyle(element).color);
+  expect(inactiveColor).not.toBe("rgb(95, 180, 100)");
+});
+
 test("reduced-motion preference disables meaningful animation", async ({ browser }) => {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1000 },

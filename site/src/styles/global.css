@@ -229,6 +229,13 @@ input[type="range"]::-moz-range-thumb {
   padding: 14px 20px;
   cursor: pointer;
 }
+/* The generic a:hover accent color is unreadable on the accent background;
+   the primary button keeps dark text on hover. */
+.btn-primary:hover {
+  color: #0b0d10;
+  background: var(--color-accent-link-hover);
+  border-color: var(--color-accent-link-hover);
+}
 .btn-secondary {
   display: inline-flex;
   align-items: center;

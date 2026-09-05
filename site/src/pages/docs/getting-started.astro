@@ -10,7 +10,9 @@ import {
   PACKAGE_MANAGERS,
   STANDALONE_INSTALL_COMMAND,
   SOURCE_INSTALL_COMMANDS,
-  WIZARD_COMMAND,
+  STANDARD_WIZARD_COMMAND,
+  ADVANCED_WIZARD_COMMAND,
+  TERMINAL_PROVIDER_COMMANDS,
   STATUS_COMMAND,
   FIRST_TASK_COMMAND_LINES,
   AGENT_TARGETS,
@@ -184,16 +186,29 @@ const STEPS = [
           Triss runs model calls through one canonical provider runtime, and you choose whose
           credential to use — for example <code>openai-compatible</code>, <code>zai</code>,
           <code>opencode-zen</code>, <code>opencode-go</code>, <code>moonshot</code>, or
-          <code>kimi-for-coding</code>. Run the interactive wizard and save your own provider:
+          <code>kimi-for-coding</code>. The wizard's standard path (its default) configures
+          the <code>openai-compatible</code> profile: it asks for the API key, a main model,
+          and a small model, saves them to the global env file (<code>--local</code> saves a
+          project-local <code>./.triss.env</code> instead), and then — without asking —
+          registers the MCP server and agent rules for both Claude Code and Codex:
         </p>
-        <pre tabindex="0" class="code-block qs-cmd"><code>{`$ ${WIZARD_COMMAND}`}</code></pre>
+        <pre tabindex="0" class="code-block qs-cmd"><code>{`$ ${STANDARD_WIZARD_COMMAND}`}</code></pre>
         <p class="qs-step__body">
-          The wizard writes the global configuration by default (<code>--local</code> saves a
-          project-local <code>./.triss.env</code> instead). Two factual flags:
-          <code>--standard</code> records an API key plus one model and skips the mode prompt;
-          <code>--advanced</code> opens the full wizard with presets, base URL, and integrations.
-          In standard mode the wizard can also wire Triss into the agent you choose — if you let
-          it, step 4 below becomes a verification step rather than a new setup.
+          Two behaviors of the current version matter here. First, standard mode writes the
+          <code>openai-compatible</code> profile specifically — for a different provider such
+          as <code>zai</code> or <code>moonshot</code>, run the full wizard with
+          <code>{ADVANCED_WIZARD_COMMAND}</code>, which walks the provider catalogue, presets,
+          base URL, and integrations. Second, standard mode wires both hosts automatically and
+          offers no skip prompt today — that is how this version behaves, not a permanent
+          design. For a terminal-only setup with no host wiring, set the same profile
+          directly:
+        </p>
+        <pre tabindex="0" class="code-block qs-cmd"><code>{TERMINAL_PROVIDER_COMMANDS.map((line) => `$ ${line}`).join("\n")}</code></pre>
+        <p class="qs-step__body">
+          <code>&lt;...&gt;</code> values are placeholders for your own key and model ids. You
+          can also omit the value and enter it interactively — key and token values are
+          masked as you type. With no host wired, nothing is written to Claude Code or Codex;
+          the CLI alone is enough for the workflows on this site.
         </p>
         <p class="qs-step__body">Then check that your configuration is ready:</p>
         <pre tabindex="0" class="code-block qs-cmd"><code>{`$ ${STATUS_COMMAND}`}</code></pre>
@@ -222,9 +237,10 @@ const STEPS = [
         </div>
         <p class="qs-step__body">
           Connect Triss to the host where you will use it — the guide for each host is below.
-          If the configuration wizard already wired your agent during step 3, verify the result
-          with <code>{STATUS_COMMAND}</code> and restart the host session instead of re-running
-          setup.
+          If you ran the standard wizard in step 3, it already registered both Claude Code and
+          Codex: verify the result with <code>{MCP_STATUS_COMMAND}</code> and restart the host
+          session instead of re-running setup. Terminal users skip host wiring entirely — the
+          CLI is the whole interface for that target.
         </p>
 
         <div class="qs-panel qs-panel--agent" data-agent-panel={claude.id}>

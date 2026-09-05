@@ -66,7 +66,13 @@ import Footer from "../../components/Footer.astro";
 
       <section class="workflow-block">
         <h2 class="workflow-block__title">Run</h2>
-        <pre tabindex="0" class="code-block"><code>triss coder run --isolate --session bounded-change "Implement the agreed change, keep unrelated files untouched, and run the focused checks specified in the task. Report the changes, checks, and remaining limitations."</code></pre>
+        <p>
+          The whole task travels in the quoted prompt — the engine starts with no
+          memory of this page or of anything you defined before the command, and the
+          session name is only a label, not context. This example embeds the Example
+          task from above; replace the quoted text with your own complete task:
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss coder run --isolate --session bounded-change "Add retries with exponential backoff to the HTTP client in src/http/client.js. Do not change the public function signatures. Run the project's HTTP test suite and report the results. Do not touch files outside src/http/. Report the changes, checks, and remaining limitations."</code></pre>
         <p>
           <code>--isolate</code> runs the task in a disposable Git worktree under
           <code>.triss/wt/&lt;slug&gt;</code>; <code>--session</code> gives the run a
@@ -109,10 +115,12 @@ triss coder session list --engine opencode</code></pre>
       <section class="workflow-block">
         <h2 class="workflow-block__title">Inspect the actual worktree</h2>
         <p>
-          Assign <code>$WORKTREE</code> to the path your real run reported, then look at
-          what actually changed — staged, unstaged, and untracked:
+          From your project root, save it and assign <code>$WORKTREE</code> to the path
+          your real run reported, then look at what actually changed — staged,
+          unstaged, and untracked:
         </p>
-        <pre tabindex="0" class="code-block"><code>WORKTREE="&lt;path reported by your run&gt;"
+        <pre tabindex="0" class="code-block"><code>PROJECT="$PWD"
+WORKTREE="&lt;path reported by your run&gt;"
 git -C "$WORKTREE" status --short
 git -C "$WORKTREE" diff --cached
 git -C "$WORKTREE" diff
@@ -120,7 +128,8 @@ git -C "$WORKTREE" ls-files --others --exclude-standard</code></pre>
         <p>
           <code>$WORKTREE</code> is assigned to the actual path before running — it is
           not copied from this demo. <code>&lt;...&gt;</code> placeholders on this page
-          are replaceable values, not literals to paste.
+          are replaceable values, not literals to paste. <code>$PROJECT</code> keeps
+          your original directory for the steps below.
         </p>
         <div class="callout">
           <p>
@@ -136,13 +145,18 @@ git -C "$WORKTREE" ls-files --others --exclude-standard</code></pre>
         <p>
           Change into the actual worktree and run the focused checks specified in the
           task — the real commands, not a recap of what the engine reported about
-          itself:
+          itself — then return to your project:
         </p>
         <pre tabindex="0" class="code-block"><code>cd "$WORKTREE"
-# run your project's focused checks exactly as specified in the task</code></pre>
+# run your project's focused checks exactly as specified in the task
+cd "$PROJECT"</code></pre>
         <p>
           An exit code of 0 does not prove the result is correct. Verification is
-          reading the diff and running the checks yourself.
+          reading the diff and running the checks yourself. Return to
+          <code>$PROJECT</code> before any inventory or cleanup command: Triss
+          resolves project state from the current directory, and run from inside the
+          worktree those commands would look at the worktree's own state instead of
+          your project's.
         </p>
       </section>
 
@@ -160,9 +174,12 @@ git -C "$WORKTREE" ls-files --others --exclude-standard</code></pre>
         <h2 class="workflow-block__title">Reject and clean up</h2>
         <p>
           Do not delete a diff you have not reviewed. After an explicit decision to
-          reject, remove the specific retained result or the specific inactive session:
+          reject, run the targeted cleanup from your project root
+          (<code>cd "$PROJECT"</code> if you are still in the worktree) and remove the
+          specific retained result or the specific inactive session:
         </p>
-        <pre tabindex="0" class="code-block"><code>triss coder result clean &lt;run-id&gt;
+        <pre tabindex="0" class="code-block"><code>cd "$PROJECT"
+triss coder result clean &lt;run-id&gt;
 triss coder session clean &lt;slug&gt; --engine &lt;actual-engine&gt;</code></pre>
         <p>
           Take <code>&lt;run-id&gt;</code>, <code>&lt;slug&gt;</code>, and
