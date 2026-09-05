@@ -279,6 +279,25 @@ test('production engine adapter projects the resolved route through coder and no
     runId: 'run_test',
   });
 });
+test('projected engine filters malformed warning metadata without failing a successful result', async () => {
+  const result = await executeProjectedEngineTask({
+    resolved: {
+      engine: 'opencode',
+      providerId: 'moonshot',
+      nativeModel: 'kimi-k2.7-code',
+    },
+    request: { task: 'review', prompt: 'Answer now.' },
+    snapshot,
+  }, {
+    runCoderRun: async (_prompt, _opts, deps) => {
+      deps.stdoutWrite(JSON.stringify({
+        final_text: 'done',
+        warnings: [null, 'kept', 42, { message: 'discarded' }],
+      }) + '\n');
+    },
+  });
+  assert.deepEqual(result.warnings, ['kept']);
+});
 
 test('unsupported projected engines fail before coder execution', async () => {
   for (const engine of ['opencode2', 'omp', 'crush']) {

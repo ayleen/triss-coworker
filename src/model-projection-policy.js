@@ -17,7 +17,7 @@ const READ_ONLY_AGENT_PERMISSION = Object.freeze({
   external_directory: 'deny',
 });
 
-export const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
+const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
   name: READ_ONLY_PROJECTION_AGENT,
   description: 'Triss run-scoped read-only model projection agent.',
   mode: 'primary',

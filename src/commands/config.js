@@ -21,6 +21,7 @@ import {
 import { multiSelect } from '../picker.js';
 import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
 import { CODER_MANIFEST } from './coder.js';
+import { DEFAULT_MODEL_ENGINE, assertModelExecutionEngine } from '../provider-contract.js';
 
 // Exported for reuse by coder.js (`--global`/`--local` mean the same
 // thing everywhere in triss) — see the identical logic that used to live
@@ -349,7 +350,7 @@ async function runStandardWizard(path, current) {
   if (model) setVar(path, 'TRISS_OPENAI_COMPATIBLE_MODEL', model);
   if (smallModel) setVar(path, 'TRISS_OPENAI_COMPATIBLE_SMALL_MODEL', smallModel);
   setVar(path, 'TRISS_DEFAULT_PROVIDER', 'openai-compatible');
-  setVar(path, 'TRISS_DEFAULT_ENGINE', 'direct');
+  setVar(path, 'TRISS_DEFAULT_ENGINE', DEFAULT_MODEL_ENGINE);
   setVar(path, 'TRISS_CONFIG_SCHEMA', '2');
 
   process.stdout.write(
@@ -500,7 +501,6 @@ export async function runSet(key, value, opts) {
   }
   let scope = resolveScope(opts);
   if (!scope) scope = await chooseScope();
-  const path = ensureEnvFile(scope);
 
   let resolved = value;
   if (resolved === '-') {
@@ -510,7 +510,11 @@ export async function runSet(key, value, opts) {
     resolved = await prompt(key, { hidden: isSecretKey(key) });
   }
   if (!resolved) throw new Error('Empty value — aborted');
+  if (key === 'TRISS_DEFAULT_ENGINE') {
+    assertModelExecutionEngine(resolved, key);
+  }
 
+  const path = ensureEnvFile(scope);
   setVar(path, key, resolved);
   process.stdout.write(pc.green(`✓ ${key} saved to ${path}\n`));
   if (scope === 'local') maybeAddGitignore();

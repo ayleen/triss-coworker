@@ -81,6 +81,13 @@ test('MIGRATE-02b: an explicit non-direct default engine survives migration plan
   assert.match(plan.cleanup, /TRISS_DEFAULT_ENGINE=opencode/);
 });
 
+test('MIGRATE-02c: an invalid default engine fails migration planning with its path', () => {
+  assert.throws(
+    () => planEnvMigration('TRISS_DEFAULT_ENGINE=opencde\n', { path: '/safe/.triss.env' }),
+    /Invalid TRISS_DEFAULT_ENGINE in \/safe\/\.triss\.env "opencde"/,
+  );
+});
+
 test('MIGRATE-03: conflicting canonical fields fail before mutation and never expose values', () => {
   const input = 'TRISS_WORKER_API_KEY=old-secret\nTRISS_OPENAI_COMPATIBLE_API_KEY=new-secret\n';
   assert.throws(

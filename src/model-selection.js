@@ -77,7 +77,10 @@ export function resolveModelSelection(request = {}, snapshot) {
     : assertModelExecutionEngine(request.defaultEngine, 'command default engine');
   const engine = validated.engine
     || commandDefaultEngine
-    || assertModelExecutionEngine(configuredEngine.value, 'configured default engine');
+    || assertModelExecutionEngine(
+      configuredEngine.value,
+      `configured default engine${configuredEngine.path ? ` in ${configuredEngine.path}` : ''}`,
+    );
 
   return deepFreeze({
     role,

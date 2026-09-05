@@ -114,6 +114,20 @@ test('runSet validates the variable name and local scope lands in the project fi
   }
 });
 
+test('runSet rejects an invalid TRISS_DEFAULT_ENGINE before writing it', async () => {
+  const s = sandbox();
+  try {
+    const { runSet } = await importCommands('set-engine');
+    await assert.rejects(
+      () => runSet('TRISS_DEFAULT_ENGINE', 'opencde', { global: true }),
+      /Invalid TRISS_DEFAULT_ENGINE "opencde"/,
+    );
+    assert.equal(existsSync(s.globalPath), false);
+  } finally {
+    s.restore();
+  }
+});
+
 test('runGet exits with status 1 for unset variables', async () => {
   const s = sandbox();
   try {

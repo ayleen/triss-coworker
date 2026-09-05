@@ -179,7 +179,7 @@ test('MCP coderStatusHandler renders mode + MCP-specific remediation for both fa
   process.env.TRISS_CODER_ENGINE = 'opencode';
   const ocOut = await coderStatusHandler();
   assert.match(ocOut, /Default credential mode: best_effort_raw/u);
-  assert.match(ocOut, /Protected mode: set protectCredentials: true/u);
+  assert.match(ocOut, /Protected mode: set protect_credentials: true/u);
 });
 
 test('runCoderRun forwards a RAW protectCredentials value — resolver normalizes it', async (t) => {

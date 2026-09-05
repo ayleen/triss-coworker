@@ -41,8 +41,7 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     const text = await withCall(() =>
       tool.handler(args, {
         signal: extra.signal,
-        modelProtectCredentials:
-          Boolean(args.protectCredentials) || Boolean(args.protect_credentials),
+        modelProtectCredentials: Boolean(args.protect_credentials),
         onWarnings: (warnings) => warningChunks.push(...warnings),
         ...(toolHasOutputSchema
           ? { onReasoning: (chunk) => reasoningChunks.push(chunk) }

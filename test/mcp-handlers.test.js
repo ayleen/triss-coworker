@@ -342,7 +342,6 @@ test('MCP model calls preserve raw warnings and forward protected credential int
   const protectedResult = await callModel(
     {
       task: 'ask',
-      protectCredentials: false,
       protect_credentials: true,
       messages: [{ role: 'user', content: 'protected' }],
     },

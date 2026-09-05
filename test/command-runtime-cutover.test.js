@@ -123,8 +123,8 @@ test('CMD-RUNTIME-03: every core MCP model tool exposes one canonical selection 
     assert.deepEqual(tool.inputSchema.properties.effort.enum, MODEL_EFFORT_LEVELS, name);
     assert.deepEqual(tool.inputSchema.properties.engine.enum, MODEL_EXECUTION_ENGINES, name);
     assert.equal(tool.inputSchema.properties.model.type, 'string', name);
-    assert.equal(tool.inputSchema.properties.protectCredentials.type, 'boolean', name);
     assert.equal(tool.inputSchema.properties.protect_credentials.type, 'boolean', name);
+    assert.equal(tool.inputSchema.properties.protectCredentials, undefined, name);
     assert.equal('preset' in tool.inputSchema.properties, false, name);
   }
 });

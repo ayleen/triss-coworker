@@ -70,11 +70,14 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   });
   const envelope = parseEnvelope(stdout, engine);
   const text = typeof envelope.final_text === 'string' ? envelope.final_text : '';
+  const warnings = Array.isArray(envelope.warnings)
+    ? envelope.warnings.filter((warning) => typeof warning === 'string')
+    : [];
   if (!text) {
     const detail = envelope.error?.message ||
       (typeof envelope.error === 'string' ? envelope.error : null) ||
       envelope.process_status ||
-      envelope.warnings?.at?.(-1) ||
+      warnings.at(-1) ||
       envelope.exit_reason ||
       'unknown engine outcome';
     throw new Error(
@@ -86,7 +89,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     text,
     finishReason: envelope.exit_reason,
     usage: executionUsage(envelope),
-    warnings: envelope.warnings,
+    warnings,
     rawMetadata: {
       engine,
       engineVersion: envelope.engine_version || null,

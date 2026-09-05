@@ -108,13 +108,9 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
     enum: MODEL_EXECUTION_ENGINES,
     description: 'Execution engine',
   },
-  protectCredentials: {
-    type: 'boolean',
-    description: 'Use parent-owned credential protection for supported projected engines',
-  },
   protect_credentials: {
     type: 'boolean',
-    description: 'Snake-case alias of protectCredentials; either true value enables protection',
+    description: 'Use parent-owned credential protection for the OpenCode model projection',
   },
   effort: {
     type: 'string',
@@ -970,7 +966,7 @@ const CODER_TOOLS = [
       '`completion_tokens` remain as deprecated aliases. By default ' +
       'OpenCode/OpenCode2 runs use best_effort_raw credential handling — the ' +
       'selected raw provider credential may be read by same-UID engine code, ' +
-      'plugins, tools, or shell commands; pass protectCredentials:true for the ' +
+      'plugins, tools, or shell commands; pass protect_credentials:true for the ' +
       'parent-owned credential proxy with strict executable-surface gates. ' +
       'This tool\'s ' +
       'timeout defaults to 1500s (25 min) since coding runs over MCP are ' +
@@ -999,8 +995,7 @@ const CODER_TOOLS = [
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         allow_best_effort_caller_worktree: { type: 'boolean', description: 'Snake-case alias of allowBestEffortCallerWorktree (the handler already accepts it; declared so schema-filtering clients forward it).' },
-        protectCredentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2/OMP use best_effort_raw unless set; Crush is always protected. Any truthy value enables protection; protect_credentials is accepted as an alias.' },
-        protect_credentials: { type: 'boolean', description: 'Snake-case alias of protectCredentials (accepted so a convention mismatch cannot silently downgrade the run to raw credential exposure).' },
+        protect_credentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2/OMP use best_effort_raw unless set; Crush is always protected.' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },

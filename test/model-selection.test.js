@@ -58,7 +58,7 @@ test('resolver rejects invalid configured and command-default engines', () => {
   const invalid = config({ local: 'TRISS_DEFAULT_ENGINE=missing\n' });
   assert.throws(
     () => resolveModelSelection({}, invalid),
-    /Invalid configured default engine "missing"/,
+    /Invalid configured default engine in \/local "missing"/,
   );
   assert.throws(
     () => resolveModelSelection({ defaultEngine: 'missing' }, config()),

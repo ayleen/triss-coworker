@@ -562,6 +562,7 @@ test('projected OpenCode run installs and verifies a primary read-only agent bef
       ['runtime name build', (agent) => { agent.name = 'build'; }],
       ['runtime name general', (agent) => { agent.name = 'general'; }],
       ['runtime name missing', (agent) => { agent.name = 'missing-agent'; }],
+      ['description drift', (agent) => { agent.description = 'other-agent'; }],
       ['default agent drift', (_agent, effective) => { effective.default_agent = 'coder'; }],
       ['subagent mode', (agent) => { agent.mode = 'subagent'; }],
       ['writable edits', (agent) => { agent.permission.edit = 'allow'; }],
