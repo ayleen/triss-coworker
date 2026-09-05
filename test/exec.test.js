@@ -10,6 +10,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decideRoute, runExecWithDeps } from '../src/commands/exec.js';
 import { createExecutionResult } from '../src/transports/result.js';
+import { runAskWithDeps } from '../src/commands/ask.js';
+import { createProviderConfigSnapshot } from '../src/provider-config.js';
+import { executeModelTask } from '../src/model-runtime.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(ROOT, 'bin', 'triss.js');
@@ -121,6 +124,9 @@ test('review inputs and bounded downstream options are forwarded exactly', async
       provider: 'glm',
       model: 'pro',
       format: 'evidence',
+      engine: 'direct',
+      effort: 'high',
+      protectCredentials: true,
       maxTokens: 16_384,
     },
     {
@@ -135,6 +141,9 @@ test('review inputs and bounded downstream options are forwarded exactly', async
   assert.equal(reviewCall.opts.model, 'pro');
   assert.equal(reviewCall.opts.format, 'evidence');
   assert.equal(reviewCall.opts.maxTokens, 16_384);
+  assert.equal(reviewCall.opts.engine, 'direct');
+  assert.equal(reviewCall.opts.effort, 'high');
+  assert.equal(reviewCall.opts.protectCredentials, true);
 
   assert.equal(decideRoute({ task: 'compare sources', paths: ['a'], urls: ['https://example.test'] }).route, 'ask');
 });
@@ -308,53 +317,110 @@ test('coder route forwards the common --max-tokens to runCoderRun under its expe
   assert.equal('maxTokens' in without, false);
 });
 
-test('coder route forwards --protect-credentials; ask/review/chat reject it', async () => {
-  let captured;
+test('exec forwards the complete model-selection contract to every model-backed route', async () => {
+  let coder;
   await runExecWithDeps(
     { task: 'implement the parser module', code: true, protectCredentials: true },
     {
       stdout: () => {},
       stderr: () => {},
-      runCoderRun: async (prompt, opts) => { captured = opts; },
+      runCoderRun: async (_prompt, opts) => { coder = opts; },
     },
   );
-  assert.equal(captured.protectCredentials, true, 'the coder route must forward the flag untouched');
+  assert.equal(coder.protectCredentials, true);
 
-  const deps = { stdout: () => {}, stderr: () => {} };
-  await assert.rejects(
-    () => runExecWithDeps({ task: 'summarize this', paths: ['README.md'], protectCredentials: true }, deps),
-    /--protect-credentials is not supported by the ask route/,
-  );
-  await assert.rejects(
-    () => runExecWithDeps({ pr: '12', protectCredentials: true }, deps),
-    /--protect-credentials is not supported by the review route/,
-  );
-  await assert.rejects(
-    () => runExecWithDeps({ task: 'hello there friend', chat: true, protectCredentials: true }, deps),
-    /--protect-credentials is not supported by the chat route/,
-  );
+  const common = {
+    provider: 'zai',
+    model: 'glm-5.2',
+    engine: 'direct',
+    effort: 'high',
+    protectCredentials: true,
+  };
+  const routed = [];
+  const deps = {
+    stdout: () => {},
+    stderr: () => {},
+    runAsk: async (opts) => routed.push(['ask', opts]),
+    runReview: async (_pr, opts) => routed.push(['review', opts]),
+    runChat: async (_prompt, opts) => routed.push(['chat', opts]),
+  };
+  await runExecWithDeps({ task: 'summarize this', paths: ['README.md'], ...common }, deps);
+  await runExecWithDeps({ task: 'review this', review: true, ...common }, deps);
+  await runExecWithDeps({ task: 'hello there friend', chat: true, ...common }, deps);
+
+  for (const [route, opts] of routed) {
+    assert.equal(opts.provider, 'zai', route);
+    assert.equal(opts.model, 'glm-5.2', route);
+    assert.equal(opts.engine, 'direct', route);
+    assert.equal(opts.effort, 'high', route);
+    assert.equal(opts.protectCredentials, true, route);
+  }
 });
 
-test('exec --explain reports unsupported --protect-credentials on non-coder routes without executing', async () => {
-  const cases = [
-    { input: { task: 'summarize this', paths: ['README.md'], protectCredentials: true, explain: true }, route: 'ask' },
-    { input: { pr: '12', protectCredentials: true, explain: true }, route: 'review' },
-    { input: { task: 'hello there friend', chat: true, protectCredentials: true, explain: true }, route: 'chat' },
-  ];
-  for (const { input } of cases) {
-    const result = await runExecWithDeps(input, { stdout: () => {} });
-    // Explain mode captures the validation failure instead of throwing.
-    assert.equal(result.route, null, JSON.stringify(input));
-    assert.match(result.reason, /--protect-credentials/);
-    assert.match(result.reason, /not supported by the/);
+test('exec explicit direct engine overrides a persisted OpenCode default before adapter dispatch', async () => {
+  const snapshot = createProviderConfigSnapshot({
+    parentEnv: {},
+    files: [{ scope: 'local', path: '/project/.triss.env', exists: true }],
+    readFile: () => [
+      'TRISS_DEFAULT_PROVIDER=opencode-go',
+      'TRISS_DEFAULT_ENGINE=opencode',
+      'TRISS_OPENCODE_GO_SMALL_MODEL=muse-spark-1.3-contributor',
+    ].join('\n'),
+  });
+  let transportCalled = false;
+  let engineCalled = false;
+  const originalOut = process.stdout.write;
+  const originalErr = process.stderr.write;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    await runExecWithDeps(
+      {
+        task: 'summarize this',
+        paths: ['README.md'],
+        engine: 'direct',
+        noStream: true,
+      },
+      {
+        stdout: () => {},
+        stderr: () => {},
+        runAsk: (opts) => runAskWithDeps(opts, {
+          executeModelTask: (request) => executeModelTask(request, {
+            snapshot,
+            executeTransport: async () => {
+              transportCalled = true;
+              return createExecutionResult({ text: 'direct answer', finishReason: 'stop' });
+            },
+            engines: {
+              opencode: async () => {
+                engineCalled = true;
+                throw new Error('OpenCode adapter must not run');
+              },
+            },
+          }),
+        }),
+      },
+    );
+  } finally {
+    process.stdout.write = originalOut;
+    process.stderr.write = originalErr;
   }
+  assert.equal(transportCalled, true);
+  assert.equal(engineCalled, false);
+});
 
-  // The coder route explains cleanly WITH the flag (explain never executes).
-  const ok = await runExecWithDeps(
-    { task: 'implement it', code: true, protectCredentials: true, explain: true },
-    { stdout: () => {}, stderr: () => {} },
-  );
-  assert.equal(ok.route, 'coder');
+test('exec explain accepts engine and protected credentials on model-backed routes', async () => {
+  for (const input of [
+    { task: 'summarize this', paths: ['README.md'] },
+    { task: 'review this', review: true },
+    { task: 'hello there friend', chat: true },
+  ]) {
+    const result = await runExecWithDeps(
+      { ...input, engine: 'direct', protectCredentials: true, explain: true },
+      { stdout: () => {}, stderr: () => {} },
+    );
+    assert.notEqual(result.route, null, JSON.stringify(input));
+  }
 });
 
 test('exec coder token caps are real for Crush and rejected for OpenCode instead of ignored', async () => {
@@ -374,16 +440,12 @@ test('exec coder token caps are real for Crush and rejected for OpenCode instead
 test('exec fails closed when explicit options are unsupported by the selected route', async () => {
   const deps = { stdout: () => {}, stderr: () => {} };
   await assert.rejects(
-    () => runExecWithDeps({ task: 'define JWT', chat: true, provider: 'glm', format: 'evidence' }, deps),
-    /--provider, --format.*not supported by the chat route/,
+    () => runExecWithDeps({ task: 'define JWT', chat: true, provider: 'zai', format: 'evidence' }, deps),
+    /--format.*not supported by the chat route/,
   );
   await assert.rejects(
     () => runExecWithDeps({ task: 'fix it', code: true, system: 'x', format: 'evidence' }, deps),
     /--format, --system.*not supported by the coder route/,
-  );
-  await assert.rejects(
-    () => runExecWithDeps({ task: 'summarize', paths: ['README.md'], engine: 'crush' }, deps),
-    /--engine.*not supported by the ask route/,
   );
   await assert.rejects(
     () => runExecWithDeps({ task: 'summarize', paths: ['README.md'], isolate: false }, deps),
@@ -399,7 +461,7 @@ test('exec --explain reports unsupported options as a non-executable JSON decisi
   const out = [];
   let called = false;
   const result = await runExecWithDeps(
-    { task: 'define JWT', chat: true, provider: 'glm', format: 'evidence', explain: true },
+    { task: 'define JWT', chat: true, provider: 'zai', format: 'evidence', explain: true },
     {
       stdout: (value) => out.push(value),
       stderr: () => {},
@@ -409,7 +471,7 @@ test('exec --explain reports unsupported options as a non-executable JSON decisi
   assert.equal(called, false);
   assert.equal(result.route, null);
   assert.equal(result.executes, null);
-  assert.match(result.reason, /--provider, --format.*not supported by the chat route/);
+  assert.match(result.reason, /--format.*not supported by the chat route/);
   assert.deepEqual(JSON.parse(out.join('')), result);
 
   const cli = spawnSync(process.execPath, [

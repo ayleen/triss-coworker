@@ -223,7 +223,7 @@ The envelope carries eight `execution_capabilities` values — `sandbox`,
 - Credential handling is mode-based: OpenCode/OpenCode2/OMP default to
   `best_effort_raw` (the envelope reports `credential_isolation` as
   `unavailable` and warns that same-UID code may read the selected raw
-  credential); `--protect-credentials` (`protectCredentials: true` over MCP)
+  credential); `--protect-credentials` (`protect_credentials: true` over MCP)
   selects the protected proxy mode, where unavailable credential isolation
   ALWAYS blocks before spawn to protect the real provider key. Crush is always
   protected. OMP's default worktree and run-private config limit repository

@@ -2,8 +2,12 @@
 // Copyright (c) 2026 ayleen
 
 import { createExecutionResult } from './transports/result.js';
+import { MODEL_EXECUTION_ENGINES } from './provider-contract.js';
+import { resolveModelProjectionPolicy } from './model-projection-policy.js';
 
-const SUPPORTED_ENGINES = Object.freeze(['opencode', 'opencode2', 'omp', 'crush']);
+const SUPPORTED_ENGINES = Object.freeze(
+  MODEL_EXECUTION_ENGINES.filter((engine) => engine !== 'direct'),
+);
 
 function promptFromRequest(request = {}) {
   if (typeof request.prompt === 'string' && request.prompt.length > 0) return request.prompt;
@@ -46,14 +50,19 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   if (!SUPPORTED_ENGINES.includes(engine)) {
     throw new Error(`Unsupported execution engine "${String(engine)}"`);
   }
+  const policy = resolveModelProjectionPolicy(request?.task, engine);
   const runCoderRun = deps.runCoderRun || (await import('./commands/coder.js')).runCoderRun;
+  const timeoutSeconds = request.timeout === undefined ? undefined : request.timeout / 1000;
   let stdout = '';
   await runCoderRun(promptFromRequest(request), {
     engine,
     provider: resolved.providerId,
     model: resolved.nativeModel,
     effort: resolved.effort,
-    isolate: false,
+    modelProjectionTask: request.task,
+    isolate: policy.isolate,
+    protectCredentials: request.protectCredentials === true,
+    timeout: timeoutSeconds,
   }, {
     abortSignal: request.signal,
     providerConfigSnapshot: snapshot,
@@ -61,11 +70,14 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   });
   const envelope = parseEnvelope(stdout, engine);
   const text = typeof envelope.final_text === 'string' ? envelope.final_text : '';
+  const warnings = Array.isArray(envelope.warnings)
+    ? envelope.warnings.filter((warning) => typeof warning === 'string')
+    : [];
   if (!text) {
     const detail = envelope.error?.message ||
       (typeof envelope.error === 'string' ? envelope.error : null) ||
       envelope.process_status ||
-      envelope.warnings?.at?.(-1) ||
+      warnings.at(-1) ||
       envelope.exit_reason ||
       'unknown engine outcome';
     throw new Error(
@@ -77,6 +89,7 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     text,
     finishReason: envelope.exit_reason,
     usage: executionUsage(envelope),
+    warnings,
     rawMetadata: {
       engine,
       engineVersion: envelope.engine_version || null,

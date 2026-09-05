@@ -10,7 +10,7 @@ import {
   resolveLabelIds,
   bulkUpdateIssues,
 } from './client.js';
-import { summarize, printResult, IntegrationError } from '../_contract.js';
+import { summarize, printResult, IntegrationError, modelExecutionOptions } from '../_contract.js';
 
 function parseList(v) {
   if (!v) return [];
@@ -50,20 +50,22 @@ function formatIssueFull(i) {
   return lines.join('\n');
 }
 
-export async function searchCmd({ term, limit, question, provider, model, engine, effort, json }) {
+export async function searchCmd(opts) {
+  const { term, limit, question, json } = opts;
   const issues = await linear.search({ term, limit: parseInt(limit, 10) || 50 });
   if (json) return printResult(issues, { json: true });
   if (!issues.length) return printResult('(no issues)');
   const corpus = issues.map(formatIssueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, provider, model, engine, effort });
+    const out = await summarize({ corpus, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(idOrIdentifier, { question, provider, model, engine, effort, withComments, json }) {
+export async function issueCmd(idOrIdentifier, opts) {
+  const { question, withComments, json } = opts;
   const i = await linear.getIssue(idOrIdentifier);
   if (json) return printResult(i, { json: true });
   let text = formatIssueFull(i);
@@ -74,7 +76,7 @@ export async function issueCmd(idOrIdentifier, { question, provider, model, engi
     text += '\n\n--- Comments ---\n' + (cmts || '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
+    const out = await summarize({ corpus: text, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(text);
@@ -130,7 +132,8 @@ export async function createCmd(opts) {
   if (opts.json) printResult(issue, { json: true });
 }
 
-export async function commentsCmd(idOrIdentifier, { post, question, provider, model, engine, effort, json }) {
+export async function commentsCmd(idOrIdentifier, opts) {
+  const { post, question, json } = opts;
   if (post) {
     const issue = await linear.getIssue(idOrIdentifier);
     await linear.addComment(issue.id, post);
@@ -147,10 +150,7 @@ export async function commentsCmd(idOrIdentifier, { post, question, provider, mo
     const out = await summarize({
       corpus: corpus || '(no comments)',
       question,
-      provider,
-      model,
-      engine,
-      effort,
+      ...modelExecutionOptions(opts),
     });
     printResult(out);
   } else {

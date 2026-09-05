@@ -36,6 +36,7 @@ export async function runWriteWithDeps(opts, deps = {}) {
     model: opts.model,
     engine: opts.engine,
     effort: opts.effort,
+    protectCredentials: opts.protectCredentials,
     signal: deps.signal,
     timeout: opts.timeoutMs,
     input: {

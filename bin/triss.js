@@ -106,8 +106,15 @@ function addModelSelectionOptions(command) {
     .option('--provider <id>', 'canonical provider id')
     .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
     .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
+    .option('--protect-credentials', MODEL_PROTECT_HELP)
     .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort);
 }
+
+// Shared help text for model-backed credential protection.
+const MODEL_PROTECT_HELP =
+  'Use the parent-owned credential proxy for the OpenCode model projection.\n' +
+  'Fails closed when protected credential isolation cannot be enforced.\n' +
+  'OpenCode2, OMP, and Crush are rejected for model-backed commands.';
 
 // Shared help text for the credential-mode flag (`coder init` and `coder run`;
 // `triss exec --code` forwards it under its own shorter description).
@@ -228,14 +235,14 @@ program
   .option('--system <text>', 'forward the system prompt to ask/chat')
   .option('--stream', 'forward streaming preference')
   .option('--no-stream', 'disable forwarded streaming')
-  .option('--engine <name>', 'forward coder engine')
+  .option('--engine <name>', 'forward model execution engine')
   .option('--agent <name>', 'forward coder agent template')
   .option('--session <id>', 'forward coder session')
   .option('--continue', 'continue the most recent coder session')
   .option('--isolate', 'forward coder isolation')
   .option('--no-isolate', 'disable coder isolation')
   .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
-  .option('--protect-credentials', 'forward coder protected credential mode (parent-owned credential proxy; OpenCode/OpenCode2 only — crush is always protected)')
+  .option('--protect-credentials', 'forward protected credential mode for model-backed and coder routes')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')

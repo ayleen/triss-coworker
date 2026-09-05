@@ -38,6 +38,7 @@ export async function executeModelTask({
   model,
   engine,
   effort,
+  protectCredentials,
   signal,
   timeout,
 } = {}, deps = {}) {
@@ -53,9 +54,11 @@ export async function executeModelTask({
   }, snapshot);
   const request = Object.freeze({
     ...input,
+    task,
     route: resolved.route,
     effort: resolved.effort,
     signal,
+    protectCredentials: protectCredentials === true,
     timeout,
   });
 

@@ -52,6 +52,7 @@ export async function runAskWithDeps(opts, deps = {}) {
     provider,
     engine,
     effort,
+    protectCredentials,
     system,
   } = opts;
   const execute = deps.executeModelTask || executeModelTask;
@@ -59,13 +60,14 @@ export async function runAskWithDeps(opts, deps = {}) {
   let corpus = '';
   let fileCount = 0;
   let totalBytes = 0;
-
+  let hasUsableContext = false;
   if (paths?.length) {
     const expanded = expandPaths(paths);
     const fileResult = readFilesAsCorpus(expanded);
     corpus += fileResult.corpus;
     fileCount += fileResult.fileCount;
     totalBytes += fileResult.totalBytes;
+    hasUsableContext ||= fileResult.readFileCount > 0;
   }
 
   if (urls?.length) {
@@ -75,6 +77,7 @@ export async function runAskWithDeps(opts, deps = {}) {
       const { url, markdown, contentType } = await fetchAsMarkdown(u);
       parts.push(`<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`);
       totalBytes += markdown.length;
+      hasUsableContext ||= Boolean(markdown);
     }
     if (parts.length) corpus += (corpus ? '\n\n' : '') + parts.join('\n\n');
     fileCount += urls.length;
@@ -87,7 +90,15 @@ export async function runAskWithDeps(opts, deps = {}) {
       corpus += (corpus ? '\n\n' : '') + `<source kind="stdin">\n${stdinText}\n</source>`;
       totalBytes += stdinText.length;
       fileCount += 1;
+      hasUsableContext = true;
     }
+  }
+
+  if (paths?.length && !hasUsableContext) {
+    throw new Error(
+      'No readable file content was collected from --paths. Pass files or a glob such as "src/**/*.js"; ' +
+      'directories are not read recursively.',
+    );
   }
 
   process.stderr.write(
@@ -107,6 +118,7 @@ export async function runAskWithDeps(opts, deps = {}) {
     model,
     engine,
     effort,
+    protectCredentials,
     signal: deps.signal,
     timeout: opts.timeoutMs,
     input: {

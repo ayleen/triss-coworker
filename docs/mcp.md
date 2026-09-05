@@ -23,11 +23,32 @@ Model-backed tools share these optional fields:
 |---|---|---|
 | `provider` | `openai-compatible`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`, `kimi-for-coding` | Canonical provider id |
 | `model` | native provider model id | One-call role override |
+| `engine` | `direct`, `opencode`, `opencode2`, `omp`, `crush` | One-call execution-engine override |
+| `protect_credentials` | boolean | Request parent-owned credential protection for a supported projected engine |
 | `effort` | `minimal`, `low`, `medium`, `high`, `max` | Shared reasoning control |
 | `max_tokens` | positive integer | Explicit output cap |
 | `timeout_ms` | positive integer | Request timeout override |
 
-When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER` and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
+When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER`, `TRISS_DEFAULT_ENGINE`, and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
+
+For a complete OpenCode Go setup, first run:
+
+```bash
+triss coder init --engine opencode --provider opencode-go
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+```
+
+Bare model-backed requests then use a run-scoped active primary
+`triss-readonly-projection` agent, with `default_agent` pinned to that name.
+Its final effective permission object is verified against an exact
+deny-by-default, context-only contract: no ambient file, shell, edit, skill, or
+delegation tools are available because the selected context is supplied in the
+prompt. Set `protect_credentials` to request the parent-owned credential proxy.
+Every model-backed MCP tool returns projected-engine warnings separately in
+structured `warnings`. Restart the MCP host after changing persisted defaults.
 
 ## Core tools
 
@@ -55,6 +76,12 @@ Coder tools are listed when any canonical provider credential is configured:
 `triss_coder_run` accepts `engine`, canonical `provider` and `model`, `effort`, session/isolation fields, timeout, and credential-protection intent. It returns one normalized envelope. The provider key is selected from the canonical route; unrelated credentials are not forwarded. The small role comes from the selected provider profile.
 
 Supported engines: `opencode`, `opencode2`, `crush`, and `omp`. Crush accepts only `zai`.
+
+For compatibility, `triss_coder_run` also accepts the documented legacy
+`protectCredentials` spelling. It is deprecated but remains fail-safe: the
+camelCase and `protect_credentials` values are OR-merged, so any truthy value
+selects protected credential handling. New clients should send
+`protect_credentials`.
 
 ## Tracker tools
 

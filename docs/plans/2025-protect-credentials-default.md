@@ -102,7 +102,7 @@ triss config wizard coder \
 
 ### MCP
 
-В `triss_coder_run` добавить boolean `protectCredentials`. Затем:
+В `triss_coder_run` добавить boolean `protect_credentials`. Затем:
 
 * добавить поле в `src/mcp/tools.js`;
 * принять его в `coderRunHandler`;

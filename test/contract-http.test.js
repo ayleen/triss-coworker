@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { httpJson, stripHtml } from '../src/integrations/_contract.js';
+import { httpJson, modelExecutionOptions, stripHtml } from '../src/integrations/_contract.js';
 
 function setEnv(k, v) {
   const before = process.env[k];
@@ -176,4 +176,20 @@ test('REVIEW-ISSUE-02: a caller abort signal cancels httpJson mid-body', async (
     () => httpJson('https://example.com/caller-abort', { signal: controller.signal }),
     /Timeout after/,
   );
+});
+
+test('modelExecutionOptions preserves explicit credential protection for integration summaries', () => {
+  assert.deepEqual(modelExecutionOptions({
+    provider: 'opencode-go',
+    model: 'muse-spark-1.3-contributor',
+    engine: 'opencode',
+    effort: 'high',
+    protectCredentials: true,
+  }), {
+    provider: 'opencode-go',
+    model: 'muse-spark-1.3-contributor',
+    engine: 'opencode',
+    effort: 'high',
+    protectCredentials: true,
+  });
 });

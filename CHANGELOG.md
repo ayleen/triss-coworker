@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effort, but help prose is not a compatibility gate. Capability errors now
   name missing options separately from below-minimum versions. Pre-suffixed
   public/configured OpenCode 2 models are rejected before engine side effects.
+- Added `TRISS_DEFAULT_ENGINE` so model-backed commands can persist a direct or verified OpenCode route. OpenCode projections install and verify an active primary agent pinned as `default_agent`; its deny-by-default context-only policy provides no ambient file, delegation, skill, or executable tools, and the final merged agent state is audited before credentials are forwarded. Engine warnings remain structured across MCP model tools, explicit credential protection is available, and unverified OpenCode 2, OMP, and Crush projections are rejected before launch.
+- `triss_coder_run` retains the documented `protectCredentials` MCP spelling
+  as a deprecated compatibility alias. It is OR-merged with
+  `protect_credentials`, so either truthy spelling selects protected
+  credential handling; new clients should use `protect_credentials`.
 - OpenCode Go and Zen coder transports now retain an OpenCode-prefixed
   transient provider identity, selecting native OpenCode V1 request semantics.
   The protected credential proxy preserves only bounded correlation headers,

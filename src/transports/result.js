@@ -31,15 +31,20 @@ export function createExecutionResult({
   reasoning = '',
   finishReason,
   usage,
+  warnings = [],
   rawMetadata = {},
 } = {}) {
   if (typeof text !== 'string') throw new Error('Transport result text must be a string');
   if (typeof reasoning !== 'string') throw new Error('Transport result reasoning must be a string');
+  if (!Array.isArray(warnings) || warnings.some((warning) => typeof warning !== 'string')) {
+    throw new Error('Transport result warnings must be an array of strings');
+  }
   return Object.freeze({
     text,
     reasoning,
     finishReason: finishReason || null,
     usage: usage == null ? null : Object.freeze({ ...normalizeUsage(usage) }),
+    warnings: Object.freeze([...warnings]),
     rawMetadata: Object.freeze({ ...rawMetadata }),
   });
 }

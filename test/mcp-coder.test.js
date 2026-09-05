@@ -486,69 +486,61 @@ test(
 );
 
 test(
-  'triss_coder_run schema exposes protectCredentials with the best_effort_raw default documented',
+  'triss_coder_run schema retains deprecated protectCredentials alongside protect_credentials',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const tools = await listTools();
     const run = tools.find((t) => t.name === 'triss_coder_run');
     assert.ok(run, 'the coder run tool is listed');
-    const prop = run.inputSchema.properties.protectCredentials;
-    assert.ok(prop, 'protectCredentials must be part of the input schema');
-    assert.equal(prop.type, 'boolean');
-    assert.match(prop.description, /best_effort_raw/u);
-    // The snake alias must be DECLARED so schema-filtering clients forward it
-    // instead of dropping the key before the handler ever sees it.
-    const snake = run.inputSchema.properties.protect_credentials;
-    assert.ok(snake, 'the snake alias must be declared so schema-filtering clients forward it');
-    assert.equal(snake.type, 'boolean');
-    // Same treatment for the neighboring isolation opt-in.
-    const wtSnake = run.inputSchema.properties.allow_best_effort_caller_worktree;
-    assert.ok(wtSnake, 'allow_best_effort_caller_worktree must be declared so schema-filtering clients forward it');
-    assert.equal(wtSnake.type, 'boolean');
+    const legacy = run.inputSchema.properties.protectCredentials;
+    const canonical = run.inputSchema.properties.protect_credentials;
+    assert.ok(legacy, 'protectCredentials must remain in the open coder schema');
+    assert.ok(canonical, 'protect_credentials must be part of the input schema');
+    assert.equal(legacy.type, 'boolean');
+    assert.equal(canonical.type, 'boolean');
+    assert.match(legacy.description, /Deprecated camelCase/u);
+    assert.match(canonical.description, /best_effort_raw/u);
   }),
 );
 
 test(
-  'coderRunHandler forwards protectCredentials to runCoderRun (default false)',
+  'coderRunHandler merges both protection spellings in the safe direction',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const seen = [];
+    const spyRun = async (_prompt, opts) => {
+      seen.push(opts);
+    };
+    const deps = { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) };
+
+    await coderRunHandler({ prompt: 'legacy client', protectCredentials: true }, deps);
+    await coderRunHandler({ prompt: 'canonical client', protect_credentials: true }, deps);
+    await coderRunHandler({ prompt: 'conflicting client', protectCredentials: false, protect_credentials: true }, deps);
+    await coderRunHandler({ prompt: 'default client' }, deps);
+
+    assert.deepEqual(
+      seen.map((opts) => opts.protectCredentials),
+      [true, true, true, false],
+    );
+  }),
+);
+
+test(
+  'coderRunHandler forwards protect_credentials to runCoderRun (default false)',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const seen = [];
     const spyRun = async (_prompt, opts) => {
       seen.push(opts);
     };
     await coderRunHandler(
-      { prompt: 'do something', protectCredentials: true },
-      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
-    );
-    assert.equal(seen[0].protectCredentials, true);
-
-    // Snake-case typo and any truthy value MUST enable protection rather than
-    // silently downgrade to raw credential exposure.
-    await coderRunHandler(
       { prompt: 'do something', protect_credentials: true },
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
-    assert.equal(seen[1].protectCredentials, true, 'snake alias must enable protection');
-
-    await coderRunHandler(
-      { prompt: 'do something', protectCredentials: 'true' },
-      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
-    );
-    assert.equal(seen[2].protectCredentials, true, 'truthy string must enable protection');
-
-    // OR-merge: if EITHER spelling asserts protection, protection wins —
-    // camel:false + snake:true must not resolve to the unsafe mode.
-    await coderRunHandler(
-      { prompt: 'do something', protectCredentials: false, protect_credentials: true },
-      { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
-    );
-    assert.equal(seen[3].protectCredentials, true);
+    assert.equal(seen[0].protectCredentials, true);
 
     await coderRunHandler(
       { prompt: 'do something' },
       { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) },
     );
-    // Omitted -> explicitly false so the downstream resolver contract stays
-    // boolean-clean over MCP.
-    assert.equal(seen[4].protectCredentials, false);
+    assert.equal(seen[1].protectCredentials, false);
   }),
 );
 

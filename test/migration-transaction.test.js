@@ -61,11 +61,31 @@ test('MIGRATE-02: env phase A preserves legacy bytes and phase B removes only le
   assert.match(plan.canonical, /TRISS_WORKER_API_KEY=secret-value/);
   assert.match(plan.canonical, /TRISS_OPENAI_COMPATIBLE_API_KEY=secret-value/);
   assert.match(plan.canonical, /TRISS_DEFAULT_PROVIDER=openai-compatible/);
+  assert.match(plan.canonical, /TRISS_DEFAULT_ENGINE=direct/);
   assert.match(plan.canonical, /TRISS_OPENCODE_GO_MODEL=muse-spark-1\.2-contributor/);
   assert.match(plan.canonical, /TRISS_OPENCODE_GO_SMALL_MODEL=deepseek-v4-flash/);
   assert.doesNotMatch(plan.cleanup, /TRISS_WORKER|TRISS_CODER_MODEL/);
   assert.match(plan.cleanup, /# keep this comment/);
   assert.match(plan.cleanup, /UNRELATED=value/);
+});
+
+test('MIGRATE-02b: an explicit non-direct default engine survives migration planning', () => {
+  const input = [
+    'TRISS_CONFIG_SCHEMA=2',
+    'TRISS_DEFAULT_PROVIDER=opencode-go',
+    'TRISS_DEFAULT_ENGINE=opencode',
+    '',
+  ].join('\n');
+  const plan = planEnvMigration(input, { path: '/safe/.triss.env' });
+  assert.doesNotMatch(plan.canonical, /TRISS_DEFAULT_ENGINE=direct/);
+  assert.match(plan.cleanup, /TRISS_DEFAULT_ENGINE=opencode/);
+});
+
+test('MIGRATE-02c: an invalid default engine fails migration planning with its path', () => {
+  assert.throws(
+    () => planEnvMigration('TRISS_DEFAULT_ENGINE=opencde\n', { path: '/safe/.triss.env' }),
+    /Invalid TRISS_DEFAULT_ENGINE in \/safe\/\.triss\.env "opencde"/,
+  );
 });
 
 test('MIGRATE-03: conflicting canonical fields fail before mutation and never expose values', () => {

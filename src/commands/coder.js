@@ -60,6 +60,11 @@ import {
 export { coderCredentialReady } from '../coder-providers.js';
 import { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES, CODER_ENGINE_REGISTRY } from '../coder-engine-registry.js';
 export { DEFAULT_CODER_ENGINE, VALID_CODER_ENGINES };
+import {
+  READ_ONLY_PROJECTION_AGENT,
+  resolveModelProjectionPolicy,
+  withReadOnlyProjectionAgent,
+} from '../model-projection-policy.js';
 
 export const CREDENTIAL_ISOLATION_DOWNGRADED_CODE = 'TRISS_CODER_CREDENTIAL_ISOLATION_DOWNGRADED';
 // The CODE stays stable for machine consumers (renaming it is a separate
@@ -76,6 +81,7 @@ const CREDENTIAL_ISOLATION_DOWNGRADED_WARNING =
 const NON_SECRET_CODER_STORE_KEYS = new Set([
   'TRISS_CONFIG_SCHEMA',
   'TRISS_DEFAULT_PROVIDER',
+  'TRISS_DEFAULT_ENGINE',
   ...listProviderDefinitions().flatMap((definition) => Object.values(definition.fields)),
   'TRISS_CODER_ENGINE',
   'TRISS_CODER_OPENCODE_VERSION',
@@ -2695,6 +2701,30 @@ function auditEffectiveOpenCodeConfiguration(
   } catch {
     throw new Error('Cannot parse the Triss run-scoped OpenCode configuration before auditing it.');
   }
+  const expectedProjectionAgent = expected.agent?.[READ_ONLY_PROJECTION_AGENT];
+  if (expectedProjectionAgent) {
+    const actualAgent = config.agent?.[READ_ONLY_PROJECTION_AGENT];
+    if (
+      !actualAgent ||
+      actualAgent.name !== READ_ONLY_PROJECTION_AGENT ||
+      actualAgent.description !== expectedProjectionAgent.description ||
+      actualAgent.mode !== 'primary' ||
+      actualAgent.disable !== false ||
+      !isDeepStrictEqual(actualAgent.permission, expectedProjectionAgent.permission) ||
+      actualAgent.prompt !== expectedProjectionAgent.prompt
+    ) {
+      throw new Error(
+        `The final effective OpenCode agent["${READ_ONLY_PROJECTION_AGENT}"] is not the ` +
+        'Triss-managed active primary read-only agent; Triss refuses to forward the selected credential.',
+      );
+    }
+    if (config.default_agent !== READ_ONLY_PROJECTION_AGENT) {
+      throw new Error(
+        `The final effective OpenCode default_agent is ${JSON.stringify(config.default_agent)}, not ` +
+          `${JSON.stringify(READ_ONLY_PROJECTION_AGENT)}; Triss refuses to forward the selected credential.`,
+      );
+    }
+  }
   if (config.model !== expected.model) {
     throw new Error(
       `The final effective OpenCode model is ${JSON.stringify(config.model)}, not ${JSON.stringify(expected.model)}; ` +
@@ -5249,6 +5279,12 @@ function resolveSlug(opts, isolate) {
 
 export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
   const engine = resolveCoderEngine(opts);
+  const projectionPolicy = opts.modelProjectionTask
+    ? resolveModelProjectionPolicy(opts.modelProjectionTask, engine)
+    : null;
+  if (projectionPolicy && opts.agent) {
+    throw new Error('Read-only model projections own their run-scoped agent; --agent is not allowed.');
+  }
   const maxTokens = opts.maxTokens === undefined
     ? undefined
     : positiveIntegerOption(opts.maxTokens, '--max-tokens');
@@ -5272,7 +5308,11 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
         'pass one or the other, never both.',
     );
   }
-  const isolate = opts.isolate === undefined ? Boolean(CODER_ENGINE_REGISTRY[engine]?.defaultIsolate) : !!opts.isolate;
+  const isolate = projectionPolicy
+    ? projectionPolicy.isolate
+    : opts.isolate === undefined
+      ? Boolean(CODER_ENGINE_REGISTRY[engine]?.defaultIsolate)
+      : !!opts.isolate;
   // shared contract: an isolation downgrade to a best-effort CALLER
   // worktree is opt-in only. Without the explicit flag the run fails before
   // spawn when the enforced sandbox is unavailable (fail closed).
@@ -5322,6 +5362,7 @@ export function validateCoderRunOptions(opts = {}, { prompt } = {}) {
     selection,
     smallModelUnused: false,
     timeoutSec,
+    projectionPolicy,
   };
 }
 
@@ -5965,6 +6006,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     maxTokens,
     isolate,
     smallModelUnused,
+    projectionPolicy,
     timeoutSec,
   } = validateCoderRunOptions(opts, { prompt: promptArg });
   if (maxTokens !== undefined) {
@@ -6038,7 +6080,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // were hand-installed — and the static agent-source preflight rejects
   // those. A beta V2 run without an explicit --agent uses the engine's
   // built-in primary agent instead.
-  const agent = opts.agent || (engine === 'opencode2' || engine === 'omp' ? null : 'coder');
+  const agent = projectionPolicy?.agent ||
+    opts.agent ||
+    (engine === 'opencode2' || engine === 'omp' ? null : 'coder');
 
   const modelUsed = selectedModel.publicModel;
   if (engine === 'opencode2' && modelUsed.includes('#')) {
@@ -6453,7 +6497,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     (runtimeRoute ? `${runtimeRoute.endpoint}${runtimeRoute.pathPrefix === '/' ? '' : runtimeRoute.pathPrefix}` : `http://127.0.0.1:0/v1`);
   const transientSmallBaseURL = smallCredentialProxy?.scopedBaseUrl ||
     (runtimeSmallRoute ? `${runtimeSmallRoute.endpoint}${runtimeSmallRoute.pathPrefix === '/' ? '' : runtimeSmallRoute.pathPrefix}` : transientBaseURL);
-  const routingConfigContent = canonicalTransientRouting
+  const baseRoutingConfigContent = canonicalTransientRouting
     ? JSON.stringify(buildCoderTransientProviderOverlay({
       route: runtimeRoute,
       model: modelUsed,
@@ -6466,6 +6510,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       includeSmallModel: engine !== 'opencode2',
     }))
     : oneShotConfigContent;
+  const routingConfigContent = projectionPolicy
+    ? withReadOnlyProjectionAgent(baseRoutingConfigContent)
+    : baseRoutingConfigContent;
   const openCodePureMode = engine === 'opencode' && Boolean(oneShotProvider);
 
   // OpenCode V1 loads account/org, managed-directory, and macOS MDM layers

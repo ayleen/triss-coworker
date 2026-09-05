@@ -32,17 +32,17 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     };
   }
   try {
-    // Reasoning/thinking from the model is collected separately and never
-    // merged into the verdict: content[0].text stays the plain final result.
-    // Only tools that declare an outputSchema for it (triss_ask,
-    // triss_review) surface reasoning — as structuredContent metadata — and
-    // for those tools structuredContent is ALWAYS present on success, with or
-    // without reasoning. Every other tool keeps its old plain result shape.
+    // Model reasoning and engine warnings stay separate from content. Every
+    // model-backed tool declares the shared output schema, so generated text
+    // and written file bodies never need warning banners injected into them.
     const toolHasOutputSchema = Boolean(tool.outputSchema);
     const reasoningChunks = [];
+    const warningChunks = [];
     const text = await withCall(() =>
       tool.handler(args, {
         signal: extra.signal,
+        modelProtectCredentials: Boolean(args.protect_credentials),
+        onWarnings: (warnings) => warningChunks.push(...warnings),
         ...(toolHasOutputSchema
           ? { onReasoning: (chunk) => reasoningChunks.push(chunk) }
           : {}),
@@ -53,6 +53,8 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     if (toolHasOutputSchema) {
       const structuredContent = { content: finalText };
       if (reasoningChunks.length) structuredContent.reasoning_content = reasoningChunks.join('');
+      const warnings = [...new Set(warningChunks)];
+      if (warnings.length) structuredContent.warnings = warnings;
       return { content, structuredContent };
     }
     return { content };

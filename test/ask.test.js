@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAsk, runAskWithDeps } from '../src/commands/ask.js';
@@ -30,10 +32,10 @@ function runtimeResponse(request, text = 'ok') {
   };
 }
 
-test('ASK-01: runAsk rejects legacy providers before corpus I/O', async () => {
+test('ASK-01: runAsk rejects legacy providers before model execution', async () => {
   await assert.rejects(
     () => runAsk({
-      paths: ['not-read-because-model-resolution-runs-first'],
+      paths: ['package.json'],
       question: 'What is this?',
       provider: 'glm',
       model: 'glm-5.2',
@@ -79,6 +81,89 @@ test('ASK-02: runAskWithDeps forwards canonical model selection to the shared ru
   assert.equal(runtimeInput.input.label, 'triss/ask');
 });
 
+test('ASK-09: a quoted source glob sends file contents to the model', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-ask-context-'));
+  const sourceDir = join(dir, 'src');
+  const sourcePath = join(sourceDir, 'demo.js');
+  mkdirSync(sourceDir, { recursive: true });
+  writeFileSync(sourcePath, 'const ASK_UNIQUE_SOURCE_MARKER = 7419;\n');
+  const originalOut = process.stdout.write;
+  const originalErr = process.stderr.write;
+  let request;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    await runAskWithDeps({
+      paths: [join(dir, 'src/**/*.js')],
+      question: 'Find correctness defects',
+      stream: false,
+    }, {
+      executeModelTask: async (input) => {
+        request = input;
+        return runtimeResponse(input);
+      },
+    });
+  } finally {
+    process.stdout.write = originalOut;
+    process.stderr.write = originalErr;
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(request.input.messages[1].content, /ASK_UNIQUE_SOURCE_MARKER = 7419/);
+  assert.match(request.input.messages[1].content, /<file path='/);
+});
+
+test('ASK-10: file context guard rejects error-only paths but preserves empty and mixed sources', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-ask-boundaries-'));
+  const emptyPath = join(dir, 'empty.js');
+  const validPath = join(dir, 'valid.js');
+  writeFileSync(emptyPath, '');
+  writeFileSync(validPath, 'const MIXED_SOURCE_MARKER = 8520;\n');
+  const originalOut = process.stdout.write;
+  const originalErr = process.stderr.write;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    for (const path of [dir, join(dir, 'missing.js')]) {
+      let executed = false;
+      await assert.rejects(
+        () => runAskWithDeps({ paths: [path], question: 'q', stream: false }, {
+          executeModelTask: async () => {
+            executed = true;
+            return runtimeResponse({});
+          },
+        }),
+        /No readable file content.*directories are not read recursively/,
+        path,
+      );
+      assert.equal(executed, false, path);
+    }
+
+    let emptyRequest;
+    await runAskWithDeps({ paths: [emptyPath], question: 'q', stream: false }, {
+      executeModelTask: async (input) => {
+        emptyRequest = input;
+        return runtimeResponse(input);
+      },
+    });
+    assert.match(emptyRequest.input.messages[1].content, new RegExp(`<file path='${emptyPath}'`));
+    assert.doesNotMatch(emptyRequest.input.messages[1].content, /error=/);
+
+    let mixedRequest;
+    await runAskWithDeps({ paths: [validPath, join(dir, 'missing.js')], question: 'q', stream: false }, {
+      executeModelTask: async (input) => {
+        mixedRequest = input;
+        return runtimeResponse(input);
+      },
+    });
+    assert.match(mixedRequest.input.messages[1].content, /MIXED_SOURCE_MARKER = 8520/);
+    assert.match(mixedRequest.input.messages[1].content, /missing\.js.*not found/);
+  } finally {
+    process.stdout.write = originalOut;
+    process.stderr.write = originalErr;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ASK-03: runAsk ignores Commander-like second arguments with dependency-shaped fields', async () => {
   const commanderArg = {
     executeModelTask() {
@@ -87,7 +172,7 @@ test('ASK-03: runAsk ignores Commander-like second arguments with dependency-sha
   };
   await assert.rejects(
     () => runAsk({
-      paths: ['not-read-because-model-resolution-runs-first'],
+      paths: ['package.json'],
       question: 'What is this?',
       provider: 'glm',
       model: 'glm-5.2',

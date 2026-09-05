@@ -3,7 +3,7 @@
 
 import pc from 'picocolors';
 import { gitlab, resolveProject } from './client.js';
-import { summarize, printResult, IntegrationError } from '../_contract.js';
+import { summarize, printResult, IntegrationError, modelExecutionOptions } from '../_contract.js';
 
 function issueLine(i) {
   const project = (i.references?.full || i.web_url?.replace(/.*?\/\/[^/]+\//, '').replace(/\/-\/issues\/\d+$/, '') || '?').replace(/#\d+$/, '');
@@ -26,7 +26,8 @@ function issueFull(i) {
   ].join('\n');
 }
 
-export async function searchCmd({ search, project, scope, limit, question, provider, model, engine, effort, json }) {
+export async function searchCmd(opts) {
+  const { search, project, scope, limit, question, json } = opts;
   const data = await gitlab.search({
     projectPath: project,
     search,
@@ -38,14 +39,15 @@ export async function searchCmd({ search, project, scope, limit, question, provi
   if (!items.length) return printResult('(no issues)');
   const corpus = items.map(issueLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, provider, model, engine, effort });
+    const out = await summarize({ corpus, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(corpus);
   }
 }
 
-export async function issueCmd(iid, { project, question, provider, model, engine, effort, withComments, json }) {
+export async function issueCmd(iid, opts) {
+  const { project, question, withComments, json } = opts;
   const p = resolveProject(project);
   const issue = await gitlab.getIssue(p, iid);
   if (json) return printResult(issue, { json: true });
@@ -59,7 +61,7 @@ export async function issueCmd(iid, { project, question, provider, model, engine
         : '(none)');
   }
   if (question) {
-    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
+    const out = await summarize({ corpus: text, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(text);
@@ -113,10 +115,7 @@ export async function commentCmd(iid, opts) {
     const out = await summarize({
       corpus: corpus || '(no notes)',
       question: opts.question,
-      model: opts.model,
-      provider: opts.provider,
-      engine: opts.engine,
-      effort: opts.effort,
+      ...modelExecutionOptions(opts),
     });
     printResult(out);
   } else {

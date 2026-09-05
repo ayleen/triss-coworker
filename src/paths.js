@@ -88,6 +88,7 @@ export function readFilesAsCorpus(paths) {
   const corpusLimit = corpusMaxBytes();
   let totalBytes = 0;
   let skipped = 0;
+  let readFileCount = 0;
   for (const p of paths) {
     if (totalBytes >= corpusLimit) {
       // Stop once the cumulative cap is hit — emit a marker so the
@@ -146,16 +147,19 @@ export function readFilesAsCorpus(paths) {
         `<file path='${escapeAttr(p)}' truncated='true'>\n${truncated}\n</file>`,
       );
       totalBytes += truncated.length;
+      readFileCount++;
       skipped++;
       continue;
     }
     totalBytes += content.length;
+    readFileCount++;
     docs.push(`<file path='${escapeAttr(p)}'>\n${content}\n</file>`);
   }
   return {
     corpus: docs.join('\n\n'),
     totalBytes,
     fileCount: paths.length,
+    readFileCount,
     skipped,
   };
 }

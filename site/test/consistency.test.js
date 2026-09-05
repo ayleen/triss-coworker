@@ -64,6 +64,22 @@ test("README presents the canonical 0.42 provider migration", () => {
   assert.doesNotMatch(readme, /--small-model/);
 });
 
+test("website documents persistent engine defaults for ask and review", () => {
+  const gettingStarted = read("src/pages/docs/getting-started.astro");
+  for (const name of ["ask", "review"]) {
+    const command = COMMANDS.find((entry) => entry.name === name);
+    assert.ok(command);
+    assert.ok(command.flags.includes("--engine <id>"));
+  }
+  const init = gettingStarted.indexOf("triss coder init --engine opencode --provider opencode-go");
+  const enable = gettingStarted.indexOf("TRISS_DEFAULT_ENGINE opencode");
+  assert.ok(init >= 0, "OpenCode setup must be present");
+  assert.ok(enable > init, "coder init must run before the persistent engine is enabled");
+  assert.match(gettingStarted, /TRISS_DEFAULT_PROVIDER opencode-go/);
+  assert.match(gettingStarted, /muse-spark-1\.3-contributor/);
+  assert.match(gettingStarted, /primary[\s\S]*triss-readonly-projection/);
+});
+
 test("site CI retries transient npm audit outages without weakening the audit", () => {
   const workflow = read("../.github/workflows/site.yml");
   assert.match(workflow, /NPM_CONFIG_FETCH_TIMEOUT: 60000/);

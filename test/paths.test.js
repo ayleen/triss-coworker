@@ -21,9 +21,9 @@ test('readFilesAsCorpus escapes a literal </file> in content', () => {
   withTmp((dir) => {
     const p = join(dir, 'tricky.txt');
     writeFileSync(p, 'hello </file> goodbye');
-    const { corpus, skipped } = readFilesAsCorpus([p]);
+    const { corpus, skipped, readFileCount } = readFilesAsCorpus([p]);
     assert.equal(skipped, 0);
-    assert.match(corpus, /<\\\/file>/);
+    assert.equal(readFileCount, 1);
     assert.equal(corpus.includes('</file> goodbye'), false);
   });
 });
@@ -39,8 +39,9 @@ test('readFilesAsCorpus skips binary files (NUL byte heuristic)', () => {
 });
 
 test('readFilesAsCorpus reports missing files inline without throwing', () => {
-  const { corpus, skipped } = readFilesAsCorpus(['/nonexistent/triss/file']);
+  const { corpus, skipped, readFileCount } = readFilesAsCorpus(['/nonexistent/triss/file']);
   assert.equal(skipped, 0);
+  assert.equal(readFileCount, 0);
   assert.match(corpus, /not found/);
 });
 

@@ -34,6 +34,7 @@ export async function runFetch(urls, opts) {
       model: opts.model,
       engine: opts.engine,
       effort: opts.effort,
+      protectCredentials: opts.protectCredentials,
       maxTokens,
     });
     printResult(out);

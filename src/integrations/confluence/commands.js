@@ -4,7 +4,7 @@
 import pc from 'picocolors';
 import { confluence, textToStorage } from './client.js';
 import { adfToText } from '../jira/adf.js';
-import { summarize, printResult, stripHtml } from '../_contract.js';
+import { summarize, printResult, stripHtml, modelExecutionOptions } from '../_contract.js';
 
 function searchLine(r) {
   const title = stripHtml(r.title) ?? '?';
@@ -13,7 +13,8 @@ function searchLine(r) {
   return `${r.content?.id ?? r.id ?? '?'}\t[${space}]\t${title}\t${url}`;
 }
 
-export async function searchCmd({ cql, limit, question, provider, model, engine, effort, json }) {
+export async function searchCmd(opts) {
+  const { cql, limit, question, json } = opts;
   const data = await confluence.search({
     cql,
     limit: parseInt(limit, 10) || 25,
@@ -23,7 +24,7 @@ export async function searchCmd({ cql, limit, question, provider, model, engine,
   if (!results.length) return printResult('(no results)');
   const corpus = results.map(searchLine).join('\n');
   if (question) {
-    const out = await summarize({ corpus, question, provider, model, engine, effort });
+    const out = await summarize({ corpus, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(corpus);
@@ -54,12 +55,13 @@ function safeParse(s) {
   }
 }
 
-export async function pageCmd(id, { question, provider, model, engine, effort, json }) {
+export async function pageCmd(id, opts) {
+  const { question, json } = opts;
   const page = await confluence.getPage(id);
   if (json) return printResult(page, { json: true });
   const text = pageFull(page);
   if (question) {
-    const out = await summarize({ corpus: text, question, provider, model, engine, effort });
+    const out = await summarize({ corpus: text, question, ...modelExecutionOptions(opts) });
     printResult(out);
   } else {
     printResult(text);

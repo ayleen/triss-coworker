@@ -33,6 +33,8 @@ export async function callModel(
     model,
     engine,
     effort,
+    protectCredentials,
+    protect_credentials: protectCredentialsSnake,
     messages,
     maxTokens,
     timeoutMs,
@@ -49,6 +51,10 @@ export async function callModel(
     model,
     engine,
     effort,
+    protectCredentials:
+      Boolean(protectCredentials) ||
+      Boolean(protectCredentialsSnake) ||
+      deps.modelProtectCredentials === true,
     signal: deps.signal,
     timeout: timeoutMs,
     input: {
@@ -73,17 +79,20 @@ export async function callModel(
     }
     assertProviderText(text);
   }
+  const warnings = output.result.warnings || [];
+  deps.onWarnings?.(warnings);
   return {
     content: text,
     usageReport: reportNormalizedUsage(output.result, 'triss'),
+    warnings,
   };
 }
 
-// Compose a text-returning handler's output from the two callModel fields.
-// The report joins only when present, so an empty report never leaves a
-// dangling blank line.
+// Compose human-readable content and usage only. Engine warnings travel
+// separately through deps.onWarnings into MCP structuredContent, so generated
+// content and target files can never contain warning metadata.
 function withUsage({ content, usageReport }) {
-  return usageReport ? `${content}\n\n${usageReport}` : content;
+  return [content, usageReport].filter(Boolean).join('\n\n');
 }
 
 // ─── core handlers ──────────────────────────────────────────────────────────
@@ -109,17 +118,26 @@ export async function askHandler(
     throw new Error('Pass at least one of paths or urls');
   }
   let corpus = '';
+  let hasUsableContext = false;
   if (paths?.length) {
     const expanded = expandPaths(paths);
     const r = readFilesAsCorpus(expanded);
     corpus += r.corpus;
+    hasUsableContext = r.readFileCount > 0;
   }
   if (urls?.length) {
     for (const u of urls) {
       const { url, markdown, contentType } = await fetchAsMarkdown(u);
       corpus += (corpus ? '\n\n' : '') +
         `<source url="${url}" content-type="${contentType}">\n${markdown}\n</source>`;
+      hasUsableContext ||= Boolean(markdown);
     }
+  }
+  if (paths?.length && !hasUsableContext) {
+    throw new Error(
+      'No readable file content was collected from paths. Pass files or a glob such as "src/**/*.js"; ' +
+      'directories are not read recursively.',
+    );
   }
   const { content, usageReport } = await callModel(
     {
@@ -353,7 +371,7 @@ export async function writeHandler({ spec, target, context, provider, model, eng
 
 // ─── jira handlers ──────────────────────────────────────────────────────────
 
-export async function jiraSearchHandler({ jql, question, limit = 50, provider, model, engine, effort, max_tokens }) {
+export async function jiraSearchHandler({ jql, question, limit = 50, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { jira } = await import('../integrations/jira/client.js');
   const res = await jira.search({
     jql,
@@ -376,7 +394,7 @@ export async function jiraSearchHandler({ jql, question, limit = 50, provider, m
       { role: 'user', content: `<jira-issues jql="${jql}">\n${corpus}\n</jira-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function jiraIssueHandler({ key, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
@@ -531,7 +549,7 @@ export async function jiraWhoamiHandler() {
 
 // ─── linear handlers ────────────────────────────────────────────────────────
 
-export async function linearSearchHandler({ term, question, limit = 50, provider, model, engine, effort, max_tokens }) {
+export async function linearSearchHandler({ term, question, limit = 50, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { linear } = await import('../integrations/linear/client.js');
   const issues = await linear.search({ term, limit });
   const corpus = issues
@@ -546,10 +564,10 @@ export async function linearSearchHandler({ term, question, limit = 50, provider
       { role: 'user', content: `<linear-issues term="${term}">\n${corpus}\n</linear-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function linearIssueHandler({ id, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function linearIssueHandler({ id, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { linear } = await import('../integrations/linear/client.js');
   const i = await linear.getIssue(id);
   const lines = [
@@ -579,7 +597,7 @@ export async function linearIssueHandler({ id, with_comments, question, provider
       { role: 'user', content: `<linear-issue>\n${text}\n</linear-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function linearCreateHandler({
@@ -795,7 +813,7 @@ export async function linearAttachmentsHandler({ id }) {
 
 // ─── github handlers ────────────────────────────────────────────────────────
 
-export async function githubSearchHandler({ query, limit = 30, question, provider, model, engine, effort, max_tokens }) {
+export async function githubSearchHandler({ query, limit = 30, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { github } = await import('../integrations/github/client.js');
   const data = await github.search({ query, limit });
   const items = data.items || [];
@@ -814,10 +832,10 @@ export async function githubSearchHandler({ query, limit = 30, question, provide
       { role: 'user', content: `<github-issues query="${query}">\n${corpus}\n</github-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function githubIssueHandler({ repo, number, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function githubIssueHandler({ repo, number, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { github, resolveRepo } = await import('../integrations/github/client.js');
   const r = resolveRepo(repo);
   const issue = await github.getIssue(r, number);
@@ -847,7 +865,7 @@ export async function githubIssueHandler({ repo, number, with_comments, question
       { role: 'user', content: `<github-issue>\n${text}\n</github-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function githubCreateHandler({ repo, title, body, labels, assignees }) {
@@ -880,7 +898,7 @@ export async function githubCommentHandler({ repo, number, body }) {
 
 // ─── confluence handlers ────────────────────────────────────────────────────
 
-export async function confluenceSearchHandler({ cql, limit = 25, question, provider, model, engine, effort, max_tokens }) {
+export async function confluenceSearchHandler({ cql, limit = 25, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const data = await confluence.search({ cql, limit });
   const results = data.results || [];
@@ -899,10 +917,10 @@ export async function confluenceSearchHandler({ cql, limit = 25, question, provi
       { role: 'user', content: `<confluence-results cql="${cql}">\n${corpus}\n</confluence-results>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function confluencePageHandler({ id, question, provider, model, engine, effort, max_tokens }) {
+export async function confluencePageHandler({ id, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { confluence } = await import('../integrations/confluence/client.js');
   const { adfToText } = await import('../integrations/jira/adf.js');
   const page = await confluence.getPage(id);
@@ -934,7 +952,7 @@ export async function confluencePageHandler({ id, question, provider, model, eng
       { role: 'user', content: `<confluence-page>\n${text}\n</confluence-page>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function confluenceCreateHandler({ space, title, body, parent }) {
@@ -967,7 +985,7 @@ export async function confluenceSpacesHandler({ limit = 100 } = {}) {
 
 // ─── gitlab handlers ────────────────────────────────────────────────────────
 
-export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, provider, model, engine, effort, max_tokens }) {
+export async function gitlabSearchHandler({ search, project, scope, limit = 30, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { gitlab } = await import('../integrations/gitlab/client.js');
   const items = await gitlab.search({ projectPath: project, search, scope, limit });
   const corpus = (Array.isArray(items) ? items : [])
@@ -985,10 +1003,10 @@ export async function gitlabSearchHandler({ search, project, scope, limit = 30, 
       { role: 'user', content: `<gitlab-issues search="${search}">\n${corpus}\n</gitlab-issues>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
-export async function gitlabIssueHandler({ project, iid, with_comments, question, provider, model, engine, effort, max_tokens }) {
+export async function gitlabIssueHandler({ project, iid, with_comments, question, provider, model, engine, effort, max_tokens }, deps = {}) {
   const { gitlab, resolveProject } = await import('../integrations/gitlab/client.js');
   const p = resolveProject(project);
   const issue = await gitlab.getIssue(p, iid);
@@ -1018,7 +1036,7 @@ export async function gitlabIssueHandler({ project, iid, with_comments, question
       { role: 'user', content: `<gitlab-issue>\n${text}\n</gitlab-issue>` },
       { role: 'user', content: question },
     ],
-  }));
+  }, deps));
 }
 
 export async function gitlabCreateHandler({ project, title, body, labels }) {
@@ -1096,13 +1114,11 @@ export async function coderRunHandler(
   // for both engines. `cwd` is IGNORED by runCoderRun whenever the run
   // isolates, so checking cwd too would reject calls over a cwd that's never
   // actually used — only check whichever one the run will touch.
-  // Both spellings are declared in the schema, so the two can disagree.
-  // This switch WEAKENS isolation, so FALSE is the safe side: any
-  // explicitly false spelling vetoes the downgrade, and an omitted one
-  // defers to the other. (Mirror image of protectCredentials below, whose
-  // safe side is TRUE and which therefore merges with OR.) The value
-  // forwarded to runCoderRun reuses this exact resolution so the sandbox
-  // check and the run can never disagree about the downgrade.
+  // The MCP contract uses snake_case for wire fields. The switch weakens
+  // isolation, so FALSE is the safe side: any explicitly false spelling
+  // vetoes the downgrade, and an omitted one defers to the other.
+  // The value forwarded to runCoderRun reuses this exact resolution so the
+  // sandbox check and the run can never disagree about the downgrade.
   const allowDowngrade = allowBestEffortCamel === false || allowBestEffortSnake === false
     ? false
     : Boolean(allowBestEffortCamel ?? allowBestEffortSnake);
@@ -1134,9 +1150,8 @@ export async function coderRunHandler(
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
       allowBestEffortCallerWorktree: allowDowngrade,
-      // OR, not ??: if EITHER spelling asserts protection, protection is on —
-      // a disagreement between the two forms (e.g. a schema-filling client
-      // defaulting camel to false) must never resolve to the unsafe mode.
+      // `protectCredentials` is the documented legacy spelling for this
+      // coder-only field; merge it with the snake-case alias before dispatch.
       protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
     },
     {
@@ -1166,7 +1181,7 @@ export async function coderStatusHandler() {
     // MCP-specific remediation: an MCP client passes the boolean input, not
     // the CLI flag. Crush never accepts raw credentials.
     status.defaultCredentialMode === 'best_effort_raw'
-      ? 'Protected mode: set protectCredentials: true'
+      ? 'Protected mode: set protect_credentials: true'
       : 'Protected mode: always on (crush is always protected)',
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — resolved from the shared default provider roles`,
     status.engineVersion
@@ -1275,6 +1290,7 @@ export async function statusHandler(_args = {}, deps = {}) {
   const rootSource = process.env.TRISS_PROJECT_ROOT ? 'TRISS_PROJECT_ROOT' : 'cwd';
   const lines = [
     `Default provider: ${snapshot.defaultProvider.value}`,
+    `Default engine: ${snapshot.defaultEngine.value}`,
     `Project root: ${root} (from ${rootSource})`,
     `Path sandbox: ${safetyModule.pathsRestricted() ? 'on' : 'off'}`,
     'Env files:',

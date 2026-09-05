@@ -64,7 +64,7 @@ Every provider has an endpoint, credential, `model` role, and `smallModel` role.
 4. global `~/.config/triss/.env`;
 5. registry defaults.
 
-`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`.
+`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`. Read-only non-coder projection is currently verified only for `opencode`; `opencode2`, `omp`, and `crush` fail before launch instead of running a write-capable agent.
 
 Shared reasoning effort values:
 
@@ -92,12 +92,38 @@ Omit `--model` to use the command's provider role. There are no public model pre
 triss config wizard
 triss config wizard --local
 triss config set TRISS_DEFAULT_PROVIDER zai
+triss config set TRISS_DEFAULT_ENGINE direct
 triss config get TRISS_ZAI_MODEL
 triss config list
 triss config path
 triss config edit
 triss config unset TRISS_ZAI_MODEL
 ```
+
+To route bare `ask`, `review`, and other model-backed calls through OpenCode Go
+with Muse:
+
+```bash
+triss coder init --engine opencode --provider opencode-go
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+
+triss ask --paths 'src/**/*.js' --question "Find correctness defects"
+triss review
+```
+
+Explicit request flags still win. OpenCode-backed non-coder calls install and
+verify a run-scoped active primary `triss-readonly-projection` agent and pin
+`default_agent` to it before forwarding the selected credential. Its permission
+contract denies every tool by default because the complete request context is
+already supplied in the prompt; it never gains ambient file, shell, edit,
+skill, or delegation access. The process still runs as the current OS user and
+is not a filesystem sandbox. Add `--protect-credentials` to a model command
+when the selected credential can be kept behind the parent-owned proxy;
+raw-mode warnings are preserved in MCP structured results for every
+model-backed tool.
 
 Provider fields:
 

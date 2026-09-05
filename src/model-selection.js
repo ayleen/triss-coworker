@@ -2,7 +2,9 @@
 // Copyright (c) 2026 ayleen
 
 import {
+  DEFAULT_MODEL_ENGINE,
   assertCanonicalProviderId,
+  assertModelExecutionEngine,
   assertProviderModelRole,
   parseModelSelector,
   validateModelSelectionInput,
@@ -65,7 +67,20 @@ export function resolveModelSelection(request = {}, snapshot) {
     : validated.provider
       ? provenance(providerId, 'explicit')
       : snapshot.defaultProvider;
-  const engine = validated.engine || request.defaultEngine || 'direct';
+  const configuredEngine = snapshot.defaultEngine || provenance(
+    DEFAULT_MODEL_ENGINE,
+    'registry-default',
+    'default',
+  );
+  const commandDefaultEngine = request.defaultEngine === undefined
+    ? undefined
+    : assertModelExecutionEngine(request.defaultEngine, 'command default engine');
+  const engine = validated.engine
+    || commandDefaultEngine
+    || assertModelExecutionEngine(
+      configuredEngine.value,
+      `configured default engine${configuredEngine.path ? ` in ${configuredEngine.path}` : ''}`,
+    );
 
   return deepFreeze({
     role,
@@ -77,11 +92,11 @@ export function resolveModelSelection(request = {}, snapshot) {
     provenance: {
       provider: providerProvenance,
       model: modelProvenance,
-      engine: provenance(
-        engine,
-        validated.engine ? 'explicit' : request.defaultEngine ? 'command-default' : 'runtime-default',
-        validated.engine ? 'request' : 'default',
-      ),
+      engine: validated.engine
+        ? provenance(engine, 'explicit')
+        : commandDefaultEngine
+          ? provenance(engine, 'command-default', 'default')
+          : configuredEngine,
       effort: validated.effort
         ? provenance(validated.effort, 'explicit')
         : provenance(undefined, 'engine-native-default', 'default'),

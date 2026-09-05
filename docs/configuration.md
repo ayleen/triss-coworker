@@ -67,6 +67,7 @@ Global runtime fields:
 |---|---|---|
 | `TRISS_CONFIG_SCHEMA` | `2` | Persisted configuration schema |
 | `TRISS_DEFAULT_PROVIDER` | `openai-compatible` | Provider selected when a request omits `provider` |
+| `TRISS_DEFAULT_ENGINE` | `direct` | Execution engine selected when a model request omits `engine` |
 | `TRISS_REQUEST_TIMEOUT_MS` | SDK default | Model request timeout |
 
 ## Model roles and request selection
@@ -75,11 +76,17 @@ Model-backed commands declare either the `model` role or the `smallModel` role. 
 
 - `provider` selects one canonical provider.
 - `model` is a native model id for direct CLI/MCP commands.
+- `engine` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush`; when omitted, `TRISS_DEFAULT_ENGINE` applies.
 - coder `--model` accepts a canonical `<provider>/<model-id>` selector; the small role comes from that provider's `*_SMALL_MODEL` field.
 - `effort` accepts `minimal`, `low`, `medium`, `high`, or `max`.
 - `max_tokens` remains a separate output cap.
 
 There are no public model presets. Omit `model` to use the selected provider role.
+
+Provider and engine defaults resolve independently. Registry-backed providers
+such as `opencode-go` require an engine-backed default instead of `direct`.
+Read-only model projection is currently verified only for `opencode`;
+`opencode2`, `omp`, and `crush` are rejected before launch for non-coder tasks.
 
 Examples:
 
@@ -89,10 +96,27 @@ triss ask --provider zai --model glm-5.2 --effort high \
 
 triss review --provider moonshot --model kimi-k3 --effort max
 
+triss coder init --engine opencode --provider opencode-go
+triss config set TRISS_DEFAULT_PROVIDER opencode-go
+triss config set TRISS_DEFAULT_ENGINE opencode
+triss config set TRISS_OPENCODE_GO_MODEL muse-spark-1.3-contributor
+triss config set TRISS_OPENCODE_GO_SMALL_MODEL muse-spark-1.3-contributor
+
 triss coder run --engine omp \
   --model opencode-go/deepseek-v4-flash \
   "Implement the task"
 ```
+
+After `coder init` and the four `config set` commands above, bare `triss ask`,
+`triss review`, and equivalent MCP calls use
+`opencode-go/muse-spark-1.3-contributor` through OpenCode. Every run installs
+and verifies a transient active primary `triss-readonly-projection` agent and
+pins `default_agent` to it. Its effective permission object must exactly match
+a deny-by-default, context-only contract: no ambient file, shell, edit, skill,
+or delegation tools are available. An explicit request `provider`, `model`, or
+`engine` retains highest precedence. `--protect-credentials` requests the
+parent-owned credential proxy; otherwise the raw credential warning is
+retained in the execution result and MCP structured output.
 
 ## Coder engines
 

@@ -10,7 +10,11 @@ import { loadEnvFiles } from '../config.js';
 // Shared provider metadata keeps MCP exposure aligned with `triss status`.
 import { coderCredentialReady } from '../coder-providers.js';
 import { NODE_TIMER_MAX_MS } from '../option-validation.js';
-import { CANONICAL_PROVIDER_IDS, MODEL_EFFORT_LEVELS } from '../provider-contract.js';
+import {
+  CANONICAL_PROVIDER_IDS,
+  MODEL_EFFORT_LEVELS,
+  MODEL_EXECUTION_ENGINES,
+} from '../provider-contract.js';
 import {
   askHandler,
   chatHandler,
@@ -63,25 +67,29 @@ import {
   gitlabCommentHandler,
 } from './handlers.js';
 
-// Output schema shared by the two tools that surface model reasoning. When a
-// tool declares an outputSchema, the MCP server always attaches matching
-// structuredContent to successful results: content mirrors content[0].text and
-// reasoning_content carries any GLM thinking (omitted when there is none).
-// Tools without an outputSchema keep their old plain { content: [...] } shape.
-// On error (isError:true) the server projects the stable allowlisted
-// TRISS_* code as {content, code} — the optional code field is part of the
-// closed schema so a real MCP Client validating error structuredContent does
-// not reject the result (the SDK validates even on isError; see Client.callTool).
+// Output schema shared by every model-backed tool. The MCP server always
+// attaches matching structuredContent on success: content mirrors
+// content[0].text, reasoning_content carries model thinking, and warnings
+// carries deduplicated engine and credential-safety warnings. Optional fields
+// are omitted when empty. On error (isError:true), the server projects the
+// stable allowlisted TRISS_* code as {content, code}; the optional code field
+// is part of the closed schema because the SDK validates structuredContent
+// even on errors.
 const TEXT_WITH_REASONING_OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
     content: { type: 'string' },
     reasoning_content: { type: 'string' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Engine and credential-safety warnings',
+    },
     code: { type: 'string', pattern: '^TRISS_[A-Z0-9_]+$' },
   },
   required: ['content'],
-  // Exact schema: structuredContent never carries anything beyond these three
-  // keys, so hosts can rely on the shape being closed.
+  // Exact schema: structuredContent never carries unknown keys, so hosts can
+  // rely on the shape being closed.
   additionalProperties: false,
 };
 
@@ -97,8 +105,12 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
   },
   engine: {
     type: 'string',
-    enum: ['direct', 'opencode', 'opencode2', 'omp', 'crush'],
+    enum: MODEL_EXECUTION_ENGINES,
     description: 'Execution engine',
+  },
+  protect_credentials: {
+    type: 'boolean',
+    description: 'Use parent-owned credential protection for the OpenCode model projection',
   },
   effort: {
     type: 'string',
@@ -122,6 +134,7 @@ const CORE_TOOLS = [
       },
       required: ['prompt'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: chatHandler,
   },
   {
@@ -171,6 +184,7 @@ const CORE_TOOLS = [
       },
       required: ['urls'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: fetchHandler,
   },
   {
@@ -248,6 +262,7 @@ const CORE_TOOLS = [
         },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: reviewShardHandler,
   },
   {
@@ -273,6 +288,7 @@ const CORE_TOOLS = [
         max_tokens: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: commitMsgHandler,
   },
   {
@@ -293,6 +309,7 @@ const CORE_TOOLS = [
       },
       required: ['spec'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: writeHandler,
   },
 ];
@@ -312,6 +329,7 @@ const JIRA_TOOLS = [
       },
       required: ['jql'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: jiraSearchHandler,
   },
   {
@@ -328,6 +346,7 @@ const JIRA_TOOLS = [
       },
       required: ['key'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: jiraIssueHandler,
   },
   {
@@ -434,6 +453,7 @@ const LINEAR_TOOLS = [
       },
       required: ['term'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: linearSearchHandler,
   },
   {
@@ -450,6 +470,7 @@ const LINEAR_TOOLS = [
       },
       required: ['id'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: linearIssueHandler,
   },
   {
@@ -689,6 +710,7 @@ const GITHUB_TOOLS = [
       },
       required: ['query'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: githubSearchHandler,
   },
   {
@@ -710,6 +732,7 @@ const GITHUB_TOOLS = [
       },
       required: ['number'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: githubIssueHandler,
   },
   {
@@ -777,6 +800,7 @@ const CONFLUENCE_TOOLS = [
       },
       required: ['cql'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: confluenceSearchHandler,
   },
   {
@@ -792,6 +816,7 @@ const CONFLUENCE_TOOLS = [
       },
       required: ['id'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: confluencePageHandler,
   },
   {
@@ -854,6 +879,7 @@ const GITLAB_TOOLS = [
         max_tokens: { type: 'number' },
       },
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: gitlabSearchHandler,
   },
   {
@@ -871,6 +897,7 @@ const GITLAB_TOOLS = [
       },
       required: ['iid'],
     },
+    outputSchema: TEXT_WITH_REASONING_OUTPUT_SCHEMA,
     handler: gitlabIssueHandler,
   },
   {
@@ -936,11 +963,13 @@ const CODER_TOOLS = [
       '(input_uncached, cache_read, cache_write, output_visible, reasoning, plus ' +
       'totals) and `usage.cost` (total_usd, source, complete), where an ' +
       'unreported class is `null` rather than `0`; `prompt_tokens`/' +
-      '`completion_tokens` remain as deprecated aliases. By default ' +
+      '`completion_tokens` remain as deprecated aliases. ' +
       'OpenCode/OpenCode2 runs use best_effort_raw credential handling — the ' +
       'selected raw provider credential may be read by same-UID engine code, ' +
-      'plugins, tools, or shell commands; pass protectCredentials:true for the ' +
+      'plugins, tools, or shell commands; pass protect_credentials:true for the ' +
       'parent-owned credential proxy with strict executable-surface gates. ' +
+      'For compatibility, protectCredentials:true is also accepted on ' +
+      'triss_coder_run and is merged safely with protect_credentials. ' +
       'This tool\'s ' +
       'timeout defaults to 1500s (25 min) since coding runs over MCP are ' +
       'expected to be long; override per call via the `timeout` arg. For ' +
@@ -968,8 +997,8 @@ const CODER_TOOLS = [
         isolate: { type: 'boolean', description: 'Run in a disposable git worktree under .triss/wt/<slug> (opencode defaults to isolate-OFF; crush defaults to isolate-ON — crush 0.1.3\'s permissions.run config is inert, so the worktree is its reliable safety layer)' },
         allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         allow_best_effort_caller_worktree: { type: 'boolean', description: 'Snake-case alias of allowBestEffortCallerWorktree (the handler already accepts it; declared so schema-filtering clients forward it).' },
-        protectCredentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2/OMP use best_effort_raw unless set; Crush is always protected. Any truthy value enables protection; protect_credentials is accepted as an alias.' },
-        protect_credentials: { type: 'boolean', description: 'Snake-case alias of protectCredentials (accepted so a convention mismatch cannot silently downgrade the run to raw credential exposure).' },
+        protectCredentials: { type: 'boolean', description: 'Deprecated camelCase spelling retained for existing triss_coder_run clients. Use protect_credentials for new calls; both spellings are merged in the safe direction, so any truthy value enables the parent-owned credential proxy.' },
+        protect_credentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Fails closed when protected credential isolation cannot be enforced. Default FALSE — OpenCode/OpenCode2/OMP use best_effort_raw unless set; Crush is always protected.' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },

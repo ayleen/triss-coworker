@@ -8,7 +8,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runChatWithDeps } from '../src/commands/chat.js';
 import { runWriteWithDeps } from '../src/commands/write.js';
-import { CANONICAL_PROVIDER_IDS, MODEL_EFFORT_LEVELS } from '../src/provider-contract.js';
+import {
+  CANONICAL_PROVIDER_IDS,
+  MODEL_EFFORT_LEVELS,
+  MODEL_EXECUTION_ENGINES,
+} from '../src/provider-contract.js';
 import { listTools } from '../src/mcp/tools.js';
 
 function runtimeResponse(request, text) {
@@ -46,6 +50,7 @@ test('CMD-RUNTIME-01: chat forwards canonical provider, model, engine, and effor
       model: 'kimi-k2.6',
       engine: 'direct',
       effort: 'xhigh',
+      protectCredentials: true,
       stream: false,
     }, {
       executeModelTask: async (request) => {
@@ -63,6 +68,7 @@ test('CMD-RUNTIME-01: chat forwards canonical provider, model, engine, and effor
   assert.equal(captured.model, 'kimi-k2.6');
   assert.equal(captured.engine, 'direct');
   assert.equal(captured.effort, 'xhigh');
+  assert.equal(captured.protectCredentials, true);
 });
 
 test('CMD-RUNTIME-02: write forwards the main role selection and writes normalized text', async () => {
@@ -78,6 +84,7 @@ test('CMD-RUNTIME-02: write forwards the main role selection and writes normaliz
       model: 'glm-5.2',
       engine: 'direct',
       effort: 'max',
+      protectCredentials: true,
     }, {
       executeModelTask: async (request) => {
         captured = request;
@@ -95,6 +102,7 @@ test('CMD-RUNTIME-02: write forwards the main role selection and writes normaliz
   assert.equal(captured.model, 'glm-5.2');
   assert.equal(captured.engine, 'direct');
   assert.equal(captured.effort, 'max');
+  assert.equal(captured.protectCredentials, true);
 });
 
 test('CMD-RUNTIME-03: every core MCP model tool exposes one canonical selection schema', async () => {
@@ -113,8 +121,10 @@ test('CMD-RUNTIME-03: every core MCP model tool exposes one canonical selection 
     assert.ok(tool, name);
     assert.deepEqual(tool.inputSchema.properties.provider.enum, CANONICAL_PROVIDER_IDS, name);
     assert.deepEqual(tool.inputSchema.properties.effort.enum, MODEL_EFFORT_LEVELS, name);
-    assert.deepEqual(tool.inputSchema.properties.engine.enum, ['direct', 'opencode', 'opencode2', 'omp', 'crush'], name);
+    assert.deepEqual(tool.inputSchema.properties.engine.enum, MODEL_EXECUTION_ENGINES, name);
     assert.equal(tool.inputSchema.properties.model.type, 'string', name);
+    assert.equal(tool.inputSchema.properties.protect_credentials.type, 'boolean', name);
+    assert.equal(tool.inputSchema.properties.protectCredentials, undefined, name);
     assert.equal('preset' in tool.inputSchema.properties, false, name);
   }
 });

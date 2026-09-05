@@ -42,6 +42,11 @@ export const CORE_MANIFEST = {
       required: false,
       doc: 'Canonical provider selected when --provider is omitted',
     },
+    {
+      name: 'TRISS_DEFAULT_ENGINE',
+      required: false,
+      doc: 'Execution engine selected when --engine is omitted',
+    },
   ],
 };
 

@@ -69,6 +69,7 @@ export async function runCommitMsgWithDeps(opts, deps = {}) {
     model: opts.model,
     engine: opts.engine,
     effort: opts.effort,
+    protectCredentials: opts.protectCredentials,
     input: {
       maxOutputTokens: maxTokens,
       messages: [

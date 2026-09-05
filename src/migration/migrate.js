@@ -21,6 +21,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parseEnvText } from '../secrets.js';
+import { DEFAULT_MODEL_ENGINE, assertModelExecutionEngine } from '../provider-contract.js';
 import { createProviderConfigSnapshot } from '../provider-config.js';
 import { resolveModelRequest } from '../model-selection.js';
 import { parseOpenCodeDocument } from '../opencode-config.js';
@@ -139,6 +140,15 @@ export function planEnvMigration(text, { path = '<env>' } = {}) {
     additions,
     'TRISS_DEFAULT_PROVIDER',
     chooseDefaultProvider(values, derivedProfiles, hasLegacyOpenAI, path),
+    path,
+  );
+  const configuredEngine = values.TRISS_DEFAULT_ENGINE ?? DEFAULT_MODEL_ENGINE;
+  assertModelExecutionEngine(configuredEngine, `TRISS_DEFAULT_ENGINE in ${path}`);
+  mergeCanonicalField(
+    values,
+    additions,
+    'TRISS_DEFAULT_ENGINE',
+    configuredEngine,
     path,
   );
 
