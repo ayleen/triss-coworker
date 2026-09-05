@@ -1,5 +1,16 @@
 # Security model
 
+## Binding product direction
+
+The accepted owner decision on
+[user choice and best-effort execution](adr/2026-09-05-user-choice-and-easy-setup.md)
+requires executable provider/engine routes to remain available with clear
+disclosure when complete safety guarantees are unavailable. The runtime gates
+described below are current implementation behavior, not a requirement to
+preserve those restrictions. This documentation update does not remove them.
+
+## Current implementation
+
 The operational security policy is
 [SECURITY.md](https://github.com/ayleen/triss-coworker/blob/main/SECURITY.md),
 and the attacker model and explicit non-guarantees are in
