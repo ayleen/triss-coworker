@@ -7,7 +7,7 @@ import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 ---
 
-<Base title="Triss Coder — The part where she writes the code" description="triss coder is an agent runtime with worktree isolation, driven by a cheap model — so the expensive one can stay on the plan and the review.">
+<Base title="Coding engines and execution — Triss" description="Run implementation tasks through supported coding engines and understand worktree isolation, results, and verification.">
   <Header current="coder" />
 
   <main>
@@ -16,7 +16,10 @@ import Footer from "../components/Footer.astro";
       <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">triss coder</div>
       <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 20em;">The part where she writes the code.</h1>
       <p style="margin: 22px 0 0; max-width: 40em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">
-        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss coder</code> is not another summariser. It is an agent runtime with worktree isolation, driven by a cheap model.
+        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss coder</code> runs bounded implementation tasks through your selected coding engine. Inspect the resulting changes before accepting them.
+      </p>
+      <p style="margin: 16px 0 0; font-size: 15px; line-height: 1.6; color: var(--color-text-secondary);">
+        <a href="/workflows/implementation/" style="color: var(--color-accent); text-decoration: underline; text-underline-offset: 0.16em;">Follow the implementation workflow</a> — from a bounded task to an inspected, accepted change.
       </p>
     </div>
     <div style="border: 1px solid var(--color-border-strong); background: var(--color-bg-code);">
@@ -53,6 +56,33 @@ import Footer from "../components/Footer.astro";
     </div>
   </section>
 
+  <section class="coder-path" style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 80px;">
+    <h2 style="font-size: 28px; color: var(--color-text-strong);">From run to accepted change</h2>
+    <p style="color: var(--color-text-secondary);">The same path with or without JavaScript: run, locate the result, inspect every class of change, verify, then decide.</p>
+    <ol class="coder-path__steps">
+      <li>
+        <span class="coder-path__step-title">Run a bounded task</span>
+        <code class="coder-path__cmd" tabindex="0">triss coder run --engine &lt;engine&gt; --isolate "the bounded task"</code>
+        <span class="coder-path__note">The prompt describes the task; it does not create a sandbox policy. <code class="coder-path__inline">--isolate</code> gives you a disposable Git worktree, not an operating-system sandbox.</span>
+      </li>
+      <li>
+        <span class="coder-path__step-title">Locate the result</span>
+        <code class="coder-path__cmd" tabindex="0">triss coder result list</code>
+        <span class="coder-path__note">Or list sessions per engine: <code class="coder-path__inline">triss coder session list --engine &lt;engine&gt;</code>. The JSON envelope reports the worktree path for isolated runs; retention of a result artifact is not guaranteed for every run.</span>
+      </li>
+      <li>
+        <span class="coder-path__step-title">Inspect the actual worktree</span>
+        <code class="coder-path__cmd" tabindex="0">git -C "$WORKTREE" status --short &amp;&amp; git -C "$WORKTREE" diff --cached &amp;&amp; git -C "$WORKTREE" diff</code>
+        <span class="coder-path__note">Also check untracked files: <code class="coder-path__inline">git -C "$WORKTREE" ls-files --others --exclude-standard</code>. Staged and untracked changes are part of the result — a diff alone is not the whole picture.</span>
+      </li>
+      <li>
+        <span class="coder-path__step-title">Verify, then accept or reject</span>
+        <span class="coder-path__note">Run the project's focused checks in the worktree yourself; a zero exit code is not proof the task is correct. Accept through your normal Git process — review, commit, pull request. To discard a specific retained result: <code class="coder-path__inline">triss coder result clean &lt;run-id&gt;</code>; a specific inactive session: <code class="coder-path__inline">triss coder session clean &lt;slug&gt; --engine &lt;engine&gt;</code>.</span>
+      </li>
+    </ol>
+    <p class="coder-path__limits">Capability and isolation verdicts (<code class="coder-path__inline">effective_isolation</code>, <code class="coder-path__inline">execution_capabilities</code>) describe the current implementation per engine and route. Where a run reports <code class="coder-path__inline">best_effort</code> or <code class="coder-path__inline">unavailable</code>, treat it as a disclosed limitation of this version and decide accordingly — not as a guaranteed property of every route, and not as a reason an engine is permanently unusable. See the <a class="coder-path__link" href="https://github.com/ayleen/triss-coworker/blob/main/docs/reliable-delegation-contract.md">reliable delegation contract</a>.</p>
+  </section>
+
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 80px;">
     <h2 style="font-size: 28px; color: var(--color-text-strong);">The envelope you actually review</h2>
     <p style="color: var(--color-text-secondary);">One JSON envelope printed to stdout per run — honest about isolation, files changed, and capabilities.</p>
@@ -68,14 +98,26 @@ import Footer from "../components/Footer.astro";
 
   </main>
 
+  <style>
+    .coder-path__steps { margin: 28px 0 0; padding: 0; list-style: none; counter-reset: coder-step; display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
+    .coder-path__steps li { background: var(--color-bg-raised); padding: 20px 22px; display: flex; flex-direction: column; gap: 8px; counter-increment: coder-step; min-width: 0; }
+    .coder-path__step-title::before { content: counter(coder-step) ". "; color: var(--color-text-label); font-family: var(--font-mono); }
+    .coder-path__step-title { font-size: 15px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.02em; }
+    .coder-path__cmd { display: block; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent); background: var(--color-bg-code); border: 1px solid var(--color-border-subtle); padding: 9px 11px; overflow-x: auto; white-space: pre; }
+    .coder-path__note { font-size: 13.5px; line-height: 1.65; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+    .coder-path__inline { font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); }
+    .coder-path__limits { margin: 22px 0 0; font-size: 13px; line-height: 1.65; color: var(--color-text-muted); max-width: 72ch; }
+    .coder-path__link { color: var(--color-accent); text-decoration: underline; text-underline-offset: 0.16em; }
+  </style>
+
   <Footer />
 
   <script>
 // @ts-nocheck
     const ENGINES = {
-      opencode: { body: "The V1 engine, and the one to pick unless you have a reason. Its deny-first bash allowlist in opencode.json is enforced. Zen and Go runs keep native OpenCode provider behavior. Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
-      opencode2: { body: "The V2 beta. OpenCode 2 0.0.0-beta-19059 or newer is accepted by default; Triss checks required option declarations, not help descriptions or an exact build. It shares the same opencode.json config and provider catalogue. Credential handling defaults to best_effort_raw; pass --protect-credentials for the parent-owned credential proxy.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
-      crush: { body: "Supported with isolation ON by default. The disposable worktree is the layer Triss can guarantee.", flag: "--engine crush", isolation: "ON by default" },
+      opencode: { body: "The V1 engine and the stable default. Its deny-first bash allowlist in opencode.json is enforced. Zen and Go runs keep native OpenCode provider behavior. Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
+      opencode2: { body: "The V2 beta. OpenCode 2 0.0.0-beta-19059 or newer is accepted by default — the supported floor plus every newer parseable version, never one pinned build; Triss checks required option declarations, not help descriptions. It shares the same opencode.json config and provider catalogue. Credential handling defaults to best_effort_raw; pass --protect-credentials for the parent-owned credential proxy.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
+      crush: { body: "Isolation is ON by default: the run happens in a disposable worktree that separates changes from your checkout. That worktree is not an operating-system sandbox. By default the engine auto-approves its tools; --restrict opts into the CLI allowlist enforcement for this run.", flag: "--engine crush", isolation: "ON by default" },
       omp: { body: "Native OMP headless adapter with structured events and named sessions. Run-private config prevents profile inheritance. It defaults to worktree isolation and best_effort_raw credential handling; --protect-credentials uses the parent-owned proxy. A worktree is not an OS sandbox.", flag: "--engine omp", isolation: "ON by default" },
       harness: { body: "Not an --engine value — opt-in DSH companion bundle. One profile dependency instead of hand-authoring provider mapping.", flag: "dsh plugin add triss-dsh-provider-bundle", isolation: "owned by Harness" },
     };

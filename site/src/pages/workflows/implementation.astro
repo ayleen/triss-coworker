@@ -1,0 +1,272 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+import Base from "../../layouts/Base.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+---
+
+<Base
+  title="Delegate an implementation task — Triss"
+  description="Run a bounded coding task, inspect worktree changes and execution results, and accept only verified work."
+>
+  <Header current="workflows" />
+
+  <main class="workflow-layout">
+    <div class="workflow-page-body">
+      <p class="workflow-eyebrow">Implementation workflow</p>
+      <h1 class="workflow-page-title">Delegate a bounded change. Inspect it before it ships.</h1>
+      <p class="workflow-lede">
+        Hand a bounded coding task to your selected coding engine through
+        <code>triss coder run</code>. The run happens in an isolated Git worktree; the
+        printed envelope and the worktree are what you inspect before anything is
+        accepted.
+      </p>
+    </div>
+
+    <div class="workflow-page-body">
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Prerequisites</h2>
+        <ul>
+          <li>A Git project.</li>
+          <li>
+            A working coding engine and provider you selected — see the
+            <a href="/coder/">coder reference</a> and
+            <a href="/docs/getting-started/">setup</a>. Triss does not choose the engine
+            for you and does not require one specific model.
+          </li>
+          <li>Concrete acceptance criteria for the change, decided before the run.</li>
+        </ul>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Define the task</h2>
+        <p>State, before running anything:</p>
+        <ul>
+          <li>the goal of the change;</li>
+          <li>the allowed scope — which files or areas may change;</li>
+          <li>the project's check commands the run should execute;</li>
+          <li>what must not change.</li>
+        </ul>
+        <div class="callout">
+          <p class="workflow-example-label">Example task</p>
+          <p>
+            "Add retries with exponential backoff to the HTTP client in
+            <code>src/http/client.js</code>. Do not change the public function
+            signatures. Run the project's HTTP test suite and report the results. Do
+            not touch files outside <code>src/http/</code>."
+          </p>
+        </div>
+        <p>
+          This is an example task you write and adapt — this page shows no fabricated
+          execution transcript.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Run</h2>
+        <p>
+          The whole task travels in the quoted prompt — the engine starts with no
+          memory of this page or of anything you defined before the command, and the
+          session name is only a label, not context. This example embeds the Example
+          task from above; replace the quoted text with your own complete task:
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss coder run --isolate --session bounded-change "Add retries with exponential backoff to the HTTP client in src/http/client.js. Do not change the public function signatures. Run the project's HTTP test suite and report the results. Do not touch files outside src/http/. Report the changes, checks, and remaining limitations."</code></pre>
+        <p>
+          <code>--isolate</code> runs the task in a disposable Git worktree under
+          <code>.triss/wt/&lt;slug&gt;</code>; <code>--session</code> gives the run a
+          Triss-side session slug you can refer to later. The command prints a JSON
+          envelope to stdout.
+        </p>
+        <div class="callout">
+          <p>
+            The natural-language prompt defines the task — it does not create a sandbox
+            policy. A Git worktree separates changes; it is not an operating-system
+            sandbox. If you have explicit protection requirements, do not silently
+            replace them with best effort: isolated runs that cannot enforce isolation
+            fail before spawn unless you explicitly opt into a downgrade.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Locate the result</h2>
+        <p>
+          Read the JSON envelope the run actually printed — it reports the session, the
+          worktree, execution details, and capability warnings. For retained artifacts
+          and sessions, use the inventory commands:
+        </p>
+        <pre tabindex="0" class="code-block"><code>triss coder result list
+triss coder session list --engine opencode</code></pre>
+        <p>
+          The second command is an example for the OpenCode engine — pass the engine of
+          your actual run (<code>opencode</code>, <code>opencode2</code>,
+          <code>crush</code>, or <code>omp</code>).
+        </p>
+        <div class="callout">
+          <p>
+            Retention is conditional: a successful run does not guarantee a retained
+            result artifact. A result you cannot locate is an unknown, not a success.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Inspect the actual worktree</h2>
+        <p>
+          From your project root, save it and assign <code>$WORKTREE</code> to the path
+          your real run reported, then look at what actually changed — staged,
+          unstaged, and untracked:
+        </p>
+        <pre tabindex="0" class="code-block"><code>PROJECT="$PWD"
+WORKTREE="&lt;path reported by your run&gt;"
+git -C "$WORKTREE" status --short
+git -C "$WORKTREE" diff --cached
+git -C "$WORKTREE" diff
+git -C "$WORKTREE" ls-files --others --exclude-standard</code></pre>
+        <p>
+          <code>$WORKTREE</code> is assigned to the actual path before running — it is
+          not copied from this demo. <code>&lt;...&gt;</code> placeholders on this page
+          are replaceable values, not literals to paste. <code>$PROJECT</code> keeps
+          your original directory for the steps below.
+        </p>
+        <div class="callout">
+          <p>
+            Do not stop at <code>git diff</code>: the run may stage its deliverables, so
+            check the staged diff and the untracked files as well. A diffstat or a
+            files-changed count does not replace reading the content.
+          </p>
+        </div>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Verify</h2>
+        <p>
+          Change into the actual worktree and run the focused checks specified in the
+          task — the real commands, not a recap of what the engine reported about
+          itself — then return to your project:
+        </p>
+        <pre tabindex="0" class="code-block"><code>cd "$WORKTREE"
+# run your project's focused checks exactly as specified in the task
+cd "$PROJECT"</code></pre>
+        <p>
+          An exit code of 0 does not prove the result is correct. Verification is
+          reading the diff and running the checks yourself. Return to
+          <code>$PROJECT</code> before any inventory or cleanup command: Triss
+          resolves project state from the current directory, and run from inside the
+          worktree those commands would look at the worktree's own state instead of
+          your project's.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Accept</h2>
+        <p>
+          After verification, accept the work through your normal Git process: review
+          the changes, make a deliberate commit or open a pull request, and have it
+          reviewed. Triss does not merge automatically, and there is no accept
+          subcommand — acceptance is your decision, recorded in your repository.
+        </p>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Reject and clean up</h2>
+        <p>
+          Do not delete a diff you have not reviewed. After an explicit decision to
+          reject, run the targeted cleanup from your project root
+          (<code>cd "$PROJECT"</code> if you are still in the worktree) and remove the
+          specific retained result or the specific inactive session:
+        </p>
+        <pre tabindex="0" class="code-block"><code>cd "$PROJECT"
+triss coder result clean &lt;run-id&gt;
+triss coder session clean &lt;slug&gt; --engine &lt;actual-engine&gt;</code></pre>
+        <p>
+          Take <code>&lt;run-id&gt;</code>, <code>&lt;slug&gt;</code>, and
+          <code>&lt;actual-engine&gt;</code> from your real inventory
+          (<code>triss coder result list</code>, <code>triss coder session list</code>) —
+          they are replaceable values, not ready-made literals for a copy button.
+        </p>
+        <ul>
+          <li>
+            Result cleanup removes a retained result artifact; it does not delete the
+            persistent session.
+          </li>
+          <li>
+            <code>triss coder clean</code> only removes finished isolation worktrees
+            whose branches have no diff against the default branch — it is not a
+            universal reject.
+          </li>
+          <li>
+            <code>--all</code> and <code>--recover-live</code> are force paths for
+            specific situations, not the normal cleanup route.
+          </li>
+        </ul>
+      </section>
+
+      <section class="workflow-block">
+        <h2 class="workflow-block__title">Limits</h2>
+        <ul>
+          <li>
+            Read the engine's execution and capability warnings in the envelope — they
+            describe what the run actually enforced.
+          </li>
+          <li>
+            A worktree separates changes; it does not confine access to your filesystem.
+            See <a href="/security/">security</a>.
+          </li>
+          <li>
+            A completed run is not proof that the task is correct. The full retention,
+            cleanup, and isolation contract is documented in the
+            <a href="https://github.com/ayleen/triss-coworker/blob/main/docs/reliable-delegation-contract.md">reliable delegation contract</a>
+            and the <a href="/coder/">coder reference</a>.
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <nav class="workflow-next" aria-label="Next steps">
+      <span class="workflow-next__label">Next:</span>
+      <a href="/security/">Security</a>
+      <a href="/coder/">Coder reference</a>
+      <a href="/docs/">Docs</a>
+    </nav>
+  </main>
+
+  <Footer />
+</Base>
+
+<style>
+  .workflow-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-label);
+    margin: 0 0 18px;
+  }
+  .workflow-page-title {
+    font-size: clamp(2rem, 3.6vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+    color: var(--color-text-strong);
+  }
+  .workflow-lede {
+    margin: 22px 0 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--color-text-secondary);
+  }
+  .workflow-example-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+    margin: 0 0 8px;
+  }
+  .workflow-next__label {
+    color: var(--color-text-faint);
+  }
+</style>

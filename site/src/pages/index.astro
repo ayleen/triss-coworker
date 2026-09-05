@@ -5,238 +5,213 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
-import { ANTHROPIC, DEEPSEEK, DEFAULTS, PROFILE, calcMonthly } from "../data/pricing.js";
-// Release version is sourced from package metadata during publication.
-
-// Static calc for SSR — must match client JS defaults (standard delegated model at 77% hit)
-const _idxDefaults = DEFAULTS;
-const _idxCalc = calcMonthly(_idxDefaults);
-function _idxMoney(v: number) { return v >= 100 ? "$" + Math.round(v).toLocaleString("en-US") : "$" + v.toFixed(2); }
-const _idxWithout = _idxMoney(_idxCalc.without);
-const _idxWith = _idxMoney(_idxCalc.withTriss);
-const _idxSaved = _idxMoney(_idxCalc.saved);
-const _idxPct = Math.round((_idxCalc.saved / _idxCalc.without) * 100);
+import DelegationExample from "../components/DelegationExample.astro";
+import { WORKFLOWS } from "../data/workflows.js";
 ---
 
 <Base
-  title="Triss — Your agent is a brilliant engineer. A very expensive proofreader."
-  description="Triss is a Node CLI that delegates token-heavy work through a lower-cost provider and returns a compact summary to your primary agent. See the measured $2.22 week."
+  title="Triss — Managed delegation for AI development"
+  description="Delegate codebase research, reviews, and implementation through a local CLI and MCP server. Choose your models and engines. Keep control of what ships."
 >
   <Header />
 
   <main>
-  <!-- Hero -->
-  <section
-    id="top"
-    style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter) 72px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: start;"
-  >
-    <div>
-      <div
-        style="display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 28px;"
-      >
-        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">MIT</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 5px 9px;">Node ≥ 22.12</span>
-        <span
-          style="border: 1px solid rgba(95,180,100,0.4); color: var(--color-accent); padding: 5px 9px; text-transform: none; letter-spacing: 0;"
-          >npm i -g triss-coworker</span
-        >
-      </div>
-      <h1
-        style="margin: 0; font-size: 62px; line-height: 1.02; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); text-wrap: balance;"
-      >
-        Your agent is a brilliant engineer.<br /><span style="color: var(--color-accent);">A very expensive proofreader.</span>
-      </h1>
-      <p style="margin: 26px 0 0; max-width: 30em; font-size: 17.5px; line-height: 1.6; color: var(--color-text-secondary);">
-        Triss is a Node CLI that intercepts the token-heavy half of the job — bulk file reads, URL fetches, diff reviews,
-        tracker chatter, whole implementation tasks — and hands it to your configured lower-cost provider. Your primary
-        agent gets a 1–2K-token summary instead of 28K in + 4.7K out per request (5.84M total week).
-      </p>
-      <div style="display: flex; gap: 12px; margin-top: 34px; flex-wrap: wrap;">
-        <button
-          id="copy-install-btn"
-          style="display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: #0b0d10; background: var(--color-accent); border: none; padding: 14px 20px; cursor: pointer;"
-        >
-          <span>npm install -g triss-coworker</span>
-          <span id="copy-label" style="font-size: 12px; font-weight: 600;">copy</span>
-        </button>
-        <a
-          href="/docs/getting-started"
-          style="display: flex; align-items: center; font-family: var(--font-mono); font-size: 14px; color: var(--color-text-code); border: 1px solid #2d323c; padding: 14px 20px;"
-          >Quickstart →</a
-        >
-      </div>
-      <div
-        style="display: grid; grid-template-columns: repeat(3, auto); gap: 36px; margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--color-border); justify-content: start;"
-      >
-        <div>
-          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-accent);"><a href="/cost" style="color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px;">~60% less</a></div>
-          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">on 28K/4.7K profile · <a href="/cost" style="color: var(--color-text-faint); text-decoration: underline;">measured week $2.22</a></div>
+    <!-- Hero: text and CTAs on the left, recorded example on the right -->
+    <section id="top" class="home-hero">
+      <div class="home-hero__intro">
+        <span class="home-hero__eyebrow">Managed delegation for AI development</span>
+        <h1 class="home-hero__title">Give your coding agent a coworker.</h1>
+        <p class="home-hero__lede">
+          Delegate codebase research, reviews, and implementation through Triss. Use your
+          preferred models and coding engines. Keep control of what ships.
+        </p>
+        <p class="home-hero__supporting">
+          An open-source CLI and MCP server for Claude Code, Codex, and your terminal.
+        </p>
+        <div class="home-hero__actions">
+          <a class="btn-primary" href="/docs/getting-started/">Get started</a>
+          <a class="btn-secondary" href="#delegation-example">See a real example</a>
         </div>
-        <div>
-          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-text);">≈1¢</div>
-          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">per delegated request</div>
-        </div>
-        <div>
-          <div style="font-family: var(--font-mono); font-size: 24px; font-weight: 600; color: var(--color-text);">$2.22</div>
-          <div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">one real week, 209 calls</div>
+        <div class="home-hero__install">
+          <code class="home-hero__install-command" id="install-command">npm install -g triss-coworker</code>
+          <button id="copy-install-btn" class="btn-secondary" type="button">Copy install command</button>
         </div>
       </div>
-    </div>
+      <DelegationExample compact id="delegation-example" />
+    </section>
 
-    <!-- Bill calculator -->
-    <div style="border: 1px solid var(--color-border-strong); background: var(--color-bg-raised);">
-      <div
-        style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--color-border-subtle);"
-      >
-        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">your monthly bill</span>
-        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--color-accent);">live</span>
+    <!-- Three workflow cards -->
+    <section class="page-section" style="border-top: 1px solid var(--color-border);">
+      <p class="page-section__label">01 — workflows</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        Three workflows to start with
+      </h2>
+      <div class="workflow-grid">
+        {WORKFLOWS.map((workflow) => (
+          <article class="workflow-card">
+            <h3 class="workflow-card__title">{workflow.title}</h3>
+            <p class="workflow-card__body">{workflow.description}</p>
+            <a class="workflow-card__cta" href={workflow.href}>{workflow.cta} →</a>
+          </article>
+        ))}
       </div>
-      <div style="padding: 22px 18px 26px; display: flex; flex-direction: column; gap: 22px;">
-        <div>
-          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
-            <span style="font-size: 13px; color: var(--color-text-secondary);">Agent requests per day</span>
-            <span id="reqs-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">40</span>
-          </div>
-          <input id="reqs-slider" type="range" min="10" max="400" step="10" value="40" style="width: 100%;" aria-label="Agent requests per day" />
+      <p style="margin-top: 22px;">
+        <a href="/workflows/" style="font-family: var(--font-mono); font-size: 13px;">All workflows →</a>
+      </p>
+    </section>
+
+    <!-- How it works -->
+    <section id="how" class="page-section" style="border-top: 1px solid var(--color-border);">
+      <p class="page-section__label">02 — how it works</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        Delegate the work. Keep the decisions.
+      </h2>
+      <ol class="how-steps">
+        <li>
+          <h3>Your agent defines the task</h3>
+          <p>Choose the question, context, and acceptance criteria.</p>
+        </li>
+        <li>
+          <h3>Triss invokes the configured route</h3>
+          <p>Use the selected provider, model, and execution engine through CLI or MCP.</p>
+        </li>
+        <li>
+          <h3>You receive a result to inspect</h3>
+          <p>Read findings, source references, or implementation changes.</p>
+        </li>
+        <li>
+          <h3>You decide what to use</h3>
+          <p>Verify the evidence and changes before accepting them.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Why add Triss to an agent you already use -->
+    <section class="page-section" style="border-top: 1px solid var(--color-border); background: #0d0f13;">
+      <p class="page-section__label">03 — why triss</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">
+        Why add Triss to an agent you already use?
+      </h2>
+      <p style="margin: 18px 0 0; max-width: 46em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
+        Keep your existing agent. Use Triss when you want a shared interface for delegated work
+        across supported models, coding engines, and project tools.
+      </p>
+      <div class="workflow-grid">
+        <article class="workflow-card">
+          <h3 class="workflow-card__title">A common interface</h3>
+          <p class="workflow-card__body">Use the same provider configuration through CLI and MCP.</p>
+        </article>
+        <article class="workflow-card">
+          <h3 class="workflow-card__title">Task-specific workflows</h3>
+          <p class="workflow-card__body">
+            Read selected context, review changes, or delegate an implementation task without
+            inventing a new prompt-and-script workflow each time.
+          </p>
+        </article>
+        <article class="workflow-card">
+          <h3 class="workflow-card__title">Results you can inspect</h3>
+          <p class="workflow-card__body">
+            Keep findings, changes, execution details, and usage information available for review.
+          </p>
+        </article>
+      </div>
+      <p style="margin: 26px 0 0; max-width: 46em; font-size: 14px; line-height: 1.65; color: var(--color-text-muted);">
+        If your agent's built-in tools already meet your needs, you may not need another layer.
+        Triss is useful when you want explicit delegation and a common interface across tools.
+      </p>
+    </section>
+
+    <!-- Controls and boundaries -->
+    <section class="page-section" style="border-top: 1px solid var(--color-border);">
+      <p class="page-section__label">04 — controls and boundaries</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        Your choices. Clear boundaries.
+      </h2>
+      <div class="boundary-grid">
+        <div class="boundary-item">
+          <h3>Models and engines</h3>
+          <p>
+            Choose the supported provider, model, and engine for the work. Check the
+            <a href="/docs/">configuration guide</a> for current route requirements.
+          </p>
         </div>
-        <div>
-          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
-            <span style="font-size: 13px; color: var(--color-text-secondary);">Share you delegate to Triss</span>
-            <span id="share-display" style="font-family: var(--font-mono); font-size: 13px; color: var(--color-text-heading);">65%</span>
-          </div>
-          <input id="share-slider" type="range" min="20" max="90" step="5" value="65" style="width: 100%;" aria-label="Share you delegate to Triss" />
+        <div class="boundary-item">
+          <h3>Data</h3>
+          <p>
+            Selected code and task context may be sent to your model provider. Triss has no
+            developer telemetry. <a href="/security/">Security and data flows</a>
+          </p>
         </div>
-        <div>
-          <div style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: 10px;">Primary model</div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <button
-              id="btn-sonnet"
-              aria-pressed="true"
-              style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);"
-              >Sonnet 4.6</button
-            >
-            <button
-              id="btn-opus"
-              aria-pressed="false"
-              style="font-family: var(--font-mono); font-size: 12.5px; padding: 10px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);"
-              >Opus 4.7</button
-            >
-          </div>
+        <div class="boundary-item">
+          <h3>Execution</h3>
+          <p>
+            A Git worktree separates changes. It is not an operating-system sandbox.
+            <a href="/coder/">Coding engines and isolation</a>
+          </p>
         </div>
-        <div style="border-top: 1px solid var(--color-border-subtle); padding-top: 20px; display: flex; flex-direction: column; gap: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <span style="font-size: 13px; color: var(--color-text-faint);">Agent alone</span>
-            <span
-              id="cost-without"
-              style="font-family: var(--font-mono); font-size: 16px; color: var(--color-danger); text-decoration: line-through; text-decoration-color: var(--color-danger-strike);">{_idxWithout}</span
-            >
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <span style="font-size: 13px; color: var(--color-text-code);">Agent + Triss</span>
-            <span
-              id="cost-with"
-              style="font-family: var(--font-mono); font-size: 30px; font-weight: 600; color: var(--color-accent); letter-spacing: -0.02em;">{_idxWith}</span
-            >
-          </div>
-          <div
-            id="saved-line"
-            style="background: var(--color-accent-selection-bg); border: 1px solid var(--color-accent-selection-border); padding: 11px 13px; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">saves {_idxSaved} / month · {_idxPct}% less</div
-          >
-          <p style="margin: 2px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--color-text-label);">
-            Baselines from published list prices and one measured week of real Triss usage (209 calls, 5.84M in, $2.22).
-            Your mileage depends on what you delegate.
+        <div class="boundary-item">
+          <h3>Acceptance</h3>
+          <p>
+            A completed run is not proof that a task is correct. Review the result before using
+            it. <a href="/workflows/implementation/">Implementation workflow</a>
           </p>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Not a Claude-only trick -->
-  <section style="border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); background: #0d0f13;">
-    <div
-      style="max-width: var(--layout-max); margin: 0 auto; padding: 34px var(--layout-gutter); display: flex; align-items: center; gap: 40px; flex-wrap: wrap; justify-content: space-between;"
-    >
-      <div style="font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: var(--color-text-heading);">Not a Claude-only trick.</div>
-      <div style="display: flex; gap: 10px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 12.5px;">
-        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">Claude Code</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">Codex</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">MCP hosts</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-code);">AGENTS.md readers</span>
-        <span style="border: 1px solid var(--color-border-strong); padding: 8px 13px; color: var(--color-text-faint);">any shell</span>
-      </div>
-      <p style="margin: 0; max-width: 34em; font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted);">
-        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss init</code> writes CLAUDE.md and AGENTS.md rules;
-        <code style="font-family: var(--font-mono); color: var(--color-accent);">triss mcp install</code> registers the same tools over MCP.
+    <!-- Cost -->
+    <section class="page-section" style="border-top: 1px solid var(--color-border); background: #0d0f13;">
+      <p class="page-section__label">05 — cost</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        Cost is one part of the decision.
+      </h2>
+      <p style="margin: 18px 0 0; max-width: 46em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
+        Delegating to a lower-cost model can reduce inference spend. The result depends on the
+        task, selected model, cache usage, and any retries. Compare the assumptions, not just
+        the headline.
       </p>
-    </div>
-  </section>
+      <p style="margin: 24px 0 0;">
+        <a class="btn-secondary" href="/cost/">Explore costs and methodology</a>
+      </p>
+    </section>
 
-  <!-- How it works -->
-  <section id="how" style="max-width: var(--layout-max); margin: 0 auto; padding: 96px var(--layout-gutter);">
-    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">01 — how it works</div>
-    <h2 style="margin: 0; font-size: 40px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong); max-width: 20em;">
-      Fewer portals. Substantially more <code style="font-family: var(--font-mono); color: var(--color-accent); font-size: 36px;">git diff</code>.
-    </h2>
-    <p style="margin: 18px 0 0; max-width: 44em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
-      One hop sits between your expensive agent and the raw context. Triss reads, fetches, and summarises — then returns only what matters.
-    </p>
-    <div style="display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 0; align-items: stretch; margin-top: 52px;">
-      <div style="border: 1px solid var(--color-border-strong); padding: 24px; background: var(--color-bg-raised);">
-        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">primary agent</div>
-        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">Claude Code / Codex</div>
-        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted); margin-top: 10px;">Decides what to do. Keeps its context for reasoning and edits.</div>
-        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-danger); margin-top: 18px; border-top: 1px solid var(--color-border-subtle); padding-top: 14px;">$3–$15 / 1M in</div>
-      </div>
-      <div style="display: flex; align-items: center; padding: 0 18px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label); white-space: nowrap;">— task →</div>
-      <div style="border: 1px solid rgba(95,180,100,0.45); padding: 24px; background: rgba(95,180,100,0.05);">
-        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent);">the hop</div>
-        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">triss</div>
-        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); margin-top: 10px;">Reads 47 files, strips the HTML, shards the diff, routes to the cheapest model that can do it.</div>
-        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); margin-top: 18px; border-top: 1px solid rgba(95,180,100,0.25); padding-top: 14px;">local · no telemetry</div>
-      </div>
-      <div style="display: flex; align-items: center; padding: 0 18px; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label); white-space: nowrap;">→ corpus →</div>
-      <div style="border: 1px solid var(--color-border-strong); padding: 24px; background: var(--color-bg-raised);">
-        <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">provider runtime</div>
-        <div style="font-size: 19px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">DeepSeek, GLM, Kimi, Ollama</div>
-        <div style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-muted); margin-top: 10px;">Any OpenAI-compatible endpoint. Returns a focused summary with cited paths.</div>
-        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); margin-top: 18px; border-top: 1px solid var(--color-border-subtle); padding-top: 14px;">≈$0.01 / call</div>
-      </div>
-    </div>
-  </section>
+    <!-- Commands -->
+    <section id="commands" class="page-section" style="border-top: 1px solid var(--color-border);">
+      <p class="page-section__label">06 — commands</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        The command reference
+      </h2>
+      <p style="margin: 18px 0 0; max-width: 46em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
+        Every CLI command and MCP tool with its options, examples, and limits — searchable, in
+        one place.
+      </p>
+      <p style="margin: 24px 0 0;">
+        <a class="btn-secondary" href="/commands/">Open the commands reference</a>
+      </p>
+    </section>
 
-  <!-- Commands preview -->
-  <section id="commands" style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 96px;">
-    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">02 — commands</div>
-    <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Five commands in preview — <a href="/commands" style="font-size: 22px; color: var(--color-accent);">all 22 on Commands →</a></h2>
-    <div style="display: grid; grid-template-columns: 220px 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 36px;">
-      <div id="cmd-list" style="background: var(--color-bg); display: flex; flex-direction: column;"></div>
-      <div style="background: var(--color-bg-code); padding: 22px; min-width: 0;">
-        <div id="cmd-title" style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.02em;"></div>
-        <div id="cmd-note" style="font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); margin-top: 8px;"></div>
-        <pre id="cmd-code" style="margin: 18px 0 0; background: #08090b; border: 1px solid var(--color-border-subtle); padding: 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; overflow-x: auto; white-space: pre-wrap;"></pre>
+    <!-- Install -->
+    <section id="install" class="page-section" style="border-top: 1px solid var(--color-border); background: #0d0f13;">
+      <p class="page-section__label">07 — install</p>
+      <h2 style="margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">
+        Install Triss
+      </h2>
+      <p style="margin: 18px 0 0; max-width: 46em; font-size: 16.5px; line-height: 1.65; color: var(--color-text-secondary);">
+        A local CLI with no developer telemetry. Requires Node ≥ 22.12 and a credential for
+        your chosen provider.
+      </p>
+      <pre tabindex="0" class="code-block" style="max-width: 480px;"><code>npm install -g triss-coworker</code></pre>
+      <div class="workflow-next">
+        <a href="/docs/getting-started/">Quickstart →</a>
+        <a href="/docs/">Docs →</a>
+        <a href="https://github.com/ayleen/triss-coworker" rel="noopener">GitHub →</a>
+        <a href="https://www.npmjs.com/package/triss-coworker" rel="noopener">npm →</a>
+        <span style="color: var(--color-text-faint);">MIT license</span>
       </div>
-    </div>
-    <p style="text-align: center; margin-top: 18px;"><a href="/commands" style="font-family: var(--font-mono); font-size: 13px;">Full commands reference →</a></p>
-  </section>
-
-  <!-- Install -->
-  <section id="install" style="border-top: 1px solid var(--color-border); background: #0d0f13; padding: 80px var(--layout-gutter);">
-    <div style="max-width: var(--layout-max); margin: 0 auto;">
-      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">03 — install</div>
-      <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Three ways in. The wizard does the rest.</h2>
-      <div style="display: flex; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 36px;">
-        <button data-tab="npm" class="tab-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: #08090b; color: var(--color-accent); border: none;">npm</button>
-        <button data-tab="curl" class="tab-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-text-muted); border: none;">curl</button>
-        <button data-tab="source" class="tab-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 12px 20px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-text-muted); border: none;">source</button>
-      </div>
-      <pre id="install-code" style="margin: 0; background: #08090b; border: 1px solid var(--color-border); border-top: none; padding: 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.9; white-space: pre-wrap;"></pre>
-    </div>
-  </section>
-
+    </section>
   </main>
 
   <Footer />
 
-  <script type="application/json" id="pricing-data" set:html={JSON.stringify({ profile: PROFILE, anthropic: ANTHROPIC, deepseek: DEEPSEEK, defaults: DEFAULTS })}></script>
-  <script is:inline src="/scripts/pricing-index.js" defer></script>
+  <script is:inline src="/scripts/home.js" defer></script>
 </Base>

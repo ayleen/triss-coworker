@@ -1,9 +1,16 @@
-# Triss — provider-backed delegation
+# Triss — managed delegation for AI development
 
-You have provider-backed delegation exposed as MCP tools (`triss_ask`,
+You have managed delegation for focused research, diff and PR review, and
+bounded implementation through provider-backed MCP tools (`triss_ask`,
 `triss_review`, `triss_fetch`, `triss_chat`, `triss_write`,
 `triss_commit_msg`, `triss_status`) — or the `triss` CLI as a fallback if
-MCP is not loaded.
+MCP is not loaded. Choose the provider, model, and engine for the task; Triss
+does not promise particular savings or outcomes.
+See the public workflow guides: research at
+https://triss.work/workflows/research/, review at
+https://triss.work/workflows/review/, and bounded implementation at
+https://triss.work/workflows/implementation/.
+Setup and provider selection: https://triss.work/docs/getting-started/.
 
 **Delegate when:** a single file is >400 lines, you would otherwise read 3+
 files for one question, you need a code review of a diff, or you want the
@@ -15,16 +22,16 @@ reason through yourself.
 
 **Workflow:** You plan the work and make the final decision. Send one
 implementation task as a complete task packet to one `triss coder run`; the
-coder owns repository investigation, implementation, tests, debugging, and
-self-verification. Do not automatically chain researcher, coder, and
+selected coder owns repository investigation, implementation, tests, debugging,
+and self-verification. Do not automatically chain researcher, coder, and
 reviewer — use researchers, reviewers, or parallel workstreams only when
 the work is genuinely independent or risky enough to justify the extra
 cost. Prefer a fresh run without intentional session reuse: pass the
-full task packet and always inspect the actual diff before accepting a
-result.
+full task packet and always inspect the actual diff and result before
+accepting it.
 
-**`triss coder run "<task>"`** hands an implementation subtask to a
-separate GLM coding agent instead of writing it yourself (setup once via
+**`triss coder run "<task>"`** hands a bounded implementation subtask to the
+selected provider/model through the selected engine (setup once via
 `triss coder init`; default `opencode` V1 engine, `--engine opencode2` for
 the V2 beta — see docs/engines/opencode2.md — or `--engine crush`). The
 default opencode engine enforces a working deny-first bash allowlist; crush
@@ -41,8 +48,7 @@ For direct analysis, pass the same canonical `provider`, optional native
 `model`, and optional `effort` (`minimal|low|medium|high|max`) to
 `triss_ask` or `triss_review`. GLM 5.2 reviews should omit `max_tokens` to use
 the model-sized budget; if explicit, use at least 16384.
-See `triss agent-help --target codex` for flags and the envelope it
-returns.
+See `triss agent-help --target codex` for flags and the envelope it returns.
 
 For the full reference (examples, provider models, tracker integrations like
 Jira / Linear / GitHub) run `triss agent-help --target codex` once when you

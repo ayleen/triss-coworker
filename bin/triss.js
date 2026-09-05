@@ -126,10 +126,7 @@ const PROTECT_HELP =
 const program = new Command();
 program
   .name('triss')
-  .description(
-    'Provider-neutral coworker for AI coding agents. Delegate bulk reads, ' +
-      'code generation, chat extraction, reviews, and tracker I/O.',
-  )
+  .description(packageJson.description)
   .version(packageJson.version);
 
 program.hook('postAction', async () => {

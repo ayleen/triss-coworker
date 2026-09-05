@@ -14,6 +14,33 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-06 — Published instructions copied from the plan without runtime verification
+- **What happened:** Owner review of the repositioned website found the
+  implementation-workflow guide told readers to `cd "$WORKTREE"` and then run
+  `triss coder result/session clean` from inside the worktree (Triss resolves
+  project state from cwd, so the commands would target the worktree's own
+  state), and its example `triss coder run` command sent a generic prompt that
+  did not contain the concrete task shown above it. The quickstart also
+  described the standard wizard inaccurately — twice: first claiming free
+  provider choice and optional host wiring, then, in the correction round,
+  claiming Standard wires both hosts automatically. The real Standard mode
+  configures the `openai-compatible` profile (key + main + small model), then
+  asks which host to connect (Claude Code, Codex, or Both — no Skip) and
+  installs MCP + agent rules for that selection.
+- **Root cause:** The workflow/cwd defects were inherited from the approved
+  plan itself and implemented verbatim; neither the executor nor the
+  integration review reproduced the documented shell sequences against the
+  actual CLI, and the wizard description was written from its help text and
+  the misleading `silentlyInstallBoth` function name instead of reading the
+  function body in `src/commands/config.js` (its own comment says "wires both
+  paths (MCP + agent rules) … but it does ask which agent").
+- **Prevention:** Documentation that prescribes a multi-step shell sequence or
+  describes interactive behavior must be validated against the implementation
+  (run the sequence, read the command source) before publishing — a plan being
+  approved is not evidence that its commands work, and a function's name is
+  not its behavior. Fix plan documents together with the pages that copied
+  the defect.
+
 ## 2026-08-28 — Fuzz oracle encoded `a >= 224` as 224.0.0.0/4
 - **What happened:** The first run of `test/fuzz.test.js` failed three
   properties with the shrunk counterexample `240.0.0.0`; the reference table
