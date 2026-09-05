@@ -77,6 +77,12 @@ Coder tools are listed when any canonical provider credential is configured:
 
 Supported engines: `opencode`, `opencode2`, `crush`, and `omp`. Crush accepts only `zai`.
 
+For compatibility, `triss_coder_run` also accepts the documented legacy
+`protectCredentials` spelling. It is deprecated but remains fail-safe: the
+camelCase and `protect_credentials` values are OR-merged, so any truthy value
+selects protected credential handling. New clients should send
+`protect_credentials`.
+
 ## Tracker tools
 
 Tools appear only when their integration is ready:

@@ -486,16 +486,40 @@ test(
 );
 
 test(
-  'triss_coder_run schema exposes protect_credentials with the best_effort_raw default documented',
+  'triss_coder_run schema retains deprecated protectCredentials alongside protect_credentials',
   withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
     const tools = await listTools();
     const run = tools.find((t) => t.name === 'triss_coder_run');
     assert.ok(run, 'the coder run tool is listed');
-    const prop = run.inputSchema.properties.protect_credentials;
-    assert.ok(prop, 'protect_credentials must be part of the input schema');
-    assert.equal(prop.type, 'boolean');
-    assert.match(prop.description, /best_effort_raw/u);
-    assert.equal(run.inputSchema.properties.protectCredentials, undefined);
+    const legacy = run.inputSchema.properties.protectCredentials;
+    const canonical = run.inputSchema.properties.protect_credentials;
+    assert.ok(legacy, 'protectCredentials must remain in the open coder schema');
+    assert.ok(canonical, 'protect_credentials must be part of the input schema');
+    assert.equal(legacy.type, 'boolean');
+    assert.equal(canonical.type, 'boolean');
+    assert.match(legacy.description, /Deprecated camelCase/u);
+    assert.match(canonical.description, /best_effort_raw/u);
+  }),
+);
+
+test(
+  'coderRunHandler merges both protection spellings in the safe direction',
+  withIsolatedEnv({ ZHIPU_API_KEY: 'zk-fake-test-key' }, async () => {
+    const seen = [];
+    const spyRun = async (_prompt, opts) => {
+      seen.push(opts);
+    };
+    const deps = { runCoderRun: spyRun, spawnSync: () => ({ status: 1, stdout: '', error: null }) };
+
+    await coderRunHandler({ prompt: 'legacy client', protectCredentials: true }, deps);
+    await coderRunHandler({ prompt: 'canonical client', protect_credentials: true }, deps);
+    await coderRunHandler({ prompt: 'conflicting client', protectCredentials: false, protect_credentials: true }, deps);
+    await coderRunHandler({ prompt: 'default client' }, deps);
+
+    assert.deepEqual(
+      seen.map((opts) => opts.protectCredentials),
+      [true, true, true, false],
+    );
   }),
 );
 

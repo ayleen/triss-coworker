@@ -1084,7 +1084,7 @@ const CODER_MCP_DEFAULT_TIMEOUT = 1500;
 // production calls fall through to the real subprocess machinery and the
 // import-time parent snapshot inside runCoderRun.
 export async function coderRunHandler(
-  { prompt, session, continue: cont, agent, provider, model, isolate, cwd, timeout, engine, effort, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protect_credentials: protectCredentialsSnake } = {},
+  { prompt, session, continue: cont, agent, provider, model, isolate, cwd, timeout, engine, effort, allow_best_effort_caller_worktree: allowBestEffortSnake, allowBestEffortCallerWorktree: allowBestEffortCamel, protectCredentials, protect_credentials: protectCredentialsSnake } = {},
   deps = {},
 ) {
   if (!prompt) throw new Error('prompt is required');
@@ -1150,8 +1150,9 @@ export async function coderRunHandler(
       cwd,
       timeout: timeout ?? CODER_MCP_DEFAULT_TIMEOUT,
       allowBestEffortCallerWorktree: allowDowngrade,
-      // The MCP contract uses snake_case for wire fields.
-      protectCredentials: Boolean(protectCredentialsSnake),
+      // `protectCredentials` is the documented legacy spelling for this
+      // coder-only field; merge it with the snake-case alias before dispatch.
+      protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
     },
     {
       spawn: deps.spawn,
