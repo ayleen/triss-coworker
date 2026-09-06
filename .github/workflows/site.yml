@@ -80,6 +80,9 @@ jobs:
       - name: Cloudflare deployment dry run
         working-directory: site
         run: npm run cloudflare:check
+      - name: Worker HTTP acceptance
+        working-directory: site
+        run: npm run test:agent-http
       - name: Link check
         working-directory: site
         run: node scripts/check-links.mjs

@@ -15,6 +15,7 @@
     "check": "astro check",
     "lint": "eslint .",
     "test": "node --test test/*.test.js",
+    "test:agent-http": "node scripts/run-agent-http.mjs",
     "test:browser": "playwright test",
     "test:lighthouse": "node scripts/check-lighthouse.mjs",
     "audit:dependencies": "npm audit --audit-level=high",
