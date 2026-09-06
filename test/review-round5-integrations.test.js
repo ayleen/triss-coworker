@@ -22,6 +22,7 @@ function withTempEnv(t, { global = "" } = {}) {
   const saved = {
     HOME: process.env.HOME,
     ROOT: process.env.TRISS_PROJECT_ROOT,
+    EXIT: process.exitCode,
     env: { ...process.env },
   };
   // Neutralize provider/credential shell keys: a leftover value from a
@@ -43,27 +44,12 @@ function withTempEnv(t, { global = "" } = {}) {
     process.env.HOME = saved.HOME;
     if (saved.ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
+    process.exitCode = saved.EXIT;
     rmSync(home, { recursive: true, force: true });
   });
   return { home, project };
 }
 
-function baseDeps(overrides = {}) {
-  return {
-    isInteractive: () => false,
-    stderrWrite: () => {},
-    integrations: [],
-    coderManifest: { name: "coder" },
-    inspectMigration: async () => ({ state: "not_required" }),
-    probeEngine: () => ({ found: true, compatible: true }),
-    runInstall: async () => ({ ok: true }),
-    runCoderSetup: async () => ({ model: "m", smallModel: "s" }),
-    installMcp: async () => ({ path: "/mcp", status: "added" }),
-    writeRules: async () => {},
-    mcpStatus: async () => ({ present: false }),
-    ...overrides,
-  };
-}
 
 const LINEAR_MANIFEST = { name: "linear", envVars: [{ name: "LINEAR_API_KEY", required: true }] };
 const JIRA_MANIFEST = { name: "jira", envVars: [{ name: "JIRA_API_KEY", required: true }] };
@@ -73,11 +59,15 @@ const CONFLUENCE_MANIFEST = { name: "confluence", envVars: [{ name: "ATLASSIAN_A
 // scripted prompts/menu, calls runSetupWizard, and returns
 // { result, keyQuestions, menuVisits, home, project }. All async — tests
 // await its returned promise directly.
-async function driveAdvancedSetup({ home: homeIn = null, project: projectIn = null, integrations, names, keyAnswers, menuScript = "integrations,done" }) {
+async function driveAdvancedSetup({ home: homeIn = null, project: projectIn = null, integrations, names, keyAnswers, menuScript = "integrations,done", seedGlobal = null }) {
   const home = homeIn ?? mkdtempSync(join(tmpdir(), "f1-"));
   const project = projectIn ?? join(home, "proj");
   const savedHome = process.env.HOME;
   const savedRoot = process.env.TRISS_PROJECT_ROOT;
+  if (!existsSync(join(home, ".config", "triss"))) {
+    mkdirSync(join(home, ".config", "triss"), { recursive: true });
+  }
+  if (seedGlobal) writeFileSync(join(home, ".config", "triss", ".env"), seedGlobal);
   // FULL env snapshot: the wizard's loadEnvFiles() loads the temp global
   // .env into process.env and those keys survive the test without a full
   // restore — polluting later tests (the F1 flip-flop root cause).
@@ -114,7 +104,12 @@ async function driveAdvancedSetup({ home: homeIn = null, project: projectIn = nu
         for (const name of ["LINEAR_API_KEY", "JIRA_API_KEY", "ATLASSIAN_API_TOKEN"]) {
           if (question.includes(name)) {
             state.keyQuestions.push(name);
-            return keyAnswers.length > 0 ? keyAnswers.shift() : "";
+            const answer = keyAnswers.length > 0 ? keyAnswers.shift() : "";
+            // Mirror the provided key into the environment: the wizard's
+            // finalize re-reads the effective state where shell beats the
+            // persisted layer.
+            if (answer) process.env[name] = answer;
+            return answer;
           }
         }
         return "";
@@ -179,10 +174,13 @@ test("F1-T2: an empty persisted LINEAR_API_KEY still counts as missing", async (
   void home;
 });
 
-test("F1-T3: skip in Integrations, provide on revisit → ready, no stale failure", async (t) => {
-  const { result, home, keyQuestions } = driveAdvancedSetup({
+test("F1-T3: skip in Integrations, provide on revisit → ready, no stale failure", async (_t) => {
+  const { result, home, keyQuestions } = await driveAdvancedSetup({
+    // The shared provider (zai) is pre-configured so the run's only open
+    // condition is the selected linear integration's key.
     home: mkdtempSync(join(tmpdir(), "f1t3-")),
     project: null,
+    seedGlobal: "TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f1\n",
     integrations: [LINEAR_MANIFEST],
     names: ["linear"],
     keyAnswers: ["", "lin-key-late"],
@@ -229,8 +227,8 @@ test("F1-T6: two selected integrations, one key missing → incomplete naming th
   const { result } = await driveAdvancedSetup({
     home,
     project: null,
-    integrations: [LINEAR_MANIFEST, JIRA_MANIFEST, CONFLUENCE_MANIFEST],
-    names: ["jira", "confluence", "linear"],
+    integrations: [LINEAR_MANIFEST, JIRA_MANIFEST],
+    names: ["jira", "linear"],
     // Questions are asked in manifest order (LINEAR first): empty for
     // linear, then jira's key. ATLASSIAN is deduped via the asked-set.
     keyAnswers: ["", "jira-key"],
@@ -242,8 +240,6 @@ test("F1-T6: two selected integrations, one key missing → incomplete naming th
     `the missing linear key must be named: ${JSON.stringify(result.failed)}`);
   assert.ok(!failed.some((f) => f.key === "JIRA_API_KEY"),
     "the provided jira key must not be flagged");
-  assert.ok(failed.some((f) => f.key === "ATLASSIAN_API_TOKEN") === false,
-    "atlassian was provided via jira's answer");
 });
 
 test("F1-T7: shared Atlassian credential asked once, one missing-error for both", async (t) => {

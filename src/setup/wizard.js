@@ -360,6 +360,15 @@ async function sectionIntegrations({ draft, previewState, deps, integrations, pr
       `Configure which integrations (comma-separated names, empty to skip)? ${choices.map((c) => c.value).join(', ')}`,
       { defaultValue: '' },
     )).split(/[,\s]+/).filter(Boolean);
+  // Record the selection BEFORE any key prompts: an empty answer means the
+  // user skipped this visit, not that an earlier explicit selection should
+  // be forgotten (review round 6, F1). Valid names only, deduped.
+  const validNames = new Set(integrations.map((integration) => integration.name));
+  for (const name of pickedNames) {
+    if (validNames.has(name) && !draft.selectedIntegrations.includes(name)) {
+      draft.selectedIntegrations.push(name);
+    }
+  }
   // Shared credential groups: Atlassian asks once for Jira+Confluence.
   const asked = new Set();
   for (const integration of integrations) {
@@ -468,7 +477,7 @@ function headlessAssemble({ draft, opts, targets }) {
 // integration target validates its manifest's required fields; a general
 // setup validates the resolved shared provider. Empty string counts as an
 // absent credential. Runs before any write.
-function missingRequirements({ preview, targets, opts: _opts, state: _state }) {
+function missingRequirements({ preview, targets, selectedIntegrations = [] }) {
   const fieldValue = (key) => preview.fields.find((f) => f.key === key)?.current?.value;
   const missing = [];
 
@@ -501,11 +510,46 @@ function missingRequirements({ preview, targets, opts: _opts, state: _state }) {
       remedy: `triss config set ${getProviderDefinition(providerId).credential}`,
     });
   }
+
+  // General Easy/Advanced runs: required fields of integrations EXPLICITLY
+  // selected in this pass. Targeted integration runs are handled above by
+  // their target; unselected integrations never become required.
+  if (!targets || targets.kind === 'none') {
+    const seenKeys = new Map();
+    for (const name of selectedIntegrations) {
+      for (const field of preview.fields
+        .filter((f) => f.group === `integration:${name}` && f.required && !f.pattern)) {
+        if (process.env.TRISS_DEBUG_MISSING) {
+          console.error(`[missing-dbg] ${field.key} current=${JSON.stringify(field.current)} shell=${JSON.stringify(process.env[field.key])}`);
+        }
+        if (field.current?.value === undefined || field.current?.value === '') {
+          const entry = seenKeys.get(field.key) ?? {
+            component: `integration:${name}`,
+            key: field.key,
+            reason: `${field.key} is not set`,
+            remedy: `triss config set ${field.key}`,
+            integrations: [],
+          };
+          if (!entry.integrations.includes(name)) entry.integrations.push(name);
+          seenKeys.set(field.key, entry);
+        }
+      }
+    }
+    for (const entry of seenKeys.values()) {
+      const affected = entry.integrations.join(', ');
+      missing.push({
+        component: entry.component,
+        key: entry.key,
+        reason: `${entry.key} is not set (needed for ${affected})`,
+        remedy: `triss config set ${entry.key}`,
+      });
+    }
+  }
   return missing;
 }
 
-function validateHeadlessCompleteness({ preview, targets, opts, state }) {
-  const missing = missingRequirements({ preview, targets, opts, state });
+function validateHeadlessCompleteness({ preview, targets, opts: _opts, state: _state }) {
+  const missing = missingRequirements({ preview, targets });
   if (missing.length > 0) {
     throw new Error(
       `Headless setup incomplete: ${missing.map((m) => m.key).join(', ')} not set. ` +
@@ -517,7 +561,7 @@ function validateHeadlessCompleteness({ preview, targets, opts, state }) {
 // ─── Orchestration ───────────────────────────────────────────────────────────
 
 function createDraft() {
-  return { set: [], unset: [], incomplete: [], agent: null, engineId: null, validate: null, scope: null };
+  return { set: [], unset: [], incomplete: [], selectedIntegrations: [], agent: null, engineId: null, validate: null, scope: null };
 }
 
 // Ordered draft mutations: the LAST confirmed action for a key wins. A set
@@ -720,10 +764,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   const missing = missingRequirements({
     preview: finalState || state,
     targets,
-    opts,
-    state: finalState || state,
-    integrations,
-    selectedIntegrations: draft.integrations || [],
+    selectedIntegrations: draft.selectedIntegrations || [],
   });
   const finalResult = finalizeResult({ result, engineResult, draft, staticValidation, missing });
   printResult({
@@ -784,7 +825,7 @@ function finalizeResult({ result, engineResult, draft, staticValidation, missing
   // Failure entries are renderer objects {kind, path, reason}; the added
   // findings keep that shape so printing never shows "undefined: undefined".
   const failures = [...result.failed];
-  const asFailure = (kind, reason, remedy) => Object.freeze({ kind, path: null, reason, ...(remedy ? { remedy } : {}) });
+  const asFailure = (kind, reason, remedy, key) => Object.freeze({ kind, path: null, reason, ...(remedy ? { remedy } : {}), ...(key ? { key } : {}) });
   if (engineResult && engineResult.status === 'incomplete') {
     for (const outcome of engineResult.outcomes || []) {
       if (outcome.status === 'failed') {
@@ -813,7 +854,7 @@ function finalizeResult({ result, engineResult, draft, staticValidation, missing
   // of truth; history entries whose key is now present are dropped.
   for (const req of missing || []) {
     if (!failures.some((f) => typeof f === 'object' && f.key === req.key)) {
-      failures.push(asFailure(req.component, req.reason, req.remedy));
+      failures.push(asFailure(req.component, req.reason, req.remedy, req.key));
     }
   }
   const status = result.status === 'ready' && failures.length === 0 ? 'ready' : 'incomplete';
