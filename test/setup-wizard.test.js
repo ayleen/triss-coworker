@@ -81,7 +81,7 @@ test('headless --yes applies a complete configuration and reports ready', withTe
 test('headless --yes with a missing credential fails honestly and writes nothing new', withTempHome('wiz-yes-incomplete-', '', async ({ project }) => {
   await assert.rejects(
     () => runSetupWizard(undefined, { global: true, yes: true, agent: 'none' }, baseDeps()),
-    /TRISS_OPENAI_COMPATIBLE_API_KEY is not set/u,
+    /TRISS_OPENAI_COMPATIBLE_API_KEY not set/u,
   );
   assert.equal(existsSync(join(project, '.triss.env')), false);
 }));
@@ -137,6 +137,9 @@ test('interactive Easy flow with confirmation writes the draft and reports ready
 }));
 
 test('targeted coder flow persists the coding provider without touching the shared default', withTempHome('wiz-coder-', ZAI_GLOBAL, async ({ project }) => {
+  // R5: with the moonshot key present the run is genuinely ready; the key
+  // gap case is covered by the dedicated incomplete test below.
+  process.env.MOONSHOT_API_KEY = 'mk-coder-ready';
   const deps = baseDeps({
     isInteractive: () => true,
     mcpStatus: async () => ({ present: false }),
@@ -150,6 +153,7 @@ test('targeted coder flow persists the coding provider without touching the shar
   assert.match(content, /TRISS_CODER_PROVIDER=moonshot/);
   assert.match(content, /TRISS_CODER_ENGINE=omp/);
   assert.doesNotMatch(content, /TRISS_DEFAULT_PROVIDER=moonshot/, 'coding-only choice must not rewrite the shared default');
+  delete process.env.MOONSHOT_API_KEY;
 }));
 
 test('explicit target plus a mode flag is rejected before side effects', withTempHome('wiz-conflict-', '', async () => {

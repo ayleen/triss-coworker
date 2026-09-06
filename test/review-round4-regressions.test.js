@@ -313,3 +313,177 @@ test('R3: Advanced re-entry renders the post-draft value and honors restore-to-d
   assert.match(content, /TRISS_DEFAULT_ENGINE=direct/, `the last answer must win on disk:\n${content}`);
   assert.doesNotMatch(content, /TRISS_DEFAULT_ENGINE=crush/);
 });
+
+// ─── R5: readiness follows the final state, not the answer history ──────────
+
+test("R5-A: targeted provider with a skipped key is incomplete, not a false success", async (t) => {
+  const { home, project } = withTempEnv(t, { global: "" });
+  const prevExitCode = process.exitCode;
+  t.after(() => { process.exitCode = prevExitCode; });
+  const stderr = [];
+  const result = await runSetupWizard("moonshot", {
+    global: true,
+  }, baseDeps({
+    isInteractive: () => true,
+    prompt: async (question) => {
+      // The key question: press Enter without typing anything.
+      if (question === "  API key") return "";
+      return "";
+    },
+    yesNo: async (question) => question === "Apply?",
+    stderrWrite: (s2) => stderr.push(s2),
+  }));
+  assert.equal(result.status, "incomplete", `expected honest incomplete, got ${result.status}`);
+  assert.notEqual(process.exitCode, 0, "exit code must be non-zero for an incomplete run");
+  const out = stderr.join("");
+  assert.doesNotMatch(out, /✓ Setup complete\./);
+  assert.doesNotMatch(out, /First command:/);
+  assert.match(out, /MOONSHOT_API_KEY/, "diagnostics must name the missing key");
+  // Partial setup is allowed to persist: provider saved, key absent.
+  const content = readFileSync(join(home, ".config", "triss", ".env"), "utf8");
+  assert.match(content, /TRISS_DEFAULT_PROVIDER=moonshot/);
+  assert.doesNotMatch(content, /MOONSHOT_API_KEY=/);
+  // Provider-only target must not run engine setup.
+  assert.equal(result.failed.some((f) => (typeof f === "object" ? f.kind : "").startsWith("engine")), false);
+  void project;
+});
+
+test("R5-B: a key added in a later Advanced visit clears the earlier skip", async (t) => {
+  const { home, project } = withTempEnv(t, { global: "" });
+  const keyAnswers = [];
+  const menuVisits = [];
+  const deps = baseDeps({
+    isInteractive: () => true,
+    promptChoice: async (question, _choices, opts) => {
+      if (question.startsWith("Which model provider")) return "moonshot";
+      if (question.startsWith("Advanced setup")) {
+        menuVisits.push(1);
+        return menuVisits.length === 1 ? "providers" : "done";
+      }
+      if (question.startsWith("Provider profile to configure?")) return "moonshot";
+      return _choices[opts?.defaultIndex ?? 0]?.value;
+    },
+    prompt: async (question) => {
+      if (question === "  API key") {
+        keyAnswers.push(1);
+        return keyAnswers.length === 1 ? "" : "mk-late-key";
+      }
+      if (question.includes("moonshot API key (current:")) return "mk-late-key";
+      return "";
+    },
+    yesNo: async (question) => {
+      if (question === "Fine-tune anything else in Advanced?") return true;
+      if (question === "Apply?") return true;
+      return false;
+    },
+  });
+  const result = await runSetupWizard(undefined, { global: true }, deps);
+  assert.equal(result.status, "ready", `expected ready after the late key, got ${result.status}`);
+  assert.equal(keyAnswers.length, 2, "the key question must be asked twice (skip, then provide)");
+  const content = readFileSync(join(home, ".config", "triss", ".env"), "utf8");
+  assert.match(content, /MOONSHOT_API_KEY=mk-late-key/);
+  assert.doesNotMatch(content, /setup incomplete/);
+  void project;
+});
+
+// ─── R5 (re-review round 5): readiness follows current state, not history ───
+
+test("R5-A(re): targeted provider with a skipped key is incomplete, honest exit", async (t) => {
+  const { home, project } = withTempEnv(t, { global: "" });
+  const prevExitCode = process.exitCode;
+  t.after(() => { process.exitCode = prevExitCode; });
+  const stderr = [];
+  const result = await runSetupWizard("moonshot", { global: true }, baseDeps({
+    isInteractive: () => true,
+    prompt: async (question) => (question === "  API key" ? "" : ""),
+    yesNo: async (question) => question === "Apply?",
+    stderrWrite: (s2) => stderr.push(s2),
+  }));
+  assert.equal(result.status, "incomplete");
+  assert.notEqual(process.exitCode, 0, "incomplete run must exit non-zero");
+  const out = stderr.join("");
+  assert.doesNotMatch(out, /✓ Setup complete\./);
+  assert.doesNotMatch(out, /First command:/);
+  assert.match(out, /MOONSHOT_API_KEY/);
+  const content = readFileSync(join(home, ".config", "triss", ".env"), "utf8");
+  assert.match(content, /TRISS_DEFAULT_PROVIDER=moonshot/, "partial setup persists the provider");
+  assert.doesNotMatch(content, /MOONSHOT_API_KEY=/, "the skipped key must not appear");
+  void project;
+});
+
+test("R5-B(re): Easy skip → Advanced Providers add key → ready, no stale failure", async (t) => {
+  const { home, project } = withTempEnv(t, { global: "" });
+  const keyAnswers = [];
+  const menuVisits = [];
+  const deps = baseDeps({
+    isInteractive: () => true,
+    promptChoice: async (question, _choices, opts) => {
+      if (question.startsWith("Which model provider")) return "moonshot";
+      if (question.startsWith("Advanced setup")) {
+        menuVisits.push(1);
+        return menuVisits.length === 1 ? "providers" : "done";
+      }
+      if (question.startsWith("Provider profile to configure?")) return "moonshot";
+      return _choices[opts?.defaultIndex ?? 0]?.value;
+    },
+    prompt: async (question) => {
+      if (question === "  API key") {
+        keyAnswers.push(1);
+        return keyAnswers.length === 1 ? "" : "mk-late-key-r5";
+      }
+      return "";
+    },
+    yesNo: async (question) => {
+      if (question === "Fine-tune anything else in Advanced?") return true;
+      if (question === "Apply?") return true;
+      return false;
+    },
+  });
+  const result = await runSetupWizard(undefined, { global: true }, deps);
+  assert.equal(result.status, "ready", `a completed key must yield ready, got ${result.status}`);
+  assert.equal(keyAnswers.length, 2, "key asked twice (skip in Easy, provide in Advanced)");
+  const content = readFileSync(join(home, ".config", "triss", ".env"), "utf8");
+  assert.match(content, /MOONSHOT_API_KEY=mk-late-key-r5/);
+  const failedKeys = (result.failed || [])
+    .filter((f) => typeof f === "object" && f.key === "MOONSHOT_API_KEY");
+  assert.equal(failedKeys.length, 0, "no stale failure for the now-provided key");
+  void project;
+});
+
+test("R5-C: headless coder with a persisted coding key fails on the right provider", async (t) => {
+  const { home } = withTempEnv(t, {
+    global: [
+      "TRISS_CONFIG_SCHEMA=2",
+      "TRISS_DEFAULT_PROVIDER=openai-compatible",
+      "TRISS_CODER_PROVIDER=moonshot",
+      "TRISS_OPENAI_COMPATIBLE_API_KEY=sk-shared-only",
+    ].join("\n"),
+  });
+  await assert.rejects(
+    () => runSetupWizard("coder", { global: true, yes: true, agent: "none" }, baseDeps()),
+    (error) => {
+      assert.match(error.message, /MOONSHOT_API_KEY/);
+      assert.doesNotMatch(error.message, /TRISS_OPENAI_COMPATIBLE_API_KEY/);
+      return true;
+    },
+  );
+  void home;
+});
+
+test("R5-D: targeted integration with all required fields is ready without any LLM key", async (t) => {
+  const { home, project } = withTempEnv(t, { global: "" });
+  const integration = {
+    name: "linear",
+    envVars: [{ name: "LINEAR_API_KEY", required: true }],
+  };
+  const result = await runSetupWizard("linear", { local: true }, baseDeps({
+    isInteractive: () => true,
+    integrations: [integration],
+    promptChoice: async (_q, _c, o) => _c[o?.defaultIndex ?? 0]?.value,
+    prompt: async (question) => (question.includes("LINEAR_API_KEY") ? "lin-key" : ""),
+    yesNo: async () => true,
+  }));
+  assert.equal(result.status, "ready", "integration target must not require an LLM credential");
+  assert.match(readFileSync(join(project, ".triss.env"), "utf8"), /LINEAR_API_KEY=lin-key/);
+  void home;
+});

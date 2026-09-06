@@ -166,13 +166,11 @@ async function runEasyFlow({ draft, state, opts, deps }) {
     { defaultIndex: CANONICAL_PROVIDER_IDS.indexOf(recommendation.providerId) },
   );
   setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', providerId);
-  const credentialOutcome = await collectProviderCredential(draft, state, providerId, deps);
-  if (credentialOutcome?.skipped) {
-    draft.incomplete.push({
-      reason: `${credentialPromptLabel(getProviderDefinition(providerId))} not set`,
-      remedy: `triss config set ${getProviderDefinition(providerId).credential}`,
-    });
-  }
+  // A skipped key is NOT recorded as a permanent failure: readiness is
+  // re-derived from the final post-draft state at finalize time, so adding
+  // the key later (Advanced/Providers) makes the run complete (review
+  // round 5, R5-B).
+  await collectProviderCredential(draft, state, providerId, deps);
 
   // 2. Working tool (agent hosts) — not an execution-engine question.
   const detected = await detectAgentHosts(deps);
@@ -369,15 +367,15 @@ async function sectionIntegrations({ draft, previewState, deps, integrations, pr
     for (const envVar of integration.envVars || []) {
       if (asked.has(envVar.name)) continue;
       asked.add(envVar.name);
-      const existing = process.env[envVar.name] || fieldFor(previewState, envVar.name)?.current?.value;
+      void previewState;
       const value = await (deps.prompt || prompt)(`  ${envVar.name}${envVar.required ? ' (required)' : ' (optional)'}`, {
         hidden: /TOKEN|KEY|SECRET|PASS/i.test(envVar.name),
         defaultValue: '',
       });
       if (value) setDraftValue(draft, envVar.name, value);
-      else if (!existing && envVar.required) {
-        draft.incomplete.push({ reason: `${envVar.name} not set`, remedy: `triss config set ${envVar.name}` });
-      }
+      // A skipped required integration field is re-derived from the final
+      // post-draft state at finalize time (R5-B): filling it on a later
+      // visit must clear the gap.
     }
   }
 }
@@ -470,23 +468,23 @@ function headlessAssemble({ draft, opts, targets }) {
 // integration target validates its manifest's required fields; a general
 // setup validates the resolved shared provider. Empty string counts as an
 // absent credential. Runs before any write.
-function validateHeadlessCompleteness({ preview, targets, opts, state }) {
-  void opts;
+function missingRequirements({ preview, targets, opts: _opts, state: _state }) {
   const fieldValue = (key) => preview.fields.find((f) => f.key === key)?.current?.value;
+  const missing = [];
 
   if (targets?.kind === 'integration') {
-    const missing = [];
     for (const field of preview.fields
       .filter((f) => f.group === `integration:${targets.names[0]}` && f.required && !f.pattern)) {
-      if (field.current?.value === undefined || field.current?.value === '') missing.push(field.key);
+      if (field.current?.value === undefined || field.current?.value === '') {
+        missing.push({
+          component: `integration:${targets.names[0]}`,
+          key: field.key,
+          reason: `${field.key} is not set`,
+          remedy: `triss config set ${field.key}`,
+        });
+      }
     }
-    if (missing.length > 0) {
-      throw new Error(
-        `Headless setup incomplete: ${missing.join(', ')} not set for integration "${targets.names[0]}". ` +
-          'Set it first (triss config set / stdin / env) and rerun.',
-      );
-    }
-    return;
+    return missing;
   }
 
   const providerId = targets?.kind === 'provider'
@@ -496,12 +494,24 @@ function validateHeadlessCompleteness({ preview, targets, opts, state }) {
       : preview.snapshot.defaultProvider?.value || 'openai-compatible';
   const credential = preview.snapshot.providers[providerId]?.credential?.value;
   if (!credential) {
+    missing.push({
+      component: `provider:${providerId}`,
+      key: getProviderDefinition(providerId).credential,
+      reason: `${getProviderDefinition(providerId).credential} is not set for provider "${providerId}"`,
+      remedy: `triss config set ${getProviderDefinition(providerId).credential}`,
+    });
+  }
+  return missing;
+}
+
+function validateHeadlessCompleteness({ preview, targets, opts, state }) {
+  const missing = missingRequirements({ preview, targets, opts, state });
+  if (missing.length > 0) {
     throw new Error(
-      `Headless setup incomplete: ${getProviderDefinition(providerId).credential} is not set for provider "${providerId}". ` +
+      `Headless setup incomplete: ${missing.map((m) => m.key).join(', ')} not set. ` +
         'Set it first (triss config set / stdin / env) and rerun.',
     );
   }
-  void state;
 }
 
 // ─── Orchestration ───────────────────────────────────────────────────────────
@@ -701,7 +711,21 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   const staticValidation = draft.validate === 'static'
     ? await runStaticValidation({ deps })
     : null;
-  const finalResult = finalizeResult({ result, engineResult, draft, staticValidation });
+  // R5: judge readiness on the CURRENT post-apply state — engine setup may
+  // have persisted values after the file transaction, and skipped keys may
+  // have been provided later in the flow.
+  const finalState = result.state
+    ? readSetupState({ scope, integrations, populateRawTexts: true })
+    : null;
+  const missing = missingRequirements({
+    preview: finalState || state,
+    targets,
+    opts,
+    state: finalState || state,
+    integrations,
+    selectedIntegrations: draft.integrations || [],
+  });
+  const finalResult = finalizeResult({ result, engineResult, draft, staticValidation, missing });
   printResult({
     result: finalResult,
     engineResult,
@@ -742,12 +766,25 @@ async function runStaticValidation({ deps }) {
 
 // The wizard's own result: never a green "complete" over a failed engine
 // setup, a skipped required credential, or failed static validation.
-function finalizeResult({ result, engineResult, draft, staticValidation }) {
+// True when the named credential is absent/empty in the snapshot the final
+// result is judged against (the post-apply re-read).
+function finalCredentialMissing(key, snapshot) {
+  if (!snapshot) return true;
+  for (const providerId of CANONICAL_PROVIDER_IDS) {
+    if (getProviderDefinition(providerId).credential === key) {
+      const value = snapshot.providers[providerId]?.credential?.value;
+      return value === undefined || value === '';
+    }
+  }
+  return true;
+}
+
+function finalizeResult({ result, engineResult, draft, staticValidation, missing }) {
   const warnings = [...result.warnings];
   // Failure entries are renderer objects {kind, path, reason}; the added
   // findings keep that shape so printing never shows "undefined: undefined".
   const failures = [...result.failed];
-  const asFailure = (kind, reason) => Object.freeze({ kind, path: null, reason });
+  const asFailure = (kind, reason, remedy) => Object.freeze({ kind, path: null, reason, ...(remedy ? { remedy } : {}) });
   if (engineResult && engineResult.status === 'incomplete') {
     for (const outcome of engineResult.outcomes || []) {
       if (outcome.status === 'failed') {
@@ -758,11 +795,26 @@ function finalizeResult({ result, engineResult, draft, staticValidation }) {
       }
     }
   }
+  // R5: readiness follows the FINAL post-draft state, not the answer
+  // history. draft.incomplete entries are re-evaluated by key against the
+  // post-apply snapshot: a key skipped earlier but provided later clears.
   for (const incomplete of draft.incomplete || []) {
-    failures.push(asFailure('credential', `${incomplete.reason} — ${incomplete.remedy}`));
+    const stillMissing = incomplete.key
+      ? finalCredentialMissing(incomplete.key, result.state?.snapshot)
+      : true;
+    if (stillMissing) {
+      failures.push(asFailure('credential', incomplete.reason, incomplete.remedy));
+    }
   }
   if (staticValidation) {
     for (const problem of staticValidation.problems) failures.push(asFailure('validation', problem));
+  }
+  // The resolved missing-requirements list (post-apply state) is the source
+  // of truth; history entries whose key is now present are dropped.
+  for (const req of missing || []) {
+    if (!failures.some((f) => typeof f === 'object' && f.key === req.key)) {
+      failures.push(asFailure(req.component, req.reason, req.remedy));
+    }
   }
   const status = result.status === 'ready' && failures.length === 0 ? 'ready' : 'incomplete';
   return Object.freeze({
