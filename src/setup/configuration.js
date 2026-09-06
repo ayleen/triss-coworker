@@ -653,7 +653,10 @@ export function readSetupState({
     return freeze({ ...descriptor, current });
   });
 
-  return freeze({ snapshot, fields: freeze(enriched), scope });
+  // Raw layers + the inventory-scoped shell env ride along so draft
+  // application (applyDraftToSnapshot) can resolve untracked keys against
+  // the real persisted files instead of only snapshot atoms.
+  return freeze({ snapshot, fields: freeze(enriched), scope, layers, shellEnv: freeze(shellEnv) });
 }
 
 // ─── sparse draft application (pure) ─────────────────────────────────────
@@ -800,7 +803,7 @@ function resolveDraftTargets(key, inventory, descriptorsByKey) {
  * boolean / integer / bytes / json values throw. Managed (editable: false)
  * fields reject edits entirely.
  */
-export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [] } = {}) {
+export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [], layers = [], shellEnv = {} } = {}) {
   if (!snapshot || typeof snapshot !== 'object') {
     throw new TypeError('a provider config snapshot is required');
   }
@@ -845,7 +848,15 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [] }
 
   const currentAtomFor = (key) => {
     const path = SNAPSHOT_ATOM_PATHS_BY_KEY.get(key)?.[0];
-    return path ? getAtPath(snapshot, path) : undefined;
+    const tracked = path ? getAtPath(snapshot, path) : undefined;
+    if (tracked && tracked.source !== 'absent') return tracked;
+    // Untracked editable keys (runtime knobs, TRISS_CODER_ENGINE, ...) have
+    // no snapshot atom: resolve against the REAL persisted layers so an
+    // unset knows whether an override exists in the target file. Without
+    // this, from=undefined made plan builders drop unset edits as no-ops
+    // while the file kept the override (review round 3).
+    const descriptor = descriptorsByKey.get(key)?.[0];
+    return resolveLayered(key, { shellEnv, layers, defaultValue: descriptor?.default });
   };
 
   const checkEditable = (descriptor, key) => {

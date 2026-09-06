@@ -308,12 +308,24 @@ test('applyDraftToSnapshot handles unsets, conflicts and no-ops', () => {
   // and the preview stays the identical frozen snapshot object.
   const untracked = applyDraftToSnapshot(base, {
     set: [{ key: 'TRISS_CODER_CRUSH_RESTRICT', value: 'on' }],
-    unset: ['GITLAB_URL'],
   }, { integrations });
   assert.equal(untracked.preview, base);
   assert.deepEqual(untracked.changed, [
     { key: 'TRISS_CODER_CRUSH_RESTRICT', from: undefined, to: 'on' },
-    { key: 'GITLAB_URL', from: undefined, to: undefined },
+  ]);
+
+  // Untracked keys resolve against the REAL persisted layers: an unset
+  // records the file's value as `from` so plan builders keep the removal,
+  // while a key absent from every layer is an honest no-op (review round 3).
+  const withLayers = applyDraftToSnapshot(base, {
+    unset: ['TRISS_REQUEST_TIMEOUT_MS', 'GITLAB_URL'],
+  }, {
+    integrations,
+    layers: [{ scope: 'local', path: '/env/local', vars: { TRISS_REQUEST_TIMEOUT_MS: '60000' } }],
+    shellEnv: {},
+  });
+  assert.deepEqual(withLayers.changed, [
+    { key: 'TRISS_REQUEST_TIMEOUT_MS', from: '60000', to: undefined },
   ]);
 });
 

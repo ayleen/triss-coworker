@@ -897,6 +897,15 @@ function providerFromEnv() {
 }
 
 function inferCoderProvider() {
+  // Coding-specific persistence first: a configured TRISS_CODER_PROVIDER
+  // (or one just written by setup) outranks the shared model-task default.
+  // Falling back straight to the shared default configured the WRONG
+  // provider for engine setup after a wizard chose a coding provider
+  // (review round 3).
+  const coderAtom = readProviderConfigSnapshot().coderProvider;
+  if (coderAtom?.source !== 'absent' && coderAtom?.value) {
+    return assertCanonicalProviderId(coderAtom.value, 'TRISS_CODER_PROVIDER');
+  }
   return providerFromEnv();
 }
 
@@ -1249,6 +1258,18 @@ implementation.
 // (via CODER_MANIFEST — the generic env-var loop handles the key, then
 // runFullWizard calls CODER_MANIFEST.postSetup -> runCoderSetup). Both
 // converge on runCoderSetup() for engine/config/template steps.
+// Persist the CODING-ONLY defaults the user selected: the engine under
+// TRISS_CODER_ENGINE and the provider under TRISS_CODER_PROVIDER. The
+// shared default provider is deliberately NOT rewritten — a coding setup
+// must not change what ask/review resolve (plan §4.2). Used by runCoderInit
+// and runOpenCode2Init so every engine records the defaults.
+function persistCoderDefaults(path, engine, provider) {
+  setVar(path, 'TRISS_CODER_ENGINE', engine);
+  setVar(path, 'TRISS_CODER_PROVIDER', provider);
+  process.env.TRISS_CODER_ENGINE = engine;
+  process.env.TRISS_CODER_PROVIDER = provider;
+}
+
 export async function runCoderInit(opts = {}, deps = {}) {
   loadEnvFiles();
   const engine = resolveCoderEngine(opts);
@@ -1274,16 +1295,7 @@ export async function runCoderInit(opts = {}, deps = {}) {
     ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
   await setupKey(path, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
-  // Persist the CODING-ONLY defaults the user selected for EVERY engine
-  // (including the opencode2 delegation below, which returns before the
-  // generic setup): the engine under TRISS_CODER_ENGINE and the provider
-  // under TRISS_CODER_PROVIDER. The shared default provider is deliberately
-  // NOT rewritten — a coding setup must not change what ask/review resolve
-  // (plan §4.2).
-  setVar(path, 'TRISS_CODER_ENGINE', engine);
-  setVar(path, 'TRISS_CODER_PROVIDER', provider);
-  process.env.TRISS_CODER_ENGINE = engine;
-  process.env.TRISS_CODER_PROVIDER = provider;
+  persistCoderDefaults(path, engine, provider);
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -1665,6 +1677,10 @@ async function runOpenCode2Init(opts = {}, deps = {}, precaptured = {}) {
     ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
   await setupKey(envPath, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
+  // Same coding-defaults contract as every other engine — written only
+  // AFTER the preflight/version/capability gates above have passed, so a
+  // failed V2 preflight persists nothing.
+  persistCoderDefaults(envPath, 'opencode2', provider);
   if (scope === 'local' && addToGitignore('.triss.env')) {
     process.stderr.write(pc.dim('  · added .triss.env to .gitignore\n'));
   }
@@ -6019,6 +6035,20 @@ async function retainV2SessionAfterUnverifiedCleanup(sessionV2, error) {
   return true;
 }
 
+// Proxy protocol selection shared by the main and small-model proxies: the
+// client protocol stays the resolved route protocol EXCEPT for Crush talking
+// to a Responses upstream, where the bounded chat-to-responses bridge is the
+// whole point. Collapsing every proxy to openai_chat broke protected
+// Responses/Anthropic routes on OpenCode/OpenCode2/OMP (404 unknown proxy
+// route before any provider call).
+function proxyProtocolFor(engine, route) {
+  const needsBridge = engine === 'crush' && route?.protocol === 'openai_responses';
+  return Object.freeze({
+    protocol: needsBridge ? 'openai_chat' : route?.protocol,
+    bridge: needsBridge ? 'chat-to-responses' : undefined,
+  });
+}
+
 export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // The engine env allowlist (buildEngineEnv) and the timeout kill
   // (negative-PID process-group SIGTERM/SIGKILL in spawnEngine) are both
@@ -6111,10 +6141,19 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // per-engine default. Tests may inject the already-resolved mode to
   // characterize one routing branch without depending on ambient process
   // environment shared by the full test runner.
+  // Task-aware protection scope: TRISS_CODER_PROTECT_CREDENTIALS is a
+  // CODING override. Non-coding projections (ask/review/chat/... runs via
+  // runCoderRun with modelProjectionTask) resolve through
+  // explicit > shared > engine default only — a coding-only false must not
+  // downgrade an ask that the user protected with TRISS_PROTECT_CREDENTIALS
+  // (and vice versa). The tri-state stays intact: undefined means "no
+  // choice", so crush's protected default still applies.
   const credentialMode = deps.credentialMode ?? resolveCoderCredentialMode({
     engine,
     protectCredentials: opts.protectCredentials,
-    coderProtectCredentials: providerSnapshot.coderProtectCredentials?.value,
+    coderProtectCredentials: opts.modelProjectionTask
+      ? undefined
+      : providerSnapshot.coderProtectCredentials?.value,
     sharedProtectCredentials: providerSnapshot.protectCredentials?.value,
   });
   assertCoderCredentialMode(credentialMode);
@@ -6535,15 +6574,25 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         smallModel: protectedRouting && engine !== 'opencode2' && !separateSmallTransport
           ? transientModelName(runtimeSmallRoute, transientRoutingContext)
           : undefined,
-        models: protectedRouting
+        // Proxy model allowlist from the RESOLVED role plan: when both roles
+        // share one transport (crush with distinct large/small on the same
+        // protocol is the live case), the small model's exact id must be
+        // pinned too — otherwise its requests 403 "model is not pinned"
+        // even though the engine config selects it (review round 3). With
+        // separate small transports the small proxy owns its own allowlist.
+        models: (protectedRouting
           ? [runtimeRoute.modelId, ...(engine === 'opencode2' || separateSmallTransport
             ? []
             : [runtimeSmallRoute.modelId])]
-          : undefined,
+          : engine === 'crush' && !crushSeparateSmallTransport
+            ? [routeCandidate.modelId, ...(smallRouteCandidate.modelId !== routeCandidate.modelId
+              ? [smallRouteCandidate.modelId] : [])]
+            : undefined),
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,
-        protocol: engine === 'crush' && !crushBridge ? proxyTarget.protocol : 'openai_chat',
-        bridge: crushBridge || undefined,
+        ...(engine === 'crush'
+          ? proxyProtocolFor(engine, routeCandidate)
+          : proxyProtocolFor(engine, runtimeRoute)),
         authStyle: proxyTarget.authStyle,
         credential: credentialValue,
         deadlineMs: (timeoutSec + 60) * 1000,
@@ -6561,12 +6610,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
           models: [engine === 'crush' ? smallRouteCandidate.modelId : runtimeSmallRoute.modelId],
           endpoint: smallRouteCandidate.endpoint,
           pathPrefix: smallRouteCandidate.pathPrefix,
-          protocol: engine === 'crush' && smallRouteCandidate.protocol !== 'openai_responses'
-            ? smallRouteCandidate.protocol
-            : 'openai_chat',
-          bridge: engine === 'crush' && smallRouteCandidate.protocol === 'openai_responses'
-            ? 'chat-to-responses'
-            : undefined,
+          ...(engine === 'crush'
+            ? proxyProtocolFor(engine, smallRouteCandidate)
+            : proxyProtocolFor(engine, runtimeSmallRoute)),
           authStyle: smallRouteCandidate.authStyle,
           credential: credentialValue,
           token: credentialProxy.token,

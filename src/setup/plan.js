@@ -202,7 +202,11 @@ export function buildSetupPlan(
   }
 
   // Pure validation first: an invalid draft throws before any fs read.
-  const applied = applyDraftToSnapshot(state.snapshot, draft, { integrations });
+  const applied = applyDraftToSnapshot(state.snapshot, draft, {
+    integrations,
+    ...(state.layers ? { layers: state.layers } : {}),
+    ...(state.shellEnv ? { shellEnv: state.shellEnv } : {}),
+  });
 
   // Env edits derived from the draft's changed list: `to === undefined`
   // means unset (planEnvPatch's null); absent-to-absent entries are no-ops.

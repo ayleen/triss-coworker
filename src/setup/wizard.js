@@ -118,7 +118,7 @@ async function collectProviderCredential(draft, state, providerId, deps) {
   if (!value) {
     return { skipped: true };
   }
-  draft.set.push({ key: definition.credential, value });
+  setDraftValue(draft, definition.credential, value);
   return { skipped: false };
 }
 
@@ -138,10 +138,15 @@ async function detectAgentHosts(deps) {
   return hosts;
 }
 
+// The printed first command must satisfy the real ask contract: --question
+// is required and the prompt needs a source (--stdin). The model comes from
+// the post-apply effective state when available (review round 3).
 function firstCommand(state, providerId) {
-  const model = state.snapshot.providers[providerId]?.model?.value
+  const modelAtom = state.snapshot.providers[providerId]?.model;
+  const model = (modelAtom?.value && modelAtom.source !== 'absent' ? modelAtom.value : null)
     || getProviderDefinition(providerId).defaults.model;
-  return `triss ask --model ${providerId}/${model} "ping"`;
+  const modelArg = /^[A-Za-z0-9._/-]+$/.test(model) ? ` --model ${providerId}/${model}` : '';
+  return `printf 'ping' | triss ask${modelArg} --stdin --question 'Reply with pong.'`;
 }
 
 // ─── Easy ────────────────────────────────────────────────────────────────────
@@ -160,7 +165,7 @@ async function runEasyFlow({ draft, state, opts, deps }) {
     providerChoices,
     { defaultIndex: CANONICAL_PROVIDER_IDS.indexOf(recommendation.providerId) },
   );
-  draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: providerId });
+  setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', providerId);
   const credentialOutcome = await collectProviderCredential(draft, state, providerId, deps);
   if (credentialOutcome?.skipped) {
     draft.incomplete.push({
@@ -240,7 +245,7 @@ async function sectionProviders({ draft, state, deps }) {
       ],
       { defaultIndex: 0 },
     );
-    if (action !== 'keep' && action !== current?.value) draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: action });
+    if (action !== 'keep' && action !== current?.value) setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', action);
     return;
   }
   const definition = getProviderDefinition(provider);
@@ -262,13 +267,13 @@ async function sectionProviders({ draft, state, deps }) {
       if (current?.source === 'shell') {
         out(deps, '  · shell value cannot be unset from here — remove it from your shell profile\n');
       } else {
-        draft.unset.push(key);
+        unsetDraftValue(draft, key);
       }
     } else if (action === 'replace') {
       const value = await (deps.prompt || prompt)('  value', {
         defaultValue: current?.value ? String(current.value) : '',
       });
-      if (value) draft.set.push({ key, value });
+      if (value) setDraftValue(draft, key, value);
     }
   }
 }
@@ -286,19 +291,19 @@ async function sectionExecution({ draft, state, deps }) {
     if (value === '' || value === undefined) return;
     if (value === '-') {
       if (current?.source === 'shell') out(deps, '  · shell value cannot be unset from here\n');
-      else draft.unset.push(key);
+      else unsetDraftValue(draft, key);
       return;
     }
     if (valid && !valid.includes(value)) {
       throw new Error(`${label} must be one of ${valid.join(', ')} (got "${value}").`);
     }
     if (value === current?.value && (current?.source === 'registry-default' || current?.source === 'absent')) return;
-    draft.set.push({ key, value });
+    setDraftValue(draft, key, value);
   };
 
   await editEnumField('TRISS_DEFAULT_ENGINE', 'Default engine for model tasks', ['direct', 'opencode', 'opencode2', 'omp', 'crush']);
   await editEnumField('TRISS_CODER_ENGINE', 'Coding engine', CODER_ENGINES);
-  draft.engineId = draft.set.find((e) => e.key === 'TRISS_CODER_ENGINE')?.value
+  draft.engineId = draftValueOf(draft, 'TRISS_CODER_ENGINE')
     || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
   await editEnumField('TRISS_CODER_PROVIDER', 'Coding provider', CANONICAL_PROVIDER_IDS);
   await editEnumField('TRISS_DEFAULT_EFFORT', 'Default effort for model tasks', ['low', 'medium', 'high', 'xhigh', 'max']);
@@ -313,7 +318,7 @@ async function sectionExecution({ draft, state, deps }) {
     ],
     { defaultIndex: 0 },
   );
-  if (protection !== 'keep') draft.set.push({ key: 'TRISS_PROTECT_CREDENTIALS', value: protection });
+  if (protection !== 'keep') setDraftValue(draft, 'TRISS_PROTECT_CREDENTIALS', protection);
 }
 
 async function sectionConnections({ draft, deps, scope, opts }) {
@@ -364,7 +369,7 @@ async function sectionIntegrations({ draft, state, deps, integrations, preselect
         hidden: /TOKEN|KEY|SECRET|PASS/i.test(envVar.name),
         defaultValue: '',
       });
-      if (value) draft.set.push({ key: envVar.name, value });
+      if (value) setDraftValue(draft, envVar.name, value);
       else if (!existing && envVar.required) {
         draft.incomplete.push({ reason: `${envVar.name} not set`, remedy: `triss config set ${envVar.name}` });
       }
@@ -387,8 +392,8 @@ async function sectionRuntime({ draft, state, deps }) {
         { defaultValue: '' },
       );
       if (value === '') continue;
-      if (value === '-') draft.unset.push(field.key);
-      else draft.set.push({ key: field.key, value });
+      if (value === '-') unsetDraftValue(draft, field.key);
+      else setDraftValue(draft, field.key, value);
     }
   }
 }
@@ -406,17 +411,17 @@ async function runTargetedFlow({ kind, names, draft, state, opts, deps, integrat
       ? String(opts.coderProvider).toLowerCase()
       : state.snapshot.coderProvider?.value
         || providerRecommendation(state).providerId;
-    draft.set.push({ key: 'TRISS_CODER_PROVIDER', value: providerId });
-    if (opts.coderEngine) draft.set.push({ key: 'TRISS_CODER_ENGINE', value: opts.coderEngine });
-    if (opts.coderProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'true' });
-    if (opts.coderNoProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'false' });
+    setDraftValue(draft, 'TRISS_CODER_PROVIDER', providerId);
+    if (opts.coderEngine) setDraftValue(draft, 'TRISS_CODER_ENGINE', opts.coderEngine);
+    if (opts.coderProtectCredentials) setDraftValue(draft, 'TRISS_CODER_PROTECT_CREDENTIALS', 'true');
+    if (opts.coderNoProtectCredentials) setDraftValue(draft, 'TRISS_CODER_PROTECT_CREDENTIALS', 'false');
     draft.engineId = opts.coderEngine || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
     await collectProviderCredential(draft, state, providerId, { ...deps, force: deps.force });
     return;
   }
   if (kind === 'provider') {
     const providerId = names[0];
-    draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: providerId });
+    setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', providerId);
     await collectProviderCredential(draft, state, providerId, { ...deps, force: false });
     // Provider endpoints/models stay editable without being asked here.
     return;
@@ -430,21 +435,21 @@ async function runTargetedFlow({ kind, names, draft, state, opts, deps, integrat
 function headlessAssemble({ draft, state, opts, targets }) {
   // An explicit target narrows the headless apply to that section.
   if (targets?.kind === 'provider') {
-    draft.set.push({ key: 'TRISS_DEFAULT_PROVIDER', value: targets.names[0] });
+    setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', targets.names[0]);
   }
-  if (opts.coderProvider) draft.set.push({ key: 'TRISS_CODER_PROVIDER', value: String(opts.coderProvider).toLowerCase() });
+  if (opts.coderProvider) setDraftValue(draft, 'TRISS_CODER_PROVIDER', String(opts.coderProvider).toLowerCase());
   if (opts.coderEngine) {
     if (!CODER_ENGINES.includes(opts.coderEngine)) {
       throw new Error(`--coder-engine must be one of ${CODER_ENGINES.join(', ')}.`);
     }
-    draft.set.push({ key: 'TRISS_CODER_ENGINE', value: opts.coderEngine });
+    setDraftValue(draft, 'TRISS_CODER_ENGINE', opts.coderEngine);
     draft.engineId = opts.coderEngine;
   }
   // Protection flags apply on the headless path too — they were previously
   // handled only by the interactive targeted flow, so a headless coder setup
   // silently dropped the declared protection choice.
-  if (opts.coderProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'true' });
-  if (opts.coderNoProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'false' });
+  if (opts.coderProtectCredentials) setDraftValue(draft, 'TRISS_CODER_PROTECT_CREDENTIALS', 'true');
+  if (opts.coderNoProtectCredentials) setDraftValue(draft, 'TRISS_CODER_PROTECT_CREDENTIALS', 'false');
   if (opts.coderProtectCredentials && opts.coderNoProtectCredentials) {
     throw new Error('--coder-protect-credentials and --coder-no-protect-credentials cannot be combined.');
   }
@@ -489,6 +494,27 @@ function headlessAssemble({ draft, state, opts, targets }) {
 
 function createDraft() {
   return { set: [], unset: [], incomplete: [], agent: null, engineId: null, validate: null, scope: null };
+}
+
+// Ordered draft mutations: the LAST confirmed action for a key wins. A set
+// replaces a previous unset and vice versa — the coalescing in
+// applyDraftToSnapshot cannot recover user intent from two unordered lists
+// (review round 3, set→unset ordering).
+function setDraftValue(draft, key, value) {
+  draft.unset = draft.unset.filter((k) => k !== key);
+  const existing = draft.set.find((e) => e.key === key);
+  if (existing) existing.value = value;
+  else draft.set.push({ key, value });
+}
+
+function unsetDraftValue(draft, key) {
+  draft.set = draft.set.filter((e) => e.key !== key);
+  if (!draft.unset.includes(key)) draft.unset.push(key);
+}
+
+function draftValueOf(draft, key) {
+  if (draft.unset.includes(key)) return undefined;
+  return draft.set.find((e) => e.key === key)?.value;
 }
 
 export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
@@ -586,12 +612,24 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   // engine along (plan §3.3).
   const plansCodingEngine = targets.kind === 'none' || targets.kind === 'coder';
   const engineId = draft.engineId || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
+  // The SINGLE resolved coding intent, honored at validation, preview, engine
+  // setup, and the printed summary: the draft-selected provider wins, then a
+  // persisted TRISS_CODER_PROVIDER, then the shared default. Re-deriving the
+  // provider from the shared default after apply configured the WRONG
+  // provider (review round 3).
+  const draftCoderProvider = draftValueOf(draft, 'TRISS_CODER_PROVIDER');
+  const coderProviderId = draftCoderProvider
+    || fieldFor(state, 'TRISS_CODER_PROVIDER')?.current?.value
+    || fieldFor(state, 'TRISS_DEFAULT_PROVIDER')?.current?.value
+    || 'openai-compatible';
+  draft.coderProviderId = coderProviderId;
   // Headless runs install only with --install; interactive runs fold the
   // install into the summary confirmation.
   const engineInstallChoice = opts.install || interactive ? 'install' : 'skip';
   const enginePlan = plansCodingEngine
     ? await planEngineSetup({
       engine: CODER_ENGINES.includes(engineId) ? engineId : 'opencode',
+      provider: coderProviderId,
       scope,
       installChoice: engineInstallChoice,
     }, {
@@ -646,7 +684,11 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     result: finalResult,
     engineResult,
     state,
-    providerId: easyProvider || draft.set.find((e) => e.key === 'TRISS_DEFAULT_PROVIDER')?.value,
+    providerId: easyProvider
+      || draftValueOf(draft, 'TRISS_DEFAULT_PROVIDER')
+      || draftValueOf(draft, 'TRISS_CODER_PROVIDER')
+      || result.state?.snapshot?.defaultProvider?.value
+      || state.snapshot.defaultProvider?.value,
     deps,
   });
   if (finalResult.status !== 'ready') process.exitCode = 1;
@@ -774,6 +816,8 @@ function printResult({ result, engineResult, state, providerId, deps }) {
     if (outcome.status === 'skipped') out(deps, `  · ${outcome.kind} skipped — ${outcome.reason || 'not needed'}\n`);
   }
   if (providerId && result.status === 'ready') {
-    out(deps, `\nFirst command:\n  ${firstCommand(state, providerId)}\n`);
+    // The applied state (applySetupPlan re-reads the real files) reflects
+    // what the user configured; fall back to the pre-apply snapshot.
+    out(deps, `\nFirst command:\n  ${firstCommand(result.state || state, providerId)}\n`);
   }
 }
