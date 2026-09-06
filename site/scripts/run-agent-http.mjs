@@ -130,12 +130,20 @@ async function main() {
       cwd: siteRoot,
       stdio: "inherit",
     });
-    const code = await new Promise((resolve, reject) => {
-      result.on("exit", resolve);
-      result.on("error", reject);
+    // Success is ONLY a normal exit with code 0: a signal or a null code
+    // (crash, external kill) means the suite did not complete and must fail
+    // the run — otherwise CI could go green on an aborted acceptance child.
+    const outcome = await new Promise((resolve, reject) => {
+      result.once("error", reject);
+      result.once("close", (code, signal) => resolve({ code, signal }));
     });
-    log(`acceptance suite exit code: ${code}`);
-    process.exitCode = code;
+    const succeeded = outcome.code === 0 && outcome.signal == null;
+    log(`acceptance suite finished: code=${outcome.code}, signal=${outcome.signal ?? "none"}`);
+    process.exitCode = succeeded
+      ? 0
+      : Number.isInteger(outcome.code) && outcome.code > 0
+        ? outcome.code
+        : 1;
   } finally {
     stop();
   }
