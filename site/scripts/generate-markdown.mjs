@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { htmlToMarkdown, extractMain } from "./html-to-markdown.mjs";
+import { htmlToMarkdown, selectAgentContent } from "./html-to-markdown.mjs";
 
 export const SITE_URL = process.env.SITE_URL || "https://triss.work";
 
@@ -59,12 +59,18 @@ function isMain(importMetaUrl) {
 }
 
 export function generateMarkdown(dist) {
-  const pages = collectPages(dist);
+  const pages = [];
   const selection = [];
-  for (const page of pages) {
-    const markdown = htmlToMarkdown(extractMain(fs.readFileSync(page.htmlPath, "utf8")), SITE_URL + page.route);
+  for (const page of collectPages(dist)) {
+    const html = fs.readFileSync(page.htmlPath, "utf8");
+    // Substantive areas only ([data-agent-content] markers, else <main>): the
+    // getting-started hero lives before <main>, so naive main extraction
+    // dropped the page's actual H1 and lede.
+    const areas = selectAgentContent(html).join("\n\n");
+    const markdown = htmlToMarkdown(areas, SITE_URL + page.route);
     const mirrorPath = path.join(dist, page.markdownRoute.replace(/^\//, ""));
     fs.writeFileSync(mirrorPath, markdown);
+    pages.push(page);
     if (LLMS_FULL_ROUTES.includes(page.route)) {
       selection.push({ ...page, url: SITE_URL + page.route, markdownUrl: page.markdownRoute });
     }

@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 ayleen
 
-// Dependency-free HTML-to-Markdown converter for the site's own built pages.
-// It covers the element inventory this Astro site emits (headings, lists,
-// paragraphs, links, code, emphasis, images) and degrades safely: any tag it
-// does not know is stripped to its text content, so raw markup can never
-// leak into an agent-facing mirror.
+// HTML-to-Markdown converter for the site's own built pages. Build-time only.
+//
+// The document is parsed once with parse5 and rendered from the tree, so the
+// failure modes of regex rewriting are gone by construction: text nodes are
+// already entity-decoded by the parser (never re-stripped), decorative
+// subtrees (controls, scripts) are dropped whole — void elements like <input>
+// cannot swallow the text around them — and unknown elements fall through to
+// their children instead of being deleted.
+
+import { parse, serialize } from "parse5";
 
 const ENTITIES = {
   amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
@@ -13,6 +18,8 @@ const ENTITIES = {
   ge: "≥", le: "≤", middot: "·", laquo: "«", raquo: "»", copy: "©",
 };
 
+// Legacy helper kept for callers that inspect raw text; the AST pipeline
+// itself relies on parse5's decoding.
 export function decodeEntities(text) {
   return text
     .replace(/&#x([0-9a-f]+);/gi, (m, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
@@ -28,86 +35,355 @@ export function absolutize(href, baseUrl) {
   }
 }
 
-function stripTags(html) {
-  return html.replace(/<[^>]+>/g, "");
+// Decorative or interactive subtrees: dropped whole, never partially.
+const DROPPED = new Set([
+  "script", "style", "template", "noscript", "iframe", "canvas", "object", "embed",
+  "svg", "math",
+  "button", "select", "option", "datalist", "input", "textarea", "output",
+]);
+
+// `hidden`-attribute subtrees are not part of the rendered page, so they
+// must not leak into the mirror either (JS-only controls, progress bars).
+// Text nodes are never "dropped" — only whole elements are.
+function dropped(node) {
+  return isElement(node) && (DROPPED.has(node.tagName) || hasFlag(node, "hidden"));
 }
 
-function inline(html, baseUrl) {
-  let out = html
-    .replace(/<img\s[^>]*>/gi, (tag) => {
-      const alt = tag.match(/\balt="([^"]*)"/i)?.[1] ?? "";
-      const src = tag.match(/\bsrc="([^"]*)"/i)?.[1];
-      return src ? `![${alt}](${absolutize(src, baseUrl)})` : alt;
-    })
-    .replace(/<a\s[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (m, href, text) => {
-      const label = stripTags(text).replace(/\s+/g, " ").trim();
-      if (!label) return "";
-      if (href.startsWith("#")) return label;
-      return `[${label}](${absolutize(href, baseUrl)})`;
-    })
-    .replace(/<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, "**$1**")
-    .replace(/<(?:em|i)\b[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, "_$1_")
-    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "`$1`")
-    .replace(/<br\s*\/?>/gi, "\n");
-  out = stripTags(out);
-  return decodeEntities(out);
+const BLOCK = new Set([
+  "address", "article", "aside", "blockquote", "details", "dd", "div", "dl", "dt",
+  "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
+  "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
+  "summary", "table", "tbody", "tfoot", "thead", "tr", "ul",
+]);
+
+function attr(node, name) {
+  return node.attrs.find((a) => a.name === name)?.value;
 }
 
-function listsToMarkdown(html, baseUrl, indent = "") {
-  return html.replace(/<(ol|ul)\b[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, inner) => {
-    let index = 0;
-    const items = [];
-    const itemRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
-    let item;
-    while ((item = itemRe.exec(inner))) {
-      index += 1;
-      // Nested lists become indented sub-lines before inline cleanup.
-      const content = listsToMarkdown(item[1], baseUrl, `${indent}  `);
-      const marker = tag.toLowerCase() === "ol" ? `${index}. ` : "- ";
-      const rendered = inline(content, baseUrl).trim().replace(/\n{3,}/g, "\n\n");
-      items.push(indent + marker + rendered.replace(/\n/g, `\n${indent}  `));
+function hasFlag(node, name) {
+  return attr(node, name) !== undefined;
+}
+
+function classNames(node) {
+  return (attr(node, "class") || "").split(/\s+/).filter(Boolean);
+}
+
+function collapse(text) {
+  return text.replace(/\s+/g, " ");
+}
+
+function isElement(node) {
+  return node.nodeName !== undefined && node.tagName !== undefined;
+}
+
+function elementChildren(node) {
+  return (node.childNodes || []).filter(isElement);
+}
+
+function textContent(node) {
+  if (!isElement(node)) {
+    return node.nodeName === "#comment" ? "" : node.value || "";
+  }
+  if (dropped(node)) return "";
+  return (node.childNodes || []).map(textContent).join("");
+}
+
+function inlineCode(text) {
+  const ticks = "`".repeat((text.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0) + 1);
+  const padded = text.startsWith("`") || text.endsWith("`") ? ` ${text} ` : text;
+  return `${ticks}${padded}${ticks}`;
+}
+
+function renderImage(node, baseUrl) {
+  const alt = attr(node, "alt") ?? "";
+  const src = attr(node, "src");
+  return src ? `![${alt}](${absolutize(src, baseUrl)})` : alt;
+}
+
+function renderLink(node, baseUrl, ctx) {
+  const label = renderInlineNodes(node.childNodes, ctx).replace(/\s+/g, " ").trim();
+  if (!label) return "";
+  const href = attr(node, "href");
+  if (!href || href.startsWith("#")) {
+    // In-page anchors have no guaranteed Markdown heading IDs; link the
+    // canonical HTML page instead of dropping the reference silently.
+    return href ? `[${label}](${absolutize(href, baseUrl)})` : label;
+  }
+  return `[${label}](${absolutize(href, baseUrl)})`;
+}
+
+function renderInline(node, baseUrl, ctx) {
+  switch (node.tagName) {
+    case "br":
+      return "\n";
+    case "img":
+      return renderImage(node, baseUrl);
+    case "a":
+      return renderLink(node, baseUrl, ctx);
+    case "code":
+      return inlineCode(textContent(node).replace(/\s+/g, " ").trim());
+    case "strong":
+    case "b":
+      return `**${renderInlineNodes(node.childNodes, ctx).trim()}**`;
+    case "em":
+    case "i":
+      return `_${renderInlineNodes(node.childNodes, ctx).trim()}_`;
+    case "kbd":
+    case "samp":
+      return inlineCode(textContent(node).replace(/\s+/g, " ").trim());
+    default:
+      return renderInlineNodes(node.childNodes, ctx);
+  }
+}
+
+// Inline runs keep source whitespace: spaces are only ever added where the
+// site's own text nodes carry them, so emphasis in prose is never corrupted.
+// CSS-gap layouts (CommandCard chips) instead opt into explicit separators
+// via data-agent-flags / data-agent-meta markers.
+function renderInlineNodes(nodes, ctx) {
+  let out = "";
+  for (const node of nodes) {
+    if (node.nodeName === "#comment") continue;
+    if (isElement(node)) {
+      if (dropped(node)) continue;
+      out += hasFlag(node, "data-agent-flags")
+        ? renderAgentFlags(node, ctx)
+        : hasFlag(node, "data-agent-meta")
+          ? renderAgentMeta(node, ctx)
+          : renderInline(node, ctx.baseUrl, ctx);
+    } else {
+      out += collapse(node.value || "");
     }
-    return `\n${items.join("\n")}\n${indent}`;
+  }
+  return out;
+}
+
+function renderAgentFlags(node, ctx) {
+  return elementChildren(node)
+    .map((child) => inlineCode(collapse(textContent(child)).trim()))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function renderAgentMeta(node, ctx) {
+  return elementChildren(node)
+    .map((child) => collapse(textContent(child)).trim())
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function renderList(node, baseUrl, depth, ctx) {
+  const ordered = node.tagName === "ol";
+  const items = elementChildren(node).filter((child) => child.tagName === "li");
+  const start = Number.parseInt(attr(node, "start") ?? "1", 10) || 1;
+  const lines = items.map((item, index) => {
+    const marker = ordered ? `${start + index}. ` : "- ";
+    const body = renderListItemContent(item, depth + 1, ctx);
+    const indent = " ".repeat(marker.length);
+    return marker + body.replace(/\n/g, `\n${indent}`);
   });
+  return lines.filter((line) => line.trim()).map((line) => "  ".repeat(depth) + line).join("\n");
+}
+
+function renderListItemContent(item, depth, ctx) {
+  // Blocks inside an item stack tightly; nested lists recurse with depth.
+  const parts = [];
+  let inlineRun = "";
+  const flush = () => {
+    const text = inlineRun.trim();
+    inlineRun = "";
+    if (text) parts.push(text);
+  };
+  for (const node of item.childNodes || []) {
+    if (node.nodeName === "#comment") continue;
+    if (isElement(node) && BLOCK.has(node.tagName) && node.tagName !== "li") {
+      if (dropped(node)) continue;
+      flush();
+      const rendered = renderBlock(node, ctx.baseUrl, ctx).trim();
+      if (rendered) parts.push(rendered);
+    } else if (isElement(node) && (node.tagName === "ul" || node.tagName === "ol")) {
+      flush();
+      const nested = renderList(node, ctx.baseUrl, depth, ctx);
+      if (nested) parts.push(nested);
+    } else {
+      inlineRun += dropped(node) ? "" : isElement(node) ? renderInline(node, ctx.baseUrl, ctx) : collapse(node.value || "");
+    }
+  }
+  flush();
+  return parts.join("\n");
+}
+
+function renderTable(table, baseUrl, ctx) {
+  const rows = [];
+  const pushRow = (cells, header = false) => {
+    const line = `| ${cells.map((cell) => renderInlineNodes(cell.childNodes, ctx).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim()).join(" | ")} |`;
+    rows.push(header ? { header: line } : line);
+  };
+  for (const section of elementChildren(table)) {
+    if (section.tagName === "tr") {
+      pushRow(elementChildren(section).filter((c) => ["td", "th"].includes(c.tagName)));
+    } else if (["thead", "tbody", "tfoot"].includes(section.tagName)) {
+      for (const row of elementChildren(section)) {
+        if (row.tagName !== "tr") continue;
+        pushRow(
+          elementChildren(row).filter((c) => ["td", "th"].includes(c.tagName)),
+          section.tagName === "thead",
+        );
+      }
+    }
+  }
+  if (rows.length === 0) return "";
+  const header = rows[0].header ?? null;
+  const body = (rows[0].header ? rows.slice(1) : rows).map((row) => (typeof row === "string" ? row : row.header));
+  const columns = Math.max(
+    ...[header, ...body].filter(Boolean).map((line) => line.split("|").length - 2),
+  );
+  const out = [];
+  if (header) {
+    out.push(header, `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`);
+  }
+  out.push(...body);
+  return out.join("\n");
+}
+
+// Grid "tables" built from styled divs (e.g. the cost tables) declare their
+// column count with data-agent-cols; cells are direct element children.
+function renderAgentTable(node, baseUrl, ctx) {
+  const columns = Number.parseInt(attr(node, "data-agent-cols") ?? "0", 10);
+  const cells = elementChildren(node);
+  if (!columns || cells.length === 0 || cells.length % columns !== 0) {
+    return renderContainer(node, baseUrl, ctx);
+  }
+  const cellText = (cell) => renderInlineNodes(cell.childNodes, ctx).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  const rows = [];
+  for (let i = 0; i < cells.length; i += columns) {
+    rows.push(Array.from({ length: columns }, (_, offset) => cellText(cells[i + offset])));
+  }
+  const [header, ...body] = rows;
+  return [
+    `| ${header.join(" | ")} |`,
+    `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+    ...body.map((row) => `| ${row.join(" | ")} |`),
+  ].join("\n");
+}
+
+function renderPre(node) {
+  const code = textContent(node).replace(/\n$/, "");
+  const fence = "```".repeat(code.includes("```") ? 2 : 1);
+  return `${fence}\n${code}\n${fence}`;
+}
+
+function renderDetails(node, baseUrl, ctx) {
+  const summary = elementChildren(node).find((child) => child.tagName === "summary");
+  const heading = summary ? `**${renderInlineNodes(summary.childNodes, ctx).replace(/\s+/g, " ").trim()}**` : "";
+  const body = renderContainer(node, baseUrl, ctx);
+  return [heading, body].filter(Boolean).join("\n\n");
+}
+
+function renderBlock(node, baseUrl, ctx) {
+  switch (node.tagName) {
+    case "h1":
+    case "h2":
+    case "h3":
+    case "h4":
+    case "h5":
+    case "h6": {
+      const level = Number(node.tagName[1]);
+      return `${"#".repeat(level)} ${renderInlineNodes(node.childNodes, ctx).replace(/\s+/g, " ").trim()}`;
+    }
+    case "p":
+      return renderInlineNodes(node.childNodes, ctx).trim();
+    case "pre":
+      return renderPre(node);
+    case "ul":
+    case "ol":
+      return renderList(node, baseUrl, 0, ctx);
+    case "blockquote": {
+      const quoted = renderContainer(node, baseUrl, ctx).trim();
+      return quoted.split("\n").map((line) => `> ${line}`.trimEnd()).join("\n");
+    }
+    case "hr":
+      return "---";
+    case "table":
+      return renderTable(node, baseUrl, ctx);
+    case "details":
+      return renderDetails(node, baseUrl, ctx);
+    default:
+      if (classNames(node).includes("cost-table")) return renderAgentTable(node, baseUrl, ctx);
+      if (hasFlag(node, "data-agent-flags")) return renderAgentFlags(node, ctx);
+      if (hasFlag(node, "data-agent-meta")) return renderAgentMeta(node, ctx);
+      return renderContainer(node, baseUrl, ctx);
+  }
+}
+
+// Block containers join block children with blank lines and keep inline runs
+// (text, spans, links) flowing as paragraphs.
+function renderContainer(node, baseUrl, ctx) {
+  const parts = [];
+  let inlineRun = "";
+  const flush = () => {
+    const text = inlineRun.replace(/^\s+|\s+$/g, "");
+    inlineRun = "";
+    if (text) parts.push(text);
+  };
+  for (const child of node.childNodes || []) {
+    if (child.nodeName === "#comment") continue;
+    if (isElement(child) && BLOCK.has(child.tagName)) {
+      if (dropped(child)) continue;
+      flush();
+      const rendered = renderBlock(child, baseUrl, ctx).trim();
+      if (rendered) parts.push(rendered);
+    } else {
+      inlineRun += dropped(child) ? "" : isElement(child) ? renderInline(child, baseUrl, ctx) : collapse(child.value || "");
+    }
+  }
+  flush();
+  return parts.join("\n\n");
 }
 
 export function htmlToMarkdown(html, baseUrl) {
-  let body = html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<(?:script|style|svg|button|select|input)\b[^>]*>[\s\S]*?<\/(?:script|style|svg|button|select|input)>/gi, "")
-    .replace(/<(?:input|select)\b[^>]*\/?>/gi, "");
-
-  // Fenced code blocks are protected from all later transforms.
-  const blocks = [];
-  body = body.replace(/<pre\b[^>]*>\s*<code\b[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi, (m, code) => {
-    blocks.push(decodeEntities(stripTags(code)).replace(/\n$/, ""));
-    return `\uE000B${blocks.length - 1}\uE000`;
-  });
-
-  body = listsToMarkdown(body, baseUrl);
-
-  body = body
-    .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (m, level, text) => `\n\n${"#".repeat(Number(level))} ${inline(text, baseUrl).trim()}\n\n`)
-    .replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (m, text) => {
-      const quoted = inline(text, baseUrl).trim().split("\n").map((line) => `> ${line.trim()}`).join("\n");
-      return `\n\n${quoted}\n\n`;
-    })
-    .replace(/<hr\s*\/?>/gi, "\n\n---\n\n")
-    .replace(/<\/(?:p|div|section|article|header|footer|figure|h[1-6]|blockquote|pre|main)>/gi, "\n\n")
-    .replace(/<(?:p|div|section|article|figure|main)\b[^>]*>/gi, "\n\n");
-
-  body = inline(body, baseUrl);
-
-  body = body
-    // \uE000 (Unicode private use area) placeholders never occur in real content.
-    .replace(new RegExp("\\uE000B(\\d+)\\uE000", "g"), (m, index) => `\n\n\`\`\`\n${blocks[Number(index)]}\n\`\`\`\n\n`)
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return `${body}\n`;
+  const document = parse(String(html));
+  const body = findBody(document);
+  const ctx = { baseUrl };
+  return `${renderContainer(body, baseUrl, ctx).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
 }
 
+function findBody(document) {
+  const htmlNode = elementChildren(document).find((node) => node.tagName === "html") ?? document;
+  return elementChildren(htmlNode).find((node) => node.tagName === "body") ?? htmlNode;
+}
+
+// Select the substantive content areas of a built page for the agent-facing
+// mirror: explicit [data-agent-content] markers in document order (nested
+// markers are absorbed by their ancestor), else the <main> element, else the
+// whole body. Returns serialized HTML fragments.
+export function selectAgentContent(html) {
+  const document = parse(String(html));
+  const body = findBody(document);
+  const marked = [];
+  const walk = (node, insideMarked) => {
+    const markedHere = hasFlag(node, "data-agent-content");
+    if (markedHere && !insideMarked) marked.push(node);
+    for (const child of elementChildren(node)) walk(child, insideMarked || markedHere);
+  };
+  walk(body, false);
+  if (marked.length > 0) return marked.map((node) => serialize(node));
+  const main = (() => {
+    let found;
+    const findMain = (node) => {
+      for (const child of elementChildren(node)) {
+        if (child.tagName === "main") { found = child; return; }
+        findMain(child);
+        if (found) return;
+      }
+    };
+    findMain(body);
+    return found;
+  })();
+  return [serialize(main ?? body)];
+}
+
+// Legacy helper kept for compatibility with earlier callers.
 export function extractMain(html) {
   const match = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i);
   return match ? match[1] : html;
