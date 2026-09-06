@@ -19,7 +19,7 @@
 // error code, not an env reader).
 
 import { readFileSync } from 'node:fs';
-import { activeEnvFiles, parseEnvText } from '../secrets.js';
+import { activeEnvFiles, getEnvFilePath, parseEnvText, planEnvPatch } from '../secrets.js';
 import { createProviderConfigSnapshot } from '../provider-config.js';
 import { listProviderDefinitions } from '../provider-registry.js';
 import {
@@ -537,6 +537,13 @@ function resolveLayered(key, { shellEnv, layers, defaultValue }) {
   return atom(undefined, 'absent', null, null);
 }
 
+// Infer a file's scope from the state's layer list by path; used only for
+// files captured by populateRawTexts that readLayers skipped (missing ones).
+function pathScope(path, state) {
+  return state.layers.find((layer) => layer.path === path)?.scope
+    ?? (path === getEnvFilePath('local') ? 'local' : 'global');
+}
+
 function readLayers(files, readFile) {
   return files
     .filter((file) => file.exists !== false)
@@ -619,6 +626,7 @@ export function readSetupState({
   readFile,
   integrations = [],
   redact = false,
+  populateRawTexts = false,
 } = {}) {
   if (scope !== null && scope !== 'local' && scope !== 'global') {
     throw new Error(`unknown setup scope "${scope}" — use "local" or "global"`);
@@ -654,9 +662,93 @@ export function readSetupState({
   });
 
   // Raw layers + the inventory-scoped shell env ride along so draft
-  // application (applyDraftToSnapshot) can resolve untracked keys against
-  // the real persisted files instead of only snapshot atoms.
-  return freeze({ snapshot, fields: freeze(enriched), scope, layers, shellEnv: freeze(shellEnv) });
+  // application (applyDraftToSnapshot / previewSetupState) can resolve
+  // untracked keys against the real persisted files instead of only
+  // snapshot atoms, and patch an in-memory layer copy for previews.
+  const extras = { snapshot, fields: freeze(enriched), scope, layers, shellEnv: freeze(shellEnv) };
+  if (populateRawTexts) {
+    // Capture EVERY candidate file (including not-yet-existing ones): a
+    // fresh install's target layer does not exist on disk yet, and the
+    // wizard's post-draft preview must still be able to apply draft edits
+    // to it in memory.
+    const rawTexts = new Map();
+    for (const file of envFiles) {
+      let raw = '';
+      try {
+        raw = reader(file.path, 'utf8');
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+      rawTexts.set(file.path, raw);
+    }
+    extras.rawTexts = rawTexts;
+  }
+  return freeze(extras);
+}
+
+/**
+ * The effective state AFTER a draft is applied to the chosen persisted
+ * layer — a true post-draft read, not an overlay over the startup snapshot.
+ *
+ * Applies the draft's set/unset edits to a COPY of the selected scope's env
+ * file (via the existing planEnvPatch, no second dotenv parser), then reuses
+ * readSetupState with an in-memory file reader so shell > local > global >
+ * defaults resolution, fallback after unset, and shadowing all behave
+ * exactly like a real on-disk read. Never touches process.env or the disk.
+ *
+ * Returns the same shape as readSetupState (plus `rawTexts` for callers
+ * that need the prepared layer contents; secret-bearing — keep internal).
+ */
+export function previewSetupState(state, draft, { scope = null, integrations = [] } = {}) {
+  if (!state?.snapshot || !Array.isArray(state.layers)) {
+    throw new TypeError('previewSetupState requires a state from readSetupState()');
+  }
+  if (!state.rawTexts) {
+    throw new TypeError(
+      'previewSetupState requires state.rawTexts (Map path → raw layer text); '
+        + 'readSetupState({ populateRawTexts: true }) provides it',
+    );
+  }
+  const targetScope = scope ?? state.scope;
+  if (targetScope !== 'local' && targetScope !== 'global') {
+    throw new Error(`unknown setup scope "${targetScope}" — use "local" or "global"`);
+  }
+  const sets = Array.isArray(draft?.set) ? draft.set : [];
+  const unsets = Array.isArray(draft?.unset) ? draft.unset : [];
+  const edits = [
+    ...sets
+      .filter((edit) => edit && typeof edit.key === 'string')
+      .map((edit) => ({ key: edit.key, value: edit.value ?? null })),
+    ...unsets
+      .filter((key) => typeof key === 'string')
+      .map((key) => ({ key, value: null })),
+  ];
+
+  // Apply the draft ONLY to the selected scope's layer copy; other layers
+  // stay byte-identical, so an unset in local still reveals global, and a
+  // global fallback surfaces through the normal resolution order.
+  const patchedTexts = new Map();
+  const files = [];
+  for (const [path, raw] of state.rawTexts) {
+    const layer = state.layers.find((candidate) => candidate.path === path);
+    const fileScope = layer?.scope ?? pathScope(path, state);
+    const patched = fileScope === scope ? planEnvPatch(raw ?? '', edits).text : raw;
+    patchedTexts.set(path, patched);
+    // A layer that did not exist on disk "appears" in the preview once the
+    // draft gives it content; empty patched text stays non-existent.
+    const exists = layer ? layer.exists !== false : patched !== '';
+    if (exists) {
+      files.push({ scope: fileScope, path, exists: true });
+    }
+  }
+  files.sort((a, b) => (a.scope === 'local' ? -1 : 1) - (b.scope === 'local' ? -1 : 1));
+  return readSetupState({
+    scope: targetScope,
+    parentEnv: state.shellEnv,
+    files,
+    readFile: (path) => patchedTexts.get(path) ?? '',
+    integrations,
+  });
 }
 
 // ─── sparse draft application (pure) ─────────────────────────────────────

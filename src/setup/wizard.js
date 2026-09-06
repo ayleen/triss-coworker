@@ -22,7 +22,7 @@ const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 import { CANONICAL_PROVIDER_IDS } from '../provider-contract.js';
 import { getProviderDefinition } from '../provider-registry.js';
 import { loadIntegrations } from '../integrations/_registry.js';
-import { readSetupState } from './configuration.js';
+import { readSetupState, previewSetupState } from './configuration.js';
 import { planEngineSetup, applyEngineSetup, probeEngineVersionPolicy } from './engines.js';
 import { buildSetupPlan, applySetupPlan } from './plan.js';
 
@@ -215,16 +215,21 @@ async function runAdvancedFlow({ draft, state, scope, opts, deps, integrations }
       defaultIndex: sections.length - 1,
     });
     if (section === 'done') break;
-    if (section === 'providers') await sectionProviders({ draft, state, deps });
-    if (section === 'execution') await sectionExecution({ draft, state, deps, opts });
-    if (section === 'connections') await sectionConnections({ draft, state, deps, scope, opts });
-    if (section === 'integrations') await sectionIntegrations({ draft, state, deps, integrations });
-    if (section === 'runtime') await sectionRuntime({ draft, state, deps });
-    if (section === 'maintenance') await sectionMaintenance({ draft, state, deps });
+    // Every section revisit renders "current" values from a FRESH
+    // post-draft preview, so earlier edits of this run are visible and a
+    // re-selection compares against the true post-draft value, not the
+    // startup snapshot (review round 4, R3).
+    const previewState = previewSetupState(state, draft, { scope, integrations });
+    if (section === 'providers') await sectionProviders({ draft, previewState, deps });
+    if (section === 'execution') await sectionExecution({ draft, previewState, deps });
+    if (section === 'connections') await sectionConnections({ draft, deps, scope, opts });
+    if (section === 'integrations') await sectionIntegrations({ draft, previewState, deps, integrations });
+    if (section === 'runtime') await sectionRuntime({ draft, previewState, deps });
+    if (section === 'maintenance') await sectionMaintenance({ draft, deps });
   }
 }
 
-async function sectionProviders({ draft, state, deps }) {
+async function sectionProviders({ draft, previewState, deps }) {
   const provider = await (deps.promptChoice || promptChoice)(
     'Provider profile to configure?',
     [
@@ -236,7 +241,7 @@ async function sectionProviders({ draft, state, deps }) {
   );
   if (provider === 'back') return;
   if (provider === 'shared-default') {
-    const current = fieldFor(state, 'TRISS_DEFAULT_PROVIDER')?.current;
+    const current = fieldFor(previewState, 'TRISS_DEFAULT_PROVIDER')?.current;
     const action = await (deps.promptChoice || promptChoice)(
       `  Shared default provider (current: ${current?.value ?? 'openai-compatible'} [${current?.source || 'registry-default'}])`,
       [
@@ -245,14 +250,14 @@ async function sectionProviders({ draft, state, deps }) {
       ],
       { defaultIndex: 0 },
     );
-    if (action !== 'keep' && action !== current?.value) setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', action);
+    if (action !== 'keep') setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', action);
     return;
   }
   const definition = getProviderDefinition(provider);
-  await collectProviderCredential(draft, state, provider, { ...deps, force: true });
+  await collectProviderCredential(draft, previewState, provider, { ...deps, force: true });
   const keys = [definition.fields.endpoint, definition.fields.model, definition.fields.smallModel];
   for (const key of keys) {
-    const field = fieldFor(state, key);
+    const field = fieldFor(previewState, key);
     const current = field?.current;
     const action = await (deps.promptChoice || promptChoice)(
       `  ${field?.description || key} (current: ${current?.value ? String(current.value) : 'not set'} [${current?.source || 'absent'}])`,
@@ -278,12 +283,12 @@ async function sectionProviders({ draft, state, deps }) {
   }
 }
 
-async function sectionExecution({ draft, state, deps }) {
+async function sectionExecution({ draft, previewState, deps }) {
   // Enter preserves the EFFECTIVE value and its inheritance: a field whose
   // current source is registry-default stays unset instead of gaining a
   // local override that merely restates the default (review finding).
   const editEnumField = async (key, label, valid) => {
-    const current = fieldFor(state, key)?.current;
+    const current = previewState.fields.find((f) => f.key === key)?.current;
     const value = await (deps.prompt || prompt)(
       `${label} (current: ${current?.value ?? 'native default'} [${current?.source || 'registry-default'}]; Enter = keep, '-' = remove override)`,
       { defaultValue: '' },
@@ -304,7 +309,7 @@ async function sectionExecution({ draft, state, deps }) {
   await editEnumField('TRISS_DEFAULT_ENGINE', 'Default engine for model tasks', ['direct', 'opencode', 'opencode2', 'omp', 'crush']);
   await editEnumField('TRISS_CODER_ENGINE', 'Coding engine', CODER_ENGINES);
   draft.engineId = draftValueOf(draft, 'TRISS_CODER_ENGINE')
-    || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
+    || fieldFor(previewState, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
   await editEnumField('TRISS_CODER_PROVIDER', 'Coding provider', CANONICAL_PROVIDER_IDS);
   await editEnumField('TRISS_DEFAULT_EFFORT', 'Default effort for model tasks', ['low', 'medium', 'high', 'xhigh', 'max']);
   await editEnumField('TRISS_CODER_EFFORT', 'Coding effort override', ['low', 'medium', 'high', 'xhigh', 'max']);
@@ -312,7 +317,7 @@ async function sectionExecution({ draft, state, deps }) {
   const protection = await (deps.promptChoice || promptChoice)(
     'Credential protection',
     [
-      { value: 'keep', label: `Keep current (${fieldFor(state, 'TRISS_PROTECT_CREDENTIALS')?.current?.value || 'engine default'})` },
+      { value: 'keep', label: `Keep current (${previewState.fields.find((f) => f.key === 'TRISS_PROTECT_CREDENTIALS')?.current?.value || 'engine default'})` },
       { value: 'true', label: 'Protected — parent-owned proxy where available' },
       { value: 'false', label: 'Raw — forward the selected credential directly' },
     ],
@@ -338,7 +343,7 @@ async function sectionConnections({ draft, deps, scope, opts }) {
   }
 }
 
-async function sectionIntegrations({ draft, state, deps, integrations, preselected = [] }) {
+async function sectionIntegrations({ draft, previewState, deps, integrations, preselected = [] }) {
   const choices = integrations
     .filter((integration) => integration.envVars?.length)
     .map((integration) => {
@@ -364,7 +369,7 @@ async function sectionIntegrations({ draft, state, deps, integrations, preselect
     for (const envVar of integration.envVars || []) {
       if (asked.has(envVar.name)) continue;
       asked.add(envVar.name);
-      const existing = process.env[envVar.name] || fieldFor(state, envVar.name)?.current?.value;
+      const existing = process.env[envVar.name] || fieldFor(previewState, envVar.name)?.current?.value;
       const value = await (deps.prompt || prompt)(`  ${envVar.name}${envVar.required ? ' (required)' : ' (optional)'}`, {
         hidden: /TOKEN|KEY|SECRET|PASS/i.test(envVar.name),
         defaultValue: '',
@@ -377,9 +382,9 @@ async function sectionIntegrations({ draft, state, deps, integrations, preselect
   }
 }
 
-async function sectionRuntime({ draft, state, deps }) {
+async function sectionRuntime({ draft, previewState, deps }) {
   const groups = new Map();
-  for (const field of state.fields) {
+  for (const field of previewState.fields) {
     if (!['requests', 'review', 'corpus', 'paths', 'usage', 'update', 'engine-tuning', 'model-transport'].includes(field.group)) continue;
     if (!groups.has(field.group)) groups.set(field.group, []);
     groups.get(field.group).push(field);
@@ -427,12 +432,12 @@ async function runTargetedFlow({ kind, names, draft, state, opts, deps, integrat
     return;
   }
   // integration target: the section is preselected by the target argument
-  await sectionIntegrations({ draft, state, deps, preselected: names, integrations: integrations.filter((i) => names.includes(i.name)) });
+  await sectionIntegrations({ draft, previewState: state, deps, preselected: names, integrations: integrations.filter((i) => names.includes(i.name)) });
 }
 
 // ─── Headless ────────────────────────────────────────────────────────────────
 
-function headlessAssemble({ draft, state, opts, targets }) {
+function headlessAssemble({ draft, opts, targets }) {
   // An explicit target narrows the headless apply to that section.
   if (targets?.kind === 'provider') {
     setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', targets.names[0]);
@@ -457,23 +462,23 @@ function headlessAssemble({ draft, state, opts, targets }) {
   if (draft.agent !== 'none' && !['claude', 'codex', 'both'].includes(draft.agent)) {
     throw new Error(`--agent must be claude, codex, both, or none (got "${draft.agent}").`);
   }
-  // Completeness: the selected (or default) provider must have its credential
-  // from an existing file or shell; --yes never turns a missing key into ok.
-  const providerId = targets?.kind === 'provider'
-    ? targets.names[0]
-    : (opts.coderProvider && (targets?.kind === 'coder' || targets?.kind === 'none')
-      ? String(opts.coderProvider).toLowerCase()
-      : state.snapshot.defaultProvider.value);
-  let credential = targets?.kind === 'integration'
-    ? true // provider credentials are not the integration's requirement
-    : state.snapshot.providers[providerId]?.credential?.value;
-  // Integration targets still gate on their manifest's REQUIRED fields: a
-  // headless --yes run must not report success over a missing key.
+}
+
+// Headless completeness, checked against the POST-draft state (review round
+// 4, R2): a coder target validates the EFFECTIVE coding provider's key —
+// never the shared provider's; a provider target validates that profile; an
+// integration target validates its manifest's required fields; a general
+// setup validates the resolved shared provider. Empty string counts as an
+// absent credential. Runs before any write.
+function validateHeadlessCompleteness({ preview, targets, opts, state }) {
+  void opts;
+  const fieldValue = (key) => preview.fields.find((f) => f.key === key)?.current?.value;
+
   if (targets?.kind === 'integration') {
     const missing = [];
-    for (const integration of state.fields
+    for (const field of preview.fields
       .filter((f) => f.group === `integration:${targets.names[0]}` && f.required && !f.pattern)) {
-      if (!process.env[integration.key] && integration.current?.value === undefined) missing.push(integration.key);
+      if (field.current?.value === undefined || field.current?.value === '') missing.push(field.key);
     }
     if (missing.length > 0) {
       throw new Error(
@@ -481,13 +486,22 @@ function headlessAssemble({ draft, state, opts, targets }) {
           'Set it first (triss config set / stdin / env) and rerun.',
       );
     }
+    return;
   }
+
+  const providerId = targets?.kind === 'provider'
+    ? targets.names[0]
+    : targets?.kind === 'coder'
+      ? (fieldValue('TRISS_CODER_PROVIDER') || fieldValue('TRISS_DEFAULT_PROVIDER') || 'openai-compatible')
+      : preview.snapshot.defaultProvider?.value || 'openai-compatible';
+  const credential = preview.snapshot.providers[providerId]?.credential?.value;
   if (!credential) {
     throw new Error(
       `Headless setup incomplete: ${getProviderDefinition(providerId).credential} is not set for provider "${providerId}". ` +
         'Set it first (triss config set / stdin / env) and rerun.',
     );
   }
+  void state;
 }
 
 // ─── Orchestration ───────────────────────────────────────────────────────────
@@ -577,7 +591,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   }
 
   const scope = await chooseScope(opts, deps);
-  const state = readSetupState({ scope, integrations });
+  const state = readSetupState({ scope, integrations, populateRawTexts: true });
   // Baseline for the whole interactive window: prompts run against THIS
   // content; buildSetupPlan refuses to plan if the file moved underneath.
   const { getEnvFilePath } = await import('../secrets.js');
@@ -593,7 +607,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
 
   let easyProvider = null;
   if (opts.yes) {
-    headlessAssemble({ draft, state, opts, targets });
+    headlessAssemble({ draft, opts, targets });
   } else if (targets.kind !== 'none') {
     await runTargetedFlow({ ...targets, draft, state, opts, deps, integrations });
   } else if (mode === 'advanced') {
@@ -611,24 +625,32 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   // install/setup — provider and integration targets must not drag a coder
   // engine along (plan §3.3).
   const plansCodingEngine = targets.kind === 'none' || targets.kind === 'coder';
-  const engineId = draft.engineId || fieldFor(state, 'TRISS_CODER_ENGINE')?.current?.value || 'opencode';
-  // The SINGLE resolved coding intent, honored at validation, preview, engine
-  // setup, and the printed summary: the draft-selected provider wins, then a
-  // persisted TRISS_CODER_PROVIDER, then the shared default. Re-deriving the
-  // provider from the shared default after apply configured the WRONG
-  // provider (review round 3).
-  const draftCoderProvider = draftValueOf(draft, 'TRISS_CODER_PROVIDER');
-  const coderProviderId = draftCoderProvider
-    || fieldFor(state, 'TRISS_CODER_PROVIDER')?.current?.value
-    || fieldFor(state, 'TRISS_DEFAULT_PROVIDER')?.current?.value
-    || 'openai-compatible';
+  // ONE true post-draft state: the collected set/unset edits applied to a
+  // copy of the selected layer, re-read through the normal resolution order
+  // (shell > local > global > defaults). Every intent value — shared
+  // provider, coding provider, coding engine — derives from THIS state, so
+  // an unset reveals its real fallback and an explicit choice (including
+  // "back to the original value") is honored. No startup-state fallback
+  // chains here (review round 4, R1/R2).
+  const preview = previewSetupState(state, draft, { scope, integrations });
+  const fieldValue = (src, key) => src.fields.find((f) => f.key === key)?.current?.value;
+  const sharedProviderId = fieldValue(preview, 'TRISS_DEFAULT_PROVIDER')
+    || state.snapshot.defaultProvider?.value || 'openai-compatible';
+  const coderProviderId = fieldValue(preview, 'TRISS_CODER_PROVIDER') || sharedProviderId;
+  const coderEngineId = fieldValue(preview, 'TRISS_CODER_ENGINE') || 'opencode';
   draft.coderProviderId = coderProviderId;
+  // Keep draft.engineId aligned with the preview resolution for callers
+  // that read it after this point (summary, apply).
+  draft.engineId = CODER_ENGINES.includes(coderEngineId) ? coderEngineId : 'opencode';
+  if (opts.yes) {
+    validateHeadlessCompleteness({ preview, targets, opts, state });
+  }
   // Headless runs install only with --install; interactive runs fold the
   // install into the summary confirmation.
   const engineInstallChoice = opts.install || interactive ? 'install' : 'skip';
   const enginePlan = plansCodingEngine
     ? await planEngineSetup({
-      engine: CODER_ENGINES.includes(engineId) ? engineId : 'opencode',
+      engine: draft.engineId,
       provider: coderProviderId,
       scope,
       installChoice: engineInstallChoice,

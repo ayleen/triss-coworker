@@ -4895,10 +4895,16 @@ function spawnCrush({
 // this; computeWorktreeChanges / cleanupAbandonedIsolation / gitWorktreeRemove
 // / gitBranchDeleteSafe are called here for the teardown). Emits the SAME
 // envelope shape as the opencode path so callers are engine-agnostic.
-// Run-scoped crush config for ANY canonical provider: protected mode pins the
-// loopback proxy, an explicit raw run pins the real configured upstream with
-// the real selected credential forwarded only through the native $ENV
-// reference. The provider key is the canonical Triss provider id.
+// Run-scoped crush config for ANY canonical provider, with a PER-ROLE base
+// URL contract (review R4): each role (main and small, including the
+// separate-small case) points at its proxy's scopedBaseUrl whenever that role
+// is proxied — credential protection in protected mode, OR protocol bridging
+// for an openai_responses role in any mode. The real configured upstream is
+// used ONLY for roles explicitly running unproxied: a raw run where the role
+// speaks a wire protocol crush handles natively (openai_chat). The caller
+// therefore passes `proxy`/`smallProxy` for exactly the proxied roles and
+// `null` for the unproxied ones. The provider key is the canonical Triss
+// provider id.
 function createCrushRuntimeConfig({
   proxy,
   smallProxy,
@@ -6551,18 +6557,51 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   // choice (CLI --no-protect-credentials, MCP boolean false, persisted
   // tri-state false) runs raw through the same run-scoped native config with
   // the real selected credential in the child env.
-  // Crush speaks Chat Completions natively against custom providers; when the
-  // model's audited upstream wire protocol is the Responses API, the proxy
+  // Crush speaks Chat Completions natively against custom providers; when a
+  // role's audited upstream wire protocol is the Responses API, the proxy
   // provides the bounded chat→responses bridge instead of substituting a
   // different engine or model.
-  const crushBridge = engine === 'crush' && routeCandidate.protocol === 'openai_responses'
-    ? 'chat-to-responses'
+
+  // Per-role routing plan (review R4), resolved BEFORE any proxy is created:
+  // BOTH roles (main and small) record their native model id, endpoint, path
+  // prefix, wire protocol, and the proxy-side protocol projection. The main
+  // route alone used to decide bridge necessity — a raw run with
+  // main=openai_chat and small=openai_responses then rendered a native
+  // openai-compat block for the small role too, sending Chat requests at a
+  // Responses upstream.
+  const crushRolePlan = engine === 'crush'
+    ? [
+      {
+        role: 'main',
+        nativeModelId: selectedModel.nativeModel,
+        endpoint: routeCandidate.endpoint,
+        pathPrefix: routeCandidate.pathPrefix,
+        protocol: routeCandidate.protocol,
+        proxyProtocol: proxyProtocolFor(engine, routeCandidate),
+      },
+      {
+        role: 'small',
+        nativeModelId: selectedSmallModel.nativeModel,
+        endpoint: smallRouteCandidate.endpoint,
+        pathPrefix: smallRouteCandidate.pathPrefix,
+        protocol: smallRouteCandidate.protocol,
+        proxyProtocol: proxyProtocolFor(engine, smallRouteCandidate),
+      },
+    ]
     : null;
+  const crushMainNeedsBridge = crushRolePlan?.[0]?.proxyProtocol.bridge === 'chat-to-responses';
+  const crushSmallNeedsBridge = crushRolePlan?.[1]?.proxyProtocol.bridge === 'chat-to-responses';
+  const crushBridgeNeeded = crushMainNeedsBridge || crushSmallNeedsBridge;
 
   // The chat→responses bridge is a PROTOCOL necessity, not a protection
-  // choice: a raw-mode crush run on a Responses-protocol model still needs
-  // the translating loopback, so bridging keeps the proxy required.
-  const proxyRequired = (engine === 'crush' && (credentialMode === 'protected_proxy' || Boolean(crushBridge)))
+  // choice: a raw-mode crush run with a Responses-protocol role still needs
+  // the translating loopback. And because the child holds exactly ONE
+  // credential variable, a bridge on ANY role routes BOTH roles through the
+  // loopback — the non-bridged role gets a plain chat passthrough proxy
+  // sharing the same one-run token. Honest raw mode is preserved: the real
+  // credential reaches the upstream through the parent-owned proxy and the
+  // child still only ever holds the run token.
+  const proxyRequired = (engine === 'crush' && (credentialMode === 'protected_proxy' || crushBridgeNeeded))
     || protectedRouting;
   if (proxyRequired && !deps.disableCredentialProxy && proxyTarget) {
     try {
@@ -6579,14 +6618,18 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         // protocol is the live case), the small model's exact id must be
         // pinned too — otherwise its requests 403 "model is not pinned"
         // even though the engine config selects it (review round 3). With
-        // separate small transports the small proxy owns its own allowlist.
+        // separate small transports the small proxy owns its own allowlist,
+        // and the main proxy pins exactly the main role's model (never the
+        // whole catalogue).
         models: (protectedRouting
           ? [runtimeRoute.modelId, ...(engine === 'opencode2' || separateSmallTransport
             ? []
             : [runtimeSmallRoute.modelId])]
-          : engine === 'crush' && !crushSeparateSmallTransport
-            ? [routeCandidate.modelId, ...(smallRouteCandidate.modelId !== routeCandidate.modelId
-              ? [smallRouteCandidate.modelId] : [])]
+          : engine === 'crush'
+            ? (crushSeparateSmallTransport
+              ? [routeCandidate.modelId]
+              : [routeCandidate.modelId, ...(smallRouteCandidate.modelId !== routeCandidate.modelId
+                ? [smallRouteCandidate.modelId] : [])])
             : undefined),
         endpoint: proxyTarget.endpoint,
         pathPrefix: proxyTarget.pathPrefix,

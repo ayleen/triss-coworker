@@ -274,9 +274,16 @@ export function buildSetupPlan(
   }
 
   const previewSnapshot = applied.preview;
+  // The engine plan carries the RESOLVED intent (post-draft state), which
+  // outranks the startup-state fallbacks below: an unset override must show
+  // its true post-draft resolution in the summary, not the stale startup
+  // value (review round 4, R1).
+  const resolvedCodingProvider = enginePlan?.providerActions?.[0]?.provider;
   const providerId = previewSnapshot.defaultProvider?.value
     ?? state.snapshot.defaultProvider?.value;
-  const coderProviderId = previewSnapshot.coderProvider?.value || providerId;
+  const coderProviderId = resolvedCodingProvider
+    || previewSnapshot.coderProvider?.value
+    || providerId;
   const profile = previewSnapshot.providers?.[coderProviderId];
   const models = enginePlan?.providerActions?.[0]?.models ?? {
     model: bareModel(profile?.model?.value),

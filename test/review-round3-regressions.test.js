@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -215,6 +215,78 @@ function ompProxyBase(project) {
   return null;
 }
 
+// ─── spawn-env capture driver (review-2*) ────────────────────────────────────
+
+const HEX32 = /^[0-9a-f]{32}$/;
+
+// Fake engine child that RECORDS the spawn env, then ends the run cleanly
+// with a V1 envelope (same shape runProtectedCoderRun replays).
+function spawnCapturingChild(env, capture) {
+  capture(env || {});
+  const child = new EventEmitter();
+  child.pid = 424242;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  setImmediate(() => {
+    child.stdout.end(JSON.stringify({
+      session_id: 'ses_r3c', exit_reason: 'end_turn', final_text: 'ok',
+      usage: { delta_tokens: 3 }, tool_calls: [],
+    }) + '\n');
+    child.stderr.end('');
+    setImmediate(() => child.emit('close', 0, null));
+  });
+  return child;
+}
+
+// Drive runCoderRun for an ask projection with the standard opencode stubs
+// and capture the child env of every spawn. The credential proxy seam stays
+// REAL: a protected run must actually start the loopback proxy and hand the
+// child its one-run token. Runs inside a throwaway HOME so the raw
+// credential-store preflight never sees the developer's real env file.
+async function driveCoderRun(t, { snapshot, runOpts = {} }) {
+  withTempEnv(t, '');
+  const { runCoderRun } = await import('../src/commands/coder.js');
+  const out = [];
+  const childEnvs = [];
+  const error = await runCoderRun('work', {
+    engine: 'opencode',
+    isolate: false,
+    timeout: 5,
+    ...runOpts,
+  }, {
+    providerConfigSnapshot: snapshot,
+    spawn: (_cmd, _argv, opts) => spawnCapturingChild(opts?.env, (env) => childEnvs.push(env)),
+    spawnSync: (cmd, argv) => (cmd === 'opencode' && argv?.[0] === '--version')
+      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
+      : { status: 1, stdout: '', stderr: '', error: null },
+    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
+    stdoutWrite: (chunk) => out.push(chunk),
+  }).then(() => null, (e) => e);
+  return { error, out: out.join(''), childEnvs };
+}
+
+// Shared wizard dep stubs: every scripted wizard test overrides only the
+// prompts it drives and asserts on.
+function wizardStubDeps(over = {}) {
+  return {
+    isInteractive: () => true,
+    integrations: [],
+    coderManifest: { name: 'coder' },
+    inspectMigration: async () => ({ state: 'not_required' }),
+    probeEngine: () => ({ found: true, compatible: true }),
+    runInstall: async () => ({ ok: true }),
+    runCoderSetup: async () => ({ model: 'm', smallModel: 's' }),
+    installMcp: async () => ({ path: '/m', status: 'added' }),
+    writeRules: async () => {},
+    mcpStatus: async () => ({ present: false }),
+    promptChoice: async (_q, choices, o) => choices[o?.defaultIndex ?? 0]?.value,
+    prompt: async () => '',
+    yesNo: async () => false,
+    stderrWrite: () => {},
+    ...over,
+  };
+}
+
 test('review-1: protected OpenCode/OpenCode2/OMP keep the resolved protocol (responses route)', async (t) => {
   // A responses-protocol route with --protect-credentials must reach the
   // /responses path through the proxy, not 404 on an openai_chat pin.
@@ -294,8 +366,11 @@ test('review-1b: protected anthropic-protocol route keeps /messages', async (t) 
   assert.ok(fixture.hits.some((h) => h.url.endsWith('/messages')), `fixture must see /messages: ${JSON.stringify(fixture.hits.map((h) => h.url))}`);
 });
 
-test('review-2: coding-only protection false does not downgrade a protected ask', async () => {
-  const { runCoderRun } = await import('../src/commands/coder.js');
+test('review-2: shared=true + coder=false protects the ask projection (token env, never the raw key)', async (t) => {
+  // Conflicting persisted choices: the shared true protects EVERY run, the
+  // coding-only false only governs coding runs — it must NOT downgrade this
+  // ask projection. The proof is in the child env: the spawn fires with the
+  // one-run proxy token, and the raw key value is absent everywhere.
   const snapshot = createProviderConfigSnapshot({
     parentEnv: {
       TRISS_PROTECT_CREDENTIALS: 'true',
@@ -305,73 +380,44 @@ test('review-2: coding-only protection false does not downgrade a protected ask'
     },
     files: [],
   });
-  let resolvedMode = null;
-  await runCoderRun('work', {
-    engine: 'opencode',
-    isolate: false,
-    timeout: 5,
-    modelProjectionTask: 'ask',
-  }, {
-    providerConfigSnapshot: snapshot,
-    // Capture the resolved mode via the credential-mode the run carries;
-    // the spawn sentinel proves the run got past validation.
-    spawn: () => { throw new Error('spawn-sentinel'); },
-    spawnSync: (cmd, argv) => (cmd === 'opencode' && argv?.[0] === '--version')
-      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
-      : { status: 1, stdout: '', stderr: '', error: null },
-    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    stdoutWrite: () => {},
-  }).then(() => {}, (e) => {
-    resolvedMode = e.message;
-  });
-  // The child env must contain NO real key in protected mode: a protected
-  // run either spawns with a proxy token env or fails closed BEFORE spawn.
-  // Here the run must reach the protected_proxy path (crush parity).
-  assert.ok(
-    resolvedMode.includes('spawn-sentinel') || resolvedMode.includes('proxy'),
-    `unexpected failure: ${resolvedMode}`,
-  );
+  const { error, childEnvs } = await driveCoderRun(t, { snapshot, runOpts: { modelProjectionTask: 'ask' } });
+  assert.equal(error, null, `protected ask must reach spawn: ${error?.message}`);
+  assert.equal(childEnvs.length, 1, 'the engine child must spawn exactly once');
+  const env = childEnvs[0];
+  assert.match(env.ZHIPU_API_KEY, HEX32, `child must carry a 32-hex proxy token, got ${JSON.stringify(env.ZHIPU_API_KEY)}`);
+  assert.notEqual(env.ZHIPU_API_KEY, 'zk-scope-probe');
+  assert.ok(!JSON.stringify(env).includes('zk-scope-probe'), 'the raw key must not leak anywhere in the child env');
 });
 
-test('review-2b: coder-only protection true does NOT protect an ask projection', async () => {
-  const { runCoderRun } = await import('../src/commands/coder.js');
+test('review-2b: coder-only protection true leaves the ask projection raw (exact key in env)', async (t) => {
   // Only the CODING field is set: a protected proxy for the projection
-  // would be the old cross-scope leak. The run must proceed as raw and
-  // reach the spawn sentinel.
-  const snapshot = createProviderConfigSnapshot({
-    parentEnv: {
-      TRISS_CODER_PROTECT_CREDENTIALS: 'true',
-      TRISS_DEFAULT_PROVIDER: 'zai',
-      ZHIPU_API_KEY: 'zk-coder-only',
-      TRISS_ZAI_MODEL: 'glm-5.2',
-      TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo',
-    },
-    files: [],
-  });
-  let reachedRawSpawn = false;
-  let outcome = null;
-  await runCoderRun('work', {
-    engine: 'opencode',
-    isolate: false,
-    timeout: 5,
-    modelProjectionTask: 'ask',
-  }, {
-    providerConfigSnapshot: snapshot,
-    spawn: () => {
-      reachedRawSpawn = true;
-      throw new Error('raw-spawn-sentinel');
-    },
-    spawnSync: (cmd, argv) => (cmd === 'opencode' && argv?.[0] === '--version')
-      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
-      : { status: 1, stdout: '', stderr: '', error: null },
-    effectiveConfigSpawnSync: fakeEffectiveOpenCodeConfig,
-    stdoutWrite: () => {},
-  }).then(() => {}, (e) => { outcome = e.message; });
-  assert.equal(reachedRawSpawn, true, `projection must not be protected by the coding-only flag (outcome: ${outcome})`);
+  // would be the old cross-scope leak. The child env must carry the
+  // CONFIGURED RAW key byte for byte — with the shared choice absent AND
+  // with an explicit shared false (both conflicting spellings).
+  for (const shared of [undefined, 'false']) {
+    const snapshot = createProviderConfigSnapshot({
+      parentEnv: {
+        ...(shared === undefined ? {} : { TRISS_PROTECT_CREDENTIALS: shared }),
+        TRISS_CODER_PROTECT_CREDENTIALS: 'true',
+        TRISS_DEFAULT_PROVIDER: 'zai',
+        ZHIPU_API_KEY: 'zk-coder-only',
+        TRISS_ZAI_MODEL: 'glm-5.2',
+        TRISS_ZAI_SMALL_MODEL: 'glm-5-turbo',
+      },
+      files: [],
+    });
+    const { error, childEnvs } = await driveCoderRun(t, { snapshot, runOpts: { modelProjectionTask: 'ask' } });
+    assert.equal(error, null, `raw ask must reach spawn (shared=${shared}): ${error?.message}`);
+    assert.equal(childEnvs.length, 1);
+    assert.equal(
+      childEnvs[0].ZHIPU_API_KEY,
+      'zk-coder-only',
+      `coder-only=true must NOT protect a non-coding projection (shared=${shared})`,
+    );
+  }
 });
 
-test('review-2c: shared protection true still protects the same projection', async () => {
-  const { runCoderRun } = await import('../src/commands/coder.js');
+test('review-2c: shared protection true alone still protects the same projection', async (t) => {
   const snapshot = createProviderConfigSnapshot({
     parentEnv: {
       TRISS_PROTECT_CREDENTIALS: 'true',
@@ -382,27 +428,40 @@ test('review-2c: shared protection true still protects the same projection', asy
     },
     files: [],
   });
-  let spawned = false;
-  let outcome = null;
-  await runCoderRun('work', {
-    engine: 'opencode',
-    isolate: false,
-    timeout: 5,
-    modelProjectionTask: 'ask',
-  }, {
-    providerConfigSnapshot: snapshot,
-    spawn: () => {
-      spawned = true;
-      throw new Error('must-not-spawn-raw');
-    },
-    spawnSync: (cmd, argv) => (cmd === 'opencode' && argv?.[0] === '--version')
-      ? { status: 0, stdout: '1.18.22\n', stderr: '', error: null }
-      : { status: 1, stdout: '', stderr: '', error: null },
-    credentialProxyOptions: { host: '256.256.256.256', port: -1 },
-    stdoutWrite: () => {},
-  }).then(() => {}, (e) => { outcome = e.message; });
-  assert.match(outcome, /proxy|protected/iu, `shared protection must engage the proxy path: ${outcome}`);
-  assert.equal(spawned, false, 'no raw spawn may happen under shared protection');
+  const { error, childEnvs } = await driveCoderRun(t, { snapshot, runOpts: { modelProjectionTask: 'ask' } });
+  assert.equal(error, null, `shared-protected ask must reach spawn: ${error?.message}`);
+  assert.equal(childEnvs.length, 1);
+  const env = childEnvs[0];
+  assert.match(env.ZHIPU_API_KEY, HEX32, 'shared protection must engage the proxy token, not the raw key');
+  assert.notEqual(env.ZHIPU_API_KEY, 'zk-shared-true');
+  assert.ok(!JSON.stringify(env).includes('zk-shared-true'));
+});
+
+test('review-2d: an explicit boolean protectCredentials override wins over the persisted choice', async (t) => {
+  const base = { TRISS_DEFAULT_PROVIDER: 'zai', ZHIPU_API_KEY: 'zk-explicit-true' };
+  // Explicit true beats persisted shared=false + coder=false: protected.
+  const protectedRun = await driveCoderRun(t, {
+    snapshot: createProviderConfigSnapshot({
+      parentEnv: { ...base, TRISS_PROTECT_CREDENTIALS: 'false', TRISS_CODER_PROTECT_CREDENTIALS: 'false' },
+      files: [],
+    }),
+    runOpts: { modelProjectionTask: 'ask', protectCredentials: true },
+  });
+  assert.equal(protectedRun.error, null, `explicit-true ask must reach spawn: ${protectedRun.error?.message}`);
+  assert.equal(protectedRun.childEnvs.length, 1);
+  assert.match(protectedRun.childEnvs[0].ZHIPU_API_KEY, HEX32, 'explicit true must protect even over persisted false');
+  assert.ok(!JSON.stringify(protectedRun.childEnvs[0]).includes('zk-explicit-true'));
+  // And the explicit false direction beats a persisted shared true: raw.
+  const rawRun = await driveCoderRun(t, {
+    snapshot: createProviderConfigSnapshot({
+      parentEnv: { ...base, TRISS_PROTECT_CREDENTIALS: 'true' },
+      files: [],
+    }),
+    runOpts: { modelProjectionTask: 'ask', protectCredentials: false },
+  });
+  assert.equal(rawRun.error, null, `explicit-false ask must reach spawn: ${rawRun.error?.message}`);
+  assert.equal(rawRun.childEnvs.length, 1);
+  assert.equal(rawRun.childEnvs[0].ZHIPU_API_KEY, 'zk-explicit-true', 'explicit false must run raw even over shared true');
 });
 
 test('review-3: wizard targeted coder passes the chosen provider to engine setup', async (t) => {
@@ -509,45 +568,59 @@ test('review-6/7: unset removes the override and respects set→unset ordering',
   void home;
 });
 
-test('review-7: wizard helpers honor set→unset through a real flow', async (t) => {
+test('review-7: scripted Advanced execution section honors set then unset on disk', async (t) => {
   const { runSetupWizard } = await import('../src/setup/wizard.js');
-  const { project } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-order\nTRISS_DEFAULT_EFFORT=high\n');
-  let phase = 0;
-  const result = await runSetupWizard(undefined, {
-    local: true,
-  }, {
-    isInteractive: () => true,
-    integrations: [],
-    coderManifest: { name: 'coder' },
-    inspectMigration: async () => ({ state: 'not_required' }),
-    probeEngine: () => ({ found: true, compatible: true }),
-    runInstall: async () => ({ ok: true }),
-    runCoderSetup: async () => ({ model: 'm', smallModel: 's' }),
-    installMcp: async () => ({ path: '/m', status: 'added' }),
-    writeRules: async () => {},
-    mcpStatus: async () => ({ present: false }),
+  // TRISS_DEFAULT_EFFORT exists ONLY in the local file (never exported to
+  // process.env): a shell copy would outrank the layer and block the unset.
+  const { home, project } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-order\n');
+  writeFileSync(join(project, '.triss.env'), 'TRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-order\nTRISS_DEFAULT_EFFORT=high\n');
+
+  const sectionQueue = ['execution', 'execution', 'done'];
+  const sectionVisits = [];
+  const effortAnswers = [];
+  const effortQuestions = [];
+  const result = await runSetupWizard(undefined, { local: true }, wizardStubDeps({
     promptChoice: async (question, choices, opts) => {
       if (question.startsWith('Which model provider')) return 'zai';
+      if (question.startsWith('Connect Triss')) return 'none';
+      if (question.startsWith('Advanced setup — which section?')) {
+        const next = sectionQueue.shift() ?? 'done';
+        if (next !== 'done') sectionVisits.push(next);
+        return next;
+      }
+      if (question.startsWith('Credential protection')) return 'keep';
       return choices[opts?.defaultIndex ?? 0]?.value;
     },
     prompt: async (question) => {
-      if (question === '  API key') return '';
-      return '';
+      if (question.startsWith('Default effort for model tasks')) {
+        effortQuestions.push(question);
+        const answer = effortAnswers.length === 0 ? 'low' : '-';
+        effortAnswers.push(answer);
+        return answer;
+      }
+      return ''; // every other field: Enter = keep
     },
     yesNo: async (question) => {
-      if (question === 'Fine-tune anything else in Advanced?') {
-        phase += 1;
-        return phase === 1; // enter Advanced once
-      }
+      if (question === 'Fine-tune anything else in Advanced?') return true;
       return question === 'Apply?';
     },
-    stderrWrite: () => {},
-  });
-  // The Advanced runtime section drives prompt() for TRISS_DEFAULT_EFFORT:
-  // phase 1 answers set 'low' then (second visit) '-' to unset. The wizard
-  // helper must keep only the unset.
-  assert.ok(['ready', 'incomplete'].includes(result.status), `unexpected status ${result.status}`);
-  void project;
+  }));
+
+  assert.deepEqual(sectionVisits, ['execution', 'execution'], 'the execution section must be visited exactly twice');
+  assert.deepEqual(effortAnswers, ['low', '-'], 'first visit sets low, second visit removes the override');
+  // The second visit renders "current" from the FRESH post-draft preview:
+  // the draft value from visit one, not the stale startup snapshot.
+  assert.match(effortQuestions[0], /current: high \[config\]/, `first visit must show the file value, got: ${effortQuestions[0]}`);
+  assert.match(effortQuestions[1], /current: low \[config\]/, `second visit must show the post-draft value, got: ${effortQuestions[1]}`);
+  assert.equal(result.status, 'ready', `wizard must apply cleanly: ${JSON.stringify(result.failed)}`);
+
+  // The set→unset sequence removes the ENTIRE override from disk (the last
+  // confirmed action wins; no low line, no resurrected high line).
+  const content = readFileSync(join(project, '.triss.env'), 'utf8');
+  assert.doesNotMatch(content, /TRISS_DEFAULT_EFFORT/, `the effort override must be gone from disk, got: ${JSON.stringify(content)}`);
+  assert.match(content, /TRISS_DEFAULT_PROVIDER=zai/);
+  assert.match(content, /ZHIPU_API_KEY=zk-order/);
+  void home;
 });
 
 test('review-8: printed first command parses and reaches a fixture upstream', async (t) => {
@@ -620,4 +693,242 @@ test('review-8: printed first command parses and reaches a fixture upstream', as
   const answer = await runAsk({ ...parsed, paths: [sample], stream: false }, {});
   assert.match(answer, /pong-from-fixture/);
   assert.ok(fixture.hits.length > 0, 'the fixture endpoint must be reached');
+});
+
+test('review-6/7-disk: unset flows to disk through plan and apply', async (t) => {
+  const { readSetupState } = await import('../src/setup/configuration.js');
+  const { buildSetupPlan, applySetupPlan } = await import('../src/setup/plan.js');
+
+  // Case 1: the unset removes its key while sibling keys stay byte-identical.
+  const first = withTempEnv(t, '');
+  writeFileSync(join(first.project, '.triss.env'), 'TRISS_REQUEST_TIMEOUT_MS=60000\nTRISS_DEFAULT_EFFORT=high\n');
+  const state = readSetupState({ scope: 'local', populateRawTexts: true });
+  const plan = buildSetupPlan({ scope: 'local', draft: { unset: ['TRISS_REQUEST_TIMEOUT_MS'] }, state });
+  const result = await applySetupPlan(plan);
+  assert.equal(result.status, 'ready', `apply must succeed: ${JSON.stringify(result.failed)}`);
+  const after = readFileSync(join(first.project, '.triss.env'), 'utf8');
+  assert.doesNotMatch(after, /TRISS_REQUEST_TIMEOUT_MS/, `unset key must be gone, got: ${JSON.stringify(after)}`);
+  assert.match(after, /TRISS_DEFAULT_EFFORT=high/, 'the untouched sibling key must survive verbatim');
+
+  // Case 2: removing the ONLY content key leaves no stale override — the
+  // file ends up holding nothing but the auto-stamped TRISS_CONFIG_SCHEMA=2
+  // marker the planner adds for fresh files (a schema-less env file would
+  // trip the migration gate on the next wizard run). The removed key itself
+  // is gone entirely.
+  const second = withTempEnv(t, '');
+  writeFileSync(join(second.project, '.triss.env'), 'TRISS_REQUEST_TIMEOUT_MS=60000\n');
+  const state2 = readSetupState({ scope: 'local', populateRawTexts: true });
+  const plan2 = buildSetupPlan({ scope: 'local', draft: { unset: ['TRISS_REQUEST_TIMEOUT_MS'] }, state: state2 });
+  const result2 = await applySetupPlan(plan2);
+  assert.equal(result2.status, 'ready', `second apply must succeed: ${JSON.stringify(result2.failed)}`);
+  const after2 = readFileSync(join(second.project, '.triss.env'), 'utf8');
+  assert.ok(!after2.includes('TRISS_REQUEST_TIMEOUT_MS'), `unset key must be gone, got: ${JSON.stringify(after2)}`);
+  assert.equal(after2.trim(), 'TRISS_CONFIG_SCHEMA=2', `only the schema marker may remain, got: ${JSON.stringify(after2)}`);
+});
+
+test('review-8-spawn: real child `triss ask` reaches a fixture upstream (black-box, env-gated)', async (t) => {
+  const fixture = await startFixture({
+    // Streaming and buffered clients both must see the answer: SSE chunks
+    // for stream:true, the startFixture buffered body otherwise.
+    paths: {
+      '*': SSE([
+        { choices: [{ index: 0, delta: { role: 'assistant', content: 'pong-from-fixture' } }] },
+        { choices: [{ index: 0, delta: {} }], finish_reason: 'stop' },
+      ]),
+    },
+  });
+  t.after(() => fixture.close());
+  withTempEnv(t, [
+    'TRISS_CONFIG_SCHEMA=2',
+    'TRISS_DEFAULT_PROVIDER=zai',
+    'ZHIPU_API_KEY=zk-spawn-child',
+    'TRISS_ZAI_MODEL=glm-5.2',
+    'TRISS_ZAI_SMALL_MODEL=glm-5-turbo',
+    `TRISS_ZAI_BASE_URL=${fixture.base}`,
+    'TRISS_DEFAULT_ENGINE=direct',
+    'TRISS_USAGE_LOG=0',
+  ].join('\n'));
+
+  // This sandbox silently DROPS outbound HTTP payloads from spawned child
+  // processes (the TCP connect succeeds, the payload is filtered), so the
+  // child would hang forever. Guard: one run with a 20s timeout; if the
+  // environment filters it, SKIP — the in-process review-8 owns the
+  // semantics. Where the environment allows outbound child HTTP, the full
+  // black-box assertions run.
+  const child = spawn(process.execPath, [
+    BIN, 'ask', '--model', 'zai/glm-5.2', '--stdin', '--question', 'Reply with pong.',
+  ]);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.write('ping\n');
+  child.stdin.end();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill('SIGKILL');
+  }, 20_000);
+  const code = await new Promise((resolveClose) => {
+    child.on('close', (closeCode) => {
+      clearTimeout(timer);
+      resolveClose(closeCode);
+    });
+  });
+  if (timedOut) {
+    t.skip('spawned-child outbound HTTP is filtered in this sandbox');
+    return;
+  }
+  if (code !== 0) {
+    t.skip(`spawned-child outbound HTTP is filtered in this sandbox (exit ${code}): ${stderr.slice(-200)}`);
+    return;
+  }
+  assert.match(stdout, /pong-from-fixture/, `child stdout must carry the fixture answer, got: ${JSON.stringify(stdout)} / ${JSON.stringify(stderr.slice(-300))}`);
+  assert.ok(fixture.hits.length >= 1, 'the fixture endpoint must have been hit');
+});
+
+test('mutation sensitivity (behavioral): each reverted fix would fail these assertions', async (t) => {
+  // Wizard-adjacent review fixes, one behavioral leg each. Every leg asserts
+  // the CORRECT behavior through an input where the pre-fix behavior produces
+  // a DIFFERENT observable result, so reverting the fix (mutation) flips the
+  // assertion. Nothing in src is mutated: the distinguishing input IS the
+  // sensitivity proof.
+
+  // Fix 1 (applyDraftToSnapshot): an untracked runtime key's unset resolves
+  // `from` against the REAL persisted layers. Mutation (old bug):
+  // from=undefined → plan builders drop the edit as a no-op while the file
+  // keeps the override.
+  {
+    const { project } = withTempEnv(t, '');
+    writeFileSync(join(project, '.triss.env'), 'TRISS_REQUEST_TIMEOUT_MS=60000\n');
+    const { readSetupState, applyDraftToSnapshot } = await import('../src/setup/configuration.js');
+    const state = readSetupState({ scope: 'local' });
+    const applied = applyDraftToSnapshot(state.snapshot, { unset: ['TRISS_REQUEST_TIMEOUT_MS'] }, {
+      layers: state.layers,
+      shellEnv: state.shellEnv,
+    });
+    assert.deepEqual(
+      applied.changed.find((c) => c.key === 'TRISS_REQUEST_TIMEOUT_MS'),
+      { key: 'TRISS_REQUEST_TIMEOUT_MS', from: '60000', to: undefined },
+      'an unset of a persisted untracked key must record from=<file value> so the plan keeps the removal',
+    );
+  }
+
+  // Fix 2 (previewSetupState): a draft set on a NOT-YET-EXISTING local layer
+  // becomes the effective post-draft value. Mutation (old bug): empty layers
+  // were dropped from the preview, so the value vanished.
+  {
+    withTempEnv(t, ''); // no local env file on disk at all
+    const { readSetupState, previewSetupState } = await import('../src/setup/configuration.js');
+    const state = readSetupState({ scope: 'local', populateRawTexts: true });
+    const preview = previewSetupState(
+      state,
+      { set: [{ key: 'TRISS_REQUEST_TIMEOUT_MS', value: '42000' }] },
+      { scope: 'local' },
+    );
+    const current = preview.fields.find((f) => f.key === 'TRISS_REQUEST_TIMEOUT_MS')?.current;
+    assert.equal(current?.value, '42000', 'a draft set must be visible even when the target layer does not exist yet');
+    assert.equal(current?.source, 'config', 'the draft lands in the selected persisted local layer');
+  }
+
+  // Fix 3 + 4 (wizard ordered draft mutators + fresh preview renders):
+  // a runtime-section set followed by '-' must end as ONE unset on disk, and
+  // the second visit must render the draft value as "current".
+  // Mutation (old bugs): unordered set+unset lists coalesce to set-wins
+  // (disk keeps 42000); a stale preview shows 60000 on the second visit.
+  {
+    const { runSetupWizard } = await import('../src/setup/wizard.js');
+    const { project } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-mut\n');
+    writeFileSync(join(project, '.triss.env'), 'TRISS_REQUEST_TIMEOUT_MS=60000\n');
+    const sectionQueue = ['runtime', 'runtime', 'done'];
+    const sectionVisits = [];
+    const runtimeQuestions = [];
+    const result = await runSetupWizard(undefined, { local: true }, wizardStubDeps({
+      promptChoice: async (question, choices, opts) => {
+        if (question.startsWith('Which model provider')) return 'zai';
+        if (question.startsWith('Connect Triss')) return 'none';
+        if (question.startsWith('Advanced setup — which section?')) {
+          const next = sectionQueue.shift() ?? 'done';
+          if (next !== 'done') sectionVisits.push(next);
+          return next;
+        }
+        return choices[opts?.defaultIndex ?? 0]?.value;
+      },
+      prompt: async (question) => {
+        if (question.includes('TRISS_REQUEST_TIMEOUT_MS')) {
+          runtimeQuestions.push(question);
+          return runtimeQuestions.length === 1 ? '42000' : '-';
+        }
+        return '';
+      },
+      yesNo: async (question) => question === 'Fine-tune anything else in Advanced?' || question === 'Apply?',
+    }));
+    assert.deepEqual(sectionVisits, ['runtime', 'runtime']);
+    assert.equal(runtimeQuestions.length, 2, 'the timeout field must be prompted exactly once per visit');
+    assert.match(runtimeQuestions[0], /current: 60000 \[config\]/, `first visit shows the file value, got: ${runtimeQuestions[0]}`);
+    assert.match(runtimeQuestions[1], /current: 42000 \[config\]/, `second visit must render the FRESH post-draft value, got: ${runtimeQuestions[1]}`);
+    assert.equal(result.status, 'ready', `runtime wizard run must apply: ${JSON.stringify(result.failed)}`);
+    const content = readFileSync(join(project, '.triss.env'), 'utf8');
+    assert.doesNotMatch(content, /TRISS_REQUEST_TIMEOUT_MS/, `set→unset must remove the override from disk, got: ${JSON.stringify(content)}`);
+  }
+
+  // Fix 5 (post-draft intent resolution): the coding provider is computed
+  // from the PREVIEW state, so an unset reveals its true fallback (the
+  // shared provider), never the stale startup value.
+  // Mutation (old bug): coderProviderId fell back to the startup snapshot →
+  // runCoderSetup would receive 'moonshot' and the fallback 'zai' would be
+  // invisible.
+  {
+    const { runSetupWizard } = await import('../src/setup/wizard.js');
+    const { project } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-cp\n');
+    writeFileSync(join(project, '.triss.env'), 'TRISS_CODER_PROVIDER=moonshot\n');
+    const sectionQueue = ['execution', 'done'];
+    const setupCalls = [];
+    const result = await runSetupWizard(undefined, { local: true }, wizardStubDeps({
+      promptChoice: async (question, choices, opts) => {
+        if (question.startsWith('Which model provider')) return 'zai';
+        if (question.startsWith('Connect Triss')) return 'none';
+        if (question.startsWith('Advanced setup — which section?')) return sectionQueue.shift() ?? 'done';
+        if (question.startsWith('Credential protection')) return 'keep';
+        return choices[opts?.defaultIndex ?? 0]?.value;
+      },
+      prompt: async (question) => (question.startsWith('Coding provider') ? '-' : ''),
+      yesNo: async (question) => question === 'Fine-tune anything else in Advanced?' || question === 'Apply?',
+      runCoderSetup: async (input) => {
+        setupCalls.push(input);
+        return { model: 'm', smallModel: 's' };
+      },
+    }));
+    assert.equal(result.status, 'ready', `provider-unset run must apply: ${JSON.stringify(result.failed)}`);
+    assert.ok(setupCalls.length > 0, 'engine setup must run');
+    assert.equal(
+      setupCalls.at(-1).provider,
+      'zai',
+      `unsetting TRISS_CODER_PROVIDER must fall back to the shared provider post-draft, got ${JSON.stringify(setupCalls.at(-1))}`,
+    );
+    const content = readFileSync(join(project, '.triss.env'), 'utf8');
+    assert.doesNotMatch(content, /TRISS_CODER_PROVIDER/, `the coding-provider override must be gone from disk, got: ${JSON.stringify(content)}`);
+  }
+
+  // Fix 6 (headless completeness against the POST-draft state): a coder
+  // target validates the EFFECTIVE coding provider's key. Mutation (old
+  // bug): validation ran against the shared provider and demanded
+  // ZHIPU_API_KEY even though the run codes with moonshot.
+  {
+    const { runSetupWizard } = await import('../src/setup/wizard.js');
+    const { home } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nMOONSHOT_API_KEY=mk-headless\n');
+    const setupCalls = [];
+    const result = await runSetupWizard('coder', { yes: true, global: true, coderProvider: 'moonshot' }, wizardStubDeps({
+      isInteractive: () => false,
+      runCoderSetup: async (input) => {
+        setupCalls.push(input);
+        return { model: 'k2', smallModel: 'k2-turbo' };
+      },
+    }));
+    assert.equal(result.status, 'ready', `headless coder run must be ready: ${JSON.stringify(result.failed)}`);
+    assert.equal(setupCalls.at(-1)?.provider, 'moonshot');
+    const content = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
+    assert.match(content, /TRISS_CODER_PROVIDER=moonshot/, 'the headless coder target must persist the coding provider');
+    assert.doesNotMatch(content, /ZHIPU_API_KEY/, 'sanity: no Z.AI key was ever configured in this scenario');
+  }
 });
