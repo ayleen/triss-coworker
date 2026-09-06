@@ -226,7 +226,7 @@ async function apiRoute(request, env, url, method) {
   });
 }
 
-async function markdownRoute(request, env, url, method) {
+async function markdownRoute(request, env, url) {
   const { pathname } = url;
   // The conditional validators ride with the markdown asset request; an HTML
   // ETag never stands in for the markdown representation's ETag.
@@ -283,6 +283,6 @@ export async function route(request, env) {
   }
 
   const representation = negotiateRepresentation(request.headers.get("accept"));
-  if (representation === "markdown") return markdownRoute(request, env, url, method);
+  if (representation === "markdown") return markdownRoute(request, env, url);
   return htmlRoute(request, env, url, representation);
 }

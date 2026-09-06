@@ -147,9 +147,9 @@ function renderInlineNodes(nodes, ctx) {
     if (isElement(node)) {
       if (dropped(node)) continue;
       out += hasFlag(node, "data-agent-flags")
-        ? renderAgentFlags(node, ctx)
+        ? renderAgentFlags(node)
         : hasFlag(node, "data-agent-meta")
-          ? renderAgentMeta(node, ctx)
+          ? renderAgentMeta(node)
           : renderInline(node, ctx.baseUrl, ctx);
     } else {
       out += collapse(node.value || "");
@@ -158,14 +158,14 @@ function renderInlineNodes(nodes, ctx) {
   return out;
 }
 
-function renderAgentFlags(node, ctx) {
+function renderAgentFlags(node) {
   return elementChildren(node)
     .map((child) => inlineCode(collapse(textContent(child)).trim()))
     .filter(Boolean)
     .join(" ");
 }
 
-function renderAgentMeta(node, ctx) {
+function renderAgentMeta(node) {
   return elementChildren(node)
     .map((child) => collapse(textContent(child)).trim())
     .filter(Boolean)
@@ -310,8 +310,8 @@ function renderBlock(node, baseUrl, ctx) {
       return renderDetails(node, baseUrl, ctx);
     default:
       if (classNames(node).includes("cost-table")) return renderAgentTable(node, baseUrl, ctx);
-      if (hasFlag(node, "data-agent-flags")) return renderAgentFlags(node, ctx);
-      if (hasFlag(node, "data-agent-meta")) return renderAgentMeta(node, ctx);
+      if (hasFlag(node, "data-agent-flags")) return renderAgentFlags(node);
+      if (hasFlag(node, "data-agent-meta")) return renderAgentMeta(node);
       return renderContainer(node, baseUrl, ctx);
   }
 }
