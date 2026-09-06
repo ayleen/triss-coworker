@@ -135,17 +135,24 @@ function assetsMock() {
       async fetch(req) {
         const { pathname } = new URL(req.url);
         const etag = req.headers.get("if-none-match");
-        if (pathname === "/" || pathname === "/index.html") {
-          if (etag === '"html"') return new Response(null, { status: 304, headers: { etag: '"html"' } });
-          return new Response("<html><body><h1>Home</h1></body></html>", {
-            headers: { "content-type": "text/html; charset=utf-8", etag: '"html"' },
-          });
+        // Models the observed platform behavior: env.ASSETS.fetch resolves
+        // the asset directly and does NOT replay the outer html_handling
+        // redirect for /docs — only some (config-driven) routes redirect.
+        if (pathname === "/archive") {
+          return new Response(null, { status: 307, headers: { location: "/docs/" } });
         }
-        if (pathname === "/index.md") {
-          if (etag === '"md"') return new Response(null, { status: 304, headers: { etag: '"md"' } });
-          return new Response("# Home\n", {
-            headers: { "content-type": "text/markdown; charset=utf-8", etag: '"md"' },
-          });
+        const isHtml = pathname === "/" || pathname === "/docs" || pathname === "/docs/" || pathname === "/index.html";
+        const isMd = pathname === "/index.md" || pathname === "/docs/index.md";
+        if (isHtml || isMd) {
+          const tag = isHtml ? '"html"' : '"md"';
+          if (etag === tag || etag === "*") {
+            // Deliberately realistic: a 304 need not include Content-Type.
+            return new Response(null, { status: 304, headers: { etag: tag } });
+          }
+          return new Response(
+            isHtml ? "<html><body><h1>Home</h1></body></html>" : "# Home\n",
+            { headers: { "content-type": isHtml ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8", etag: tag } },
+          );
         }
         if (pathname === "/api/v1/meta.json") {
           return new Response('{"ok":true}', { headers: { "content-type": "application/json; charset=utf-8" } });
@@ -161,6 +168,9 @@ function assetsMock() {
 
 const get = (accept, pathname = "/", extra = {}) =>
   route(new Request(`https://triss.work${pathname}`, { headers: { ...(accept ? { accept } : {}), ...extra } }), assetsMock());
+
+const varyTokens = (response) =>
+  (response.headers.get("vary") || "").toLowerCase().split(",").map((token) => token.trim());
 
 test("HEAD returns the GET representation without a body", async () => {
   const htmlHead = await route(new Request("https://triss.work/", { method: "HEAD" }), assetsMock());
@@ -184,7 +194,7 @@ test("conditional requests revalidate against their own representation only", as
   const mdRevalidate = await get("text/markdown", "/", { "if-none-match": '"md"' });
   assert.equal(mdRevalidate.status, 304, "matching markdown validator revalidates");
   assert.equal((await mdRevalidate.arrayBuffer()).byteLength, 0, "304 must not carry a body");
-  assert.ok((mdRevalidate.headers.get("vary") || "").includes("Accept"), "304 must still declare Vary");
+  assert.ok(varyTokens(mdRevalidate).includes("accept"), "304 must still declare Vary (Accept token)");
 
   const htmlRevalidate = await get("text/html", "/", { "if-none-match": '"md"' });
   assert.equal(htmlRevalidate.status, 200, "an HTML request must not be satisfied by a markdown ETag");
@@ -192,6 +202,90 @@ test("conditional requests revalidate against their own representation only", as
   const mdWithHtmlEtag = await get("text/markdown", "/", { "if-none-match": '"html"' });
   assert.equal(mdWithHtmlEtag.status, 200, "an HTML ETag must never stand in for markdown");
   assert.match(await mdWithHtmlEtag.text(), /# Home/);
+});
+
+test("F1: a matching validator cannot override the 406 profile", async () => {
+  const response = await get("application/json", "/docs/", { "if-none-match": '"html"' });
+  assert.equal(response.status, 406, "the preconditional 406 decision wins over a matched HTML ETag");
+  assert.doesNotMatch(response.headers.get("etag") || "", /html/, "406 must not echo another representation's ETag");
+  assert.equal((await response.json()).error.code, "not_acceptable");
+  assert.ok(varyTokens(response).includes("accept"), "406 must declare the Accept token");
+});
+
+test("F1: If-None-Match: * with all representations excluded stays 406", async () => {
+  const response = await get("text/html;q=0,text/markdown;q=0", "/docs/", { "if-none-match": "*" });
+  assert.equal(response.status, 406);
+});
+
+test("F1: HEAD with an unacceptable representation stays a bodyless 406", async () => {
+  const response = await route(
+    new Request("https://triss.work/docs/", {
+      method: "HEAD",
+      headers: { accept: "application/json", "if-none-match": '"html"' },
+    }),
+    assetsMock(),
+  );
+  assert.equal(response.status, 406);
+  assert.equal((await response.arrayBuffer()).byteLength, 0);
+});
+
+test("F1: accepted representations keep their own revalidation on /docs/", async () => {
+  for (const [accept, tag] of [["text/html", '"html"'], ["text/markdown", '"md"']]) {
+    const response = await get(accept, "/docs/", { "if-none-match": tag });
+    assert.equal(response.status, 304, `${accept} revalidates its own representation`);
+    assert.equal((await response.arrayBuffer()).byteLength, 0, "304 must not carry a body");
+    const tokens = varyTokens(response);
+    assert.ok(tokens.includes("accept") || tokens.includes("*"), `${accept} 304 must vary by Accept`);
+    assert.ok(!tokens.includes("accept-encoding") || tokens.includes("accept"), "Accept-Encoding must not stand in for Accept");
+  }
+});
+
+test("F3: the canonical redirect applies to markdown agents too", async () => {
+  // The platform's outer redirect only fires for HTML-eligible requests, so
+  // the worker canonicalizes directory-style pages for markdown itself.
+  const mdRedirect = await get("text/markdown", "/docs");
+  assert.equal(mdRedirect.status, 301, "directory-style page canonicalizes to its trailing-slash URL");
+  assert.equal(mdRedirect.headers.get("location"), "/docs/");
+  assert.equal((await mdRedirect.arrayBuffer()).byteLength, 0, "a redirect must not carry the mirror as a body");
+
+  const canonical = await get("text/markdown", "/docs/");
+  assert.equal(canonical.status, 200, "canonical URL serves the mirror");
+  assert.match(canonical.headers.get("content-type"), /text\/markdown/);
+  assert.match(await canonical.text(), /# Home/);
+});
+
+test("F3: a redirect returned by the asset layer is preserved as-is", async () => {
+  const mdRedirect = await get("text/markdown", "/archive");
+  assert.equal(mdRedirect.status, 307, "the platform's real status and location are kept");
+  assert.equal(mdRedirect.headers.get("location"), "/docs/");
+
+  const htmlRedirect = await get("text/html", "/archive");
+  assert.equal(htmlRedirect.status, 307);
+  assert.equal(htmlRedirect.headers.get("location"), "/docs/");
+});
+
+test("F3: a client ETag cannot turn the canonical redirect into a 304", async () => {
+  const response = await get("text/markdown", "/docs", { "if-none-match": '"md"' });
+  assert.equal(response.status, 301, "canonical resolution precedes conditional evaluation");
+  assert.equal(response.headers.get("location"), "/docs/");
+
+  const archived = await get("text/markdown", "/archive", { "if-none-match": '"md"' });
+  assert.equal(archived.status, 307, "asset-layer redirects precede conditional evaluation too");
+});
+
+test("N1: qvalue grammar accepts the empty fraction forms", () => {
+  assert.equal(negotiateRepresentation("text/html;q=0.,text/markdown;q=1."), "markdown");
+  assert.equal(negotiateRepresentation("text/html;q=0.,text/markdown;q=0."), "not-acceptable");
+  assert.equal(negotiateRepresentation("text/markdown;q=1."), "markdown");
+  assert.equal(negotiateRepresentation("text/markdown;q=0.123,text/html;q=0.5"), "html");
+});
+
+test("N1: qvalue grammar still rejects malformed values", () => {
+  assert.equal(negotiateRepresentation("text/markdown;q=1.001"), "html");
+  assert.equal(negotiateRepresentation("text/markdown;q=1.0000"), "html");
+  assert.equal(negotiateRepresentation("text/markdown;q=-1"), "html");
+  assert.equal(negotiateRepresentation("text/markdown;q="), "html");
+  assert.equal(negotiateRepresentation("text/markdown;q=1garbage"), "html");
 });
 
 test("synthesized and proxied responses carry the site security policy", async () => {
@@ -226,4 +320,12 @@ test("non-document misses keep the static 404 even for markdown agents", async (
 test("api error bodies satisfy the published error shape", () => {
   const body = apiErrorBody("not_found", "Unknown API endpoint.", "Fetch /openapi.json");
   assert.deepEqual(body, { error: { code: "not_found", message: "Unknown API endpoint.", hint: "Fetch /openapi.json" } });
+});
+
+test("llms.txt does not promise an MCP registry on the CLI command page", () => {
+  const llms = fs.readFileSync(path.join(siteRoot, "public", "llms.txt"), "utf8");
+  assert.doesNotMatch(llms, /every CLI command and MCP tool/i, "the commands reference covers CLI commands, not MCP tools");
+  assert.doesNotMatch(llms, /full (?:CLI command and )?MCP tool catalogue/i);
+  assert.match(llms, /docs\/mcp\.md/, "MCP tooling must be pointed at its own documentation");
+  assert.match(llms, /top-level CLI commands/i, "the commands link must describe its actual scope");
 });

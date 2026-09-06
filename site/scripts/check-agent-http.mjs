@@ -11,7 +11,9 @@
 // Worker-invocation routing (run_worker_first) is verified separately and
 // deterministically by site/test/worker-contract.test.js against the real
 // dist inventory; this suite proves the served behavior of every request
-// class over actual network I/O. Read-only: GET/HEAD only, no credentials.
+// class over actual network I/O. Mostly GET/HEAD, plus deliberate POST
+// probes of the documented 405 API contract — so run it locally or against
+// an approved preview, never as a production smoke. No credentials.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -57,8 +59,11 @@ const assertOk = (condition, label) => {
   if (!condition) throw new Error(label);
 };
 const assertVary = (response, label) => {
-  const vary = (response.headers.get("vary") || "").toLowerCase();
-  assertOk(vary.includes("accept") || vary === "*", `${label}: response must vary by Accept`);
+  const tokens = (response.headers.get("vary") || "").toLowerCase().split(",").map((token) => token.trim());
+  assertOk(
+    tokens.includes("accept") || tokens.includes("*"),
+    `${label}: response must declare the Accept token in Vary (got: ${response.headers.get("vary")})`,
+  );
 };
 const assertSecurity = (response, label) => {
   assertOk((response.headers.get("x-content-type-options") || "") === "nosniff", `${label}: nosniff missing`);
@@ -169,6 +174,21 @@ check("canonical trailing-slash redirect works without loops", async () => {
   await followed.arrayBuffer();
 });
 
+check("canonical redirect applies to markdown agents too (F3)", async () => {
+  const mdRedirect = await request("/docs", { accept: "text/markdown", ...noRedirect });
+  assertOk(
+    [301, 302, 307, 308].includes(mdRedirect.status),
+    `markdown agent must see the canonical redirect, got ${mdRedirect.status}`,
+  );
+  const location = mdRedirect.headers.get("location") || "";
+  assertOk(location.endsWith("/docs/"), `markdown redirect location ${location}`);
+  assertEqual((await mdRedirect.arrayBuffer()).byteLength, 0, "redirect must not carry the mirror as a body");
+  const canonical = await request("/docs/", { accept: "text/markdown" });
+  assertEqual(canonical.status, 200, "canonical markdown target");
+  assertEqual(shortType(canonical), "text/markdown", "canonical markdown type");
+  await canonical.arrayBuffer();
+});
+
 check("missing document is a real HTML 404 for browsers", async () => {
   const response = await request("/review-probe-no-such-page-118/");
   assertEqual(response.status, 404, "status");
@@ -256,6 +276,24 @@ check("conditional requests revalidate per representation without false sharing"
   assertEqual(crossVariant.status, 200, "an HTML ETag must never satisfy a markdown request");
   assertEqual(shortType(crossVariant), "text/markdown", "cross-variant content-type");
   await crossVariant.arrayBuffer();
+});
+
+check("a matched validator cannot override the 406 profile (F1)", async () => {
+  const docsEtag = await etagFor("/docs/", "text/html,application/xhtml+xml,*/*;q=0.8");
+  assertOk(docsEtag, "the docs page must publish a validator");
+
+  const refused = await request("/docs/", { accept: "application/json", headers: { "if-none-match": docsEtag } });
+  assertEqual(refused.status, 406, "the 406 decision must win over a matched HTML ETag");
+  assertVary(refused, "406 with validator");
+  await refused.arrayBuffer();
+
+  const refusedHead = await request("/docs/", { method: "HEAD", accept: "application/json", headers: { "if-none-match": docsEtag } });
+  assertEqual(refusedHead.status, 406, "HEAD 406");
+  assertEqual((await refusedHead.arrayBuffer()).byteLength, 0, "HEAD 406 body");
+
+  const starExclusion = await request("/docs/", { accept: "text/html;q=0,text/markdown;q=0", headers: { "if-none-match": "*" } });
+  assertEqual(starExclusion.status, 406, "If-None-Match: * must not bypass the exclusion");
+  await starExclusion.arrayBuffer();
 });
 
 check("error and redirect responses keep the security policy", async () => {

@@ -18,8 +18,9 @@ import { withSecurityHeaders } from "./response-headers.js";
 const MARKDOWN_TYPE = "text/markdown; charset=utf-8";
 const JSON_TYPE = "application/json; charset=utf-8";
 
-// RFC 9110 qvalue grammar: 0[.0-3 digits] or 1[.000].
-const Q_VALUE = /^(?:0(?:\.\d{1,3})?|1(?:\.0{1,3})?)$/;
+// RFC 9110 qvalue grammar: 0[.0-3 digits] or 1[.0-3 zeros] — the empty
+// fraction forms ("0.", "1.") are valid and must not be discarded.
+const Q_VALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 
 function parseAccept(header) {
   if (!header) return [];
@@ -226,15 +227,58 @@ async function apiRoute(request, env, url, method) {
   });
 }
 
-async function markdownRoute(request, env, url) {
+const REDIRECT_STATUSES = new Set([301, 302, 307, 308]);
+
+// Resolves the route itself without client validators: per RFC 9110
+// §13.2.1 preconditions apply only after the server has chosen its
+// response, so a matching ETag must never turn a canonical redirect into
+// a 304 or trade the strict 406 profile for the HTML variant's validator.
+// The probe must use GET: the platform's html_handling redirects are only
+// produced for GET, and a HEAD probe would miss the canonical redirect.
+// It stays unconditional — no If-None-Match/If-Modified-Since, no Range —
+// and only reads status, type, and redirect location.
+async function resolveRoute(env, url) {
+  return env.ASSETS.fetch(new Request(new URL(url.pathname + url.search, url.origin), { method: "GET" }));
+}
+
+function redirectResponse(probe) {
+  const location = probe.headers.get("location") || "/";
+  return new Response(null, {
+    status: probe.status,
+    headers: withSecurityHeaders({ location, "cache-control": "public, max-age=0, must-revalidate" }),
+  });
+}
+
+async function markdownRepresentation(request, env, url) {
   const { pathname } = url;
   // The conditional validators ride with the markdown asset request; an HTML
   // ETag never stands in for the markdown representation's ETag.
   const conditional = conditionalHeaders(request);
-  for (const candidate of markdownCandidates(pathname)) {
-    const mirror = await env.ASSETS.fetch(new Request(new URL(candidate, url.origin), { method: "GET", headers: conditional }));
+  const candidates = markdownCandidates(pathname);
+  // A page whose mirror lives at <route>/index.md is directory-style: its
+  // canonical URL carries the trailing slash. The platform's html_handling
+  // only redirects HTML-eligible requests before the worker runs, so without
+  // this rule markdown agents would receive the mirror on the non-canonical
+  // URL. Canonical resolution also precedes conditional validation.
+  const canonical = pathname === "/" || pathname.endsWith("/");
+  for (let index = 0; index < candidates.length; index += 1) {
+    const mirror = await env.ASSETS.fetch(
+      new Request(new URL(candidates[index], url.origin), { method: "GET", headers: conditional }),
+    );
+    if (mirror.status !== 200 && mirror.status !== 304) continue;
+    if (index === 0 && !canonical) {
+      const search = url.searchParams.toString();
+      return new Response(null, {
+        status: 301,
+        headers: withSecurityHeaders({
+          location: `${pathname}/${search ? `?${search}` : ""}`,
+          "cache-control": "public, max-age=0, must-revalidate",
+          vary: "Accept",
+        }),
+      });
+    }
     if (mirror.status === 304) return revalidationResponse(mirror);
-    if (mirror.status === 200 && mirror.headers.get("content-type")?.toLowerCase().includes("text/markdown")) {
+    if (mirror.headers.get("content-type")?.toLowerCase().includes("text/markdown")) {
       return markdownResponse(mirror, request);
     }
   }
@@ -249,14 +293,17 @@ async function markdownRoute(request, env, url) {
   return passThrough(page, request);
 }
 
-async function htmlRoute(request, env, url, representation) {
-  const { pathname } = url;
+async function htmlRepresentation(request, env, url, probe, representation) {
+  // The refusal decision uses the unconditional probe's status and type, so
+  // a validator-matched 304 (which may carry no Content-Type) can never
+  // preempt the 406, and the 406 itself never echoes another
+  // representation's validators.
+  if (representation === "not-acceptable" && isDocumentPath(url.pathname)) {
+    const isHtml = probe.headers.get("content-type")?.toLowerCase().includes("text/html") ?? false;
+    if (probe.status === 404 || isHtml) return notAcceptableResponse(request);
+  }
   const page = await env.ASSETS.fetch(request);
   if (page.status === 304) return revalidationResponse(page);
-  if (representation === "not-acceptable" && isDocumentPath(pathname)) {
-    const isHtml = page.headers.get("content-type")?.toLowerCase().includes("text/html") ?? false;
-    if (page.status === 404 || isHtml) return notAcceptableResponse(request);
-  }
   return passThrough(page, request);
 }
 
@@ -283,6 +330,16 @@ export async function route(request, env) {
   }
 
   const representation = negotiateRepresentation(request.headers.get("accept"));
-  if (representation === "markdown") return markdownRoute(request, env, url);
-  return htmlRoute(request, env, url, representation);
+
+  // Canonical redirects come first and identically for every representation:
+  // the platform's html_handling redirect for /docs must not be bypassed by
+  // an existing /docs/index.md mirror, and its real status/Location are kept
+  // as-is rather than hardcoded.
+  const probe = await resolveRoute(env, url);
+  if (REDIRECT_STATUSES.has(probe.status)) {
+    return redirectResponse(probe);
+  }
+
+  if (representation === "markdown") return markdownRepresentation(request, env, url);
+  return htmlRepresentation(request, env, url, probe, representation);
 }

@@ -36,8 +36,8 @@ test("agents asking for markdown are served the markdown variant with Vary", asy
   const response = await route(request, { ASSETS: { fetch: (req) => (new URL(req.url).pathname.endsWith(".md") ? md(req) : html(req)) } });
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /text\/markdown/);
-  const vary = response.headers.get("vary") || "";
-  assert.ok(vary.includes("Accept"), "markdown variant must declare Vary: Accept");
+  const varyTokens = (response.headers.get("vary") || "").toLowerCase().split(",").map((t) => t.trim());
+  assert.ok(varyTokens.includes("accept"), "markdown variant must declare Vary: Accept");
 });
 
 test("browser requests keep the HTML variant untouched", async () => {
@@ -54,7 +54,8 @@ test("browser requests keep the HTML variant untouched", async () => {
   });
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /text\/html/);
-  assert.ok((response.headers.get("vary") || "").includes("Accept"), "HTML variant must also declare Vary: Accept");
+  const varyTokens = (response.headers.get("vary") || "").toLowerCase().split(",").map((t) => t.trim());
+  assert.ok(varyTokens.includes("accept"), "HTML variant must also declare Vary: Accept");
 });
 
 test("404 for markdown agents carries recovery links and keeps the 404 status", async () => {
