@@ -2,7 +2,17 @@
 
 > Managed delegation for AI development: an open-source CLI and MCP server (npm package `triss-coworker`, binary `triss`) that delegates codebase research, code review, and implementation tasks from coding agents (Claude Code, Codex) to the model providers and coding engines the user configures. Local-first, no telemetry, MIT-licensed. Canonical site: https://triss.work. The short name for "Triss Coworker" is "Triss".
 
-Install: `npm install -g triss-coworker` (requires Node.js >= 22.12). MCP tools are named `triss_ask`, `triss_review`, `triss_fetch`, `triss_chat`, `triss_write`, `triss_commit_msg`, `triss_status`. Call `triss agent-help` locally for the full delegation cookbook.
+Triss runs locally. Delegating work to it means installing the CLI or connecting its MCP server — everything under "Machine-readable resources" below is documentation about the product, not an execution API.
+
+## Quick start
+
+1. Check prerequisites and install: Node.js >= 22.12, then `npm install -g triss-coworker` — see [Getting started](https://triss.work/docs/getting-started/).
+2. Configure a provider credential locally (`triss config wizard --standard`); API keys stay on your machine — never paste them into a chat, issue, or this site.
+3. Connect the existing MCP server to your host (`triss mcp install`) — per-host instructions in [Getting started](https://triss.work/docs/getting-started/) and [MCP setup](https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md).
+4. Verify readiness: `triss status` shows provider credentials and defaults; `triss mcp status` shows the registered MCP server.
+5. Delegate one bounded research task, e.g. `triss ask --paths README.md --question "What does this project do?"` — see the [research workflow](https://triss.work/workflows/research/).
+
+Install: `npm install -g triss-coworker` (requires Node.js >= 22.12). The MCP server exposes core tools such as `triss_ask`, `triss_review`, `triss_fetch`, `triss_chat`, `triss_write`, `triss_commit_msg`, and `triss_status` — which of them are available depends on your configuration, and `triss agent-help` prints the full delegation cookbook locally.
 
 ## When to use this
 
@@ -29,10 +39,12 @@ Install: `npm install -g triss-coworker` (requires Node.js >= 22.12). MCP tools 
 
 ## Machine-readable resources
 
+Documentation about Triss, published as data — not a tool-execution API:
+
 - [llms-full.txt](https://triss.work/llms-full.txt): the usage-critical docs as one Markdown file.
-- [OpenAPI spec](https://triss.work/openapi.json): the public read-only JSON API surface (OpenAPI 3.1).
+- [OpenAPI spec](https://triss.work/openapi.json): this site's read-only documentation metadata (OpenAPI 3.1).
 - [API: meta](https://triss.work/api/v1/meta): package identity, version, install command.
-- [API: commands](https://triss.work/api/v1/commands): the command catalogue as JSON.
+- [API: commands](https://triss.work/api/v1/commands): the site's top-level CLI command catalogue as JSON (MCP tools are documented separately in docs/mcp.md).
 - [API: docs](https://triss.work/api/v1/docs): index of pages with their Markdown mirrors.
 - [Sitemap](https://triss.work/sitemap-index.xml): all public pages.
 
