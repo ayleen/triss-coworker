@@ -1,0 +1,78 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+import Base from "../layouts/Base.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+const REPO = "https://github.com/ayleen/triss-coworker";
+---
+
+<Base title="About — Triss" description="What Triss is: an open-source CLI and MCP server for managed delegation, how it is maintained, and the principles behind it.">
+  <Header />
+
+  <main>
+    <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 44px; border-bottom: 1px solid var(--color-border);">
+      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">about</div>
+      <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">Triss is a coworker for your coding agent, not another hosted platform.</h1>
+      <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">
+        Triss is an open-source command-line tool and MCP server (npm: <code style="font-family: var(--font-mono);">triss-coworker</code>)
+        that lets coding agents such as Claude Code and Codex delegate work — codebase research,
+        code review, and implementation tasks — to the model providers and coding engines you
+        choose. It runs locally, keeps its state on your machine, and reports every result with
+        the evidence and usage data you need to accept or reject it.
+      </p>
+    </section>
+
+    <section class="sec-trust" style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 0;">
+      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">principles</div>
+      <h2 style="margin: 0; font-size: 28px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">What the project optimizes for.</h2>
+      <div class="sec-trust__grid">
+        <div class="sec-trust__item">
+          <div class="sec-trust__q">You choose the stack</div>
+          <p class="sec-trust__a">Providers, models, and coding engines are configuration, not ideology. Supported routes are documented, and restrictive defaults are avoided.</p>
+        </div>
+        <div class="sec-trust__item">
+          <div class="sec-trust__q">Local-first</div>
+          <p class="sec-trust__a">Triss is a CLI, not a hosted service. There is no developer telemetry, no control plane, and no account. Your credentials stay configured by you, for you.</p>
+        </div>
+        <div class="sec-trust__item">
+          <div class="sec-trust__q">Boundaries, stated plainly</div>
+          <p class="sec-trust__a">A worktree separates delegated changes but is not a sandbox. A finished run is not acceptance. Triss says so on the tin — see the <a class="sec-trust__link" href="/security/">security and privacy page</a>.</p>
+        </div>
+        <div class="sec-trust__item">
+          <div class="sec-trust__q">Results you can inspect</div>
+          <p class="sec-trust__a">Findings, diffs, execution details, and token usage stay available for review. Delegation that cannot be audited is not delegation worth having.</p>
+        </div>
+      </div>
+    </section>
+
+    <section style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter);">
+      <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">project</div>
+      <h2 style="margin: 0; font-size: 28px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">How it is maintained.</h2>
+      <p style="margin: 18px 0 0; max-width: 46em; font-size: 15px; line-height: 1.75; color: var(--color-text-secondary);">
+        Development happens in the open at <a href={REPO} rel="noopener">github.com/ayleen/triss-coworker</a>.
+        The project is MIT-licensed, accepts contributions under the Developer Certificate of
+        Origin, publishes releases with signed tags and npm provenance, and tracks its
+        governance and roadmap in the repository (<a href={`${REPO}/blob/main/GOVERNANCE.md`} rel="noopener">GOVERNANCE.md</a>,
+        <a href={`${REPO}/blob/main/MAINTAINERS.md`} rel="noopener">MAINTAINERS.md</a>). Install is one command:
+        <code style="font-family: var(--font-mono);">npm install -g triss-coworker</code>. If you want to help,
+        start with <a href={`${REPO}/blob/main/CONTRIBUTING.md`} rel="noopener">CONTRIBUTING.md</a>.
+      </p>
+    </section>
+  </main>
+
+  <Footer />
+
+  <style>
+    .sec-trust__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 28px; }
+    .sec-trust__item { background: var(--color-bg-raised); padding: 20px 22px; min-width: 0; }
+    .sec-trust__q { font-family: var(--font-mono); font-size: 13px; color: var(--color-accent); }
+    .sec-trust__a { margin: 8px 0 0; font-size: 13.5px; line-height: 1.65; color: var(--color-text-secondary); }
+    .sec-trust__link { color: var(--color-accent); text-decoration: underline; text-underline-offset: 0.16em; }
+    @media (max-width: 760px) {
+      .sec-trust__grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</Base>

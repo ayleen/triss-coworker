@@ -98,11 +98,19 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
       </div>
     </div>
 
+    <!-- Visually hidden (but not `hidden`) copy of the calculator's static
+         defaults: the controls themselves are interactive widgets, so the
+         Markdown mirror and screen readers carry the labeled values instead
+         of an unexplained jump in numbers. -->
+    <div style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;">
+      <p>Calculator defaults: agent requests per day 40; share delegated to Triss 65%; primary model $3 / $15 per 1M; delegated model class standard (off-peak pricing); cache hit rate 77%.</p>
+    </div>
+
     <!-- Measured week -->
     <div style="margin-top: 48px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;">
       <h2 style="margin: 0; font-size: 18px; color: var(--color-text-heading);">One measured week — not a projection</h2>
       <p style="margin: 8px 0 0; color: var(--color-text-secondary); font-size: 13.5px;">209 calls on the Triss codebase itself. A lower-cost model handled bulk reads; a higher-capability model handled reviews. The $2.22 total is the recorded cost of that one usage period — not proof of general savings or quality for every task.</p>
-      <div class="cost-table cost-table--measured" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 18px; font-family: var(--font-mono); font-size: 12.5px;">
+      <div class="cost-table cost-table--measured" data-agent-cols="4" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 18px; font-family: var(--font-mono); font-size: 12.5px;">
         <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label);">metric</div>
         <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">advanced</div>
         <div style="background: var(--color-bg); padding: 10px; color: var(--color-text-label); text-align: right;">standard</div>
@@ -139,7 +147,7 @@ const _costAnnual = _costMoney(_costCalc.saved * 12);
       <div style="margin-top: 32px; border: 1px solid var(--color-border); background: var(--color-bg); padding: 20px;">
         <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-heading); font-family: var(--font-mono);">DeepSeek pricing — off-peak USD per 1M (peak 2×) — 2026-08</h3>
         <p style="margin: 6px 0 0; font-size: 12px; color: var(--color-text-label);">Source: DeepSeek's <a class="source-link" href="https://api-docs.deepseek.com/news/news260813">official pricing notice</a> and <a class="source-link" href="https://api-docs.deepseek.com/img/v4_260813_price_en.png">price card</a>; effective 2026-08-16 16:00 UTC. CLI source: <code style="font-family: var(--font-mono); color: var(--color-text-muted);">src/usage.js DEEPSEEK_PRICING</code> — override via <code style="font-family: var(--font-mono); color: var(--color-text-muted);">TRISS_PRICE_&lt;MODEL&gt;</code>. Peak: 01:00–04:00/06:00–10:00 UTC; rest off-peak.</p>
-        <div class="cost-table cost-table--pricing" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 14px; font-family: var(--font-mono); font-size: 12px;">
+        <div class="cost-table cost-table--pricing" data-agent-cols="3" style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 14px; font-family: var(--font-mono); font-size: 12px;">
           <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-text-label);">metric</div>
           <div style="background: var(--color-bg-raised); padding: 8px; color: var(--color-accent); text-align: right;">standard — $0.22 / $0.007 / $0.66</div>
           <div style="background: var(--color-bg-raised); padding: 8px; color: #e0a458; text-align: right;">advanced — $0.66 / $0.022 / $1.98</div>
