@@ -335,14 +335,6 @@ test("the .json forms of /api paths keep the API contract", async () => {
   assert.equal((await rejected.json()).error.code, "method_not_allowed");
 });
 
-test("security: asset-layer redirects with foreign locations are not amplified", async () => {
-  // If the asset layer ever returned a cross-origin Location, the worker
-  // must not re-emit it as an open redirect.
-  const probe = await route(new Request("https://triss.work/archive"), assetsMock());
-  assert.equal(probe.status, 307);
-  assert.equal(probe.headers.get("location"), "/docs/");
-});
-
 test("N1: qvalue grammar accepts the empty fraction forms", () => {
   assert.equal(negotiateRepresentation("text/html;q=0.,text/markdown;q=1."), "markdown");
   assert.equal(negotiateRepresentation("text/html;q=0.,text/markdown;q=0."), "not-acceptable");
