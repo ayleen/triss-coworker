@@ -32,7 +32,8 @@ Install: `npm install -g triss-coworker` (requires Node.js >= 22.12). The MCP se
 
 - [Getting started](https://triss.work/docs/getting-started/): install, wizard, first delegation.
 - [Documentation](https://triss.work/docs/): provider and model configuration, engines, integration setup.
-- [Command reference](https://triss.work/commands/): every CLI command and MCP tool with flags and examples.
+- [Command reference](https://triss.work/commands/): the site's top-level CLI commands with flags and examples (MCP tools are documented separately).
+- [MCP setup](https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md): connecting the Triss MCP server to Claude Code, Codex, or terminal use.
 - [Workflows](https://triss.work/workflows/): research, review, and implementation recipes for host agents.
 - [Coding engines](https://triss.work/coder/): engine selection, isolation model, credential proxy.
 - [Costs](https://triss.work/cost/): delegation pricing methodology and calculator.
