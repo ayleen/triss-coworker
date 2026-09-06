@@ -1,11 +1,48 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "triss",
+  "main": "./src/worker/index.js",
   "compatibility_date": "2026-08-20",
   "workers_dev": true,
   "preview_urls": true,
   "assets": {
     "directory": "./dist/",
+    "binding": "ASSETS",
+    // Documents (HTML pages), /api/*, /sitemap.xml and unknown paths invoke
+    // the worker: it adds markdown content negotiation, markdown 404s, and
+    // JSON /api error handling on top of the static assets. Pure asset
+    // classes are negated and served straight from the asset store — they
+    // need no negotiation, and every bypassed request is a worker invocation
+    // saved. Only the standalone /openapi.json and the generated
+    // sitemap-*.xml files are bypassed by name: negating "*.json" wholesale
+    // would also lift /api/v1/*.json out from under the API contract
+    // (CORS, JSON 404s, 405 + Allow). site/test/worker-contract.test.js
+    // keeps these patterns in sync with the actual dist inventory.
+    "run_worker_first": [
+      "/*",
+      "!/_astro/*",
+      "!/fonts/*",
+      "!/*.css",
+      "!/*.js",
+      "!/*.mjs",
+      "!/*.map",
+      "!/*.png",
+      "!/*.jpg",
+      "!/*.jpeg",
+      "!/*.gif",
+      "!/*.svg",
+      "!/*.webp",
+      "!/*.ico",
+      "!/*.woff",
+      "!/*.woff2",
+      "!/*.ttf",
+      "!/*.otf",
+      "!/*.webmanifest",
+      "!/*.txt",
+      "!/*.md",
+      "!/openapi.json",
+      "!/sitemap-*.xml"
+    ],
     "not_found_handling": "404-page",
     "html_handling": "auto-trailing-slash"
   }
