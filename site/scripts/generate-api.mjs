@@ -3,9 +3,11 @@
 
 // Build step: publish the public read-only JSON API surface.
 // dist/openapi.json describes the API; dist/api/v1/*.json are the endpoints
-// themselves, generated from the same build-time data the site renders, so
-// the spec and the responses cannot drift from the published site. Runs
-// after "astro build" (and the markdown mirror step).
+// themselves, generated from the same build-time data the site renders. The
+// OpenAPI examples ARE the generated payloads, so spec and responses cannot
+// disagree. The endpoints are documentation metadata only — they do not
+// execute CLI commands or MCP tools. Runs after "astro build" (and the
+// markdown mirror step).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -70,7 +72,7 @@ function buildDocs(dist) {
   };
 }
 
-function openApiSpec(pkg, docs) {
+function openApiSpec(meta, commands, docs) {
   const errorResponse = (description) => ({
     description,
     content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
@@ -83,25 +85,25 @@ function openApiSpec(pkg, docs) {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Triss Public API",
-      version: pkg.version,
-      summary: "Read-only, build-derived metadata about the Triss CLI, its commands, and its documentation.",
+      title: "Triss documentation metadata API",
+      version: meta.version,
+      summary: "Read-only, build-derived documentation metadata about the Triss CLI and its published reference pages.",
       description:
-        "Static, read-only JSON endpoints published by the triss.work website. There is no authentication, no user data, and no state: every response is derived from the published release and site content. Unknown /api paths return a structured JSON error (see the Error schema); agents should start from /api/v1/meta or the llms.txt resource map.",
+        "Static, read-only JSON endpoints published by the triss.work website. There is no authentication, no user data, and no state: every response is derived from this documentation build. These endpoints describe the product — they are not an execution interface and cannot run Triss commands or MCP tools; use the installed `triss` CLI or MCP server for that. Unknown /api paths return a structured JSON error (see the Error schema); agents should start from /api/v1/meta or the llms.txt resource map.",
       license: { name: "MIT", url: `${REPO}/blob/main/LICENSE` },
     },
     servers: [{ url: SITE_URL }],
-    tags: [{ name: "public", description: "Read-only public metadata" }],
+    tags: [{ name: "public", description: "Read-only public documentation metadata" }],
     paths: {
       "/api/v1/meta": {
         get: {
           operationId: "getMeta",
           tags: ["public"],
-          summary: "Package identity, current version, and resource map.",
+          summary: "Package identity, documentation build version, and resource map.",
           description:
-            "Returns the npm package name, the published version, the install command, and pointers to the machine-readable resources (llms.txt, OpenAPI spec, docs index). Use this first to discover everything else.",
+            "Returns the npm package name, the version of the checkout this documentation build was generated from (not a guarantee of the latest npm release), the install command, and pointers to the machine-readable resources (llms.txt, OpenAPI spec, docs index). Use this first to discover everything else.",
           responses: {
-            "200": ok("Meta", { name: "triss-coworker", displayName: "Triss Coworker", version: pkg.version, cli: { bin: "triss", npm: pkg.name, install: `npm install -g ${pkg.name}` } }),
+            "200": ok("Meta", meta),
             "405": errorResponse("Method is not GET or HEAD."),
           },
         },
@@ -110,11 +112,11 @@ function openApiSpec(pkg, docs) {
         get: {
           operationId: "getCommands",
           tags: ["public"],
-          summary: "The full CLI command and MCP tool catalogue.",
+          summary: "The site's top-level CLI command catalogue.",
           description:
-            "Every top-level command with its group, credential tier, summary, flags, and a canonical example, mirroring the /commands reference page and the CLI's own help output.",
+            "Every top-level CLI command shown on the /commands reference page, with its group, credential tier, summary, flags, and a canonical example. Generated from the same build-time source data as the HTML reference page. This is the site's command catalogue — not a registry of MCP tools; MCP tools are documented in the repository's docs/mcp.md.",
           responses: {
-            "200": ok("CommandsResponse", { count: COMMANDS.length, commands: [{ name: "ask", summary: COMMANDS[0].body }] }),
+            "200": ok("CommandsResponse", commands),
             "405": errorResponse("Method is not GET or HEAD."),
           },
         },
@@ -127,7 +129,7 @@ function openApiSpec(pkg, docs) {
           description:
             "Lists the usage-critical documentation pages with their canonical URL and the matching Markdown variant (served through Accept: text/markdown negotiation or as the .md path).",
           responses: {
-            "200": ok("DocsResponse", { pages: docs.pages.slice(0, 1) }),
+            "200": ok("DocsResponse", docs),
             "405": errorResponse("Method is not GET or HEAD."),
           },
         },
@@ -156,7 +158,7 @@ function openApiSpec(pkg, docs) {
           properties: {
             name: { type: "string", description: "npm package name." },
             displayName: { type: "string", description: "Full product brand name (short form: Triss)." },
-            version: { type: "string", description: "Published package version." },
+            version: { type: "string", description: "Version of the checkout this documentation build was generated from." },
             description: { type: "string" },
             license: { type: "string" },
             repository: { type: "string", format: "uri" },
@@ -229,13 +231,18 @@ function openApiSpec(pkg, docs) {
 
 export function generateApi(dist) {
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "..", "package.json"), "utf8"));
+  // One payload per resource: it is written to dist and embedded verbatim as
+  // the OpenAPI example, so the spec and the served responses agree by
+  // construction and site/test/openapi-contract.test.js can enforce it.
+  const meta = buildMeta(pkg);
+  const commands = buildCommands();
   const docs = buildDocs(dist);
   const apiDir = path.join(dist, "api", "v1");
   fs.mkdirSync(apiDir, { recursive: true });
   const write = (file, data) => fs.writeFileSync(path.join(dist, file), `${JSON.stringify(data, null, 2)}\n`);
-  write("openapi.json", openApiSpec(pkg, docs));
-  write("api/v1/meta.json", buildMeta(pkg));
-  write("api/v1/commands.json", buildCommands());
+  write("openapi.json", openApiSpec(meta, commands, docs));
+  write("api/v1/meta.json", meta);
+  write("api/v1/commands.json", commands);
   write("api/v1/docs.json", docs);
   return { version: pkg.version, commands: COMMANDS.length, docs: docs.pages.length };
 }
