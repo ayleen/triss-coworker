@@ -199,7 +199,7 @@ function notAcceptableResponse(request) {
   );
 }
 
-async function apiRoute(request, env, url, method) {
+async function apiRoute(request, env, url, method, pathname) {
   if (method !== "GET" && method !== "HEAD") {
     return jsonResponse(
       request,
@@ -212,7 +212,7 @@ async function apiRoute(request, env, url, method) {
   }
   // Endpoints are published as static files: /api/v1/meta is served from
   // dist/api/v1/meta.json. Unknown endpoints miss and become JSON errors.
-  const assetPath = url.pathname.endsWith(".json") ? url.pathname : `${url.pathname}.json`;
+  const assetPath = pathname.endsWith(".json") ? pathname : `${pathname}.json`;
   const assets = await env.ASSETS.fetch(
     new Request(new URL(assetPath, url.origin), { method: "GET", headers: conditionalHeaders(request) }),
   );
@@ -229,28 +229,57 @@ async function apiRoute(request, env, url, method) {
 
 const REDIRECT_STATUSES = new Set([301, 302, 307, 308]);
 
+// Collapse protocol-relative-looking paths ("//host/path"): url.pathname
+// keeps them verbatim, and both ASSETS sub-request URLs and a synthesized
+// redirect Location would otherwise resolve off-origin (open redirect).
+function normalizedPathname(url) {
+  return url.pathname.replace(/^\/{2,}/, "/");
+}
+
+// A redirect target must stay on this origin — reject anything that would
+// hand the Location header a different host.
+function sameOriginLocation(url, location) {
+  try {
+    return new URL(location, url.origin).origin === url.origin ? location : null;
+  } catch {
+    return null;
+  }
+}
+
+// Frees an unused response body so the connection is not held open.
+function discard(response) {
+  try {
+    response.body?.cancel()?.catch(() => {});
+  } catch {
+    /* body already consumed or absent */
+  }
+}
+
 // Resolves the route itself without client validators: per RFC 9110
 // §13.2.1 preconditions apply only after the server has chosen its
 // response, so a matching ETag must never turn a canonical redirect into
 // a 304 or trade the strict 406 profile for the HTML variant's validator.
-// The probe must use GET: the platform's html_handling redirects are only
-// produced for GET, and a HEAD probe would miss the canonical redirect.
-// It stays unconditional — no If-None-Match/If-Modified-Since, no Range —
-// and only reads status, type, and redirect location.
-async function resolveRoute(env, url) {
-  return env.ASSETS.fetch(new Request(new URL(url.pathname + url.search, url.origin), { method: "GET" }));
+// The probe keeps the request's Accept header — the asset layer only
+// produces its html_handling redirects for HTML-eligible requests — but
+// drops conditional validators and must use GET (a HEAD probe never sees
+// those redirects either). It reads status, type, and redirect location;
+// for validator-less HTML requests it doubles as the served response.
+async function resolveRoute(request, env, url, pathname) {
+  const headers = new Headers();
+  const accept = request.headers.get("accept");
+  if (accept) headers.set("accept", accept);
+  return env.ASSETS.fetch(new Request(new URL(pathname + url.search, url.origin), { method: "GET", headers }));
 }
 
-function redirectResponse(probe) {
-  const location = probe.headers.get("location") || "/";
+function redirectResponse(probe, url) {
+  const location = sameOriginLocation(url, probe.headers.get("location") || "/") ?? "/";
   return new Response(null, {
     status: probe.status,
     headers: withSecurityHeaders({ location, "cache-control": "public, max-age=0, must-revalidate" }),
   });
 }
 
-async function markdownRepresentation(request, env, url) {
-  const { pathname } = url;
+async function markdownRepresentation(request, env, url, pathname) {
   // The conditional validators ride with the markdown asset request; an HTML
   // ETag never stands in for the markdown representation's ETag.
   const conditional = conditionalHeaders(request);
@@ -267,11 +296,16 @@ async function markdownRepresentation(request, env, url) {
     );
     if (mirror.status !== 200 && mirror.status !== 304) continue;
     if (index === 0 && !canonical) {
+      discard(mirror);
       const search = url.searchParams.toString();
+      // Defensive: the target is built from the normalized path, but never
+      // emit a redirect whose Location escapes this origin.
+      const location = sameOriginLocation(url, `${pathname}/${search ? `?${search}` : ""}`);
+      if (!location) break;
       return new Response(null, {
         status: 301,
         headers: withSecurityHeaders({
-          location: `${pathname}/${search ? `?${search}` : ""}`,
+          location,
           "cache-control": "public, max-age=0, must-revalidate",
           vary: "Accept",
         }),
@@ -293,15 +327,22 @@ async function markdownRepresentation(request, env, url) {
   return passThrough(page, request);
 }
 
-async function htmlRepresentation(request, env, url, probe, representation) {
+async function htmlRepresentation(request, env, url, probe, representation, pathname) {
   // The refusal decision uses the unconditional probe's status and type, so
   // a validator-matched 304 (which may carry no Content-Type) can never
   // preempt the 406, and the 406 itself never echoes another
   // representation's validators.
-  if (representation === "not-acceptable" && isDocumentPath(url.pathname)) {
+  if (representation === "not-acceptable" && isDocumentPath(pathname)) {
     const isHtml = probe.headers.get("content-type")?.toLowerCase().includes("text/html") ?? false;
-    if (probe.status === 404 || isHtml) return notAcceptableResponse(request);
+    if (probe.status === 404 || isHtml) {
+      discard(probe);
+      return notAcceptableResponse(request);
+    }
   }
+  discard(probe);
+  // The final response must come from the original request: serving the
+  // probe's response instead would bypass the platform's html_handling
+  // trailing-slash redirect for directory-style URLs.
   const page = await env.ASSETS.fetch(request);
   if (page.status === 304) return revalidationResponse(page);
   return passThrough(page, request);
@@ -309,7 +350,7 @@ async function htmlRepresentation(request, env, url, probe, representation) {
 
 export async function route(request, env) {
   const url = new URL(request.url);
-  const { pathname } = url;
+  const pathname = normalizedPathname(url);
   const method = request.method.toUpperCase();
 
   // The generated sitemap is published as sitemap-index.xml; keep the
@@ -322,7 +363,7 @@ export async function route(request, env) {
   }
 
   if (pathname === "/api" || pathname.startsWith("/api/")) {
-    return apiRoute(request, env, url, method);
+    return apiRoute(request, env, url, method, pathname);
   }
 
   if (method !== "GET" && method !== "HEAD") {
@@ -335,11 +376,16 @@ export async function route(request, env) {
   // the platform's html_handling redirect for /docs must not be bypassed by
   // an existing /docs/index.md mirror, and its real status/Location are kept
   // as-is rather than hardcoded.
-  const probe = await resolveRoute(env, url);
+  const probe = await resolveRoute(request, env, url, pathname);
   if (REDIRECT_STATUSES.has(probe.status)) {
-    return redirectResponse(probe);
+    discard(probe);
+    return redirectResponse(probe, url);
   }
 
-  if (representation === "markdown") return markdownRepresentation(request, env, url);
-  return htmlRepresentation(request, env, url, probe, representation);
+  if (representation === "markdown") {
+    discard(probe);
+    return markdownRepresentation(request, env, url, pathname);
+  }
+  return htmlRepresentation(request, env, url, probe, representation, pathname);
 }
+

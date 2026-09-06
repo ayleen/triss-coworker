@@ -34,6 +34,10 @@ test("response-headers policy matches public/_headers", () => {
   assert.equal(fromFile.size, Object.keys(SECURITY_HEADERS).length, "one of the sources declares extra headers");
 });
 
+// Evaluates the run_worker_first patterns with a local glob matcher. This
+// proves only that the CONFIG distinguishes the intended classes; live
+// worker-vs-bypass behavior is proven over the network by
+// scripts/check-agent-http.mjs.
 function patternToRegExp(pattern) {
   const negated = pattern.startsWith("!");
   const source = pattern.slice(negated ? 1 : 0);
@@ -64,7 +68,7 @@ test("run_worker_first bypasses real asset classes and keeps documents on the wo
 
   const bypassableExtensions = new Set([
     ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-    ".ico", ".woff", ".woff2", ".ttf", ".otf", ".webmanifest", ".txt", ".md",
+    ".ico", ".woff", ".woff2", ".ttf", ".otf", ".webmanifest", ".txt", ".md", ".json",
   ]);
   let checked = 0;
   const walk = (dir) => {
@@ -80,6 +84,9 @@ test("run_worker_first bypasses real asset classes and keeps documents on the wo
         assert.equal(requestRouting(patterns, relative), true, `document ${relative} must invoke the worker`);
       } else if (bypassableExtensions.has(path.extname(entry.name))) {
         assert.equal(requestRouting(patterns, relative), false, `asset ${relative} must bypass the worker`);
+        checked += 1;
+      } else if (/^sitemap-.*\.xml$/.test(entry.name)) {
+        assert.equal(requestRouting(patterns, relative), false, `generated sitemap ${relative} must bypass the worker`);
         checked += 1;
       }
     }
@@ -271,6 +278,31 @@ test("F3: a client ETag cannot turn the canonical redirect into a 304", async ()
 
   const archived = await get("text/markdown", "/archive", { "if-none-match": '"md"' });
   assert.equal(archived.status, 307, "asset-layer redirects precede conditional evaluation too");
+});
+
+test("security: protocol-relative paths never redirect off-origin", async () => {
+  // "//evil.com" is a valid request path, but in a Location header it would
+  // be a protocol-relative URL. The canonicalizer collapses the double slash
+  // into a same-origin path, so both probe sub-requests and any redirect
+  // target stay on this origin — the attacker gets a plain 404, no Location.
+  for (const pathname of ["//evil.com", "//evil.com/docs"]) {
+    const response = await get("text/markdown", pathname);
+    assert.equal(response.status, 404, `${pathname} is a plain same-origin miss`);
+    assert.ok(!response.headers.has("location"), `${pathname} must not redirect`);
+  }
+
+  // Sanity: canonicalization itself is unaffected on honest paths.
+  const canonical = await get("text/markdown", "/docs");
+  assert.equal(canonical.status, 301);
+  assert.equal(canonical.headers.get("location"), "/docs/");
+});
+
+test("security: asset-layer redirects with foreign locations are not amplified", async () => {
+  // If the asset layer ever returned a cross-origin Location, the worker
+  // must not re-emit it as an open redirect.
+  const probe = await route(new Request("https://triss.work/archive"), assetsMock());
+  assert.equal(probe.status, 307);
+  assert.equal(probe.headers.get("location"), "/docs/");
 });
 
 test("N1: qvalue grammar accepts the empty fraction forms", () => {

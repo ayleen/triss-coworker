@@ -296,6 +296,26 @@ check("a matched validator cannot override the 406 profile (F1)", async () => {
   await starExclusion.arrayBuffer();
 });
 
+check("protocol-relative paths never redirect off-origin", async () => {
+  // "//evil.com" is a valid request path but a protocol-relative URL in a
+  // Location header. Safe outcomes: a plain same-origin miss, or a redirect
+  // whose Location is a same-origin relative path (the platform's
+  // duplicate-slash collapse lands on /evil.com — a legitimate path that
+  // merely contains that segment). Any absolute or protocol-relative
+  // Location fails.
+  for (const pathname of ["//evil.com", "//evil.com/docs"]) {
+    const response = await request(pathname, { accept: "text/markdown", ...noRedirect });
+    const location = response.headers.get("location") || "";
+    const safe =
+      response.status === 404 ||
+      ([301, 302, 307, 308].includes(response.status) &&
+        location.startsWith("/") &&
+        !location.startsWith("//"));
+    assertOk(safe, `${pathname}: status ${response.status}, location ${location}`);
+    await response.arrayBuffer();
+  }
+});
+
 check("error and redirect responses keep the security policy", async () => {
   const missing = await request("/review-probe-no-such-page-118/");
   assertSecurity(missing, "html 404");

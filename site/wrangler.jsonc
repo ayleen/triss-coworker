@@ -13,8 +13,10 @@
     // JSON /api error handling on top of the static assets. Pure asset
     // classes are negated and served straight from the asset store — they
     // need no negotiation, and every bypassed request is a worker invocation
-    // saved. site/test/worker-contract.test.js keeps these patterns in sync
-    // with the actual dist inventory.
+    // saved. Generated .json resources and the generated sitemap-*.xml files
+    // are bypassed too (their workers-side handling only covers /api/* and
+    // the /sitemap.xml alias). site/test/worker-contract.test.js keeps these
+    // patterns in sync with the actual dist inventory.
     "run_worker_first": [
       "/*",
       "!/_astro/*",
@@ -36,7 +38,9 @@
       "!/*.otf",
       "!/*.webmanifest",
       "!/*.txt",
-      "!/*.md"
+      "!/*.md",
+      "!/*.json",
+      "!/sitemap-*.xml"
     ],
     "not_found_handling": "404-page",
     "html_handling": "auto-trailing-slash"
