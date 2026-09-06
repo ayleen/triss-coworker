@@ -15,6 +15,10 @@ import {
   yesNo,
 } from '../secrets.js';
 import { homedir } from 'node:os';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
+const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 import { CANONICAL_PROVIDER_IDS } from '../provider-contract.js';
 import { getProviderDefinition } from '../provider-registry.js';
 import { loadIntegrations } from '../integrations/_registry.js';
@@ -436,6 +440,14 @@ function headlessAssemble({ draft, state, opts, targets }) {
     draft.set.push({ key: 'TRISS_CODER_ENGINE', value: opts.coderEngine });
     draft.engineId = opts.coderEngine;
   }
+  // Protection flags apply on the headless path too — they were previously
+  // handled only by the interactive targeted flow, so a headless coder setup
+  // silently dropped the declared protection choice.
+  if (opts.coderProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'true' });
+  if (opts.coderNoProtectCredentials) draft.set.push({ key: 'TRISS_CODER_PROTECT_CREDENTIALS', value: 'false' });
+  if (opts.coderProtectCredentials && opts.coderNoProtectCredentials) {
+    throw new Error('--coder-protect-credentials and --coder-no-protect-credentials cannot be combined.');
+  }
   draft.agent = opts.agent ? String(opts.agent).toLowerCase() : 'none';
   if (draft.agent !== 'none' && !['claude', 'codex', 'both'].includes(draft.agent)) {
     throw new Error(`--agent must be claude, codex, both, or none (got "${draft.agent}").`);
@@ -447,9 +459,24 @@ function headlessAssemble({ draft, state, opts, targets }) {
     : (opts.coderProvider && (targets?.kind === 'coder' || targets?.kind === 'none')
       ? String(opts.coderProvider).toLowerCase()
       : state.snapshot.defaultProvider.value);
-  const credential = targets?.kind === 'integration'
-    ? true // integration targets carry no provider credential requirement
+  let credential = targets?.kind === 'integration'
+    ? true // provider credentials are not the integration's requirement
     : state.snapshot.providers[providerId]?.credential?.value;
+  // Integration targets still gate on their manifest's REQUIRED fields: a
+  // headless --yes run must not report success over a missing key.
+  if (targets?.kind === 'integration') {
+    const missing = [];
+    for (const integration of state.fields
+      .filter((f) => f.group === `integration:${targets.names[0]}` && f.required && !f.pattern)) {
+      if (!process.env[integration.key] && integration.current?.value === undefined) missing.push(integration.key);
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `Headless setup incomplete: ${missing.join(', ')} not set for integration "${targets.names[0]}". ` +
+          'Set it first (triss config set / stdin / env) and rerun.',
+      );
+    }
+  }
   if (!credential) {
     throw new Error(
       `Headless setup incomplete: ${getProviderDefinition(providerId).credential} is not set for provider "${providerId}". ` +
@@ -489,7 +516,20 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
     home: homedir(),
   });
-  if (migration.state === 'required') {
+  // 'required' also fires when the planner would merely append default
+  // canonical lines (e.g. TRISS_DEFAULT_ENGINE) to an already-clean file.
+  // The gate exists for LEGACY data (plan §P10.6), so require an actual
+  // legacy key in one of the target files before demanding a migration.
+  let legacyRequired = migration.state === 'required';
+  if (legacyRequired) {
+    const { discoverMigrationTargets, envTextHasLegacyKeys } = await import('../migration/migrate.js');
+    const { readFileSync } = await import('node:fs');
+    legacyRequired = discoverMigrationTargets({
+      cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
+      home: homedir(),
+    }).some((target) => target.kind === 'env' && envTextHasLegacyKeys(readFileSync(target.path, 'utf8')));
+  }
+  if (legacyRequired) {
     if (!interactive) {
       throw new Error(
         'Legacy configuration detected — run `triss migrate` first; the wizard refuses to write schema 2 over unmigrated data.',
@@ -512,6 +552,16 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
 
   const scope = await chooseScope(opts, deps);
   const state = readSetupState({ scope, integrations });
+  // Baseline for the whole interactive window: prompts run against THIS
+  // content; buildSetupPlan refuses to plan if the file moved underneath.
+  const { getEnvFilePath } = await import('../secrets.js');
+  let stateRawHash;
+  try {
+    stateRawHash = sha256(readFileSync(getEnvFilePath(scope), 'utf8'));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    stateRawHash = sha256('');
+  }
   const draft = createDraft();
   draft.scope = scope;
 
@@ -557,6 +607,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     hostActions: agentHostActions(draft.agent, scope),
     requestedValidation: draft.validate === 'static',
     integrations,
+    stateRawHash,
   });
 
   if (!opts.yes) {
@@ -629,20 +680,25 @@ async function runStaticValidation({ deps }) {
 // setup, a skipped required credential, or failed static validation.
 function finalizeResult({ result, engineResult, draft, staticValidation }) {
   const warnings = [...result.warnings];
+  // Failure entries are renderer objects {kind, path, reason}; the added
+  // findings keep that shape so printing never shows "undefined: undefined".
   const failures = [...result.failed];
+  const asFailure = (kind, reason) => Object.freeze({ kind, path: null, reason });
   if (engineResult && engineResult.status === 'incomplete') {
     for (const outcome of engineResult.outcomes || []) {
-      if (outcome.status === 'failed') failures.push(`${outcome.kind} (${outcome.engine}): ${outcome.reason}`);
+      if (outcome.status === 'failed') {
+        failures.push(asFailure(`${outcome.kind} (${outcome.engine})`, outcome.reason));
+      }
       if (outcome.status === 'skipped' && outcome.kind === 'engine-install') {
-        failures.push(`engine-install (${outcome.engine}) skipped: ${outcome.reason}`);
+        failures.push(asFailure(`engine-install (${outcome.engine})`, `skipped: ${outcome.reason}`));
       }
     }
   }
   for (const incomplete of draft.incomplete || []) {
-    failures.push(`${incomplete.reason} — ${incomplete.remedy}`);
+    failures.push(asFailure('credential', `${incomplete.reason} — ${incomplete.remedy}`));
   }
   if (staticValidation) {
-    for (const problem of staticValidation.problems) failures.push(`validation: ${problem}`);
+    for (const problem of staticValidation.problems) failures.push(asFailure('validation', problem));
   }
   const status = result.status === 'ready' && failures.length === 0 ? 'ready' : 'incomplete';
   return Object.freeze({
@@ -695,14 +751,17 @@ async function confirmPlan(plan, { deps }) {
 }
 
 function describeAction(action) {
+  if (typeof action === 'string') return action;
   const detail = action.keys?.length ? ` (${action.keys.join(', ')})` : action.detail ? ` (${action.detail})` : '';
-  return `${action.kind}: ${action.path}${detail}`;
+  return `${action.kind}: ${action.path ?? ''}${detail}`;
 }
 
 function printResult({ result, engineResult, state, providerId, deps }) {
   out(deps, `\n${result.status === 'ready' ? '✓ Setup complete.' : '⚠ Setup incomplete.'}\n`);
   for (const action of result.applied) out(deps, `  ✓ ${describeAction(action)}\n`);
-  for (const action of result.failed) out(deps, `  ✗ ${action.kind}: ${action.path}${action.reason ? ` — ${action.reason}` : ''}\n`);
+  for (const action of result.failed) {
+    out(deps, `  ✗ ${describeAction(action)}${typeof action === 'object' && action.reason ? ` — ${action.reason}` : ''}\n`);
+  }
   for (const warning of result.warnings) out(deps, `  · ${warning}\n`);
   for (const component of result.perComponent || []) {
     if (component.configured === false) {

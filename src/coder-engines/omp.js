@@ -745,6 +745,10 @@ function foldAssistantMessage(state, message, { countUsage = true } = {}) {
   }
   if (!countUsage || !message.usage) return;
   const usage = message.usage;
+  // Any event carrying usage counts marks usage as genuinely seen: runs
+  // whose events never carry counters must report UNKNOWN usage downstream,
+  // not zeros presented as an estimate (review finding).
+  state.usageSeen = true;
   state.usage.input += Number(usage.input) || 0;
   state.usage.output += Number(usage.output) || 0;
   state.usage.cacheRead += Number(usage.cacheRead) || 0;
@@ -757,6 +761,7 @@ function foldAssistantMessage(state, message, { countUsage = true } = {}) {
 
 export function createOmpEventFolder() {
   return {
+    usageSeen: false,
     sawParseableEvent: false,
     sessionId: null,
     terminalAgentEnd: false,

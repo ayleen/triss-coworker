@@ -126,9 +126,12 @@ test('buildSetupPlan redacts every secret from the serialized plan', (t) => {
   // only in the non-enumerable payload applySetupPlan consumes.
   assert.equal(plan.preview.snapshot.providers.zai.credential.value, 'sk-p…4321');
   assert.ok(!Object.keys(plan).includes('rawEnvEdits'));
+  // The managed schema marker rides along whenever the marker is not yet
+  // persisted in a config layer (the registry default reads '2' either way).
   assert.deepEqual(plan.rawEnvEdits, [
     { key: 'ZHIPU_API_KEY', value: longSecret },
     { key: 'GITHUB_TOKEN', value: shortSecret },
+    { key: 'TRISS_CONFIG_SCHEMA', value: '2' },
   ]);
 });
 
@@ -248,13 +251,14 @@ test('applySetupPlan batches env edits into one patch and preserves unrelated li
   assert.equal(result.status, 'ready');
   assert.deepEqual(result.failed, []);
   const envEntry = result.applied.find((a) => a.kind === 'env');
-  assert.deepEqual(envEntry.keys, ['ZHIPU_API_KEY', 'TRISS_GLOB_MAX_FILES']);
+  assert.deepEqual(envEntry.keys, ['ZHIPU_API_KEY', 'TRISS_GLOB_MAX_FILES', 'TRISS_CONFIG_SCHEMA']);
 
   const raw = readFileSync(envPath, 'utf8');
   assert.ok(raw.includes('# my comment'));
   assert.ok(raw.includes('UNRELATED_KEEP=yes'));
   assert.ok(raw.includes('ZHIPU_API_KEY=sk-apply-secret-123456'));
   assert.ok(raw.includes('TRISS_GLOB_MAX_FILES=432'));
+  assert.ok(raw.includes('TRISS_CONFIG_SCHEMA=2'), 'fresh files must carry the persisted schema marker');
   assert.ok(!raw.includes('old-value'));
 });
 

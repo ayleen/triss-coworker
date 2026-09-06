@@ -181,7 +181,10 @@ test('resolveWizardTargets accepts canonical providers and integrations, rejects
   assert.throws(() => resolveWizardTargets('deepseek', { integrations: [] }), /Unknown target "deepseek"/);
 });
 
-test('migration gate: legacy state refuses before writes non-interactively, and runs migration when confirmed', withTempHome('wiz-migrate-', '', async () => {
+test('migration gate: legacy state refuses before writes non-interactively, and runs migration when confirmed', withTempHome('wiz-migrate-', 'TRISS_WORKER_API_KEY=legacy-worker-key\n', async () => {
+  // A REAL legacy key in the temp global env file makes the gate's legacy
+  // detection pass; the canonical-only additions of a fresh file do not
+  // require migration (review round 2).
   let migrationRun = 0;
   const required = async () => ({ state: 'required' });
   await assert.rejects(
@@ -239,5 +242,5 @@ test('a failed engine setup never reports a green complete', withTempHome('wiz-e
     deps,
   );
   assert.equal(result.status, 'incomplete');
-  assert.ok(result.failed.some((f) => f.includes('omp')), `failures must name the engine: ${JSON.stringify(result.failed)}`);
+  assert.ok(result.failed.some((f) => (typeof f === 'string' ? f : `${f.kind}: ${f.reason}`).includes('omp')), `failures must name the engine: ${JSON.stringify(result.failed)}`);
 }));

@@ -372,12 +372,11 @@ test('applyDraftToSnapshot validates keys and values', () => {
     () => applyDraftToSnapshot(base, { set: [{ key: 'TRISS_PRICE_', value: '1,2,3' }] }),
     /unknown setup field "TRISS_PRICE_"/,
   );
-  // Contradictory duplicate edits fail like planEnvPatch does.
-  assert.throws(
-    () => applyDraftToSnapshot(base, {
-      set: [{ key: 'TRISS_ZAI_MODEL', value: 'a' }],
-      unset: ['TRISS_ZAI_MODEL'],
-    }),
-    /duplicate draft edit/,
-  );
+  // Contradictory duplicate edits coalesce: the later set wins over an
+  // earlier unset (revisiting an Advanced section must not error).
+  const coalesced = applyDraftToSnapshot(base, {
+    set: [{ key: 'TRISS_ZAI_MODEL', value: 'a' }],
+    unset: ['TRISS_ZAI_MODEL'],
+  });
+  assert.ok(coalesced.changed.some((c) => c.key === 'TRISS_ZAI_MODEL' && c.to === 'a'));
 });

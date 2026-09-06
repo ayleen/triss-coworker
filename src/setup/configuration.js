@@ -675,7 +675,7 @@ function describeEditKind(kind) {
 // Runtime knobs whose readers disable on the literal '0' only (src/usage.js):
 // wizard validation mirrors the reader instead of accepting generic booleans
 // the runtime would ignore.
-const ZERO_OPT_OUT_KEYS = new Set(['TRISS_USAGE_LOG', 'TRISS_USAGE_LOG_CWD']);
+const ZERO_OPT_OUT_KEYS = new Set(['TRISS_USAGE_LOG', 'TRISS_USAGE_LOG_CWD', 'TRISS_RESTRICT_PATHS']);
 
 function validateDraftValue(descriptor, value) {
   const raw = value === undefined || value === null ? '' : String(value);
@@ -698,7 +698,7 @@ function validateDraftValue(descriptor, value) {
         // a value the reader silently ignores.
         if (normalized !== '0' && normalized !== '1' && normalized !== '') {
           throw new Error(
-            `"${descriptor.key}" is a literal opt-out knob: use "0" to disable (any other value keeps it on); ` +
+            `"${descriptor.key}" is a literal knob: use "0" or "1" exactly as the runtime reader checks; ` +
               `got ${JSON.stringify(raw)}`,
           );
         }
@@ -723,6 +723,15 @@ function validateDraftValue(descriptor, value) {
       if (!POSITIVE_INTEGER_RE.test(normalized)) {
         throw new Error(
           `"${descriptor.key}" must be ${describeEditKind(descriptor.kind)}; ` +
+            `got ${JSON.stringify(raw)}`,
+        );
+      }
+      // Mirror the real runtime bound: requestTimeoutMs caps at 2^31-1 ms
+      // (src/config.js) because the value feeds setTimeout; storing a larger
+      // integer would be silently clamped/ignored by the reader.
+      if (descriptor.key === 'TRISS_REQUEST_TIMEOUT_MS' && Number(normalized) > 2147483647) {
+        throw new Error(
+          `"${descriptor.key}" must be at most 2147483647 (setTimeout cap in src/config.js); ` +
             `got ${JSON.stringify(raw)}`,
         );
       }
@@ -808,6 +817,27 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [] }
   const unsetEdits = Array.isArray(draft.unset) ? draft.unset : [];
   const draftScope = draft.scope ?? 'draft';
 
+  // Coalesce multi-section drafts: revisiting an Advanced section (or a
+  // shared credential covering Zen and Go) may produce several edits for the
+  // same key. Last write wins — throwing a duplicate error here would punish
+  // a legitimate flow.
+  const coalesce = (edits, kind) => {
+    const byKey = new Map();
+    for (const edit of edits) {
+      if (!edit || typeof edit !== 'object' || typeof edit.key !== 'string') continue;
+      byKey.set(edit.key, { ...edit, __kind: kind });
+    }
+    return [...byKey.values()];
+  };
+  const setEditsCoalesced = coalesce(setEdits, 'set');
+  const unsetSet = new Set(unsetEdits);
+  // A later set overrides an earlier unset and vice versa within the draft:
+  // an unset listing means "no value", a set listing means the value wins.
+  const unsetEditsFinal = unsetSet.size || setEditsCoalesced.length
+    ? [...unsetSet].filter((key) => !setEditsCoalesced.some((e) => e.key === key))
+    : [];
+  const setEditsFinal = setEditsCoalesced;
+
   const changed = [];
   const conflicts = [];
   const atomEdits = new Map(); // path joined with '\0' -> draft atom
@@ -826,7 +856,7 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [] }
     }
   };
 
-  for (const edit of setEdits) {
+  for (const edit of setEditsFinal) {
     if (!edit || typeof edit !== 'object' || typeof edit.key !== 'string') {
       throw new TypeError('each draft set edit must be an object with a string key');
     }
@@ -845,7 +875,7 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [] }
     }
   }
 
-  for (const key of unsetEdits) {
+  for (const key of unsetEditsFinal) {
     if (typeof key !== 'string') throw new TypeError('draft unset entries must be strings');
     if (seenKeys.has(key)) throw new TypeError(`duplicate draft edit for "${key}"`);
     seenKeys.add(key);

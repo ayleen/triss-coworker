@@ -190,6 +190,7 @@ export function buildSetupPlan(
     hostActions = [],
     requestedValidation = false,
     integrations = [],
+    stateRawHash,
   } = {},
   deps = {},
 ) {
@@ -208,9 +209,13 @@ export function buildSetupPlan(
   const rawEnvEdits = applied.changed
     .filter((edit) => !(edit.to === undefined && edit.from === undefined))
     .map((edit) => freeze({ key: edit.key, value: edit.to === undefined ? null : edit.to }));
-  // TRISS_CONFIG_SCHEMA is managed (not user-editable through the draft);
-  // any real config write stamps it so downstream readers see schema 2.
-  if (rawEnvEdits.length > 0 && state.snapshot.schema?.value !== '2') {
+  // TRISS_CONFIG_SCHEMA is managed (not user-editable through the draft).
+  // Any real config write stamps it when the marker is not PERSISTED in a
+  // config layer: the registry default already reads as '2', so checking the
+  // effective value would leave fresh files without the marker and trip the
+  // migration gate on the very next wizard run.
+  const schemaPersisted = state.snapshot.schema?.source === 'config';
+  if (rawEnvEdits.length > 0 && !schemaPersisted) {
     rawEnvEdits.push(freeze({ key: 'TRISS_CONFIG_SCHEMA', value: '2' }));
   }
 
@@ -231,6 +236,17 @@ export function buildSetupPlan(
   const readFile = deps.readFile ?? defaultReadRaw;
   const envPath = getEnvFilePath(scope);
   const rawHash = sha256(readFile(envPath));
+  // Concurrent-edit guard across the WHOLE interactive window: the caller
+  // captured state (and answered prompts) against the content at
+  // `stateRawHash`; if the file changed between then and now, the draft is
+  // based on stale values and applying it would silently clobber a newer
+  // edit. Fail before planning rather than at apply time.
+  if (stateRawHash !== undefined && stateRawHash !== rawHash) {
+    throw new Error(
+      `concurrent modification: ${envPath} changed while the setup was running — ` +
+        'the collected answers may be stale; re-run the wizard to re-read the file',
+    );
+  }
 
   const limitations = [...(enginePlan?.limitations ?? [])];
   for (const key of applied.conflicts) {

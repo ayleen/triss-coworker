@@ -273,7 +273,7 @@ function bridgeResponsesToChatPayload(response) {
         content: bridgeResponsesText(response),
         ...(toolCalls ? { tool_calls: toolCalls } : {}),
       },
-      finish_reason: toolCalls ? 'tool_calls' : 'stop',
+      finish_reason: toolCalls ? 'tool_calls' : response?.status === 'incomplete' ? 'length' : 'stop',
     }],
     usage: {
       prompt_tokens: usage.input_tokens ?? null,
@@ -337,6 +337,8 @@ async function forwardBridged(req, res, parsedBody, context) {
     body: JSON.stringify(translated),
     signal: controller.signal,
   });
+  const bridgeResponseHeaders = { 'content-type': upstream.headers.get('content-type') || 'application/json' };
+  copyRetryHeaders(upstream.headers, bridgeResponseHeaders);
   // Bounded read: count bytes WHILE streaming the upstream body instead of
   // buffering it all first; overflow aborts the fetch and fails closed.
   const reader = upstream.body?.getReader();
@@ -396,10 +398,10 @@ async function forwardBridged(req, res, parsedBody, context) {
   }
   const engineAskedStream = parsedBody.stream === true;
   if (engineAskedStream) {
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.writeHead(200, { ...bridgeResponseHeaders, 'content-type': 'text/event-stream' });
     res.end(sseChunksForPayload(payload));
   } else {
-    res.writeHead(200, { 'content-type': 'application/json' });
+    res.writeHead(200, bridgeResponseHeaders);
     res.end(JSON.stringify(payload));
   }
 }
@@ -407,8 +409,13 @@ async function forwardBridged(req, res, parsedBody, context) {
 function isValidOrigin(endpoint) {
   try {
     const url = new URL(endpoint);
+    // http is allowed for LOOPBACK only — the same posture as the shared
+    // provider-security endpoint validation: local fixture/test endpoints
+    // must work, remote plaintext must not.
+    const httpLoopback = url.protocol === 'http:' &&
+      ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
     return (
-      url.protocol === 'https:' &&
+      (url.protocol === 'https:' || httpLoopback) &&
       (url.pathname === '/' || url.pathname === '') &&
       !url.search &&
       !url.hash
@@ -478,7 +485,7 @@ export async function startCoderCredentialProxy(opts = {}) {
   // validation exists to catch), so it fails closed at construction.
   if (typeof endpoint !== 'string' || !isValidOrigin(endpoint)) {
     throw new TypeError(
-      'startCoderCredentialProxy: endpoint must be an https ORIGIN (no path), e.g. https://api.z.ai',
+      'startCoderCredentialProxy: endpoint must be an https ORIGIN (no path; http allowed for loopback only), e.g. https://api.z.ai',
     );
   }
   if (typeof credential !== 'string' || credential.length === 0) {

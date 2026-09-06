@@ -53,6 +53,20 @@ const LEGACY_ENV_KEYS = new Set([
   ...LEGACY_MODEL_SELECTION_FIELDS,
 ]);
 
+/**
+ * Whether raw env-file text contains ACTUAL legacy keys. The canonical
+ * additions (schema marker, default provider/engine) are not legacy data —
+ * a fresh minimal file must not trip the "unmigrated" gate just because the
+ * planner would append a default-engine line.
+ */
+export function envTextHasLegacyKeys(text) {
+  const { vars } = parseEnvText(text);
+  for (const key of Object.keys(vars)) {
+    if (LEGACY_ENV_KEYS.has(key)) return true;
+  }
+  return false;
+}
+
 function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }

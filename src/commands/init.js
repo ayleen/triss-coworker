@@ -35,6 +35,10 @@ export async function runInit(opts) {
     const { runSetupWizard } = await import('../setup/wizard.js');
     await runSetupWizard(undefined, {
       global: opts.global,
+      // init's scope semantics carry over: without --global the intent is
+      // the project (local env + project rules), not an interactive global
+      // default.
+      local: opts.global ? undefined : true,
       agent: agentIntent,
       ...(opts.yes ? { yes: true } : {}),
     });

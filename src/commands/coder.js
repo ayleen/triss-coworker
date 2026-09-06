@@ -1274,10 +1274,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
     ? readOpenAICompatibleConfigSnapshot({ scope })
     : null;
   await setupKey(path, provider, provider === 'openai-compatible' ? { existing: scopedProfile?.apiKey } : {});
-  // Persist the CODING-ONLY defaults the user selected: the engine under
-  // TRISS_CODER_ENGINE and the provider under TRISS_CODER_PROVIDER. The
-  // shared default provider is deliberately NOT rewritten — a coding setup
-  // must not change what ask/review resolve (plan §4.2).
+  // Persist the CODING-ONLY defaults the user selected for EVERY engine
+  // (including the opencode2 delegation below, which returns before the
+  // generic setup): the engine under TRISS_CODER_ENGINE and the provider
+  // under TRISS_CODER_PROVIDER. The shared default provider is deliberately
+  // NOT rewritten — a coding setup must not change what ask/review resolve
+  // (plan §4.2).
   setVar(path, 'TRISS_CODER_ENGINE', engine);
   setVar(path, 'TRISS_CODER_PROVIDER', provider);
   process.env.TRISS_CODER_ENGINE = engine;
@@ -6944,13 +6946,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       // Missing OMP usage stays missing — never fabricated zeros. The fold
-      // reports null counts until a real message_end carries them.
+      // sets usageSeen only when an event actually carried counters.
       const ompUsageRaw = ompFinalized.usage || null;
-      const ompUsageKnown = ompUsageRaw !== null && (
-        Number.isFinite(ompUsageRaw.input) ||
-        Number.isFinite(ompUsageRaw.output) ||
-        Number.isFinite(ompUsageRaw.totalTokens)
-      );
+      const ompUsageKnown = Boolean(ompFinalized.usageSeen) && ompUsageRaw !== null;
       const ompUsage = ompUsageKnown ? ompUsageRaw : null;
       const ompTokens = ompUsage
         ? {
@@ -6975,20 +6973,27 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         ? 'unknown'
         : ompReportedTotalUsd !== null ? 'reported' : 'estimated';
       const ompBillingModel = modelUsed;
-      const ompCost = estimateCanonicalCost({
-        billing_model: ompBillingModel,
-        billing_mode: resolveBillingMode({ billing_model: ompBillingModel, engine: 'omp' }),
-        timestamp: ompUsageTimestamp,
-        tokens: ompTokens,
-        reported_total_usd: ompReportedTotalUsd,
-        reported_total_source: ompReportedTotalUsd !== null ? 'engine' : null,
-        usage_source: 'omp',
-      });
-      const ompPromptTokens = ompTokens.input_uncached ?? 0;
-      const ompCompletionTokens = ompTokens.output_visible ?? 0;
+      // Unknown usage: null canonical counters, null cost, status 'unknown'
+      // — zeros would be fabricated estimates (review finding).
+      const ompCost = ompTokens
+        ? estimateCanonicalCost({
+          billing_model: ompBillingModel,
+          billing_mode: resolveBillingMode({ billing_model: ompBillingModel, engine: 'omp' }),
+          timestamp: ompUsageTimestamp,
+          tokens: ompTokens,
+          reported_total_usd: ompReportedTotalUsd,
+          reported_total_source: ompReportedTotalUsd !== null ? 'engine' : null,
+          usage_source: 'omp',
+        })
+        : null;
+      const ompPromptTokens = ompTokens ? ompTokens.input_uncached ?? 0 : null;
+      const ompCompletionTokens = ompTokens ? ompTokens.output_visible ?? 0 : null;
       const ompCtx = currentCall();
       const logUsageFn = deps.logUsage || logUsage;
-      logUsageFn({
+      // A run with no usage counters records nothing: a zero-token record
+      // would be fabricated accounting, and logUsage itself treats absent
+      // tokens honestly.
+      if (ompTokens) logUsageFn({
         model: modelUsed,
         billing_model: ompBillingModel,
         billing_mode: resolveBillingMode({ billing_model: modelUsed, engine: 'omp' }),

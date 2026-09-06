@@ -401,6 +401,25 @@ function outcome(kind, engine, status, reason) {
  * { kind, engine, status: 'applied'|'skipped'|'failed', reason }. A throwing
  * seam is recorded as a failed outcome, never re-thrown mid-way.
  */
+// Interactive seams that refuse to run outside the collection phase.
+function noPromptSetupDeps(deps) {
+  if (deps.allowEngineSetupPrompts === true) return deps;
+  const refuse = (what) => async () => {
+    throw new Error(
+      `interactive ${what} is not available after the setup files were applied — ` +
+        'complete the configuration explicitly (triss config set / triss coder init)',
+    );
+  };
+  return {
+    ...deps,
+    confirmInstall: refuse('install confirmation'),
+    prompt: refuse('input prompt'),
+    promptChoice: refuse('choice prompt'),
+    yesNo: refuse('yes/no prompt'),
+    multiSelect: refuse('multi-select'),
+  };
+}
+
 export async function applyEngineSetup(plan, deps = {}) {
   if (!plan || typeof plan !== 'object' || !VALID_CODER_ENGINES.includes(plan.engine)) {
     throw new TypeError('applyEngineSetup requires a plan from planEngineSetup');
@@ -436,8 +455,14 @@ export async function applyEngineSetup(plan, deps = {}) {
   const providerAction = Array.isArray(plan.providerActions)
     ? plan.providerActions.find((action) => action.kind === 'provider-setup')
     : undefined;
+  // Engine setup runs AFTER the file transaction, so it must not open
+  // interactive prompts (install confirms, model pickers) — the wizard
+  // collected all intent before applying. Unless the caller explicitly
+  // allows prompts, inject seams that fail with a typed message so the
+  // outcome is recorded as incomplete with a remedy instead of hanging or
+  // silently defaulting (review finding: prompts-after-apply).
   const runSetup = deps.runCoderSetup
-    ?? ((input) => runCoderSetup(input, deps));
+    ?? ((input) => runCoderSetup(input, noPromptSetupDeps(deps)));
   let providerResult = null;
   try {
     providerResult = await runSetup({
