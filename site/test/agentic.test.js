@@ -211,7 +211,7 @@ test("trust anchor pages exist with substantial content", { skip: !hasDist }, ()
   for (const page of ["about", "contact", "privacy"]) {
     const html = readDist(page, "index.html");
     const text = html
-      .replace(/<(?:script|style)[\s\S]*?<\/(?:script|style)>/g, " ")
+      .replace(/<(?:script|style)[\s\S]*?<\/(?:script|style)>/gi, " ")
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim();

@@ -214,10 +214,16 @@ function renderListItemContent(item, depth, ctx) {
   return parts.join("\n");
 }
 
+// GFM table cells escape the backslash before the pipe, or a literal "\|"
+// would turn into an escaped pipe.
+function escapeCell(text) {
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+}
+
 function renderTable(table, baseUrl, ctx) {
   const rows = [];
   const pushRow = (cells, header = false) => {
-    const line = `| ${cells.map((cell) => renderInlineNodes(cell.childNodes, ctx).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim()).join(" | ")} |`;
+    const line = `| ${cells.map((cell) => escapeCell(renderInlineNodes(cell.childNodes, ctx))).join(" | ")} |`;
     rows.push(header ? { header: line } : line);
   };
   for (const section of elementChildren(table)) {
@@ -258,7 +264,7 @@ function renderAgentTable(node, baseUrl, ctx) {
   if (!columns || cells.length === 0 || cells.length % columns !== 0) {
     return renderContainer(node, baseUrl, ctx);
   }
-  const cellText = (cell) => renderInlineNodes(cell.childNodes, ctx).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  const cellText = (cell) => escapeCell(renderInlineNodes(cell.childNodes, ctx));
   const rows = [];
   for (let i = 0; i < cells.length; i += columns) {
     rows.push(Array.from({ length: columns }, (_, offset) => cellText(cells[i + offset])));
