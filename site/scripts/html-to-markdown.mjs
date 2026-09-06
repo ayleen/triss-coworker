@@ -160,8 +160,9 @@ function renderInlineNodes(nodes, ctx) {
 
 function renderAgentFlags(node) {
   return elementChildren(node)
-    .map((child) => inlineCode(collapse(textContent(child)).trim()))
+    .map((child) => collapse(textContent(child)).trim())
     .filter(Boolean)
+    .map(inlineCode)
     .join(" ");
 }
 
@@ -233,16 +234,19 @@ function renderTable(table, baseUrl, ctx) {
     }
   }
   if (rows.length === 0) return "";
-  const header = rows[0].header ?? null;
-  const body = (rows[0].header ? rows.slice(1) : rows).map((row) => (typeof row === "string" ? row : row.header));
-  const columns = Math.max(
-    ...[header, ...body].filter(Boolean).map((line) => line.split("|").length - 2),
-  );
+  // GFM requires a delimiter row after the header line; a <thead>-less
+  // table promotes its first row so the output still parses as a table.
+  const hasHeader = typeof rows[0] === "object";
+  const header = hasHeader ? rows[0].header : null;
+  const body = (hasHeader ? rows.slice(1) : rows).map((row) => (typeof row === "string" ? row : row.header));
+  const columns = Math.max(...[header, ...body].filter(Boolean).map((line) => line.split("|").length - 2));
+  const delimiter = `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`;
   const out = [];
   if (header) {
-    out.push(header, `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`);
+    out.push(header, delimiter, ...body);
+  } else if (body.length > 0) {
+    out.push(body[0], delimiter, ...body.slice(1));
   }
-  out.push(...body);
   return out.join("\n");
 }
 

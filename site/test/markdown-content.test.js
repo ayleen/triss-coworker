@@ -117,3 +117,21 @@ test("built cost mirror preserves the explanatory copy and labeled values", () =
   }
   assert.match(md, /\| Cost \(USD\) \| \$1\.88 \| \$0\.34 \| \$2\.22 \|/);
 });
+
+test("hidden calculator defaults stay in sync with the controls", () => {
+  const html = readDist("cost", "index.html");
+  const spanValue = (id) => html.match(new RegExp(`id="${id}"[^>]*>([^<]+)<`))?.[1]?.trim();
+  const requests = spanValue("c-reqs");
+  const share = spanValue("c-share");
+  const cache = spanValue("c-cache");
+  const primaryModel = html.match(/id="c-mid"[^>]*>([^<]+)</)?.[1]?.trim();
+  assert.ok(requests && share && cache && primaryModel, "reviewed calculator markup changed: reconcile this test");
+
+  const defaults = html.match(/Calculator defaults:([^<]+)</)?.[1];
+  assert.ok(defaults, "the hidden defaults block is missing from the cost page");
+  assert.ok(defaults.includes(`requests per day ${requests}`), `defaults drifted from the requests control (${requests}): ${defaults}`);
+  assert.ok(defaults.includes(`Triss ${share}`), `defaults drifted from the share control (${share}): ${defaults}`);
+  assert.ok(defaults.includes(`cache hit rate ${cache}`), `defaults drifted from the cache control (${cache}): ${defaults}`);
+  assert.ok(defaults.includes(`primary model ${primaryModel}`), `defaults drifted from the primary-model button (${primaryModel}): ${defaults}`);
+  assert.match(defaults, /model class standard/, `defaults drifted from the delegated-class button: ${defaults}`);
+});
