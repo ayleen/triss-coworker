@@ -68,19 +68,24 @@ test("run_worker_first bypasses real asset classes and keeps documents on the wo
 
   const bypassableExtensions = new Set([
     ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-    ".ico", ".woff", ".woff2", ".ttf", ".otf", ".webmanifest", ".txt", ".md", ".json",
+    ".ico", ".woff", ".woff2", ".ttf", ".otf", ".webmanifest", ".txt", ".md",
   ]);
   let checked = 0;
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "api") continue; // /api/* always invokes the worker
         walk(full);
         continue;
       }
       const relative = `/${path.relative(dist, full).split(path.sep).join("/")}`;
-      if (entry.name.endsWith(".html")) {
+      if (relative.startsWith("/api/")) {
+        // The whole /api/** tree is behind the API contract (CORS, JSON 404s,
+        // 405 + Allow) — nothing under it may bypass the worker, including
+        // the published .json files.
+        assert.equal(requestRouting(patterns, relative), true, `api file ${relative} must invoke the worker`);
+        checked += 1;
+      } else if (entry.name.endsWith(".html")) {
         assert.equal(requestRouting(patterns, relative), true, `document ${relative} must invoke the worker`);
       } else if (bypassableExtensions.has(path.extname(entry.name))) {
         assert.equal(requestRouting(patterns, relative), false, `asset ${relative} must bypass the worker`);
@@ -95,7 +100,8 @@ test("run_worker_first bypasses real asset classes and keeps documents on the wo
   walk(dist);
   assert.ok(checked > 20, `unexpectedly few bypassable assets verified: ${checked}`);
 
-  for (const pathname of ["/", "/docs/", "/cost/", "/api/v1/meta", "/sitemap.xml", "/missing-page/"]) {
+  assert.equal(requestRouting(patterns, "/openapi.json"), false, "the standalone OpenAPI spec must bypass the worker");
+  for (const pathname of ["/", "/docs/", "/cost/", "/api", "/api/v1/meta", "/api/v1/meta.json", "/sitemap.xml", "/missing-page/"]) {
     assert.equal(requestRouting(patterns, pathname), true, `${pathname} must invoke the worker`);
   }
 });
@@ -147,6 +153,10 @@ function assetsMock() {
         // redirect for /docs — only some (config-driven) routes redirect.
         if (pathname === "/archive") {
           return new Response(null, { status: 307, headers: { location: "/docs/" } });
+        }
+        if (pathname === "/foreign") {
+          // A misconfigured (hypothetical) asset-layer redirect to another host.
+          return new Response(null, { status: 307, headers: { location: "https://evil.com/docs/" } });
         }
         const isHtml = pathname === "/" || pathname === "/docs" || pathname === "/docs/" || pathname === "/index.html";
         const isMd = pathname === "/index.md" || pathname === "/docs/index.md";
@@ -295,6 +305,34 @@ test("security: protocol-relative paths never redirect off-origin", async () => 
   const canonical = await get("text/markdown", "/docs");
   assert.equal(canonical.status, 301);
   assert.equal(canonical.headers.get("location"), "/docs/");
+});
+
+test("security: foreign asset-layer locations are not re-emitted", async () => {
+  // The asset layer must never hand the response an attacker-controlled
+  // host: sameOriginLocation replaces a foreign Location with "/".
+  const response = await get("text/markdown", "/foreign");
+  assert.equal(response.status, 307, "the platform's status is kept");
+  assert.equal(response.headers.get("location"), "/", "a foreign Location is replaced with the same-origin root");
+  assert.doesNotMatch(response.headers.get("location") || "", /evil\.com/);
+});
+
+test("the .json forms of /api paths keep the API contract", async () => {
+  // /api/v1/*.json is behind the same worker contract as the extensionless
+  // endpoints: CORS on success, structured JSON 404s, 405 with Allow.
+  const jsonForm = await route(new Request("https://triss.work/api/v1/meta.json"), assetsMock());
+  assert.equal(jsonForm.status, 200);
+  assert.equal(jsonForm.headers.get("access-control-allow-origin"), "*");
+  assert.equal(jsonForm.headers.get("x-content-type-options"), "nosniff");
+
+  const unknown = await route(new Request("https://triss.work/api/v1/unknown.json"), assetsMock());
+  assert.equal(unknown.status, 404);
+  assert.match(unknown.headers.get("content-type"), /application\/json/);
+  assert.equal((await unknown.json()).error.code, "not_found");
+
+  const rejected = await route(new Request("https://triss.work/api/v1/meta.json", { method: "POST" }), assetsMock());
+  assert.equal(rejected.status, 405);
+  assert.equal(rejected.headers.get("allow"), "GET, HEAD");
+  assert.equal((await rejected.json()).error.code, "method_not_allowed");
 });
 
 test("security: asset-layer redirects with foreign locations are not amplified", async () => {

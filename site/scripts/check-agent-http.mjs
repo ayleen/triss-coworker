@@ -243,6 +243,30 @@ check("POST to an API endpoint returns JSON 405 with Allow", async () => {
   assertEqual(body.error.code, "method_not_allowed", "error code");
 });
 
+check("the .json forms of API paths keep the API contract", async () => {
+  const success = await request("/api/v1/meta.json");
+  assertEqual(success.status, 200, "status");
+  assertEqual(shortType(success), "application/json", "content-type");
+  assertOk(
+    (success.headers.get("access-control-allow-origin") || "") === "*",
+    "the .json form must carry the API's CORS header",
+  );
+  await success.arrayBuffer();
+
+  const unknown = await request("/api/v1/nope.json");
+  assertEqual(unknown.status, 404, "status");
+  assertEqual(shortType(unknown), "application/json", "unknown .json must be a JSON error, not the HTML 404 page");
+  const unknownBody = await unknown.json();
+  assertEqual(unknownBody.error.code, "not_found", "error code");
+
+  const rejected = await request("/api/v1/meta.json", { method: "POST" });
+  assertEqual(rejected.status, 405, "status");
+  const allow = (rejected.headers.get("allow") || "").toUpperCase();
+  assertOk(allow.includes("GET") && allow.includes("HEAD"), `the .json 405 must carry Allow, got ${allow}`);
+  const rejectedBody = await rejected.json();
+  assertEqual(rejectedBody.error.code, "method_not_allowed", "error code");
+});
+
 check("HEAD matches GET status and headers with an empty body", async () => {
   for (const { pathname, accept } of [
     { pathname: "/", accept: undefined },

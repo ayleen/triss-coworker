@@ -255,6 +255,17 @@ function discard(response) {
   }
 }
 
+// The fallback fetch targets the same asset as the client's request, but
+// with the normalized path: a raw "//host/path" request URL must never
+// leak into a sub-request URL.
+function normalizedRequest(request, url, pathname) {
+  if (url.pathname === pathname) return request;
+  return new Request(new URL(pathname + url.search, url.origin), {
+    method: request.method,
+    headers: request.headers,
+  });
+}
+
 // Resolves the route itself without client validators: per RFC 9110
 // §13.2.1 preconditions apply only after the server has chosen its
 // response, so a matching ETag must never turn a canonical redirect into
@@ -262,8 +273,8 @@ function discard(response) {
 // The probe keeps the request's Accept header — the asset layer only
 // produces its html_handling redirects for HTML-eligible requests — but
 // drops conditional validators and must use GET (a HEAD probe never sees
-// those redirects either). It reads status, type, and redirect location;
-// for validator-less HTML requests it doubles as the served response.
+// those redirects either). It only reads status, type, and redirect
+// location; htmlRepresentation re-fetches with the client's validators.
 async function resolveRoute(request, env, url, pathname) {
   const headers = new Headers();
   const accept = request.headers.get("accept");
@@ -316,7 +327,7 @@ async function markdownRepresentation(request, env, url, pathname) {
       return markdownResponse(mirror, request);
     }
   }
-  const page = await env.ASSETS.fetch(request);
+  const page = await env.ASSETS.fetch(normalizedRequest(request, url, pathname));
   if (page.status === 304) return revalidationResponse(page);
   if (page.status === 404 && isDocumentPath(pathname)) {
     return markdownResponse(
@@ -340,10 +351,11 @@ async function htmlRepresentation(request, env, url, probe, representation, path
     }
   }
   discard(probe);
-  // The final response must come from the original request: serving the
-  // probe's response instead would bypass the platform's html_handling
-  // trailing-slash redirect for directory-style URLs.
-  const page = await env.ASSETS.fetch(request);
+  // The final response must honor the client's validators: the probe is
+  // unconditional, so serving it would answer full bodies where a 304 is
+  // due. (Observed separately: the platform's trailing-slash redirect also
+  // only materializes for an original-request asset fetch.)
+  const page = await env.ASSETS.fetch(normalizedRequest(request, url, pathname));
   if (page.status === 304) return revalidationResponse(page);
   return passThrough(page, request);
 }
