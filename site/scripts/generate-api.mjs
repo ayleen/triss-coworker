@@ -62,7 +62,10 @@ function buildCommands() {
 }
 
 function buildDocs(dist) {
-  const pages = collectPages(dist).filter((page) => LLMS_FULL_ROUTES.includes(page.route));
+  // Follow the declared usage-critical order so the docs index, llms-full,
+  // and the OpenAPI example tell the same story in the same order.
+  const byRoute = new Map(collectPages(dist).map((page) => [page.route, page]));
+  const pages = LLMS_FULL_ROUTES.filter((route) => byRoute.has(route)).map((route) => byRoute.get(route));
   return {
     pages: pages.map((page) => ({
       title: page.title,

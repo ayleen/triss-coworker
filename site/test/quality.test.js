@@ -103,7 +103,11 @@ test("site stays within explicit static asset budgets", { skip: !hasDist }, () =
   // the OpenAPI spec, /api responses) are never loaded by a browser, so
   // they carry their own budget and stay out of the user-facing page-weight
   // total. Per-type budgets below are unchanged.
-  const isAgentFile = (file) => /\.md$/.test(file) || /\.txt$/.test(file) || file === "openapi.json" || file.startsWith("api/");
+  const isAgentFile = (file) =>
+    /\.md$/.test(file) ||
+    (/\.txt$/.test(file) && file !== "robots.txt") ||
+    file === "openapi.json" ||
+    file.startsWith("api/");
   const userTotal = sizes.filter(({ file }) => !isAgentFile(file)).reduce((sum, entry) => sum + entry.size, 0);
   const agentTotal = sizes.filter(({ file }) => isAgentFile(file)).reduce((sum, entry) => sum + entry.size, 0);
   const total = sizes.reduce((sum, entry) => sum + entry.size, 0);

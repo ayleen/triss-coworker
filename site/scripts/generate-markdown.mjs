@@ -40,12 +40,9 @@ export function collectPages(dist) {
         const route = relativeDir === "." || relativeDir === "" ? "/" : `/${relativeDir}/`;
         const html = fs.readFileSync(full, "utf8");
         const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] ?? route;
-        pages.push({
-          route,
-          title,
-          htmlPath: full,
-          markdownRoute: route === "/" ? "/index.md" : `${route}index.md`,
-        });
+        // The parsed HTML travels with the page so later steps (markdown
+        // generation, the docs index) never re-read the file.
+        pages.push({ route, title, html, markdownRoute: route === "/" ? "/index.md" : `${route}index.md` });
       }
     }
   };
@@ -59,21 +56,19 @@ function isMain(importMetaUrl) {
 }
 
 export function generateMarkdown(dist) {
-  const pages = [];
-  const selection = [];
-  for (const page of collectPages(dist)) {
-    const html = fs.readFileSync(page.htmlPath, "utf8");
-    // Substantive areas only ([data-agent-content] markers, else <main>): the
-    // getting-started hero lives before <main>, so naive main extraction
-    // dropped the page's actual H1 and lede.
-    const areas = selectAgentContent(html).join("\n\n");
+  const byRoute = new Map(collectPages(dist).map((page) => [page.route, page]));
+  const pages = [...byRoute.values()];
+  // llms-full.txt follows the declared usage-critical order, not the
+  // alphabetical route order collectPages produces.
+  const selection = LLMS_FULL_ROUTES.filter((route) => byRoute.has(route)).map((route) => {
+    const page = byRoute.get(route);
+    return { ...page, url: SITE_URL + page.route, markdownUrl: page.markdownRoute };
+  });
+  for (const page of pages) {
+    const areas = selectAgentContent(page.html).join("\n\n");
     const markdown = htmlToMarkdown(areas, SITE_URL + page.route);
     const mirrorPath = path.join(dist, page.markdownRoute.replace(/^\//, ""));
     fs.writeFileSync(mirrorPath, markdown);
-    pages.push(page);
-    if (LLMS_FULL_ROUTES.includes(page.route)) {
-      selection.push({ ...page, url: SITE_URL + page.route, markdownUrl: page.markdownRoute });
-    }
   }
 
   const header = [

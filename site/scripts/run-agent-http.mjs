@@ -62,24 +62,24 @@ async function main() {
   child.stderr.pipe(logStream);
 
   let stopped = false;
+  // Negative PIDs address the detached process group; Windows has no process
+  // groups, so fall back to the direct child handle there.
+  const kill = (signal) => {
+    if (!child.pid) return;
+    try {
+      if (process.platform === "win32") child.kill(signal);
+      else process.kill(-child.pid, signal);
+    } catch {
+      /* already gone */
+    }
+  };
   const stop = () => {
     if (stopped) return;
     stopped = true;
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        /* already gone */
-      }
-    }
-    const killTimer = setTimeout(() => {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }, 3000);
+    kill("SIGTERM");
+    const killTimer = setTimeout(() => kill("SIGKILL"), 3000);
     killTimer.unref();
+    logStream.end();
   };
   process.on("exit", stop);
   process.on("SIGINT", () => {
@@ -107,8 +107,7 @@ async function main() {
     while (Date.now() < deadline) {
       if (child.exitCode !== null || child.signalCode !== null) {
         dumpLog();
-        console.error("wrangler dev exited before becoming ready.");
-        process.exit(1);
+        throw new Error("wrangler dev exited before becoming ready.");
       }
       try {
         const response = await fetch(base);
@@ -121,8 +120,7 @@ async function main() {
     }
     if (!ready) {
       dumpLog();
-      console.error(`wrangler dev did not become ready within ${READY_TIMEOUT_MS}ms.`);
-      process.exit(1);
+      throw new Error(`wrangler dev did not become ready within ${READY_TIMEOUT_MS}ms.`);
     }
     log("worker is up — running the HTTP acceptance matrix");
 
