@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSetupWizard } from '../src/setup/wizard.js';
@@ -25,6 +25,18 @@ function withTempEnv(t, { global = '', local = '', shellOnly = {} } = {}) {
   mkdirSync(project, { recursive: true });
   if (global) writeFileSync(join(home, '.config', 'triss', '.env'), global);
   if (local) writeFileSync(join(project, '.triss.env'), local);
+  // Full process.env snapshot: tests set provider vars and the wizard reads
+  // loadEnvFiles() from HOME — without a complete restore, later tests in
+  // the file inherit earlier tests' leakage and flip results.
+  const savedEnv = { ...process.env };
+  // Neutralize provider/credential shell keys: a leftover value from a
+  // previous test would win the shell layer over this test's global file
+  // and flip readiness results.
+  for (const key of Object.keys(process.env)) {
+    if (/^(ZHIPU|MOONSHOT|OPENCODE|LINEAR|JIRA|ATLASSIAN)_|^TRISS_(ZAI|MOONSHOT|OPENCODE|KIMI|DEFAULT|CODER|OPENAI)/.test(key)) {
+      delete process.env[key];
+    }
+  }
   const vars = {};
   for (const [key, value] of Object.entries(shellOnly)) {
     vars[key] = process.env[key];
@@ -35,13 +47,15 @@ function withTempEnv(t, { global = '', local = '', shellOnly = {} } = {}) {
   process.env.HOME = home;
   process.env.TRISS_PROJECT_ROOT = project;
   t.after(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(savedEnv)) {
+      process.env[key] = value;
+    }
     process.env.HOME = savedHome;
     if (savedRoot === undefined) delete process.env.TRISS_PROJECT_ROOT;
     else process.env.TRISS_PROJECT_ROOT = savedRoot;
-    for (const [key, value] of Object.entries(vars)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
     rmSync(home, { recursive: true, force: true });
   });
   return { home, project };
@@ -487,3 +501,7 @@ test("R5-D: targeted integration with all required fields is ready without any L
   assert.match(readFileSync(join(project, ".triss.env"), "utf8"), /LINEAR_API_KEY=lin-key/);
   void home;
 });
+
+// ─── F1: selected integrations in the general Advanced flow gate readiness ──
+
+
