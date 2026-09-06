@@ -23,8 +23,23 @@ const BIN = join(REPO, 'bin', 'triss.js');
 
 // ─── fixture endpoint + protected-run driver ─────────────────────────────────
 
+// Own-entry route table: a Map cannot return inherited properties, and the
+// typeof check refuses non-function values before any call (CodeQL alert
+// #60). Selection order: exact match, then the first suffix rule the URL
+// ends with ('*' excluded), then the wildcard.
+function resolveFixtureHandler(routes, url) {
+  const exact = routes.get(url);
+  if (exact !== undefined) return exact;
+  const suffix = [...routes.entries()]
+    .filter(([key]) => key !== '*')
+    .find(([key]) => url.endsWith(key.replace(/^\*/, '')));
+  if (suffix) return suffix[1];
+  return routes.get('*');
+}
+
 async function startFixture({ paths = {} } = {}) {
   const hits = [];
+  const routes = new Map(Object.entries(paths));
   const server = createServer2((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -32,10 +47,12 @@ async function startFixture({ paths = {} } = {}) {
       let parsed = null;
       try { parsed = JSON.parse(body); } catch {}
       hits.push({ url: req.url, auth: req.headers.authorization || null, model: parsed?.model ?? null });
-      const handler = paths[req.url]
-        || Object.entries(paths).find(([key]) => key !== '*' && req.url.endsWith(key.replace(/^\*/, '')))?.[1]
-        || paths['*'];
-      if (!handler) {
+      // CodeQL js/unvalidated-dynamic-method-call: resolve the handler via a
+      // Map of the fixture's OWN entries and require a function, so neither
+      // inherited names (e.g. "__proto__") nor non-function values can be
+      // invoked as handlers.
+      const handler = resolveFixtureHandler(routes, req.url);
+      if (typeof handler !== 'function') {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { message: `unexpected ${req.url}` } }));
         return;
@@ -466,7 +483,11 @@ test('review-2d: an explicit boolean protectCredentials override wins over the p
 
 test('review-3: wizard targeted coder passes the chosen provider to engine setup', async (t) => {
   const { runSetupWizard } = await import('../src/setup/wizard.js');
-  const { home, project } = withTempEnv(t, 'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=openai-compatible\nTRISS_OPENAI_COMPATIBLE_API_KEY=sk-shared\n');
+  // The moonshot key rides in the shell: this test pins provider intent
+  // propagation, and per R5 a missing key would now honestly fail the run.
+  const { home, project } = withTempEnv(t,
+    'TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=openai-compatible\nTRISS_OPENAI_COMPATIBLE_API_KEY=sk-shared\n',
+    { MOONSHOT_API_KEY: 'mk-review3-key' });
   const setupCalls = [];
   const result = await runSetupWizard('coder', {
     local: true,
@@ -930,5 +951,78 @@ test('mutation sensitivity (behavioral): each reverted fix would fail these asse
     const content = readFileSync(join(home, '.config', 'triss', '.env'), 'utf8');
     assert.match(content, /TRISS_CODER_PROVIDER=moonshot/, 'the headless coder target must persist the coding provider');
     assert.doesNotMatch(content, /ZHIPU_API_KEY/, 'sanity: no Z.AI key was ever configured in this scenario');
+  }
+});
+
+// ─── G1: fixture dispatcher only invokes registered function handlers ────────
+//
+// CodeQL alert #60 (js/unvalidated-dynamic-method-call): the previous
+// `paths[req.url]` lookup could select inherited/non-function values.
+// These tests pin the Map-based dispatch: exact, suffix, wildcard, unknown
+// path, and prototype-named paths must never reach a non-registered
+// callback, and the fixture stays usable afterwards.
+
+test("G1 dispatch: unknown and prototype-named paths 404 without a wildcard, fixture stays usable", async () => {
+  // No wildcard: only the suffix route is registered, so an unknown path
+  // and a prototype-named path must both 404 (a plain-object lookup could
+  // have selected inherited entries; the Map cannot).
+  const fixture = await startFixture({
+    paths: { "*/responses": (res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"suffix":true}');
+    } },
+  });
+  try {
+    const unknown = await fetch(`${fixture.base}/definitely/not/registered`, { method: "POST", body: "{}" });
+    assert.equal(unknown.status, 404);
+    const proto = await fetch(`${fixture.base}/__proto__/polluted`, { method: "POST", body: "{}" });
+    assert.equal(proto.status, 404);
+    const known = await fetch(`${fixture.base}/v1/responses`, { method: "POST", body: '{"stream":false}' });
+    assert.equal(known.status, 200);
+    assert.equal(fixture.hits.length, 3);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("G1 dispatch: suffix routes match by tail, buffered and SSE branches both work", async () => {
+  const fixture = await startFixture({
+    paths: {
+      "*/chat/completions": (res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "b", model: "m",
+          choices: [{ index: 0, message: { role: "assistant", content: "buffered-ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }));
+      },
+      "*/responses": (res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write('data: {"wildcard":true}\n\n');
+        res.write("data: [DONE]\n\n");
+        res.end();
+      },
+    },
+  });
+  try {
+    const buffered = await fetch(`${fixture.base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "m", stream: false }),
+    });
+    assert.equal(buffered.status, 200);
+    // Non-stream requests get the fixture's built-in buffered answer; the
+    // dispatch contract here is that the route resolved (not 404).
+    assert.equal((await buffered.json()).choices[0].finish_reason, "stop");
+
+    const sse = await fetch(`${fixture.base}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "m", stream: true }),
+    });
+    assert.match(sse.headers.get("content-type") || "", /event-stream/);
+    assert.ok((await sse.text()).includes("wildcard"));
+  } finally {
+    fixture.close();
   }
 });
