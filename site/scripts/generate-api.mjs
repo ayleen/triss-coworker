@@ -22,6 +22,7 @@ function isMain(importMetaUrl) {
 function buildMeta(pkg) {
   return {
     name: pkg.name,
+    displayName: "Triss Coworker",
     version: pkg.version,
     description: pkg.description,
     license: "MIT",
@@ -100,7 +101,7 @@ function openApiSpec(pkg, docs) {
           description:
             "Returns the npm package name, the published version, the install command, and pointers to the machine-readable resources (llms.txt, OpenAPI spec, docs index). Use this first to discover everything else.",
           responses: {
-            "200": ok("Meta", { name: "triss-coworker", version: pkg.version, cli: { bin: "triss", npm: pkg.name, install: `npm install -g ${pkg.name}` } }),
+            "200": ok("Meta", { name: "triss-coworker", displayName: "Triss Coworker", version: pkg.version, cli: { bin: "triss", npm: pkg.name, install: `npm install -g ${pkg.name}` } }),
             "405": errorResponse("Method is not GET or HEAD."),
           },
         },
@@ -154,6 +155,7 @@ function openApiSpec(pkg, docs) {
           type: "object",
           properties: {
             name: { type: "string", description: "npm package name." },
+            displayName: { type: "string", description: "Full product brand name (short form: Triss)." },
             version: { type: "string", description: "Published package version." },
             description: { type: "string" },
             license: { type: "string" },
@@ -181,7 +183,7 @@ function openApiSpec(pkg, docs) {
               required: ["llms", "llmsFull", "openapi", "docs", "commands"],
             },
           },
-          required: ["name", "version", "description", "license", "repository", "homepage", "cli", "resources"],
+          required: ["name", "displayName", "version", "description", "license", "repository", "homepage", "cli", "resources"],
         },
         Command: {
           type: "object",

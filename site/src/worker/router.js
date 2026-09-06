@@ -54,7 +54,7 @@ export function notFoundMarkdownBody() {
     "- [Sitemap](https://triss.work/sitemap-index.xml) — every public page",
     "- [OpenAPI spec](https://triss.work/openapi.json) — the public JSON API surface",
     "",
-    "Triss is a local CLI and MCP server (`npm install -g triss-coworker`) that",
+    "Triss Coworker is a local CLI and MCP server (`npm install -g triss-coworker`) that",
     "delegates research, reviews, and implementation from coding agents to your",
     "chosen models and engines.",
     "",

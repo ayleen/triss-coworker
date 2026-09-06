@@ -1,6 +1,6 @@
-# Triss
+# Triss Coworker
 
-> Managed delegation for AI development: an open-source CLI and MCP server (npm package `triss-coworker`, binary `triss`) that delegates codebase research, code review, and implementation tasks from coding agents (Claude Code, Codex) to the model providers and coding engines the user configures. Local-first, no telemetry, MIT-licensed. Canonical site: https://triss.work.
+> Managed delegation for AI development: an open-source CLI and MCP server (npm package `triss-coworker`, binary `triss`) that delegates codebase research, code review, and implementation tasks from coding agents (Claude Code, Codex) to the model providers and coding engines the user configures. Local-first, no telemetry, MIT-licensed. Canonical site: https://triss.work. The short name for "Triss Coworker" is "Triss".
 
 Install: `npm install -g triss-coworker` (requires Node.js >= 22.12). MCP tools are named `triss_ask`, `triss_review`, `triss_fetch`, `triss_chat`, `triss_write`, `triss_commit_msg`, `triss_status`. Call `triss agent-help` locally for the full delegation cookbook.
 

@@ -71,7 +71,7 @@ export function generateMarkdown(dist) {
   }
 
   const header = [
-    "# Triss — documentation (llms-full)",
+    "# Triss Coworker — documentation (llms-full)",
     "",
     `> Full-text Markdown export of the usage-critical ${SITE_URL} pages for AI agents.`,
     "> Guidance and resource map: /llms.txt. Machine index of these pages: /api/v1/docs.",

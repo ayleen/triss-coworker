@@ -159,10 +159,11 @@ test("markdown candidates mirror the directory build layout", () => {
 
 test("llms.txt exists and follows the published format", { skip: !hasDist }, () => {
   const body = readDist("llms.txt");
-  assert.match(body, /^# Triss\n/);
+  assert.match(body, /^# Triss Coworker\n/);
   assert.match(body, /^> /m, "llms.txt opens with a summary blockquote");
   assert.match(body, /## When to use/, "agents need explicit when-to-use guidance");
   assert.match(body, /triss-coworker/, "the npm package name must be discoverable");
+  assert.match(body, /short name .*Triss|Triss.* short name/i, "the short form Triss must map to the brand");
   for (const link of ["https://triss.work/llms-full.txt", "https://triss.work/openapi.json", "https://triss.work/docs/"]) {
     assert.ok(body.includes(link), `llms.txt must link ${link}`);
   }
@@ -178,7 +179,7 @@ test("llms.txt exists and follows the published format", { skip: !hasDist }, () 
 
 test("llms-full.txt mirrors the machine-readable docs selection", { skip: !hasDist }, () => {
   const body = readDist("llms-full.txt");
-  assert.match(body, /^# Triss/);
+  assert.match(body, /^# Triss Coworker/);
   const docs = JSON.parse(readDist("api", "v1", "docs.json"));
   assert.ok(docs.pages.length >= 5, "docs selection must cover the usage-critical pages");
   for (const page of docs.pages) {
@@ -195,10 +196,12 @@ test("homepage carries valid JSON-LD identity data", { skip: !hasDist }, () => {
   const app = graph.find((node) => node["@type"] === "SoftwareApplication");
   const org = graph.find((node) => node["@type"] === "Organization");
   assert.ok(app, "SoftwareApplication node required");
-  assert.equal(app.name, "Triss");
+  assert.equal(app.name, "Triss Coworker");
+  assert.equal(app.alternateName, "Triss", "the short form must be declared as alternateName");
   assert.match(app.url, /^https:\/\/triss\.work/);
   assert.ok(app.offers, "SoftwareApplication needs offers (free product)");
   assert.ok(org, "Organization node required");
+  assert.equal(org.name, "Triss Coworker");
   assert.ok(Array.isArray(org.sameAs) && org.sameAs.length > 0, "Organization needs sameAs links");
   assert.ok(Array.isArray(org.contactPoint) && org.contactPoint[0].contactType, "Organization needs contactPoint");
 });
@@ -272,6 +275,7 @@ test("api endpoints serve build-derived truth", { skip: !hasDist }, () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "..", "package.json"), "utf8"));
   const meta = JSON.parse(readDist("api", "v1", "meta.json"));
   assert.equal(meta.name, "triss-coworker");
+  assert.equal(meta.displayName, "Triss Coworker");
   assert.equal(meta.version, pkg.version);
   assert.equal(meta.cli.bin, "triss");
   assert.equal(meta.cli.npm, "triss-coworker");
