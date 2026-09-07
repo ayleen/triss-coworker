@@ -106,6 +106,7 @@ triss config wizard                    # Easy setup (provider + key + hosts)
 triss config wizard --advanced         # full sections
 triss config wizard opencode-go        # targeted provider setup
 triss config wizard coder --coder-engine omp --coder-provider moonshot
+triss config wizard coder --coder-protect-credentials   # persist TRISS_CODER_PROTECT_CREDENTIALS=true (proxy mode instead of default best-effort raw)
 triss config set TRISS_DEFAULT_PROVIDER zai
 triss config set TRISS_DEFAULT_ENGINE direct
 triss config get TRISS_ZAI_MODEL
@@ -141,7 +142,11 @@ OS user and is not a filesystem sandbox. Add `--protect-credentials` to a model
 command when the selected credential can be kept behind the parent-owned proxy
 (it falls back to a best-effort raw run with a warning when a protected route
 is unavailable); `--no-protect-credentials` overrides a persisted
-`TRISS_PROTECT_CREDENTIALS=true` choice for one run. Raw-mode and engine
+`TRISS_PROTECT_CREDENTIALS=true` choice for one run. For coder runs configured
+through the wizard, `--coder-protect-credentials` / `--coder-no-protect-credentials`
+persist `TRISS_CODER_PROTECT_CREDENTIALS=true` / `=false` (cannot be combined);
+the coder-specific value takes precedence over the shared
+`TRISS_PROTECT_CREDENTIALS`. Raw-mode and engine
 warnings are preserved in MCP structured results for every model-backed tool.
 
 Provider fields:

@@ -18,7 +18,7 @@ triss coder run --engine opencode \
 | Main role | `TRISS_OPENCODE_GO_MODEL` |
 | Small role | `TRISS_OPENCODE_GO_SMALL_MODEL` |
 
-Initialization fetches the authenticated catalogue. HTTP 401/403, malformed data, an authoritative empty catalogue, and unsupported model transport metadata fail closed. A temporary catalogue failure can use the documented `--allow-unverified` init path only where the CLI explicitly permits it; it never bypasses authentication failures.
+Initialization fetches the authenticated catalogue. HTTP 401/403, malformed data, an authoritative empty catalogue, and unsupported model transport metadata fail closed. A transient catalogue failure (network or timeout error, HTTP 408/429/5xx) does not block setup: init prints a warning, continues with the built-in DeepSeek V4 Flash defaults on a best-effort basis (availability is not verified), and recommends re-running setup to verify once the catalogue is reachable. There is no flag to skip verification; authentication failures are never bypassed.
 
 Protected execution admits only models with audited transport metadata. OpenAI Chat, OpenAI Responses, and Anthropic Messages projections are selected per model rather than guessed from the provider.
 

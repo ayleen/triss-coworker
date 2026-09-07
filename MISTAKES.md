@@ -1,3 +1,19 @@
+# MISTAKES — project log
+
+Meaningful mistakes made while working in this repo. Append new entries on
+top, below the header; never delete or rewrite past entries.
+
+Format:
+
+```markdown
+## YYYY-MM-DD — <short title>
+- **What happened:** <observable symptom / wrong outcome>
+- **Root cause:** <why it happened, not just what>
+- **Prevention:** <concrete rule or check that would have caught it>
+```
+
+<!-- add new entries below this line -->
+
 ## 2026-09-06 — Concurrent subagents in one worktree silently lost an uncommitted edit
 
 **What happened:** During the wizard implementation, an uncommitted edit to
@@ -20,22 +36,6 @@ launching background agents that may run git commands; never `git add -A` —
 stage explicit paths only; after any scripted file surgery, assert the file
 shrunk (or `node --check`/import it) before continuing; re-read a file before
 claiming a behavioral fix in acceptance notes.
-
-# MISTAKES — project log
-
-Meaningful mistakes made while working in this repo. Append new entries on
-top, below the header; never delete or rewrite past entries.
-
-Format:
-
-```markdown
-## YYYY-MM-DD — <short title>
-- **What happened:** <observable symptom / wrong outcome>
-- **Root cause:** <why it happened, not just what>
-- **Prevention:** <concrete rule or check that would have caught it>
-```
-
-<!-- add new entries below this line -->
 
 ## 2026-08-28 — Fuzz oracle encoded `a >= 224` as 224.0.0.0/4
 - **What happened:** The first run of `test/fuzz.test.js` failed three

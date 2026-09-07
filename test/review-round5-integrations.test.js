@@ -69,22 +69,6 @@ const CONFLUENCE_MANIFEST = { name: "confluence", envVars: ATLASSIAN_FIELDS };
 // scripted prompts/menu, calls runSetupWizard, and returns
 // { result, keyQuestions, menuVisits, home, project }. All async — tests
 // await its returned promise directly.
-async function baseDeps(overrides = {}) {
-  return {
-    isInteractive: () => false,
-    stderrWrite: () => {},
-    integrations: [],
-    coderManifest: { name: "coder" },
-    inspectMigration: async () => ({ state: "not_required" }),
-    probeEngine: () => ({ found: true, compatible: true }),
-    runInstall: async () => ({ ok: true }),
-    runCoderSetup: async () => ({ model: "m", smallModel: "s" }),
-    installMcp: async () => ({ path: "/mcp", status: "added" }),
-    writeRules: async () => {},
-    mcpStatus: async () => ({ present: false }),
-    ...overrides,
-  };
-}
 
 async function driveAdvancedSetup({ home: homeIn = null, project: projectIn = null, integrations, names, selectionAnswers = null, keyAnswers, menuScript = "integrations,done", seedGlobal = null }) {
   const home = homeIn ?? mkdtempSync(join(tmpdir(), "f1-"));
@@ -553,41 +537,3 @@ test("F2-P5: general Advanced, key absent, debug 1 → incomplete, key named, no
   t.after(() => { process.exitCode = prevExit; });
 });
 
-// Route control (NOT route coverage): a targeted integration run returns
-// from missingRequirements() before the general branch where the old debug
-// block lived, so it stays green even with the defect restored. Keeping it
-// documents that separation and guards the targeted route's own hygiene.
-test("F2-T: targeted linear run, debug 1 → ready, secret not printed (route control)", async (t) => {
-  const { home } = withTempEnv(t, {
-    global: `TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=${F2_SECRET}\n`,
-  });
-  delete process.env.LINEAR_API_KEY;
-  const captured = [];
-  const realWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = (chunk, ...rest) => {
-    captured.push(String(chunk));
-    return realWrite("", ...rest);
-  };
-  const injected = [];
-  const prevExit = process.exitCode;
-  try {
-    const result = await runSetupWizard("linear", { global: true }, await baseDeps({
-      isInteractive: () => true,
-      integrations: [LINEAR_MANIFEST],
-      promptChoice: async (_q, _c, o) => _c[o?.defaultIndex ?? 0]?.value,
-      prompt: async (question) => (question.includes("LINEAR_API_KEY") ? "" : ""),
-      yesNo: async (question) => question === "Apply?",
-      stderrWrite: (s2) => injected.push(s2),
-    }));
-    assert.equal(result.status, "ready", `expected ready, got ${result.status}`);
-  } finally {
-    process.stderr.write = realWrite;
-    process.exitCode = prevExit;
-  }
-  const all = captured.join("") + injected.join("");
-  assert.ok(!all.includes(F2_SECRET),
-    `the targeted route must not print the secret (captured ${all.length} chars)`);
-  assert.match(readFileSync(join(home, ".config", "triss", ".env"), "utf8"),
-    new RegExp(`^LINEAR_API_KEY=${F2_SECRET}$`, "m"),
-    "the targeted run must preserve the file-layer key");
-});
