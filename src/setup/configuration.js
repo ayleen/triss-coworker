@@ -732,7 +732,11 @@ export function previewSetupState(state, draft, { scope = null, integrations = [
   for (const [path, raw] of state.rawTexts) {
     const layer = state.layers.find((candidate) => candidate.path === path);
     const fileScope = layer?.scope ?? pathScope(path, state);
-    const patched = fileScope === scope ? planEnvPatch(raw ?? '', edits).text : raw;
+    // Compare against the RESOLVED target scope, not the raw `scope`
+    // argument: callers that omit scope (draft.scope is the target) would
+    // otherwise silently skip every layer and the preview would never show
+    // the draft's edits.
+    const patched = fileScope === targetScope ? planEnvPatch(raw ?? '', edits).text : raw;
     patchedTexts.set(path, patched);
     // A layer that did not exist on disk "appears" in the preview once the
     // draft gives it content; empty patched text stays non-existent.
@@ -946,7 +950,7 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [], 
     // no snapshot atom: resolve against the REAL persisted layers so an
     // unset knows whether an override exists in the target file. Without
     // this, from=undefined made plan builders drop unset edits as no-ops
-    // while the file kept the override (review round 3).
+    // while the file kept the override.
     const descriptor = descriptorsByKey.get(key)?.[0];
     return resolveLayered(key, { shellEnv, layers, defaultValue: descriptor?.default });
   };
@@ -972,6 +976,13 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [], 
     checkEditable(targets[0], key);
     const value = validateDraftValue(targets[0], edit.value);
     const previous = currentAtomFor(key);
+    if (previous?.source === 'shell' && previous.value !== value) {
+      // The shell outranks every persisted layer: the new value is persisted
+      // as chosen, but the effective value stays the shell's until the
+      // export is removed. Surface the shadow exactly like the unset-side
+      // conflict so the plan cannot present the draft value as effective.
+      conflicts.push(key);
+    }
     changed.push(freeze({ key, from: previous?.value, to: value }));
     for (const path of SNAPSHOT_ATOM_PATHS_BY_KEY.get(key) || []) {
       atomEdits.set(path.join('\0'), atom(value, 'draft', draftScope, null));
@@ -991,18 +1002,43 @@ export function applyDraftToSnapshot(snapshot, draft = {}, { integrations = [], 
       conflicts.push(key);
       continue;
     }
-    if (!previous || previous.source === 'config') {
-      // Tracked override (or an untracked key the files may still hold):
-      // record the removal. For snapshot atoms the preview value becomes
-      // undefined — the renderer shows the fall-back to the next layer or
-      // the registry default at apply time.
-      changed.push(freeze({ key, from: previous?.value, to: undefined }));
+    // Resolve against the layer the TARGET scope will read: an unset may only
+    // remove an override that actually lives in the persisted file being
+    // edited. An override in a DIFFERENT layer survives (an unset of a
+    // local-sourced key in the global file is a no-op, not a phantom
+    // removal of a line the file never contained).
+    let recordRemoval = false;
+    let fromValue;
+    if (draftScope === 'local' || draftScope === 'global') {
+      const targetLayer = layers.find((layer) => layer.scope === draftScope
+        && Object.prototype.hasOwnProperty.call(layer.vars, key));
+      if (targetLayer) {
+        recordRemoval = true;
+        fromValue = targetLayer.vars[key];
+      } else if (
+        (SNAPSHOT_ATOM_PATHS_BY_KEY.get(key) || []).length > 0
+        && previous?.source === 'config'
+        && previous?.scope === draftScope
+      ) {
+        // Snapshot-tracked atom already resolved to the target scope, but the
+        // caller supplied no raw layers to inspect.
+        recordRemoval = true;
+        fromValue = previous.value;
+      }
+    } else if (previous?.source === 'config') {
+      // Scope-less draft (tests, direct callers): preserve the coarse
+      // behavior — any persisted override counts.
+      recordRemoval = true;
+      fromValue = previous.value;
+    }
+    if (recordRemoval) {
+      changed.push(freeze({ key, from: fromValue, to: undefined }));
       for (const path of SNAPSHOT_ATOM_PATHS_BY_KEY.get(key) || []) {
         atomEdits.set(path.join('\0'), atom(undefined, 'draft', draftScope, null));
       }
     }
-    // registry-default / absent atoms have no persisted override to remove:
-    // a no-op, recorded nowhere.
+    // registry-default / absent atoms (or overrides living in another layer)
+    // have nothing to remove in the target file: a no-op, recorded nowhere.
   }
 
   let preview = snapshot;

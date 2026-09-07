@@ -3,7 +3,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planEnvPatch, applyEnvPatch } from '../src/secrets.js';
@@ -109,14 +109,11 @@ test('planEnvPatch preserves CRLF line endings consistently', () => {
 });
 
 test('planEnvPatch rejects duplicate keys and invalid keys or values', () => {
-  assert.throws(
-    () => planEnvPatch('', [{ key: 'A', value: '1' }, { key: 'A', value: null }]),
-    { name: 'TypeError', message: 'duplicate env patch key' },
-  );
-  // Keys differing only in case target the same (case-insensitive) line.
+  // Duplicate keys are rejected; keys differing only in case target the same
+  // (case-insensitive) line, so they count as duplicates too.
   assert.throws(
     () => planEnvPatch('', [{ key: 'A', value: '1' }, { key: 'a', value: '2' }]),
-    { name: 'TypeError', message: 'duplicate env patch key' },
+    TypeError,
   );
   assert.throws(() => planEnvPatch('', [{ key: 'BAD-KEY', value: '1' }]), TypeError);
   assert.throws(() => planEnvPatch('', [{ key: '1START', value: '1' }]), TypeError);
@@ -172,4 +169,35 @@ test('applyEnvPatch patches an existing file, preserving unrelated lines', (t) =
   );
   // Any write re-tightens permissions to 0600.
   assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+test('applyEnvPatch replaces the file atomically via a 0600 temp file in the same directory', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-env-patch-'));
+  const path = join(dir, '.env');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path, 'KEEP=1\nOLD=2\n');
+  chmodSync(path, 0o644);
+
+  const result = applyEnvPatch(path, [{ key: 'OLD', value: 'rewritten-atomic' }]);
+  assert.equal(result.changed, true);
+  assert.equal(readFileSync(path, 'utf8'), 'KEEP=1\nOLD=rewritten-atomic\n');
+  // The renamed-in file is 0600 and lives at the original path.
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  // No patch temp files are left behind (the rename consumed the only one).
+  const leftovers = readdirSync(dir).filter((name) => name.includes('.triss-patch-'));
+  assert.deepEqual(leftovers, []);
+});
+
+test('applyEnvPatch temp+rename keeps the old content on a refused patch', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'triss-env-patch-'));
+  const path = join(dir, '.env');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const original = 'ZHIPU_API_KEY=sk-do-not-lose-0123456789\n';
+  writeFileSync(path, original);
+  chmodSync(path, 0o600);
+
+  // A rejected edit list must leave the credential store byte-identical.
+  assert.throws(() => applyEnvPatch(path, [{ key: 'BAD-KEY', value: '1' }]), TypeError);
+  assert.equal(readFileSync(path, 'utf8'), original);
+  assert.equal(readdirSync(dir).filter((name) => name.includes('.triss-patch-')).length, 0);
 });

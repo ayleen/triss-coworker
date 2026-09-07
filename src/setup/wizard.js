@@ -23,7 +23,12 @@ import { CANONICAL_PROVIDER_IDS } from '../provider-contract.js';
 import { getProviderDefinition } from '../provider-registry.js';
 import { loadIntegrations } from '../integrations/_registry.js';
 import { readSetupState, previewSetupState } from './configuration.js';
-import { planEngineSetup, applyEngineSetup, probeEngineVersionPolicy } from './engines.js';
+import {
+  applyEngineSetup,
+  listEngineSetupFields,
+  planEngineSetup,
+  probeEngineVersionPolicy,
+} from './engines.js';
 import { buildSetupPlan, applySetupPlan } from './plan.js';
 
 const CODER_ENGINES = Object.freeze(['opencode', 'opencode2', 'crush', 'omp']);
@@ -140,7 +145,7 @@ async function detectAgentHosts(deps) {
 
 // The printed first command must satisfy the real ask contract: --question
 // is required and the prompt needs a source (--stdin). The model comes from
-// the post-apply effective state when available (review round 3).
+// the post-apply effective state when available.
 function firstCommand(state, providerId) {
   const modelAtom = state.snapshot.providers[providerId]?.model;
   const model = (modelAtom?.value && modelAtom.source !== 'absent' ? modelAtom.value : null)
@@ -168,8 +173,7 @@ async function runEasyFlow({ draft, state, opts, deps }) {
   setDraftValue(draft, 'TRISS_DEFAULT_PROVIDER', providerId);
   // A skipped key is NOT recorded as a permanent failure: readiness is
   // re-derived from the final post-draft state at finalize time, so adding
-  // the key later (Advanced/Providers) makes the run complete (review
-  // round 5, R5-B).
+  // the key later (Advanced/Providers) makes the run complete.
   await collectProviderCredential(draft, state, providerId, deps);
 
   // 2. Working tool (agent hosts) — not an execution-engine question.
@@ -216,7 +220,7 @@ async function runAdvancedFlow({ draft, state, scope, opts, deps, integrations }
     // Every section revisit renders "current" values from a FRESH
     // post-draft preview, so earlier edits of this run are visible and a
     // re-selection compares against the true post-draft value, not the
-    // startup snapshot (review round 4, R3).
+    // startup snapshot.
     const previewState = previewSetupState(state, draft, { scope, integrations });
     if (section === 'providers') await sectionProviders({ draft, previewState, deps });
     if (section === 'execution') await sectionExecution({ draft, previewState, deps });
@@ -322,22 +326,104 @@ async function sectionExecution({ draft, previewState, deps }) {
     { defaultIndex: 0 },
   );
   if (protection !== 'keep') setDraftValue(draft, 'TRISS_PROTECT_CREDENTIALS', protection);
-}
 
-async function sectionConnections({ draft, deps, scope, opts }) {
-  const agent = opts.agent || await (deps.promptChoice || promptChoice)(
-    'Wire which assistant?',
+  // Advanced exposes FULL tuning: the coding-specific protection override is
+  // an independent persisted knob (it shadows TRISS_PROTECT_CREDENTIALS for
+  // coder runs), so it gets its own tri-state control.
+  const coderProtectionField = previewState.fields.find((f) => f.key === 'TRISS_CODER_PROTECT_CREDENTIALS')?.current;
+  const coderProtection = await (deps.promptChoice || promptChoice)(
+    'Coder credential protection override (TRISS_CODER_PROTECT_CREDENTIALS)',
     [
-      { value: 'both', label: 'Both (MCP + rules)' },
-      { value: 'claude', label: 'Claude only' },
-      { value: 'codex', label: 'Codex only' },
-      { value: 'none', label: 'Skip' },
+      { value: 'keep', label: `Keep current (${coderProtectionField?.value ?? 'unset — inherits the shared choice'})` },
+      { value: 'true', label: 'Explicit on — coder runs use the protected proxy where available' },
+      { value: 'false', label: 'Explicit off — coder runs forward the raw credential (best effort)' },
     ],
     { defaultIndex: 0 },
   );
-  draft.agent = agent;
-  if (agent !== 'none') {
-    out(deps, `  · MCP will be ${agent === 'codex' ? 'global (~/.codex/config.toml — Codex has no project-local MCP)' : scope === 'local' ? 'project (.mcp.json)' : 'global (~/.claude.json)'}; rules in ${scope === 'local' ? './CLAUDE.md' : '~/.claude/CLAUDE.md'}\n`);
+  if (coderProtection !== 'keep') setDraftValue(draft, 'TRISS_CODER_PROTECT_CREDENTIALS', coderProtection);
+
+  // Advanced exposes the engine inventory (install command, effective
+  // minimum, detection hint) for the selected engine, and its version pin
+  // stays editable right here instead of only in Runtime.
+  await describeEngineSetupFields({ draft, previewState, deps });
+  const enginePinKeys = {
+    opencode: 'TRISS_CODER_OPENCODE_VERSION',
+    opencode2: 'TRISS_CODER_OPENCODE2_VERSION',
+    crush: 'TRISS_CODER_CRUSH_VERSION',
+    omp: 'TRISS_CODER_OMP_VERSION',
+  };
+  const pinKey = enginePinKeys[draft.engineId];
+  if (pinKey) {
+    const pinField = previewState.fields.find((f) => f.key === pinKey);
+    const pinCurrent = pinField?.current;
+    const pinValue = await (deps.prompt || prompt)(
+      `  ${pinKey} (configured minimum ${draft.engineId} version, raise-only; current: ${pinCurrent?.value ?? 'adapter floor'} [${pinCurrent?.source || 'absent'}]; Enter = keep, '-' = remove override)`,
+      { defaultValue: '' },
+    );
+    if (pinValue === '-') {
+      if (pinCurrent?.source === 'shell') out(deps, '  · shell value cannot be unset from here\n');
+      else unsetDraftValue(draft, pinKey);
+    } else if (pinValue !== '' && pinValue !== undefined) {
+      setDraftValue(draft, pinKey, pinValue);
+    }
+  }
+}
+
+// Render the shared engine inventory (listEngineSetupFields) for the engine
+// the section just selected: install command, effective minimum and its
+// source, and the detection hint. Pins resolve through the post-draft
+// preview (files and draft edits first, process.env fallback) so values
+// edited earlier in the same run are what the plan will actually install.
+function describeEngineSetupFields({ draft, previewState, deps }) {
+  const pinKeys = new Set([
+    'TRISS_CODER_OPENCODE_VERSION', 'TRISS_CODER_OPENCODE2_VERSION',
+    'TRISS_CODER_CRUSH_VERSION', 'TRISS_CODER_OMP_VERSION',
+  ]);
+  const envLookup = (key) => {
+    const field = previewState.fields.find((f) => f.key === key);
+    if (pinKeys.has(key) && field?.current && field.current.source !== 'absent'
+      && field.current.value !== undefined && field.current.value !== '') {
+      return String(field.current.value);
+    }
+    return process.env[key];
+  };
+  const engineFields = listEngineSetupFields({ envLookup }).find((f) => f.id === draft.engineId);
+  if (!engineFields) return;
+  const minimum = engineFields.minimumVersion();
+  out(deps, `  · ${engineFields.id} install: ${engineFields.install.command}\n`);
+  out(deps, `  · ${engineFields.id} minimum: ${minimum.value} [${minimum.source}]\n`);
+  out(deps, `  · ${engineFields.id} detection: ${engineFields.detectionHint}\n`);
+}
+
+async function sectionConnections({ draft, deps, scope, opts }) {
+  // MCP install and managed-rules writing are INDEPENDENT choices: a user
+  // may want the MCP server without rewriting rules files or the reverse.
+  // Each choice records its own draft key; agentHostActions() falls back to
+  // draft.agent only when a choice was never made (Easy path).
+  const hostChoices = [
+    { value: 'both', label: 'Both Claude and Codex' },
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'none', label: 'Skip' },
+  ];
+  const choose = async (question) => {
+    if (opts.agent) return String(opts.agent).toLowerCase();
+    return (deps.promptChoice || promptChoice)(question, hostChoices, { defaultIndex: 0 });
+  };
+  const mcp = await choose('Install the Triss MCP server for which assistant?');
+  const rules = await choose('Write the managed rules block for which assistant?');
+  draft.mcp = mcp;
+  draft.rules = rules;
+  for (const [label, choice] of [['MCP', mcp], ['rules', rules]]) {
+    if (choice === 'none') {
+      out(deps, `  · ${label}: skipped\n`);
+      continue;
+    }
+    out(deps, `  · ${label} for ${choice}: ${
+      label === 'MCP'
+        ? 'claude global (~/.claude.json) or project (.mcp.json); codex always global (~/.codex/config.toml — Codex has no project-local MCP)'
+        : (scope === 'local' ? './CLAUDE.md and ./AGENTS.md' : '~/.claude/CLAUDE.md and ~/.codex/AGENTS.md')
+    }\n`);
   }
 }
 
@@ -362,7 +448,7 @@ async function sectionIntegrations({ draft, previewState, deps, integrations, pr
     )).split(/[,\s]+/).filter(Boolean);
   // Record the selection BEFORE any key prompts: an empty answer means the
   // user skipped this visit, not that an earlier explicit selection should
-  // be forgotten (review round 6, F1). Valid names only, deduped.
+  // be forgotten. Valid names only, deduped.
   const validNames = new Set(integrations.map((integration) => integration.name));
   for (const name of pickedNames) {
     if (validNames.has(name) && !draft.selectedIntegrations.includes(name)) {
@@ -376,12 +462,32 @@ async function sectionIntegrations({ draft, previewState, deps, integrations, pr
     for (const envVar of integration.envVars || []) {
       if (asked.has(envVar.name)) continue;
       asked.add(envVar.name);
-      void previewState;
-      const value = await (deps.prompt || prompt)(`  ${envVar.name}${envVar.required ? ' (required)' : ' (optional)'}`, {
-        hidden: /TOKEN|KEY|SECRET|PASS/i.test(envVar.name),
-        defaultValue: '',
-      });
-      if (value) setDraftValue(draft, envVar.name, value);
+      // Like the other editors: the prompt shows the EFFECTIVE value and its
+      // source (secrets masked), Enter keeps it, '-' unsets the persisted
+      // override, and a typed value replaces it.
+      const field = previewState.fields.find((f) => f.key === envVar.name);
+      const current = field?.current;
+      const hasValue = current?.value !== undefined && current?.value !== '';
+      const display = hasValue
+        ? (field?.secret ? maskValue(String(current.value)) : String(current.value))
+        : 'not set';
+      const value = await (deps.prompt || prompt)(
+        `  ${envVar.name}${envVar.required ? ' (required)' : ' (optional)'}` +
+          ` (current: ${display} [${current?.source || 'absent'}]${hasValue ? "; Enter = keep, '-' = unset" : ''})`,
+        {
+          hidden: /TOKEN|KEY|SECRET|PASS/i.test(envVar.name),
+          defaultValue: '',
+        },
+      );
+      if (value === '-') {
+        if (current?.source === 'shell') {
+          out(deps, '  · shell value cannot be unset from here — remove it from your shell profile\n');
+        } else {
+          unsetDraftValue(draft, envVar.name);
+        }
+      } else if (value) {
+        setDraftValue(draft, envVar.name, value);
+      }
       // A skipped required integration field is re-derived from the final
       // post-draft state at finalize time (R5-B): filling it on a later
       // visit must clear the gap.
@@ -391,8 +497,10 @@ async function sectionIntegrations({ draft, previewState, deps, integrations, pr
 
 async function sectionRuntime({ draft, previewState, deps }) {
   const groups = new Map();
+  // Advanced = full tuning: the pricing group (per-model price overrides) is
+  // part of the inventory and stays editable here like every other group.
   for (const field of previewState.fields) {
-    if (!['requests', 'review', 'corpus', 'paths', 'usage', 'update', 'engine-tuning', 'model-transport'].includes(field.group)) continue;
+    if (!['requests', 'review', 'corpus', 'paths', 'usage', 'pricing', 'update', 'engine-tuning', 'model-transport'].includes(field.group)) continue;
     if (!groups.has(field.group)) groups.set(field.group, []);
     groups.get(field.group).push(field);
   }
@@ -471,8 +579,8 @@ function headlessAssemble({ draft, opts, targets }) {
   }
 }
 
-// Headless completeness, checked against the POST-draft state (review round
-// 4, R2): a coder target validates the EFFECTIVE coding provider's key —
+// Headless completeness, checked against the POST-draft state: a coder
+// target validates the EFFECTIVE coding provider's key —
 // never the shared provider's; a provider target validates that profile; an
 // integration target validates its manifest's required fields; a general
 // setup validates the resolved shared provider. Empty string counts as an
@@ -563,8 +671,7 @@ function createDraft() {
 
 // Ordered draft mutations: the LAST confirmed action for a key wins. A set
 // replaces a previous unset and vice versa — the coalescing in
-// applyDraftToSnapshot cannot recover user intent from two unordered lists
-// (review round 3, set→unset ordering).
+// applyDraftToSnapshot cannot recover user intent from two unordered lists.
 function setDraftValue(draft, key, value) {
   draft.unset = draft.unset.filter((k) => k !== key);
   const existing = draft.set.find((e) => e.key === key);
@@ -583,15 +690,19 @@ function draftValueOf(draft, key) {
 }
 
 export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
+  // -f / --force ("re-prompt for values that are already set") is CLI intent:
+  // merge it into the seams here so every flow (Easy, targeted, coder) sees
+  // it, instead of only callers that already injected deps.force.
+  const flowDeps = { ...deps, force: Boolean(deps.force) || Boolean(opts.force) };
   // Argument validation BEFORE any side effect (no env file creation yet).
   const mode = resolveMode(opts);
   if (mode && targetArg) {
     throw new Error('--standard / --advanced cannot be combined with a target argument.');
   }
-  const integrations = deps.integrations || await loadIntegrations();
-  const coderManifest = deps.coderManifest || (await import('../commands/coder.js')).CODER_MANIFEST;
+  const integrations = flowDeps.integrations || await loadIntegrations();
+  const coderManifest = flowDeps.coderManifest || (await import('../commands/coder.js')).CODER_MANIFEST;
   const targets = resolveWizardTargets(targetArg, { integrations, coderManifest });
-  const interactive = isInteractive(deps);
+  const interactive = isInteractive(flowDeps);
   if (!interactive && !opts.yes) {
     throw new Error(
       'triss config wizard is interactive; in non-interactive shells pass --yes to apply a complete configuration ' +
@@ -600,25 +711,46 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   }
 
   // Migration gate BEFORE any draft is assembled: schema-2 writes must never
-  // land on top of unmigrated legacy data (plan §P10.6).
-  const inspectMigration = deps.inspectMigration
+  // land on top of unmigrated legacy data or an unresolved preflight
+  // conflict (plan §P10.6).
+  const inspectMigration = flowDeps.inspectMigration
     || (async (options) => (await import('../migration/migrate.js')).inspectMigration(options));
   const migration = await inspectMigration({
     cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
     home: homedir(),
   });
+  if (migration.state === 'blocked') {
+    // inspectMigration returns 'blocked' for preflight failures: legacy
+    // variables inherited from the parent shell, unreadable/conflicting
+    // targets, or planning conflicts. Writing schema 2 on top would enshrine
+    // the conflict, so the wizard stops with the actionable message.
+    throw new Error(
+      `Setup blocked — the migration preflight reports an unresolved conflict: ${migration.message}. ` +
+        'Run `triss migrate` (it reports the same conflict) and fix it before configuring; ' +
+        'the wizard refuses to write schema 2 over unmigrated or conflicting data.',
+    );
+  }
   // 'required' also fires when the planner would merely append default
   // canonical lines (e.g. TRISS_DEFAULT_ENGINE) to an already-clean file.
-  // The gate exists for LEGACY data (plan §P10.6), so require an actual
-  // legacy key in one of the target files before demanding a migration.
+  // The gate exists for LEGACY data (plan §P10.6), so require actual legacy
+  // content in SOME target — env keys, managed rules, structured configs,
+  // or usage state — before demanding a migration. Legacy outside the env
+  // files must still gate: a clean env file never justifies leaving
+  // unmigrated rules or usage records behind.
   let legacyRequired = migration.state === 'required';
   if (legacyRequired) {
-    const { discoverMigrationTargets, envTextHasLegacyKeys } = await import('../migration/migrate.js');
-    const { readFileSync } = await import('node:fs');
-    legacyRequired = discoverMigrationTargets({
-      cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
-      home: homedir(),
-    }).some((target) => target.kind === 'env' && envTextHasLegacyKeys(readFileSync(target.path, 'utf8')));
+    const hasLegacyData = flowDeps.migrationHasLegacyData
+      || (await import('../migration/migrate.js')).migrationHasLegacyData;
+    try {
+      legacyRequired = await hasLegacyData({
+        cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
+        home: homedir(),
+      });
+    } catch {
+      // The preflight flipped to a failure since inspectMigration ran: fail
+      // closed and demand the migration rather than writing over it.
+      legacyRequired = true;
+    }
   }
   if (legacyRequired) {
     if (!interactive) {
@@ -626,14 +758,14 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
         'Legacy configuration detected — run `triss migrate` first; the wizard refuses to write schema 2 over unmigrated data.',
       );
     }
-    const migrateNow = await (deps.yesNo || yesNo)(
+    const migrateNow = await (flowDeps.yesNo || yesNo)(
       'Legacy configuration found. Run the canonical migration now (recommended)?',
       true,
     );
     if (!migrateNow) {
       throw new Error('Setup cancelled — run `triss migrate` before configuring.');
     }
-    const runMigration = deps.runMigration
+    const runMigration = flowDeps.runMigration
       || (async (options) => (await import('../migration/migrate.js')).runMigration(options));
     await runMigration({
       cwd: process.env.TRISS_PROJECT_ROOT || process.cwd(),
@@ -641,7 +773,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     });
   }
 
-  const scope = await chooseScope(opts, deps);
+  const scope = await chooseScope(opts, flowDeps);
   const state = readSetupState({ scope, integrations, populateRawTexts: true });
   // Baseline for the whole interactive window: prompts run against THIS
   // content; buildSetupPlan refuses to plan if the file moved underneath.
@@ -660,15 +792,15 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   if (opts.yes) {
     headlessAssemble({ draft, opts, targets });
   } else if (targets.kind !== 'none') {
-    await runTargetedFlow({ ...targets, draft, state, opts, deps, integrations });
+    await runTargetedFlow({ ...targets, draft, state, opts, deps: flowDeps, integrations });
   } else if (mode === 'advanced') {
-    await runAdvancedFlow({ draft, state, scope, opts, deps, integrations });
+    await runAdvancedFlow({ draft, state, scope, opts, deps: flowDeps, integrations });
   } else {
-    const easy = await runEasyFlow({ draft, state, opts, deps });
+    const easy = await runEasyFlow({ draft, state, opts, deps: flowDeps });
     easyProvider = easy.providerId;
     if (interactive) {
-      const goAdvanced = await (deps.yesNo || yesNo)('Fine-tune anything else in Advanced?', false);
-      if (goAdvanced) await runAdvancedFlow({ draft, state, scope, opts, deps, integrations });
+      const goAdvanced = await (flowDeps.yesNo || yesNo)('Fine-tune anything else in Advanced?', false);
+      if (goAdvanced) await runAdvancedFlow({ draft, state, scope, opts, deps: flowDeps, integrations });
     }
   }
 
@@ -682,7 +814,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   // provider, coding provider, coding engine — derives from THIS state, so
   // an unset reveals its real fallback and an explicit choice (including
   // "back to the original value") is honored. No startup-state fallback
-  // chains here (review round 4, R1/R2).
+  // chains here.
   const preview = previewSetupState(state, draft, { scope, integrations });
   const fieldValue = (src, key) => src.fields.find((f) => f.key === key)?.current?.value;
   const sharedProviderId = fieldValue(preview, 'TRISS_DEFAULT_PROVIDER')
@@ -699,14 +831,44 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   // Headless runs install only with --install; interactive runs fold the
   // install into the summary confirmation.
   const engineInstallChoice = opts.install || interactive ? 'install' : 'skip';
+  // The planned models are the CONFIRMED contract: they come from the same
+  // post-draft preview the summary renders, and applyEngineSetup forwards
+  // them to runCoderSetup so the applied setup cannot diverge from the plan.
+  const coderProfile = preview.snapshot.providers?.[coderProviderId];
+  const bareModel = (value) => (typeof value === 'string' && value.includes('/')
+    ? value.slice(value.indexOf('/') + 1)
+    : (value ?? null));
+  // Version pins resolve through the post-draft preview (persisted files and
+  // draft edits first, process.env fallback): the wizard never mutates the
+  // environment, so a file-layer pin — or one edited earlier in this run —
+  // must still drive the install planning.
+  const pinKeys = new Set([
+    'TRISS_CODER_OPENCODE_VERSION', 'TRISS_CODER_OPENCODE2_VERSION',
+    'TRISS_CODER_CRUSH_VERSION', 'TRISS_CODER_OMP_VERSION',
+  ]);
+  const envLookup = (key) => {
+    if (pinKeys.has(key)) {
+      const field = preview.fields.find((f) => f.key === key);
+      if (field?.current && field.current.source !== 'absent'
+        && field.current.value !== undefined && field.current.value !== '') {
+        return String(field.current.value);
+      }
+    }
+    return process.env[key];
+  };
   const enginePlan = plansCodingEngine
     ? await planEngineSetup({
       engine: draft.engineId,
       provider: coderProviderId,
       scope,
+      models: {
+        model: bareModel(coderProfile?.model?.value),
+        smallModel: bareModel(coderProfile?.smallModel?.value),
+      },
       installChoice: engineInstallChoice,
     }, {
-      probeEngine: deps.probeEngine || ((engine) => probeEngineVersionPolicy(engine)),
+      probeEngine: flowDeps.probeEngine || ((engine) => probeEngineVersionPolicy(engine)),
+      envLookup,
     })
     : null;
 
@@ -715,16 +877,16 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
     draft,
     state,
     enginePlan,
-    hostActions: agentHostActions(draft.agent, scope),
+    hostActions: agentHostActions(draft, scope),
     requestedValidation: draft.validate === 'static',
     integrations,
     stateRawHash,
   });
 
   if (!opts.yes) {
-    const confirmed = await confirmPlan(plan, { deps, install: enginePlan });
+    const confirmed = await confirmPlan(plan, { deps: flowDeps, install: enginePlan });
     if (!confirmed) {
-      out(deps, '\nCancelled — nothing was written.\n');
+      out(flowDeps, '\nCancelled — nothing was written.\n');
       return { status: 'cancelled', applied: [], warnings: [] };
     }
   }
@@ -734,23 +896,23 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
   // AFTER the file transaction (their own writers own their durability), so
   // a post-apply failure never strands a half-written env file.
   const result = await applySetupPlan(plan, {
-    installMcp: deps.installMcp,
-    writeRules: deps.writeRules,
+    installMcp: flowDeps.installMcp,
+    writeRules: flowDeps.writeRules,
     rereadState: () => readSetupState({ scope, integrations }),
   });
 
   const engineResult = enginePlan
     ? await applyEngineSetup(enginePlan, {
       installChoice: engineInstallChoice,
-      runInstall: deps.runInstall,
-      runCoderSetup: deps.runCoderSetup,
+      runInstall: flowDeps.runInstall,
+      runCoderSetup: flowDeps.runCoderSetup,
     })
     : null;
 
   // Honest final status: ready only when the file transaction AND the engine
   // setup AND every required credential succeeded (plan §1.1/§P06 acceptance).
   const staticValidation = draft.validate === 'static'
-    ? await runStaticValidation({ deps })
+    ? await runStaticValidation({ deps: flowDeps })
     : null;
   // R5: judge readiness on the CURRENT post-apply state — engine setup may
   // have persisted values after the file transaction, and skipped keys may
@@ -773,7 +935,7 @@ export async function runSetupWizard(targetArg, opts = {}, deps = {}) {
       || draftValueOf(draft, 'TRISS_CODER_PROVIDER')
       || result.state?.snapshot?.defaultProvider?.value
       || state.snapshot.defaultProvider?.value,
-    deps,
+    deps: flowDeps,
   });
   if (finalResult.status !== 'ready') process.exitCode = 1;
   return finalResult;
@@ -863,23 +1025,33 @@ function finalizeResult({ result, engineResult, draft, staticValidation, missing
   });
 }
 
-function agentHostActions(agent, scope) {
-  if (!agent || agent === 'none') return [];
-  const hosts = agent === 'both' ? ['claude', 'codex'] : [agent];
+function agentHostActions(draftOrAgent, scope) {
+  // Accepts the draft (preferred) or a bare agent choice. MCP install and
+  // rules writing are INDEPENDENT choices (draft.mcp / draft.rules from the
+  // Advanced connections section); when a choice was never made, both fall
+  // back to draft.agent so the Easy path behaves exactly as before.
+  const draft = typeof draftOrAgent === 'object' && draftOrAgent !== null ? draftOrAgent : null;
+  const fallback = draft ? draft.agent : draftOrAgent;
+  const hostsFor = (choice) => {
+    if (!choice || choice === 'none') return [];
+    return choice === 'both' ? ['claude', 'codex'] : [choice];
+  };
+  const mcpHosts = hostsFor(draft ? (draft.mcp ?? fallback) : fallback);
+  const rulesHosts = hostsFor(draft ? (draft.rules ?? fallback) : fallback);
   // The promised integration is BOTH surfaces: the MCP server entry and the
   // managed rules block, each through its existing writer.
-  return hosts.flatMap((target) => [
-    {
+  return [
+    ...mcpHosts.map((target) => ({
       kind: 'mcp',
       target,
       scope: target === 'codex' ? 'global' : (scope || 'global'),
-    },
-    {
+    })),
+    ...rulesHosts.map((target) => ({
       kind: 'rules',
       target,
       scope: scope || 'global',
-    },
-  ]);
+    })),
+  ];
 }
 
 
@@ -895,7 +1067,12 @@ async function confirmPlan(plan, { deps }) {
     out(deps, `  file     : ${file.path} (${file.kind})\n`);
   }
   for (const action of summary.externalActions) {
-    if (action.needed) out(deps, `  install  : ${action.reason || action.engine}\n`);
+    if (!action.needed) continue;
+    // The user must see the EXACT command that will run before confirming:
+    // an install hands an external installer a child process, so the reason
+    // alone is never enough.
+    out(deps, `  install  : ${action.command}\n`);
+    if (action.reason) out(deps, `             (${action.reason})\n`);
   }
   for (const limitation of summary.limitations) {
     out(deps, `  note     : ${limitation}\n`);

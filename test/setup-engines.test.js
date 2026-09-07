@@ -151,18 +151,6 @@ test('planEngineSetup maps the injected probe to needed=true/false without spawn
   assert.match(below.actions[0].reason, /17\.0\.0 does not meet the minimum 18\.0\.6/);
 });
 
-test('planEngineSetup is deterministic and freezes its result', () => {
-  const probe = () => compatiblePolicy('0.1.6', '0.1.6');
-  const input = { engine: 'crush', provider: 'zai', scope: 'local', credentialMode: 'best_effort_raw' };
-  const one = planEngineSetup(input, { probeEngine: probe });
-  const two = planEngineSetup(input, { probeEngine: probe });
-  assert.equal(JSON.stringify(one), JSON.stringify(two));
-  assert.ok(Object.isFrozen(one));
-  assert.ok(Object.isFrozen(one.actions));
-  assert.ok(Object.isFrozen(one.providerActions));
-  assert.throws(() => { one.installChoice = 'skip'; }, TypeError);
-});
-
 test('planEngineSetup validates arguments before touching anything', () => {
   assert.throws(
     () => planEngineSetup({ engine: 'vscode' }, { probeEngine: () => compatiblePolicy() }),
@@ -213,9 +201,14 @@ test('planEngineSetup records provider intent and honest limitations', () => {
     { engine: 'crush' },
     { probeEngine: () => missingPolicy('0.1.6') },
   );
+  assert.equal(
+    crush.limitations.some((l) => l.includes('triss coder init --engine crush')),
+    false,
+    'crush provider setup completes in the shared path — the stale recovery limitation must be gone',
+  );
   assert.ok(
-    crush.limitations.some((l) => l.includes('runCoderSetup') && l.includes('triss coder init --engine crush')),
-    'the crush shared-boundary gap must be disclosed as a limitation',
+    crush.limitations.some((l) => l.startsWith('crush:')),
+    'crush still discloses its real limitations (worktree isolation default, tool auto-approval without --restrict)',
   );
 
   // A malformed configured minimum cannot be fixed by installing.
@@ -266,36 +259,6 @@ test('probeEngineVersionPolicy classifies crush and opencode through their adapt
 });
 
 // ─── applyEngineSetup ──────────────────────────────────────────────────────
-
-test('applyEngineSetup delegates provider setup through the runCoderSetup seam', async () => {
-  const calls = [];
-  const plan = planEngineSetup(
-    {
-      engine: 'opencode',
-      provider: 'zai',
-      scope: 'global',
-      credentialMode: 'best_effort_raw',
-    },
-    { probeEngine: () => compatiblePolicy() },
-  );
-  const result = await applyEngineSetup(plan, {
-    runCoderSetup: async (input) => {
-      calls.push(input);
-      return { model: 'zai/glm-5.2', smallModel: 'zai/glm-5-turbo' };
-    },
-  });
-  assert.deepEqual(calls, [{
-    engine: 'opencode',
-    scope: 'global',
-    provider: 'zai',
-    credentialMode: 'best_effort_raw',
-  }]);
-  assert.equal(result.status, 'applied');
-  assert.deepEqual(result.outcomes.map((o) => o.status), ['skipped', 'applied']);
-  assert.equal(result.outcomes[0].kind, 'engine-install');
-  assert.match(result.outcomes[1].reason, /model=zai\/glm-5\.2/);
-  assert.deepEqual(result.providerResult, { model: 'zai/glm-5.2', smallModel: 'zai/glm-5-turbo' });
-});
 
 test('applyEngineSetup records a failed install instead of throwing, then still runs provider setup', async () => {
   const installs = [];

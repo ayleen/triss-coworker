@@ -277,7 +277,7 @@ export function buildSetupPlan(
   // The engine plan carries the RESOLVED intent (post-draft state), which
   // outranks the startup-state fallbacks below: an unset override must show
   // its true post-draft resolution in the summary, not the stale startup
-  // value (review round 4, R1).
+  // value.
   const resolvedCodingProvider = enginePlan?.providerActions?.[0]?.provider;
   const providerId = previewSnapshot.defaultProvider?.value
     ?? state.snapshot.defaultProvider?.value;
@@ -457,7 +457,11 @@ export async function applySetupPlan(plan, deps = {}) {
     }
   }
 
-  // 2. Rules / MCP writes through the existing writers.
+  // 2. Rules / MCP writes through the existing writers. Outcomes are tracked
+  // per CONCRETE action (host + target), not per file kind: two hosts share
+  // the 'rules' kind, and one failing target must not mark the other as
+  // failed (or as configured) too.
+  const hostOutcomes = new Map();
   for (const action of plan.hostActions ?? []) {
     if (action.host === 'mcp') {
       try {
@@ -469,8 +473,10 @@ export async function applySetupPlan(plan, deps = {}) {
           path: result?.path ?? action.path,
           detail: `mcp server "triss" ${result?.status ?? 'written'}`,
         });
+        hostOutcomes.set(action, { state: 'applied' });
       } catch (err) {
         recordAction(failed, { kind: action.fileKind, path: action.path, reason: err.message });
+        hostOutcomes.set(action, { state: 'failed', reason: err.message });
       }
       continue;
     }
@@ -478,10 +484,14 @@ export async function applySetupPlan(plan, deps = {}) {
       try {
         const writer = deps.writeRules
           ?? (async (opts) => (await import('../commands/init.js')).runInit(opts));
-        await writer({ global: action.hostScope !== 'local', target: action.target });
+        // The wizard renders its own summary and next-step guidance; the
+        // post-setup hints inside runInit would duplicate it here.
+        await writer({ global: action.hostScope !== 'local', target: action.target, nextSteps: false });
         recordAction(applied, { kind: 'rules', path: action.path, detail: 'managed rules block written' });
+        hostOutcomes.set(action, { state: 'applied' });
       } catch (err) {
         recordAction(failed, { kind: 'rules', path: action.path, reason: err.message });
+        hostOutcomes.set(action, { state: 'failed', reason: err.message });
       }
     }
   }
@@ -494,7 +504,10 @@ export async function applySetupPlan(plan, deps = {}) {
     warnings.push(limitation);
   }
   for (const key of plan.preview?.conflicts ?? []) {
-    warnings.push(`${key}: shell value overrides the persisted layers; the unset was not applied`);
+    warnings.push(
+      `${key}: shell value overrides the persisted layers; the persisted edit will not change ` +
+        'the effective value until the shell variable is removed',
+    );
   }
 
   // 5. Re-read the effective state with the shared resolver.
@@ -545,12 +558,12 @@ export async function applySetupPlan(plan, deps = {}) {
       : [],
   }));
   for (const action of plan.hostActions ?? []) {
+    const outcome = hostOutcomes.get(action);
+    const failureReason = outcome?.state === 'failed' ? outcome.reason : null;
     components.push(perComponent(`${action.host}:${action.target}`, {
-      configured: okKinds.has(action.fileKind),
-      available: !badKinds.has(action.fileKind),
-      reasons: badKinds.has(action.fileKind)
-        ? [failed.find((f) => f.kind === action.fileKind)?.reason].filter(Boolean)
-        : [],
+      configured: Boolean(outcome) && outcome.state !== 'failed',
+      available: outcome?.state !== 'failed',
+      reasons: failureReason ? [failureReason] : [],
     }));
   }
   if (gitignorePlanned) {

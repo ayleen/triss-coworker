@@ -154,6 +154,7 @@ program
   .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .option('-f, --force', 'force-replace an existing triss block without diffing')
   .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
+  .option('--yes', 'with --setup: non-interactive apply of a complete headless configuration (required outside a TTY)')
   .action(wrap(runInit));
 
 addModelSelectionOptions(

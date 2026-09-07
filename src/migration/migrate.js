@@ -531,6 +531,22 @@ export function inspectMigration(options = {}) {
   }
 }
 
+/**
+ * Whether any discovered migration target still holds ACTUAL legacy data —
+ * legacy env keys, managed-rule blocks, structured config references, or
+ * usage records. Canonical-only additions (e.g. appending a missing default
+ * engine line to an already-clean env file) do NOT count: inspectMigration
+ * reports 'required' for those too, and a caller that must not block setup
+ * on them can use this to tell the two apart. Throws when the preflight
+ * fails (the inspectMigration 'blocked' case). The setup wizard's migration
+ * gate uses this so a 'required' verdict is never downgraded while managed
+ * rules, structured configs, or usage state remain unmigrated.
+ */
+export function migrationHasLegacyData(options = {}) {
+  return preflightMigration(options).targets.some((plan) =>
+    plan.canonical !== plan.cleanup || plan.changed === true);
+}
+
 function fsyncDirectory(path) {
   const descriptor = openSync(dirname(path), 'r');
   try {

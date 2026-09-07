@@ -2,15 +2,20 @@
 // Copyright (c) 2026 ayleen
 
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
   writeFileSync,
   chmodSync,
   appendFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { projectRoot } from './safety.js';
 
@@ -302,7 +307,11 @@ export function planEnvPatch(rawText, edits) {
 // Filesystem wrapper around planEnvPatch mirroring setVar's durability
 // behavior: ensure the env file exists (same scope detection as setVar),
 // write the patched text only when something changed, and keep the
-// permissions tight afterwards. Returns { changed, touched }.
+// permissions tight. The write is ATOMIC: the patched content lands in a
+// 0600 temp file in the SAME directory (temp+rename, same pattern as the
+// migration transaction), then a single rename replaces the target. An
+// in-place writeFileSync could be interrupted mid-write and leave a
+// truncated env file behind — losing credentials. Returns { changed, touched }.
 export function applyEnvPatch(path, edits) {
   ensureEnvFile(path === getEnvFilePath('local') ? 'local' : 'global');
   // A verbatim path matching neither scope just gets touched, like setVar.
@@ -312,11 +321,29 @@ export function applyEnvPatch(path, edits) {
   const raw = readFileSync(path, 'utf8');
   const { text, changed, touched } = planEnvPatch(raw, edits);
   if (changed) {
-    writeFileSync(path, text);
+    const temp = join(dirname(path), `.${basename(path)}.triss-patch-${randomBytes(6).toString('hex')}`);
+    const descriptor = openSync(temp, 'wx', 0o600);
     try {
-      chmodSync(path, 0o600);
+      writeFileSync(descriptor, text);
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    try {
+      chmodSync(temp, 0o600);
     } catch {
       /* best-effort; chmod may fail on Windows */
+    }
+    renameSync(temp, path);
+    try {
+      const dir = openSync(dirname(path), 'r');
+      try {
+        fsyncSync(dir);
+      } finally {
+        closeSync(dir);
+      }
+    } catch {
+      /* best-effort; directory fsync is not supported everywhere */
     }
   }
   return { changed, touched };
@@ -429,7 +456,9 @@ export function prompt(question, { hidden = false, defaultValue } = {}) {
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n') {
           finish();
-          return resolve(value || defaultValue || '');
+          // Trim like the visible path so a trailing space typed into a key
+          // is not persisted into the env file.
+          return resolve(value.trim() || defaultValue || '');
         }
         if (ch === CTRL_C) {
           finish();

@@ -8,7 +8,13 @@ import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
 import { activeEnvFiles, readEnvFile, maskValue } from '../secrets.js';
 import { projectRoot, pathsRestricted } from '../safety.js';
 import { CODER_MANIFEST, describeCoderStatus } from './coder.js';
-import { CODER_PROVIDER_CREDENTIALS, resolveCoderRuntimeProviderRoute } from '../coder-providers.js';
+import {
+  CODER_PROVIDER_CREDENTIALS,
+  resolveCoderCredentialMode,
+  resolveCoderRuntimeProviderRoute,
+} from '../coder-providers.js';
+import { VALID_CODER_ENGINES } from '../coder-engine-registry.js';
+import { readSetupState } from '../setup/configuration.js';
 import { inspectMigration } from '../migration/migrate.js';
 
 export async function runStatus(deps = {}) {
@@ -137,21 +143,50 @@ export async function runStatus(deps = {}) {
     // "default engine" line says what a bare `triss coder run` resolves to.
     lines.push(pc.bold('Coder'));
     const coder = describeCoderStatus(deps);
-    lines.push(`  default engine                ${pc.cyan(coder.defaultEngine)}`);
-    if (coder.coderEngine) {
-      lines.push(`  coding engine                 ${pc.cyan(coder.coderEngine)}${coder.coderProvider ? ` (provider ${pc.cyan(coder.coderProvider)})` : ''}`);
+    // TRISS_CODER_ENGINE has no atom in the provider snapshot (and
+    // describeCoderStatus reads process.env only, while `triss status` runs
+    // before the env-file loader fills process.env), so a PERSISTED engine
+    // choice was invisible — a configured crush reported as opencode. Read
+    // the engine through the same shell > local > global > default layering
+    // every other setup field uses.
+    const engineField = readSetupState({}).fields.find((f) => f.key === 'TRISS_CODER_ENGINE')?.current;
+    const engineValue = engineField?.value;
+    const engineExplicit = Boolean(engineField && engineField.source !== 'absent' && engineField.source !== 'registry-default');
+    const engineLabel = VALID_CODER_ENGINES.includes(engineValue)
+      ? pc.cyan(engineValue)
+      : pc.yellow(`${engineValue} (invalid — \`triss coder run\` refuses it; valid: ${VALID_CODER_ENGINES.join(', ')})`);
+    lines.push(`  default engine                ${engineLabel}`);
+    if (engineExplicit) {
+      const providerTag = coder.coderProvider ? ` (provider ${pc.cyan(coder.coderProvider)})` : '';
+      lines.push(`  coding engine                 ${engineLabel}${pc.dim(` [${engineField.source}]`)}${providerTag}`);
     } else if (coder.coderProvider) {
-      lines.push(`  coding provider               ${pc.cyan(coder.coderProvider)} (engine inherits ${coder.defaultEngine})`);
+      lines.push(`  coding provider               ${pc.cyan(coder.coderProvider)} (engine inherits ${engineValue})`);
     }
-    // Credential mode comes from describeCoderStatus, which resolves it via
-    // the same single resolver as runCoderRun — this file never re-implements
-    // the engine x flag matrix.
-    const credMode = coder.defaultCredentialMode;
+    // Credential mode resolves through the ONE shared resolver, but against
+    // the EFFECTIVE engine above: describeCoderStatus's own resolution reads
+    // process.env only and misses the persisted file layer.
+    const credMode = resolveCoderCredentialMode({
+      engine: engineValue,
+      coderProtectCredentials: snapshot.coderProtectCredentials?.value,
+      sharedProtectCredentials: snapshot.protectCredentials?.value,
+    });
+    // "default on" wording only when NO explicit choice exists: a persisted
+    // true/false is the user's own setting and is reported as such.
+    const explicitProtection = snapshot.coderProtectCredentials?.source
+      && snapshot.coderProtectCredentials.source !== 'absent'
+      ? `TRISS_CODER_PROTECT_CREDENTIALS=${snapshot.coderProtectCredentials.value}`
+      : snapshot.protectCredentials?.source && snapshot.protectCredentials.source !== 'absent'
+        ? `TRISS_PROTECT_CREDENTIALS=${snapshot.protectCredentials.value}`
+        : null;
     lines.push(`  default credential mode       ${pc.cyan(credMode)}`);
     lines.push(
       credMode === 'best_effort_raw'
-        ? '  protected credential mode     pass --protect-credentials'
-        : '  protected credential mode     default on (crush); --no-protect-credentials for raw',
+        ? (explicitProtection
+          ? `  protected credential mode     off (persisted ${explicitProtection}); pass --protect-credentials for the proxy`
+          : '  protected credential mode     pass --protect-credentials')
+        : (explicitProtection
+          ? `  protected credential mode     on (persisted ${explicitProtection}); --no-protect-credentials for raw`
+          : '  protected credential mode     default on (crush); --no-protect-credentials for raw'),
     );
     // Shared provider roles used by an unqualified coder run.
     lines.push(`  default model (opencode)      ${pc.cyan(coder.defaultModel)}`);

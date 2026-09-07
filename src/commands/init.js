@@ -69,6 +69,11 @@ export async function runInit(opts) {
   for (const plan of plans) mkdirSync(dirname(plan.targetPath), { recursive: true });
   applyFileTransaction(plans);
   for (const plan of plans) reportPlan(plan, opts);
+  // Plain `triss init` ends with real next-step guidance: missing
+  // credentials and not-ready integrations each get an actionable command.
+  // Embedded callers that render their own summary (the setup wizard's host
+  // pass) opt out with nextSteps: false to avoid duplicated output.
+  if (opts.nextSteps !== false) await postInit();
 }
 
 async function chooseTarget() {

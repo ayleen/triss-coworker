@@ -19,6 +19,7 @@ import {
   readStdin,
 } from '../secrets.js';
 import { assertModelExecutionEngine } from '../provider-contract.js';
+import { listSetupFields } from '../setup/configuration.js';
 import { loadIntegrations, getCoreManifest } from '../integrations/_registry.js';
 import { CODER_MANIFEST } from './coder.js';
 
@@ -101,6 +102,16 @@ export async function runSet(key, value, opts) {
   if (!resolved) throw new Error('Empty value — aborted');
   if (key === 'TRISS_DEFAULT_ENGINE') {
     assertModelExecutionEngine(resolved, key);
+  }
+  // Validate enum-valued keys against the canonical setup inventory (the
+  // same value descriptors the wizard uses), so a bogus provider id like
+  // "za1" is rejected here instead of failing later in the status/runtime
+  // resolvers.
+  const enumDescriptor = listSetupFields().find((f) => f.key === key && Array.isArray(f.values));
+  if (enumDescriptor && !enumDescriptor.values.includes(resolved)) {
+    throw new Error(
+      `"${key}" must be one of: ${enumDescriptor.values.join(', ')} (got "${resolved}")`,
+    );
   }
 
   const path = ensureEnvFile(scope);

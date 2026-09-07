@@ -24,10 +24,15 @@
 // and owned by another workstream; do not duplicate more of it here).
 
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VALID_CODER_ENGINES } from '../coder-engine-registry.js';
 import { crush as crushEngine } from '../coder-engines/crush.js';
 import { omp as ompEngine } from '../coder-engines/omp.js';
 import { opencode2 as opencode2Engine } from '../coder-engines/opencode2.js';
+import { compareOpenCode2Versions } from '../coder-engines/opencode2.js';
 import { resolveOpencodeVersionPolicy, runCoderSetup } from '../commands/coder.js';
 
 // ─── engine inventory ──────────────────────────────────────────────────────
@@ -40,39 +45,88 @@ function commandFromHint(hint) {
   return String(hint).split('#')[0].trim();
 }
 
-// OpenCode 1 minimum without spawning: resolveOpencodeVersionPolicy(null)
-// is pure and classifies the configured minimum (TRISS_CODER_OPENCODE_VERSION)
-// against the exported supported floor, degrading to the floor text when the
-// config is invalid — the same value ensureEngine() installs.
-function opencodeMinimum() {
-  const policy = resolveOpencodeVersionPolicy(null);
+// OpenCode 1 minimum without spawning: resolveOpencodeVersionPolicy(null, pin)
+// is pure and classifies a configured minimum against the exported supported
+// floor, degrading to the floor text when the config is invalid — the same
+// value ensureEngine() installs. The pin comes from the caller's env lookup
+// (resolved state layering) so a file-layer override counts here too.
+function opencodeMinimum(envLookup) {
+  const configured = envLookup ? envLookup('TRISS_CODER_OPENCODE_VERSION') : undefined;
+  const policy = resolveOpencodeVersionPolicy(null, configured ?? undefined);
   return { value: policy.effectiveMinimum, policy };
 }
 
-function minimumFromPin(pin, configuredEnv, origin) {
-  const configured = process.env[configuredEnv];
+// Raise-only overlay used when the caller supplies an env/state lookup: a
+// configured pin is honored only when it RAISES the adapter's effective pin
+// (which already floor-clamps process.env). This mirrors the adapters' own
+// raise-only clamp (resolveCrushMinimumConfig / resolveOmpMinimumConfig /
+// opencode2MinimumVersion) without mutating the environment. Values that do
+// not parse as versions are ignored (the adapter pin stays in charge).
+function canonicalStableParts(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function raisesPin(configured, adapterPin) {
+  const left = canonicalStableParts(configured);
+  if (left) {
+    const right = canonicalStableParts(adapterPin);
+    // Both plain stable versions: component-wise compare.
+    if (right) return left[0] !== right[0] || left[1] !== right[1] || left[2] !== right[2]
+      ? left[0] > right[0] || (left[0] === right[0] && (left[1] > right[1] || (left[1] === right[1] && left[2] > right[2])))
+      : false;
+    // Adapter pin is a channel build (e.g. a beta): any stable version raises it.
+    return true;
+  }
+  // Non-canonical (e.g. opencode2 beta channel): delegate to the adapter's
+  // own comparator so `x.y.z-beta-N` ordering matches the runtime policy.
+  const compared = compareOpenCode2Versions(configured, adapterPin);
+  return compared !== null && compared > 0;
+}
+
+function minimumFromPin(pin, configuredEnv, origin, envLookup) {
+  const configured = envLookup ? envLookup(configuredEnv) : process.env[configuredEnv];
+  const effective = configured && configured !== '' && raisesPin(configured, pin)
+    ? String(configured)
+    : String(pin);
   return {
-    value: pin,
-    source: configured ? `${configuredEnv} (raise-only; clamped to the adapter floor)` : origin,
+    value: effective,
+    source: configured
+      ? `${configuredEnv} (raise-only; clamped to the adapter floor)`
+      : origin,
   };
+}
+
+// Rewrite the trailing @<version> of an npm install hint so the planned
+// command installs exactly the effective pin (the adapter hint is built from
+// its own env-derived pin; the lookup may raise it from the file layer).
+function pinInstallCommand(command, adapterPin, effectivePin) {
+  if (effectivePin === adapterPin) return command;
+  return command.replace(new RegExp(`@${adapterPin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), `@${effectivePin}`);
 }
 
 // Descriptors are rebuilt on every call (no module-level cache): the
 // effective minimums read raise-only TRISS_CODER_*_VERSION overrides at
 // call time, and tests change process.env per case — a cached command
-// would go stale.
-function buildEngineDescriptor(id) {
+// would go stale. `envLookup` (a key -> value function) lets callers
+// resolve pins through a resolved state layering (files > env) instead of
+// process.env directly; the default lookup is process.env.
+function buildEngineDescriptor(id, envLookup) {
+  const pinFromEnv = (configuredEnv) => (envLookup
+    ? (envLookup(configuredEnv) ?? process.env[configuredEnv])
+    : process.env[configuredEnv]);
   switch (id) {
     case 'opencode':
       return {
         id,
         install: () => ({
-          command: `npm install -g opencode-ai@${opencodeMinimum().value}`,
+          command: `npm install -g opencode-ai@${opencodeMinimum(envLookup).value}`,
           kind: 'npm',
         }),
         minimumVersion: () => {
-          const { value, policy } = opencodeMinimum();
-          const configured = process.env.TRISS_CODER_OPENCODE_VERSION;
+          const { value, policy } = opencodeMinimum(envLookup);
+          const configured = pinFromEnv('TRISS_CODER_OPENCODE_VERSION');
           return {
             value,
             source: configured
@@ -95,20 +149,28 @@ function buildEngineDescriptor(id) {
           opencode2Engine.versionPin(),
           'TRISS_CODER_OPENCODE2_VERSION',
           'src/coder-engines/opencode2.js OPENCODE2_MIN_VERSION_DEFAULT (minimum-or-newer beta channel, never an exact pin)',
+          envLookup,
         ),
         detectionHint: 'opencode2 --version on PATH plus capability probe (src/coder-engines/opencode2.js detect)',
       };
     case 'crush':
       return {
         id,
-        install: () => ({
-          command: crushEngine.installHint(),
-          kind: 'npm',
-        }),
+        install: () => {
+          const hint = crushEngine.installHint();
+          const configured = pinFromEnv('TRISS_CODER_CRUSH_VERSION');
+          return {
+            command: configured && configured !== '' && raisesPin(configured, crushEngine.CRUSH_PIN)
+              ? pinInstallCommand(hint, crushEngine.CRUSH_PIN, String(configured))
+              : hint,
+            kind: 'npm',
+          };
+        },
         minimumVersion: () => minimumFromPin(
           crushEngine.CRUSH_PIN,
           'TRISS_CODER_CRUSH_VERSION',
           'src/coder-engines/crush.js CRUSH_SUPPORTED_FLOOR (hard floor, raise-only config)',
+          envLookup,
         ),
         detectionHint: 'crush --version on PATH (src/coder-engines/crush.js resolveCrushVersionPolicy)',
       };
@@ -123,6 +185,7 @@ function buildEngineDescriptor(id) {
           ompEngine.OMP_PIN,
           'TRISS_CODER_OMP_VERSION',
           'src/coder-engines/omp.js OMP_SUPPORTED_FLOOR (hard floor, raise-only config)',
+          envLookup,
         ),
         detectionHint: 'omp --version on PATH (src/coder-engines/omp.js resolveOmpVersionPolicy)',
       };
@@ -131,8 +194,8 @@ function buildEngineDescriptor(id) {
   }
 }
 
-function descriptorFor(engine) {
-  return buildEngineDescriptor(engine);
+function descriptorFor(engine, envLookup) {
+  return buildEngineDescriptor(engine, envLookup);
 }
 
 /**
@@ -140,12 +203,15 @@ function descriptorFor(engine) {
  * needs to describe an install: { id, install: { command, kind }, 
  * minimumVersion() -> { value, source }, detectionHint }. Commands come from
  * the adapters' installHint() (opencode 1 assembles its command from the
- * shared version policy, mirroring ensureEngine()).
+ * shared version policy, mirroring ensureEngine()). `deps.envLookup(key)` may
+ * resolve TRISS_CODER_*_VERSION pins through a resolved state layering
+ * (persisted files first, process.env fallback) instead of process.env alone.
  */
-export function listEngineSetupFields() {
+export function listEngineSetupFields(deps = {}) {
+  const envLookup = typeof deps.envLookup === 'function' ? deps.envLookup : undefined;
   return Object.freeze(
     VALID_CODER_ENGINES.map((id) => {
-      const descriptor = descriptorFor(id);
+      const descriptor = descriptorFor(id, envLookup);
       return Object.freeze({
         id: descriptor.id,
         install: Object.freeze({ ...descriptor.install() }),
@@ -267,7 +333,7 @@ function engineLimitations(engine, policy) {
   }
   if (engine === 'crush') {
     limitations.push(
-      'crush: the shared setup boundary (runCoderSetup) does not complete crush model/permission seeding yet — applyEngineSetup records the exact `triss coder init --engine crush <scope>` recovery command from the underlying error instead of faking success',
+      'crush: runs default to disposable worktree isolation, and tools are auto-approved unless the run passes --restrict to enforce the persisted allowlist',
     );
   }
   if (engine === 'omp') {
@@ -293,7 +359,11 @@ function engineLimitations(engine, policy) {
  * where actions[0] is { kind: 'engine-install', engine, command, installKind,
  * needed, reason } and providerActions[0] carries the runCoderSetup intent
  * ({ engine, provider, scope, credentialMode, models }). installChoice
- * ('install' | 'skip', default 'install') is honored by applyEngineSetup.
+ * ('install' | 'skip', default 'install') is honored by applyEngineSetup,
+ * which forwards the planned models to runCoderSetup so the applied setup
+ * matches the confirmed plan. deps.envLookup(key) optionally resolves
+ * TRISS_CODER_*_VERSION pins through the resolved state layering instead of
+ * process.env alone.
  */
 export function planEngineSetup(
   {
@@ -325,7 +395,8 @@ export function planEngineSetup(
     throw new TypeError('models must be null/undefined or an object like { model, smallModel }');
   }
 
-  const descriptor = descriptorFor(engine);
+  const envLookup = typeof deps.envLookup === 'function' ? deps.envLookup : undefined;
+  const descriptor = descriptorFor(engine, envLookup);
   const policy = normalizePolicy(engine, deps.probeEngine(engine));
 
   const action = Object.freeze({
@@ -362,19 +433,80 @@ export function planEngineSetup(
 
 // ─── apply ─────────────────────────────────────────────────────────────────
 
-// Default deps.runInstall. The npm commands this module plans contain no
-// quoted/whitespace arguments, so whitespace splitting is exact; script-kind
-// commands (omp's curl|sh) run through `sh -c` verbatim.
-function defaultRunInstall(command, engine) {
-  const parts = String(command).trim().split(/\s+/);
-  const result = parts[0] === 'npm'
-    ? nodeSpawnSync('npm', parts.slice(1), { stdio: 'inherit' })
-    : nodeSpawnSync('sh', ['-c', command], { stdio: 'inherit' });
-  if (!result || result.error || result.status !== 0) {
-    const detail = result?.error ? ` (${result.error.message})` : '';
-    return { ok: false, error: `install command failed for ${engine}: ${command}${detail}` };
+// Install children run with a MINIMAL environment: the setup process may
+// hold provider and integration tokens (shell exports), and npm lifecycle
+// scripts as well as downloaded installers must not see them. PATH/HOME
+// plus the locale/TZ/tmp/proxy allowlist below is everything a package
+// manager or a curl|sh bootstrap needs.
+const INSTALL_ENV_ALLOWLIST = Object.freeze([
+  'PATH', 'HOME', 'TMPDIR', 'TMP', 'LANG', 'LC_ALL', 'TZ',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'no_proxy',
+]);
+
+function minimalInstallEnv() {
+  const env = {};
+  for (const key of INSTALL_ENV_ALLOWLIST) {
+    if (process.env[key] != null) env[key] = process.env[key];
   }
-  return { ok: true };
+  return env;
+}
+
+// `curl <args> | sh` pipelines (the omp install hint shape): returns the
+// curl arguments when the command matches exactly that shape, otherwise
+// null. Anything else is refused rather than run through a shell.
+function curlShPipelineArgs(command) {
+  const text = String(command).trim();
+  const pipe = text.split('|');
+  if (pipe.length !== 2 || pipe[1].trim() !== 'sh') return null;
+  const args = pipe[0].trim().split(/\s+/);
+  if (args[0] !== 'curl') return null;
+  return args.slice(1);
+}
+
+/**
+ * Default deps.runInstall. Every child spawns from an argv array — no
+ * `sh -c`, no shell strings (CONTRIBUTING: subprocess arguments are always
+ * arrays). npm commands run via the npm executable; `curl ... | sh` style
+ * script commands download the installer to a private temp file with curl
+ * (argv) and execute it as `sh <file>` (argv) with the minimal install env.
+ * `deps.spawnSync` is injectable for tests.
+ */
+export function defaultRunInstall(command, engine, deps = {}) {
+  const spawnSync = deps.spawnSync ?? nodeSpawnSync;
+  const env = minimalInstallEnv();
+  const fail = (result, what) => {
+    const detail = result?.error ? ` (${result.error.message})` : '';
+    return { ok: false, error: `install command failed for ${engine}: ${what}${detail}` };
+  };
+  const text = String(command).trim();
+  const parts = text.split(/\s+/);
+  if (parts[0] === 'npm') {
+    const result = spawnSync('npm', parts.slice(1), { stdio: 'inherit', env });
+    if (!result || result.error || result.status !== 0) return fail(result, command);
+    return { ok: true };
+  }
+  const curlArgs = curlShPipelineArgs(text);
+  if (!curlArgs) {
+    return {
+      ok: false,
+      error: `unsupported script install command for ${engine}: ${command} — ` +
+        'only "npm ..." and "curl ... | sh" installers are executed',
+    };
+  }
+  if (curlArgs.some((arg) => arg === '-o' || arg === '--output')) {
+    return { ok: false, error: `refusing install command that declares its own output file: ${command}` };
+  }
+  const scriptPath = join(tmpdir(), `triss-install-${randomBytes(6).toString('hex')}.sh`);
+  try {
+    const download = spawnSync('curl', [...curlArgs, '-fsSL', '-o', scriptPath], { stdio: 'inherit', env });
+    if (!download || download.error || download.status !== 0) return fail(download, `curl ${curlArgs.join(' ')}`);
+    const run = spawnSync('sh', [scriptPath], { stdio: 'inherit', env });
+    if (!run || run.error || run.status !== 0) return fail(run, command);
+    return { ok: true };
+  } finally {
+    rmSync(scriptPath, { force: true });
+  }
 }
 
 function outcome(kind, engine, status, reason) {
@@ -384,22 +516,23 @@ function outcome(kind, engine, status, reason) {
 /**
  * Execute an engine setup plan through seams:
  *   deps.runInstall(command, engine) — performs the external install
- *     (default: real npm / sh -c spawn, stdio inherited);
+ *     (default: the exported defaultRunInstall — minimal-env, argv-only
+ *     npm / curl|sh execution, stdio inherited);
  *   deps.runCoderSetup(input) — performs provider/model persistence
  *     (default: the real runCoderSetup from src/commands/coder.js).
  *
  * The engine install runs only when the plan says it is needed AND
  * installChoice !== 'skip'. Provider setup then runs for ALL four engines
- * through runCoderSetup (its omp branch verifies the version policy and the
- * credential; its crush branch currently refuses to complete and reports
- * the exact `triss coder init --engine crush` recovery command — recorded
- * as a failed outcome with that actionable reason, never swallowed).
+ * through runCoderSetup — with the plan's provider, scope, credentialMode,
+ * and the CONFIRMED models from providerActions[0], so the applied setup
+ * matches what the plan showed — and its omp branch verifies the version
+ * policy and the credential. A throwing seam is recorded as a failed
+ * outcome, never re-thrown mid-way.
  *
  * Returns { engine, status, outcomes, providerResult, limitations }:
  * `status` is 'applied' when every outcome succeeded and no needed install
  * was declined, otherwise 'incomplete'; each outcome carries
- * { kind, engine, status: 'applied'|'skipped'|'failed', reason }. A throwing
- * seam is recorded as a failed outcome, never re-thrown mid-way.
+ * { kind, engine, status: 'applied'|'skipped'|'failed', reason }.
  */
 // Interactive seams that refuse to run outside the collection phase.
 function noPromptSetupDeps(deps) {
@@ -465,12 +598,18 @@ export async function applyEngineSetup(plan, deps = {}) {
     ?? ((input) => runCoderSetup(input, noPromptSetupDeps(deps)));
   let providerResult = null;
   try {
-    providerResult = await runSetup({
+    // The confirmed plan is the contract: the planned models are forwarded
+    // so the applied setup cannot silently diverge from what the user
+    // reviewed. Only present when the plan actually carries models, so
+    // callers that plan without them see the same input shape as before.
+    const setupInput = {
       engine: plan.engine,
       scope: providerAction?.scope ?? 'global',
       provider: providerAction?.provider ?? undefined,
       credentialMode: providerAction?.credentialMode ?? undefined,
-    });
+    };
+    if (providerAction?.models) setupInput.models = providerAction.models;
+    providerResult = await runSetup(setupInput);
     const summaryBits = [];
     if (providerResult && typeof providerResult === 'object') {
       if (providerResult.model) summaryBits.push(`model=${providerResult.model}`);

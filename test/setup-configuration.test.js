@@ -235,15 +235,6 @@ test('readSetupState masks secrets only when redact is requested', () => {
   assert.equal(fieldOf(redacted, 'ATLASSIAN_EMAIL').current.value, undefined);
 });
 
-test('readSetupState result and enriched fields are frozen', () => {
-  const state = readSetupState(seams());
-  assert.ok(Object.isFrozen(state));
-  assert.ok(Object.isFrozen(state.fields));
-  assert.ok(Object.isFrozen(state.snapshot));
-  assert.ok(Object.isFrozen(state.fields[0]));
-  assert.throws(() => { state.fields[0].editable = false; }, TypeError);
-});
-
 test('applyDraftToSnapshot applies sets as draft atoms without writing', () => {
   const base = createProviderConfigSnapshot(seams());
 

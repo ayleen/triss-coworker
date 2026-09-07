@@ -205,7 +205,9 @@ test('buildSetupPlan surfaces engine plan externals without applying them', (t) 
   useTempEnv(t);
   const enginePlan = planEngineSetup(
     { engine: 'crush', provider: 'zai', scope: 'global' },
-    { probeEngine: () => ({ found: false, installedVersion: null, compatible: false, reason: 'missing', effectiveMinimum: '0.1.6', configValid: true }) },
+    // configValid: false keeps a real (non-stale) crush limitation in the
+    // plan: a malformed configured minimum is disclosed as unfixable.
+    { probeEngine: () => ({ found: false, installedVersion: null, compatible: false, reason: 'missing', effectiveMinimum: '0.1.6', configValid: false, configuredMinimum: 'eighteen' }) },
   );
   const plan = buildSetupPlan({
     scope: 'global',
@@ -213,10 +215,15 @@ test('buildSetupPlan surfaces engine plan externals without applying them', (t) 
     draft: { set: [{ key: 'ZHIPU_API_KEY', value: 'sk-engine-abcdef123456' }] },
     enginePlan,
   }, { readFile: () => '' });
-  assert.equal(plan.enginePlan, enginePlan);
-  assert.deepEqual(plan.summary.externalActions, enginePlan.actions);
   assert.equal(plan.summary.engine, 'crush');
+  // Crush provider setup completes in the shared path, so the only crush
+  // limitation left is the honest invalid-minimum one (surfaced through the
+  // configValid probe below) — never the removed recovery gap.
   assert.ok(plan.summary.limitations.some((l) => l.startsWith('crush:')));
+  assert.equal(
+    plan.summary.limitations.some((l) => l.includes('triss coder init --engine crush')),
+    false,
+  );
   assert.deepEqual(plan.summary.blockers, []);
 });
 

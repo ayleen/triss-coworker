@@ -58,15 +58,26 @@ for (const engine of engines) {
     'TRISS_UPDATE_CHECK=0',
   ].join('\n') + '\n');
   const before = hits.length;
+  const args = [
+    BIN, 'ask',
+    '--paths', 'sample.txt',
+    '--question', `What is the marker? Reply with the marker only.`,
+    '--engine', engine,
+    '--provider', 'openai-compatible',
+    '--model', 'deepseek-v4-pro',
+  ];
+  if (engine === 'crush') {
+    // Crush defaults to protected_proxy, and that mode's preflight fails
+    // closed BEFORE spawn when any raw credential store is readable by the
+    // same-UID child — the fixture store above deliberately holds a key. A
+    // protected run can therefore never pass in this smoke layout; run crush
+    // raw (best-effort) and disclose the downgrade instead of failing the
+    // engine deterministically.
+    args.push('--no-protect-credentials');
+    console.log('NOTE ask --engine crush: running best-effort raw (--no-protect-credentials); the protected_proxy preflight rejects readable fixture credential stores.');
+  }
   const run = await new Promise((resolve) => {
-    const child = spawn('node', [
-      BIN, 'ask',
-      '--paths', 'sample.txt',
-      '--question', `What is the marker? Reply with the marker only.`,
-      '--engine', engine,
-      '--provider', 'openai-compatible',
-      '--model', 'deepseek-v4-pro',
-    ], {
+    const child = spawn('node', args, {
       cwd: proj,
       env: {
         PATH: process.env.PATH,
