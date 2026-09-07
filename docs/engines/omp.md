@@ -30,6 +30,14 @@ Main and small models come from the selected provider profile; an explicit `--mo
 
 Each invocation receives a fresh `PI_CODING_AGENT_DIR`. Generated `models.yml`, settings, and policy files contain environment indirection or run-scoped proxy tokens, never a persistent provider secret. The configured OMP minimum is raise-only and the capability probe must pass before spawn.
 
+## Non-coder model projections
+
+OMP also executes non-coder model tasks (`ask`, `review`, `chat`, …)
+best-effort under the same run-private `PI_CODING_AGENT_DIR` and deny-first
+policy overlay. Tool restriction is configured per run, not verified, so the
+run reports that limitation as a warning on the execution result instead of
+refusing.
+
 ## Sessions and worktrees
 
 ```bash

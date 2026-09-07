@@ -6,11 +6,16 @@ import {
   assertCanonicalProviderId,
   assertModelExecutionEngine,
   assertProviderModelRole,
+  normalizeModelEffort,
   parseModelSelector,
   validateModelSelectionInput,
 } from './provider-contract.js';
 import { resolveProviderProfile } from './provider-config.js';
 import { validateProviderProfileSecurity } from './provider-security.js';
+import {
+  parseModelTransportsOverride,
+  resolveProviderModelTransport,
+} from './provider-model-transport.js';
 
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -34,6 +39,22 @@ function parseConfiguredModel(atom, providerId, role) {
     );
   }
   return selector.nativeModel;
+}
+
+function configuredEffortFrom(snapshot) {
+  const atom = snapshot?.defaultEffort;
+  if (!atom || atom.source === 'absent' || atom.value === undefined || atom.value === '') {
+    return undefined;
+  }
+  try {
+    const normalized = normalizeModelEffort(atom.value);
+    return normalized === undefined ? undefined : { value: normalized, atom };
+  } catch (error) {
+    throw new Error(
+      `Invalid configured default effort${atom.path ? ` in ${atom.path}` : ''} (${atom.scope ?? 'shell'}): ${error.message}`,
+      { cause: error },
+    );
+  }
 }
 
 export function resolveModelSelection(request = {}, snapshot) {
@@ -82,13 +103,22 @@ export function resolveModelSelection(request = {}, snapshot) {
       `configured default engine${configuredEngine.path ? ` in ${configuredEngine.path}` : ''}`,
     );
 
+  // Effort precedence mirrors the engine chain: explicit request value >
+  // command-level default (e.g. the coding override) > configured
+  // TRISS_DEFAULT_EFFORT > the engine's native default (undefined).
+  const configuredEffort = configuredEffortFrom(snapshot);
+  const commandDefaultEffort = request.defaultEffort === undefined || request.defaultEffort === ''
+    ? undefined
+    : normalizeModelEffort(request.defaultEffort);
+  const effort = validated.effort || commandDefaultEffort || configuredEffort?.value;
+
   return deepFreeze({
     role,
     providerId,
     publicModel: `${providerId}/${nativeModel}`,
     nativeModel,
     engine,
-    effort: validated.effort,
+    effort,
     provenance: {
       provider: providerProvenance,
       model: modelProvenance,
@@ -99,7 +129,11 @@ export function resolveModelSelection(request = {}, snapshot) {
           : configuredEngine,
       effort: validated.effort
         ? provenance(validated.effort, 'explicit')
-        : provenance(undefined, 'engine-native-default', 'default'),
+        : commandDefaultEffort
+          ? provenance(commandDefaultEffort, 'command-default', 'default')
+          : configuredEffort
+            ? configuredEffort.atom
+            : provenance(undefined, 'engine-native-default', 'default'),
     },
   });
 }
@@ -109,6 +143,12 @@ export function resolveProviderRoute(selection, snapshot) {
   const providerId = assertCanonicalProviderId(selection.providerId);
   const profile = resolveProviderProfile(snapshot, providerId);
   const endpointValue = validateProviderProfileSecurity(providerId, profile);
+  const modelTransports = parseModelTransportsOverride(snapshot?.modelTransports?.value);
+  const transportMetadata = resolveProviderModelTransport({
+    providerId,
+    nativeModel: selection.nativeModel,
+    overrides: modelTransports,
+  });
 
   return deepFreeze({
     providerId,
@@ -116,7 +156,10 @@ export function resolveProviderRoute(selection, snapshot) {
     nativeModel: selection.nativeModel,
     credential: profile.credential,
     endpoint: { ...profile.endpoint, value: endpointValue },
-    transport: profile.transport,
+    // A concrete transport id when the model resolves to one; the 'registry'
+    // sentinel remains only for models without resolvable direct metadata.
+    transport: transportMetadata.transportId || 'registry',
+    transportMetadata,
     policy: profile.policy,
     engineProjection: profile.engineProjection,
     billingIdentity: `${providerId}/${selection.nativeModel}`,

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { executeModelTask } from '../model-runtime.js';
+import { executeModelTask, printModelResultWarnings } from '../model-runtime.js';
 import { reportNormalizedUsage } from '../model-usage.js';
 
 export class IntegrationError extends Error {
@@ -187,6 +187,7 @@ export async function summarize({
       label: 'triss/summary',
     },
   }, deps.runtimeDeps);
+  printModelResultWarnings(output.result, { color: pc.yellow });
   process.stderr.write(
     pc.dim(
       `[triss/summary] provider=${output.resolved.providerId} model=${output.resolved.publicModel} bytes=${corpus.length}\n`,

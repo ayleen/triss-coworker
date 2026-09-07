@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { executeModelTask } from '../model-runtime.js';
+import { executeModelTask, printModelResultWarnings } from '../model-runtime.js';
 import { reportNormalizedUsage } from '../model-usage.js';
 import { assertProviderText } from '../provider-errors.js';
 import {
@@ -309,6 +309,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
               label: 'triss/review',
             },
           }, deps.runtimeDeps);
+          printModelResultWarnings(output.result, { color: pc.yellow });
           const text = output.result.text;
           if (!text || !text.trim()) {
             const err = new Error(emptyReviewResponseMessage({
@@ -487,6 +488,7 @@ export async function runReviewWithDeps(prNumber, opts, deps = {}) {
           flushPendingReasoning();
           throw error;
         }
+        printModelResultWarnings(output.result, { color: pc.yellow });
         const out = output.result.text;
         if (!out || !out.trim()) {
           closeReasoning();

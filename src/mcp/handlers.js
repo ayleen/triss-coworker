@@ -45,16 +45,28 @@ export async function callModel(
   deps = {},
 ) {
   const execute = deps.executeModelTask || executeModelTask;
+  // Tri-state merge, strongest source first:
+  //   1. an explicit per-call boolean (either spelling) is forwarded as-is, so
+  //      an explicit false can override a persisted protection choice;
+  //   2. the server-wide protect_credentials value (deps.modelProtectCredentials)
+  //      is forwarded verbatim when it is a real boolean — false included;
+  //   3. absence stays undefined and the persisted tri-state resolves
+  //      downstream. Collapsing false into undefined here would silently
+  //      replace the user's explicit raw choice with the persisted setting.
+  const explicitProtection = [protectCredentials, protectCredentialsSnake].find(
+    (value) => value === true || value === false,
+  );
+  const serverProtection = typeof deps.modelProtectCredentials === 'boolean'
+    ? deps.modelProtectCredentials
+    : undefined;
+  const modelProtection = explicitProtection !== undefined ? explicitProtection : serverProtection;
   const output = await execute({
     task: task || (purpose === 'review' ? 'review' : 'integration-summary'),
     provider,
     model,
     engine,
     effort,
-    protectCredentials:
-      Boolean(protectCredentials) ||
-      Boolean(protectCredentialsSnake) ||
-      deps.modelProtectCredentials === true,
+    protectCredentials: modelProtection,
     signal: deps.signal,
     timeout: timeoutMs,
     input: {
@@ -1152,7 +1164,13 @@ export async function coderRunHandler(
       allowBestEffortCallerWorktree: allowDowngrade,
       // `protectCredentials` is the documented legacy spelling for this
       // coder-only field; merge it with the snake-case alias before dispatch.
-      protectCredentials: Boolean(protectCredentials) || Boolean(protectCredentialsSnake),
+      // Tri-state merge in the SAFE direction: a conflicting pair resolves to
+      // protection (true), an explicit false survives when nothing
+      // contradicts it, and absence stays undefined for the persisted
+      // tri-state to resolve downstream.
+      protectCredentials: [protectCredentials, protectCredentialsSnake].includes(true)
+        ? true
+        : [protectCredentials, protectCredentialsSnake].includes(false) ? false : undefined,
     },
     {
       spawn: deps.spawn,
@@ -1179,10 +1197,11 @@ export async function coderStatusHandler() {
     `Default engine: ${status.defaultEngine}`,
     `Default credential mode: ${status.defaultCredentialMode}`,
     // MCP-specific remediation: an MCP client passes the boolean input, not
-    // the CLI flag. Crush never accepts raw credentials.
+    // the CLI flag. Tri-state: absent keeps the engine default, an explicit
+    // boolean is honored for every engine including crush.
     status.defaultCredentialMode === 'best_effort_raw'
       ? 'Protected mode: set protect_credentials: true'
-      : 'Protected mode: always on (crush is always protected)',
+      : 'Protected mode: default on (crush); pass protect_credentials: false for an explicitly raw run',
     `Default model: ${status.defaultModel} (small: ${status.defaultSmallModel}) — resolved from the shared default provider roles`,
     status.engineVersion
       ? `Engine: opencode ${status.engineVersion}${

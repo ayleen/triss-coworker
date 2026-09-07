@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import pc from 'picocolors';
-import { executeModelTask } from '../model-runtime.js';
+import { executeModelTask, printModelResultWarnings } from '../model-runtime.js';
 import { reportNormalizedUsage } from '../model-usage.js';
 import { assertSafePath } from '../safety.js';
 import { positiveIntegerOption } from '../option-validation.js';
@@ -53,6 +53,7 @@ export async function runWriteWithDeps(opts, deps = {}) {
       `[triss/write] provider=${output.resolved.providerId} model=${output.resolved.publicModel} target=${target}\n`,
     ),
   );
+  printModelResultWarnings(output.result, { color: pc.yellow });
   let content = output.result.text;
 
   if (!content) throw new Error('[triss/write] model returned empty content — try --max-tokens 32768');

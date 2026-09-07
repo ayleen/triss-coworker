@@ -74,10 +74,9 @@ test('resolveScope and resolveMode are pure over the parsed flags', async () => 
   assert.throws(() => resolveMode({ standard: true, advanced: true }), /not both/);
 });
 
-test('chooseScope and chooseMode fall back silently when stdin is not a TTY', async () => {
-  const { chooseScope, chooseMode } = await importCommands('nontty');
+test('chooseScope falls back silently when stdin is not a TTY', async () => {
+  const { chooseScope } = await importCommands('nontty');
   assert.equal(await chooseScope(), 'global');
-  assert.equal(await chooseMode(), 'standard');
 });
 
 test('runSet writes a variable and runGet echoes it with scope and path', async () => {

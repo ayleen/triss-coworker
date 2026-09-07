@@ -26,8 +26,10 @@ Configuration is read once per command or MCP request into an immutable snapshot
 `process.env` always wins. Project configuration overrides global configuration. Provider selection, model roles, endpoint, credential, and provenance are resolved together.
 
 ```bash
-triss config wizard                 # guided global setup
+triss config wizard                 # Easy setup: provider + key, assistant hosts, first command
+triss config wizard --advanced      # full Advanced sections (providers, execution, connections, integrations, runtime)
 triss config wizard --local         # guided project setup
+triss config wizard <target>        # canonical provider id, coder, or integration name
 triss config set KEY [value]        # global by default
 triss config set KEY [value] --local
 triss config get KEY
@@ -68,7 +70,45 @@ Global runtime fields:
 | `TRISS_CONFIG_SCHEMA` | `2` | Persisted configuration schema |
 | `TRISS_DEFAULT_PROVIDER` | `openai-compatible` | Provider selected when a request omits `provider` |
 | `TRISS_DEFAULT_ENGINE` | `direct` | Execution engine selected when a model request omits `engine` |
+| `TRISS_DEFAULT_EFFORT` | unset | Effort for model tasks when a request omits `effort`; absence keeps the provider default |
+| `TRISS_CODER_PROVIDER` | unset | Coding provider default; when absent it inherits `TRISS_DEFAULT_PROVIDER` |
+| `TRISS_CODER_EFFORT` | unset | Coding effort override; when absent it inherits `TRISS_DEFAULT_EFFORT` |
+| `TRISS_PROTECT_CREDENTIALS` | unset (tri-state) | Persisted credential-protection choice for model-backed and coder routes |
+| `TRISS_CODER_PROTECT_CREDENTIALS` | unset (tri-state) | Coding-only override of `TRISS_PROTECT_CREDENTIALS` |
+| `TRISS_MODEL_TRANSPORTS` | unset | Exact-model direct transport override map |
 | `TRISS_REQUEST_TIMEOUT_MS` | SDK default | Model request timeout |
+
+`TRISS_CODER_PROVIDER` selects the provider profile for coding runs only; it
+never rewrites `TRISS_DEFAULT_PROVIDER`, so `triss ask` / `triss review`
+defaults are unaffected by coder configuration.
+
+### Credential protection tri-state
+
+`TRISS_PROTECT_CREDENTIALS` and `TRISS_CODER_PROTECT_CREDENTIALS` accept three
+meaningful states — absent, `true`, or `false` — and the string `"false"` is
+never treated as a truthy opt-in. Resolution order: an explicit per-run flag
+(`--protect-credentials` / `--no-protect-credentials`) wins; otherwise
+`TRISS_CODER_PROTECT_CREDENTIALS` (coder runs) or `TRISS_PROTECT_CREDENTIALS`
+applies. `true` selects the parent-owned credential proxy; `false` explicitly
+selects a best-effort raw run (warned). When no choice is expressed, each route
+uses its recommended default — `crush` defaults to the protected proxy; the
+other engines default to best-effort raw handling — so an explicit `false`
+means something different from an unset value.
+
+### Model transport overrides
+
+`TRISS_MODEL_TRANSPORTS` is a JSON map of exact `"canonical-provider/native-model"`
+selectors to direct transport ids (`openai-chat`, `openai-responses`,
+`anthropic-messages`):
+
+```bash
+triss config set TRISS_MODEL_TRANSPORTS '{"opencode-go/muse-spark-1.3-contributor": "openai-responses"}'
+```
+
+It is an expert protocol clarification for specific models — never an allowlist
+of permitted models. OpenCode Zen and Go models resolve through their audited
+per-model transport catalogue first; the override pins the transport for an
+exact model when the catalogue cannot.
 
 ## Model roles and request selection
 
@@ -78,15 +118,23 @@ Model-backed commands declare either the `model` role or the `smallModel` role. 
 - `model` is a native model id for direct CLI/MCP commands.
 - `engine` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush`; when omitted, `TRISS_DEFAULT_ENGINE` applies.
 - coder `--model` accepts a canonical `<provider>/<model-id>` selector; the small role comes from that provider's `*_SMALL_MODEL` field.
-- `effort` accepts `minimal`, `low`, `medium`, `high`, or `max`.
+- `effort` accepts `low`, `medium`, `high`, `xhigh`, or `max`.
 - `max_tokens` remains a separate output cap.
 
 There are no public model presets. Omit `model` to use the selected provider role.
 
-Provider and engine defaults resolve independently. Registry-backed providers
-such as `opencode-go` require an engine-backed default instead of `direct`.
-Read-only model projection is currently verified only for `opencode`;
-`opencode2`, `omp`, and `crush` are rejected before launch for non-coder tasks.
+Provider and engine defaults resolve independently. The `direct` engine serves
+providers with native HTTP transport metadata: `openai-compatible`, `zai`,
+`moonshot`, and `kimi-for-coding` natively, and `opencode-zen` / `opencode-go`
+models through audited per-model transports (OpenAI Chat, OpenAI Responses, or
+Anthropic Messages). A model without resolvable direct metadata fails with the
+stable `TRISS_DIRECT_ENGINE_REQUIRED` error and an actionable remedy: set a
+`TRISS_MODEL_TRANSPORTS` entry for that exact model or run it on a native
+engine (`opencode`, `opencode2`, `omp`, or `crush`).
+
+Every engine can execute non-coder model projections (`ask`, `review`, `chat`,
+…); engines without a verified read-only projection report their concrete
+limitation as a warning on the execution result, never as a refusal.
 
 Examples:
 
@@ -123,7 +171,7 @@ retained in the execution result and MCP structured output.
 ```bash
 triss coder init --engine opencode --provider zai
 triss coder init --engine opencode2 --provider opencode-zen
-triss coder init --engine crush --provider zai
+triss coder init --engine crush --provider moonshot
 triss coder init --engine omp --provider opencode-go
 ```
 

@@ -107,21 +107,23 @@ function addModelSelectionOptions(command) {
     .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
     .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
     .option('--protect-credentials', MODEL_PROTECT_HELP)
+    .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
     .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort);
 }
 
 // Shared help text for model-backed credential protection.
 const MODEL_PROTECT_HELP =
-  'Use the parent-owned credential proxy for the OpenCode model projection.\n' +
-  'Fails closed when protected credential isolation cannot be enforced.\n' +
-  'OpenCode2, OMP, and Crush are rejected for model-backed commands.';
+  'Use the parent-owned credential proxy for the model projection.\n' +
+  'Falls back to a best-effort raw run with a warning when a verified\n' +
+  'protected route is unavailable for the selected engine.';
 
 // Shared help text for the credential-mode flag (`coder init` and `coder run`;
 // `triss exec --code` forwards it under its own shorter description).
 const PROTECT_HELP =
-  'Use the parent-owned credential proxy and strict executable-surface gates.\n' +
-  'Fails closed when protected credential isolation cannot be enforced.\n' +
-  'OpenCode, OpenCode2, and OMP support this option; Crush is always protected.';
+  'Use the parent-owned credential proxy and strict executable-surface gates\n' +
+  'where the selected engine supports them; otherwise run best-effort with a\n' +
+  'warning. An explicit --no-protect-credentials overrides a persisted\n' +
+  'TRISS_*_PROTECT_CREDENTIALS=true choice for this run.';
 
 const program = new Command();
 program
@@ -149,6 +151,7 @@ program
   .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .option('-f, --force', 'force-replace an existing triss block without diffing')
   .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
+  .option('--yes', 'with --setup: non-interactive apply of a complete headless configuration (required outside a TTY)')
   .action(wrap(runInit));
 
 addModelSelectionOptions(
@@ -240,6 +243,7 @@ program
   .option('--no-isolate', 'disable coder isolation')
   .option('--allow-best-effort-caller-worktree', 'forward coder isolation downgrade')
   .option('--protect-credentials', 'forward protected credential mode for model-backed and coder routes')
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
   .option('--restrict', 'forward coder restriction')
   .option('--no-restrict', 'disable coder restriction')
   .option('--cwd <path>', 'forward coder working directory')
@@ -329,15 +333,19 @@ const config = program
 
 config
   .command('wizard [target]')
-  .description('Interactive setup. Optional target: deepseek | jira | linear | …')
+  .description('Interactive setup (Easy by default, Advanced by choice). Optional target: a canonical provider id, coder, or an integration name (jira | linear | …)')
   .option('-g, --global', 'save to ~/.config/triss/.env (default if not asked)')
   .option('-l, --local', 'save to ./.triss.env (project-local override)')
-  .option('-f, --force', 're-prompt for keys that are already set')
-  .option('--standard', 'API key + one model only — skip the standard/advanced prompt')
-  .option('--advanced', 'full wizard with presets, base URL, integrations — skip the prompt')
+  .option('-f, --force', 're-prompt for values that are already set')
+  .option('--standard', 'explicit Easy path (same as the default interactive flow)')
+  .option('--advanced', 'full Advanced wizard — providers, execution, connections, integrations, runtime')
+  .option('--yes', 'non-interactive apply of a complete configuration assembled from existing files, the environment, and explicit flags')
+  .option('--agent <agent>', 'headless host intent: claude | codex | both | none (non-TTY default: none)')
+  .option('--install', 'allow installing missing engines in a headless run (without it, missing dependencies are reported)')
   .option('--coder-engine <name>', 'coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine')
   .option('--coder-provider <name>', 'coder target only: canonical provider id. `coder init` uses --provider')
   .option('--coder-protect-credentials', 'coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials')
+  .option('--coder-no-protect-credentials', 'coder target only: persist/forward an explicit unprotected choice that overrides TRISS_PROTECT_CREDENTIALS=true')
   .action(wrap(runWizard));
 
 config
@@ -393,9 +401,8 @@ coder
   .option('-l, --local', 'save to the project scope (./.triss.env, ./opencode.json)')
   .option('--engine <name>', 'coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
   .option('--provider <name>', 'canonical model provider id')
-  .option('--allow-unverified', 'requires explicit --provider opencode-go: allow the built-in fallback only after a temporary network or HTTP 408/429/500/502/503/504 catalogue failure (never bypasses 401/403, empty, or invalid responses)')
-  .option('--allow-unsafe-bash', 'proceed even if an existing opencode.json has no deny-first bash policy (the agent runs with --auto)')
   .option('--protect-credentials', PROTECT_HELP)
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this setup/run')
   .action(wrap(runCoderInit));
 
 coder
@@ -416,6 +423,7 @@ coder
   .option('--timeout <sec>', 'kill the engine after this many seconds', parsePositiveNumber, 900)
   .option('--allow-best-effort-caller-worktree', 'allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)')
   .option('--protect-credentials', PROTECT_HELP)
+  .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
   .option('--stdin', 'read the prompt from piped stdin instead of the [prompt] argument')
   .option('--json', 'no-op — the envelope is always JSON; kept for symmetry with other commands')
   .action((prompt, opts) => wrap(runCoderRun)(prompt, opts));

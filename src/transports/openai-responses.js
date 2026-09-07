@@ -67,6 +67,19 @@ function responseReasoning(response) {
     .join('');
 }
 
+// The SDK's `output_text` convenience property is absent in some installed
+// versions; fall back to assembling message content parts from `output`.
+function responseText(response) {
+  if (typeof response?.output_text === 'string') return response.output_text;
+  if (!Array.isArray(response?.output)) return '';
+  return response.output
+    .filter((item) => item?.type === 'message')
+    .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+    .filter((part) => (part?.type === 'output_text' || part?.type === 'text') && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('');
+}
+
 function finishReason(response) {
   return response?.incomplete_details?.reason || response?.status || null;
 }
@@ -79,7 +92,7 @@ export async function executeOpenAIResponses(request = {}, deps = {}) {
     requestOptions(request),
   );
   return createExecutionResult({
-    text: typeof response?.output_text === 'string' ? response.output_text : '',
+    text: responseText(response),
     reasoning: responseReasoning(response),
     finishReason: finishReason(response),
     usage: usageFrom(response?.usage),

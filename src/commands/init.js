@@ -7,7 +7,6 @@ import { dirname, join } from 'node:path';
 import pc from 'picocolors';
 import { readProviderConfigSnapshot } from '../provider-config.js';
 import { loadIntegrations, envReadiness } from '../integrations/_registry.js';
-import { runWizard } from './config.js';
 import { promptChoice } from '../secrets.js';
 import {
   TARGETS,
@@ -25,6 +24,26 @@ import {
 const SUPPORTED = [...SUPPORTED_TARGETS, 'both'];
 
 export async function runInit(opts) {
+  // `init --setup` delegates to the wizard BEFORE any rules write: the setup
+  // owns which host files change, and the rules pass reuses the resolved
+  // agent/scope intent instead of guessing. The wizard's host actions call
+  // back into runInit WITHOUT the setup flag, so the loop terminates.
+  if (opts.setup) {
+    const agentIntent = opts.target && ['claude', 'codex', 'both'].includes(String(opts.target).toLowerCase())
+      ? String(opts.target).toLowerCase()
+      : undefined;
+    const { runSetupWizard } = await import('../setup/wizard.js');
+    await runSetupWizard(undefined, {
+      global: opts.global,
+      // init's scope semantics carry over: without --global the intent is
+      // the project (local env + project rules), not an interactive global
+      // default.
+      local: opts.global ? undefined : true,
+      agent: agentIntent,
+      ...(opts.yes ? { yes: true } : {}),
+    });
+    return;
+  }
   let raw = opts.target ? String(opts.target).toLowerCase() : '';
   if (!raw) raw = await chooseTarget();
   if (!SUPPORTED.includes(raw)) {
@@ -50,8 +69,11 @@ export async function runInit(opts) {
   for (const plan of plans) mkdirSync(dirname(plan.targetPath), { recursive: true });
   applyFileTransaction(plans);
   for (const plan of plans) reportPlan(plan, opts);
-
-  await postInit(opts);
+  // Plain `triss init` ends with real next-step guidance: missing
+  // credentials and not-ready integrations each get an actionable command.
+  // Embedded callers that render their own summary (the setup wizard's host
+  // pass) opt out with nextSteps: false to avoid duplicated output.
+  if (opts.nextSteps !== false) await postInit();
 }
 
 async function chooseTarget() {
@@ -80,15 +102,7 @@ function reportPlan(plan, opts) {
   }
 }
 
-async function postInit(opts) {
-  if (opts.setup) {
-    process.stdout.write('\n' + pc.bold('Running setup wizard…') + '\n');
-    // Don't conflate the `init` scope (where to write agent rules) with the
-    // `wizard` scope (where to write env files). Let the wizard ask
-    // (or default to global silently in non-TTY).
-    await runWizard(undefined, {});
-    return;
-  }
+async function postInit() {
 
   // Auto-detect missing credentials and print friendly next-step hints.
   const cfg = readProviderConfigSnapshot();

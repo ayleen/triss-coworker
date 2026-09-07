@@ -28,6 +28,13 @@ const READ_ONLY_PROJECTION_AGENT_DEFINITION = Object.freeze({
     'provided context. Never read files, edit files, run shell commands, load skills, or delegate to subagents.',
 });
 
+// Every engine can execute a non-coder model projection. What differs is the
+// AVAILABLE protection, not permission to run: opencode gets a verified
+// deny-everything agent; opencode2 runs with its built-in agent under the
+// merged deny-first permission policy; omp runs under its run-private policy
+// overlay; crush runs single-agent with the restrict allowlist when enabled.
+// Engines without a VERIFIED read-only projection report their concrete
+// limitation; callers surface it as a warning, never as a refusal.
 const POLICIES = Object.freeze({
   direct: Object.freeze({
     engine: 'direct',
@@ -35,6 +42,8 @@ const POLICIES = Object.freeze({
     agent: null,
     isolate: null,
     credentialMode: 'transport',
+    readOnlyGuarantee: 'verified',
+    limitations: [],
   }),
   opencode: Object.freeze({
     engine: 'opencode',
@@ -42,27 +51,45 @@ const POLICIES = Object.freeze({
     agent: READ_ONLY_PROJECTION_AGENT,
     isolate: false,
     credentialMode: 'caller-selectable',
+    readOnlyGuarantee: 'verified',
+    limitations: [],
   }),
   opencode2: Object.freeze({
     engine: 'opencode2',
-    supported: false,
-    agent: null,
-    isolate: null,
-    credentialMode: 'unsupported',
+    supported: true,
+    agent: READ_ONLY_PROJECTION_AGENT,
+    isolate: false,
+    credentialMode: 'caller-selectable',
+    readOnlyGuarantee: 'config-injected',
+    limitations: [
+      'opencode2 receives the deny-everything projection agent through its run-scoped config ' +
+        'surface; the beta engine itself is not independently verified to enforce it',
+    ],
   }),
   omp: Object.freeze({
     engine: 'omp',
-    supported: false,
+    supported: true,
     agent: null,
-    isolate: null,
-    credentialMode: 'unsupported',
+    isolate: false,
+    credentialMode: 'caller-selectable',
+    readOnlyGuarantee: 'best-effort',
+    limitations: [
+      'omp runs the projection under its run-private deny-first policy overlay; ' +
+        'tool restriction is configured per run, not verified',
+    ],
   }),
   crush: Object.freeze({
     engine: 'crush',
-    supported: false,
+    supported: true,
     agent: null,
-    isolate: null,
-    credentialMode: 'unsupported',
+    isolate: false,
+    credentialMode: 'caller-selectable',
+    restrict: true,
+    readOnlyGuarantee: 'best-effort',
+    limitations: [
+      'crush runs the projection single-agent with the restrict allowlist; ' +
+        'crush permissions.run config is inert, so restriction relies on CLI flags',
+    ],
   }),
 });
 
@@ -76,12 +103,6 @@ export function resolveModelProjectionPolicy(task, engine) {
   }
   const policy = POLICIES[engine];
   if (!policy) throw new Error(`Unsupported execution engine "${String(engine)}"`);
-  if (!policy.supported) {
-    throw new Error(
-      `Execution engine "${engine}" does not provide a verified read-only projection for task "${task}"; ` +
-      'use engine "direct" or "opencode".',
-    );
-  }
   return policy;
 }
 

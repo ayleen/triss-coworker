@@ -60,6 +60,16 @@ enforces most of them mechanically:
 - PRs stay focused and call out security-sensitive path, URL-fetching,
   credential, or MCP changes explicitly.
 
+### Binding product decisions
+
+Contributions must follow the accepted owner decision on
+[user choice, best-effort execution, and easy setup](docs/adr/2026-09-05-user-choice-and-easy-setup.md).
+Do not treat existing provider/engine bans as product requirements: incomplete
+safety guarantees call for an executable best-effort path and clear disclosure,
+not an arbitrary prohibition. Easy setup is the default; comprehensive tuning
+belongs in optional Advanced setup. Runtime behavior that still contradicts
+this decision is implementation debt, not a precedent to preserve in new code.
+
 ## Project shape
 
 - `bin/triss.js` is the CLI entrypoint.
@@ -91,8 +101,9 @@ enforces most of them mechanically:
   SSRF guard, redirect checks, timeouts, and response bounds stay active.
 - Call `assertSafePath(path, { kind: 'read' | 'write' })` before new
   repository file operations.
-- Never pass raw provider credentials to a child engine or include them in
-  output, fixtures, logs, or error messages.
+- Forward only the selected provider credential through the supported execution
+  mode. Explain best-effort exposure; do not silently weaken user-requested
+  protection. Never include secrets in output, fixtures, logs, or error messages.
 - Keep subprocess arguments as arrays and never enable `shell: true`.
 - Do not commit `.triss.env`, usage logs, credentials, or generated local
   state.

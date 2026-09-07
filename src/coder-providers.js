@@ -2,6 +2,11 @@
 // Copyright (c) 2026 ayleen
 
 import { getProviderDefinition } from './provider-registry.js';
+import {
+  OPENCODE_GO_MODEL_TRANSPORTS,
+  OPENCODE_ZEN_MODEL_TRANSPORTS,
+  transportRouteForId,
+} from './provider-model-transport.js';
 
 const freeze = (value) => Object.freeze(value);
 
@@ -65,92 +70,19 @@ export function coderTransientProviderAlias(route, routingContext) {
     : CODER_TRANSIENT_PROVIDER_ALIAS;
 }
 
-const OPENAI_CHAT_ROUTE = freeze({ protocol: 'openai_chat', package: '@ai-sdk/openai-compatible' });
-const OPENAI_RESPONSES_ROUTE = freeze({ protocol: 'openai_responses', package: '@ai-sdk/openai' });
-const ANTHROPIC_MESSAGES_ROUTE = freeze({
-  protocol: 'anthropic_messages',
-  package: '@ai-sdk/anthropic',
-  authStyle: 'anthropic',
-});
-const UNSUPPORTED_GOOGLE_ROUTE = freeze({
-  unsupported: 'google/gemini transport is not vetted by the protected proxy',
-});
-
-function modelTransportMap({ chat = [], responses = [], anthropic = [], unsupportedGoogle = [] }) {
-  const entries = [
-    ...chat.map((id) => [id, OPENAI_CHAT_ROUTE]),
-    ...responses.map((id) => [id, OPENAI_RESPONSES_ROUTE]),
-    ...anthropic.map((id) => [id, ANTHROPIC_MESSAGES_ROUTE]),
-    ...unsupportedGoogle.map((id) => [id, UNSUPPORTED_GOOGLE_ROUTE]),
-  ];
-  const seen = new Set();
-  for (const [id] of entries) {
-    if (seen.has(id)) throw new Error(`duplicate audited OpenCode transport metadata for model ${id}`);
-    seen.add(id);
-  }
-  return freeze(Object.fromEntries(entries));
-}
-
 export const CODER_PROVIDER_REGISTRY = freeze({
   'openai-compatible': providerRoute('openai-compatible'),
   zai: providerRoute('zai'),
   // OpenCode's catalogue is model/provider specific. Keep the provider
   // defaults for catalogue/status compatibility, but the runtime resolver
   // below only admits an exact audited model entry for Zen/Go. An unknown
-  // model must never silently become Chat Completions.
+  // model must never silently become Chat Completions. The audited tables are
+  // shared with the direct transports via provider-model-transport.js.
   'opencode-zen': providerRoute('opencode-zen', {
-    // Audited against https://opencode.ai/docs/zen/ on 2026-08-22. Models
-    // present only in the catalogue remain unaudited until endpoint/package
-    // metadata is published.
-    modelOverrides: modelTransportMap({
-      chat: [
-        'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free',
-        'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
-        'glm-5.2', 'glm-5.1', 'glm-5',
-        'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
-        'big-pickle', 'x-preview-f-free', 'mimo-v2.5-free', 'hy3-free',
-        'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free',
-      ],
-      responses: [
-        'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-        'gpt-5.5', 'gpt-5.5-pro',
-        'gpt-5.4', 'gpt-5.4-pro', 'gpt-5.4-mini', 'gpt-5.4-nano',
-        'gpt-5.3-codex', 'gpt-5.3-codex-spark',
-        'gpt-5.2', 'gpt-5.2-codex',
-        'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
-        'gpt-5', 'gpt-5-codex', 'gpt-5-nano',
-        'grok-4.6', 'grok-4.5', 'grok-build-0.1',
-        'muse-spark-1.2', 'muse-spark-1.2-contributor-free',
-      ],
-      anthropic: [
-        'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7',
-        'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-5',
-        'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5',
-        'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen3.5-plus',
-      ],
-      // Google/Gemini requires @ai-sdk/google and /models/*, which the
-      // credential proxy deliberately does not implement yet.
-      unsupportedGoogle: [
-        'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
-        'gemini-3.5-flash-lite', 'gemini-3.1-pro', 'gemini-3-flash',
-      ],
-    }),
+    modelOverrides: OPENCODE_ZEN_MODEL_TRANSPORTS,
   }),
   'opencode-go': providerRoute('opencode-go', {
-    // Audited against https://opencode.ai/docs/go/ on 2026-08-22.
-    modelOverrides: modelTransportMap({
-      chat: [
-        'glm-5.3', 'glm-5.2', 'glm-5.1',
-        'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6',
-        'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
-        'mimo-v2.5', 'mimo-v2.5-pro', 'hy3', 'ox-alpha-free',
-      ],
-      responses: ['grok-4.5', 'gpt-5.6-luna', 'muse-spark-1.2-contributor'],
-      anthropic: [
-        'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
-        'qwen3.8-max', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus',
-      ],
-    }),
+    modelOverrides: OPENCODE_GO_MODEL_TRANSPORTS,
   }),
   moonshot: providerRoute('moonshot'),
   'kimi-for-coding': providerRoute('kimi-for-coding'),
@@ -160,27 +92,51 @@ export const CODER_PROVIDER_REGISTRY = freeze({
 // Credential mode is independent from caller-worktree isolation. Every entry
 // point resolves explicit user intent here; no environment fallback exists.
 //
-//   | engine    | without the flag | with --protect-credentials        |
-//   |-----------|------------------|-----------------------------------|
-//   | opencode  | best_effort_raw  | protected_proxy                   |
-//   | opencode2 | best_effort_raw  | protected_proxy                   |
-//   | crush     | protected_proxy  | protected_proxy (flag is a no-op) |
+//   | engine    | without any protection choice | with protection chosen true |
+//   |-----------|------------------------------|----------------------------|
+//   | opencode  | best_effort_raw              | protected_proxy            |
+//   | opencode2 | best_effort_raw              | protected_proxy            |
+//   | omp       | best_effort_raw              | protected_proxy            |
+//   | crush     | protected_proxy (default)    | protected_proxy            |
+//
+// An explicit `false` (CLI --no-protect-credentials, MCP boolean false, or a
+// persisted `TRISS_*_PROTECT_CREDENTIALS=false`) is honored for every engine
+// including crush: the proxy is a recommendation there, not a ban on the raw
+// native alternative.
 export const CODER_CREDENTIAL_MODES = Object.freeze(['best_effort_raw', 'protected_proxy']);
 
+const PERSISTED_TRUTHY = new Set(['true', '1', 'yes', 'on']);
+const PERSISTED_FALSY = new Set(['false', '0', 'no', 'off']);
+
+/**
+ * Parse one credential-protection value into a tri-state. `undefined` keeps
+ * the "no choice" state; `false` is a real value, never collapsed into the
+ * default. Persisted strings are compared case-insensitively so that the
+ * string "false" can never act as a truthy opt-in.
+ */
+export function parseCredentialProtection(value, field = 'credential protection value') {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true) return true;
+  if (value === false) return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (PERSISTED_TRUTHY.has(normalized)) return true;
+  if (PERSISTED_FALSY.has(normalized)) return false;
+  throw new Error(`${field} must be true or false; got ${JSON.stringify(String(value))}`);
+}
+
 export function resolveCoderCredentialMode({
-  protectCredentials = false,
+  protectCredentials,
+  coderProtectCredentials,
+  sharedProtectCredentials,
   engine,
 } = {}) {
-  if (engine === 'crush') return 'protected_proxy';
+  const explicit = parseCredentialProtection(protectCredentials, 'protect-credentials choice');
+  const persisted = parseCredentialProtection(coderProtectCredentials, 'TRISS_CODER_PROTECT_CREDENTIALS')
+    ?? parseCredentialProtection(sharedProtectCredentials, 'TRISS_PROTECT_CREDENTIALS');
+  const requested = explicit !== undefined ? explicit : persisted;
 
-  // Truthy on purpose, and the normalization is INTENTIONALLY centralized
-  // here: callers pass the raw user-supplied value through unchanged, so any
-  // plausible affirmative (true, 'true', 1) selects protection instead of
-  // silently falling through to the insecure default. Only genuinely negative
-  // values (false, undefined, '', 0) resolve to best_effort_raw.
-  return protectCredentials
-    ? 'protected_proxy'
-    : 'best_effort_raw';
+  if (engine === 'crush' && requested === undefined) return 'protected_proxy';
+  return requested === true ? 'protected_proxy' : 'best_effort_raw';
 }
 
 // Internal helpers must never invent a mode. Validate the already-resolved
@@ -200,7 +156,7 @@ export function assertCoderCredentialMode(credentialMode) {
  * deliberately pure: callers still decide whether the route is protected by
  * the credential proxy or uses the explicitly acknowledged raw mode.
  */
-export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
+export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGISTRY, overrides = null) {
   const qualified = String(model || '').trim();
   const slash = qualified.indexOf('/');
   if (slash <= 0 || slash === qualified.length - 1 || qualified.slice(slash + 1).includes('/')) return null;
@@ -208,6 +164,25 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   const modelId = qualified.slice(slash + 1);
   const provider = Object.values(registry).find((candidate) => candidate.prefixes.includes(prefix));
   if (!provider) return null;
+  // Manual TRISS_MODEL_TRANSPORTS overrides apply to the exact model in the
+  // native routing too — not only to the direct HTTP transports.
+  const manualOverride = overrides ? transportRouteForId(overrides[`${provider.kind}/${modelId}`]) : null;
+  if (manualOverride) {
+    return Object.freeze({
+      model: qualified,
+      modelId,
+      prefix,
+      provider: provider.kind,
+      credentialEnv: provider.credentialEnv,
+      endpoint: provider.endpointByPrefix?.[prefix] || provider.endpoint,
+      pathPrefix: provider.pathPrefixByPrefix?.[prefix] || provider.pathPrefix,
+      protocol: manualOverride.protocol,
+      package: manualOverride.package,
+      authStyle: manualOverride.authStyle || provider.authStyle,
+      transportAudited: true,
+      unsupportedTransport: null,
+    });
+  }
   const override = provider.modelOverrides?.[modelId] || null;
   const modelSpecificTransport = provider.kind === 'opencode-zen' || provider.kind === 'opencode-go';
   const transport = modelSpecificTransport ? override : (override || provider);
@@ -227,8 +202,8 @@ export function resolveCoderProviderRoute(model, registry = CODER_PROVIDER_REGIS
   });
 }
 
-export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY) {
-  return resolveCoderProviderRoute(model, registry);
+export function resolveCoderRuntimeProviderRoute(model, registry = CODER_PROVIDER_REGISTRY, overrides = null) {
+  return resolveCoderProviderRoute(model, registry, overrides);
 }
 
 export function coderRoutesShareTransport(left, right) {

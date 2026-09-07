@@ -10,6 +10,7 @@ import {
   assertCoderCredentialMode,
   buildCoderTransientProviderOverlay,
   createCoderTransientRoutingContext,
+  parseCredentialProtection,
   resolveCoderCredentialMode,
   resolveCoderProviderRoute,
   resolveCoderRuntimeProviderRoute,
@@ -18,10 +19,10 @@ import {
 const OPENCODE_ROUTING_CONTEXT = createCoderTransientRoutingContext('opencode');
 const OPENCODE2_ROUTING_CONTEXT = createCoderTransientRoutingContext('opencode2');
 
-test('credential mode resolver: explicit --protect-credentials matrix over engines', () => {
-  // Default (no options): OpenCode/OpenCode2 are best_effort_raw; crush is
-  // ALWAYS protected regardless of the flag.
-  for (const engine of ['opencode', 'opencode2']) {
+test('credential mode resolver: explicit protection matrix over engines', () => {
+  // Default (no choice): OpenCode/OpenCode2/OMP are best_effort_raw; crush
+  // defaults to the recommended protected_proxy.
+  for (const engine of ['opencode', 'opencode2', 'omp']) {
     assert.equal(resolveCoderCredentialMode({ engine }), 'best_effort_raw', engine);
     assert.equal(
       resolveCoderCredentialMode({ engine, protectCredentials: true }),
@@ -29,19 +30,44 @@ test('credential mode resolver: explicit --protect-credentials matrix over engin
       engine,
     );
   }
-  for (const protectCredentials of [false, true, undefined]) {
-    assert.equal(
-      resolveCoderCredentialMode({ engine: 'crush', protectCredentials }),
-      'protected_proxy',
-      `crush with protectCredentials=${protectCredentials}`,
-    );
-  }
-  // Any truthy value opts into protection: a plausible affirmative must not
+  // Crush: protected by default (recommendation), but an explicit false is a
+  // real user choice and must be honored, not banned.
+  assert.equal(resolveCoderCredentialMode({ engine: 'crush' }), 'protected_proxy');
+  assert.equal(resolveCoderCredentialMode({ engine: 'crush', protectCredentials: true }), 'protected_proxy');
+  assert.equal(resolveCoderCredentialMode({ engine: 'crush', protectCredentials: false }), 'best_effort_raw');
+  // Any affirmative opts into protection: a plausible truthy must not
   // silently resolve to raw credential exposure.
   for (const truthy of [true, 1, 'true', 'yes']) {
     assert.equal(resolveCoderCredentialMode({ engine: 'opencode', protectCredentials: truthy }), 'protected_proxy');
     assert.equal(resolveCoderCredentialMode({ engine: 'opencode2', protectCredentials: truthy }), 'protected_proxy');
   }
+});
+
+test('credential protection is a persisted tri-state where "false" is never truthy', () => {
+  assert.equal(parseCredentialProtection(undefined), undefined);
+  assert.equal(parseCredentialProtection(''), undefined);
+  assert.equal(parseCredentialProtection(true), true);
+  assert.equal(parseCredentialProtection(false), false);
+  assert.equal(parseCredentialProtection('false'), false);
+  assert.equal(parseCredentialProtection('FALSE'), false);
+  assert.equal(parseCredentialProtection('0'), false);
+  assert.equal(parseCredentialProtection('true'), true);
+  assert.throws(() => parseCredentialProtection('maybe', 'TRISS_PROTECT_CREDENTIALS'), /TRISS_PROTECT_CREDENTIALS must be true or false/);
+
+  // Persisted choices resolve through the same precedence as the flag:
+  // explicit > TRISS_CODER_PROTECT_CREDENTIALS > TRISS_PROTECT_CREDENTIALS.
+  assert.equal(resolveCoderCredentialMode({
+    engine: 'opencode', sharedProtectCredentials: 'true',
+  }), 'protected_proxy');
+  assert.equal(resolveCoderCredentialMode({
+    engine: 'opencode', sharedProtectCredentials: 'true', coderProtectCredentials: 'false',
+  }), 'best_effort_raw');
+  assert.equal(resolveCoderCredentialMode({
+    engine: 'opencode', sharedProtectCredentials: 'true', protectCredentials: false,
+  }), 'best_effort_raw');
+  assert.equal(resolveCoderCredentialMode({
+    engine: 'crush', sharedProtectCredentials: 'false',
+  }), 'best_effort_raw');
 });
 
 test('credential mode resolver ignores the retired legacy environment variable', () => {

@@ -61,7 +61,12 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
     effort: resolved.effort,
     modelProjectionTask: request.task,
     isolate: policy.isolate,
-    protectCredentials: request.protectCredentials === true,
+    // Tri-state pass-through: an explicit false must survive so it can
+    // override a persisted protection choice downstream (model-runtime
+    // already narrowed it; re-collapsing here would lose the user choice).
+    protectCredentials: request.protectCredentials === true
+      ? true
+      : request.protectCredentials === false ? false : undefined,
     timeout: timeoutSeconds,
   }, {
     abortSignal: request.signal,
@@ -70,9 +75,29 @@ export async function executeProjectedEngineTask({ resolved, request, snapshot }
   });
   const envelope = parseEnvelope(stdout, engine);
   const text = typeof envelope.final_text === 'string' ? envelope.final_text : '';
+  // A terminal engine failure is a failure even when partial text exists —
+  // never report a successful projection over an error/timeout/kill envelope.
+  if (['error', 'timeout', 'killed'].includes(envelope.exit_reason)) {
+    const detail = envelope.error?.message ||
+      (typeof envelope.error === 'string' ? envelope.error : null) ||
+      envelope.process_status ||
+      text.slice(0, 300) ||
+      'unknown engine outcome';
+    const failure = new Error(
+      `${engine} run ended with exit_reason "${envelope.exit_reason}": ${String(detail).slice(0, 500)}`,
+    );
+    failure.warnings = envelope.warnings?.filter((w) => typeof w === 'string') || [];
+    if (text) failure.partialText = text;
+    throw failure;
+  }
   const warnings = Array.isArray(envelope.warnings)
     ? envelope.warnings.filter((warning) => typeof warning === 'string')
     : [];
+  // Best-effort engines disclose their concrete projection limitation in the
+  // normalized result — once, not on every internal step.
+  for (const limitation of policy.limitations || []) {
+    if (!warnings.includes(limitation)) warnings.push(limitation);
+  }
   if (!text) {
     const detail = envelope.error?.message ||
       (typeof envelope.error === 'string' ? envelope.error : null) ||

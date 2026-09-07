@@ -21,7 +21,8 @@ function effortFields(route, effort) {
   if (
     route?.policy === 'zai-endpoint-discovery' ||
     route?.policy === 'openai-compatible' ||
-    route?.policy === 'moonshot'
+    route?.policy === 'moonshot' ||
+    route?.policy === 'opencode-catalogue'
   ) {
     return { thinking: { type: effort === 'low' ? 'disabled' : 'enabled' } };
   }

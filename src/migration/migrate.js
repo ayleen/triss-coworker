@@ -53,6 +53,20 @@ const LEGACY_ENV_KEYS = new Set([
   ...LEGACY_MODEL_SELECTION_FIELDS,
 ]);
 
+/**
+ * Whether raw env-file text contains ACTUAL legacy keys. The canonical
+ * additions (schema marker, default provider/engine) are not legacy data —
+ * a fresh minimal file must not trip the "unmigrated" gate just because the
+ * planner would append a default-engine line.
+ */
+export function envTextHasLegacyKeys(text) {
+  const { vars } = parseEnvText(text);
+  for (const key of Object.keys(vars)) {
+    if (LEGACY_ENV_KEYS.has(key)) return true;
+  }
+  return false;
+}
+
 function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -515,6 +529,22 @@ export function inspectMigration(options = {}) {
   } catch (error) {
     return Object.freeze({ state: 'blocked', message: error.message, targets: Object.freeze([]) });
   }
+}
+
+/**
+ * Whether any discovered migration target still holds ACTUAL legacy data —
+ * legacy env keys, managed-rule blocks, structured config references, or
+ * usage records. Canonical-only additions (e.g. appending a missing default
+ * engine line to an already-clean env file) do NOT count: inspectMigration
+ * reports 'required' for those too, and a caller that must not block setup
+ * on them can use this to tell the two apart. Throws when the preflight
+ * fails (the inspectMigration 'blocked' case). The setup wizard's migration
+ * gate uses this so a 'required' verdict is never downgraded while managed
+ * rules, structured configs, or usage state remain unmigrated.
+ */
+export function migrationHasLegacyData(options = {}) {
+  return preflightMigration(options).targets.some((plan) =>
+    plan.canonical !== plan.cleanup || plan.changed === true);
 }
 
 function fsyncDirectory(path) {

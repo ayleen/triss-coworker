@@ -347,7 +347,9 @@ test('MCP model calls preserve raw warnings and forward protected credential int
     },
     { executeModelTask },
   );
-  assert.deepEqual(observed, [false, true]);
+  // Tri-state forwarding: an absent flag passes undefined so a persisted
+  // protection choice still resolves downstream; explicit booleans survive.
+  assert.deepEqual(observed, [undefined, true]);
   assert.deepEqual(protectedResult.warnings, []);
 });
 

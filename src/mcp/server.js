@@ -41,7 +41,15 @@ export async function handleToolRequest(request, extra = {}, deps = {}) {
     const text = await withCall(() =>
       tool.handler(args, {
         signal: extra.signal,
-        modelProtectCredentials: Boolean(args.protect_credentials),
+        // Tri-state, verbatim: an absent protect_credentials must stay
+        // undefined (the persisted choice applies), an explicit true or false
+        // must survive as-is. Boolean() would collapse absent and false into
+        // one value, so an explicit false could never override a persisted
+        // protection choice — silently replacing the user's selection.
+        modelProtectCredentials:
+          args.protect_credentials === true || args.protect_credentials === false
+            ? args.protect_credentials
+            : undefined,
         onWarnings: (warnings) => warningChunks.push(...warnings),
         ...(toolHasOutputSchema
           ? { onReasoning: (chunk) => reasoningChunks.push(chunk) }

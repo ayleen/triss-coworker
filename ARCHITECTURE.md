@@ -36,3 +36,8 @@ behavior change. Priority candidates are coder orchestration, model management,
 updater installation, MCP installation, and MCP handlers.
 
 Architecture decisions that change trust boundaries belong in `docs/adr/`.
+
+The accepted owner decision on
+[user choice, best-effort execution, and easy setup](docs/adr/2026-09-05-user-choice-and-easy-setup.md)
+governs provider/engine availability and wizard design. Existing runtime gates
+are not product requirements when they conflict with that decision.

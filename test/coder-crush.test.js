@@ -99,9 +99,11 @@ test('buildCrushRunArgv: --model is omitted on a falsy override (rely on the con
 
 // ─── buildCrushSpawnEnv ─────────────────────────────────────────────────────────
 
-test('buildCrushSpawnEnv: forwards only the canonical ZHIPU_API_KEY', () => {
+test('buildCrushSpawnEnv: raw fallback forwards pinned global config state, invents no ZAI alias', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk-secret-key',
+    CRUSH_GLOBAL_CONFIG: '/pinned/config',
+    CRUSH_GLOBAL_DATA: '/pinned/data',
     PATH: '/bin',
     HOME: '/h',
     TMPDIR: '/tmp',
@@ -110,14 +112,21 @@ test('buildCrushSpawnEnv: forwards only the canonical ZHIPU_API_KEY', () => {
     // An unrelated var that must NOT cross into the subprocess env.
     AWS_SECRET_ACCESS_KEY: 'should-not-leak',
   });
-  // crush ≥0.1.1 reads ZHIPU_API_KEY directly — forward it verbatim.
-  assert.equal(env.ZHIPU_API_KEY, 'zk-secret-key');
-  assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined, 'unrelated vars must not be spread');
+  // Without a run-scoped plan the fallback must NOT invent a ZAI_API_KEY alias
+  // for ZHIPU_API_KEY: silently re-labeling a credential hides which variable
+  // the child actually receives. The pinned global config locations survive.
+  assert.equal('ZAI_API_KEY' in env, false, 'no invented ZAI_API_KEY alias');
+  assert.equal('ZHIPU_API_KEY' in env, false, 'the fallback forwards no credential');
+  assert.equal(env.CRUSH_GLOBAL_CONFIG, '/pinned/config');
+  assert.equal(env.CRUSH_GLOBAL_DATA, '/pinned/data');
+  assert.equal('AWS_SECRET_ACCESS_KEY' in env, false, 'unrelated vars must not be spread');
 });
 
-test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets no credential', () => {
+test('buildCrushSpawnEnv: with no plan and no pinned config, sets nothing beyond the allowlist', () => {
   const env = buildCrushSpawnEnv({ PATH: '/bin', HOME: '/h' });
   assert.equal('ZHIPU_API_KEY' in env, false);
+  assert.equal('ZAI_API_KEY' in env, false);
+  assert.equal('CRUSH_GLOBAL_CONFIG' in env, false);
 });
 
 // ─── Crush credential-proxy parity ──────────────────────────────────────────
@@ -139,25 +148,55 @@ test('buildCrushSpawnEnv: protected projection gives Crush only run-private prox
   assert.equal(JSON.stringify(env).includes('REAL'), false);
 });
 
-test('buildCrushProtectedProviderConfig pins zai to the loopback proxy', () => {
+test('buildCrushProtectedProviderConfig maps any canonical provider onto a native block', () => {
   const config = buildCrushProtectedProviderConfig(
     'http://127.0.0.1:51001/api/coding/paas/v4',
     'glm-5.2',
   );
   assert.equal(config.providers.zai.base_url, 'http://127.0.0.1:51001/api/coding/paas/v4');
   assert.equal(config.providers.zai.api_key, '$ZAI_API_KEY');
+  assert.equal(config.providers.zai.type, 'openai-compat');
   assert.equal(config.options.disable_provider_auto_update, true);
   assert.deepEqual(config.models.large, { model: 'glm-5.2', provider: 'zai' });
   assert.equal(config.providers.zai.models[0].id, 'glm-5.2');
+
+  // Non-zai providers keep their canonical id, credential env reference, and
+  // native wire type; Responses-protocol models ride openai-compat on the
+  // engine side (the proxy provides the chat->responses bridge).
+  const goConfig = buildCrushProtectedProviderConfig(
+    'http://127.0.0.1:51002/v1',
+    'muse-spark-1.2-contributor',
+    { providerId: 'opencode-go', credentialEnv: 'OPENCODE_API_KEY', protocol: 'openai_responses', smallModel: 'deepseek-v4-flash' },
+  );
+  assert.equal(goConfig.providers['opencode-go'].api_key, '$OPENCODE_API_KEY');
+  assert.equal(goConfig.providers['opencode-go'].type, 'openai-compat');
+  assert.deepEqual(goConfig.models.large, { model: 'muse-spark-1.2-contributor', provider: 'opencode-go' });
+  assert.deepEqual(goConfig.models.small, { model: 'deepseek-v4-flash', provider: 'opencode-go' });
+
+  const kimiConfig = buildCrushProtectedProviderConfig(
+    'http://127.0.0.1:51003/v1',
+    'k3',
+    { providerId: 'kimi-for-coding', credentialEnv: 'KIMI_API_KEY', protocol: 'anthropic_messages' },
+  );
+  assert.equal(kimiConfig.providers['kimi-for-coding'].type, 'anthropic');
+
   assert.throws(
-    () => buildCrushProtectedProviderConfig('https://attacker.invalid/v1', 'glm-5.2'),
-    /loopback proxy URL/,
+    () => buildCrushProtectedProviderConfig('http://127.0.0.1:51001/v1', 'm', { protocol: 'pigeon_post' }),
+    /no native provider type/,
   );
 });
 
-test('buildCrushSpawnEnv: without a proxy, the real key is forwarded as before', () => {
-  const env = buildCrushSpawnEnv({ ZHIPU_API_KEY: 'zk-real', PATH: '/bin' }, null);
-  assert.equal(env.ZHIPU_API_KEY, 'zk-real');
+test('buildCrushSpawnEnv: raw run-scoped plan forwards the real selected credential under its native reference', () => {
+  const env = buildCrushSpawnEnv({ ZHIPU_API_KEY: 'zk-real', PATH: '/bin' }, {
+    rawCredentialValue: 'openai-real',
+    rawBaseUrl: 'https://opencode.ai/zen/go/v1',
+    configDir: '/run/config',
+    dataDir: '/run/data',
+    credentialEnv: 'OPENCODE_API_KEY',
+  });
+  assert.equal(env.OPENCODE_API_KEY, 'openai-real');
+  assert.equal(env.CRUSH_GLOBAL_CONFIG, '/run/config');
+  assert.equal(env.ZHIPU_API_KEY, undefined);
   assert.equal(env.ZAI_BASE_URL, undefined);
 });
 
@@ -173,7 +212,7 @@ test('buildCrushSpawnEnv: result only ever contains keys from the allowlist', ()
     DEBUG: '*',
     SHELL: '/bin/zsh',
   });
-  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY']);
+  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY', 'ZAI_API_KEY', 'CRUSH_GLOBAL_CONFIG', 'CRUSH_GLOBAL_DATA']);
   for (const key of Object.keys(env)) {
     assert.ok(allowed.has(key), `unexpected key in crush env: ${key}`);
   }
@@ -678,12 +717,12 @@ function recordingSh(response) {
   return sh;
 }
 
-test('configureCrushModels: scope "global" -> `crush models use glm5_2 glm5_turbo --global` as an argv array (never a shell string)', () => {
+test('configureCrushModels: scope "global" -> `crush models use <large> <small> --global` as an argv array (never a shell string)', () => {
   const sh = recordingSh({ status: 0, stdout: '', stderr: '', error: null });
-  const res = configureCrushModels({ scope: 'global', sh });
+  const res = configureCrushModels({ scope: 'global', large: 'glm-5.2', small: 'glm-5-turbo', sh });
   assert.equal(sh.calls.length, 1);
   assert.equal(sh.calls[0].cmd, 'crush');
-  assert.deepEqual(sh.calls[0].argv, ['models', 'use', 'glm5_2', 'glm5_turbo', '--global']);
+  assert.deepEqual(sh.calls[0].argv, ['models', 'use', 'glm-5.2', 'glm-5-turbo', '--global']);
   // argv is an array, never a shell:true string.
   assert.ok(Array.isArray(sh.calls[0].argv));
   assert.equal(res.ok, true);
@@ -691,15 +730,15 @@ test('configureCrushModels: scope "global" -> `crush models use glm5_2 glm5_turb
 
 test('configureCrushModels: scope "local" -> `--local`', () => {
   const sh = recordingSh({ status: 0, stdout: '', stderr: '', error: null });
-  configureCrushModels({ scope: 'local', sh });
-  assert.deepEqual(sh.calls[0].argv, ['models', 'use', 'glm5_2', 'glm5_turbo', '--local']);
+  configureCrushModels({ scope: 'local', large: 'glm-5.2', small: 'glm-5-turbo', sh });
+  assert.deepEqual(sh.calls[0].argv, ['models', 'use', 'glm-5.2', 'glm-5-turbo', '--local']);
 });
 
 test('configureCrushModels: success (status 0) -> {ok:true} with the canonical note', () => {
   const sh = recordingSh({ status: 0, stdout: '', stderr: '', error: null });
-  const res = configureCrushModels({ scope: 'global', sh });
+  const res = configureCrushModels({ scope: 'global', large: 'glm-5.2', small: 'glm-5-turbo', sh });
   assert.equal(res.ok, true);
-  assert.equal(res.note, 'set default models: glm5_2 (large) / glm5_turbo (small)');
+  assert.equal(res.note, 'set default models: glm-5.2 (large) / glm-5-turbo (small)');
 });
 
 test('configureCrushModels: non-zero exit -> {ok:false}, note carries the exit code + stderr tail, never throws', () => {
@@ -850,9 +889,10 @@ test(
 
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall, 'crush models use must be invoked when crush is present');
-    assert.deepEqual(modelsCall.argv, ['models', 'use', 'glm5_2', 'glm5_turbo', '--global']);
+    // Init pins provider-qualified operands (crush 0.1.6 rejects bare native ids that are not catalog atoms).
+    assert.deepEqual(modelsCall.argv, ['models', 'use', 'zai/glm-5.2', 'zai/glm-5-turbo', '--global']);
 
-    assert.match(captured(), /set default models: glm5_2 \(large\) \/ glm5_turbo \(small\)/);
+    assert.match(captured(), /set default models: zai\/glm-5\.2 \(large\) \/ zai\/glm-5-turbo \(small\)/);
   }),
 );
 
@@ -864,7 +904,7 @@ test(
 
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall);
-    assert.deepEqual(modelsCall.argv, ['models', 'use', 'glm5_2', 'glm5_turbo', '--local']);
+    assert.deepEqual(modelsCall.argv, ['models', 'use', 'zai/glm-5.2', 'zai/glm-5-turbo', '--local']);
   }),
 );
 
@@ -1023,7 +1063,7 @@ test(
     assert.match(captured(), /✓ crush 0\.1\.6 installed/);
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall, 'models write must run once the binary meets the minimum');
-    assert.match(captured(), /set default models: glm5_2 \(large\) \/ glm5_turbo \(small\)/);
+    assert.match(captured(), /set default models: zai\/glm-5\.2 \(large\) \/ zai\/glm-5-turbo \(small\)/);
   }),
 );
 

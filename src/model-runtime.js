@@ -58,7 +58,12 @@ export async function executeModelTask({
     route: resolved.route,
     effort: resolved.effort,
     signal,
-    protectCredentials: protectCredentials === true,
+    // Tri-state pass-through: true/false are explicit user choices (an
+    // explicit false can override a persisted protection choice); undefined
+    // lets the persisted tri-state resolve downstream.
+    protectCredentials: protectCredentials === true
+      ? true
+      : protectCredentials === false ? false : undefined,
     timeout,
   });
 
@@ -76,4 +81,16 @@ export async function executeModelTask({
   const result = await adapter({ resolved, request, snapshot });
 
   return Object.freeze({ resolved, result });
+}
+
+
+/**
+ * Print a model result's warnings to stderr — CLI consumers surface the
+ * best-effort limitations (projection warnings, engine caveats) without
+ * polluting stdout contracts. MCP carries them in the structured result.
+ */
+export function printModelResultWarnings(result, { write = (text) => process.stderr.write(text), color = (t) => t } = {}) {
+  for (const warning of result?.warnings || []) {
+    write(color(`  ⚠ ${warning}\n`));
+  }
 }

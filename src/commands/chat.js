@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ayleen
 
 import pc from 'picocolors';
-import { executeModelTask } from '../model-runtime.js';
+import { executeModelTask, printModelResultWarnings } from '../model-runtime.js';
 import { reportNormalizedUsage } from '../model-usage.js';
 import { readStdin } from '../secrets.js';
 import { positiveIntegerOption } from '../option-validation.js';
@@ -61,6 +61,7 @@ export async function runChatWithDeps(prompt, opts, deps = {}) {
     },
   }, deps.runtimeDeps);
 
+  printModelResultWarnings(result, { color: pc.yellow });
   const out = result.text;
   if (!out) {
     throw new Error('[triss/chat] model returned empty content — try larger --max-tokens');

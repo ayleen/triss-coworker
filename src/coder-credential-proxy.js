@@ -126,11 +126,296 @@ function generateToken() {
   return randomBytes(16).toString('hex');
 }
 
+// ─── chat→responses protocol bridge ─────────────────────────────────────────
+//
+// Some native engines (crush 0.1.6 on this fork) speak ONLY Chat Completions
+// against custom providers, while the selected model's audited upstream wire
+// protocol is the OpenAI Responses API. Instead of substituting a different
+// engine or model, the proxy translates: the pinned chat/completions route is
+// accepted from the engine, forwarded as a Responses request to the pinned
+// upstream, and the Responses answer is translated back into the chat shape
+// the engine expects. The bridge is bounded: model identity, credential, and
+// endpoint pass through verbatim; message-only rounds are translated and any
+// request carrying tool definitions/tool calls is refused with a precise
+// error rather than silently degraded.
+
+const BRIDGE_MODES = Object.freeze(['chat-to-responses']);
+
+function bridgeUnsupported(res, detail) {
+  res.writeHead(400, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: `chat-to-responses bridge: ${detail}`,
+    },
+  }));
+}
+
+function bridgeChatTools(tools) {
+  if (!Array.isArray(tools)) return undefined;
+  return tools.map((tool) => {
+    if (tool?.type !== 'function' || !tool.function?.name) {
+      throw new Error(`tool definition of type "${tool?.type}" is not translated by the bridge`);
+    }
+    return {
+      type: 'function',
+      name: tool.function.name,
+      ...(tool.function.description !== undefined ? { description: tool.function.description } : {}),
+      ...(tool.function.parameters !== undefined ? { parameters: tool.function.parameters } : {}),
+    };
+  });
+}
+
+function bridgeChatToolChoice(toolChoice) {
+  if (toolChoice === undefined) return undefined;
+  if (toolChoice === 'auto' || toolChoice === 'none') return toolChoice;
+  if (toolChoice?.type === 'function' && toolChoice.function?.name) {
+    return { type: 'function', name: toolChoice.function.name };
+  }
+  throw new Error('tool_choice shape is not translated by the bridge');
+}
+
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((part) => typeof part?.text === 'string')
+      .map((part) => part.text)
+      .join('');
+  }
+  return '';
+}
+
+function bridgeChatMessagesToInput(messages) {
+  const input = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    if (message?.role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: String(message.tool_call_id ?? ''),
+        output: contentToText(message.content),
+      });
+      continue;
+    }
+    if (message?.role === 'assistant' && toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        if (call?.type !== 'function' || !call.function?.name) {
+          throw new Error('tool_call shape is not translated by the bridge');
+        }
+        input.push({
+          type: 'function_call',
+          call_id: String(call.id ?? ''),
+          name: call.function.name,
+          arguments: String(call.function.arguments ?? '{}'),
+        });
+      }
+      // An assistant turn can carry text alongside its tool calls.
+      const text = contentToText(message.content);
+      if (text) input.push({ role: 'assistant', content: text });
+      continue;
+    }
+    input.push({ role: message?.role ?? 'user', content: message?.content ?? '' });
+  }
+  return input;
+}
+
+function bridgeChatBodyToResponses(body) {
+  const translated = {
+    model: body.model,
+    input: bridgeChatMessagesToInput(body.messages),
+    stream: false,
+  };
+  const tools = bridgeChatTools(body.tools);
+  if (tools !== undefined) translated.tools = tools;
+  const toolChoice = bridgeChatToolChoice(body.tool_choice);
+  if (toolChoice !== undefined) translated.tool_choice = toolChoice;
+  if (body.parallel_tool_calls !== undefined) translated.parallel_tool_calls = body.parallel_tool_calls;
+  if (body.max_tokens !== undefined) translated.max_output_tokens = body.max_tokens;
+  if (body.temperature !== undefined) translated.temperature = body.temperature;
+  if (body.reasoning_effort !== undefined) translated.reasoning = { effort: body.reasoning_effort };
+  return translated;
+}
+
+function bridgeResponsesText(response) {
+  if (typeof response?.output_text === 'string') return response.output_text;
+  if (!Array.isArray(response?.output)) return '';
+  return response.output
+    .filter((item) => item?.type === 'message')
+    .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+    .filter((part) => (part?.type === 'output_text' || part?.type === 'text') && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('');
+}
+
+function bridgeResponsesToolCalls(response) {
+  if (!Array.isArray(response?.output)) return undefined;
+  const calls = response.output
+    .filter((item) => item?.type === 'function_call')
+    .map((item, index) => ({
+      index,
+      id: String(item.call_id ?? item.id ?? `call_${index}`),
+      type: 'function',
+      function: { name: item.name, arguments: String(item.arguments ?? '{}') },
+    }));
+  return calls.length ? calls : undefined;
+}
+
+function bridgeResponsesToChatPayload(response) {
+  const usage = response?.usage || {};
+  const toolCalls = bridgeResponsesToolCalls(response);
+  return {
+    id: response?.id || 'bridge-response',
+    model: response?.model,
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: bridgeResponsesText(response),
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      },
+      finish_reason: toolCalls ? 'tool_calls' : response?.status === 'incomplete' ? 'length' : 'stop',
+    }],
+    usage: {
+      prompt_tokens: usage.input_tokens ?? null,
+      completion_tokens: usage.output_tokens ?? null,
+      total_tokens: usage.total_tokens ?? null,
+    },
+  };
+}
+
+function sseChunksForPayload(payload, includeUsage = true) {
+  const events = [];
+  const choice = payload.choices?.[0];
+  const content = choice?.message?.content;
+  if (typeof content === 'string' && content.length > 0) {
+    events.push({
+      id: payload.id,
+      model: payload.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content } }],
+    });
+  }
+  for (const call of choice?.message?.tool_calls || []) {
+    events.push({
+      id: payload.id,
+      model: payload.model,
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [{ index: call.index, id: call.id, type: 'function', function: call.function }],
+        },
+      }],
+    });
+  }
+  events.push({
+    id: payload.id,
+    model: payload.model,
+    choices: [{ index: 0, delta: {}, finish_reason: choice?.finish_reason || 'stop' }],
+    ...(includeUsage ? { usage: payload.usage } : {}),
+  });
+  return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
+}
+
+// Forward through the chat→responses bridge: always issue a NON-streaming
+// Responses request (deterministic single parse), then answer the engine in
+// the shape it asked for (chat JSON or chat SSE). Response bytes are capped on
+// the translated output like every other proxy path.
+async function forwardBridged(req, res, parsedBody, context) {
+  const { endpoint, pathPrefix, credential, fetchImpl, maxResponseBytes, controller } = context;
+  let translated;
+  try {
+    translated = bridgeChatBodyToResponses(parsedBody);
+  } catch (err) {
+    bridgeUnsupported(res, err.message);
+    return;
+  }
+  const upstreamPath = `${pathPrefix === '/' ? '' : pathPrefix}/responses`;
+  const headers = { 'content-type': 'application/json', authorization: `Bearer ${credential}` };
+  const upstream = await fetchImpl(endpoint + upstreamPath, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(translated),
+    signal: controller.signal,
+  });
+  const bridgeResponseHeaders = { 'content-type': upstream.headers.get('content-type') || 'application/json' };
+  copyRetryHeaders(upstream.headers, bridgeResponseHeaders);
+  // Bounded read: count bytes WHILE streaming the upstream body instead of
+  // buffering it all first; overflow aborts the fetch and fails closed.
+  const reader = upstream.body?.getReader();
+  const chunks = [];
+  let received = 0;
+  let overflow = false;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maxResponseBytes) {
+        overflow = true;
+        controller.abort();
+        break;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  if (overflow) {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'upstream response exceeds proxy cap' } }));
+    }
+    return;
+  }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  let payload;
+  try {
+    const parsed = JSON.parse(raw);
+    // Non-success terminal statuses are failures, never normal completions.
+    if (parsed?.status && parsed.status !== 'completed' && parsed.status !== 'incomplete') {
+      const message = parsed?.error?.message || `upstream response status "${parsed.status}"`;
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
+      if (!res.writableEnded) res.end(JSON.stringify({ error: { message } }));
+      return;
+    }
+    if (!upstream.ok) {
+      const message = parsed?.error?.message || `upstream status ${upstream.status}`;
+      if (!res.headersSent) {
+        res.writeHead(upstream.status, { 'content-type': 'application/json' });
+      }
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({ error: { message } }));
+      }
+      return;
+    }
+    payload = bridgeResponsesToChatPayload(parsed);
+  } catch {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'application/json' });
+    }
+    if (!res.writableEnded) {
+      res.end(JSON.stringify({ error: { message: `upstream error: unparseable responses body (status ${upstream.status})` } }));
+    }
+    return;
+  }
+  const engineAskedStream = parsedBody.stream === true;
+  if (engineAskedStream) {
+    res.writeHead(200, { ...bridgeResponseHeaders, 'content-type': 'text/event-stream' });
+    res.end(sseChunksForPayload(payload));
+  } else {
+    res.writeHead(200, bridgeResponseHeaders);
+    res.end(JSON.stringify(payload));
+  }
+}
+
 function isValidOrigin(endpoint) {
   try {
     const url = new URL(endpoint);
+    // http is allowed for LOOPBACK only — the same posture as the shared
+    // provider-security endpoint validation: local fixture/test endpoints
+    // must work, remote plaintext must not.
+    const httpLoopback = url.protocol === 'http:' &&
+      ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
     return (
-      url.protocol === 'https:' &&
+      (url.protocol === 'https:' || httpLoopback) &&
       (url.pathname === '/' || url.pathname === '') &&
       !url.search &&
       !url.hash
@@ -171,13 +456,39 @@ export async function startCoderCredentialProxy(opts = {}) {
   // Path prefix the upstream serves the model scope under (default /v1). The
   // engine's baseURL points at `scopedBaseUrl` (loopback origin + this
   // prefix), so requests arrive verbatim and no rewrite is needed.
-  const pathPrefix = typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')
-    ? opts.pathPrefix.replace(/\/+$/, '') || '/'
-    : '/v1';
+  // An EMPTY string is a deliberate ROOT endpoint: the provider config named
+  // e.g. https://host with no path, and the unproxied run hits
+  // https://host/chat/completions. Treating '' as "unset, add /v1" would make
+  // a protected run silently target a different upstream path than a raw run
+  // of the same configuration — the proxy must never edit the user's
+  // effective URL. Only a truly absent option falls back to /v1.
+  let pathPrefix;
+  if (opts.pathPrefix === undefined || opts.pathPrefix === null) {
+    pathPrefix = '/v1';
+  } else if (typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')) {
+    pathPrefix = opts.pathPrefix.replace(/\/+$/, '') || '/';
+  } else if (typeof opts.pathPrefix === 'string' && opts.pathPrefix === '') {
+    pathPrefix = '';
+  } else {
+    throw new TypeError(
+      'startCoderCredentialProxy: pathPrefix must be an absolute path ("/v1"), "/" for the origin root, or omitted for the /v1 default',
+    );
+  }
   const protocol = ['openai_chat', 'openai_responses', 'anthropic_messages'].includes(opts.protocol)
     ? opts.protocol
     : opts.authStyle === 'anthropic' ? 'anthropic_messages' : 'openai_chat';
   const authStyle = protocol === 'anthropic_messages' ? 'anthropic' : 'bearer';
+  // Optional bounded protocol bridge: the engine speaks chat/completions on
+  // the pinned route while the upstream speaks the Responses API.
+  const bridge = opts.bridge === undefined || opts.bridge === null ? null : opts.bridge;
+  if (bridge !== null) {
+    if (!BRIDGE_MODES.includes(bridge)) {
+      throw new TypeError(`startCoderCredentialProxy: unsupported bridge "${bridge}"`);
+    }
+    if (bridge === 'chat-to-responses' && protocol !== 'openai_chat') {
+      throw new TypeError('startCoderCredentialProxy: bridge "chat-to-responses" requires protocol "openai_chat"');
+    }
+  }
   if (typeof provider !== 'string' || provider.length === 0) {
     throw new TypeError('startCoderCredentialProxy: provider is required');
   }
@@ -189,7 +500,7 @@ export async function startCoderCredentialProxy(opts = {}) {
   // validation exists to catch), so it fails closed at construction.
   if (typeof endpoint !== 'string' || !isValidOrigin(endpoint)) {
     throw new TypeError(
-      'startCoderCredentialProxy: endpoint must be an https ORIGIN (no path), e.g. https://api.z.ai',
+      'startCoderCredentialProxy: endpoint must be an https ORIGIN (no path; http allowed for loopback only), e.g. https://api.z.ai',
     );
   }
   if (typeof credential !== 'string' || credential.length === 0) {
@@ -374,6 +685,30 @@ export async function startCoderCredentialProxy(opts = {}) {
         return;
       }
       requestCount += 1;
+      if (bridge === 'chat-to-responses') {
+        const controller = new AbortController();
+        activeFetches.add(controller);
+        try {
+          await forwardBridged(req, res, parsedBody, {
+            endpoint,
+            pathPrefix,
+            credential,
+            fetchImpl,
+            maxResponseBytes,
+            controller,
+          });
+        } catch (err) {
+          if (!res.destroyed) {
+            if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
+            if (!res.writableEnded) {
+              res.end(JSON.stringify({ error: { message: `upstream error: ${err?.message || 'unknown'}` } }));
+            }
+          }
+        } finally {
+          activeFetches.delete(controller);
+        }
+        return;
+      }
       const body = JSON.stringify(parsedBody);
       await forward(req, res, body);
     });
@@ -525,6 +860,7 @@ export async function startCoderCredentialProxy(opts = {}) {
     provider,
     model,
     protocol,
+    bridge,
     revoke,
     closed,
   };

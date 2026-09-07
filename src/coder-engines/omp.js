@@ -302,7 +302,6 @@ export function buildOmpSpawnEnv({
   baseEnv = process.env,
   credentialEnv,
   credentialValue,
-  _proxy = null,
   agentDir,
   configPath,
   extraEnv = {},
@@ -745,6 +744,10 @@ function foldAssistantMessage(state, message, { countUsage = true } = {}) {
   }
   if (!countUsage || !message.usage) return;
   const usage = message.usage;
+  // Any event carrying usage counts marks usage as genuinely seen: runs
+  // whose events never carry counters must report UNKNOWN usage downstream,
+  // not zeros presented as an estimate (review finding).
+  state.usageSeen = true;
   state.usage.input += Number(usage.input) || 0;
   state.usage.output += Number(usage.output) || 0;
   state.usage.cacheRead += Number(usage.cacheRead) || 0;
@@ -757,6 +760,7 @@ function foldAssistantMessage(state, message, { countUsage = true } = {}) {
 
 export function createOmpEventFolder() {
   return {
+    usageSeen: false,
     sawParseableEvent: false,
     sessionId: null,
     terminalAgentEnd: false,
@@ -883,15 +887,19 @@ export function foldOmpEventLine(state, rawLine) {
   }
 }
 
+// Every returned projection carries `usageSeen` verbatim from the fold state:
+// the fold sets it only when an event actually carried counters, and the
+// caller gates token/cost accounting on it — dropping the flag here would
+// discard real usage even when counters arrived.
 export function finalizeOmpEnvelopeState(state, { exitCode = 0, timedOut = false, killed = false } = {}) {
-  if (timedOut) return { exitReason: 'timeout', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
-  if (killed) return { exitReason: 'killed', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
-  if (state.isTerminalError || state.terminalError) return { exitReason: 'error', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true, errorMessage: state.terminalError };
-  if (exitCode !== 0) return { exitReason: 'error', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
-  if (state.sawTerminalAgentEnd || state.stopReason === 'stop') return { exitReason: 'end_turn', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
+  if (timedOut) return { exitReason: 'timeout', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
+  if (killed) return { exitReason: 'killed', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
+  if (state.isTerminalError || state.terminalError) return { exitReason: 'error', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true, errorMessage: state.terminalError };
+  if (exitCode !== 0) return { exitReason: 'error', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
+  if (state.sawTerminalAgentEnd || state.stopReason === 'stop') return { exitReason: 'end_turn', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: false };
   if (state.sawParseableEvent) {
     pushOmpWarning(state, 'parseable but incomplete stream — no terminal agent_end');
-    return { exitReason: 'error', finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
+    return { exitReason: 'error', usageSeen: state.usageSeen, finalText: state.finalText, usage: state.usage, provider: state.provider, model: state.model, sessionId: state.sessionId, warnings: state.warnings, toolActivity: [...state.toolActivity.values()], isError: true };
   }
   throw new Error('unparseable OMP output — no parseable events');
 }

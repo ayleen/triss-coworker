@@ -14,6 +14,29 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-06 — Concurrent subagents in one worktree silently lost an uncommitted edit
+
+**What happened:** During the wizard implementation, an uncommitted edit to
+`src/commands/init.js` (the `--setup` delegation) vanished before it could be
+committed; the later "wizard integration" commit captured the pre-edit file.
+It surfaced only when the `init --setup` non-TTY acceptance probe wrote a
+`CLAUDE.md` into the repo checkout. A second incident in the same session: a
+`git add -A` swept a sibling subagent's in-progress `src/secrets.js` work into
+an unrelated commit, and a python "delete a function" script accidentally
+duplicated the tail of `src/commands/coder.js` (14k lines) instead of
+removing it.
+
+**Root cause:** Multiple agents (main + background subagents) shared one
+worktree while the main agent did long-lived uncommitted edits and broad
+`git add -A`; nothing re-verified the edited file's content between the edit
+and the commit, and file surgery by string offsets was not length-checked.
+
+**Prevention:** In shared worktrees, commit or stash your own edits before
+launching background agents that may run git commands; never `git add -A` —
+stage explicit paths only; after any scripted file surgery, assert the file
+shrunk (or `node --check`/import it) before continuing; re-read a file before
+claiming a behavioral fix in acceptance notes.
+
 ## 2026-09-06 — Published instructions copied from the plan without runtime verification
 - **What happened:** Owner review of the repositioned website found the
   implementation-workflow guide told readers to `cd "$WORKTREE"` and then run
@@ -40,30 +63,6 @@ Format:
   approved is not evidence that its commands work, and a function's name is
   not its behavior. Fix plan documents together with the pages that copied
   the defect.
-
-## 2026-09-05 — External worktree cleaner destroyed a task worktree mid-verification
-- **What happened:** The `fix/dependabot-2026-09` git worktree (lockfile
-  regenerated, full `npm run check` already green) was deleted at 23:11
-  along with every other linked worktree (including `.codex/worktrees/vex`)
-  and every local branch except `main`; `main` itself was fast-forwarded to
-  origin/main. All uncommitted worktree state was lost and had to be redone
-  in the primary checkout.
-- **Root cause:** An external host process (first seen one minute after a
-  fresh `triss mcp serve` start) syncs the repository and removes linked
-  worktrees plus non-main branches. The task edits had been left uncommitted
-  while the long verification suite ran, so nothing was recoverable from
-  git. Initially misdiagnosed as a stray test-process deletion because the
-  failure surfaced right after a local `npm run check`.
-- **Prevention:** Commit and push the task branch BEFORE starting any
-  long-running local verification; treat linked worktrees in this repo as
-  ephemeral (a branch checked out in the primary checkout is protected —
-  git refuses to delete the current branch, and the cleaner did not touch
-  primary-checkout files). Separately, two local coder-opencode2 preflight
-  failures were environment pollution from an untracked
-  `.opencode/agents/coder.md`, not regressions — confirmed by moving the
-  dir aside (31/31 green); expect untracked host state to leak into tests
-  run in the primary checkout.
-
 ## 2026-08-28 — Fuzz oracle encoded `a >= 224` as 224.0.0.0/4
 - **What happened:** The first run of `test/fuzz.test.js` failed three
   properties with the shrunk counterexample `240.0.0.0`; the reference table
