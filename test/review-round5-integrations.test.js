@@ -353,73 +353,241 @@ test("F1-T8: an empty integrations revisit keeps the first explicit selection", 
 
 // ─── F2: no credential material may reach diagnostic output ─────────────────
 
-// A1/A2/A3: the integration key lives ONLY in the global env file (the
-// shell variable is explicitly removed before the run). With
-// TRISS_DEBUG_MISSING set to 1, to 0, and absent, the real
-// process.stderr.write and the injected stderr must never contain the
-// synthetic secret.
+// F3 (review round 7): the privacy suite must exercise the ROUTE the old
+// TRISS_DEBUG_MISSING leak lived on — the GENERAL Advanced readiness branch
+// (targets.kind === 'none'), not a targeted integration run, which returns
+// from missingRequirements() before that branch — and the credential under
+// test must be PRESERVED: the key prompt answers "", because a replacement
+// value would make the old-secret assertion pass even with the defect
+// restored. The real process.stderr.write is mocked via t.mock.method (the
+// old leak went through console.error, bypassing deps); deps.stderrWrite is
+// injected alongside. All secrets are synthetic; failure messages name the
+// scenario without dumping captured output.
+//
+// Matrix (review §6): P1/P2/P3 file-only key, debug 1/0/absent; P4 shell
+// token; P5 absent key → incomplete. F2-T keeps the targeted run as an
+// explicit route control (it stays green even with the defect restored —
+// that is the documented route separation, not coverage).
+
+const F2_SECRET = "lin-file-only-secret-9911";
+const F2_SHELL_SECRET = "lin-shell-secret-4477";
+
+// Strict general-Advanced driver: answers ONLY the questions of the exact
+// scripted scenario (probed on 25d5f95: menu → integrations selection →
+// LINEAR_API_KEY → menu done → Apply) and FAILS on any unexpected prompt, so
+// a changed route cannot silently walk the test through other questions.
+// Env is fully snapshotted/restored: the wizard loads the temp global .env
+// into process.env, and leftovers would leak into other tests (the F1
+// flip-flop root cause).
+async function drivePrivacyAdvanced({ t, home, debugValue, shellKey = null }) {
+  const project = join(home, "proj");
+  const saved = {
+    HOME: process.env.HOME,
+    ROOT: process.env.TRISS_PROJECT_ROOT,
+    EXIT: process.exitCode,
+    DEBUG: process.env.TRISS_DEBUG_MISSING,
+    env: { ...process.env },
+  };
+  for (const key of Object.keys(process.env)) {
+    if (/^(ZHIPU|MOONSHOT|OPENCODE|LINEAR|JIRA|ATLASSIAN)_|^TRISS_(ZAI|MOONSHOT|OPENCODE|KIMI|DEFAULT|CODER|OPENAI)/.test(key)) {
+      delete process.env[key];
+    }
+  }
+  process.env.HOME = home;
+  process.env.TRISS_PROJECT_ROOT = project;
+  if (shellKey !== null) process.env.LINEAR_API_KEY = shellKey;
+  if (debugValue === undefined) delete process.env.TRISS_DEBUG_MISSING;
+  else process.env.TRISS_DEBUG_MISSING = debugValue;
+
+  const state = { menuVisits: 0, selectionAnswers: [], keyQuestions: [], stderrChunks: [], exitCodeAfter: null };
+  const injected = [];
+  const stderrMock = t.mock.method(process.stderr, "write", (chunk, encoding, callback) => {
+    state.stderrChunks.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+    const cb = typeof encoding === "function" ? encoding : callback;
+    if (typeof cb === "function") queueMicrotask(cb);
+    return true;
+  });
+  let result;
+  try {
+    result = await runSetupWizard(undefined, { global: true, advanced: true }, {
+      isInteractive: () => true,
+      integrations: [LINEAR_MANIFEST],
+      inspectMigration: async () => ({ state: "not_required" }),
+      probeEngine: () => ({ found: true, compatible: true }),
+      runInstall: async () => ({ ok: true }),
+      runCoderSetup: async () => ({ model: "m", smallModel: "s" }),
+      installMcp: async () => ({ path: "/mcp", status: "added" }),
+      writeRules: async () => {},
+      mcpStatus: async () => ({ present: false }),
+      promptChoice: async (question) => {
+        if (question.startsWith("Advanced setup")) {
+          state.menuVisits += 1;
+          return state.menuVisits === 1 ? "integrations" : "done";
+        }
+        throw new Error(`unexpected promptChoice: ${question}`);
+      },
+      prompt: async (question) => {
+        if (question.startsWith("Configure which integrations")) {
+          state.selectionAnswers.push("linear");
+          return "linear";
+        }
+        if (question.includes("LINEAR_API_KEY")) {
+          state.keyQuestions.push("LINEAR_API_KEY");
+          // Keep the existing credential: the secret under test must survive
+          // the run — a replaced value would defeat the privacy assertion.
+          return "";
+        }
+        throw new Error(`unexpected prompt: ${question}`);
+      },
+      yesNo: async (question) => {
+        if (question === "Apply?") return true;
+        throw new Error(`unexpected yesNo: ${question}`);
+      },
+      stderrWrite: (s2) => injected.push(s2),
+    });
+    state.exitCodeAfter = process.exitCode;
+  } finally {
+    stderrMock.mock.restore();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in saved.env)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(saved.env)) process.env[key] = value;
+    process.env.HOME = saved.HOME;
+    if (saved.ROOT === undefined) delete process.env.TRISS_PROJECT_ROOT;
+    else process.env.TRISS_PROJECT_ROOT = saved.ROOT;
+    if (saved.DEBUG === undefined) delete process.env.TRISS_DEBUG_MISSING;
+    else process.env.TRISS_DEBUG_MISSING = saved.DEBUG;
+    process.exitCode = saved.EXIT;
+  }
+  state.allOutput = () => state.stderrChunks.join("") + injected.join("");
+  return { result, state, injected };
+}
+
+function assertSecretNeverPrinted(state, secret, scenario) {
+  const all = state.allOutput();
+  assert.ok(all.length > 0, `[${scenario}] the wizard must produce diagnostics`);
+  assert.ok(!all.includes(secret),
+    `[${scenario}] the full secret must never reach diagnostics (captured ${all.length} chars of output)`);
+}
+
+function assertReadyScriptFollowed(result, state, scenario) {
+  assert.equal(result.status, "ready", `[${scenario}] expected ready, got ${result.status}`);
+  assert.equal(state.menuVisits, 2, `[${scenario}] exactly two Advanced-menu visits expected`);
+  assert.deepEqual(state.selectionAnswers, ["linear"], `[${scenario}] one explicit linear selection expected`);
+  assert.deepEqual(state.keyQuestions, ["LINEAR_API_KEY"], `[${scenario}] exactly one key question expected`);
+  assert.ok(
+    !(result.failed || []).some((f) => typeof f === "object" && f.key === "LINEAR_API_KEY"),
+    `[${scenario}] no failure may be reported for the preserved key`,
+  );
+}
+
 for (const debugValue of ["1", "0", undefined]) {
   const label = debugValue === undefined ? "absent" : debugValue;
-  test(`F2-A: file-only integration key, debug ${label} → no secret in any output`, async (t) => {
+  test(`F2-P${debugValue === "1" ? 1 : debugValue === "0" ? 2 : 3}: general Advanced, file-only key, debug ${label} → ready, secret not printed`, async (t) => {
     const { home } = withTempEnv(t, {
-      global: "TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=\n",
+      // File-only: the key lives ONLY in the global file; the shell copy is
+      // removed before the run so the file layer is the sole source.
+      global: `TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=${F2_SECRET}\n`,
     });
-    const SECRET = "lin-file-only-secret-9911";
-    // File-only: the key lives in the global file; the shell copy is
-    // removed so the file layer is the only source.
     delete process.env.LINEAR_API_KEY;
-    writeFileSync(join(home, ".config", "triss", ".env"),
-      `TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=${SECRET}\n`);
-    const prevDebug = process.env.TRISS_DEBUG_MISSING;
-    if (debugValue === undefined) delete process.env.TRISS_DEBUG_MISSING;
-    else process.env.TRISS_DEBUG_MISSING = debugValue;
-
-    // Intercept the REAL stderr writes; deps.stderrWrite is injected too.
-    const realWrite = process.stderr.write.bind(process.stderr);
-    const captured = [];
-    process.stderr.write = (chunk, ...rest) => {
-      captured.push(String(chunk));
-      return realWrite("", ...rest.slice(0));
-    };
-    const injected = [];
-    const prevExit = process.exitCode;
-    try {
-      const result = await runSetupWizard("linear", { global: true }, await baseDeps({
-        isInteractive: () => {
-          console.error('F2DBG interactive called');
-          return true;
-        },
-        integrations: [LINEAR_MANIFEST],
-        promptChoice: async (_q, _c, o) => _c[o?.defaultIndex ?? 0]?.value,
-        prompt: async (question) => (question.includes("LINEAR_API_KEY") ? "lin-provided-f2" : ""),
-        yesNo: async (question) => question === "Apply?",
-        stderrWrite: (s2) => injected.push(s2),
-      }));
-      assert.equal(result.status, "ready", `expected ready, got ${result.status}`);
-    } finally {
-      process.stderr.write = realWrite;
-      if (prevDebug === undefined) delete process.env.TRISS_DEBUG_MISSING;
-      else process.env.TRISS_DEBUG_MISSING = prevDebug;
-      process.exitCode = prevExit;
-    }
-    const all = captured.join("") + injected.join("");
-    assert.ok(!all.includes(SECRET), `the synthetic secret must never reach diagnostics: ${all.slice(0, 200)}`);
-    assert.ok(all.length > 0, "the wizard must produce diagnostics");
+    const { result, state } = await drivePrivacyAdvanced({ t, home, debugValue });
+    assertReadyScriptFollowed(result, state, `P${debugValue === "1" ? 1 : debugValue === "0" ? 2 : 3}`);
+    assertSecretNeverPrinted(state, F2_SECRET, `P${debugValue === "1" ? 1 : debugValue === "0" ? 2 : 3}`);
+    // The preserved key is still in the same global .env…
+    const globalEnvPath = join(home, ".config", "triss", ".env");
+    const content = readFileSync(globalEnvPath, "utf8");
+    assert.match(content, new RegExp(`^LINEAR_API_KEY=${F2_SECRET}$`, "m"),
+      "the run must not alter the preserved file-layer key");
+    // …and an independent read (empty parent env) attributes it to the file.
+    const independent = readSetupState({
+      parentEnv: {},
+      files: [
+        { scope: "local", path: join(home, "proj", ".triss.env"), exists: false },
+        { scope: "global", path: globalEnvPath, exists: true },
+      ],
+      integrations: [LINEAR_MANIFEST],
+    });
+    const linear = independent.fields.find((f) => f.key === "LINEAR_API_KEY");
+    assert.equal(linear?.current?.value, F2_SECRET, "the independent read must see the raw file-layer value");
+    assert.equal(linear?.current?.source, "config", "the independent read must attribute the value to the config layer");
+    void home;
   });
 }
 
-test("F2-A4: file-only key, no debug flag → configuration stays ready", async (t) => {
+test("F2-P4: general Advanced, shell-sourced token, debug 1 → ready, shell secret not printed", async (t) => {
   const { home } = withTempEnv(t, {
-    global: "TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=lin-existing-f2\n",
+    // The file has the shared provider but NO linear key: the credential
+    // comes from the shell layer — the old debug block printed
+    // process.env[field.key] as a second exposure point.
+    global: "TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\n",
+  });
+  const { result, state } = await drivePrivacyAdvanced({ t, home, debugValue: "1", shellKey: F2_SHELL_SECRET });
+  assertReadyScriptFollowed(result, state, "P4");
+  assertSecretNeverPrinted(state, F2_SHELL_SECRET, "P4");
+  // A shell-sourced value must never be persisted by the run either.
+  const content = readFileSync(join(home, ".config", "triss", ".env"), "utf8");
+  assert.ok(!content.includes(F2_SHELL_SECRET), "the shell secret must not leak into the env file");
+  assert.ok(!/^LINEAR_API_KEY=/m.test(content), "no LINEAR_API_KEY line may be written from the shell value");
+  void home;
+});
+
+test("F2-P5: general Advanced, key absent, debug 1 → incomplete, key named, no First command", async (t) => {
+  const prevExit = process.exitCode;
+  const { home } = withTempEnv(t, {
+    global: "TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\n",
   });
   delete process.env.LINEAR_API_KEY;
-  const result = await runSetupWizard("linear", { global: true }, await baseDeps({
-    isInteractive: () => true,
-    integrations: [LINEAR_MANIFEST],
-    promptChoice: async (_q, _c, o) => _c[o?.defaultIndex ?? 0]?.value,
-    prompt: async (question) => (question.includes("LINEAR_API_KEY") ? "lin-provided" : ""),
-    yesNo: async () => true,
-  }));
-  assert.equal(result.status, "ready", "an existing file-layer key keeps the run ready");
+  const { result, state } = await drivePrivacyAdvanced({ t, home, debugValue: "1" });
+  assert.equal(result.status, "incomplete", "a selected integration with no key must stay incomplete");
+  assert.equal(Number(state.exitCodeAfter ?? 0), 1, "exit code must be 1 for incomplete");
+  assert.ok(
+    (result.failed || []).some((f) => typeof f === "object" && f.key === "LINEAR_API_KEY"),
+    `the missing key must be named in failed: ${JSON.stringify(result.failed)}`,
+  );
+  const all = state.allOutput();
+  assert.ok(all.includes("LINEAR_API_KEY"), "the diagnostic output must name the missing key");
+  assert.ok(!all.includes("First command"), "an incomplete run must not print First command");
+  assert.ok(!all.includes("✓ Setup complete."), "an incomplete run must not claim completion");
+  assert.ok(!all.includes(F2_SECRET), "no secret may be printed");
   void home;
+  t.after(() => { process.exitCode = prevExit; });
+});
+
+// Route control (NOT route coverage): a targeted integration run returns
+// from missingRequirements() before the general branch where the old debug
+// block lived, so it stays green even with the defect restored. Keeping it
+// documents that separation and guards the targeted route's own hygiene.
+test("F2-T: targeted linear run, debug 1 → ready, secret not printed (route control)", async (t) => {
+  const { home } = withTempEnv(t, {
+    global: `TRISS_CONFIG_SCHEMA=2\nTRISS_DEFAULT_PROVIDER=zai\nZHIPU_API_KEY=zk-f2\nLINEAR_API_KEY=${F2_SECRET}\n`,
+  });
+  delete process.env.LINEAR_API_KEY;
+  const captured = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    captured.push(String(chunk));
+    return realWrite("", ...rest);
+  };
+  const injected = [];
+  const prevExit = process.exitCode;
+  try {
+    const result = await runSetupWizard("linear", { global: true }, await baseDeps({
+      isInteractive: () => true,
+      integrations: [LINEAR_MANIFEST],
+      promptChoice: async (_q, _c, o) => _c[o?.defaultIndex ?? 0]?.value,
+      prompt: async (question) => (question.includes("LINEAR_API_KEY") ? "" : ""),
+      yesNo: async (question) => question === "Apply?",
+      stderrWrite: (s2) => injected.push(s2),
+    }));
+    assert.equal(result.status, "ready", `expected ready, got ${result.status}`);
+  } finally {
+    process.stderr.write = realWrite;
+    process.exitCode = prevExit;
+  }
+  const all = captured.join("") + injected.join("");
+  assert.ok(!all.includes(F2_SECRET),
+    `the targeted route must not print the secret (captured ${all.length} chars)`);
+  assert.match(readFileSync(join(home, ".config", "triss", ".env"), "utf8"),
+    new RegExp(`^LINEAR_API_KEY=${F2_SECRET}$`, "m"),
+    "the targeted run must preserve the file-layer key");
 });
