@@ -1665,8 +1665,15 @@ test('runCoderRun does not return while a cancelled child or descendant can stil
       "setInterval(() => {}, 1000);",
     ].join('');
     let ownedGroupPid = null;
+    // The abort fires only after the run has OBSERVED the parseable fixture
+    // (tapped on its way into the supervisor): under load, cancelling on the
+    // descendant's write count alone could kill the group before the one-shot
+    // fixture line was drained, turning the run into "no parseable output
+    // (signal SIGTERM)" — a scheduling assumption, not the invariant under
+    // test.
+    let fixtureObserved = false;
     const spawnFn = (_cmd, _argv, opts) => {
-      const child = spawn(process.execPath, ['-e', parentScript], {
+      const real = spawn(process.execPath, ['-e', parentScript], {
         ...opts,
         env: {
           ...opts.env,
@@ -1674,7 +1681,12 @@ test('runCoderRun does not return while a cancelled child or descendant can stil
           TRISS_TEST_FIXTURE: fixtureBase64,
         },
       });
-      ownedGroupPid = child.pid;
+      ownedGroupPid = real.pid;
+      const tapped = new PassThrough();
+      real.stdout.pipe(tapped);
+      tapped.on('data', () => { fixtureObserved = true; });
+      const child = Object.create(real);
+      Object.defineProperty(child, 'stdout', { value: tapped });
       return child;
     };
     const killOwnedGroup = (pid, signal) => {
@@ -1691,12 +1703,16 @@ test('runCoderRun does not return while a cancelled child or descendant can stil
       killProcess: killOwnedGroup,
       pollMs: 0,
     });
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (existsSync(writePath) && readFileSync(writePath, 'utf8').trim().split('\n').length >= 2) break;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const writes = existsSync(writePath)
+        ? readFileSync(writePath, 'utf8').trim().split('\n').filter(Boolean).length
+        : 0;
+      if (writes >= 2 && fixtureObserved) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     const beforeCancellation = readFileSync(writePath, 'utf8');
-    assert.ok(beforeCancellation.trim().split('\n').length >= 2, 'the descendant must have written repeatedly before cancellation');
+    assert.ok(beforeCancellation.trim().split('\n').filter(Boolean).length >= 2, 'the descendant must have written repeatedly before cancellation');
+    assert.ok(fixtureObserved, 'the parseable fixture must have reached the run before cancellation');
     controller.abort();
     await promise;
 

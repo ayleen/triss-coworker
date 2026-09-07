@@ -4449,27 +4449,29 @@ function killProcessGroup(
     return true;
   } catch (err) {
     if (err?.code === 'ESRCH') return false;
-    // EPERM on a group we cannot signal can mean two different things: our
-    // own group is genuinely out of reach (fail-closed territory), OR the
-    // pgid number was REUSED by an unrelated group after our group died — on
-    // a busy machine the OS hands the number to a new group within
-    // milliseconds, and a foreign member makes the group signal fail with
-    // EPERM. Distinguish by ownership. Once the group LEADER (our direct
-    // detached child, pid == pgid) has EXITED — an event the supervisor
-    // observes directly; between 'exit' and the reap the pid is a zombie
-    // that still answers a signal-0 probe — any live group under that number
-    // can no longer contain processes we spawned: our descendants are
+    // Signal 0 is an EXISTENCE PROBE, not an ownership decision. macOS
+    // sandbox profiles can deny the group probe even when signalling the
+    // same group is permitted, and the waitForGroupExit loops rely on
+    // "EPERM on a probe = still observable" to keep waiting for residual
+    // writers — including while the leader is a zombie between 'exit' and
+    // its reap (the probe must not read the zombie window as "gone"). Only
+    // PROOF — the reaped-leader ESRCH — may call a probed group gone.
+    if (sig === 0) {
+      if (err?.code !== 'EPERM') return false;
+      return processGroupLeaderReaped(pid, killProcess) !== true;
+    }
+    // A REAL signal failing with EPERM is an ownership decision: once the
+    // group LEADER (our direct detached child, pid == pgid) has EXITED —
+    // observed by the supervisor; between 'exit' and the reap the pid is a
+    // zombie that still answers a signal-0 probe — any live group under that
+    // number can no longer contain processes we spawned: our descendants are
     // signalable (the timeout-kill has always relied on that), so an EPERM
     // member is foreign and no writer of ours can be in the group.
-    // Proceeding there is correct; fail-closed stays for a leader that has
-    // not exited (or an inconclusive ownership probe).
+    // Proceeding is correct; fail-closed stays for a leader that has not
+    // exited (or an inconclusive ownership probe).
     if (err?.code === 'EPERM' && (leaderExited === true || processGroupLeaderReaped(pid, killProcess) === true)) {
       return false;
     }
-    // macOS sandbox profiles can deny the existence probe for a process group
-    // even when signalling that same group is permitted. EPERM for signal 0
-    // therefore means "still observable", not "already gone".
-    if (sig === 0 && err?.code === 'EPERM') return true;
     if (!strict) return false;
     throw unverifiedProcessGroupCleanup(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
