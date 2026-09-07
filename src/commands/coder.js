@@ -41,7 +41,7 @@ import { getProviderDefinition, listProviderDefinitions } from '../provider-regi
 import { parseModelTransportsOverride } from '../provider-model-transport.js';
 import { CANONICAL_PROVIDER_IDS, assertCanonicalProviderId, isCanonicalProviderId, normalizeModelEffort, validateModelSelectionInput } from '../provider-contract.js';
 import { resolveModelRequest } from '../model-selection.js';
-import { projectConfiguredEndpoint, validateProviderProfileSecurity } from '../provider-security.js';
+import { projectConfiguredEndpoint, validateProviderEndpoint, validateProviderProfileSecurity } from '../provider-security.js';
 import { acquireCoderMutationLock } from '../coder-lock.js';
 import { ISOLATION_CONFLICT_CODE, ISOLATION_DOWNGRADED_CODE, ISOLATION_ENFORCEMENT_REQUIRED_CODE, ISOLATION_UNAVAILABLE_CODE, normalizeActivity } from '../coder-result.js';
 import { buildExecutionCapabilities, allocateRunIdentity, deriveV2LifecycleFields } from '../coder-orchestration.js';
@@ -734,7 +734,7 @@ async function resolveInitModels(
   providerInfo,
   deps = {},
   existing = {},
-  { allowUnaudited = false } = {},
+  { allowUnaudited = false, explicitModels = null } = {},
 ) {
   // For Zen, resolve defaults + picker order against the LIVE catalogue (free
   // models are temporary) so we never pin a model that's already gone.
@@ -771,7 +771,14 @@ async function resolveInitModels(
   // model passes the resolved main model's prefix instead (see below).
   const pickOne = async (role, existingVal, label, idx, def, fallbackFull, prefix = cat.prefix) => {
     const configuredProfile = readProviderConfigSnapshot().providers[providerInfo.kind];
-    const configuredNativeModel = configuredProfile?.[role]?.value;
+    // A planned model from the confirmed engine plan is the strongest preset;
+    // it outranks the persisted profile and then passes the SAME guards
+    // (kind match, catalogue presence) — a planned-but-gone model is never
+    // persisted silently.
+    const plannedNativeModel = explicitModels?.[role];
+    const configuredNativeModel =
+      (typeof plannedNativeModel === 'string' && plannedNativeModel) ||
+      configuredProfile?.[role]?.value;
     const preset = configuredNativeModel ? `${providerInfo.kind}/${configuredNativeModel}` : null;
     if (preset) {
       if (modelMatchesKind(preset, providerInfo.kind)) {
@@ -900,8 +907,7 @@ function inferCoderProvider() {
   // Coding-specific persistence first: a configured TRISS_CODER_PROVIDER
   // (or one just written by setup) outranks the shared model-task default.
   // Falling back straight to the shared default configured the WRONG
-  // provider for engine setup after a wizard chose a coding provider
-  // (review round 3).
+  // provider for engine setup after a wizard chose a coding provider.
   const coderAtom = readProviderConfigSnapshot().coderProvider;
   if (coderAtom?.source !== 'absent' && coderAtom?.value) {
     return assertCanonicalProviderId(coderAtom.value, 'TRISS_CODER_PROVIDER');
@@ -1391,13 +1397,12 @@ export async function runCoderInit(opts = {}, deps = {}) {
     }
     // Pin the SELECTED provider's models (from the canonical profile — the
     // key was just written by setupKey above) so `--role smart`/`--role fast`
-    // resolve deterministically for any provider, not just Z.AI.
+    // resolve deterministically for any provider, not just Z.AI. Operands are
+    // provider-qualified: crush 0.1.6 rejects a bare native id that is not a
+    // catalog atom ("glm-5.2" is not a known atom or provider/model).
     const crushProfile = readProviderConfigSnapshot().providers[provider];
-    const bareAtom = (atom) => (typeof atom?.value === 'string' && atom.value.includes('/')
-      ? atom.value.slice(atom.value.indexOf('/') + 1)
-      : atom?.value);
-    const largeModel = bareAtom(crushProfile?.model) || getProviderDefinition(provider).defaults.model;
-    const smallModel = bareAtom(crushProfile?.smallModel) || getProviderDefinition(provider).defaults.smallModel;
+    const largeModel = crushProviderQualifiedModel(provider, crushProfile?.model, getProviderDefinition(provider).defaults.model);
+    const smallModel = crushProviderQualifiedModel(provider, crushProfile?.smallModel, getProviderDefinition(provider).defaults.smallModel);
     process.stderr.write(
       pc.dim(`  · default models: ${largeModel} (large) / ${smallModel} (small)\n`),
     );
@@ -1407,6 +1412,10 @@ export async function runCoderInit(opts = {}, deps = {}) {
     // be exactly the drift this gate removes. Non-fatal: a non-zero exit
     // returns {ok:false} and is surfaced yellow, never thrown (init exits 0).
     if (crushReady) {
+      // The provider block must exist in crush.json BEFORE `crush models use`:
+      // provider/model operands resolve against the providers crush already
+      // knows, and a fresh crush.json knows none.
+      seedCrushProviderBlock(scope, { providerId: provider, model: largeModel, smallModel });
       const res = crushEngine.configureCrushModels({ scope, large: largeModel, small: smallModel, sh });
       process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
       // Seed permissions.run AFTER `crush models use` has written the models
@@ -1813,6 +1822,12 @@ async function runCoderSetupUnlocked(
     // (runCoderSetup resolves it via resolveCoderCredentialMode).
     credentialMode,
     skipAgentTemplates,
+    // The CONFIRMED engine plan's models ({ model, smallModel }, native ids):
+    // when present they are the contract the user reviewed, so they outrank a
+    // re-read of the persisted profile and the applied setup cannot diverge
+    // from the plan. An empty field means "no planned pin" — the persisted
+    // resolution stands.
+    models,
   } = {},
   deps = {},
 ) {
@@ -1834,8 +1849,8 @@ async function runCoderSetupUnlocked(
         `Coder setup incomplete: ${keyEnv} is not set. Set it (triss config set ${keyEnv}) and re-run.`,
       );
     }
-    const model = coderModel();
-    const smallModel = coderSmallModel();
+    const model = (typeof models?.model === 'string' && models.model) || coderModel();
+    const smallModel = (typeof models?.smallModel === 'string' && models.smallModel) || coderSmallModel();
     process.stderr.write(
       pc.green(`  ✓ omp ${policy.installedVersion} (meets minimum ${policy.effectiveMinimum})\n`) +
         pc.dim('  · engine state and policy are isolated under a run-private PI_CODING_AGENT_DIR\n') +
@@ -1866,16 +1881,25 @@ async function runCoderSetupUnlocked(
     if (crushPolicy.configValid) {
       // Version policy mirrors init: a found-but-incompatible binary still
       // gets the permissions seed; the models write only runs when ready.
+      // Operands are provider-qualified (crush 0.1.6 rejects bare native ids
+      // that are not catalog atoms), and the provider block is seeded BEFORE
+      // the models write so the operands resolve.
       const crushProfile = readProviderConfigSnapshot().providers[resolvedCrushProvider];
-      const bareAtom = (atom) => (typeof atom?.value === 'string' && atom.value.includes('/')
-        ? atom.value.slice(atom.value.indexOf('/') + 1)
-        : atom?.value);
-      const crushLarge = bareAtom(crushProfile?.model) || getProviderDefinition(resolvedCrushProvider).defaults.model;
-      const crushSmall = bareAtom(crushProfile?.smallModel) || getProviderDefinition(resolvedCrushProvider).defaults.smallModel;
+      const crushLarge = crushProviderQualifiedModel(
+        resolvedCrushProvider,
+        (typeof models?.model === 'string' && models.model) || crushProfile?.model,
+        getProviderDefinition(resolvedCrushProvider).defaults.model,
+      );
+      const crushSmall = crushProviderQualifiedModel(
+        resolvedCrushProvider,
+        (typeof models?.smallModel === 'string' && models.smallModel) || crushProfile?.smallModel,
+        getProviderDefinition(resolvedCrushProvider).defaults.smallModel,
+      );
       process.stderr.write(
         pc.dim(`  · default models: ${crushLarge} (large) / ${crushSmall} (small)\n`),
       );
       if (crushPolicy.compatible) {
+        seedCrushProviderBlock(scope, { providerId: resolvedCrushProvider, model: crushLarge, smallModel: crushSmall });
         const res = crushEngine.configureCrushModels({ scope, large: crushLarge, small: crushSmall, sh: shCrush });
         process.stderr.write(res.ok ? pc.green(`  ✓ ${res.note}\n`) : pc.yellow(`  ⚠ ${res.note}\n`));
       }
@@ -1940,6 +1964,7 @@ async function runCoderSetupUnlocked(
     {
       allowUnaudited: credentialMode === 'best_effort_raw',
       scope: resolvedScope,
+      explicitModels: models || null,
     },
   );
   const projectCfg = opencodeConfigPath('local');
@@ -2252,6 +2277,111 @@ function seedCrushPermissions(scope) {
   );
 }
 
+// Provider-qualified operand for `crush models use`. Verified against crush
+// 0.1.6 (`crush models list`): each operand must be a KNOWN catalog atom or a
+// `provider/model` pair resolvable from crush.json's providers block — a bare
+// native model id that is not a catalog atom (e.g. "glm-5.2") exits 1 with
+// `"glm-5.2" is not a known atom or provider/model`. Triss therefore always
+// passes the RESOLVED canonical provider id as the prefix; a provider prefix
+// already present on the configured value is replaced so the operand always
+// points at the provider Triss actually selected.
+function crushProviderQualifiedModel(providerId, atom, fallbackModel) {
+  // Accepts either a config atom ({ value }) or a plain native id string —
+  // the planned-models contract arrives as plain strings.
+  const raw = typeof atom === 'string' && atom.trim()
+    ? atom.trim()
+    : typeof atom?.value === 'string' && atom.value.trim()
+      ? atom.value.trim()
+      : String(fallbackModel);
+  const candidate = raw.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
+  const native = candidate.trim() ? candidate.trim() : String(fallbackModel);
+  return `${providerId}/${native}`;
+}
+
+// Seed the SELECTED provider's block into persistent crush.json BEFORE
+// `crush models use` runs: provider/model operands only resolve against
+// providers crush already knows, and a fresh crush.json knows none. No-clobber
+// rules mirror seedCrushPermissions: an existing entry for this provider id is
+// left untouched (warned dim), a malformed/non-object crush.json is warned and
+// skipped, and the write is atomic. The api_key stays a native `$ENV`
+// variable reference — no credential material is ever written to crush.json.
+// Never throws: seeding is a non-fatal setup improvement, and a failure here
+// is surfaced yellow while `crush models use` may still resolve a known
+// catalog atom on its own.
+function seedCrushProviderBlock(scope, { providerId, model, smallModel }) {
+  try {
+    const path = crushConfigPath(scope);
+    let config = {};
+    if (existsSync(path)) {
+      let parsed;
+      try {
+        parsed = JSON.parse(readFileSync(path, 'utf8'));
+      } catch {
+        process.stderr.write(
+          pc.yellow(`  ⚠ ${path} is not valid JSON — not seeding the ${providerId} provider block (edit it manually)\n`),
+        );
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        process.stderr.write(
+          pc.yellow(
+            `  ⚠ ${path} is valid JSON but not a JSON object — not seeding the ${providerId} provider block (edit it manually)\n`,
+          ),
+        );
+        return;
+      }
+      config = parsed;
+    }
+    const existingProviders =
+      config.providers && typeof config.providers === 'object' && !Array.isArray(config.providers)
+        ? config.providers
+        : {};
+    if (existingProviders[providerId]) {
+      process.stderr.write(
+        pc.dim(`  · ${path} already has a ${providerId} provider block — not overwriting\n`),
+      );
+      return;
+    }
+    const definition = getProviderDefinition(providerId);
+    const snapshot = readProviderConfigSnapshot();
+    const endpointValue = snapshot.providers?.[providerId]?.endpoint?.value ?? definition.defaults.endpoint;
+    // Same validation the run path applies to a configured endpoint, so the
+    // seeded block can never carry a form (embedded credentials, query
+    // strings, plaintext remote http) that the run path itself would refuse.
+    const baseUrl = validateProviderEndpoint(providerId, endpointValue);
+    // Wire protocol follows the same resolution the run path uses — provider
+    // registry metadata plus any manual TRISS_MODEL_TRANSPORTS override for
+    // this exact model — so the seeded block and the run-scoped block can
+    // never disagree about the upstream protocol.
+    const route = resolveCoderRuntimeProviderRoute(model, undefined, { requireAudited: false, snapshot });
+    const protocol = route?.protocol || definition.route.protocol || 'openai_chat';
+    const credentialEnv = coderProviderKeyInfo(providerId).env;
+    const projection = crushEngine.buildProtectedProviderConfig(baseUrl, model, {
+      providerId,
+      credentialEnv,
+      protocol,
+      smallModel,
+    });
+    const block = projection.providers[providerId];
+    const merged = {
+      ...config,
+      providers: { ...existingProviders, [providerId]: block },
+    };
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWriteJson(path, merged);
+    process.stderr.write(
+      pc.green(
+        `  ✓ seeded ${providerId} provider block into ${path} ` +
+          `(api_key is a $${credentialEnv} environment reference — no key material is written)\n`,
+      ),
+    );
+  } catch (err) {
+    process.stderr.write(
+      pc.yellow(`  ⚠ could not seed the ${providerId} crush provider block: ${err.message}\n`),
+    );
+  }
+}
+
 // crush's restrict policy default. INTERIM (live-verified 2026-07-06,
 // docs/engines/crush.md): crush 0.1.3 IGNORES the permissions.run
 // config block, and a denied bash command deadlocks to the timeout instead of
@@ -2311,12 +2441,19 @@ export function resolveCrushRestrict(opts = {}) {
 
 
 // Resolve the canonical route once for a run. Operator-configured endpoints
-// come from the immutable provider snapshot.
-function resolveRuntimeCoderProviderRoute(model, providerSettings, { requireAudited = true } = {}) {
+// come from the immutable provider snapshot, and so do the manual transport
+// overrides: `snapshot` must be the SAME captured snapshot the caller used for
+// model/credential selection. Reading a fresh snapshot here would let a config
+// edit (or a different MCP snapshot) pair one snapshot's model with another
+// snapshot's transport protocol — a mixed request that never existed in any
+// single user configuration. Exported so the single-snapshot resolution
+// contract stays directly unit-testable.
+export function resolveRuntimeCoderProviderRoute(model, providerSettings, { requireAudited = true, snapshot = null } = {}) {
   // Manual TRISS_MODEL_TRANSPORTS overrides reach the native routing too:
   // a new model with an explicit transport runs instead of being refused
   // with advice to set the very override that is already set.
-  const manualOverrides = parseModelTransportsOverride(readProviderConfigSnapshot().modelTransports?.value);
+  const source = snapshot || readProviderConfigSnapshot();
+  const manualOverrides = parseModelTransportsOverride(source.modelTransports?.value);
   const route = resolveCoderRuntimeProviderRoute(model, undefined, manualOverrides);
   if (!route) {
     throw new Error(
@@ -4688,6 +4825,22 @@ function spawnEngine({
 // at end-of-run, so stdout is
 // buffered fully and parsed once on close.
 
+// Redact the credential material a run handed to the engine child before its
+// output is embedded in an error message. In best-effort raw mode the child
+// holds the real selected API key (protected mode: the one-run proxy token),
+// and engine stderr/stdout can echo it (verbose env dumps, upstream error
+// bodies, shell prompts). Every occurrence is replaced with maskValue's
+// masked form so diagnostics survive without carrying the secret.
+function redactChildCredentialMaterial(text, values) {
+  let out = String(text ?? '');
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0 && out.includes(value)) {
+      out = out.split(value).join(maskValue(value));
+    }
+  }
+  return out;
+}
+
 function spawnCrush({
   argv,
   env,
@@ -4904,8 +5057,9 @@ function spawnCrush({
 // speaks a wire protocol crush handles natively (openai_chat). The caller
 // therefore passes `proxy`/`smallProxy` for exactly the proxied roles and
 // `null` for the unproxied ones. The provider key is the canonical Triss
-// provider id.
-function createCrushRuntimeConfig({
+// provider id. Exported so the build-before-mkdir ordering (no run-root leak
+// on a failed provider projection) stays directly unit-testable.
+export function createCrushRuntimeConfig({
   proxy,
   smallProxy,
   rawCredentialValue,
@@ -4916,11 +5070,6 @@ function createCrushRuntimeConfig({
   providerId,
   credentialEnv,
 }) {
-  const root = join(projectRoot(), '.triss', 'crush', 'runs', `run_${randomBytes(16).toString('hex')}`);
-  const configDir = join(root, 'config');
-  const dataDir = join(root, 'data');
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const upstreamFor = (aRoute, aProxy) => (aProxy
     ? aProxy.scopedBaseUrl
     : `${aRoute.endpoint}${aRoute.pathPrefix === '/' ? '' : aRoute.pathPrefix}`);
@@ -4928,6 +5077,10 @@ function createCrushRuntimeConfig({
     smallModelId && smallRoute && !coderRoutesShareTransport(smallRoute, route),
   );
   const sameProviderSmall = smallModelId && !separateSmall ? smallModelId : null;
+  // Both provider projections are built FIRST: they are the fallible steps
+  // (validation throws on a bad base URL, model id, or wire protocol), and
+  // building them before any filesystem side effect means a throw can never
+  // leak a half-created run root under .triss/crush/runs.
   const config = crushEngine.buildProtectedProviderConfig(
     upstreamFor(route, proxy),
     nativeModel,
@@ -4948,6 +5101,12 @@ function createCrushRuntimeConfig({
     config.providers[smallProviderId] = smallConfig.providers[smallProviderId];
     config.models.small = smallConfig.models.large;
   }
+  // Only after the fallible builds succeeded: create the run root and write.
+  const root = join(projectRoot(), '.triss', 'crush', 'runs', `run_${randomBytes(16).toString('hex')}`);
+  const configDir = join(root, 'config');
+  const dataDir = join(root, 'data');
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   writeFileSync(
     join(configDir, 'crush.json'),
     JSON.stringify(config, null, 2) + '\n',
@@ -4981,6 +5140,12 @@ async function runCrushFlow({
   // Resolved by runCoderRun over the shared tri-state resolver; crush
   // defaults to protected_proxy but honors an explicit raw choice.
   credentialMode,
+  // Effort resolved ONCE in runCoderRun from the selected model (explicit
+  // --effort > TRISS_CODER_EFFORT > TRISS_DEFAULT_EFFORT). Consulting only
+  // opts.effort here would silently drop a persisted effort default for this
+  // engine. Direct internal callers (tests) that pass no effort fall back to
+  // opts.effort below.
+  effort = null,
   // Resolved AND asserted by runCoderRun BEFORE isolation/proxy/session side
   // effects. REQUIRED for a spawn to be reachable; the fallback re-resolve
   // only covers direct internal callers (tests).
@@ -5014,7 +5179,7 @@ async function runCrushFlow({
     cwd: dir,
     timeoutSec,
     maxTokens: opts.maxTokens,
-    effort: opts.effort,
+    effort: effort ?? opts.effort,
     restrict,
   });
   const env = crushEngine.buildSpawnEnv(
@@ -5087,9 +5252,14 @@ async function runCrushFlow({
   if (!parsed) {
     // Nothing parseable on stdout -> throw a plain Error (envelope-vs-throw
     // split, identical to the opencode path). Clean up a freshly-created empty
-    // worktree first so it doesn't leak.
+    // worktree first so it doesn't leak. The stderr tail is redacted through
+    // the credential values this run handed the child: in best-effort raw mode
+    // the child holds the real selected key, and engine output can echo it.
     if (isolation && isolation.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-    const tailLines = result.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+    const tailLines = redactChildCredentialMaterial(result.stderrTail, [
+      crushRuntimeConfig?.rawCredentialValue,
+      credentialProxy?.token,
+    ]).trim().split('\n').filter(Boolean).slice(-20);
     const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
     throw new Error(
       `crush produced no parseable output (exit ${result.code ?? 'null'}` +
@@ -5098,6 +5268,12 @@ async function runCrushFlow({
   }
 
   const warnings = [];
+  // Best-effort disclosure: an explicitly raw run carries the credential
+  // warning AND the effective credential_mode in its envelope, like the
+  // OpenCode/OMP paths — MCP consumers read the structured result, not stderr.
+  if (credentialMode === 'best_effort_raw') {
+    warnings.push(CREDENTIAL_ISOLATION_DOWNGRADED_WARNING);
+  }
   if (allowBestEffortCallerWorktree && !isolation && isolate) warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
   if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
 
@@ -5246,6 +5422,9 @@ async function runCrushFlow({
     engine: 'crush',
     envelope_version: 2,
     engine_version: engineVersion,
+    // Same disclosure contract as the omp/opencode envelopes: the effective
+    // credential mode is part of the structured result, not stderr only.
+    credential_mode: credentialMode,
     session_id: parsed.session_id || null,
     // component: every safe envelope carries the run identity + honest
     // execution capabilities (Section 6.3 / documented contract).
@@ -6205,13 +6384,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
   const cred = coderModelCredential(modelUsed);
   const protectedRouting = engine !== 'crush' && credentialMode === 'protected_proxy';
   const smallModelUsed = oneShotSmallModel;
-  const baseRouteCandidate = resolveRuntimeCoderProviderRoute(modelUsed, undefined, { requireAudited: false });
+  const baseRouteCandidate = resolveRuntimeCoderProviderRoute(modelUsed, undefined, { requireAudited: false, snapshot: providerSnapshot });
   const routeCandidate = projectConfiguredEndpoint(
     baseRouteCandidate,
     selectedModel.route.endpoint.value,
   );
   const baseSmallRouteCandidate = engine !== 'opencode2'
-    ? resolveRuntimeCoderProviderRoute(smallModelUsed, undefined, { requireAudited: false })
+    ? resolveRuntimeCoderProviderRoute(smallModelUsed, undefined, { requireAudited: false, snapshot: providerSnapshot })
     : baseRouteCandidate;
   const smallRouteCandidate = projectConfiguredEndpoint(
     baseSmallRouteCandidate,
@@ -6534,25 +6713,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     for (const proxy of proxies) proxy.revoke();
     await Promise.all(proxies.map((proxy) => proxy.closed));
   };
-  if (
-    !protectedRouting &&
-    engine === 'opencode' &&
-    proxyTarget?.engineRedirect === 'none' &&
-    !deps.disableCredentialProxy
-  ) {
-    // Honest fail-closed: the opencode built-in provider for this credential
-    // exposes no documented base-URL override, so the engine would present
-    // the one-run PROXY token to the REAL upstream (a guaranteed auth
-    // failure, possibly with the token logged upstream). Refuse before spawn
-    // instead of handing over a credential that cannot work.
-    if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
-    throw new Error(
-      `credential isolation unavailable: ${cred.env} runs through opencode cannot be ` +
-        `pinned to the parent-owned credential proxy (no documented engine base-URL ` +
-        `override for this provider); refusing to spawn the engine with a one-run ` +
-        `proxy token the upstream would reject`,
-    );
-  }
   // Crush defaults to the recommended protected proxy, but an explicit false
   // choice (CLI --no-protect-credentials, MCP boolean false, persisted
   // tri-state false) runs raw through the same run-scoped native config with
@@ -6617,7 +6777,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         // share one transport (crush with distinct large/small on the same
         // protocol is the live case), the small model's exact id must be
         // pinned too — otherwise its requests 403 "model is not pinned"
-        // even though the engine config selects it (review round 3). With
+        // even though the engine config selects it. With
         // separate small transports the small proxy owns its own allowlist,
         // and the main proxy pins exactly the main role's model (never the
         // whole catalogue).
@@ -6816,6 +6976,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         usageProvider: selectedModel.providerId,
         sessionV2,
         credentialMode,
+        // Resolved from the selected model ONCE above (explicit > persisted
+        // coding override > persisted default); passing opts.effort alone
+        // would drop the persisted defaults for this engine.
+        effort: selectedModel.effort,
         // Resolved + asserted in runCoderRun BEFORE any side effect; runCrushFlow
         // only echoes it. An incompatible version never reaches this flow.
         crushPolicy,
@@ -6950,7 +7114,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         prompt,
         model: modelProjection.mainSelector,
         smallModel: modelProjection.smallSelector,
-        effort: opts.effort,
+        // Selected-model resolution (explicit > TRISS_CODER_EFFORT >
+        // TRISS_DEFAULT_EFFORT); opts.effort alone drops the persisted values.
+        effort: selectedModel.effort ?? opts.effort,
         sessionDir: ompSessionsDir,
         sessionRealId: sessionRealIdV1,
         cont: !!opts.continue,
@@ -6966,9 +7132,6 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         credentialValue: credentialProxy
           ? credentialProxy.token
           : (canonicalTransientRouting || engine === 'omp' ? credentialValue : undefined),
-        proxy: credentialProxy
-          ? { token: credentialProxy.token, baseUrl: credentialProxy.scopedBaseUrl }
-          : null,
         agentDir,
         configPath: policyPath,
       });
@@ -7007,7 +7170,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       if (!ompResult.sawParseableEvent) {
-        const tailLines = ompResult.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+        // Redact the credential values this run handed the child before the
+        // stderr tail is embedded in the error (best-effort raw mode: the
+        // child holds the real selected key).
+        const tailLines = redactChildCredentialMaterial(ompResult.stderrTail, [
+          credentialProxy?.token,
+          credentialValue,
+        ]).trim().split('\n').filter(Boolean).slice(-20);
         const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
         throw new Error(
           `omp produced no parseable output (exit ${ompResult.code ?? 'null'}` +
@@ -7027,6 +7196,10 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
       });
 
       const ompWarnings = [...new Set(ompFinalized.warnings || ompResult.warnings || [])];
+      // Same structured best-effort disclosure as the crush/opencode envelopes:
+      // an explicitly raw run carries the credential warning in its envelope,
+      // not only on stderr (MCP consumers read the structured result).
+      if (rawCredentialWarning) ompWarnings.unshift(rawCredentialWarning);
       if (allowBestEffortCallerWorktree && !isolation && isolate) {
         ompWarnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
       }
@@ -7458,7 +7631,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
         throw err;
       }
       if (!result2.parsedAnyEvent) {
-        const tailLines = result2.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+        // Redact the credential values this run handed the child before the
+        // stderr tail is embedded in the error (best-effort raw mode: the
+        // child holds the real selected key).
+        const tailLines = redactChildCredentialMaterial(result2.stderrTail, [
+          credentialProxy?.token,
+          credentialValue,
+        ]).trim().split('\n').filter(Boolean).slice(-20);
         const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
         throw new Error(
           `opencode2 produced no parseable output (exit ${result2.code ?? 'null'}` +
@@ -7716,7 +7895,9 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     model: canonicalTransientRouting
       ? transientModelName(runtimeRoute, transientRoutingContext)
       : modelUsed,
-    effort: opts.effort,
+    // Selected-model resolution (explicit > TRISS_CODER_EFFORT >
+    // TRISS_DEFAULT_EFFORT); opts.effort alone drops the persisted values.
+    effort: selectedModel.effort ?? opts.effort,
     sessionRealId: sessionRealIdV1,
     cont: !!opts.continue,
     dir,
@@ -7782,7 +7963,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     // sessions.json entry — opencode's "Session not found" prints nothing
     // to stdout, so it naturally lands here.
     if (!result.parsedAnyEvent) {
-      const tailLines = result.stderrTail.trim().split('\n').filter(Boolean).slice(-20);
+      // Redact the credential values this run handed the child before the
+      // stderr tail is embedded in the error (best-effort raw mode: the
+      // child holds the real selected key).
+      const tailLines = redactChildCredentialMaterial(result.stderrTail, [
+        credentialProxy?.token,
+        credentialValue,
+      ]).trim().split('\n').filter(Boolean).slice(-20);
       const detail = tailLines.length ? `\nLast stderr:\n${tailLines.join('\n')}` : '';
       throw new Error(
         `opencode produced no parseable output (exit ${result.code ?? 'null'}` +

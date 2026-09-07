@@ -352,11 +352,14 @@ export function buildCrushSpawnEnv(baseEnv = process.env, proxy = null) {
     env.CRUSH_GLOBAL_DATA = proxy.dataDir;
     return env;
   }
-  // No run-scoped plan: fall back to the canonical zai pairing only when the
-  // caller supplied nothing more specific.
-  if (baseEnv.ZHIPU_API_KEY) {
-    env.ZAI_API_KEY = baseEnv.ZHIPU_API_KEY;
-  }
+  // No run-scoped plan: forward the pinned global config locations when the
+  // caller supplied them, and nothing else. Deliberately do NOT invent a
+  // ZAI_API_KEY alias for ZHIPU_API_KEY here: silently re-labeling a
+  // credential hides which variable the child actually receives, so a caller
+  // without a run-scoped plan must pass the exact credential env the config
+  // references.
+  if (baseEnv.CRUSH_GLOBAL_CONFIG != null) env.CRUSH_GLOBAL_CONFIG = baseEnv.CRUSH_GLOBAL_CONFIG;
+  if (baseEnv.CRUSH_GLOBAL_DATA != null) env.CRUSH_GLOBAL_DATA = baseEnv.CRUSH_GLOBAL_DATA;
   return env;
 }
 
@@ -566,7 +569,14 @@ export function mergeCrushPermissionsRun(config = {}) {
 
 // configureCrushModels: runs `crush models use <large> <small> <scopeFlag>`
 // so crush's --role smart/fast resolve to the SELECTED provider's models
-// deterministically. The model ids come from the caller (the canonical
+// deterministically. Verified against crush 0.1.6 (`crush models list`): each
+// operand must be a KNOWN catalog atom or a `provider/model` pair that
+// crush.json's providers block can resolve — a bare native model id that is
+// not a catalog atom (e.g. "glm-5.2") exits 1 with
+// `"glm-5.2" is not a known atom or provider/model`. Callers therefore pass
+// provider-qualified ids (`zai/glm-5.2`) AND seed the matching provider block
+// into crush.json BEFORE this call (see seedCrushProviderBlock in
+// src/commands/coder.js). The model ids come from the caller (the canonical
 // provider profile); no vendor is hardcoded here. It does NOT write any
 // api_key into crush.json; run-scoped configs and spawn env own credentials.
 //
@@ -631,6 +641,7 @@ export const crush = {
   buildRunArgv: buildCrushRunArgv,
   buildSpawnEnv: buildCrushSpawnEnv,
   buildProtectedProviderConfig: buildCrushProtectedProviderConfig,
+  crushProviderTypeForProtocol,
   parseEnvelope: parseCrushEnvelope,
   mapExitReason: mapCrushExitReason,
   configureCrushModels,

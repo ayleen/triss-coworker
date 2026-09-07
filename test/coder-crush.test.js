@@ -99,9 +99,11 @@ test('buildCrushRunArgv: --model is omitted on a falsy override (rely on the con
 
 // ─── buildCrushSpawnEnv ─────────────────────────────────────────────────────────
 
-test('buildCrushSpawnEnv: raw fallback bridges the canonical ZHIPU_API_KEY only', () => {
+test('buildCrushSpawnEnv: raw fallback forwards pinned global config state, invents no ZAI alias', () => {
   const env = buildCrushSpawnEnv({
     ZHIPU_API_KEY: 'zk-secret-key',
+    CRUSH_GLOBAL_CONFIG: '/pinned/config',
+    CRUSH_GLOBAL_DATA: '/pinned/data',
     PATH: '/bin',
     HOME: '/h',
     TMPDIR: '/tmp',
@@ -110,16 +112,21 @@ test('buildCrushSpawnEnv: raw fallback bridges the canonical ZHIPU_API_KEY only'
     // An unrelated var that must NOT cross into the subprocess env.
     AWS_SECRET_ACCESS_KEY: 'should-not-leak',
   });
-  // The run-scoped config references $ZAI_API_KEY; without a proxy plan the
-  // raw fallback bridges the canonical key to the native variable name.
-  assert.equal(env.ZAI_API_KEY, 'zk-secret-key');
-  assert.equal(env.ZHIPU_API_KEY, undefined);
-  assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined, 'unrelated vars must not be spread');
+  // Without a run-scoped plan the fallback must NOT invent a ZAI_API_KEY alias
+  // for ZHIPU_API_KEY: silently re-labeling a credential hides which variable
+  // the child actually receives. The pinned global config locations survive.
+  assert.equal('ZAI_API_KEY' in env, false, 'no invented ZAI_API_KEY alias');
+  assert.equal('ZHIPU_API_KEY' in env, false, 'the fallback forwards no credential');
+  assert.equal(env.CRUSH_GLOBAL_CONFIG, '/pinned/config');
+  assert.equal(env.CRUSH_GLOBAL_DATA, '/pinned/data');
+  assert.equal('AWS_SECRET_ACCESS_KEY' in env, false, 'unrelated vars must not be spread');
 });
 
-test('buildCrushSpawnEnv: with no ZHIPU_API_KEY, sets no credential', () => {
+test('buildCrushSpawnEnv: with no plan and no pinned config, sets nothing beyond the allowlist', () => {
   const env = buildCrushSpawnEnv({ PATH: '/bin', HOME: '/h' });
   assert.equal('ZHIPU_API_KEY' in env, false);
+  assert.equal('ZAI_API_KEY' in env, false);
+  assert.equal('CRUSH_GLOBAL_CONFIG' in env, false);
 });
 
 // ─── Crush credential-proxy parity ──────────────────────────────────────────
@@ -205,7 +212,7 @@ test('buildCrushSpawnEnv: result only ever contains keys from the allowlist', ()
     DEBUG: '*',
     SHELL: '/bin/zsh',
   });
-  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY', 'ZAI_API_KEY']);
+  const allowed = new Set(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'ZHIPU_API_KEY', 'ZAI_API_KEY', 'CRUSH_GLOBAL_CONFIG', 'CRUSH_GLOBAL_DATA']);
   for (const key of Object.keys(env)) {
     assert.ok(allowed.has(key), `unexpected key in crush env: ${key}`);
   }
@@ -882,9 +889,10 @@ test(
 
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall, 'crush models use must be invoked when crush is present');
-    assert.deepEqual(modelsCall.argv, ['models', 'use', 'glm-5.2', 'glm-5-turbo', '--global']);
+    // Init pins provider-qualified operands (crush 0.1.6 rejects bare native ids that are not catalog atoms).
+    assert.deepEqual(modelsCall.argv, ['models', 'use', 'zai/glm-5.2', 'zai/glm-5-turbo', '--global']);
 
-    assert.match(captured(), /set default models: glm-5\.2 \(large\) \/ glm-5-turbo \(small\)/);
+    assert.match(captured(), /set default models: zai\/glm-5\.2 \(large\) \/ zai\/glm-5-turbo \(small\)/);
   }),
 );
 
@@ -896,7 +904,7 @@ test(
 
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall);
-    assert.deepEqual(modelsCall.argv, ['models', 'use', 'glm-5.2', 'glm-5-turbo', '--local']);
+    assert.deepEqual(modelsCall.argv, ['models', 'use', 'zai/glm-5.2', 'zai/glm-5-turbo', '--local']);
   }),
 );
 
@@ -1055,7 +1063,7 @@ test(
     assert.match(captured(), /✓ crush 0\.1\.6 installed/);
     const modelsCall = sh.calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
     assert.ok(modelsCall, 'models write must run once the binary meets the minimum');
-    assert.match(captured(), /set default models: glm-5\.2 \(large\) \/ glm-5-turbo \(small\)/);
+    assert.match(captured(), /set default models: zai\/glm-5\.2 \(large\) \/ zai\/glm-5-turbo \(small\)/);
   }),
 );
 

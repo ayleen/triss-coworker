@@ -45,16 +45,21 @@ export async function callModel(
   deps = {},
 ) {
   const execute = deps.executeModelTask || executeModelTask;
-  // Tri-state merge: an explicit boolean (either spelling, or the server-wide
-  // default) is forwarded as-is so an explicit false can override a persisted
-  // protection choice; an absent value stays undefined and the persisted
-  // tri-state resolves downstream.
+  // Tri-state merge, strongest source first:
+  //   1. an explicit per-call boolean (either spelling) is forwarded as-is, so
+  //      an explicit false can override a persisted protection choice;
+  //   2. the server-wide protect_credentials value (deps.modelProtectCredentials)
+  //      is forwarded verbatim when it is a real boolean — false included;
+  //   3. absence stays undefined and the persisted tri-state resolves
+  //      downstream. Collapsing false into undefined here would silently
+  //      replace the user's explicit raw choice with the persisted setting.
   const explicitProtection = [protectCredentials, protectCredentialsSnake].find(
     (value) => value === true || value === false,
   );
-  const modelProtection = explicitProtection !== undefined
-    ? explicitProtection
-    : (deps.modelProtectCredentials === true ? true : undefined);
+  const serverProtection = typeof deps.modelProtectCredentials === 'boolean'
+    ? deps.modelProtectCredentials
+    : undefined;
+  const modelProtection = explicitProtection !== undefined ? explicitProtection : serverProtection;
   const output = await execute({
     task: task || (purpose === 'review' ? 'review' : 'integration-summary'),
     provider,

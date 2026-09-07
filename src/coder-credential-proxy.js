@@ -456,9 +456,24 @@ export async function startCoderCredentialProxy(opts = {}) {
   // Path prefix the upstream serves the model scope under (default /v1). The
   // engine's baseURL points at `scopedBaseUrl` (loopback origin + this
   // prefix), so requests arrive verbatim and no rewrite is needed.
-  const pathPrefix = typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')
-    ? opts.pathPrefix.replace(/\/+$/, '') || '/'
-    : '/v1';
+  // An EMPTY string is a deliberate ROOT endpoint: the provider config named
+  // e.g. https://host with no path, and the unproxied run hits
+  // https://host/chat/completions. Treating '' as "unset, add /v1" would make
+  // a protected run silently target a different upstream path than a raw run
+  // of the same configuration — the proxy must never edit the user's
+  // effective URL. Only a truly absent option falls back to /v1.
+  let pathPrefix;
+  if (opts.pathPrefix === undefined || opts.pathPrefix === null) {
+    pathPrefix = '/v1';
+  } else if (typeof opts.pathPrefix === 'string' && opts.pathPrefix.startsWith('/')) {
+    pathPrefix = opts.pathPrefix.replace(/\/+$/, '') || '/';
+  } else if (typeof opts.pathPrefix === 'string' && opts.pathPrefix === '') {
+    pathPrefix = '';
+  } else {
+    throw new TypeError(
+      'startCoderCredentialProxy: pathPrefix must be an absolute path ("/v1"), "/" for the origin root, or omitted for the /v1 default',
+    );
+  }
   const protocol = ['openai_chat', 'openai_responses', 'anthropic_messages'].includes(opts.protocol)
     ? opts.protocol
     : opts.authStyle === 'anthropic' ? 'anthropic_messages' : 'openai_chat';
