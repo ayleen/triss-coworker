@@ -17,7 +17,7 @@ share the same resolution, persistence, and verification logic.
 ```bash
 triss config wizard                      # Easy: provider + key, assistant hosts, summary, first command
 triss config wizard --advanced           # full sections: providers, execution, connections, integrations, runtime
-triss config wizard --standard           # explicit Easy path (same as the default interactive flow)
+triss config wizard --standard           # explicit Easy path (alias of the default interactive flow)
 triss config wizard <target>             # a canonical provider id, `coder`, or an integration name (jira | linear | …)
 triss config wizard --local|--global     # project ./.triss.env or global ~/.config/triss/.env
 triss config wizard --yes                # non-interactive apply of a complete configuration from files + env + flags
