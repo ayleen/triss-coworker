@@ -2356,11 +2356,18 @@ function seedCrushProviderBlock(scope, { providerId, model, smallModel }) {
     const route = resolveCoderRuntimeProviderRoute(model, undefined, { requireAudited: false, snapshot });
     const protocol = route?.protocol || definition.route.protocol || 'openai_chat';
     const credentialEnv = coderProviderKeyInfo(providerId).env;
-    const projection = crushEngine.buildProtectedProviderConfig(baseUrl, model, {
+    // crush matches catalog metadata (context_window, default_max_tokens,
+    // can_reason, reasoning_levels) by the NATIVE model id — the same id it
+    // writes itself into models.large after `models use`
+    // ({ provider, model }). A provider-qualified id here parses as a
+    // different (unknown) entry and the whole seeded catalog silently falls
+    // back to crush defaults; `models use` keeps the provider-qualified form.
+    const nativeOf = (v) => (typeof v === 'string' && v.includes('/') ? v.slice(v.indexOf('/') + 1) : v);
+    const projection = crushEngine.buildProtectedProviderConfig(baseUrl, nativeOf(model), {
       providerId,
       credentialEnv,
       protocol,
-      smallModel,
+      smallModel: nativeOf(smallModel),
     });
     const block = projection.providers[providerId];
     const merged = {
@@ -5182,6 +5189,19 @@ async function runCrushFlow({
     effort: effort ?? opts.effort,
     restrict,
   });
+  const effectiveEffort = effort ?? opts.effort;
+  if (effectiveEffort) {
+    // crush accepts --effort at the CLI level, but openai-compat providers
+    // (zai included) report "no effort" support in their own catalogue, so
+    // the flag can be inert on the wire. Disclose instead of implying a knob
+    // that may do nothing.
+    process.stderr.write(
+      pc.dim(
+        `  · crush: effort "${effectiveEffort}" is forwarded as --effort; openai-compat providers ` +
+          'declare "no effort", so the engine may not apply it on the wire\n',
+      ),
+    );
+  }
   const env = crushEngine.buildSpawnEnv(
     undefined,
     credentialProxy

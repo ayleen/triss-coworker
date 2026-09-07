@@ -309,6 +309,9 @@ export function buildCrushRunArgv({
         `Crush cannot apply effort "${effort}" — this engine supports low, medium, and high only.`,
       );
     }
+    // CLI-level support only: openai-compat providers report "no effort" in
+    // `crush models list`, so the flag may not change wire behavior. The run
+    // path discloses this instead of presenting effort as an effective knob.
     argv.push('--effort', effort);
   }
   if (restrict) {

@@ -189,3 +189,58 @@ function mkdirRecursive(dir) {
 function writeJson(path, value) {
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 }
+
+test('runCoderSetup (crush): seeded catalog ids are native, models use stays provider-qualified', () => {
+  // crush matches provider catalog entries (context_window, default_max_tokens,
+  // can_reason, reasoning_levels) by the NATIVE id it writes itself into
+  // models.large after `models use` ({ provider, model }). A provider-qualified
+  // catalog id parses as a different entry and crush silently falls back to its
+  // own defaults on the wire.
+  const calls = [];
+  const sh = (cmd, argv) => {
+    calls.push({ cmd, argv });
+    if (cmd === 'crush' && argv[0] === '--version') {
+      return { status: 0, stdout: 'crush version v0.1.6\n', stderr: '', error: null };
+    }
+    return { status: 0, stdout: '', stderr: '', error: null };
+  };
+  const scopeDir = mkdtempSync(join(tmpdir(), 'triss-r8-crush-native-'));
+  const crushJsonPath = join(scopeDir, '.crush', 'crush.json');
+  const savedRoot = process.env.TRISS_PROJECT_ROOT;
+  process.env.TRISS_PROJECT_ROOT = scopeDir;
+  try {
+    runCoderSetup(
+      {
+        engine: 'crush',
+        provider: 'zai',
+        scope: 'local',
+        credentialMode: 'protected_proxy',
+        models: { model: 'glm-4.7', smallModel: 'glm-4.5-air' },
+      },
+      { spawnSync: sh },
+    );
+  } finally {
+    process.env.TRISS_PROJECT_ROOT = savedRoot;
+  }
+  const modelsUse = calls.find((c) => c.cmd === 'crush' && c.argv[0] === 'models');
+  assert.ok(modelsUse, 'models use must run for a compatible crush');
+  // `models use` operands KEEP the provider-qualified form (crush 0.1.6 needs
+  // provider/model to resolve non-catalog atoms).
+  assert.deepEqual(
+    modelsUse.argv,
+    ['models', 'use', 'zai/glm-4.7', 'zai/glm-4.5-air', '--local'],
+  );
+  const seeded = JSON.parse(readFileSync(crushJsonPath, 'utf8'));
+  const block = seeded.providers.zai;
+  assert.ok(Array.isArray(block.models) && block.models.length === 2, 'both models must be cataloged');
+  for (const entry of block.models) {
+    assert.ok(!String(entry.id).includes('/'),
+      `catalog id must be NATIVE (crush matches it against models.large.model): ${entry.id}`);
+    assert.equal(entry.default_max_tokens, 65536, 'seeded metadata must ride on the native entry');
+  }
+  assert.deepEqual(
+    block.models.map((m) => m.id),
+    ['glm-4.7', 'glm-4.5-air'],
+  );
+  rmSync(scopeDir, { recursive: true, force: true });
+});

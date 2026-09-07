@@ -278,3 +278,33 @@ test(
     assert.equal(recorded[0].argv.includes('--thinking'), false);
   }),
 );
+
+test(
+  'crush: a forwarded effort discloses that openai-compat providers declare "no effort"',
+  withIsolatedRun(async () => {
+    const recorded = [];
+    const errChunks = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk, ...rest) => {
+      errChunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+      return realWrite('', ...rest);
+    };
+    try {
+      await runCoderRunProduction('do things', { engine: 'crush', isolate: false, effort: 'low' }, {
+        spawnSync: crushSpawnSync(),
+        spawn: fakeCrushSpawn(recorded),
+        startCredentialProxy: fakeProxy(),
+        providerConfigSnapshot: snapshotWith(),
+        stdoutWrite: () => {},
+      });
+    } finally {
+      process.stderr.write = realWrite;
+    }
+    const flag = recorded[0].argv.indexOf('--effort');
+    assert.notEqual(flag, -1, 'the effort flag is still forwarded');
+    const all = errChunks.join('');
+    assert.match(all, /no effort/,
+      'the run must disclose that openai-compat providers declare "no effort"');
+    assert.match(all, /"low"/, 'the disclosure must name the forwarded value');
+  }),
+);

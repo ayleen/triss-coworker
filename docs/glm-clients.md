@@ -174,25 +174,23 @@ readiness (no secrets printed), and a live **availability** per model:
 
 - **`available`** — authenticated, parseable catalogue response contains the id;
 - **`unavailable`** — authenticated, parseable response returns a complete list
-  without the id (authoritative: the model is gone; `--allow-unverified` can
-  never override this);
+  without the id (authoritative: the model is gone; there is no flag that
+  overrides this);
 - **`not verified`** — the catalogue could not be authoritatively read. The
   cause is one of timeout, auth failure, non-2xx, or parse failure. A
   network/parse failure is never proof of removal — but neither is it proof the
   model is live.
 
-`--allow-unverified` narrows *which* `not verified` you may proceed past. It is
-accepted **only** when an explicit positional main model and explicit `--small`
-model are supplied and the provider credential is present. For OpenCode Go,
-only `catalogue_status: transient` is bypassable: transport failures and HTTP
-408/429/500/502/503/504. Go `unauthenticated`, `forbidden`, `empty`, `invalid`,
-and authoritative unavailable states always block. Legacy Zen model management
-continues to allow `timeout`, `http-error`, or `parse-error`; it never accepts
-`unauthenticated` or authoritative `unavailable`.
-`catalogue_status: not-supported` is different: the provider has no catalogue
-API, so there is no remote list to bypass. After credential, provider-prefix,
-and plan-prefix validation succeeds, the switch proceeds without
-`--allow-unverified`.
+There is no opt-out flag for catalogue verification: the former
+`--allow-unverified` safety opt-in was removed. Current behavior is fixed per
+state. An authoritative `unavailable` blocks the pin. A transient failure
+(network/timeout, HTTP 408/429/5xx) does not block setup: Triss warns and
+continues best-effort with the provider's built-in defaults, marking
+availability as unverified and advising a setup re-run. Auth failures
+(401/403), an authoritative empty catalogue, and invalid responses fail closed.
+`catalogue_status: not-supported` is different again: the provider has no
+catalogue API, so there is no remote list to check — after credential,
+provider-prefix, and plan-prefix validation succeeds, the pin proceeds.
 
 `triss status` never makes a network request — it points you here for live
 verification. Crush and providers without a catalogue API report
