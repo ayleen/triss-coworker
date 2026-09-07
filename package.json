@@ -1,7 +1,7 @@
 {
   "name": "triss-coworker",
-  "version": "0.42.0",
-  "description": "Delegate model-backed analysis and coding tasks through unified provider profiles while keeping primary-agent context focused.",
+  "version": "0.43.0",
+  "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {
     "triss": "bin/triss.js"
@@ -57,8 +57,11 @@
     "smoke:engine-ask": "node scripts/smoke-engine-ask.mjs"
   },
   "keywords": [
+    "agent-delegation",
+    "ai-development",
+    "code-review",
+    "developer-tools",
     "claude-code",
-    "claude",
     "codex",
     "mcp",
     "model-context-protocol",
@@ -71,9 +74,7 @@
     "delegation",
     "ai",
     "cli",
-    "developer-tools",
-    "code-review",
-    "token-saving",
+    "coding-agents",
     "jira",
     "linear",
     "confluence"
@@ -93,12 +94,12 @@
   },
   "packageManager": "npm@11.6.2",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
+    "@anthropic-ai/sdk": "^0.123.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "linkedom": "^0.18.12",
-    "openai": "^7.4.0",
+    "openai": "^7.8.0",
     "picocolors": "^1.1.1",
     "turndown": "^7.2.4"
   },

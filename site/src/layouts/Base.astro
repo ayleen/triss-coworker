@@ -6,10 +6,14 @@ interface Props {
   title: string;
   description: string;
   canonical?: string;
+  jsonLd?: object | object[];
 }
-const { title, description, canonical } = Astro.props;
+const { title, description, canonical, jsonLd } = Astro.props;
 const site = Astro.site?.toString().replace(/\/$/, "") || "";
 const canonicalUrl = canonical || (site ? site + Astro.url.pathname : undefined);
+// JSON-LD is a non-executable data island (same class as the pricing island);
+// "<" is escaped so the payload can never close the script tag early.
+const jsonLdPayload = jsonLd ? JSON.stringify(jsonLd).replace(/</g, "\\u003c") : undefined;
 import "../styles/global.css";
 ---
 <!doctype html>
@@ -34,6 +38,7 @@ import "../styles/global.css";
     {canonicalUrl && <meta property="og:url" content={canonicalUrl} />}
     <meta property="og:image" content={(site ? site : "https://triss.work") + "/og-image.png"} />
     <meta name="twitter:card" content="summary_large_image" />
+    {jsonLdPayload && <script is:inline type="application/ld+json" set:html={jsonLdPayload} />}
   </head>
   <body>
     <slot />

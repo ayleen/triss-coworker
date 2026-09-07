@@ -37,6 +37,30 @@ The committed public key is protected by review and git history. Rotating
 the signing key means replacing this file in a PR first, then signing the
 next release with the new key.
 
+## Keep public descriptions synchronized
+
+When positioning or onboarding changes, update `README.md`, the packaged
+quickstart and MCP documentation, `templates/`, and the website together.
+`package.json.description` is also the CLI help description; use the same
+short description for GitHub About. Keep README links absolute so they work
+on both GitHub and npm. Do not maintain a separate npm README.
+
+GitHub About, topics, and any custom social preview are repository settings,
+not files. Verify them separately. Merging to `main` updates the GitHub README
+and triggers the Cloudflare production build; npm metadata and README change
+only after a new package version is published.
+
+For the version-bump PR, align the root and companion package versions and
+lockfile, update the companion README's install command/version table, and
+record its newly packed tarball's SHA-256 and SHA-512 in the matching
+`CHANGELOG.md` release entry. Never rewrite historical artifact hashes.
+Run `npm run check` and the site checks before merging.
+
+After publication, verify GitHub About and README, the production workflow
+links, and `npm view triss-coworker version description dist-tags --json`.
+Inspect the registry README as well: a successful push alone does not mean
+all public surfaces have updated.
+
 ## Cutting a release
 
 After the version-bump PR is merged into `main`:

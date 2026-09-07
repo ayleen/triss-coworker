@@ -78,7 +78,10 @@ test('defaultRunInstall executes curl|sh as two argv spawns and never sh -c', ()
   assert.equal(calls.length, 2, 'download + execute, nothing else');
   const [download, run] = calls;
   assert.equal(download.cmd, 'curl');
-  assert.ok(download.args.includes('https://omp.sh/install'));
+  // Exact-element equality, not a URL substring containment: a substring
+  // could match any host the attacker places before or after the URL.
+  assert.ok(download.args.some((arg) => arg === 'https://omp.sh/install'),
+    'the installer URL must be passed as an exact argv element');
   assert.ok(download.args.includes('-o'), 'the installer is downloaded to a file');
   const scriptPath = download.args[download.args.indexOf('-o') + 1];
   assert.ok(scriptPath.endsWith('.sh'));

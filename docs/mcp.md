@@ -1,6 +1,21 @@
 # MCP reference
 
-Triss exposes the CLI capabilities through one MCP server. CLI and MCP calls use the same provider registry, configuration snapshot, selection precedence, effort values, transport adapters, and normalized result shape.
+Triss is a managed delegation layer for AI development, exposed here through
+MCP for host agents. Use its tools for bounded research, review, and
+implementation while the host keeps task interpretation, authorization, and
+final acceptance. You choose supported providers, models, and execution engines.
+Savings depend on the workload and selected models; they are not guaranteed.
+Inspect returned evidence and implementation diffs before accepting them.
+
+One Triss MCP server exposes the CLI capabilities below. CLI and MCP calls use
+the same provider registry, configuration snapshot, selection precedence, effort
+values, transport adapters, and normalized result shape.
+
+Workflow guides:
+
+- [Research](https://triss.work/workflows/research/)
+- [Review](https://triss.work/workflows/review/)
+- [Implementation](https://triss.work/workflows/implementation/)
 
 > **Upgrading from Triss < 0.42.0**
 >
@@ -8,12 +23,35 @@ Triss exposes the CLI capabilities through one MCP server. CLI and MCP calls use
 
 ## Install
 
+Choose the host you use. The Standard configuration wizard performs the same
+MCP registration and agent-rules installation for your selected host or hosts
+after configuring the `openai-compatible` profile:
+
 ```bash
-triss mcp install --target claude --global
-triss mcp install --target codex --global
+triss config wizard --standard
 ```
 
-A project-local Claude install writes `./.mcp.json` and pins the project root. A global install follows the host session cwd and does not pin one project globally.
+When installing manually, `mcp install` registers the server and `init` writes
+the rules fallback. Use the same target for both:
+
+```bash
+triss mcp install --target claude --global
+triss init --target claude --global
+```
+
+Replace `claude` with `codex`, or use `both` to configure both hosts. Codex
+registration is global. Claude supports `--local`, which writes `./.mcp.json`
+and pins that project, or `--global`, which follows the host session's current
+working directory. A project-local Claude rules file is written with
+`triss init --target claude` (without `--global`). Restart the host session
+after installation.
+
+Use `triss config wizard --advanced` when you need additional providers,
+custom endpoints, integrations, or granular MCP/rules choices. Terminal-only
+use does not require MCP; configure the profile with `triss config set -g KEY`
+and run the CLI directly. See
+[docs/getting-started](https://triss.work/docs/getting-started/) for the full
+setup path.
 
 ## Common model selection
 

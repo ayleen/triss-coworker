@@ -1,7 +1,7 @@
 {
-  "name": "Triss — Unified Provider Runtime",
+  "name": "Triss — Managed delegation for AI development",
   "short_name": "Triss",
-  "description": "Delegate token-heavy work through lower-cost model providers",
+  "description": "Managed delegation for AI development through a local CLI and MCP server.",
   "start_url": "/",
   "scope": "/",
   "icons": [

@@ -11,7 +11,15 @@ import lighthouse from "lighthouse";
 const root = process.cwd();
 const dist = path.join(root, "dist");
 const reports = path.join(root, ".lighthouse");
-const auditedRoutes = ["/", "/commands/", "/docs/getting-started/"];
+const auditedRoutes = [
+  "/",
+  "/commands/",
+  "/docs/getting-started/",
+  "/workflows/",
+  "/workflows/research/",
+  "/workflows/review/",
+  "/workflows/implementation/",
+];
 const categories = ["performance", "accessibility", "best-practices", "seo"];
 const minimumScore = 0.9;
 

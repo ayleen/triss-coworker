@@ -107,8 +107,10 @@ curl -fsS -o /dev/null -w '%{http_code}\n' \
 Acceptance requires:
 
 - the home page returns HTML, not `Hello world`;
-- `/cost/`, `/commands/`, `/coder/`, `/integrations/`, `/security/`, and
-  `/docs/` return 200;
+- `/workflows/`, `/workflows/research/`, `/workflows/review/`,
+  `/workflows/implementation/`, `/cost/`, `/commands/`, `/coder/`,
+  `/integrations/`, `/security/`, `/docs/`, and `/docs/getting-started/`
+  return 200;
 - an unknown route returns the custom 404 page with status 404;
 - canonical, Open Graph, `robots.txt`, and sitemap URLs use
   `https://triss.work`;

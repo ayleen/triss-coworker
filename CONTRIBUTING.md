@@ -16,9 +16,9 @@ triss status
 
 Requirements:
 
-- Node.js >= 22. CI currently publishes with Node 24.
+- Node.js >= 22.12.0. CI currently publishes with Node 24.
 - npm, which ships with Node.js.
-- A DeepSeek-compatible API key if you want to run model-backed commands.
+- A supported provider credential if you want to run model-backed commands.
 
 ## Test and lint
 

@@ -7,14 +7,14 @@ import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 ---
 
-<Base title="Integrations — Triss" description="Your tickets, without the chatter. Jira, Confluence, Linear, GitHub, GitLab — reads get summarised, writes stay literal.">
+<Base title="Project context and integrations — Triss" description="Read project context and perform explicit operations with GitHub, GitLab, Jira, Linear, and Confluence through Triss.">
   <Header current="integrations" />
 
   <main>
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 68px var(--layout-gutter) 44px; border-bottom: 1px solid var(--color-border);">
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">integrations</div>
-    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">Your tickets, without the chatter.</h1>
-    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">A ticket thread is forty comments of context your agent does not need to read in full. Triss talks to the tracker, summarises what matters, and hands back a paragraph.</p>
+    <h1 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 600; color: var(--color-text-strong); max-width: 22em;">Project context, on explicit terms.</h1>
+    <p style="margin: 22px 0 0; max-width: 44em; font-size: 17px; line-height: 1.65; color: var(--color-text-secondary);">Read project context and perform explicit operations with GitHub, GitLab, Jira, Linear, and Confluence through Triss. Read context when you need it. Make external changes only through explicit operations.</p>
   </section>
 
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 80px var(--layout-gutter) 0;">
@@ -24,17 +24,57 @@ import Footer from "../components/Footer.astro";
       <div style="background: var(--color-bg-raised); padding: 24px;">
         <div style="font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">read --question</div>
         <div style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">The model reads the API response, not your agent</div>
-        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Every read command accepts --question. Instead of dumping raw JSON, Triss runs it through the selected provider and returns a focused answer.</p>
+        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Every read command accepts --question. Instead of dumping raw JSON, Triss runs it through the selected provider and returns a focused answer you can inspect against the source.</p>
       </div>
       <div style="background: var(--color-bg-raised); padding: 24px;">
         <div style="font-family: var(--font-mono); font-size: 12.5px; color: #e0a458;">create · update · post · apply</div>
         <div style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); margin-top: 12px; letter-spacing: -0.02em;">No model anywhere near a mutation</div>
-        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Write commands make the HTTP call directly. The model is never asked to invent a request body.</p>
+        <p style="margin: 10px 0 0; font-size: 14.5px; line-height: 1.65; color: var(--color-text-secondary);">Write commands make the HTTP call directly. The model is never asked to invent a request body. Creating, updating, or commenting is an explicit operation you or your host agent decide to run — not an automatic ticket-to-code loop.</p>
       </div>
     </div>
   </section>
 
+  <section class="int-setup" style="max-width: var(--layout-max); margin: 0 auto; padding: 72px var(--layout-gutter) 0;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">02 — setup and readiness</div>
+    <h2 style="margin: 0; font-size: 28px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Five services, one readiness check.</h2>
+    <p style="margin: 14px 0 0; font-size: 15px; line-height: 1.65; color: var(--color-text-secondary); max-width: 72ch;">Each service is configured independently. Run the setup once, then confirm with <code class="int-setup__code">triss status</code> — it shows which integrations are ready and where each credential was read from.</p>
+    <ul class="int-setup__list">
+      <li>
+        <a class="int-setup__name" href="https://github.com/ayleen/triss-coworker/blob/main/docs/integrations/jira.md">Jira</a>
+        <span class="int-setup__purpose">Search with JQL, read an issue with its comment history, then create, update, comment, or transition it.</span>
+        <span class="int-setup__cred">Credential: <code class="int-setup__code">triss config wizard jira</code> writes the Atlassian site URL, email, and API token to the global env file, or to the project <code class="int-setup__code">./.triss.env</code> with <code class="int-setup__code">--local</code>.</span>
+        <span class="int-setup__ready">Readiness: the <code class="int-setup__code">jira</code> row in <code class="int-setup__code">triss status</code> with its credential source tag.</span>
+      </li>
+      <li>
+        <a class="int-setup__name" href="https://github.com/ayleen/triss-coworker/blob/main/docs/integrations/confluence.md">Confluence</a>
+        <span class="int-setup__purpose">CQL search across spaces, read a page as text, create or update pages.</span>
+        <span class="int-setup__cred">Credential: reuses the same Atlassian credentials as Jira — once Jira is configured, Confluence needs no separate setup.</span>
+        <span class="int-setup__ready">Readiness: Confluence shows ready in <code class="int-setup__code">triss status</code> together with Jira.</span>
+      </li>
+      <li>
+        <a class="int-setup__name" href="https://github.com/ayleen/triss-coworker/blob/main/docs/integrations/linear.md">Linear</a>
+        <span class="int-setup__purpose">Issues, projects, initiatives, milestones, labels, states, attachments, and bulk updates.</span>
+        <span class="int-setup__cred">Credential: <code class="int-setup__code">triss config wizard linear</code> writes your personal <code class="int-setup__code">LINEAR_API_KEY</code> (optional API URL override).</span>
+        <span class="int-setup__ready">Readiness: the <code class="int-setup__code">linear</code> row in <code class="int-setup__code">triss status</code>.</span>
+      </li>
+      <li>
+        <a class="int-setup__name" href="https://github.com/ayleen/triss-coworker/blob/main/docs/integrations/github.md">GitHub</a>
+        <span class="int-setup__purpose">Search, read, create, update, and comment on issues.</span>
+        <span class="int-setup__cred">Credential: <code class="int-setup__code">triss config wizard github</code> writes a <code class="int-setup__code">GITHUB_TOKEN</code> personal access token; if it is unset but the <code class="int-setup__code">gh</code> CLI is logged in, Triss uses that token instead.</span>
+        <span class="int-setup__ready">Readiness: the <code class="int-setup__code">github</code> row in <code class="int-setup__code">triss status</code>, including the <code class="int-setup__code">gh</code> fallback source.</span>
+      </li>
+      <li>
+        <a class="int-setup__name" href="https://github.com/ayleen/triss-coworker/blob/main/docs/integrations/gitlab.md">GitLab</a>
+        <span class="int-setup__purpose">Search, read, create, update, and comment on issues — gitlab.com or a self-hosted instance.</span>
+        <span class="int-setup__cred">Credential: <code class="int-setup__code">triss config wizard gitlab</code> writes a <code class="int-setup__code">GITLAB_TOKEN</code> personal access token (optional <code class="int-setup__code">GITLAB_URL</code> for self-hosted).</span>
+        <span class="int-setup__ready">Readiness: the <code class="int-setup__code">gitlab</code> row in <code class="int-setup__code">triss status</code>.</span>
+      </li>
+    </ul>
+    <p class="int-setup__note">Scope and token details live in each setup guide — follow the links above rather than guessing token scopes at creation time.</p>
+  </section>
+
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 80px var(--layout-gutter);">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">03 — per service</div>
     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
       <button data-int="jira" class="int-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-bg-raised); color: var(--color-accent); border: 1px solid var(--color-border-strong);">Jira</button>
       <button data-int="confluence" class="int-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">Confluence</button>
@@ -50,4 +90,14 @@ import Footer from "../components/Footer.astro";
   <Footer />
 
   <script is:inline src="/scripts/integrations-tabs.js" defer></script>
+
+  <style>
+    .int-setup__list { margin: 28px 0 0; padding: 0; list-style: none; display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
+    .int-setup__list li { background: var(--color-bg-raised); padding: 20px 22px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .int-setup__name { font-size: 16px; font-weight: 600; color: var(--color-accent); text-decoration: underline; text-underline-offset: 0.16em; letter-spacing: -0.02em; }
+    .int-setup__purpose { font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); }
+    .int-setup__cred, .int-setup__ready { font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted); }
+    .int-setup__code { font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); }
+    .int-setup__note { margin: 16px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--color-text-label); }
+  </style>
 </Base>

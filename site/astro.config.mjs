@@ -15,5 +15,7 @@ export default defineConfig({
   integrations: [sitemap()],
   build: {
     format: "directory",
+    // The small shared stylesheet otherwise blocks first paint on a network round trip.
+    inlineStylesheets: "always",
   },
 });

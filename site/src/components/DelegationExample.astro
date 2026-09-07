@@ -1,0 +1,84 @@
+---
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+// Build-time rendering of the recorded delegation example
+// (site/src/data/delegation-example.json). Model output is interpolated as
+// plain text only — never set:html — so recorded excerpts cannot inject markup.
+import example from "../data/delegation-example.json";
+
+interface Props {
+  compact?: boolean;
+  id?: string;
+}
+
+const { compact = false, id = "delegation-example" } = Astro.props;
+const recordedDate = new Date(example.recordedAt).toISOString().slice(0, 10);
+const sourceFile = "src/model-selection.js";
+const shortCommit = example.sourceCommit.slice(0, 7);
+const attribution = `Recorded ${recordedDate} · Triss ${example.trissVersion} · provider ${example.provider} · model ${example.provider}/${example.model} · engine ${example.engine}`;
+---
+
+<aside class:list={["delegation-example", { "delegation-example--compact": compact }]} id={id}>
+  {compact ? (
+    <>
+      <h3 class="delegation-example__heading">A recorded research run</h3>
+      <p class="delegation-example__attribution">{attribution}</p>
+      <p class="delegation-example__intro">
+        Question put to the Triss source at commit {shortCommit}:
+        “{example.question}”
+      </p>
+    </>
+  ) : (
+    <>
+      <h2 class="delegation-example__heading">Recorded example</h2>
+      <p class="delegation-example__attribution">{attribution}</p>
+      <p class="delegation-example__intro">
+        The command below was run against <code>{sourceFile}</code> at commit
+        <code>{shortCommit}</code> of the public repository. Every excerpt on
+        this page was manually checked against that source before publishing.
+      </p>
+    </>
+  )}
+
+  <p class="delegation-example__command-label">Command</p>
+  <pre class="delegation-example__command"><code>{example.command}</code></pre>
+
+  <p class="delegation-example__findings-label">
+    Excerpt from a recorded run{compact ? "" : " — three of the answer's findings"}
+  </p>
+  <ul class="delegation-example__findings">
+    {(compact ? example.findings.slice(0, 1) : example.findings).map((finding) => (
+      <li class="delegation-example__finding">
+        <p class="delegation-example__excerpt">{finding.excerpt}</p>
+        <a
+          class="delegation-example__source-link"
+          href={finding.sourceUrl}
+          rel="noopener"
+        >
+          View {sourceFile} lines {finding.sourceUrl.match(/#L(\d+)(?:-L(\d+))?/)?.slice(1).filter(Boolean).join("–")} on GitHub
+        </a>
+        {!compact && (
+          <p class="delegation-example__verification">
+            Verification: {finding.verification}
+          </p>
+        )}
+      </li>
+    ))}
+  </ul>
+
+  {compact ? (
+    <a class="delegation-example__more" href="/workflows/research/#recorded-example">
+      Read the full recorded example
+    </a>
+  ) : (
+    <div class="delegation-example__limitations">
+      <h3 class="delegation-example__limitations-heading">Limits of this example</h3>
+      <ul>
+        {example.limitations.map((limitation) => (
+          <li>{limitation}</li>
+        ))}
+      </ul>
+    </div>
+  )}
+</aside>
