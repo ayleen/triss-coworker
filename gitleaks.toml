@@ -1,0 +1,19 @@
+# Extends gitleaks' default rule set with an allowlist for this repository's
+# synthetic test fixtures. The scope is double-bound: only files under test/
+# AND only values in the repo's placeholder vocabulary — a lowercase,
+# hyphen-separated token under a known fixture prefix (zk-, sk-, tok-, lin-,
+# mk-, jira-) or a TRISS_* configuration field name. Real credentials
+# (mixed-case, high-entropy blobs, other prefixes, non-test paths) keep
+# failing the scan.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+paths = ['''(^|/)test/''']
+regexTarget = "secret"
+regexes = [
+  '''^(zk|sk|tok|lin|mk|jira)-[a-z0-9]+(-[a-z0-9]+)+$''',
+  '''^TRISS_[A-Z0-9_]+$''',
+]
