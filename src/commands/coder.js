@@ -4441,7 +4441,7 @@ function killProcessGroup(
   pid,
   sig,
   killProcess = process.kill.bind(process),
-  { strict = false, label = 'OpenCode' } = {},
+  { strict = false, label = 'OpenCode', leaderExited = false } = {},
 ) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
@@ -4449,6 +4449,23 @@ function killProcessGroup(
     return true;
   } catch (err) {
     if (err?.code === 'ESRCH') return false;
+    // EPERM on a group we cannot signal can mean two different things: our
+    // own group is genuinely out of reach (fail-closed territory), OR the
+    // pgid number was REUSED by an unrelated group after our group died — on
+    // a busy machine the OS hands the number to a new group within
+    // milliseconds, and a foreign member makes the group signal fail with
+    // EPERM. Distinguish by ownership. Once the group LEADER (our direct
+    // detached child, pid == pgid) has EXITED — an event the supervisor
+    // observes directly; between 'exit' and the reap the pid is a zombie
+    // that still answers a signal-0 probe — any live group under that number
+    // can no longer contain processes we spawned: our descendants are
+    // signalable (the timeout-kill has always relied on that), so an EPERM
+    // member is foreign and no writer of ours can be in the group.
+    // Proceeding there is correct; fail-closed stays for a leader that has
+    // not exited (or an inconclusive ownership probe).
+    if (err?.code === 'EPERM' && (leaderExited === true || processGroupLeaderReaped(pid, killProcess) === true)) {
+      return false;
+    }
     // macOS sandbox profiles can deny the existence probe for a process group
     // even when signalling that same group is permitted. EPERM for signal 0
     // therefore means "still observable", not "already gone".
@@ -4458,6 +4475,20 @@ function killProcessGroup(
       `Failed to signal ${label} process group ${pid} with ${sig}: ${err?.message || String(err)}`,
       err,
     );
+  }
+}
+
+// Supplementary ownership probe for callers that cannot pass leaderExited:
+// true means the leader has been reaped (ESRCH) — the pgid number can only
+// name a foreign group. false includes the zombie window (an exited but
+// unreaped leader answers signal 0), where the caller's own observation of
+// 'exit' is the stronger signal.
+function processGroupLeaderReaped(pid, killProcess) {
+  try {
+    killProcess(pid, 0);
+    return false;
+  } catch (err) {
+    return err?.code === 'ESRCH';
   }
 }
 
@@ -4536,7 +4567,11 @@ function spawnEngine({
     let totalStdoutBytes = 0;
     let outputLimitObserved = false;
 
-    const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true });
+    // Observed leader exit: between 'exit' and the reap the pid is a zombie
+    // that still answers a signal-0 probe, so "leader exited" — not the probe
+    // — is what proves a later EPERM names a reused, foreign pgid.
+    let leaderExitSeen = false;
+    const killGroup = (sig) => killProcessGroup(child.pid, sig, killProcess, { strict: true, leaderExited: leaderExitSeen });
 
     const waitForGroupExit = async (maxMs) => {
       const deadline = Date.now() + Math.max(0, maxMs);
@@ -4694,6 +4729,7 @@ function spawnEngine({
     // close and widening the chance that the numeric PID/PGID is recycled.
     // Test doubles that emit only close still use settle()'s safe fallback.
     child.on('exit', () => {
+      leaderExitSeen = true;
       if (settled) return;
       // The execution is over even if inherited stdio delays `close`. Disarm
       // deadline/cancellation callbacks before cleaning residual descendants,
@@ -4879,6 +4915,9 @@ function spawnCrush({
     let settled = false;
     let timedOut = false;
     let graceTimer = null;
+    // Observed leader exit proves a later EPERM names a reused, foreign pgid
+    // (see killProcessGroup) — a zombie leader would still answer signal 0.
+    let leaderExitSeen = false;
     let residualCleanupPromise = null;
     const stdoutChunks = [];
     // crush emits ONE JSON envelope at end of run, so stdout is buffered —
@@ -4897,7 +4936,7 @@ function spawnCrush({
     let stderrTail = '';
 
     const killGroup = (sig) =>
-      killProcessGroup(child.pid, sig, killProcess, { strict: true, label: 'Crush' });
+      killProcessGroup(child.pid, sig, killProcess, { strict: true, label: 'Crush', leaderExited: leaderExitSeen });
 
     const waitForGroupExit = async (maxMs) => {
       const deadline = Date.now() + Math.max(0, maxMs);
@@ -4993,6 +5032,7 @@ function spawnCrush({
     }
 
     child.on('exit', () => {
+      leaderExitSeen = true;
       if (settled) return;
       disarmExecutionSources();
       void startResidualCleanup().catch((err) =>
@@ -5296,6 +5336,14 @@ async function runCrushFlow({
   }
   if (allowBestEffortCallerWorktree && !isolation && isolate) warnings.push(`${ISOLATION_DOWNGRADED_CODE}: isolation unavailable — downgraded to caller worktree (best-effort; edits may reach current Git worktree)`);
   if (parsed.error) warnings.push(`crush error: ${parsed.error}`);
+  // Effort parity: the same limitation the run prints to stderr rides in the
+  // structured envelope, so MCP consumers see that --effort may be inert
+  // instead of trusting a knob that openai-compat providers do not apply.
+  if (effectiveEffort) {
+    warnings.push(
+      `crush: effort "${effectiveEffort}" is forwarded as --effort; openai-compat providers declare "no effort", so the engine may not apply it on the wire`,
+    );
+  }
 
   // crush reports a COMBINED delta_tokens, never split prompt/completion (unlike
   // opencode's per-step input/output). The canonical tokens shape keeps every

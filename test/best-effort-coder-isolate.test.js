@@ -1413,7 +1413,14 @@ test('successful OpenCode and Crush runs accept ESRCH from the real signal when 
   }
 });
 
-test('successful OpenCode cleanup fails closed when the real residual SIGTERM is EPERM-denied', async () => {
+test('EPERM-denied residual SIGTERM after the leader exited reads as a reused pgid, not a failure', async () => {
+  // The supervisor OBSERVED the leader's exit: between 'exit' and the reap
+  // the pid is a zombie that still answers a signal-0 probe, and once the
+  // leader is gone the pgid number can only name a foreign, reused group —
+  // no writer of ours can be in it. An EPERM on that group signal must
+  // therefore NOT fail-closed the run (the pre-2026-09 flake: a parallel
+  // engine run on the same machine claimed the recycled pgid and the strict
+  // cleanup turned an unrelated EPERM into CODER_PROCESS_GROUP_STILL_ALIVE).
   const repoRoot = initRepo();
   const run = withIsolatedRun(repoRoot, async () => {
     const child = new EventEmitter();
@@ -1436,17 +1443,17 @@ test('successful OpenCode cleanup fails closed when the real residual SIGTERM is
     };
 
     let captured = '';
-    await assert.rejects(
-      () => runCoderRun('finish without a safe cleanup', {}, {
-        spawn: spawnFn,
-        spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
-        stdoutWrite: (value) => { captured += value; },
-        killProcess,
-        pollMs: 0,
-      }),
-      /Failed to signal OpenCode process group 777779 with SIGTERM: signal denied/,
-    );
-    assert.equal(captured, '', 'an unverified cleanup must not emit a completion envelope');
+    let failure = null;
+    await runCoderRun('finish without a safe cleanup', {}, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', stderr: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      killProcess,
+      pollMs: 0,
+    }).catch((error) => { failure = error; });
+    assert.equal(failure, null,
+      `EPERM on a group whose leader already exited is a reused pgid, not our group: ${failure?.message}`);
+    assert.ok(JSON.parse(captured), 'the run completes with a normal envelope');
   });
   try {
     await run();
@@ -2347,6 +2354,171 @@ test('runCoderRun --isolate: a REUSED worktree is never deleted on throw, even w
     // Reused worktree must survive regardless of cleanliness.
     assert.equal(existsSync(wtPath), true);
     assert.equal(branchExists(repoRoot, 'coder/task-reuse-throw'), true);
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ─── pgid ownership on EPERM: a reused pgid is not our group ────────────────
+// kill(-pgid) can fail with EPERM because the OS handed the pgid NUMBER to an
+// unrelated group after our leader was reaped (busy machine: any parallel
+// engine run can claim it within milliseconds). The supervisor must tell
+// "foreign reused group" (proceed; nothing of ours can write) apart from
+// "our own group out of reach" (fail closed).
+
+test('EPERM from a reused pgid (leader already reaped) does not fail-closed cleanup', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 542561;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(FIXTURE);
+        child.stderr.end('');
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+    // Group signals: EPERM (a foreign member makes the group unsignalable).
+    // Leader probe: ESRCH — our leader is long reaped, so the live group is
+    // a reused pgid, not ours.
+    const killProcess = (pid, signal) => {
+      if (pid < 0) {
+        const err = new Error('operation not permitted');
+        err.code = 'EPERM';
+        throw err;
+      }
+      if (signal === 0) {
+        const err = new Error('no such process');
+        err.code = 'ESRCH';
+        throw err;
+      }
+      return true;
+    };
+    let captured = '';
+    let failure = null;
+    await runCoderRun('finish after pgid reuse', { isolate: false }, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      killProcess,
+      pollMs: 0,
+      residualTermGraceMs: 1,
+      residualKillWaitMs: 1,
+      processGroupPollMs: 1,
+    }).catch((error) => { failure = error; });
+    assert.equal(failure, null,
+      `a reused (foreign) pgid must not fail-closed the run: ${failure?.message}`);
+    assert.ok(JSON.parse(captured), 'the run must complete with a normal envelope');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('EPERM on the group-existence probe with a reaped leader reads as gone, not alive', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 542562;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(FIXTURE);
+        child.stderr.end('');
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+    // SIGTERM succeeds; the existence probe (signal 0) hits EPERM — the
+    // pre-fix code read that as "still observable" and fail-closed after the
+    // SIGKILL wait deadline. The leader probe proves the group is foreign.
+    const killProcess = (pid, signal) => {
+      if (pid < 0 && signal === 0) {
+        const err = new Error('operation not permitted');
+        err.code = 'EPERM';
+        throw err;
+      }
+      if (pid > 0 && signal === 0) {
+        const err = new Error('no such process');
+        err.code = 'ESRCH';
+        throw err;
+      }
+      return true;
+    };
+    let captured = '';
+    let failure = null;
+    await runCoderRun('finish past probe EPERM', { isolate: false }, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      killProcess,
+      pollMs: 0,
+      residualTermGraceMs: 1,
+      residualKillWaitMs: 1,
+      processGroupPollMs: 1,
+    }).catch((error) => { failure = error; });
+    assert.equal(failure, null,
+      `probe EPERM on a foreign group must not fail-closed: ${failure?.message}`);
+    assert.ok(JSON.parse(captured), 'the run must complete with a normal envelope');
+  });
+  try {
+    await run();
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('EPERM with our own leader still alive keeps the fail-closed semantics', async () => {
+  const repoRoot = initRepo();
+  const run = withIsolatedRun(repoRoot, async () => {
+    const child = new EventEmitter();
+    child.pid = 542563;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const spawnFn = () => {
+      setImmediate(() => {
+        child.stdout.end(FIXTURE);
+        child.stderr.end('');
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+    // Group signals: EPERM. Leader probe: ALIVE — the group is genuinely
+    // ours and out of reach, so the conservative CODER_PROCESS_GROUP_STILL_ALIVE
+    // error must stay.
+    const killProcess = (pid, _signal) => {
+      if (pid < 0) {
+        const err = new Error('operation not permitted');
+        err.code = 'EPERM';
+        throw err;
+      }
+      return true;
+    };
+    let captured = '';
+    let failure = null;
+    await runCoderRun('finish unsafely eperm', { isolate: false }, {
+      spawn: spawnFn,
+      spawnSync: () => ({ status: 1, stdout: '', error: null }),
+      stdoutWrite: (value) => { captured += value; },
+      killProcess,
+      pollMs: 0,
+      residualTermGraceMs: 1,
+      residualKillWaitMs: 1,
+      processGroupPollMs: 1,
+    }).catch((error) => { failure = error; });
+    assert.ok(failure, 'an unsignalable OWN group must still fail closed');
+    assert.equal(failure.code, 'CODER_PROCESS_GROUP_STILL_ALIVE');
+    assert.equal(failure.cleanupVerified, false);
+    assert.equal(captured, '', 'a failed cleanup must not emit a completion envelope');
   });
   try {
     await run();

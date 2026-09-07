@@ -284,6 +284,7 @@ test(
   withIsolatedRun(async () => {
     const recorded = [];
     const errChunks = [];
+    let envelopeText = '';
     const realWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (chunk, ...rest) => {
       errChunks.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
@@ -295,7 +296,7 @@ test(
         spawn: fakeCrushSpawn(recorded),
         startCredentialProxy: fakeProxy(),
         providerConfigSnapshot: snapshotWith(),
-        stdoutWrite: () => {},
+        stdoutWrite: (s) => { envelopeText += s; },
       });
     } finally {
       process.stderr.write = realWrite;
@@ -306,5 +307,11 @@ test(
     assert.match(all, /no effort/,
       'the run must disclose that openai-compat providers declare "no effort"');
     assert.match(all, /"low"/, 'the disclosure must name the forwarded value');
+    // Parity: MCP consumers read the structured envelope, not stderr — the
+    // same limitation must ride in envelope.warnings.
+    const envelope = JSON.parse(envelopeText);
+    const effortWarning = (envelope.warnings || []).find((w) => /no effort/.test(String(w)));
+    assert.ok(effortWarning, 'the envelope warnings must carry the effort limitation');
+    assert.match(effortWarning, /"low"/);
   }),
 );
