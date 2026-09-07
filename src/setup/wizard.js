@@ -519,9 +519,6 @@ function missingRequirements({ preview, targets, selectedIntegrations = [] }) {
     for (const name of selectedIntegrations) {
       for (const field of preview.fields
         .filter((f) => f.group === `integration:${name}` && f.required && !f.pattern)) {
-        if (process.env.TRISS_DEBUG_MISSING) {
-          console.error(`[missing-dbg] ${field.key} current=${JSON.stringify(field.current)} shell=${JSON.stringify(process.env[field.key])}`);
-        }
         if (field.current?.value === undefined || field.current?.value === '') {
           const entry = seenKeys.get(field.key) ?? {
             component: `integration:${name}`,
