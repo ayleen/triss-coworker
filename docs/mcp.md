@@ -23,12 +23,13 @@ Workflow guides:
 
 ## Install
 
-Choose the host you use. The Standard configuration wizard performs the same
-MCP registration and agent-rules installation for your selected host or hosts
-after configuring the `openai-compatible` profile:
+Choose the host you use. The configuration wizard performs the same MCP
+registration and agent-rules installation for your selected host or hosts
+while setting up the provider you pick (Easy opens by default; `--advanced`
+exposes the full tuning sections):
 
 ```bash
-triss config wizard --standard
+triss config wizard
 ```
 
 When installing manually, `mcp install` registers the server and `init` writes

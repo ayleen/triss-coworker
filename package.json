@@ -1,6 +1,6 @@
 {
   "name": "triss-coworker",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {

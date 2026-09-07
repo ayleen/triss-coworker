@@ -52,6 +52,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs a Claude MCP server implicitly; Easy and Advanced share one setup
   and resolution path.
 
+## [0.44.0] — 2026-09-08
+
+### Added
+
+- `triss config wizard` opens the Easy path directly: pick any canonical
+  provider, paste its key, choose which assistant host to connect (Claude
+  Code, Codex, both, or skip host wiring), review the summary before apply,
+  and finish with a first command to try. Reruns reuse the existing
+  configuration instead of resetting it.
+- `triss config wizard --advanced` exposes the full tuning sections —
+  providers, execution (engine, effort, tri-state credential protection),
+  connections (MCP and agent rules selectable independently), integrations
+  (keep/unset with effective-source display), runtime (including pricing),
+  and in-place engine version pins.
+- Targeted wizard setups configure one piece:
+  `triss config wizard <provider-id>`, `triss config wizard coder` (with
+  `--coder-provider`, `--coder-engine`, `--coder-protect-credentials`), or an
+  integration name.
+- Headless apply: `triss config wizard --yes --agent none [--install]`
+  assembles a complete configuration from existing files, the environment,
+  and explicit flags; missing requirements exit non-zero before writing.
+  `triss init --setup` delegates to the same wizard after writing agent
+  rules.
+- Every execution engine now serves every canonical provider: crush runs any
+  provider through a run-scoped config with `$ENV` credential references
+  (provider block seeded before `crush models use`), and opencode2, omp, and
+  crush execute non-coder projections (`ask`, `review`, `chat`, `write`,
+  `commit-msg`) best-effort with structured warnings naming the unverified
+  limitation.
+- `--protect-credentials` / `--no-protect-credentials` on model-backed
+  commands; MCP forwards `protect_credentials` as the same tri-state and
+  carries credential mode and disclosures in the run envelope.
+- `TRISS_CODER_EFFORT` and `TRISS_DEFAULT_EFFORT` knobs, honored by every
+  engine (crush discloses when a provider declares no effort support).
+
+### Changed
+
+- Credential protection is a verbatim tri-state (absent/true/false) across
+  the CLI, MCP, and persisted configuration: `TRISS_PROTECT_CREDENTIALS` and
+  `TRISS_CODER_PROTECT_CREDENTIALS` persist explicit choices, and an explicit
+  false overrides a persisted true.
+- The setup wizard no longer resets an existing provider/engine selection or
+  installs a Claude MCP server implicitly; Easy and Advanced share one setup
+  and resolution path, integrations gate readiness only when selected, and
+  readiness is re-derived from post-apply state.
+- Engine installers run with a minimal environment allowlist (provider and
+  integration tokens never reach npm lifecycle scripts or downloaded
+  installers), curl|sh installers run as two argv spawns instead of a shell
+  string, and the exact install command is shown before Apply.
+- Env-file writes are atomic (0600 temp file + rename after the CAS check);
+  host-plan status is tracked per concrete target; `config set` validates
+  provider and engine values; `triss status` reads `TRISS_CODER_ENGINE`
+  through the layered setup state.
+- Migration gates the wizard on a `blocked` preflight state instead of
+  writing schema-2 over a conflict.
+
+### Fixed
+
+- A debug path in the wizard's readiness diagnostics could print full
+  credentials to stderr; it is removed and privacy tests now guard the
+  route, the preserved value, and both former exposure points.
+- MCP `protect_credentials: false` was indistinguishable from absent and
+  could not override a persisted true.
+- OMP runs discarded usage/cost records; the coder transport protocol now
+  resolves from the same captured snapshot as the model, and child stderr
+  echoed in errors is masked.
+- `triss init --setup` works in non-TTY shells (`--yes` registered).
+- Root-endpoint provider URLs no longer gain a silent `/v1` in protected
+  runs; unverified cleanup no longer fails closed on a recycled pgid.
+
+
+### Artifact integrity (0.44.0)
+
+- `triss-dsh-provider-bundle-0.44.0.tgz` — sha256
+  `c2e8ce70bb5964cdbcc16a42c574b6f85c142c36d905d066e042c0150f50b935`
+  — `sha512-l8rIL6i7vgukA7efR8Q2PvG8YBnAVRdnlWL338FgZmNt9r+/Efz8OgujnkFb39KLK1qe/sdHY+HntvcLZ9GrQw==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.44.0.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.44.0`; the root tarball ships `CHANGELOG.md`, so its hash cannot be
+  recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
+
 ## [0.43.0] — 2026-09-05
 
 ### Changed

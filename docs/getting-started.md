@@ -32,22 +32,36 @@ triss status
 Run the guided setup:
 
 ```bash
-triss config wizard --standard
+triss config wizard
 ```
 
-Standard is the short path. It configures the `openai-compatible` profile,
-its API key, and its main and small model fields.
-It then asks whether to wire Triss into **Claude**, **Codex**, or **Both**, and
-installs both the MCP registration and the matching agent-rules block for the
-host you choose. Standard setup does not offer a skip choice. Choose the
-global or project scope when prompted; Codex MCP registration is global, while
-Claude can use `./.mcp.json` for a project-local setup.
+Easy is the default path, and it opens directly. Pick any canonical provider
+(`openai-compatible`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`,
+`kimi-for-coding`), paste its credential, and choose whether to wire Triss
+into **Claude**, **Codex**, **Both**, or to skip host wiring. The summary
+before apply shows exactly what will be written, and the run ends with a
+first command to try. Rerunning the wizard reuses your existing
+configuration instead of resetting it. Choose the global or project scope
+when prompted; Codex MCP registration is global, while Claude can use
+`./.mcp.json` for a project-local setup.
 
-Choose **Advanced** when you need another provider, a custom endpoint, an
-execution engine, integrations, or more granular MCP/rules setup:
+Everything else is one flag away. **Advanced** exposes the full tuning
+sections — providers, execution (engine, effort, credential protection),
+connections (MCP and rules, selectable independently), integrations, and
+runtime:
 
 ```bash
 triss config wizard --advanced
+```
+
+A target argument configures a single piece instead of the whole setup, and
+non-interactive shells apply a complete configuration headlessly from
+existing files, the environment, and explicit flags:
+
+```bash
+triss config wizard zai
+triss config wizard coder
+triss config wizard --yes --agent none
 ```
 
 You can also install the two host-facing pieces explicitly. `mcp install`
