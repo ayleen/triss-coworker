@@ -202,3 +202,70 @@ test('malformed tags and boilerplate-only sections fail closed', () => {
     /no substantive content/,
   );
 });
+
+// V02 fixtures (review round 3): Markdown code and comments must never pass
+// as release changes. Fences are recognized with their CommonMark spellings
+// (optional space before the info string, multi-word info strings, tilde and
+// backtick alike), indented code is not structure, and a list entry that is
+// only an HTML comment carries no visible change description.
+
+test('V02: a list entry that is only an HTML comment is not substantive content', () => {
+  assert.equal(
+    sectionHasSubstantiveContent('### Fixed\n\n- <!-- Add release changes here -->'),
+    false,
+  );
+});
+
+test('V02: a real entry with a trailing HTML comment stays substantive', () => {
+  assert.equal(
+    sectionHasSubstantiveContent('### Fixed\n\n- Fixed the lexer. <!-- internal note -->'),
+    true,
+  );
+});
+
+test('V02: fences with a space before the info string never count as content', () => {
+  const section = '``` markdown\n### Fixed\n\n- Example only.\n```';
+  assert.equal(sectionHasSubstantiveContent(section), false);
+});
+
+test('V02: multi-word fence info strings are still fences', () => {
+  const section = '```markdown title=example\n### Fixed\n\n- Example only.\n```';
+  assert.equal(sectionHasSubstantiveContent(section), false);
+});
+
+test('V02: tilde fences with a space before the info string never count as content', () => {
+  const section = '~~~ markdown\n### Fixed\n\n- Example only.\n~~~';
+  assert.equal(sectionHasSubstantiveContent(section), false);
+});
+
+test('V02: indented code blocks never count as content', () => {
+  const section = '    ### Fixed\n\n    - Example only.';
+  assert.equal(sectionHasSubstantiveContent(section), false);
+});
+
+test('V02: a version heading sampled inside a fenced example creates no section', () => {
+  const changelog = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '``` markdown',
+    '## [9.9.9]',
+    '',
+    '### Fixed',
+    '',
+    '- Example only, not an actual release.',
+    '```',
+    '',
+  ].join('\n');
+  assert.equal(extractVersionSection(changelog, '9.9.9'), null);
+  assert.throws(
+    () => buildReleaseNotes({ tag: 'v9.9.9', changelog, enginesNode: '>=22.12.0' }),
+    /no "## \[9\.9\.9\]" section/,
+  );
+});
+
+test('V02: a single-line HTML comment cannot mint a section', () => {
+  const changelog = '# Changelog\n\n## [Unreleased]\n\n<!-- ## [9.9.9] -->\n';
+  assert.equal(extractVersionSection(changelog, '9.9.9'), null);
+});
