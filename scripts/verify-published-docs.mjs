@@ -27,9 +27,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   collectCliFacts,
@@ -68,16 +68,32 @@ const EXAMPLE_DOC_FILES = [
   'templates/codex-full.md',
 ];
 
-function isBareDirectoryToken(token) {
-  // A `--paths` value that is a bare directory name (no glob, no slash, no
-  // extension, no placeholder) is the removed recursive-directory pattern
-  // the audited docs explicitly warn about. Placeholders (`<file>`), globs,
-  // paths with separators, extensioned files, and shorthand like `...` are
-  // fine.
-  if (typeof token !== 'string' || token.length === 0) return false;
-  if (token.startsWith('<') || token.startsWith('$')) return false;
-  if (token === '...' || token === '-') return false;
-  return !/[/.*]/.test(token);
+// Classify a `--paths` value against the FILESYSTEM, not the spelling
+// (review C04): a value that resolves to a real file is fine (LICENSE has
+// no extension and is still a file); a value that resolves to a real
+// directory is the removed recursive-directory pattern, whatever it looks
+// like (src, src/, ./src). Values that cannot be resolved inside the
+// package root — placeholders, globs, absolute paths, anything nonexistent
+// — are not judged: the verifier has no basis to call them directories.
+function classifyPathsValue(packageRoot, token) {
+  if (typeof token !== 'string' || token.length === 0) return 'unresolved';
+  if (token.startsWith('<') || token.startsWith('$')) return 'placeholder';
+  if (token === '...' || token === '-') return 'placeholder';
+  if (/[*]/.test(token)) return 'glob';
+  // Normalize safe relative forms of the same path (src, src/, ./src)
+  // without weakening traversal boundaries.
+  const normalized = token.replace(/\/+$/, '').replace(/^\.\//, '');
+  if (normalized === '' || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return 'unresolved';
+  }
+  const resolved = resolve(packageRoot, normalized);
+  if (resolved !== packageRoot && !resolved.startsWith(packageRoot + sep)) return 'unresolved';
+  if (!existsSync(resolved)) return 'unresolved';
+  return statSync(resolved).isDirectory() ? 'directory' : 'file';
+}
+
+function flagsForPathCheck(facts, pathKey) {
+  return facts.get(pathKey) ?? null;
 }
 
 async function findStalePathRecommendations(packageRoot) {
@@ -102,17 +118,14 @@ async function findStalePathRecommendations(packageRoot) {
         for (const tokens of splitShellSegments(line.text)) {
           const args = trissInvocationTokens(stripPrompt(tokens));
           if (!args) continue;
-          for (let i = 0; i < args.length; i += 1) {
-            if (args[i] !== '--paths') continue;
-            // --paths is variadic: inspect every following value token up to
-            // the next option.
-            for (let j = i + 1; j < args.length && !args[j].startsWith('-'); j += 1) {
-              if (isBareDirectoryToken(args[j])) {
-                findings.push(
-                  `${rel}:${line.startLine}: runnable example recommends a bare directory input ` +
-                    `\`--paths ${args[j]}\`; directories are not read recursively`,
-                );
-              }
+          const { optionValues } = parseInvocationOptions(facts, args);
+          for (const value of optionValues.get('paths') ?? []) {
+            const kind = classifyPathsValue(packageRoot, value);
+            if (kind === 'directory') {
+              findings.push(
+                `${rel}:${line.startLine}: runnable example recommends a bare directory input ` +
+                  `\`--paths ${value}\`; directories are not read recursively`,
+              );
             }
           }
         }
@@ -120,6 +133,89 @@ async function findStalePathRecommendations(packageRoot) {
     }
   }
   return findings;
+}
+
+// Reuse the checker's exact consumption grammar (review C01/C04) so the
+// --paths values inspected here are the values the real CLI would bind.
+function parseInvocationOptions(facts, tokens) {
+  const optionValues = new Map();
+  let key = '';
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.startsWith('-')) break;
+    const candidate = key ? `${key} ${token}` : token;
+    if (!flagsForPathCheck(facts, candidate)) break;
+    key = candidate;
+    i += 1;
+  }
+  const command = flagsForPathCheck(facts, key);
+  if (!command) return { optionValues };
+  const record = (name, value) => {
+    if (!optionValues.has(name)) optionValues.set(name, []);
+    optionValues.get(name).push(value);
+  };
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.startsWith('--') && token.length > 2) {
+      const name = token.split('=')[0];
+      const meta = command.options.get(name);
+      if (!meta) {
+        i += 1;
+        continue;
+      }
+      if (token.includes('=')) {
+        record(meta.name, token.slice(token.indexOf('=') + 1));
+        i += 1;
+        continue;
+      }
+      if (!meta.takesValue) {
+        i += 1;
+        continue;
+      }
+      i += 1;
+      if (i >= tokens.length) break;
+      record(meta.name, tokens[i]);
+      i += 1;
+      if (meta.variadic) {
+        while (i < tokens.length && !tokens[i].startsWith('-')) {
+          record(meta.name, tokens[i]);
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
+      const name = token.split('=')[0];
+      const meta = command.options.get(name);
+      if (!meta) {
+        i += 1;
+        continue;
+      }
+      if (token.includes('=')) {
+        record(meta.name, token.slice(token.indexOf('=') + 1));
+        i += 1;
+        continue;
+      }
+      if (!meta.takesValue) {
+        i += 1;
+        continue;
+      }
+      i += 1;
+      if (i >= tokens.length) break;
+      record(meta.name, tokens[i]);
+      i += 1;
+      if (meta.variadic) {
+        while (i < tokens.length && !tokens[i].startsWith('-')) {
+          record(meta.name, tokens[i]);
+          i += 1;
+        }
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return { optionValues };
 }
 
 // Pure validator: no process.exit, no network, structured findings. The

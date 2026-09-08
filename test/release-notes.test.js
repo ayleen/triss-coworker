@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReleaseNotes, extractVersionSection } from '../scripts/release-notes.js';
+import { buildReleaseNotes, extractVersionSection, sectionHasSubstantiveContent } from '../scripts/release-notes.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -109,6 +109,83 @@ test('the real published 0.44.0 section passes the content guard', () => {
   const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
   const notes = buildReleaseNotes({ tag: 'v0.44.0', changelog, enginesNode: '>=22.12.0' });
   assert.match(notes, /## What changed/);
+});
+
+test('C03: content is judged across the whole section; bullets vary; code never counts', () => {
+  const cases = {
+    normal: ['### Fixed\n\n- Corrected the checker.', true],
+    withUpgradeNotes: [
+      '### Fixed\n\n- Corrected the checker.\n\n### Upgrade notes\n\nNo configuration changes are required.',
+      true,
+    ],
+    starBullet: ['### Fixed\n\n* Corrected the checker.', true],
+    plusBullet: ['### Fixed\n\n+ Corrected the checker.', true],
+    tildeFenceOnly: ['~~~markdown\n### Fixed\n\n- Example only.\n~~~', false],
+    emptySubsection: ['### Fixed', false],
+    placeholderEntry: ['### Fixed\n\n- TBD', false],
+    emphasisPlaceholderEntry: ['### Fixed\n\n- *TBD*', false],
+    realSentenceWithTodoWord: ['### Fixed\n\n- Stopped treating every TODO marker as an entry.', true],
+    artifactIntegrityOnly: ['### Artifact integrity\n\n- sha256 abcdef', false],
+  };
+  for (const [label, [section, expected]] of Object.entries(cases)) {
+    assert.equal(sectionHasSubstantiveContent(section), expected, `${label} must be ${expected}`);
+  }
+});
+
+test('C03: an exact-version heading inside code or comments creates no section', () => {
+  const changelogWithFenceHeading = [
+    '## [Unreleased]',
+    '',
+    '```md',
+    '## [0.52.0] — 2026-09-13',
+    '',
+    '### Added',
+    '',
+    '- fake entry inside a sample',
+    '```',
+    '',
+    '## [0.51.0] — 2026-09-12',
+    '',
+    '### Fixed',
+    '',
+    '- the real release',
+  ].join('\n');
+  // Requesting the fake version must NOT find the sampled heading; it must
+  // fail closed even though the literal heading text exists in the file.
+  assert.throws(
+    () => buildReleaseNotes({ tag: 'v0.52.0', changelog: changelogWithFenceHeading, enginesNode: '>=22.12.0' }),
+    /no "## \[0\.52\.0\]" section/,
+  );
+  // Requesting the real version still extracts exactly its own section.
+  const section = extractVersionSection(changelogWithFenceHeading, '0.51.0');
+  assert.match(section, /the real release/);
+  assert.ok(!section.includes('fake entry'));
+});
+
+test('buildReleaseNotes serves the exact requested version from a full changelog', () => {
+  const changelog = [
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '',
+    '- unreleased work that must never leak into notes',
+    '',
+    '## [0.53.0] — 2026-09-14',
+    '',
+    '### Changed',
+    '',
+    '- requested version entry',
+    '',
+    '## [0.52.0] — 2026-09-13',
+    '',
+    '### Fixed',
+    '',
+    '- older version entry',
+  ].join('\n');
+  const notes = buildReleaseNotes({ tag: 'v0.53.0', changelog, enginesNode: '>=22.12.0' });
+  assert.match(notes, /requested version entry/);
+  assert.ok(!notes.includes('older version entry'));
+  assert.ok(!notes.includes('unreleased work'));
 });
 
 test('malformed tags and boilerplate-only sections fail closed', () => {

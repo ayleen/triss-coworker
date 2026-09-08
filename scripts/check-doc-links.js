@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractMarkdownLinkTargets, withoutCode } from './markdown-links.js';
+import { extractMarkdownLinkTargets, withoutCode, withoutFencedCode } from './markdown-links.js';
 
 const GITHUB_FILE_URL = /^https?:\/\/github\.com\/ayleen\/triss-coworker\/(?:blob|tree)\/[^/]+\/(.+?)(?:#.+)?$/i;
 const DEFAULT_SKIP_DIRS = new Set(['.git', 'node_modules', '.codex', '.claude', 'dist', '.wrangler']);
@@ -41,15 +41,21 @@ export function githubSlug(headingText) {
 
 // Collect every fragment a Markdown file can receive: GitHub-style heading
 // slugs (with -1/-2 suffixes on duplicates) plus explicit HTML anchors
-// (<a id="...">, <a name="...">, id="..." on any element). Headings and HTML
-// attributes inside fenced code, inline code, and HTML comments do NOT
-// create anchors — a code sample showing `## Phantom` syntax must not
-// validate a link to #phantom (review R05).
+// (<a id="...">, <a name="...">, id="..." on any element).
+//
+// Two different projections (review C02, extending R05):
+//   - Real HEADING text comes from the rendered visible text: fenced code
+//     blocks and HTML comments are excluded, but inline code SPANS in a
+//     real heading stay part of the text — `## \`triss config wizard\``
+//     slugs to "triss-config-wizard", not to an empty anchor.
+//   - HTML anchor ATTRIBUTES are structural markup, not text: they are
+//     searched in a projection that also strips inline code, so a code
+//     sample containing `<a id="fake">` never mints an anchor.
 export function headingFragments(source) {
   const fragments = new Set();
   const seen = new Map();
-  const visible = withoutCode(stripHtmlComments(source));
-  for (const line of visible.split('\n')) {
+  const headingText = withoutFencedCode(stripHtmlComments(source));
+  for (const line of headingText.split('\n')) {
     const heading = line.match(/^ {0,3}(#{1,6})\s+(.*)$/);
     if (heading) {
       const base = githubSlug(heading[2].replace(/\s+#+\s*$/, ''));
@@ -59,7 +65,8 @@ export function headingFragments(source) {
       fragments.add(count === 0 ? base : `${base}-${count}`);
     }
   }
-  for (const match of visible.matchAll(/\b(?:id|name)="([^"]+)"/g)) {
+  const anchorVisible = withoutCode(stripHtmlComments(source));
+  for (const match of anchorVisible.matchAll(/\b(?:id|name)="([^"]+)"/g)) {
     fragments.add(match[1]);
   }
   return fragments;

@@ -43,6 +43,11 @@ function makePackageRoot({ readme }) {
     mkdirSync(join(root, rel, '..'), { recursive: true });
     writeFileSync(join(root, rel), '# placeholder\n');
   }
+  // A small real fixture tree: the --paths classifier judges values by
+  // filesystem metadata, not by the spelling of the name (review C04).
+  writeFileSync(join(root, 'LICENSE'), 'MIT License\n');
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'example.js'), 'export const marker = 1;\n');
   writeFileSync(join(root, 'README.md'), readme);
   return root;
 }
@@ -84,6 +89,53 @@ test('a runnable --paths src recommendation is rejected; its prose explanation i
   const { findings } = await validatePackagedDocs({ packageRoot: root, expectedVersion: '1.0.0' });
   assert.equal(findings.length, 1, JSON.stringify(findings, null, 2));
   assert.match(findings[0], /README\.md:4: .*bare directory input `--paths src`/);
+});
+
+test('C04: directory inputs are rejected in every relative form; extensionless files pass', async () => {
+  for (const [input, expected] of [
+    ['src', true],
+    ['src/', true],
+    ['./src', true],
+    ['LICENSE', false],
+    ["'src/**/*.js'", false],
+  ]) {
+    const readme = [
+      '# Triss Coworker',
+      '',
+      '```bash',
+      `triss ask --paths ${input} --question "explain"`,
+      '```',
+      '',
+      README_WARNING_PARAGRAPH,
+      '',
+    ].join('\n');
+    const root = makePackageRoot({ readme });
+    const { findings } = await validatePackagedDocs({ packageRoot: root, expectedVersion: '1.0.0' });
+    const directoryFindings = findings.filter((finding) => /bare directory input/.test(finding));
+    assert.equal(
+      directoryFindings.length > 0,
+      expected,
+      `--paths ${input}: expected ${expected ? 'rejection' : 'acceptance'}, got ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+test('C04: a directory whose name contains a dot is still rejected', async () => {
+  const root = makePackageRoot({
+    readme: [
+      '# Triss Coworker',
+      '',
+      '```bash',
+      'triss ask --paths v1.2 --question "explain"',
+      '```',
+      '',
+      README_WARNING_PARAGRAPH,
+      '',
+    ].join('\n'),
+  });
+  mkdirSync(join(root, 'v1.2'), { recursive: true });
+  const { findings } = await validatePackagedDocs({ packageRoot: root, expectedVersion: '1.0.0' });
+  assert.ok(findings.some((finding) => /bare directory input `--paths v1\.2`/.test(finding)), JSON.stringify(findings));
 });
 
 test('a removed --small-model recommendation is rejected in one line, in a continuation, and in a console prompt', async () => {

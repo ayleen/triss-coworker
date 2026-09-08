@@ -47,14 +47,50 @@ function argMap(argv) {
   return options;
 }
 
+// Walk the changelog line by line, tracking fenced code blocks and HTML
+// comments, so a `## [X.Y.Z]` heading that exists only inside a code sample
+// or comment never creates a release section (review C03). Returns the
+// ORIGINAL lines of the requested version's section, or null.
+export function extractVersionSectionLines(changelog, version) {
+  const headingPattern = new RegExp(`^## \\[${escapeRegExp(version)}\\]`);
+  const lines = changelog.split('\n');
+  let inFence = null; // { char, length }
+  let inComment = false;
+  let sectionStart = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (inComment) {
+      if (line.includes('-->')) inComment = false;
+      continue;
+    }
+    if (inFence) {
+      const closer = line.trim().match(/^(`{3,}|~{3,})$/);
+      if (closer && closer[1][0] === inFence.char && closer[1].length >= inFence.length) inFence = null;
+      continue;
+    }
+    if (line.includes('<!--') && !line.includes('-->')) {
+      inComment = true;
+      continue;
+    }
+    const fence = line.trim().match(/^(`{3,}|~{3,})\S*$/);
+    if (fence) {
+      inFence = { char: fence[1][0], length: fence[1].length };
+      continue;
+    }
+    if (sectionStart === -1) {
+      if (headingPattern.test(line)) sectionStart = index;
+      continue;
+    }
+    if (/^## \[/.test(line)) {
+      return lines.slice(sectionStart, index);
+    }
+  }
+  return sectionStart === -1 ? null : lines.slice(sectionStart);
+}
+
 export function extractVersionSection(changelog, version) {
-  const heading = new RegExp(`^## \\[${escapeRegExp(version)}\\](.*)$`, 'm');
-  const match = changelog.match(heading);
-  if (!match) return null;
-  const start = match.index + match[0].length;
-  const rest = changelog.slice(start);
-  const next = rest.search(/^## \[/m);
-  return (next === -1 ? rest : rest.slice(0, next)).trim();
+  const lines = extractVersionSectionLines(changelog, version);
+  return lines === null ? null : lines.join('\n').trim();
 }
 
 export function renderReleaseNotes({ version, section, enginesNode }) {
@@ -105,39 +141,87 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Machine-checkable minimum for a release section (review R07): it must
-// contain at least one real `###` subsection and, under it, at least one
-// non-empty change entry that is not a placeholder. Fenced code blocks and
-// HTML comments never count — a `### Fixed` shown only inside a code sample
-// is not a changelog entry. This checks structure, not literary quality.
+// Subsections that describe actual release changes. Service sections (for
+// example "Artifact integrity" or "Upgrade notes") may exist alongside, but
+// they never substitute for a change entry (review C03).
+const CHANGE_SUBSECTIONS = new Set(['Added', 'Changed', 'Fixed', 'Removed', 'Security', 'Deprecated']);
+
+// Machine-checkable minimum for a release section (R07, refined by C03):
+// across the WHOLE version section there must be at least one real change
+// subsection (### Added/Changed/Fixed/Removed/Security/Deprecated) and at
+// least one non-placeholder list entry under the change subsections
+// collectively. Fenced code blocks (backtick AND tilde) and HTML comments
+// never count — a `### Fixed` shown only inside a code sample is not a
+// changelog entry. This checks structure, not literary quality.
 export function sectionHasSubstantiveContent(section) {
-  const visible = section
-    .replace(/```[\s\S]*?```/g, (match) => match.replace(/[^\n]/g, ' '))
-    .replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ' '));
-  let inSubsection = false;
-  let hasSubsection = false;
+  const visible = maskNonContentLines(section.split('\n'));
+  let inChangeSubsection = false;
+  let hasChangeSubsection = false;
   let hasEntry = false;
-  for (const raw of visible.split('\n')) {
+  for (const raw of visible) {
     const line = raw.trim();
     if (!line) continue;
-    if (/^###\s+\S/.test(line)) {
-      inSubsection = true;
-      hasSubsection = true;
-      hasEntry = false;
+    const subsection = line.match(/^###\s+(\S+)/);
+    if (subsection) {
+      inChangeSubsection = CHANGE_SUBSECTIONS.has(subsection[1].replace(/[:：]$/, ''));
+      if (inChangeSubsection) hasChangeSubsection = true;
       continue;
     }
     if (/^##\s/.test(line)) {
-      inSubsection = false;
+      inChangeSubsection = false;
       continue;
     }
-    if (!inSubsection) continue;
-    const entry = line.replace(/^[-*]\s+/, '').trim();
-    if (line.startsWith('-') && entry && !/^(tbd|todo|tba)\b/i.test(entry) && !/^[-–—]+$/.test(entry)) {
+    if (!inChangeSubsection) continue;
+    if (!/^[-*+]\s+/.test(line)) continue;
+    // Normalize the list marker and emphasis wrappers before the
+    // placeholder check, so `-TBD` / `*TBD*` stay placeholders while a real
+    // sentence that merely contains the word TODO stays an entry.
+    const entry = line
+      .replace(/^[-*+]\s+/, '')
+      .replace(/^[-*_~`]+|[-*_~`]+$/g, '')
+      .trim();
+    if (entry && !/^(tbd|todo|tba)\b/i.test(entry) && !/^[-—–]+$/.test(entry)) {
       hasEntry = true;
     }
   }
-  return hasSubsection && hasEntry;
+  return hasChangeSubsection && hasEntry;
 }
+
+// Replace lines that belong to fenced code blocks (backtick or tilde) or
+// HTML comments with empty strings (newlines preserved), so structural
+// parsing sees only real Markdown content.
+function maskNonContentLines(lines) {
+  const visible = [];
+  let inFence = null;
+  let inComment = false;
+  for (const line of lines) {
+    if (inComment) {
+      if (line.includes('-->')) inComment = false;
+      visible.push('');
+      continue;
+    }
+    if (inFence) {
+      const closer = line.trim().match(/^(`{3,}|~{3,})$/);
+      if (closer && closer[1][0] === inFence.char && closer[1].length >= inFence.length) inFence = null;
+      visible.push('');
+      continue;
+    }
+    if (line.includes('<!--') && !line.includes('-->')) {
+      inComment = true;
+      visible.push('');
+      continue;
+    }
+    const fence = line.trim().match(/^(`{3,}|~{3,})\S*$/);
+    if (fence) {
+      inFence = { char: fence[1][0], length: fence[1].length };
+      visible.push('');
+      continue;
+    }
+    visible.push(line);
+  }
+  return visible;
+}
+
 
 export function buildReleaseNotes({ tag, changelog, enginesNode }) {
   if (!/^v\d+\.\d+\.\d+(?:[-+].+)?$/.test(tag)) {

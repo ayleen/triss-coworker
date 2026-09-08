@@ -122,6 +122,40 @@ test('DOC-LINK-01: a malformed fragment encoding yields a diagnostic, not a cras
   assert.match(failures[0], /invalid URL encoding in fragment/);
 });
 
+test('C02: inline code in a real heading keeps the full slug', () => {
+  const fragments = headingFragments('## `triss config wizard`');
+  assert.ok(fragments.has('triss-config-wizard'), JSON.stringify([...fragments]));
+  assert.ok(!fragments.has(''), 'empty anchor must not be minted');
+
+  const mixed = headingFragments('## Configure `provider`');
+  assert.ok(mixed.has('configure-provider'));
+  assert.ok(!mixed.has('configure'), 'the shortened anchor must not exist');
+
+  // The fenced-code phantom stays excluded (R05 keeps holding).
+  assert.deepEqual([...headingFragments('```md\n## Phantom\n```')], []);
+});
+
+test('C02: a real link to a code-formatted heading passes the full tree check', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'triss-doclinks-c02-'));
+  writeFileSync(
+    join(fixture, 'TARGET.md'),
+    '# Guide\n\n## `triss config wizard`\n\nbody\n',
+  );
+  writeFileSync(
+    join(fixture, 'README.md'),
+    [
+      '# Root',
+      '',
+      '[wizard](TARGET.md#triss-config-wizard)',
+      '[intra](#root)',
+      '[short-form must fail](TARGET.md#triss-config)',
+    ].join('\n'),
+  );
+  const { failures } = checkRepositoryDocs(fixture);
+  assert.equal(failures.length, 1, `unexpected failures:\n${failures.join('\n')}`);
+  assert.match(failures[0], /#triss-config/);
+});
+
 test('DOC-LINK-01: the real repository tree passes fragment validation', () => {
   const { failures } = checkRepositoryDocs(ROOT);
   assert.equal(failures.length, 0, `repository docs have broken fragments:\n${failures.join('\n')}`);

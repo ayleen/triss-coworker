@@ -25,6 +25,98 @@ import {
 } from '../scripts/check-doc-examples.js';
 import { COMMANDS } from '../site/src/data/commands.js';
 
+// C01 regression fixtures: the checker must agree with the real Commander
+// parse of the registered declarations for the supported grammar.
+
+test('C01: `triss config set` without the mandatory KEY argument is rejected', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(facts, '```bash\ntriss config set\n```');
+  assert.ok(findings.some((finding) => /mandatory argument `<KEY>`/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('C01: `ask --paths --question x` is rejected the way Commander parses it', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(facts, '```bash\ntriss ask --paths --question x\n```');
+  assert.ok(findings.some((finding) => /--question/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('C01: a short variadic alias accepts multiple values', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    '```bash\ntriss ask -p README.md SECURITY.md -q x\n```',
+  );
+  assert.deepEqual(findings, [], JSON.stringify(findings));
+});
+
+test('C01: `--help` short-circuits mandatory-option validation without duplicates', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(facts, '```bash\ntriss ask --help\n```');
+  assert.deepEqual(findings, [], JSON.stringify(findings));
+});
+
+test('C01: a removed flag hidden behind a double-quoted continuation is detected', async () => {
+  const facts = await collectCliFacts();
+  const BS = String.fromCharCode(92);
+  const markdown = [
+    '```bash',
+    'triss coder run "first line ' + BS,
+    'last line" ' + BS,
+    '  --small-model x',
+    '```',
+  ].join('\n');
+  const findings = validateRunnableExamples(facts, markdown);
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('C01: the node bin form validates Triss flags and rejects unknown root flags', async () => {
+  const facts = await collectCliFacts();
+  const help = validateRunnableExamples(facts, '```bash\nnode bin/triss.js --help\n```');
+  assert.deepEqual(help, [], JSON.stringify(help));
+  const unknown = validateRunnableExamples(facts, '```bash\nnode bin/triss.js --not-a-flag\n```');
+  assert.ok(unknown.some((finding) => /--not-a-flag/.test(finding.message)), JSON.stringify(unknown));
+});
+
+test('C01: orphan option segments from shell alternatives are flagged', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    '```bash\ntriss config wizard --local|--global\n```',
+  );
+  assert.ok(findings.some((finding) => /orphan option segment/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('C01: parse-only validation never runs actions, bootstrap, or engines', async () => {
+  // A fake integration whose register() installs an action that would set a
+  // global flag if the checker ever executed handlers.
+  globalThis.__trissActionProbe = { ran: false };
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triss-action-probe-'));
+  fs.mkdirSync(path.join(dir, 'probe'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'probe', 'index.js'), [
+    'export default {',
+    '  name: "probe",',
+    '  description: "probe integration",',
+    '  register(program) {',
+    '    program',
+    '      .command("probe-cmd")',
+    '      .description("probe command")',
+    '      .action(() => { globalThis.__trissActionProbe.ran = true; });',
+    '  },',
+    '};',
+  ].join('\n'));
+  const { collectCliFacts: factsWithProbe } = await import('../scripts/check-doc-examples.js');
+  const probedFacts = await factsWithProbe({ root: path.join(dir, '..') });
+  // Validation of a command that resolves into the probe command must not
+  // execute its action handler.
+  const markdown = '```bash\ntriss probe-cmd --anything\n```';
+  validateRunnableExamples(probedFacts, markdown);
+  assert.equal(globalThis.__trissActionProbe.ran, false, 'action handlers must never run during docs validation');
+  delete globalThis.__trissActionProbe;
+});
+
 test('DOC-CLI-01/02: every documented triss example matches the registered CLI tree', async () => {
   const { failures, fileCount } = await checkRepositoryDocs();
   assert.equal(
