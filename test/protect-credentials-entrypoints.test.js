@@ -67,7 +67,10 @@ test('help: triss coder run documents --protect-credentials', () => {
 test('help: triss coder init documents --protect-credentials', () => {
   const out = help(['coder', 'init']);
   assert.match(out, /--protect-credentials/u);
-  assert.match(out, /best-effort with a/u);
+  // D04 contract: the help states the fail-closed gate instead of promising
+  // an automatic best-effort raw fallback.
+  assert.match(out, /no automatic downgrade to raw/u);
+  assert.match(out, /--no-protect-credentials/u);
 });
 
 test('help: triss exec forwards --protect-credentials for the coder route', () => {

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { extractMarkdownLinkTargets } from './markdown-links.js';
 
 const GITHUB_FILE_URL = /^https?:\/\/github\.com\/ayleen\/triss-coworker\/(?:blob|tree)\/[^/]+\/(.+?)(?:#.+)?$/i;
-const DEFAULT_SKIP_DIRS = new Set(['.git', 'node_modules', '.codex', '.claude']);
+const DEFAULT_SKIP_DIRS = new Set(['.git', 'node_modules', '.codex', '.claude', 'dist', '.wrangler']);
 
 function collectMarkdownFiles(root, skipDirs = DEFAULT_SKIP_DIRS) {
   const files = [];
@@ -183,7 +183,10 @@ export function checkRepoRoot() {
 }
 
 function main() {
-  const root = checkRepoRoot();
+  // CLI behavior stays cwd-driven so the checker can validate any Markdown
+  // tree (tests run it against fixture trees); library callers pass an
+  // explicit root to checkRepositoryDocs.
+  const root = resolve(process.cwd());
   const { failures, fileCount } = checkRepositoryDocs(root);
   if (failures.length) {
     process.stderr.write(`${failures.join('\n')}\n`);

@@ -114,7 +114,7 @@ check("no Accept and */* default to HTML", async () => {
 check("markdown agents get faithful mirrors of key pages", async () => {
   for (const [pathname, expected] of [
     ["/", "# Give your coding agent a coworker."],
-    ["/commands/", "# Every command, one handbook."],
+    ["/commands/", "# Common commands, one overview."],
     ["/docs/getting-started/", "# Your first delegated task."],
   ]) {
     const response = await request(pathname, { accept: "text/markdown" });
@@ -157,7 +157,7 @@ check("direct .md file serves markdown, not the HTML shell", async () => {
   assertEqual(response.status, 200, "status");
   assertEqual(shortType(response), "text/markdown", "content-type");
   const body = await response.text();
-  assertOk(body.includes("# Every command, one handbook."), "direct mirror must be markdown content");
+  assertOk(body.includes("# Common commands, one overview."), "direct mirror must be markdown content");
 });
 
 check("canonical trailing-slash redirect works without loops", async () => {
