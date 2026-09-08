@@ -41,6 +41,7 @@
     "src/agent-rules.js",
     "src/call-context.js",
     "src/cli-argv.js",
+    "src/cli-program.js",
     "src/coder-credential-proxy.js",
     "src/coder-engine-registry.js",
     "src/coder-engines/crush.js",

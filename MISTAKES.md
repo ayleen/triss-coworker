@@ -14,6 +14,37 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-08 — Astro component rules and bundling broke "obviously correct" site edits
+- **What happened:** Three separate failures from one site change set: (1) an
+  .astro component edit placed HTML comments before the frontmatter, so Astro
+  treated the frontmatter as literal body text and the page crashed in
+  prerender; (2) a data module resolved the repository manifest via
+  import.meta.url, which after bundling points into dist/.prerender chunks —
+  the rendered page silently read site/package.json (v0.1.0) instead of the
+  root manifest; (3) shrinking an inline page script moved it under Vite's
+  inline limit, so Astro inlined it and the no-inline-scripts CSP test failed.
+- **Root cause:** Treated .astro files as plain HTML/JS and assumed build-time
+  module semantics survive Vite bundling; verified with unit tests only
+  before dist existed, so the built-output checks were skipped.
+- **Prevention:** Frontmatter must be the first block in .astro files; never
+  resolve repo files from import.meta.url inside modules that Astro bundles
+  (walk up from process.cwd for a manifest with the expected package name);
+  prefer the public/scripts + is:inline src pattern for page scripts; run
+  site unit tests AFTER a build so dist-dependent checks actually execute.
+
+## 2026-09-08 — Updated help/error text without grepping tests that pin it
+- **What happened:** Rewording the credential-protection help strings and the
+  readable-store recovery hint in coder.js broke three tests that asserted
+  the old phrases (ISOLATION-GATE-01/05 matched /--protect-credentials/,
+  protect-credentials-entrypoints matched /best-effort with a/), surfaced
+  only in the full-suite run.
+- **Root cause:** The D04 wording fix was planned, but I changed the strings
+  without searching test/ for regular expressions pinning the old text.
+- **Prevention:** Before changing any user-facing string, grep test/ for
+  distinctive substrings of the current text; update the pinning assertions
+  in the same commit, stating the contract they now enforce.
+
+
 ## 2026-09-06 — Concurrent subagents in one worktree silently lost an uncommitted edit
 
 **What happened:** During the wizard implementation, an uncommitted edit to

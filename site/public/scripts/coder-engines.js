@@ -48,7 +48,7 @@
 
   var copyButton = document.getElementById("copy-engine-command");
   if (copyButton) {
-    copyButton.addEventListener("click", function (event) {
+    copyButton.addEventListener("click", function () {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(document.getElementById("engine-command").textContent).then(
           function () { copyButton.textContent = "copied"; },
