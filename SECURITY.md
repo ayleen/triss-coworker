@@ -1,8 +1,8 @@
 # Security
 
 Triss is a local CLI and MCP server that can read files, fetch URLs, call
-tracker APIs, and send selected context to a DeepSeek-compatible model. That
-makes the trust boundary worth spelling out plainly.
+tracker APIs, and send selected context to the model provider you configure.
+That makes the trust boundary worth spelling out plainly.
 
 ## Reporting vulnerabilities
 
@@ -22,8 +22,8 @@ advisory unless they ask to remain anonymous.
 
 ## What leaves your machine
 
-Model-backed commands send the requested prompt and selected corpus to the
-configured OpenAI-compatible endpoint:
+Model-backed commands send the requested prompt and selected context to the
+resolved endpoint of your selected canonical provider:
 
 - `triss ask`
 - `triss chat`
@@ -84,21 +84,31 @@ content is never written to this log** — metadata only. If working-directory
 paths are themselves sensitive (client names in folder names), set
 `TRISS_USAGE_LOG_CWD=0`, or disable the log entirely with
 `TRISS_USAGE_LOG=0`. The file rotates once past `TRISS_USAGE_LOG_MAX_BYTES`;
-the generated defaults table in [docs/configuration.md](docs/configuration.md#tunables)
+the generated defaults table in
+[docs/configuration.md](docs/configuration.md#network-and-usage-controls)
 is the source of truth. Delete it at any time with `triss usage --reset`.
 
 ## Data residency and GDPR
 
 Triss is a local tool, not a hosted service — it stores none of your data
 server-side and has no subprocessors of its own. The party that processes
-your prompts is **whatever model endpoint you configure**. The default is
-DeepSeek (`api.deepseek.com`); if your compliance posture requires an EU- or
-US-resident processor, a signed DPA, or a zero-retention guarantee, point
-`TRISS_WORKER_BASE_URL` at a provider that offers one (Azure OpenAI,
-AWS Bedrock, Mistral, or a self-hosted vLLM/Ollama endpoint — see the
-provider recipes in the README) and set the model names accordingly. Your
-organisation's agreement with that provider is the controlling document;
-Triss adds no additional data flows on top of it.
+your prompts is **whatever model endpoint you configure**.
+
+Model-backed commands send their selected context to the resolved provider
+endpoint. For the `openai-compatible` profile, configure
+`TRISS_OPENAI_COMPATIBLE_BASE_URL`, `TRISS_OPENAI_COMPATIBLE_API_KEY`, and the
+profile's model fields. Other canonical providers use their own endpoint
+fields (see the provider field table in
+[docs/configuration.md](docs/configuration.md#canonical-providers)).
+`TRISS_WORKER_BASE_URL` is a pre-0.42 migration input, not a current setup
+instruction; the migration reference in
+[src/migration/legacy-inventory.js](src/migration/legacy-inventory.js) maps it
+to the canonical field. Triss does not enforce a provider's retention,
+training, residency, or contractual policies — your organisation's agreement
+with that provider is the controlling document. Triss does not add undocumented
+data flows on top of the configured provider; see the complete flow table in
+[docs/data-flows.md](docs/data-flows.md), including integrations, approved
+setup downloads, and the credential-free passive update check.
 
 ## Supply chain
 

@@ -86,14 +86,28 @@ defaults are unaffected by coder configuration.
 
 `TRISS_PROTECT_CREDENTIALS` and `TRISS_CODER_PROTECT_CREDENTIALS` accept three
 meaningful states — absent, `true`, or `false` — and the string `"false"` is
-never treated as a truthy opt-in. Resolution order: an explicit per-run flag
-(`--protect-credentials` / `--no-protect-credentials`) wins; otherwise
-`TRISS_CODER_PROTECT_CREDENTIALS` (coder runs) or `TRISS_PROTECT_CREDENTIALS`
-applies. `true` selects the parent-owned credential proxy; `false` explicitly
-selects a best-effort raw run (warned). When no choice is expressed, each route
-uses its recommended default — `crush` defaults to the protected proxy; the
-other engines default to best-effort raw handling — so an explicit `false`
-means something different from an unset value.
+never treated as a truthy opt-in. Resolution order for coder runs: an explicit
+per-run flag (`--protect-credentials` / `--no-protect-credentials`) wins;
+otherwise `TRISS_CODER_PROTECT_CREDENTIALS` applies; otherwise
+`TRISS_PROTECT_CREDENTIALS`. For non-coder model commands (`ask`, `review`,
+`chat`, `write`, `fetch`, `commit-msg`) the coder-specific field is ignored:
+only the explicit flag, the shared `TRISS_PROTECT_CREDENTIALS`, or the engine
+default applies. `true` selects the parent-owned credential proxy; `false`
+explicitly selects a best-effort raw run (warned). When no choice is expressed,
+each route uses its recommended default — `crush` defaults to the protected
+proxy; the other engines default to best-effort raw handling — so an explicit
+`false` means something different from an unset value.
+
+Best-effort tool-policy support does not imply an automatic credential
+downgrade. A selected protected route fails closed — before any
+credential-bearing spawn — when the raw key cannot be contained by the checked
+credential boundary (for example, a readable key file that a child process of
+the same UID could read; `0600` protects only against other UIDs) or when the
+proxy cannot start. This applies to coder runs and to model tasks routed
+through the same child-engine path. Three properties are distinct and warned
+about separately: tool restrictions, worktree isolation, and credential
+isolation. A warning about one is never a fallback of another; worktree
+isolation and a credential proxy are not OS-level sandboxing.
 
 ### Model transport overrides
 
@@ -115,9 +129,13 @@ exact model when the catalogue cannot.
 Model-backed commands declare either the `model` role or the `smallModel` role. Each provider owns both native model ids.
 
 - `provider` selects one canonical provider.
-- `model` is a native model id for direct CLI/MCP commands.
+- `model` is either a qualified `<canonical-provider>/<native-id>` selector or a
+  bare native id. A bare id resolves against `--provider` when given, otherwise
+  against the effective default provider (`TRISS_CODER_PROVIDER` for coder
+  runs, `TRISS_DEFAULT_PROVIDER` otherwise). An explicit `--provider` that
+  conflicts with a qualified model prefix is rejected, not silently replaced.
 - `engine` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush`; when omitted, `TRISS_DEFAULT_ENGINE` applies.
-- coder `--model` accepts a canonical `<provider>/<model-id>` selector; the small role comes from that provider's `*_SMALL_MODEL` field.
+- The small role comes from the selected provider's `*_SMALL_MODEL` field where the engine supports it.
 - `effort` accepts `low`, `medium`, `high`, `xhigh`, or `max`.
 - `max_tokens` remains a separate output cap.
 
@@ -140,7 +158,8 @@ Examples:
 
 ```bash
 triss ask --provider zai --model glm-5.2 --effort high \
-  --paths src --question "Find correctness defects"
+  --paths 'src/**/*.js' \
+  --question "Find correctness defects. Cite file paths and line numbers."
 
 triss review --provider moonshot --model kimi-k3 --effort max
 
@@ -154,6 +173,10 @@ triss coder run --engine omp \
   --model opencode-go/deepseek-v4-flash \
   "Implement the task"
 ```
+
+`--paths` accepts text files or quoted glob patterns; directories are not read
+recursively, and an empty file corpus fails before any model call. Quote globs
+so Triss, rather than the shell, expands them.
 
 After `coder init` and the four `config set` commands above, bare `triss ask`,
 `triss review`, and equivalent MCP calls use

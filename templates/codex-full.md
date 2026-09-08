@@ -233,8 +233,10 @@ and harder to accept than a single focused run.
 ## Models
 
 Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
-`opencode-go`, `moonshot`, and `kimi-for-coding`. `--model <native-id>`
-overrides the selected provider role for one call; `--effort
+`opencode-go`, `moonshot`, and `kimi-for-coding`. `--model <model>` overrides
+the main model for one call: a `<canonical-provider>/<native-id>` selector or
+a bare native id resolved against `--provider` or the effective default
+provider (conflicting selections are rejected); `--effort
 low|medium|high|xhigh|max` controls reasoning consistently. With no explicit
 selection, commands use `TRISS_DEFAULT_PROVIDER` and that profile's `model` or
 `smallModel` role. For GLM 5.2 review, omit `--max-tokens` to use the
@@ -254,8 +256,9 @@ Examples: `openai-compatible/deepseek-v4-pro`, `zai/glm-5.2`,
 `triss coder init --provider <canonical-id>`.
 
 Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
-[--agent <name>] [--provider <name> --model <p/m> [--small-model <p/m>]]
+[--agent <name>] [--provider <name>] [--model <model>]
 [--isolate] [--no-isolate]
+[--protect-credentials] [--no-protect-credentials]
 [--restrict] [--no-restrict] [--cwd <path>]
 [--timeout <sec>] [--stdin]` — prints one JSON envelope to stdout (`engine`,
 `engine_version`, `session_id`, `exit_reason`, `final_text`, `files_changed`,
@@ -265,12 +268,17 @@ Then: `triss coder run "<task>" [--engine <name>] [--session <id>] [--continue]
 carries `total_usd` plus `complete`, and an unreported class is `null`, never
 `0`; `prompt_tokens`/`completion_tokens` remain as deprecated aliases.
 `--engine <name>` selects
-`opencode` (default), `opencode2`, `crush`, or `omp`. `--session <id>` is a triss-side slug
-mapped to a real opencode session id in `.triss/sessions.json` (first run
-creates it, later runs with the same slug continue that conversation).
-On OpenCode, `--provider` plus a canonical provider-qualified `--model`
-switches the complete provider pair for one run without changing persistent
-configuration. `--small-model` defaults to the one-shot main model. Triss
+`opencode` (default), `opencode2`, `crush`, or `omp`. `--session <id>` is a
+named session slug for the selected engine; storage and resume compatibility
+are engine-specific. `--provider` selects a canonical provider for this run;
+`--model <model>` overrides the main model for this run (a
+`<provider>/<native-id>` selector or a bare native id resolved against
+`--provider` or the effective default; conflicting provider selections are
+rejected). The small model comes from the selected provider profile where the
+engine supports it; there is no public `coder run --small-model` option in
+0.44.0. For persistent small-model changes, use
+`triss config set <PROVIDER>_SMALL_MODEL <native-id>` — a profile change that
+can affect other commands, not a one-run override. Triss
 audits the effective engine configuration and provider projection before
 forwarding the selected credential.
 `--isolate` runs the agent in a disposable git worktree (`.triss/wt/<slug>`)

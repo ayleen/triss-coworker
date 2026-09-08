@@ -42,26 +42,35 @@ of resetting them. The wizard's coder-target flags are `--coder-engine <name>`,
 
 ## `triss init --setup`
 
-`triss init` writes the delegation block into agent rule files. With
-`-s, --setup` it hands control to `triss config wizard` BEFORE any rules
-write: the wizard owns which host files change, and its host actions invoke
-the rules pass with the agent/scope intent resolved during setup, so one
-command still produces a working setup. The wizard asks its own scope (or
-defaults silently to global in non-TTY).
+`triss init` manages the Triss block in the selected host rule files. With
+`-s, --setup` it delegates to the setup wizard BEFORE any rules write: the
+wizard owns the host actions, and its host actions invoke the rules pass with
+the agent/scope intent resolved during setup, so one command still produces a
+working setup. `init --setup` preserves init's scope intent: project scope
+without `--global`, global scope with `--global`. This differs from invoking
+`triss config wizard` directly, which asks its own scope. In non-interactive
+use, pass `--yes` and provide a complete configuration. Codex MCP registration
+remains global even when project-local rule files are requested. A run can
+still end incomplete after the env/host configuration has been applied (for
+example, a skipped or failed engine install); that outcome is reported on top
+of the already-written configuration and is not a transaction that undoes it.
 
 ## Credential protection flags
 
 Model-backed commands (`ask`, `chat`, `write`, `review`, `fetch`,
 `commit-msg`) and coder commands accept:
 
-- `--protect-credentials` — request the parent-owned credential proxy. When a
-  verified protected route is unavailable for the selected engine, the run
-  falls back to best-effort raw execution with a warning (MCP results carry it
-  in structured `warnings`).
-- `--no-protect-credentials` — override a persisted
+- `--protect-credentials` — request the parent-owned credential proxy. A
+  selected protected route fails closed — before any credential-bearing spawn —
+  when the raw key cannot be contained by the checked credential boundary or
+  when the proxy cannot start; there is no automatic downgrade to raw. This
+  applies to coder runs and to model tasks routed through the same
+  child-engine path. Warnings that do occur (for an explicit best-effort raw
+  choice or an engine limitation) are carried in MCP structured `warnings`.
+- `--no-protect-credentials` — an explicit choice to run with the selected raw
+  credential and a disclosed limitation for one run; it overrides a persisted
   `TRISS_PROTECT_CREDENTIALS=true` (or `TRISS_CODER_PROTECT_CREDENTIALS=true`)
-  choice for one run. For crush this is the explicit raw exit from its
-  protected default.
+  choice. For crush this is the explicit raw exit from its protected default.
 
 `triss config wizard` accepts the coder-target pair
 `--coder-protect-credentials` / `--coder-no-protect-credentials`. They persist

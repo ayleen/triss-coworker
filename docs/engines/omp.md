@@ -4,12 +4,15 @@ The `omp` engine projects the shared Triss provider runtime into a run-private O
 
 ```bash
 triss coder init --engine omp --provider opencode-go
-triss coder status
+triss status
 triss coder run --engine omp \
   --model opencode-go/deepseek-v4-flash \
   --effort high \
   "Create result.txt containing OMP_OK"
 ```
+
+`triss status` is the readiness check (migration, provider, engine, and
+integration readiness); the `coder` command group has no `status` subcommand.
 
 ## Provider projection
 

@@ -104,7 +104,7 @@ function parseEffort(value) {
 function addModelSelectionOptions(command) {
   return command
     .option('--provider <id>', 'canonical provider id')
-    .option('-m, --model <id>', 'provider-qualified model id, or a bare id with --provider')
+    .option('-m, --model <id>', '<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider')
     .option('--engine <id>', 'execution engine (direct, opencode, opencode2, omp, or crush)')
     .option('--protect-credentials', MODEL_PROTECT_HELP)
     .option('--no-protect-credentials', 'override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run')
@@ -114,16 +114,18 @@ function addModelSelectionOptions(command) {
 // Shared help text for model-backed credential protection.
 const MODEL_PROTECT_HELP =
   'Use the parent-owned credential proxy for the model projection.\n' +
-  'Falls back to a best-effort raw run with a warning when a verified\n' +
-  'protected route is unavailable for the selected engine.';
+  'A selected protected route fails closed — before any credential-bearing\n' +
+  'spawn — when the raw key cannot be contained or the proxy cannot start;\n' +
+  'there is no automatic downgrade to raw.';
 
 // Shared help text for the credential-mode flag (`coder init` and `coder run`;
 // `triss exec --code` forwards it under its own shorter description).
 const PROTECT_HELP =
-  'Use the parent-owned credential proxy and strict executable-surface gates\n' +
-  'where the selected engine supports them; otherwise run best-effort with a\n' +
-  'warning. An explicit --no-protect-credentials overrides a persisted\n' +
-  'TRISS_*_PROTECT_CREDENTIALS=true choice for this run.';
+  'Use the parent-owned credential proxy and strict executable-surface gates.\n' +
+  'A selected protected route fails closed — before any credential-bearing\n' +
+  'spawn — when the raw key cannot be contained or the proxy cannot start;\n' +
+  'there is no automatic downgrade to raw. An explicit --no-protect-credentials\n' +
+  'overrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.';
 
 const program = new Command();
 program
@@ -150,7 +152,7 @@ program
   .option('-g, --global', 'install into the target agent global rules file instead of the current project')
   .option('-t, --target <agent>', 'target agent (claude | codex | both); omit for an interactive prompt')
   .option('-f, --force', 'force-replace an existing triss block without diffing')
-  .option('-s, --setup', 'after writing CLAUDE.md, run `triss config wizard` to fill in credentials')
+  .option('-s, --setup', 'run the setup wizard before any rules write; preserve the selected init target and scope')
   .option('--yes', 'with --setup: non-interactive apply of a complete headless configuration (required outside a TTY)')
   .action(wrap(runInit));
 
@@ -410,11 +412,11 @@ coder
   .description('Spawn a coding agent through the configured provider runtime and print a JSON envelope to stdout')
   .option('--engine <name>', 'coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)')
   .option('-e, --effort <level>', 'reasoning effort: low, medium, high, xhigh, or max', parseEffort)
-  .option('--session <id>', 'triss-side session slug, mapped to a real opencode session id in .triss/sessions.json')
-  .option('--continue', 'continue the most recent opencode session (maps to opencode --continue)')
+  .option('--session <id>', 'named session slug for the selected engine; storage and resume compatibility are engine-specific')
+  .option('--continue', 'continue a prior session using the selected engine\'s supported continuation semantics')
   .option('--agent <name>', 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)')
   .option('--provider <name>', 'canonical provider for this one run')
-  .option('--model <p/m>', 'override the main model for this one run; bare ids use --provider or the configured default')
+  .option('--model <model>', 'override the main model for this one run: <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider')
   .option('--isolate', 'run in a disposable git worktree under .triss/wt/<slug>')
   .option('--no-isolate', 'disable worktree isolation (opencode defaults to OFF; crush defaults to ON)')
   .option('--restrict', 'crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)')

@@ -61,7 +61,7 @@ Model-backed tools share these optional fields:
 | Field | Values | Meaning |
 |---|---|---|
 | `provider` | `openai-compatible`, `zai`, `opencode-zen`, `opencode-go`, `moonshot`, `kimi-for-coding` | Canonical provider id |
-| `model` | native provider model id | One-call role override |
+| `model` | `<canonical-provider>/<native-id>` selector, or a bare native id resolved against `provider` or the effective default provider | One-call role override; conflicting provider selections are rejected |
 | `engine` | `direct`, `opencode`, `opencode2`, `omp`, `crush` | One-call execution-engine override |
 | `protect_credentials` | boolean | Explicit credential-protection choice, forwarded as a tri-state: `true` requests the parent-owned proxy, `false` explicitly overrides a persisted protection choice for this call, and an absent value lets the persisted `TRISS_PROTECT_CREDENTIALS` tri-state resolve downstream |
 | `effort` | `low`, `medium`, `high`, `xhigh`, `max` | Shared reasoning control |
@@ -71,8 +71,12 @@ Model-backed tools share these optional fields:
 Every execution engine is available for model-backed tools. Engines without a
 verified read-only projection still execute the request and attach their
 concrete limitation to the structured `warnings` of a successful result — they
-are not rejected. A requested protected route that cannot be provided falls
-back to best-effort raw execution with a warning naming what is not guaranteed.
+are not rejected. Best-effort tool-policy support does not imply an automatic
+credential downgrade: a selected protected route fails closed — before any
+credential-bearing spawn — when the raw key cannot be contained by the checked
+credential boundary or when the proxy cannot start. `protect_credentials:
+false` is an explicit choice to run with the selected raw credential and a
+disclosed limitation, not a recovery step.
 
 When fields are omitted, the request resolves `TRISS_DEFAULT_PROVIDER`, `TRISS_DEFAULT_ENGINE`, and the tool's declared `model` or `smallModel` role. MCP does not accept provider aliases or public model presets.
 
@@ -128,9 +132,11 @@ config with `$ENV` credential references; `protect_credentials: false` runs it
 raw through the same run-scoped config as an explicit choice.
 
 For compatibility, `triss_coder_run` also accepts the documented legacy
-`protectCredentials` spelling. It is deprecated but remains fail-safe: the
-camelCase and `protect_credentials` values are OR-merged, so any truthy value
-selects protected credential handling. New clients should send
+`protectCredentials` spelling. It is deprecated but remains fail-safe: the two
+spellings merge as a tri-state over real booleans — a boolean `true` on either
+spelling selects protected credential handling, an explicit boolean `false`
+survives when nothing contradicts it, and absence stays undefined for the
+persisted tri-state. New clients should send
 `protect_credentials`.
 
 ## Tracker tools
