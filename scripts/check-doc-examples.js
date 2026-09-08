@@ -81,7 +81,7 @@ export function collectCliFacts() {
     const optionNames = new Set();
     for (const opt of command.options) {
       for (const token of opt.flags.split(/[ ,|]+/)) {
-        if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<\[].*$/, ''));
+        if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<[].*$/, ''));
       }
       if (opt.negate) optionNames.add(`--no-${opt.name()}`);
     }
@@ -96,7 +96,7 @@ export function collectCliFacts() {
   const optionNames = new Set();
   for (const opt of root.options) {
     for (const token of opt.flags.split(/[ ,|]+/)) {
-      if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<\[].*$/, ''));
+      if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<[].*$/, ''));
     }
   }
   commands.set('', { options: optionNames, subcommands: new Set(root.commands.map((c) => c.name())), args: [] });
@@ -132,24 +132,6 @@ function extractFencesSimple(text) {
 function stripComment(line) {
   const hash = line.indexOf(' #');
   return (hash === -1 ? line : line.slice(0, hash)).trim();
-}
-
-function* commandLines(fence) {
-  let pending = null;
-  for (const raw of fence.lines) {
-    const line = pending ? `${pending} ${stripComment(raw)}` : stripComment(raw);
-    if (!line) {
-      pending = null;
-      continue;
-    }
-    if (line.endsWith('\\')) {
-      pending = line.slice(0, -1).trim();
-      continue;
-    }
-    pending = null;
-    yield line;
-  }
-  if (pending) yield pending;
 }
 
 function splitShellSegments(line) {

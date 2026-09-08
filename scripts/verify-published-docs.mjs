@@ -28,10 +28,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PACKAGE = 'triss-coworker';
 
 const STALE_MARKERS = [
