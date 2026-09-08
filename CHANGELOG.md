@@ -7,51 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- All execution engines now run non-coder model projections (`ask`, `review`,
-  `chat`, `write`, `commit-msg`): `opencode` keeps its verified read-only
-  projection; `opencode2`, `omp`, and `crush` execute best-effort and attach a
-  warning naming the concrete limitation that is not verified, instead of
-  rejecting the run before launch.
-- `triss config wizard` now opens the Easy path directly (provider + key,
-  assistant hosts, summary, first command) and preserves existing explicit
-  choices on rerun. `--advanced` exposes the full sections; an optional target
-  argument accepts a canonical provider id, `coder`, or an integration name;
-  `--yes`, `--agent`, and `--install` support headless apply; `triss init
-  --setup` delegates to the same wizard after writing agent rules.
-- New persisted fields: `TRISS_CODER_PROVIDER`, `TRISS_DEFAULT_EFFORT`,
-  `TRISS_CODER_EFFORT`, `TRISS_PROTECT_CREDENTIALS`, and
-  `TRISS_CODER_PROTECT_CREDENTIALS` (credential protection is a tri-state:
-  absent, true, or false — the string `"false"` is never a truthy opt-in) and
-  `TRISS_MODEL_TRANSPORTS` (exact-model direct transport override map).
-- The `direct` engine now serves `opencode-zen` and `opencode-go` models
-  through audited per-model transports (OpenAI Chat, OpenAI Responses,
-  Anthropic Messages); a model without resolvable direct metadata fails with
-  the stable `TRISS_DIRECT_ENGINE_REQUIRED` code and an actionable
-  `TRISS_MODEL_TRANSPORTS` remedy instead of a generic registry error.
-- `--protect-credentials` / `--no-protect-credentials` on model-backed
-  commands: the former requests the parent-owned proxy and falls back to a
-  warned best-effort raw run when a protected route is unavailable; the latter
-  overrides a persisted protection choice for one run. MCP forwards
-  `protect_credentials` as the same tri-state.
-
-### Changed
-
-- Crush is provider-neutral: any canonical provider projects onto a run-scoped
-  config with `$ENV` credential references. Protected mode remains the crush
-  default; an explicit `--no-protect-credentials` runs crush raw through the
-  same run-scoped config as a disclosed best-effort choice. Responses-protocol
-  models ride a bounded chat→responses bridge in the credential proxy
-  (message-only; tool rounds are refused with a precise error).
-- `triss ask`, `triss review`, and other model-backed commands no longer
-  require engine-specific provider restrictions: provider and engine are
-  independent choices, honored as selected with truthful warnings for
-  best-effort routes.
-- The setup wizard no longer resets an existing provider/engine selection or
-  installs a Claude MCP server implicitly; Easy and Advanced share one setup
-  and resolution path.
-
 ## [0.44.0] — 2026-09-08
 
 ### Added
@@ -73,19 +28,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Headless apply: `triss config wizard --yes --agent none [--install]`
   assembles a complete configuration from existing files, the environment,
   and explicit flags; missing requirements exit non-zero before writing.
-  `triss init --setup` delegates to the same wizard after writing agent
-  rules.
+  `triss init --setup` delegates to the same wizard before any rules write,
+  preserving init's target and scope intent.
 - Every execution engine now serves every canonical provider: crush runs any
   provider through a run-scoped config with `$ENV` credential references
   (provider block seeded before `crush models use`), and opencode2, omp, and
   crush execute non-coder projections (`ask`, `review`, `chat`, `write`,
   `commit-msg`) best-effort with structured warnings naming the unverified
-  limitation.
+  limitation. Provider and engine are independent choices for model-backed
+  commands, honored as selected with truthful warnings for best-effort
+  routes.
 - `--protect-credentials` / `--no-protect-credentials` on model-backed
   commands; MCP forwards `protect_credentials` as the same tri-state and
   carries credential mode and disclosures in the run envelope.
-- `TRISS_CODER_EFFORT` and `TRISS_DEFAULT_EFFORT` knobs, honored by every
-  engine (crush discloses when a provider declares no effort support).
+- New persisted fields: `TRISS_CODER_PROVIDER` (coder-only provider default
+  that never rewrites `TRISS_DEFAULT_PROVIDER`), `TRISS_DEFAULT_EFFORT`,
+  `TRISS_CODER_EFFORT` (honored by every engine; crush discloses when a
+  provider declares no effort support), the `TRISS_PROTECT_CREDENTIALS` /
+  `TRISS_CODER_PROTECT_CREDENTIALS` tri-state (absent, true, or false — the
+  string `"false"` is never a truthy opt-in), and `TRISS_MODEL_TRANSPORTS`
+  (exact-model direct transport override map; a model without resolvable
+  direct metadata fails with the stable `TRISS_DIRECT_ENGINE_REQUIRED` code
+  and this remedy).
 
 ### Changed
 

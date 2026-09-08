@@ -2,6 +2,23 @@
 
 The `omp` engine projects the shared Triss provider runtime into a run-private OMP agent directory. Triss does not mutate the user's persistent OMP configuration.
 
+## Install and readiness entrypoints
+
+Three paths lead to a working OMP engine, and they are distinct:
+
+- **Manual install** — run the engine's own installer (for example
+  `curl https://omp.sh/install | sh`) yourself, then `triss coder init
+  --engine omp --provider <id>` configures Triss. This downloads and executes
+  installer-provided code from the engine's published endpoint.
+- **Direct `coder init` / runtime probe** — Triss checks the installed binary
+  against the effective minimum and capability requirements before use and
+  never installs anything on this path.
+- **Guided wizard install** — `triss config wizard` (or `init --setup`) can
+  install a missing engine when installation is part of the plan shown before
+  you apply; headless runs install nothing without `--install`. Installer
+  runs use a minimal environment allowlist, so provider and integration
+  credentials never reach the installer.
+
 ```bash
 triss coder init --engine omp --provider opencode-go
 triss status

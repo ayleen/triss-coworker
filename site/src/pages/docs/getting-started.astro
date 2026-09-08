@@ -17,7 +17,6 @@ import {
   STATUS_COMMAND,
   FIRST_TASK_COMMAND_LINES,
   AGENT_TARGETS,
-  AGENT_HELP_COMMAND,
   MCP_STATUS_COMMAND,
   UPGRADE_042_COMMANDS,
   OPENCODE2_SETUP_COMMANDS,
@@ -208,10 +207,18 @@ const STEPS = [
         </p>
         <pre tabindex="0" class="code-block qs-cmd"><code>{TERMINAL_PROVIDER_COMMANDS.map((line) => `$ ${line}`).join("\n")}</code></pre>
         <p class="qs-step__body">
-          <code>&lt;...&gt;</code> values are placeholders for your own key and model ids. You
-          can also omit the value and enter it interactively — key and token values are
-          masked as you type. With no host wired, nothing is written to Claude Code or Codex;
-          the CLI alone is enough for the workflows on this site.
+          Each command without a value prompts for it interactively — key and
+          token input is masked as you type and never lands in your shell
+          history. <code>openai-compatible</code> is a configurable profile,
+          not a provider detector: its built-in endpoint is
+          <code>https://api.deepseek.com/v1</code>, so set the base URL
+          explicitly when using another compatible endpoint. These commands
+          edit profile fields; they do not reset an existing default provider
+          or engine. For headless use, interactive prompts do not apply —
+          assemble a complete configuration with
+          <code>{HEADLESS_WIZARD_COMMAND}</code> instead. With no host wired,
+          nothing is written to Claude Code or Codex; the CLI alone is enough
+          for the workflows on this site.
         </p>
         <p class="qs-step__body">Then check that your configuration is ready:</p>
         <pre tabindex="0" class="code-block qs-cmd"><code>{`$ ${STATUS_COMMAND}`}</code></pre>
@@ -260,7 +267,8 @@ const STEPS = [
             For a single-project registration, <code>triss mcp install</code> also accepts
             <code>--local</code>, which writes <code>./.mcp.json</code> in the current project;
             the global install follows your session and does not pin one project. After
-            connecting, <code>{AGENT_HELP_COMMAND}</code> prints the full delegation cookbook.
+            connecting, <code>{claude.agentHelpCommand}</code> prints the full delegation
+            cookbook for the Claude flavour.
           </p>
         </div>
 
@@ -272,8 +280,8 @@ const STEPS = [
             for Codex. Restart the Codex CLI after registering, then verify with
             <code>{MCP_STATUS_COMMAND}</code>. Current releases of the Codex CLI also ship
             <code>codex mcp list</code> to show registered servers; check your installed Codex
-            CLI for the exact command. After connecting, <code>{AGENT_HELP_COMMAND}</code>
-            prints the full delegation cookbook.
+            CLI for the exact command. After connecting, <code>{codex.agentHelpCommand}</code>
+            prints the full delegation cookbook for the Codex flavour.
           </p>
         </div>
 
@@ -359,11 +367,19 @@ const STEPS = [
               <div class="qs-sub__title">Optional: use the native OMP coder engine</div>
               <pre tabindex="0" class="code-block"><code>{OMP_SETUP_COMMANDS.map((line) => `$ ${line}`).join("\n")}</code></pre>
               <p class="qs-details__note">
-                OMP 18.0.6 or newer must already be installed; Triss only probes it and never
-                runs the installer. OMP defaults to worktree isolation, but that is not
-                host-filesystem confinement. The default credential mode is
-                <code>best_effort_raw</code>; add <code>--protect-credentials</code> when the
-                selected key must stay behind the parent-owned proxy. See
+                The OMP runtime must meet Triss's effective minimum (18.0.6 or
+                newer) and capability checks before it is used. The manual
+                <code>curl | sh</code> line above is one conscious way to
+                install it; the setup wizard can also install a missing engine
+                when installation is part of the plan it shows before apply,
+                and headless installation requires <code>--install</code>.
+                Direct runtime use still requires a compatible binary on
+                <code>PATH</code>. Installing OMP does not grant permission to
+                send a task or credentials, and OMP defaults to worktree
+                isolation — which is not host-filesystem confinement. The
+                default credential mode is <code>best_effort_raw</code>; add
+                <code>--protect-credentials</code> when the selected key must
+                stay behind the parent-owned proxy. See
                 <a href="https://github.com/ayleen/triss-coworker/blob/main/docs/engines/omp.md">docs/engines/omp.md</a>.
               </p>
             </div>

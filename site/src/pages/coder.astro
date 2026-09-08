@@ -5,6 +5,7 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import { CODER_ENGINES, ENVELOPE_FIELDS } from "../data/coder-reference.js";
 ---
 
 <Base title="Coding engines and execution — Triss" description="Run implementation tasks through supported coding engines and understand worktree isolation, results, and verification.">
@@ -41,16 +42,42 @@ import Footer from "../components/Footer.astro";
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 88px var(--layout-gutter);">
     <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-label); margin-bottom: 18px;">engines</div>
     <h2 style="margin: 0; font-size: 38px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 600; color: var(--color-text-strong);">Pick one engine. Keep the same public model IDs.</h2>
+    <p style="margin: 18px 0 0; max-width: 46em; font-size: 15px; line-height: 1.65; color: var(--color-text-secondary);">Every engine panel is rendered below — with JavaScript they collapse to tabs, without it they all stay visible.</p>
     <div role="group" aria-label="Coder engine" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px;">
-      <button data-engine="opencode" class="engine-btn" aria-pressed="true" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: var(--color-accent); color: #0b0d10; border: 1px solid var(--color-accent);">opencode <span>default</span></button>
-      <button data-engine="opencode2" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">opencode2 <span>beta</span></button>
-      <button data-engine="crush" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">crush <span>interim</span></button>
-      <button data-engine="omp" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">omp <span>new</span></button>
-      <button data-engine="harness" class="engine-btn" aria-pressed="false" style="font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">harness bundle <span>DSH plugin, not --engine</span></button>
+      {CODER_ENGINES.map((engine, index) => (
+        <button
+          data-engine={engine.id}
+          class="engine-btn"
+          aria-pressed={index === 0 ? "true" : "false"}
+          style={`font-family: var(--font-mono); font-size: 13px; padding: 10px 16px; cursor: pointer; background: ${index === 0 ? "var(--color-accent)" : "transparent"}; border: 1px solid ${index === 0 ? "var(--color-accent)" : "var(--color-border-strong)"}; color: ${index === 0 ? "#0b0d10" : "var(--color-text-muted)"};`}
+        >
+          {engine.label} <span>{engine.badge}</span>
+        </button>
+      ))}
     </div>
-    <div id="engine-body" style="margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;"></div>
-    <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-label);" id="engine-flag"></div>
-    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px;">
+    {CODER_ENGINES.map((engine, index) => (
+      <div
+        id={`engine-panel-${engine.id}`}
+        data-engine-panel={engine.id}
+        class="engine-panel"
+        style={`margin-top: 24px; border: 1px solid var(--color-border); background: var(--color-bg-raised); padding: 24px;`}
+      >
+        <div style="display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;">
+          <h3 id={`engine-${engine.id}`} style="margin: 0; font-size: 17px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.01em;">{engine.label}</h3>
+          <span style="font-family: var(--font-mono); font-size: 11px; color: var(--color-text-label);">{engine.badge}</span>
+        </div>
+        <p style="margin: 10px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); max-width: 62em;">{engine.body}</p>
+        <dl style="margin: 14px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 12.5px; line-height: 1.55;">
+          <dt style="font-family: var(--font-mono); color: var(--color-text-label);">isolation</dt>
+          <dd style="margin: 0; color: var(--color-text-secondary);">{engine.isolation}</dd>
+          <dt style="font-family: var(--font-mono); color: var(--color-text-label);">credential default</dt>
+          <dd style="margin: 0; color: var(--color-text-secondary);">{engine.credentialDefault}</dd>
+        </dl>
+        <code data-engine-command style="display: inline-block; margin-top: 14px; font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); background: var(--color-bg-code); border: 1px solid var(--color-border-subtle); padding: 9px 11px; overflow-x: auto; max-width: 100%; white-space: pre;">{engine.command}</code>
+      </div>
+    ))}
+    <div id="engine-flag" style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-label);"></div>
+    <div id="engine-command-bar" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px;" hidden>
       <code id="engine-command" style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); background: var(--color-bg-code); border: 1px solid var(--color-border-subtle); padding: 9px 11px;"></code>
       <button id="copy-engine-command" type="button" style="min-height: 44px; font-family: var(--font-mono); font-size: 12px; padding: 9px 13px; cursor: pointer; background: transparent; border: 1px solid var(--color-border-strong); color: var(--color-text-muted);">copy command</button>
     </div>
@@ -85,14 +112,18 @@ import Footer from "../components/Footer.astro";
 
   <section style="max-width: var(--layout-max); margin: 0 auto; padding: 0 var(--layout-gutter) 80px;">
     <h2 style="font-size: 28px; color: var(--color-text-strong);">The envelope you actually review</h2>
-    <p style="color: var(--color-text-secondary);">One JSON envelope printed to stdout per run — honest about isolation, files changed, and capabilities.</p>
-    <div style="display: grid; grid-template-columns: 240px 1fr; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 24px;">
-      <div id="field-list" style="background: var(--color-bg); display: flex; flex-direction: column;"></div>
-      <div style="background: var(--color-bg-code); padding: 20px;">
-        <div id="field-title" style="font-size: 15px; font-weight: 600; color: var(--color-text-heading);"></div>
-        <div id="field-body" style="margin-top: 8px; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary);"></div>
-        <code id="field-hint" style="display: block; margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); background: rgba(95,180,100,0.08); border: 1px solid rgba(95,180,100,0.35); padding: 8px 10px;"></code>
-      </div>
+    <p style="color: var(--color-text-secondary);">One JSON envelope printed to stdout per run — honest about isolation, files changed, and capabilities. Every field note below is static content; no script is required to read it.</p>
+    <div style="display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); margin-top: 24px;">
+      {ENVELOPE_FIELDS.map((field) => (
+        <div style="background: var(--color-bg-raised); padding: 18px 22px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;">
+            <code id={`envelope-field-${field.key}`} style="font-family: var(--font-mono); font-size: 12.5px; color: var(--color-accent);">{field.key}</code>
+            <span style="font-size: 14px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.01em;">{field.title}</span>
+          </div>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--color-text-secondary); max-width: 62em;">{field.body}</p>
+          <code style="font-family: var(--font-mono); font-size: 12px; color: var(--color-accent); background: rgba(95,180,100,0.08); border: 1px solid rgba(95,180,100,0.35); padding: 8px 10px; align-self: flex-start; overflow-x: auto; max-width: 100%;">{field.hint}</code>
+        </div>
+      ))}
     </div>
   </section>
 
@@ -114,36 +145,43 @@ import Footer from "../components/Footer.astro";
 
   <script>
 // @ts-nocheck
-    const ENGINES = {
-      opencode: { body: "The V1 engine and the stable default. Its deny-first bash allowlist in opencode.json is enforced. Zen and Go runs keep native OpenCode provider behavior. Protected mode forwards only User-Agent plus session, request, and client identity; the project fingerprint stays local.", flag: "--engine opencode", isolation: "opt-in via --isolate" },
-      opencode2: { body: "The V2 beta. OpenCode 2 0.0.0-beta-19059 or newer is accepted by default — the supported floor plus every newer parseable version, never one pinned build; Triss checks required option declarations, not help descriptions. It shares the same opencode.json config and provider catalogue. Credential handling defaults to best_effort_raw; pass --protect-credentials for the parent-owned credential proxy.", flag: "--engine opencode2", isolation: "opt-in via --isolate" },
-      crush: { body: "Isolation is ON by default: the run happens in a disposable worktree that separates changes from your checkout. That worktree is not an operating-system sandbox. By default the engine auto-approves its tools; --restrict opts into the CLI allowlist enforcement for this run.", flag: "--engine crush", isolation: "ON by default" },
-      omp: { body: "Native OMP headless adapter with structured events and named sessions. Run-private config prevents profile inheritance. It defaults to worktree isolation and best_effort_raw credential handling; --protect-credentials uses the parent-owned proxy. A worktree is not an OS sandbox.", flag: "--engine omp", isolation: "ON by default" },
-      harness: { body: "Not an --engine value — opt-in DSH companion bundle. One profile dependency instead of hand-authoring provider mapping.", flag: "dsh plugin add triss-dsh-provider-bundle", isolation: "owned by Harness" },
-    };
-    let engine = "opencode";
-    function renderEngine() {
-      const e = ENGINES[engine];
-      document.getElementById("engine-body").innerHTML = "<div style='font-size:15px; font-weight:600; color:var(--color-text-heading);'>" + engine + "</div><p style='margin:8px 0 0; font-size:13.5px; line-height:1.6; color:var(--color-text-secondary);'>" + e.body + "</p><div style='margin-top:12px; font-family:var(--font-mono); font-size:12px;'><span style='background:var(--color-bg-code); border:1px solid var(--color-border-subtle); padding:6px 10px; color:var(--color-accent);'>" + e.flag + "</span> <span style='color:var(--color-text-label); margin-left:8px;'>isolation: " + e.isolation + "</span></div>";
-      document.getElementById("engine-flag").textContent = e.flag + " · isolation: " + e.isolation;
-      const command = engine === "harness"
-        ? e.flag
-        : `triss coder run ${e.flag} "your task"`;
-      document.getElementById("engine-command").textContent = command;
-      const copyButton = document.getElementById("copy-engine-command");
-      copyButton.textContent = "copy command";
-      copyButton.setAttribute("aria-label", `Copy ${engine} command`);
-      document.querySelectorAll(".engine-btn").forEach(b => {
-        const on = b.getAttribute("data-engine")===engine;
-        b.setAttribute("aria-pressed", String(on));
-        b.style.background = on ? "var(--color-accent)" : "transparent";
-        b.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
-        b.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
-      });
-    }
+    // Enhancement only: every engine panel and envelope field already exists
+    // in the static HTML. The script hides non-selected panels, syncs button
+    // state, and wires the copy bar. Without JavaScript the full content
+    // stays visible.
+    const PANELS = [...document.querySelectorAll("[data-engine-panel]")];
     const engineButtons = [...document.querySelectorAll(".engine-btn")];
+    let engine = "opencode";
+
+    function applySelection() {
+      PANELS.forEach((panel) => {
+        const on = panel.getAttribute("data-engine-panel") === engine;
+        panel.hidden = !on;
+      });
+      engineButtons.forEach((button) => {
+        const on = button.getAttribute("data-engine") === engine;
+        button.setAttribute("aria-pressed", String(on));
+        button.style.background = on ? "var(--color-accent)" : "transparent";
+        button.style.color = on ? "#0b0d10" : "var(--color-text-muted)";
+        button.style.borderColor = on ? "var(--color-accent)" : "var(--color-border-strong)";
+      });
+      const active = PANELS.find((panel) => !panel.hidden);
+      const commandEl = active ? active.querySelector("[data-engine-command]") : null;
+      const flag = document.getElementById("engine-flag");
+      const bar = document.getElementById("engine-command-bar");
+      if (flag && active) {
+        flag.textContent = `${engine} — see the highlighted panel above`;
+      }
+      if (bar && commandEl) {
+        document.getElementById("engine-command").textContent = commandEl.textContent;
+      }
+    }
+
     engineButtons.forEach((button, index) => {
-      button.addEventListener("click", () => { engine = button.getAttribute("data-engine"); renderEngine(); });
+      button.addEventListener("click", () => {
+        engine = button.getAttribute("data-engine");
+        applySelection();
+      });
       button.addEventListener("keydown", (event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
@@ -153,42 +191,21 @@ import Footer from "../components/Footer.astro";
         next.click();
       });
     });
-    document.getElementById("copy-engine-command").addEventListener("click", async (event) => {
-      const button = event.currentTarget;
-      try {
-        await navigator.clipboard.writeText(document.getElementById("engine-command").textContent);
-        button.textContent = "copied";
-      } catch {
-        button.textContent = "copy unavailable";
-      }
-    });
-    renderEngine();
 
-    const FIELDS = [
-      { key: "session_slug", title: "Never an implicit conversation", body: "Either the slug you passed or a generated anonymous one. A run never silently continues a previous session.", hint: "triss coder session list" },
-      { key: "files_changed", title: "Null unless isolated", body: "Only an isolated run can honestly count changed files. Otherwise this is null.", hint: "--isolate" },
-      { key: "worktree", title: "A disposable checkout", body: "The isolated run happens here, never in your working tree. Triss waits for residual processes.", hint: ".triss/wt/<slug>" },
-      { key: "effective_isolation", title: "Enforced, or honestly downgraded", body: "Fails before spawn unless you opted into best-effort. Advisory only when downgraded.", hint: "--allow-best-effort-caller-worktree" },
-      { key: "execution_capabilities", title: "Eight honest verdicts", body: "Each capability reports enforced, best_effort, or unavailable — verified for the run.", hint: "docs/reliable-delegation-contract.md" },
-    ];
-    let field = "files_changed";
-    function renderField() {
-      const list = document.getElementById("field-list");
-      if (!list) return;
-      list.innerHTML = "";
-      FIELDS.forEach(f => {
-        const b = document.createElement("button");
-        b.textContent = f.key;
-        b.style.cssText = "text-align:left; padding:10px 14px; font-family:var(--font-mono); font-size:12px; cursor:pointer; border:none; border-bottom:1px solid var(--color-border-subtle); background:" + (f.key===field ? "var(--color-bg-raised)" : "transparent") + "; color:" + (f.key===field ? "var(--color-accent)" : "var(--color-text-muted)");
-        b.setAttribute("aria-pressed", String(f.key===field));
-        b.addEventListener("click", () => { field=f.key; renderField(); });
-        list.appendChild(b);
+    const copyButton = document.getElementById("copy-engine-command");
+    if (copyButton) {
+      copyButton.addEventListener("click", async (event) => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById("engine-command").textContent);
+          copyButton.textContent = "copied";
+        } catch {
+          copyButton.textContent = "copy unavailable";
+        }
       });
-      const cur = FIELDS.find(f=>f.key===field);
-      document.getElementById("field-title").textContent = cur.title;
-      document.getElementById("field-body").textContent = cur.body;
-      document.getElementById("field-hint").textContent = cur.hint;
     }
-    renderField();
+
+    const bar = document.getElementById("engine-command-bar");
+    if (bar) bar.hidden = false;
+    applySelection();
   </script>
 </Base>

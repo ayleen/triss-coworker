@@ -158,8 +158,10 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   const opencode2 = page.locator('[data-engine="opencode2"]');
   await opencode2.click();
   await expect(opencode2).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#engine-body")).toContainText("0.0.0-beta-19059 or newer");
-  await expect(page.locator("#engine-body")).toContainText("never one pinned build");
+  const opencode2Panel = page.locator('[data-engine-panel="opencode2"]');
+  await expect(opencode2Panel).toBeVisible();
+  await expect(opencode2Panel).toContainText("0.0.0-beta-19059 or newer");
+  await expect(opencode2Panel).toContainText("never one pinned build");
 
   const crush = page.locator('[data-engine="crush"]');
   const omp = page.locator('[data-engine="omp"]');
@@ -167,8 +169,10 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   await page.keyboard.press("ArrowRight");
   await expect(omp).toBeFocused();
   await expect(omp).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#engine-body")).toContainText(/run-private config/i);
-  await expect(page.locator("#engine-body")).toContainText("not an OS sandbox");
+  const ompPanel = page.locator('[data-engine-panel="omp"]');
+  await expect(ompPanel).toBeVisible();
+  await expect(ompPanel).toContainText(/run-private config/i);
+  await expect(ompPanel).toContainText("not an OS sandbox");
   await expect(page.locator("#engine-command")).toHaveText('triss coder run --engine omp "your task"');
 
   await page.locator("#copy-engine-command").click();
