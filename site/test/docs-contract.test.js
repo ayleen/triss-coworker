@@ -97,9 +97,19 @@ test('DOC-SITE-01: built pages compute counts instead of hardcoding them', () =>
   assert.ok(!commandsHtml.includes('core (7)'), 'stale hardcoded core count must stay out of the page');
 
   const securityHtml = fs.readFileSync(securityFile, 'utf8');
+  // Compare the RENDERED page against the root manifest read independently
+  // by path — the site bundle must not resolve a different package.json
+  // (import.meta.url points into dist chunks once bundled).
+  const rootManifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), '..', 'package.json'), 'utf8'));
+  const rootDeps = Object.keys(rootManifest.dependencies).length;
+  assert.equal(
+    DIRECT_DEPENDENCY_COUNT,
+    rootDeps,
+    'facts.js must derive its count from the root manifest',
+  );
   assert.ok(
-    securityHtml.includes(`${DIRECT_DEPENDENCY_COUNT} direct deps`),
-    'security page must render the manifest-derived dependency count',
+    securityHtml.includes(`${rootDeps} direct deps`),
+    `security page must render the manifest-derived dependency count ${rootDeps}`,
   );
   assert.ok(!securityHtml.includes('>7 deps<'), 'stale hardcoded dependency count must stay out of the page');
 });
