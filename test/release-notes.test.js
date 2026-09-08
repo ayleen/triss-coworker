@@ -269,3 +269,53 @@ test('V02: a single-line HTML comment cannot mint a section', () => {
   const changelog = '# Changelog\n\n## [Unreleased]\n\n<!-- ## [9.9.9] -->\n';
   assert.equal(extractVersionSection(changelog, '9.9.9'), null);
 });
+
+// G02 fixtures (review round 4): `<!--` inside an inline code span is
+// literal text — it must not open a comment state that hides the next real
+// version heading or glues two versions together.
+
+test('G02: a real version after a `<!--` code span is still found and accepted', () => {
+  const changelog = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    'Parser now preserves the `<!--` token.',
+    '',
+    '## [9.9.9]',
+    '',
+    '### Fixed',
+    '',
+    '- Corrected release behavior.',
+  ].join('\n');
+  const section = extractVersionSection(changelog, '9.9.9');
+  assert.ok(section !== null, 'the real section must be found');
+  assert.match(section, /- Corrected release behavior\./);
+  const notes = buildReleaseNotes({ tag: 'v9.9.9', changelog, enginesNode: '>=22.12.0' });
+  assert.match(notes, /## What changed/);
+  assert.match(notes, /Corrected release behavior\./);
+});
+
+test('G02: a `<!--` code span does not glue the next version into the section', () => {
+  const changelog = [
+    '## [9.9.9]',
+    '',
+    '### Fixed',
+    '',
+    '- Preserve the `<!--` token.',
+    '',
+    '## [9.9.8]',
+    '',
+    '### Fixed',
+    '',
+    '- Old release only.',
+  ].join('\n');
+  const section = extractVersionSection(changelog, '9.9.9');
+  assert.ok(section !== null, 'the section must be found');
+  // Exact boundary, not just presence of the requested version's heading.
+  assert.match(section, /- Preserve the `<!--` token\./, 'the code-span entry stays visible content');
+  assert.ok(!section.includes('9.9.8'), 'the next version heading must not leak in');
+  assert.ok(!section.includes('Old release only.'), 'the next version content must not leak in');
+  // The inline-code entry itself is substantive content.
+  assert.equal(sectionHasSubstantiveContent(section), true);
+});

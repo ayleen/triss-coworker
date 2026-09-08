@@ -67,3 +67,56 @@ test('V02: comment markers inside code regions are code text, not comments', () 
   const records = annotateMarkdownLines('```md\n<!-- not a comment -->\n```');
   assert.deepEqual(records.map((record) => record.kind), ['fence-open', 'fence-body', 'fence-end']);
 });
+
+// G02 fixtures (review round 4): an HTML comment can only start OUTSIDE an
+// inline code span. `<!--` inside backticks is visible literal text — it
+// must not open a comment state that hides the headings after it, and the
+// code-span content must stay visible.
+
+test('G02: `<!--` inside a code span is literal text, not a comment opener', () => {
+  const line = 'Parser now preserves the `<!--` token.';
+  const records = annotateMarkdownLines(line);
+  assert.equal(records[0].kind, 'text');
+  assert.equal(records[0].visible, line, 'the code span and its content must stay visible');
+  // No comment state may leak: the next heading stays structural.
+  const followUp = annotateMarkdownLines(`${line}\n## [9.9.9]`);
+  assert.equal(followUp[1].kind, 'text');
+  assert.equal(followUp[1].visible, '## [9.9.9]');
+});
+
+test('G02: a real comment after a code span is still stripped, span content kept', () => {
+  const records = annotateMarkdownLines('- Keep `<!--` visible. <!-- internal note -->');
+  assert.equal(records[0].kind, 'text');
+  assert.equal(records[0].visible, '- Keep `<!--` visible. ');
+});
+
+test('G02: a code span closes only on a backtick run of the same length', () => {
+  const records = annotateMarkdownLines('a ``<!--`` b <!-- note -->');
+  assert.equal(records[0].visible, 'a ``<!--`` b ', 'a single backtick must not close a two-backtick span');
+});
+
+test('G02: an escaped `<!--` is literal text', () => {
+  const line = String.raw`before \<!-- not a comment`;
+  const records = annotateMarkdownLines(line);
+  assert.equal(records[0].visible, line);
+  const followUp = annotateMarkdownLines(`${line}\n## [9.9.8]`);
+  assert.equal(followUp[1].visible, '## [9.9.8]');
+});
+
+test('G02: an unclosed code-span run hides nothing', () => {
+  const line = 'text `<!-- more';
+  const records = annotateMarkdownLines(line);
+  assert.equal(records[0].kind, 'text');
+  assert.equal(records[0].visible, line, 'an unclosed delimiter run stays literal text');
+  const followUp = annotateMarkdownLines(`${line}\n## [9.9.7]`);
+  assert.equal(followUp[1].visible, '## [9.9.7]');
+});
+
+test('G02: a real multi-line comment still swallows code-span-looking lines', () => {
+  const records = annotateMarkdownLines('<!-- note\n`<!--` inside a comment\n--> after');
+  // The opening line keeps kind 'text' with empty visible output (nothing of
+  // it renders); the rest of the comment — including the code-span-looking
+  // line — is comment-only.
+  assert.deepEqual(records.map((record) => record.kind), ['text', 'comment', 'comment']);
+  assert.equal(records[0].visible, '');
+});

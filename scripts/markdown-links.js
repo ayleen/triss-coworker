@@ -10,9 +10,13 @@ const ROOT_DOC_REFERENCE_PATTERN = /(?<![A-Za-z0-9_./:-])(?:\.\/)?(docs\/[A-Za-z
 // fence's info string just may not contain a backtick) — and match closers
 // by fence character and length. Lines indented 4 spaces or a tab are
 // indented code, not structure. HTML comments are stripped from visible
-// text across line boundaries; code regions are never touched. Text inside
-// code or comments never yields headings, list entries, anchors, or
-// further comments.
+// text across line boundaries — but only OUTSIDE inline code spans (review
+// G02): `<!--` inside backticks is literal visible text and never opens a
+// comment state that would hide the headings after it. A code span closes
+// on the next backtick run of the SAME length, keeps its content visible,
+// and an unclosed run stays literal. Backslash-escaped punctuation cannot
+// open a span or a comment. Text inside code regions or comments never
+// yields headings, list entries, anchors, or further comments.
 //
 // Records: { number, raw, kind, visible } with kind one of 'fence-open',
 // 'fence-body', 'fence-end', 'indented-code', 'comment', 'text'. `visible`
@@ -53,33 +57,83 @@ export function annotateMarkdownLines(source) {
       records.push(record);
       return;
     }
-    let out = '';
-    let cursor = 0;
-    for (;;) {
-      if (inComment) {
-        const end = raw.indexOf('-->', cursor);
-        if (end === -1) break;
-        cursor = end + 3;
-        inComment = false;
-        continue;
-      }
-      const start = raw.indexOf('<!--', cursor);
-      if (start === -1) {
-        out += raw.slice(cursor);
-        break;
-      }
-      out += raw.slice(cursor, start);
-      const end = raw.indexOf('-->', start + 4);
-      if (end === -1) {
-        inComment = true;
-        break;
-      }
-      cursor = end + 3;
-    }
-    record.visible = out;
+    record.visible = stripCommentsOutsideCodeSpans(raw, () => {
+      inComment = true;
+    });
     records.push(record);
   });
   return records;
+}
+
+// CommonMark ASCII punctuation, for backslash-escape handling.
+const ASCII_PUNCTUATION = /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/;
+
+// Remove HTML comment spans from one line of paragraph text, honoring
+// inline code spans and backslash escapes. Code spans win: an opener run of
+// N backticks is closed by the next run of exactly N backticks, its content
+// is literal and stays visible, and an unclosed run is plain text. When a
+// comment is still open at end of line, onComment() marks the state so the
+// caller carries it to the following lines.
+function stripCommentsOutsideCodeSpans(raw, onComment) {
+  let out = '';
+  let cursor = 0;
+  for (;;) {
+    const char = raw[cursor];
+    if (char === undefined) return out;
+    if (char === '\\') {
+      const next = raw[cursor + 1];
+      if (next !== undefined && ASCII_PUNCTUATION.test(next)) {
+        out += raw.slice(cursor, cursor + 2); // escaped punctuation is literal
+        cursor += 2;
+      } else {
+        out += char;
+        cursor += 1;
+      }
+      continue;
+    }
+    if (char === '`') {
+      let runEnd = cursor;
+      while (raw[runEnd] === '`') runEnd += 1;
+      const length = runEnd - cursor;
+      let probe = runEnd;
+      let closer = -1;
+      while (probe < raw.length) {
+        if (raw[probe] !== '`') {
+          probe += 1;
+          continue;
+        }
+        let run = probe;
+        while (raw[run] === '`') run += 1;
+        if (run - probe === length) {
+          closer = run;
+          break;
+        }
+        probe = run;
+      }
+      if (closer !== -1) {
+        out += raw.slice(cursor, closer); // the whole span, content included
+        cursor = closer;
+      } else {
+        // Unclosed run: everything from here on is literal text — comment
+        // recognition is disabled for the rest of the line so a stray `<!--`
+        // can never hide the content that follows (review G02).
+        out += raw.slice(cursor);
+        cursor = raw.length;
+      }
+      continue;
+    }
+    if (char === '<' && raw.startsWith('<!--', cursor)) {
+      const end = raw.indexOf('-->', cursor + 4);
+      if (end === -1) {
+        onComment();
+        return out;
+      }
+      cursor = end + 3;
+      continue;
+    }
+    out += char;
+    cursor += 1;
+  }
 }
 
 export function withoutFencedCode(source) {
