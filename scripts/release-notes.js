@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { annotateMarkdownLines } from './markdown-links.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -47,43 +48,24 @@ function argMap(argv) {
   return options;
 }
 
-// Walk the changelog line by line, tracking fenced code blocks and HTML
-// comments, so a `## [X.Y.Z]` heading that exists only inside a code sample
-// or comment never creates a release section (review C03). Returns the
-// ORIGINAL lines of the requested version's section, or null.
+// Structural version-section extraction over the shared Markdown scanner
+// (review V02): a `## [X.Y.Z]` heading inside a fenced code block (any
+// CommonMark opener spelling), indented code, or an HTML comment never
+// creates a release section. The section runs to the next sibling-or-higher
+// heading. Returns the ORIGINAL lines of the requested version's section,
+// or null.
 export function extractVersionSectionLines(changelog, version) {
-  const headingPattern = new RegExp(`^## \\[${escapeRegExp(version)}\\]`);
+  const headingPattern = new RegExp(`^ {0,3}## \\[${escapeRegExp(version)}\\]`);
+  const boundaryPattern = /^ {0,3}#{1,2}\s/;
   const lines = changelog.split('\n');
-  let inFence = null; // { char, length }
-  let inComment = false;
   let sectionStart = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (inComment) {
-      if (line.includes('-->')) inComment = false;
-      continue;
-    }
-    if (inFence) {
-      const closer = line.trim().match(/^(`{3,}|~{3,})$/);
-      if (closer && closer[1][0] === inFence.char && closer[1].length >= inFence.length) inFence = null;
-      continue;
-    }
-    if (line.includes('<!--') && !line.includes('-->')) {
-      inComment = true;
-      continue;
-    }
-    const fence = line.trim().match(/^(`{3,}|~{3,})\S*$/);
-    if (fence) {
-      inFence = { char: fence[1][0], length: fence[1].length };
-      continue;
-    }
+  for (const record of annotateMarkdownLines(changelog)) {
+    if (record.kind !== 'text') continue;
     if (sectionStart === -1) {
-      if (headingPattern.test(line)) sectionStart = index;
+      if (headingPattern.test(record.visible)) sectionStart = record.number;
       continue;
     }
-    if (/^## \[/.test(line)) {
-      return lines.slice(sectionStart, index);
-    }
+    if (boundaryPattern.test(record.visible)) return lines.slice(sectionStart, record.number);
   }
   return sectionStart === -1 ? null : lines.slice(sectionStart);
 }
@@ -146,20 +128,23 @@ function escapeRegExp(value) {
 // they never substitute for a change entry (review C03).
 const CHANGE_SUBSECTIONS = new Set(['Added', 'Changed', 'Fixed', 'Removed', 'Security', 'Deprecated']);
 
-// Machine-checkable minimum for a release section (R07, refined by C03):
-// across the WHOLE version section there must be at least one real change
-// subsection (### Added/Changed/Fixed/Removed/Security/Deprecated) and at
-// least one non-placeholder list entry under the change subsections
-// collectively. Fenced code blocks (backtick AND tilde) and HTML comments
-// never count — a `### Fixed` shown only inside a code sample is not a
-// changelog entry. This checks structure, not literary quality.
+// Machine-checkable minimum for a release section (R07, refined by C03 and
+// V02): across the WHOLE version section there must be at least one real
+// change subsection (### Added/Changed/Fixed/Removed/Security/Deprecated)
+// and at least one non-placeholder list entry under the change subsections
+// collectively. Fenced code (backtick AND tilde, with the full CommonMark
+// opener grammar), indented code, and HTML comments never count — a `###
+// Fixed` shown only inside a code sample is not a changelog entry, and a
+// list item that is only an HTML comment carries no visible change. A real
+// entry with a trailing internal comment still counts. This checks
+// structure, not literary quality.
 export function sectionHasSubstantiveContent(section) {
-  const visible = maskNonContentLines(section.split('\n'));
   let inChangeSubsection = false;
   let hasChangeSubsection = false;
   let hasEntry = false;
-  for (const raw of visible) {
-    const line = raw.trim();
+  for (const record of annotateMarkdownLines(section)) {
+    if (record.kind !== 'text') continue; // code and comments are never content
+    const line = record.visible.trim();
     if (!line) continue;
     const subsection = line.match(/^###\s+(\S+)/);
     if (subsection) {
@@ -185,41 +170,6 @@ export function sectionHasSubstantiveContent(section) {
     }
   }
   return hasChangeSubsection && hasEntry;
-}
-
-// Replace lines that belong to fenced code blocks (backtick or tilde) or
-// HTML comments with empty strings (newlines preserved), so structural
-// parsing sees only real Markdown content.
-function maskNonContentLines(lines) {
-  const visible = [];
-  let inFence = null;
-  let inComment = false;
-  for (const line of lines) {
-    if (inComment) {
-      if (line.includes('-->')) inComment = false;
-      visible.push('');
-      continue;
-    }
-    if (inFence) {
-      const closer = line.trim().match(/^(`{3,}|~{3,})$/);
-      if (closer && closer[1][0] === inFence.char && closer[1].length >= inFence.length) inFence = null;
-      visible.push('');
-      continue;
-    }
-    if (line.includes('<!--') && !line.includes('-->')) {
-      inComment = true;
-      visible.push('');
-      continue;
-    }
-    const fence = line.trim().match(/^(`{3,}|~{3,})\S*$/);
-    if (fence) {
-      inFence = { char: fence[1][0], length: fence[1].length };
-      visible.push('');
-      continue;
-    }
-    visible.push(line);
-  }
-  return visible;
 }
 
 
