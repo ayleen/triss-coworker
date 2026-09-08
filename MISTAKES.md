@@ -14,6 +14,32 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-09 — the round-3 lexer silently discarded heredoc commands (PR #122 G01)
+
+**What happened.** The fourth re-review found that the `lexShellCommands`
+rewrite from the previous round (a) dropped the introducing command of a
+heredoc entirely, so a bad flag in the real agent-template headers
+(`triss coder run --stdin --isolate <<'TASK'`) passed unverified, and (b)
+stored the delimiter WITH its syntax quotes (`'TASK'`), which never
+matched the bare terminator line, silently swallowing every following
+command in the fence. A `#` mid-word (`C#`) also opened a comment and
+truncated the argument list. Additionally, running the full `npm run
+check` with `TRISS_UPDATE_CHECK=0` (copied from the review's doc-only
+harness) self-inflicted 6 MCP lifecycle failures — the env var disables
+the update path under test at `src/mcp/server.js:278`.
+
+**Root cause.** When a lexer consumes a shell construct it must still
+emit the command's own argv and normalize away only the syntax; that
+invariant had no test for the quoted/unquoted delimiter pair, and the
+harness env leaked into the full-suite invocation.
+
+**Prevention.** Any construct a lexer recognizes needs fixtures in BOTH
+spellings that reach it (quoted and unquoted) asserting the command is
+checked, plus a termination assertion (unterminated construct is a
+diagnostic, never a silent skip); copy env vars from a harness snippet
+only into that harness, and re-run the full suite with the bare script
+environment before reporting green.
+
 ## 2026-09-09 — validators drifted from real Commander and CommonMark (PR #122 V01/V02)
 
 **What happened.** The third re-review of the docs PR found two drift
