@@ -34,8 +34,8 @@ import { fileURLToPath } from 'node:url';
 import {
   collectCliFacts,
   extractRunnableFences,
-  joinContinuations,
-  splitShellSegments,
+  lexShellCommands,
+  parseCliInvocation,
   stripPrompt,
   trissInvocationTokens,
   validateRunnableExamples,
@@ -92,10 +92,6 @@ function classifyPathsValue(packageRoot, token) {
   return statSync(resolved).isDirectory() ? 'directory' : 'file';
 }
 
-function flagsForPathCheck(facts, pathKey) {
-  return facts.get(pathKey) ?? null;
-}
-
 async function findStalePathRecommendations(packageRoot) {
   const findings = [];
   // The facts anchor the example checks to the real CLI tree of the current
@@ -114,19 +110,19 @@ async function findStalePathRecommendations(packageRoot) {
     }
     for (const fence of extractRunnableFences(text)) {
       // +1: fence.startLine is the ``` open line; content starts one later.
-      for (const line of joinContinuations(fence.lines, fence.startLine + 1)) {
-        for (const tokens of splitShellSegments(line.text)) {
-          const args = trissInvocationTokens(stripPrompt(tokens));
-          if (!args) continue;
-          const { optionValues } = parseInvocationOptions(facts, args);
-          for (const value of optionValues.get('paths') ?? []) {
-            const kind = classifyPathsValue(packageRoot, value);
-            if (kind === 'directory') {
-              findings.push(
-                `${rel}:${line.startLine}: runnable example recommends a bare directory input ` +
-                  `\`--paths ${value}\`; directories are not read recursively`,
-              );
-            }
+      const { commands } = lexShellCommands(fence.lines, fence.startLine + 1);
+      for (const command of commands) {
+        if (command.unsupported) continue; // unsupported shell construct: not verified
+        const args = trissInvocationTokens(stripPrompt(command.tokens));
+        if (!args) continue;
+        const { optionValues } = parseInvocationOptions(facts, args);
+        for (const value of optionValues.get('paths') ?? []) {
+          const kind = classifyPathsValue(packageRoot, value);
+          if (kind === 'directory') {
+            findings.push(
+              `${rel}:${command.startLine}: runnable example recommends a bare directory input ` +
+                `\`--paths ${value}\`; directories are not read recursively`,
+            );
           }
         }
       }
@@ -135,85 +131,18 @@ async function findStalePathRecommendations(packageRoot) {
   return findings;
 }
 
-// Reuse the checker's exact consumption grammar (review C01/C04) so the
-// --paths values inspected here are the values the real CLI would bind.
+// Bind `--paths` values through the SAME parse-only Commander result the
+// docs checker uses (review V01): the values inspected here are exactly the
+// values the real CLI would bind — no second hand-rolled grammar.
 function parseInvocationOptions(facts, tokens) {
   const optionValues = new Map();
-  let key = '';
-  let i = 0;
-  while (i < tokens.length) {
-    const token = tokens[i];
-    if (token.startsWith('-')) break;
-    const candidate = key ? `${key} ${token}` : token;
-    if (!flagsForPathCheck(facts, candidate)) break;
-    key = candidate;
-    i += 1;
-  }
-  const command = flagsForPathCheck(facts, key);
-  if (!command) return { optionValues };
-  const record = (name, value) => {
-    if (!optionValues.has(name)) optionValues.set(name, []);
-    optionValues.get(name).push(value);
-  };
-  while (i < tokens.length) {
-    const token = tokens[i];
-    if (token.startsWith('--') && token.length > 2) {
-      const name = token.split('=')[0];
-      const meta = command.options.get(name);
-      if (!meta) {
-        i += 1;
-        continue;
-      }
-      if (token.includes('=')) {
-        record(meta.name, token.slice(token.indexOf('=') + 1));
-        i += 1;
-        continue;
-      }
-      if (!meta.takesValue) {
-        i += 1;
-        continue;
-      }
-      i += 1;
-      if (i >= tokens.length) break;
-      record(meta.name, tokens[i]);
-      i += 1;
-      if (meta.variadic) {
-        while (i < tokens.length && !tokens[i].startsWith('-')) {
-          record(meta.name, tokens[i]);
-          i += 1;
-        }
-      }
-      continue;
-    }
-    if (token.startsWith('-') && token.length > 1) {
-      const name = token.split('=')[0];
-      const meta = command.options.get(name);
-      if (!meta) {
-        i += 1;
-        continue;
-      }
-      if (token.includes('=')) {
-        record(meta.name, token.slice(token.indexOf('=') + 1));
-        i += 1;
-        continue;
-      }
-      if (!meta.takesValue) {
-        i += 1;
-        continue;
-      }
-      i += 1;
-      if (i >= tokens.length) break;
-      record(meta.name, tokens[i]);
-      i += 1;
-      if (meta.variadic) {
-        while (i < tokens.length && !tokens[i].startsWith('-')) {
-          record(meta.name, tokens[i]);
-          i += 1;
-        }
-      }
-      continue;
-    }
-    i += 1;
+  const { status, options } = parseCliInvocation({
+    integrations: facts.integrations,
+    argv: tokens,
+  });
+  if (status !== 'command') return { optionValues };
+  for (const [name, value] of Object.entries(options)) {
+    if (Array.isArray(value)) optionValues.set(name, value);
   }
   return { optionValues };
 }

@@ -23,6 +23,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Command, CommanderError } from 'commander';
 import { buildProgram } from '../src/cli-program.js';
 import { loadIntegrations } from '../src/integrations/_registry.js';
 
@@ -101,17 +102,22 @@ function optionVariadic(opt) {
 // WITHOUT bootstrap side effects. Async because manifest discovery reads the
 // integrations directory; callers await it (the CLI main, the reference
 // generator, and the contract tests).
-export async function collectCliFacts({ root = REPO_ROOT } = {}) {
-  // A tree without integrations still validates its core commands.
-  let integrations;
-  try {
-    integrations = await loadIntegrations({
-      dir: join(root, 'src', 'integrations'),
-      bootstrap: false,
-    });
-  } catch {
-    integrations = [];
+//
+// Discovery errors propagate: a broken manifest or a missing integrations
+// directory must fail the check loudly instead of silently shrinking the
+// audited tree to core-only commands (review V01).
+export class CliFacts extends Map {
+  constructor(entries, integrations) {
+    super(entries);
+    this.integrations = integrations;
   }
+}
+
+export async function collectCliFacts({ root = REPO_ROOT } = {}) {
+  const integrations = await loadIntegrations({
+    dir: join(root, 'src', 'integrations'),
+    bootstrap: false,
+  });
   const program = buildProgram({ integrations });
   const commands = new Map(); // "coder run" -> { options, subcommands, args }
 
@@ -141,7 +147,7 @@ export async function collectCliFacts({ root = REPO_ROOT } = {}) {
   };
 
   addCommand(program, []);
-  return commands;
+  return new CliFacts(commands, integrations);
 }
 
 function flagsForPath(facts, pathKey) {
@@ -150,90 +156,192 @@ function flagsForPath(facts, pathKey) {
 
 // --- Shell lexing -----------------------------------------------------------
 
-// Tokenize one shell command segment, honoring single/double quotes and
-// backslash escapes. Returns the tokens plus the un-lexed remainder after
-// the first unquoted separator (&&, ||, |, ;) or unquoted comment (#).
-function lexSegment(text) {
-  const tokens = [];
+// One stateful pass over a runnable fence's raw lines. Understands single and
+// double quotes, backslash escapes and line continuations, unquoted comments
+// (to end of line), and the unquoted separators ; | && || & — quote state is
+// tracked across physical lines, so a newline inside an open quote continues
+// the SAME command and the SAME argument value (review V01: a quoted newline
+// must not split one command in two, and prompt text like
+// `triss chat "…\ntriss coder status"` must not become a runnable command).
+//
+// Returns:
+//   commands: [{ tokens, startLine, endLine, unsupported }]
+//   issues:   [{ line, message }] — an unterminated quote at fence end.
+//
+// A command containing an unsupported construct (command substitution
+// `$(…)`/backticks, a heredoc) is marked `unsupported`: it is skipped by the
+// validator as explicitly NOT verified, never half-validated. No shell is
+// executed, no env or substitution is expanded.
+export function lexShellCommands(rawLines, startLine) {
+  const commands = [];
+  const issues = [];
+  let tokens = [];
   let current = '';
   let hasToken = false;
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (inSingle) {
-      if (char === "'") inSingle = false;
-      else current += char;
-      continue;
+  let quote = null; // null | "'" | '"'
+  let comment = false;
+  let unsupported = false;
+  let continuation = false; // unquoted trailing backslash (or inside double quotes)
+  let heredocDelimiter = null;
+  let currentStart = 0;
+
+  const flushToken = () => {
+    if (hasToken) tokens.push(current);
+    current = '';
+    hasToken = false;
+  };
+  const flushCommand = (offset) => {
+    flushToken();
+    if (tokens.length) {
+      commands.push({
+        tokens,
+        startLine: startLine + currentStart,
+        endLine: startLine + offset,
+        unsupported,
+      });
     }
-    if (inDouble) {
-      if (char === '\\') {
-        const next = text[i + 1];
-        if (next !== undefined && '$`"\\\n'.includes(next)) {
-          current += next === '\n' ? '' : next;
-          i += 1;
-        } else {
-          current += char;
-        }
+    tokens = [];
+    unsupported = false;
+    currentStart = offset;
+  };
+
+  rawLines.forEach((raw, offset) => {
+    if (heredocDelimiter !== null) {
+      if (raw.trim() === heredocDelimiter) heredocDelimiter = null;
+      return;
+    }
+    // A command that has not begun yet starts on THIS physical line.
+    if (!hasToken && tokens.length === 0 && quote === null && !comment && !continuation) {
+      currentStart = offset;
+    }
+    for (let i = 0; i < raw.length; i += 1) {
+      const char = raw[i];
+      if (comment) continue;
+      if (quote === "'") {
+        if (char === "'") quote = null;
+        else current += char;
         continue;
       }
-      if (char === '"') inDouble = false;
-      else current += char;
-      continue;
-    }
-    if (char === "'") {
-      inSingle = true;
-      hasToken = true;
-      continue;
-    }
-    if (char === '"') {
-      inDouble = true;
-      hasToken = true;
-      continue;
-    }
-    if (char === '\\') {
-      const next = text[i + 1];
-      if (next !== undefined) {
+      if (quote === '"') {
+        if (char === '\\') {
+          const next = raw[i + 1];
+          if (next === undefined) {
+            // Backslash-newline continues the line inside double quotes too.
+            continuation = true;
+            break;
+          }
+          if ('$`"\\'.includes(next)) {
+            current += next;
+            i += 1;
+          } else {
+            current += char;
+          }
+          continue;
+        }
+        if (char === '"') {
+          quote = null;
+          continue;
+        }
+        current += char;
+        continue;
+      }
+      // unquoted
+      if (char === '\\') {
+        const next = raw[i + 1];
+        if (next === undefined) {
+          continuation = true; // backslash-newline pair is removed
+          break;
+        }
         current += next;
         hasToken = true;
         i += 1;
+        continue;
       }
-      continue;
+      if (char === "'" || char === '"') {
+        quote = char;
+        hasToken = true;
+        continue;
+      }
+      if (char === ' ' || char === '\t') {
+        flushToken();
+        continue;
+      }
+      if (char === '#') {
+        comment = true;
+        flushToken();
+        continue;
+      }
+      if (char === ';') {
+        flushCommand(offset);
+        continue;
+      }
+      if (char === '&') {
+        if (raw[i + 1] === '&') i += 1;
+        flushCommand(offset);
+        continue;
+      }
+      if (char === '|') {
+        if (raw[i + 1] === '|') i += 1;
+        flushCommand(offset);
+        continue;
+      }
+      if (char === '$' && raw[i + 1] === '(') {
+        unsupported = true;
+        current += char;
+        hasToken = true;
+        continue;
+      }
+      if (char === '`') {
+        unsupported = true;
+        current += char;
+        hasToken = true;
+        continue;
+      }
+      if (char === '<' && raw[i + 1] === '<') {
+        // Heredoc: the following lines are the heredoc body, not commands.
+        // Drop everything accumulated for the introducing command.
+        const rest = raw.slice(i + 2).trim();
+        if (rest) heredocDelimiter = rest;
+        tokens = [];
+        current = '';
+        hasToken = false;
+        break;
+      }
+      current += char;
+      hasToken = true;
     }
-    if (char === ' ' || char === '\t' || char === '\n') {
-      if (hasToken) tokens.push(current);
-      current = '';
-      hasToken = false;
-      continue;
+    // End of physical line: the state decides whether the command continues.
+    if (heredocDelimiter !== null) return;
+    if (comment) {
+      comment = false;
+      flushCommand(offset);
+      continuation = false;
+      return;
     }
-    if (char === '#') break; // unquoted comment ends the segment
-    if (char === '&' && text[i + 1] === '&') {
-      if (hasToken) tokens.push(current);
-      return { tokens, rest: text.slice(i + 2) };
+    if (quote === "'") {
+      current += '\n'; // literal newline stays part of the value
+      continuation = false;
+      return;
     }
-    if (char === '|' || char === ';') {
-      if (hasToken) tokens.push(current);
-      return { tokens, rest: text.slice(i + 1) };
+    if (quote === '"') {
+      if (!continuation) current += '\n';
+      continuation = false;
+      return;
     }
-    current += char;
-    hasToken = true;
+    if (continuation) {
+      continuation = false; // next physical line continues this command
+      return;
+    }
+    flushCommand(offset);
+  });
+  if (quote !== null) {
+    issues.push({
+      line: startLine + Math.max(rawLines.length - 1, 0),
+      message: 'unterminated quote at the end of the example — the command is incomplete',
+    });
   }
-  if (hasToken) tokens.push(current);
-  return { tokens, rest: '' };
-}
-
-// Split one logical line into command segments at shell separators that sit
-// outside quotes. Text inside "..." or '...' never becomes a new command.
-export function splitShellSegments(line) {
-  const segments = [];
-  let rest = line;
-  for (;;) {
-    const { tokens, rest: remainder } = lexSegment(rest);
-    if (tokens.length) segments.push(tokens);
-    if (!remainder) break;
-    rest = remainder;
-  }
-  return segments;
+  flushCommand(Math.max(rawLines.length - 1, 0));
+  return { commands, issues };
 }
 
 // Strip a leading interactive prompt ($, %, >) from a console segment
@@ -305,256 +413,146 @@ export function extractRunnableFences(text) {
   return fences.filter((fence) => fence.runnable && !fence.skipped);
 }
 
-// Join physical lines into logical shell lines, honoring an unquoted
-// trailing backslash. Returns [{ text, startLine }].
-export function joinContinuations(rawLines, startLine) {
-  const logical = [];
-  let pending = null;
-  let pendingStart = 0;
-  rawLines.forEach((raw, offset) => {
-    const line = pending === null ? raw : `${pending}\n${raw}`;
-    let inSingle = false;
-    let inDouble = false;
-    let continues = false;
-    for (let i = 0; i < line.length; i += 1) {
-      const char = line[i];
-      if (inSingle) {
-        if (char === "'") inSingle = false;
-        continue;
-      }
-      if (inDouble) {
-        if (char === '\\') {
-          const next = line[i + 1];
-          if (next === undefined || next === '\n') {
-            // A backslash-newline inside double quotes still continues the
-            // logical line (review C01): track quote state across physical
-            // lines instead of dropping the tail.
-            continues = true;
-            break;
-          }
-          i += 1;
-        } else if (char === '"') inDouble = false;
-        continue;
-      }
-      if (char === "'") inSingle = true;
-      else if (char === '"') inDouble = true;
-      else if (char === '\\') {
-        const next = line[i + 1];
-        if (next === undefined || next === '\n') {
-          continues = true;
-          break;
-        }
-        i += 1;
-      }
-    }
-    if (continues) {
-      if (pending === null) pendingStart = startLine + offset;
-      // Drop exactly one trailing backslash (plus a joined newline if the
-      // break came from inside a quoted continuation).
-      pending = line.endsWith('\\') ? line.slice(0, -1) : line.replace(/\\\n$/, '');
-      return;
-    }
-    logical.push({ text: line, startLine: pending === null ? startLine + offset : pendingStart });
-    pending = null;
-  });
-  if (pending !== null) logical.push({ text: pending, startLine: pendingStart });
-  return logical;
+// --- Parse-only Commander ---------------------------------------------------
+
+// A parse-only Command tree: the exact registered declarations, but
+// `.action()` registers only a tracker and `.hook()` registers nothing, so a
+// successful parse can never execute work. Output is suppressed and
+// exitOverride turns help, version, and parse errors into catchable
+// CommanderError values. Child commands are created through the overridden
+// `createCommand`, so the whole tree — including integration-registered
+// subcommands — is inert (review V01).
+class ParseOnlyCommand extends Command {
+  constructor(name, state) {
+    super(name);
+    this.__parseOnlyState = state;
+    this.configureOutput({ writeOut: () => {}, writeErr: () => {} });
+    this.exitOverride();
+  }
+  createCommand(name) {
+    return new ParseOnlyCommand(name, this.__parseOnlyState);
+  }
+  action(_fn) {
+    const state = this.__parseOnlyState;
+    return super.action(() => {
+      state.actions.push(this);
+    });
+  }
+  hook(_event, _listener) {
+    return this;
+  }
 }
 
-// True when a fence's raw content ENDS inside an unterminated single or
-// double quote — a partial command that must not be silently accepted.
-// Quotes legitimately span physical lines (multi-line '…' shell strings,
-// documented node -e snippets), so the state is tracked across the whole
-// fence, with unquoted `#` starting a comment that ends at the newline and
-// backslash-newline continuing the line in and out of double quotes.
-export function fenceHasUnterminatedQuote(rawLines) {
-  let inSingle = false;
-  let inDouble = false;
-  for (const line of rawLines) {
-    for (let i = 0; i < line.length; i += 1) {
-      const char = line[i];
-      if (inSingle) {
-        if (char === '\'') inSingle = false;
-        continue;
+// Help and version displays are informational results, not syntax errors;
+// Commander reports them as CommanderError with exit code 0 (bare `triss`
+// help with exit 1 is still a help display, never a doc finding).
+const INFORMATIONAL_CODES = new Set(['commander.help', 'commander.helpDisplayed', 'commander.version']);
+
+// Documented synopsis convention: a bracketed flag token like `[--all]`
+// denotes an optional flag, not a literal positional argument.
+function normalizeSynopsisFlags(tokens) {
+  return tokens.map((token) => {
+    const synopsis = token.match(/^\[(--[^\]]+)\]$/);
+    return synopsis ? synopsis[1] : token;
+  });
+}
+
+// Parse ONE documented invocation (tokens after the `triss` literal, or the
+// full argument list after the bin path in the node form) against a FRESH
+// parse-only Commander tree, and return the shared parse result used by both
+// the docs checker and the packaged-docs validator:
+//   { status: 'command', command, options, positionals } — parse succeeded;
+//     `command` is the tracked invoked command, `options` its bound values.
+//   { status: 'help' | 'version' }                       — informational.
+//   { status: 'error', message }                         — parse diagnostic.
+// Option grammar (long/short forms, attached values, variadic consumption,
+// `--`, mandatory options/arguments) is Commander's own — never duplicated.
+export function parseCliInvocation({ integrations, argv }) {
+  const state = { actions: [] };
+  const program = buildProgram({
+    integrations,
+    commandFactory: () => new ParseOnlyCommand(undefined, state),
+  });
+  try {
+    program.parse(argv, { from: 'user' });
+    const command = state.actions[state.actions.length - 1] ?? program;
+    return {
+      status: 'command',
+      command,
+      options: command.opts(),
+      positionals: [...command.args],
+    };
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      if (INFORMATIONAL_CODES.has(error.code)) {
+        return { status: error.code === 'commander.version' ? 'version' : 'help' };
       }
-      if (inDouble) {
-        if (char === '\\') {
-          i += 1; // inside double quotes a backslash escapes the next char
-          continue;
-        }
-        if (char === '"') inDouble = false;
-        continue;
-      }
-      if (char === '#') break; // comment to end of line
-      if (char === '\'') inSingle = true;
-      else if (char === '"') inDouble = true;
-      else if (char === '\\') i += 1;
+      return { status: 'error', message: error.message.replace(/^error: /, '') };
     }
+    throw error;
   }
-  return inSingle || inDouble;
+}
+
+// Validate one triss invocation against the registered CLI tree. Help and
+// version parse as informational; any other Commander diagnostic is a
+// finding. Nothing is executed: actions are trackers, hooks are dropped, and
+// integration manifests load with bootstrap: false.
+export function checkInvocation(facts, tokens) {
+  if (tokens.length === 0) return [];
+  if (tokens[0] === '<command>') return []; // documented integration placeholder
+  const result = parseCliInvocation({
+    integrations: facts.integrations,
+    argv: normalizeSynopsisFlags(tokens),
+  });
+  return result.status === 'error' ? [result.message] : [];
 }
 
 // --- Validation ------------------------------------------------------------
 
-export const INTEGRATION_COMMAND_NAMES = new Set(['jira', 'linear', 'github', 'gitlab', 'confluence']);
 const UNIVERSAL_OPTIONS = new Set(['--help', '-h', '--version', '-V']);
 
-// Validate one triss invocation (tokens after the `triss` literal) against
-// the registered CLI tree: command path, option names, value arity, and
-// mandatory option presence.
-export function checkInvocation(facts, tokens) {
-  const errors = [];
-  let key = '';
-  let i = 0;
-
-  // Commander short-circuits on the help flag before any requirement
-  // validation, so a documented `--help` example validates cleanly.
-  if (tokens.includes('--help') || tokens.includes('-h')) return errors;
-
-  while (i < tokens.length) {
-    const token = tokens[i];
-    if (token.startsWith('-')) break;
-    if (token === '<command>') return errors; // documented integration placeholder
-    const candidate = key ? `${key} ${token}` : token;
-    if (!flagsForPath(facts, candidate)) break;
-    key = candidate;
-    i += 1;
-  }
-
-  const command = flagsForPath(facts, key);
-  if (!command) {
-    errors.push(`unknown command \`triss ${tokens.slice(0, i + 1).join(' ')}\``);
-    return errors;
-  }
-
-  const seenOptions = new Set(); // deduped by canonical option name
-  let positionalCount = 0;
-  const variadicPositional = command.args.some((arg) => arg.variadic);
-  const maxPositionals = variadicPositional ? Number.POSITIVE_INFINITY : command.args.length;
-  const minPositionals = command.args.filter((arg) => arg.required).length;
-
-  // One grammar for long and short forms, matching the Commander parse of
-  // the registered declarations: a value-taking option consumes the next
-  // token unconditionally (even if it starts with a dash); a variadic
-  // option continues consuming until the next dash token.
-  const consumeOption = (name, token) => {
-    const meta = command.options.get(name);
-    if (!meta) {
-      if (!UNIVERSAL_OPTIONS.has(name)) {
-        errors.push(`unknown option \`${name}\` for \`triss ${key}\``);
-      }
-      i += 1;
-      return;
-    }
-    seenOptions.add(meta.name);
-    if (token.includes('=') || !meta.takesValue) {
-      i += 1;
-      return;
-    }
-    i += 1;
-    if (i >= tokens.length) {
-      errors.push(`option \`${name}\` for \`triss ${key}\` requires a value`);
-      return;
-    }
-    i += 1; // the value token, whatever it starts with
-    if (meta.variadic) {
-      while (i < tokens.length && !tokens[i].startsWith('-')) i += 1;
-    }
-  };
-
-  while (i < tokens.length) {
-    const token = tokens[i];
-    if ((token.startsWith('--') && token.length > 2) || (token.startsWith('-') && token.length > 1)) {
-      consumeOption(token.split('=')[0], token);
-      continue;
-    }
-    // Documented synopsis convention: a bracketed flag token like `--all`
-    // in `[--all]` denotes an optional flag, not a positional argument.
-    const synopsisFlag = token.match(/^\[(--[^\]]+)\]$/);
-    if (synopsisFlag) {
-      const meta = command.options.get(synopsisFlag[1]);
-      if (!meta && !UNIVERSAL_OPTIONS.has(synopsisFlag[1])) {
-        errors.push(`unknown option \`${synopsisFlag[1]}\` for \`triss ${key}\``);
-      }
-      if (meta) seenOptions.add(meta.name);
-      i += 1;
-      continue;
-    }
-    if (positionalCount >= maxPositionals) {
-      if (command.subcommands.size > 0) {
-        errors.push(
-          `unknown argument \`${token}\` for \`triss ${key}\` — \`triss ${key} ${token}\` is not a registered command path`,
-        );
-      } else {
-        errors.push(`unexpected argument \`${token}\` for \`triss ${key}\``);
-      }
-      i += 1;
-      continue;
-    }
-    positionalCount += 1;
-    i += 1;
-  }
-
-  if (positionalCount < minPositionals) {
-    const missing = command.args.filter((arg) => arg.required)[positionalCount];
-    errors.push(`\`triss ${key}\` requires the mandatory argument \`<${missing.name}>\``);
-  }
-
-  const reportedMandatory = new Set();
-  for (const opt of command.options.values()) {
-    if (!opt.mandatory || seenOptions.has(opt.name) || reportedMandatory.has(opt.name)) continue;
-    reportedMandatory.add(opt.name);
-    const longToken = [...opt.tokens].find((token) => token.startsWith('--')) ?? [...opt.tokens][0];
-    errors.push(`\`triss ${key}\` requires the mandatory option \`${longToken}\``);
-  }
-
-  return errors;
-}
 export function validateRunnableExamples(facts, text) {
   const findings = [];
   for (const fence of extractRunnableFences(text)) {
-    if (fenceHasUnterminatedQuote(fence.lines)) {
-      findings.push({
-        startLine: fence.startLine + fence.lines.length,
-        message: 'unterminated quote at the end of the example — the command is incomplete',
-      });
-    }
     // +1: fence.startLine is the ``` open line; content starts one later.
-    for (const line of joinContinuations(fence.lines, fence.startLine + 1)) {
-      let sawTriss = false;
-      for (const tokens of splitShellSegments(line.text)) {
-        const prompted = stripPrompt(tokens);
-        const args = trissInvocationTokens(prompted);
-        if (args) {
-          sawTriss = true;
-          for (const message of checkInvocation(facts, args)) {
-            findings.push({ startLine: line.startLine, message });
-          }
-          continue;
+    const { commands, issues } = lexShellCommands(fence.lines, fence.startLine + 1);
+    for (const issue of issues) {
+      findings.push({ startLine: issue.line, message: issue.message });
+    }
+    let sawTriss = false;
+    for (const command of commands) {
+      if (command.unsupported) continue; // unsupported shell construct: NOT verified
+      const prompted = stripPrompt(command.tokens);
+      const args = trissInvocationTokens(prompted);
+      if (args) {
+        sawTriss = true;
+        for (const message of checkInvocation(facts, args)) {
+          findings.push({ startLine: command.startLine, message });
         }
-        if (!fence.legendPath && sawTriss && prompted[0]?.startsWith('-')) {
-          // Shell alternatives like `--local|--global` split into an orphan
-          // option segment that was never validated as a full command.
-          findings.push({
-            startLine: line.startLine,
-            message: `orphan option segment \`${prompted.join(' ')}\` — write syntax alternatives as separate, complete examples`,
-          });
-          continue;
-        }
-        if (fence.legendPath) {
-          const command = flagsForPath(facts, fence.legendPath);
-          if (!command) continue; // command validity is reported by invocations
-          const first = prompted[0];
-          if (first && first.startsWith('--')) {
-            const name = first.split('=')[0].replace(/^\[|\]$/g, '');
-            if (!command.options.has(name) && !UNIVERSAL_OPTIONS.has(name)) {
-              findings.push({
-                startLine: line.startLine,
-                message: `unknown documented option \`${name}\` for \`triss ${fence.legendPath}\``,
-              });
-            }
+        continue;
+      }
+      if (fence.legendPath) {
+        const commandEntry = flagsForPath(facts, fence.legendPath);
+        if (!commandEntry) continue; // command validity is reported by invocations
+        const first = prompted[0];
+        if (first && first.startsWith('--')) {
+          const name = first.split('=')[0].replace(/^\[|\]$/g, '');
+          if (!commandEntry.options.has(name) && !UNIVERSAL_OPTIONS.has(name)) {
+            findings.push({
+              startLine: command.startLine,
+              message: `unknown documented option \`${name}\` for \`triss ${fence.legendPath}\``,
+            });
           }
         }
+        continue;
+      }
+      if (sawTriss && prompted[0]?.startsWith('-')) {
+        // Shell alternatives like `--local|--global` split into an orphan
+        // option segment that was never validated as a full command.
+        findings.push({
+          startLine: command.startLine,
+          message: `orphan option segment \`${prompted.join(' ')}\` — write syntax alternatives as separate, complete examples`,
+        });
       }
     }
   }

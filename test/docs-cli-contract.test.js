@@ -31,7 +31,8 @@ import { COMMANDS } from '../site/src/data/commands.js';
 test('C01: `triss config set` without the mandatory KEY argument is rejected', async () => {
   const facts = await collectCliFacts();
   const findings = validateRunnableExamples(facts, '```bash\ntriss config set\n```');
-  assert.ok(findings.some((finding) => /mandatory argument `<KEY>`/.test(finding.message)), JSON.stringify(findings));
+  // Message is Commander's own diagnostic for a missing required argument.
+  assert.ok(findings.some((finding) => /missing required argument 'KEY'/.test(finding.message)), JSON.stringify(findings));
 });
 
 test('C01: `ask --paths --question x` is rejected the way Commander parses it', async () => {
@@ -235,7 +236,8 @@ test('DOC-CLI-01: the removed `coder status` path is rejected by the checker', a
   const facts = await collectCliFacts();
   const failures = checkInvocation(facts, ['coder', 'status']);
   assert.equal(failures.length, 1, 'coder status must be flagged as a non-existent command path');
-  assert.match(failures[0], /not a registered command path/);
+  // Message is Commander's own unknown-command diagnostic.
+  assert.match(failures[0], /unknown command 'status'/);
 });
 
 test('DOC-CLI-02: the removed `--small-model` flag is rejected by the checker', async () => {

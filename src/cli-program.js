@@ -119,8 +119,12 @@ const PROTECT_HELP =
   'there is no automatic downgrade to raw. An explicit --no-protect-credentials\n' +
   'overrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.';
 
-export function buildProgram({ integrations = [] } = {}) {
-  const program = new Command();
+// `commandFactory` is a test/dev seam for parse-only checkers: it supplies
+// the root Command instance (a subclass can neuter action/hook registration
+// and override createCommand so the whole tree is inert). Production keeps
+// the default `new Command()`; declarations below are shared verbatim.
+export function buildProgram({ integrations = [], commandFactory } = {}) {
+  const program = commandFactory ? commandFactory() : new Command();
   program
     .name('triss')
     .description(packageJson.description)
