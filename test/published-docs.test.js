@@ -183,6 +183,28 @@ test('a removed --small-model recommendation is rejected in one line, in a conti
   }
 });
 
+// G01 (review round 4): the packaged-docs verifier shares the repo lexer, so
+// a bad flag hidden in a heredoc example must be rejected end-to-end through
+// validatePackagedDocs — the same path the release pipeline runs pre-publish.
+test('G01: a bad flag inside a heredoc example is rejected through validatePackagedDocs', async () => {
+  const readme = [
+    '# Triss Coworker',
+    '',
+    '```bash',
+    "triss coder run --stdin --small-model zai/glm-5 <<'TASK'",
+    'Fix the reported defect.',
+    'TASK',
+    '```',
+    '',
+  ].join('\n');
+  const root = makePackageRoot({ readme });
+  const { findings } = await validatePackagedDocs({ packageRoot: root, expectedVersion: '1.0.0' });
+  assert.ok(
+    findings.some((finding) => finding.startsWith('README.md:') && /--small-model/.test(finding)),
+    JSON.stringify(findings, null, 2),
+  );
+});
+
 test('missing files and version drift are reported', async () => {
   const root = mkdtempSync(join(tmpdir(), 'triss-published-docs-'));
   writeFileSync(join(root, 'package.json'), JSON.stringify({

@@ -13,9 +13,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { runAskWithDeps } from '../src/commands/ask.js';
 import {
   checkRepositoryDocs,
@@ -147,6 +148,138 @@ test('V01: a variadic option rejects an attached first value (documented non-beh
     '```bash\ntriss ask --paths=README.md SECURITY.md -q x\n```',
   );
   assert.ok(findings.length >= 1, 'must stay rejected exactly as Commander rejects it');
+});
+
+// G01 fixtures (review round 4): the lexer must not hide checkable commands
+// behind a heredoc. The introducing command's own words stay in argv and are
+// validated; the body is skipped only up to its REAL delimiter (quotes in
+// `<<'TASK'`/`<<"TASK"` are syntax, not part of the delimiter word); a fence
+// that ends inside a heredoc is a diagnostic, and a command following a
+// completed heredoc is parsed again.
+
+test('G01: an unknown flag in a single-quoted heredoc header is rejected', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    "```bash\ntriss coder run --stdin --small-model x <<'TASK'\nTask body\nTASK\n```",
+  );
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: an unknown flag in a double-quoted heredoc header is rejected', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    '```bash\ntriss coder run --stdin --small-model x <<"TASK"\nTask body\nTASK\n```',
+  );
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: an unknown flag in a plain heredoc header is rejected', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    '```bash\ntriss coder run --stdin --small-model x <<TASK\nTask body\nTASK\n```',
+  );
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: a valid quoted heredoc header is verified and its body is not commands', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    "```bash\ncat <<'TASK'\ntriss coder status\ntriss coder run --isolate\nTASK\n```",
+  );
+  assert.deepEqual(
+    findings,
+    [],
+    `heredoc body lines must not become runnable commands: ${JSON.stringify(findings)}`,
+  );
+});
+
+test('G01: a command after a completed quoted heredoc is parsed again', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    "```bash\ncat <<'TASK'\nTask body\nTASK\ntriss coder run task --small-model x\n```",
+  );
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: a `<<-` heredoc terminator allows leading tabs', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    "```bash\ncat <<-'TASK'\n\tTask body\n\tTASK\ntriss coder run task --small-model x\n```",
+  );
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: a heredoc that never terminates inside the fence is a diagnostic', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    "```bash\ntriss coder run --stdin <<'TASK'\nTask body without an end\n```",
+  );
+  assert.ok(findings.length >= 1, 'an unterminated heredoc must not pass silently');
+  assert.match(findings[0].message, /unterminated heredoc/);
+  assert.match(findings[0].message, /TASK/, 'the diagnostic must name the missing delimiter');
+});
+
+test('G01: a `#` inside a started word is a literal character, not a comment', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(facts, '```bash\ntriss chat C# --small-model x\n```');
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+});
+
+test('G01: a real comment after a word separator is still not part of the command', async () => {
+  const facts = await collectCliFacts();
+  assert.deepEqual(
+    validateRunnableExamples(facts, '```bash\ntriss chat ok # clarify below\n```'),
+    [],
+  );
+});
+
+test('G01: an uncheckable triss example is reported, never a silent skip', async () => {
+  const facts = await collectCliFacts();
+  const substitution = validateRunnableExamples(
+    facts,
+    '```bash\ntriss chat $(build-prompt) --small-model x\n```',
+  );
+  assert.ok(
+    substitution.some((finding) => /cannot verify the triss example/.test(finding.message)),
+    `command substitution must surface as unverified: ${JSON.stringify(substitution)}`,
+  );
+  const hereString = validateRunnableExamples(facts, '```bash\ntriss chat <<< "text"\n```');
+  assert.ok(
+    hereString.some((finding) => /cannot verify the triss example/.test(finding.message)),
+    `here-strings must surface as unverified: ${JSON.stringify(hereString)}`,
+  );
+});
+
+test('G01: a mutated heredoc header in each real agent template is detected', async () => {
+  const facts = await collectCliFacts();
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  for (const rel of ['templates/claude-full.md', 'templates/codex-full.md']) {
+    const text = readFileSync(join(root, rel), 'utf8');
+    // The real fence must exist — a missing example must fail this test
+    // loudly instead of degrading it into a vacuous loop.
+    assert.match(
+      text,
+      /^triss coder run --stdin --isolate <<'TASK'$/m,
+      `${rel} must contain the documented heredoc example`,
+    );
+    const mutated = text.replace(
+      /^triss coder run --stdin --isolate <<'TASK'$/m,
+      "triss coder run --stdin --isolate --small-model zai/glm-5 <<'TASK'",
+    );
+    assert.notEqual(mutated, text, `the ${rel} mutation must change the text`);
+    const findings = validateRunnableExamples(facts, mutated);
+    assert.ok(
+      findings.some((finding) => /--small-model/.test(finding.message)),
+      `${rel}: the mutated heredoc header must be rejected: ${JSON.stringify(findings)}`,
+    );
+  }
 });
 
 test('C01: parse-only validation never runs actions, bootstrap, or engines', async () => {

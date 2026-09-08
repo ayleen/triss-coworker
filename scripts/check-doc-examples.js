@@ -158,31 +158,36 @@ function flagsForPath(facts, pathKey) {
 
 // One stateful pass over a runnable fence's raw lines. Understands single and
 // double quotes, backslash escapes and line continuations, unquoted comments
-// (to end of line), and the unquoted separators ; | && || & — quote state is
+// (only OUTSIDE a started word — review G01: `C#` is an argument, ` #` opens
+// a comment), and the unquoted separators ; | && || & — quote state is
 // tracked across physical lines, so a newline inside an open quote continues
-// the SAME command and the SAME argument value (review V01: a quoted newline
-// must not split one command in two, and prompt text like
-// `triss chat "…\ntriss coder status"` must not become a runnable command).
+// the SAME command and the SAME argument value (review V01).
+//
+// Heredocs (review G01): `<<`, `<<-`, `<<'WORD'`, and `<<"WORD"` introduce a
+// body that is skipped until a line equal to the delimiter word (`<<-`
+// compares after stripping leading tabs). The introducing command's own
+// words STAY in argv and are validated — only the redirection word itself is
+// dropped; the body is never parsed as commands.
 //
 // Returns:
-//   commands: [{ tokens, startLine, endLine, unsupported }]
-//   issues:   [{ line, message }] — an unterminated quote at fence end.
-//
-// A command containing an unsupported construct (command substitution
-// `$(…)`/backticks, a heredoc) is marked `unsupported`: it is skipped by the
-// validator as explicitly NOT verified, never half-validated. No shell is
-// executed, no env or substitution is expanded.
+//   commands:   [{ tokens, startLine, endLine, unsupported, reason? }]
+//   issues:     [{ line, message }] — unterminated quote or heredoc at fence end.
+//   unverified: [{ startLine, endLine, reason, tokens }] — commands skipped as
+//               explicitly NOT verified (substitutions, here-strings). No
+//               shell is executed, no env or substitution is expanded.
 export function lexShellCommands(rawLines, startLine) {
   const commands = [];
   const issues = [];
+  const unverified = [];
   let tokens = [];
   let current = '';
   let hasToken = false;
   let quote = null; // null | "'" | '"'
   let comment = false;
   let unsupported = false;
+  let unsupportedReason = null;
   let continuation = false; // unquoted trailing backslash (or inside double quotes)
-  let heredocDelimiter = null;
+  let heredocs = []; // pending terminators in order: { delim, stripTabs, startOffset }
   let currentStart = 0;
 
   const flushToken = () => {
@@ -193,21 +198,36 @@ export function lexShellCommands(rawLines, startLine) {
   const flushCommand = (offset) => {
     flushToken();
     if (tokens.length) {
-      commands.push({
+      const command = {
         tokens,
         startLine: startLine + currentStart,
         endLine: startLine + offset,
         unsupported,
-      });
+      };
+      if (unsupported) {
+        command.reason = unsupportedReason;
+        unverified.push({
+          startLine: command.startLine,
+          endLine: command.endLine,
+          reason: unsupportedReason,
+          tokens,
+        });
+      }
+      commands.push(command);
     }
     tokens = [];
     unsupported = false;
+    unsupportedReason = null;
     currentStart = offset;
   };
 
   rawLines.forEach((raw, offset) => {
-    if (heredocDelimiter !== null) {
-      if (raw.trim() === heredocDelimiter) heredocDelimiter = null;
+    // Heredoc body: consumed by the FIRST pending delimiter (`<<-` strips
+    // leading tabs first). A plain `<<` terminator must be the whole line.
+    if (heredocs.length > 0) {
+      const head = heredocs[0];
+      const candidate = head.stripTabs ? raw.replace(/^\t+/, '') : raw;
+      if (candidate === head.delim) heredocs.shift();
       return;
     }
     // A command that has not begun yet starts on THIS physical line.
@@ -267,6 +287,12 @@ export function lexShellCommands(rawLines, startLine) {
         continue;
       }
       if (char === '#') {
+        // A `#` inside a started word is data (`C#`); after a separator it
+        // opens a comment (review G01).
+        if (hasToken) {
+          current += char;
+          continue;
+        }
         comment = true;
         flushToken();
         continue;
@@ -287,31 +313,51 @@ export function lexShellCommands(rawLines, startLine) {
       }
       if (char === '$' && raw[i + 1] === '(') {
         unsupported = true;
+        unsupportedReason = 'unexpanded command substitution $(...)';
         current += char;
         hasToken = true;
         continue;
       }
       if (char === '`') {
         unsupported = true;
+        unsupportedReason = 'unexpanded backtick command substitution';
         current += char;
         hasToken = true;
         continue;
       }
       if (char === '<' && raw[i + 1] === '<') {
-        // Heredoc: the following lines are the heredoc body, not commands.
-        // Drop everything accumulated for the introducing command.
-        const rest = raw.slice(i + 2).trim();
-        if (rest) heredocDelimiter = rest;
-        tokens = [];
-        current = '';
-        hasToken = false;
-        break;
+        if (raw[i + 2] === '<') {
+          // Here-string: no body follows, the construct is just unverifiable.
+          unsupported = true;
+          unsupportedReason = 'here-string redirection (<<<) is not checked';
+          i += 2;
+          continue;
+        }
+        const parsed = parseHeredocWord(raw, i + 2);
+        if (parsed.error) {
+          // `<<` without a delimiter word, or an unterminated quote inside
+          // it: not checkable, but keep parsing the rest of the line.
+          unsupported = true;
+          unsupportedReason = parsed.error;
+          i = parsed.next - 1;
+          continue;
+        }
+        heredocs.push({ delim: parsed.delim, stripTabs: parsed.stripTabs, startOffset: offset });
+        flushToken(); // the redirection word is syntax, not argv
+        i = parsed.next - 1;
+        continue;
       }
       current += char;
       hasToken = true;
     }
     // End of physical line: the state decides whether the command continues.
-    if (heredocDelimiter !== null) return;
+    if (heredocs.length > 0) {
+      // The introducing command ends at this line; the body lines follow.
+      comment = false;
+      continuation = false;
+      flushCommand(offset);
+      return;
+    }
     if (comment) {
       comment = false;
       flushCommand(offset);
@@ -334,6 +380,14 @@ export function lexShellCommands(rawLines, startLine) {
     }
     flushCommand(offset);
   });
+  if (heredocs.length > 0) {
+    issues.push({
+      line: startLine + heredocs[0].startOffset,
+      message:
+        `unterminated heredoc: the "${heredocs[0].delim}" delimiter line never appears ` +
+        'before the end of the example — the command is incomplete',
+    });
+  }
   if (quote !== null) {
     issues.push({
       line: startLine + Math.max(rawLines.length - 1, 0),
@@ -341,7 +395,62 @@ export function lexShellCommands(rawLines, startLine) {
     });
   }
   flushCommand(Math.max(rawLines.length - 1, 0));
-  return { commands, issues };
+  return { commands, issues, unverified };
+}
+
+// Parse ONE heredoc delimiter word starting at `from` (just after `<<` or
+// `<<-`): `WORD`, `'WORD'`, and `"WORD"` (with the usual in-double-quote
+// escapes) all yield the same literal delimiter; quoted and escaped
+// characters concatenate. Whitespace ends the word. Returns
+// { delim, stripTabs, next } or { error } — never runs any expansion.
+function parseHeredocWord(raw, from) {
+  let i = from;
+  const stripTabs = raw[i] === '-';
+  if (stripTabs) i += 1;
+  while (raw[i] === ' ' || raw[i] === '\t') i += 1;
+  let delim = '';
+  let delimQuote = null;
+  for (;;) {
+    const char = raw[i];
+    if (char === undefined) break;
+    if (delimQuote !== null) {
+      if (char === delimQuote) {
+        delimQuote = null;
+        i += 1;
+        continue;
+      }
+      if (delimQuote === '"' && char === '\\' && '$`"\\'.includes(raw[i + 1])) {
+        delim += raw[i + 1];
+        i += 2;
+        continue;
+      }
+      delim += char;
+      i += 1;
+      continue;
+    }
+    if (char === ' ' || char === '\t') break;
+    if (char === "'" || char === '"') {
+      delimQuote = char;
+      i += 1;
+      continue;
+    }
+    if (char === '\\') {
+      const next = raw[i + 1];
+      if (next === undefined) break; // line continuation inside the word: unsupported
+      delim += next;
+      i += 2;
+      continue;
+    }
+    delim += char;
+    i += 1;
+  }
+  if (delim === '') {
+    return { error: 'heredoc redirection without a delimiter word' };
+  }
+  if (delimQuote !== null) {
+    return { error: 'unterminated quote in the heredoc delimiter word' };
+  }
+  return { delim, stripTabs, next: i };
 }
 
 // Strip a leading interactive prompt ($, %, >) from a console segment
@@ -521,7 +630,20 @@ export function validateRunnableExamples(facts, text) {
     }
     let sawTriss = false;
     for (const command of commands) {
-      if (command.unsupported) continue; // unsupported shell construct: NOT verified
+      if (command.unsupported) {
+        // Review G01: an unverifiable construct inside a runnable triss
+        // example must never read as "all checked" — report the reason at
+        // the command's line instead of silently skipping it.
+        if (trissInvocationTokens(stripPrompt(command.tokens))) {
+          findings.push({
+            startLine: command.startLine,
+            message:
+              `cannot verify the triss example: ${command.reason} — rewrite the example ` +
+              'with plain words and quotes, or mark the fence with <!-- doc-examples-skip -->',
+          });
+        }
+        continue;
+      }
       const prompted = stripPrompt(command.tokens);
       const args = trissInvocationTokens(prompted);
       if (args) {
@@ -566,6 +688,7 @@ export function checkDocument(facts, text) {
 export async function checkRepositoryDocs({ root = REPO_ROOT } = {}) {
   const facts = await collectCliFacts({ root });
   const failures = [];
+  const unverifiedAreas = [];
   let fileCount = 0;
   for (const file of collectDocFiles(root)) {
     fileCount += 1;
@@ -573,12 +696,29 @@ export async function checkRepositoryDocs({ root = REPO_ROOT } = {}) {
     for (const finding of validateRunnableExamples(facts, text)) {
       failures.push(`${relative(root, file)}:${finding.startLine}: ${finding.message}`);
     }
+    // Review G01: skipped shell constructs stay visible. Unsupported triss
+    // examples are already failures above; the rest are reported as
+    // non-failing warnings so a fence never looks fully checked when it
+    // contains an area the checker does not understand.
+    for (const fence of extractRunnableFences(text)) {
+      const { unverified } = lexShellCommands(fence.lines, fence.startLine + 1);
+      for (const entry of unverified) {
+        if (trissInvocationTokens(stripPrompt(entry.tokens))) continue;
+        unverifiedAreas.push(`${relative(root, file)}:${entry.startLine}: not verified: ${entry.reason}`);
+      }
+    }
   }
-  return { failures, fileCount };
+  return { failures, fileCount, unverifiedAreas };
 }
 
 function main() {
-  checkRepositoryDocs().then(({ failures, fileCount }) => {
+  checkRepositoryDocs().then(({ failures, fileCount, unverifiedAreas }) => {
+    if (unverifiedAreas.length) {
+      process.stderr.write(
+        `shell constructs not verified by this checker (${unverifiedAreas.length}):\n` +
+          `${unverifiedAreas.join('\n')}\n`,
+      );
+    }
     if (failures.length) {
       process.stderr.write(`${failures.join('\n')}\n`);
       process.exit(1);
