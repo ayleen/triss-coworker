@@ -331,7 +331,7 @@ Usage records preserve provider, model, token-class provenance, billing mode, an
 ## Updates
 
 ```bash
-triss update --check
+triss update
 triss update --apply
 triss update --rollback
 ```

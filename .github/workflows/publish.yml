@@ -587,8 +587,26 @@ jobs:
             ${{ runner.temp }}/audit-signatures.json
           if-no-files-found: error
 
+  documentation-acceptance:
+    # A03.3: verify the DOCUMENTATION a user downloads — packaged README,
+    # security/configuration docs, agent templates, and stale-instruction
+    # markers — from the published registry tarball, on top of the existing
+    # byte-verification. Does not assert dist-tags.latest so re-accepting an
+    # older release stays possible after a newer one is published.
+    needs: [npm-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Accept published documentation for this version
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: node scripts/verify-published-docs.mjs --version "${TAG_VERSION#v}"
+
   release:
-    needs: [standalone-smoke, npm-publish, registry-acceptance]
+    needs: [standalone-smoke, npm-publish, registry-acceptance, documentation-acceptance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -630,9 +648,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_VERSION: ${{ github.ref_name }}
         run: |
+          # Release notes come from the versioned CHANGELOG section (never
+          # Unreleased); the extractor fails the run when the section for the
+          # published version is missing or boilerplate-only.
+          NOTES="$(node scripts/release-notes.js --tag "$TAG_VERSION")"
           node scripts/release-gates.js ensure-release \
             --tag "$TAG_VERSION" \
             --target "$GITHUB_SHA" \
+            --notes "$NOTES" \
             --artifact "dist/triss-coworker-${TAG_VERSION#v}-standalone.ndjson.gz" \
             --checksum "dist/triss-coworker-${TAG_VERSION#v}-standalone.sha256" \
             --manifest dist/update-manifest.json

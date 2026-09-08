@@ -51,7 +51,10 @@ export const CODER_ENGINE_REGISTRY = Object.freeze({
     supportsAgent: false,
     supportsSmallModel: false,
     supportsRestrict: true,
-    providerKinds: Object.freeze(['zai']),
+    // Crush is provider-neutral since 0.44.0: any canonical provider projects
+    // onto its run-scoped config with $ENV credential references. Keep this
+    // metadata in sync with docs/engines/crush.md; the contract test pins it.
+    providerKinds: Object.freeze(['openai-compatible', 'zai', 'opencode-zen', 'opencode-go', 'moonshot', 'kimi-for-coding']),
   }),
   omp: Object.freeze({
     id: 'omp',

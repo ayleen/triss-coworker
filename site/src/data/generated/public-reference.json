@@ -1,0 +1,1875 @@
+{
+  "schema": "triss-public-reference/1",
+  "providers": [
+    "openai-compatible",
+    "zai",
+    "opencode-zen",
+    "opencode-go",
+    "moonshot",
+    "kimi-for-coding"
+  ],
+  "cli": [
+    {
+      "path": "init",
+      "description": "Add the triss delegation block to your project (or globally)",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "install into the target agent global rules file instead of the current project",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-t, --target <agent>",
+          "description": "target agent (claude | codex | both); omit for an interactive prompt",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-f, --force",
+          "description": "force-replace an existing triss block without diffing",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-s, --setup",
+          "description": "run the setup wizard before any rules write; preserve the selected init target and scope",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--yes",
+          "description": "with --setup: non-interactive apply of a complete headless configuration (required outside a TTY)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "ask",
+      "description": "Read a corpus and answer through the configured provider runtime",
+      "args": [],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-p, --paths <paths...>",
+          "description": "files or globs to read",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-u, --urls <urls...>",
+          "description": "http(s) URLs to fetch and convert to markdown",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stdin",
+          "description": "read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "question to answer about the corpus",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget for reasoning + answer",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": "8192"
+        },
+        {
+          "flags": "--system <text>",
+          "description": "override the system prompt",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--format <format>",
+          "description": "response format: text (default) or evidence",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stream",
+          "description": "force streaming even when stdout is not a TTY",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-stream",
+          "description": "disable streaming output (default streams when stdout is a TTY)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "write",
+      "description": "Generate a file through the configured provider runtime",
+      "args": [],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-s, --spec <text>",
+          "description": "what to write",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-t, --target <path>",
+          "description": "output file path",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-c, --context <path>",
+          "description": "reference file to mimic in style",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget for reasoning + output",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": "16384"
+        }
+      ]
+    },
+    {
+      "path": "extract",
+      "description": "Convert Claude Code JSONL transcripts into readable text",
+      "args": [
+        {
+          "name": "<jsonl>",
+          "required": true,
+          "variadic": false,
+          "description": "path to a .jsonl session file"
+        }
+      ],
+      "options": [
+        {
+          "flags": "-o, --output <path>",
+          "description": "write to file instead of stdout",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "fetch",
+      "description": "Fetch URL(s); --question uses the configured provider runtime",
+      "args": [
+        {
+          "name": "<urls>...",
+          "required": true,
+          "variadic": true,
+          "description": "one or more http(s) URLs"
+        }
+      ],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarise the fetched corpus",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget for the summary",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--timeout <ms>",
+          "description": "per-request timeout in ms (default 30000)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "output JSON array of {url, markdown}",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "chat",
+      "description": "Send a prompt through the configured provider runtime",
+      "args": [
+        {
+          "name": "[prompt]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stdin",
+          "description": "read prompt from piped stdin instead of [prompt] arg",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-s, --system <text>",
+          "description": "system prompt (e.g. role / persona)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget (default 4096)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stream",
+          "description": "force streaming even when stdout is not a TTY",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-stream",
+          "description": "disable streaming output (default streams when stdout is a TTY)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "exec",
+      "description": "Route a task deterministically to ask, review, coder run, or chat",
+      "args": [
+        {
+          "name": "[task]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--explain",
+          "description": "print the JSON route decision without executing anything",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--pr <number>",
+          "description": "explicitly route to review a GitHub PR",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--base <branch>",
+          "description": "explicitly route to review against a base branch",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--review",
+          "description": "explicitly route to review",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--skip-issue",
+          "description": "forward review linked-ticket lookup suppression",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--paths <path>",
+          "description": "explicitly route to ask with a file path; repeat for multiple paths",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": ""
+        },
+        {
+          "flags": "--urls <url>",
+          "description": "explicitly route to ask with a URL; repeat for multiple URLs",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": ""
+        },
+        {
+          "flags": "--code",
+          "description": "explicitly route to coder run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--chat",
+          "description": "explicitly route to chat",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stdin",
+          "description": "let the selected downstream command read piped input",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <name>",
+          "description": "forward the inference provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <name>",
+          "description": "forward the model",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "forward reasoning effort",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "forward the token budget",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--format <format>",
+          "description": "forward ask/review response format: text or evidence",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--system <text>",
+          "description": "forward the system prompt to ask/chat",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stream",
+          "description": "forward streaming preference",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-stream",
+          "description": "disable forwarded streaming",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <name>",
+          "description": "forward model execution engine",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--agent <name>",
+          "description": "forward coder agent template",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--session <id>",
+          "description": "forward coder session",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--continue",
+          "description": "continue the most recent coder session",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--isolate",
+          "description": "forward coder isolation",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-isolate",
+          "description": "disable coder isolation",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--allow-best-effort-caller-worktree",
+          "description": "forward coder isolation downgrade",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "forward protected credential mode for model-backed and coder routes",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--restrict",
+          "description": "forward coder restriction",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-restrict",
+          "description": "disable coder restriction",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--cwd <path>",
+          "description": "forward coder working directory",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--timeout <sec>",
+          "description": "forward coder timeout",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "commit-msg",
+      "description": "Generate a Git commit message from staged changes",
+      "args": [],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--apply",
+          "description": "run `git commit -m <generated>` immediately instead of printing",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-conventional",
+          "description": "use a free-form commit subject instead of Conventional Commits",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--type <type>",
+          "description": "force the conventional type (feat | fix | refactor | …)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--scope <scope>",
+          "description": "force the conventional scope",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget (default 2048)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "review",
+      "description": "Review a local change or GitHub PR through the configured provider runtime",
+      "args": [
+        {
+          "name": "[pr]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-b, --base <branch>",
+          "description": "compare against this branch (default: auto-detect origin/HEAD or main/master/develop)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--skip-issue",
+          "description": "don't try to look up a Jira/Linear ticket from the branch/PR title",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stdin",
+          "description": "read an explicitly piped UTF-8 diff instead of Git or PR sources",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--files <paths...>",
+          "description": "literal path selectors: review ONLY these files (repeatable; renames select both sides)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--issue <key>",
+          "description": "explicit linked-issue key (e.g. PROJ-123); PR prose never triggers tracker access",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "override the default review question",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--max-tokens <n>",
+          "description": "token budget for the review (default 8192)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--format <format>",
+          "description": "response format: text (default) or evidence",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stream",
+          "description": "force streaming even when stdout is not a TTY",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-stream",
+          "description": "disable streaming output (default streams when stdout is a TTY)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--payload-mode <mode>",
+          "description": "review payload mode: single (default) or shard (sequential whole-file shards; no global verdict)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "usage",
+      "description": "Cumulative cost / token usage summary across all triss calls",
+      "args": [],
+      "options": [
+        {
+          "flags": "--since <period>",
+          "description": "period like 24h, 7d, 4w (default 24h)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--month",
+          "description": "shortcut for --since 30d",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--by-project",
+          "description": "break down by working directory",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--by-model",
+          "description": "break down by model name",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--by-label",
+          "description": "break down by call source (ask, review, chat, …)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "dump raw log records as JSON",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--reset",
+          "description": "clear the usage log (cannot be undone)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "agent-help",
+      "description": "Print the full Triss delegation cookbook (the nano block in CLAUDE.md / AGENTS.md points here)",
+      "args": [],
+      "options": [
+        {
+          "flags": "-t, --target <agent>",
+          "description": "agent flavour for headings (claude | codex)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": "claude"
+        }
+      ]
+    },
+    {
+      "path": "status",
+      "description": "Show current configuration: API key, models, .env sources",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "migrate",
+      "description": "Migrate pre-0.42 Triss-owned configuration to canonical provider schema 2",
+      "args": [],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "emit one machine-readable migration result",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "update",
+      "description": "Check for a newer stable release; explicitly update standalone installs",
+      "args": [],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "emit one machine-readable status object",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--apply",
+          "description": "apply the newer release to a validated standalone install",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--rollback",
+          "description": "switch to the previous verified standalone version",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--yes",
+          "description": "skip apply/rollback confirmation in non-interactive use",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--break-lock",
+          "description": "separately authorize breaking a proven-stale update lock",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "completion",
+      "description": "Print shell completion script (bash | zsh). eval `triss completion bash`",
+      "args": [
+        {
+          "name": "<shell>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": []
+    },
+    {
+      "path": "config",
+      "description": "Manage credentials in ~/.config/triss/.env (global) or ./.triss.env (project)",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "config wizard",
+      "description": "Interactive setup (Easy by default, Advanced by choice). Optional target: a canonical provider id, coder, or an integration name (jira | linear | …)",
+      "args": [
+        {
+          "name": "[target]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "save to ~/.config/triss/.env (default if not asked)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "save to ./.triss.env (project-local override)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-f, --force",
+          "description": "re-prompt for values that are already set",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--standard",
+          "description": "explicit Easy path (same as the default interactive flow)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--advanced",
+          "description": "full Advanced wizard — providers, execution, connections, integrations, runtime",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--yes",
+          "description": "non-interactive apply of a complete configuration assembled from existing files, the environment, and explicit flags",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--agent <agent>",
+          "description": "headless host intent: claude | codex | both | none (non-TTY default: none)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--install",
+          "description": "allow installing missing engines in a headless run (without it, missing dependencies are reported)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--coder-engine <name>",
+          "description": "coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--coder-provider <name>",
+          "description": "coder target only: canonical provider id. `coder init` uses --provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--coder-protect-credentials",
+          "description": "coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--coder-no-protect-credentials",
+          "description": "coder target only: persist/forward an explicit unprotected choice that overrides TRISS_PROTECT_CREDENTIALS=true",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config set",
+      "description": "Set a single variable. Without value, prompts (masked for *_KEY/_TOKEN). Use \"-\" to read from stdin.",
+      "args": [
+        {
+          "name": "<KEY>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        },
+        {
+          "name": "[value]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "save to global env file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "save to project env file (./.triss.env)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config get",
+      "description": "Print the active value (masked for secrets)",
+      "args": [
+        {
+          "name": "<KEY>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "check only the global file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "check only the project file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config list",
+      "description": "List variables from all (or one) env file",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "only the global file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "only the project file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config path",
+      "description": "Print path(s) of triss env file(s)",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "only the global path",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "only the project path",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config edit",
+      "description": "Open the env file in $EDITOR ($VISUAL > $EDITOR > vi)",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "edit the global file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "edit the project file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "config unset",
+      "description": "Remove a variable from an env file",
+      "args": [
+        {
+          "name": "<KEY>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "global file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "project file",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder",
+      "description": "Run a coding agent through OpenCode V1, OpenCode 2 beta, Crush, or OMP",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "coder init",
+      "description": "Install/configure a coding engine (opencode default, opencode2 beta, crush, or omp), provider key, permission policy, and agent templates",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "save to the global scope (~/.config/triss/.env, ~/.config/opencode/)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "save to the project scope (./.triss.env, ./opencode.json)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <name>",
+          "description": "coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <name>",
+          "description": "canonical model provider id",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy and strict executable-surface gates.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw. An explicit --no-protect-credentials\noverrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this setup/run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder run",
+      "description": "Spawn a coding agent through the configured provider runtime and print a JSON envelope to stdout",
+      "args": [
+        {
+          "name": "[prompt]",
+          "required": false,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--engine <name>",
+          "description": "coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--session <id>",
+          "description": "named session slug for the selected engine; storage and resume compatibility are engine-specific",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--continue",
+          "description": "continue a prior session using the selected engine's supported continuation semantics",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--agent <name>",
+          "description": "agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <name>",
+          "description": "canonical provider for this one run",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--model <model>",
+          "description": "override the main model for this one run: <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--isolate",
+          "description": "run in a disposable git worktree under .triss/wt/<slug>",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-isolate",
+          "description": "disable worktree isolation (opencode defaults to OFF; crush defaults to ON)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--restrict",
+          "description": "crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-restrict",
+          "description": "crush only: disable restrict (crush auto-approves every tool — the default)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--cwd <path>",
+          "description": "working directory (ignored with --isolate)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--timeout <sec>",
+          "description": "kill the engine after this many seconds",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": "900"
+        },
+        {
+          "flags": "--allow-best-effort-caller-worktree",
+          "description": "allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy and strict executable-surface gates.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw. An explicit --no-protect-credentials\noverrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--stdin",
+          "description": "read the prompt from piped stdin instead of the [prompt] argument",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "no-op — the envelope is always JSON; kept for symmetry with other commands",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder clean",
+      "description": "Remove finished .triss/wt isolation worktrees (branches with no diff vs the default branch)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--all",
+          "description": "force-remove every worktree under .triss/wt, regardless of diff state",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder state",
+      "description": "Back up or validate the v2 coder state of a project (rollback contract)",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "coder state backup",
+      "description": "Create a bounded rollback backup of the v2 coder state (both engine session stores + coder-state-v2)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <absolute-path>",
+          "description": "absolute path of the validated project root",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--backup <path>",
+          "description": "backup destination directory (default: <project>/.triss/backups/<timestamp>)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print the stable machine-readable result (no secrets)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder state validate",
+      "description": "Validate a rollback backup: manifest schema, completion marker hash, per-entry verification",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <absolute-path>",
+          "description": "absolute path of the validated project root",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--backup <basename>",
+          "description": "backup directory to validate",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print the stable machine-readable result (no secrets)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder state adopt",
+      "description": "Adopt owned v2 state under a NEW project id: quarantine the old id, rewrite validated owner records",
+      "args": [],
+      "options": [
+        {
+          "flags": "--from-project-id <32hex>",
+          "description": "the old project id (32 lowercase hex) to quarantine",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder state reset",
+      "description": "Quarantine all validated local v2 state and create an empty identity (never deletes it)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <absolute-path>",
+          "description": "absolute path of the validated project root",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder session",
+      "description": "List, clean, or migrate v2 isolated sessions (per-engine store; legacy .triss/sessions.json is never touched)",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "coder session list",
+      "description": "Serialize the bounded v2 session inventory projection to stdout",
+      "args": [],
+      "options": [
+        {
+          "flags": "--engine <name>",
+          "description": "coding engine: opencode (default), opencode2, crush, or omp (see docs/engines/omp.md)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder session clean",
+      "description": "Remove a selected inactive v2 isolated session/workspace transaction and its engine-owned store mapping (a row whose recorded owner provably died is reclaimed automatically; --recover-live attests a still-live-looking owner is gone)",
+      "args": [
+        {
+          "name": "<slug>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--engine <name>",
+          "description": "coding engine: opencode, opencode2, crush, or omp (MANDATORY)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--recover-live",
+          "description": "force-clean a reserved/running session whose owner process may still appear live (you attest the owner is really gone)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder session migrate",
+      "description": "One-shot upgrade of a released v0.39.0 (schema_version 1) engine inventory to the canonical schema: fully-idle documents gain freshly minted immutable session instance ids and the original document is preserved under .triss/quarantine-v1/. An inventory with any reserved/running/deleting legacy row fails closed without partial migration",
+      "args": [],
+      "options": [
+        {
+          "flags": "--engine <name>",
+          "description": "coding engine: opencode, opencode2, crush, or omp (MANDATORY)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "coder result",
+      "description": "List or clean retained result artifacts (never persistent sessions)",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "coder result list",
+      "description": "Serialize the bounded retained-result projection to stdout",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "coder result clean",
+      "description": "Remove only a validated retained result artifact (run-<32 lowercase hex>)",
+      "args": [
+        {
+          "name": "<run-id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": []
+    },
+    {
+      "path": "mcp",
+      "description": "MCP server: register Triss as a tool provider for Claude Code and Codex",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "mcp serve",
+      "description": "Run the stdio MCP server. Claude Code starts this for you — no need to run it directly.",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "mcp install",
+      "description": "Register triss as MCP server for Claude Code (~/.claude.json) or Codex (~/.codex/config.toml)",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "install into the agent global config (default)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "install into <cwd>/.mcp.json (claude only)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-t, --target <agent>",
+          "description": "target agent (claude | codex | both); omit for an interactive prompt",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--command <cmd>",
+          "description": "override the executable name (default: triss)",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        },
+        {
+          "flags": "--args <args>",
+          "description": "override args, space-separated (default: 'mcp serve')",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "mcp uninstall",
+      "description": "Remove the triss MCP entry from the config",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "remove from the agent global config (default)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "remove from <cwd>/.mcp.json (claude only)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-t, --target <agent>",
+          "description": "target agent (claude | codex | both); omit for an interactive prompt",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "mcp status",
+      "description": "Show whether triss is registered and with what command",
+      "args": [],
+      "options": [
+        {
+          "flags": "-g, --global",
+          "description": "(default) check the agent global config",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --local",
+          "description": "check <cwd>/.mcp.json (claude only)",
+          "required": false,
+          "hasValue": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-t, --target <agent>",
+          "description": "target agent (claude | codex | both). Default: both",
+          "required": true,
+          "hasValue": true,
+          "defaultValue": null
+        }
+      ]
+    }
+  ],
+  "mcp": [
+    {
+      "id": "core",
+      "label": "Always available (core)",
+      "tools": [
+        "triss_chat",
+        "triss_ask",
+        "triss_fetch",
+        "triss_review",
+        "triss_review_shard",
+        "triss_status",
+        "triss_commit_msg",
+        "triss_write"
+      ]
+    },
+    {
+      "id": "coder",
+      "label": "Any canonical provider credential configured",
+      "tools": [
+        "triss_chat",
+        "triss_ask",
+        "triss_fetch",
+        "triss_review",
+        "triss_review_shard",
+        "triss_status",
+        "triss_commit_msg",
+        "triss_write",
+        "triss_coder_run",
+        "triss_coder_status",
+        "triss_coder_result_list",
+        "triss_coder_result_clean"
+      ]
+    },
+    {
+      "id": "all-integrations",
+      "label": "Every integration ready + coder",
+      "tools": [
+        "triss_chat",
+        "triss_ask",
+        "triss_fetch",
+        "triss_review",
+        "triss_review_shard",
+        "triss_status",
+        "triss_commit_msg",
+        "triss_write",
+        "triss_jira_search",
+        "triss_jira_issue",
+        "triss_jira_create",
+        "triss_jira_update",
+        "triss_jira_comment",
+        "triss_jira_transitions",
+        "triss_jira_attachments",
+        "triss_jira_whoami",
+        "triss_linear_search",
+        "triss_linear_issue",
+        "triss_linear_create",
+        "triss_linear_update",
+        "triss_linear_comment",
+        "triss_linear_states",
+        "triss_linear_attachments",
+        "triss_linear_project_list",
+        "triss_linear_project_create",
+        "triss_linear_initiative_list",
+        "triss_linear_milestone_list",
+        "triss_linear_milestone_create",
+        "triss_linear_label_list",
+        "triss_linear_bulk_update",
+        "triss_github_search",
+        "triss_github_issue",
+        "triss_github_create",
+        "triss_github_update",
+        "triss_github_comment",
+        "triss_confluence_search",
+        "triss_confluence_page",
+        "triss_confluence_create",
+        "triss_confluence_update",
+        "triss_confluence_spaces",
+        "triss_gitlab_search",
+        "triss_gitlab_issue",
+        "triss_gitlab_create",
+        "triss_gitlab_update",
+        "triss_gitlab_comment",
+        "triss_coder_run",
+        "triss_coder_status",
+        "triss_coder_result_list",
+        "triss_coder_result_clean"
+      ]
+    }
+  ]
+}

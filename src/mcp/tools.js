@@ -1038,12 +1038,12 @@ const CODER_TOOLS = [
   },
 ];
 
-export async function listTools() {
-  // Defensive: ensure env files are loaded even when listTools is called
-  // outside the server lifecycle (e.g. from tests).
-  loadEnvFiles();
-  const integrations = await loadIntegrations();
-  const ready = new Set(integrations.filter((m) => envReadiness(m).ready).map((m) => m.name));
+// Pure assembly of the tool inventory from readiness facts. Side-effect-free
+// by design: the public-reference generator and contract tests call this with
+// fake readiness fixtures instead of touching the environment, while the
+// server path (listTools) derives the same facts for real.
+export function assembleTools({ readyIntegrations = [], coderReady = false } = {}) {
+  const ready = new Set(readyIntegrations);
   const tools = [...CORE_TOOLS];
   if (ready.has('jira')) tools.push(...JIRA_TOOLS);
   if (ready.has('linear')) tools.push(...LINEAR_TOOLS);
@@ -1051,8 +1051,20 @@ export async function listTools() {
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
   // Coder tools surface once any canonical provider credential is configured.
-  if (coderCredentialReady()) tools.push(...CODER_TOOLS);
+  if (coderReady) tools.push(...CODER_TOOLS);
   return tools;
+}
+
+export async function listTools() {
+  // Defensive: ensure env files are loaded even when listTools is called
+  // outside the server lifecycle (e.g. from tests).
+  loadEnvFiles();
+  const integrations = await loadIntegrations();
+  const ready = integrations.filter((m) => envReadiness(m).ready).map((m) => m.name);
+  return assembleTools({
+    readyIntegrations: ready,
+    coderReady: coderCredentialReady(),
+  });
 }
 
 export async function findTool(name) {

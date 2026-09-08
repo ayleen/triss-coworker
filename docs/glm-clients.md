@@ -162,97 +162,28 @@ everything else goes through the engine binary.
 GLM models verified: **`glm-5.2`** (recommended large/main), **`glm-5-turbo`**
 (default small/fast), **`glm-4.7`**.
 
-### Discovery and states
+### Discovery and availability
+
+The `triss coder models` and `triss coder model set` surfaces were removed in
+Triss 0.42.0. Role selection now lives in the canonical provider profile:
 
 ```bash
-triss coder models [--engine <opencode|opencode2|crush|omp>] [--provider <name>] [--json]
+triss status                                        # local readiness, no network
+triss coder init --engine opencode --provider zai   # pins roles from the profile
+triss config set TRISS_ZAI_MODEL glm-5.2            # persistent main role
+triss config set TRISS_ZAI_SMALL_MODEL glm-5-turbo  # persistent small role
 ```
 
-Reports the current main + small models, the winning source for each role
-(shown separately; they can differ), each model's **compatibility**, credential
-readiness (no secrets printed), and a live **availability** per model:
-
-- **`available`** — authenticated, parseable catalogue response contains the id;
-- **`unavailable`** — authenticated, parseable response returns a complete list
-  without the id (authoritative: the model is gone; there is no flag that
-  overrides this);
-- **`not verified`** — the catalogue could not be authoritatively read. The
-  cause is one of timeout, auth failure, non-2xx, or parse failure. A
-  network/parse failure is never proof of removal — but neither is it proof the
-  model is live.
-
-There is no opt-out flag for catalogue verification: the former
-`--allow-unverified` safety opt-in was removed. Current behavior is fixed per
-state. An authoritative `unavailable` blocks the pin. A transient failure
-(network/timeout, HTTP 408/429/5xx) does not block setup: Triss warns and
-continues best-effort with the provider's built-in defaults, marking
-availability as unverified and advising a setup re-run. Auth failures
-(401/403), an authoritative empty catalogue, and invalid responses fail closed.
-`catalogue_status: not-supported` is different again: the provider has no
-catalogue API, so there is no remote list to check — after credential,
-provider-prefix, and plan-prefix validation succeeds, the pin proceeds.
-
-`triss status` never makes a network request — it points you here for live
-verification. Crush and providers without a catalogue API report
-`catalogue_status: not-supported`, never a fabricated error.
-
-### `triss coder models --json` public contract
-
-`--json` prints one stable object. The contract is **additive only**: new keys
-may appear, but existing keys keep their names and shape.
-
-```json
-{
-  "engine": "opencode | opencode2 | crush | omp",
-  "provider": "zai-coding-plan | zai | opencode | opencode-go | moonshotai | kimi-for-coding | triss-worker",
-  "scope": "global | local",
-  "current": {
-    "main":  { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" },
-    "small": { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" }
-  },
-  "config_main": { "value": "…", "scope": "…", "source_path": "…", "availability": "…", "compatibility": "…" },
-  "credential":       { "env": "ZHIPU_API_KEY", "ready": true },
-  "available_models": ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5-turbo"],
-  "recommended":      { "main": "…", "small": "…" },
-  "catalogue_status": "ok | not-supported | unauthenticated | timeout | http-error | parse-error",
-  "warnings": [
-    { "code": "…", "severity": "info | warn | error", "message": "…", "scope": "main | small | credential | catalogue" }
-  ]
-}
-```
-
-Shape rules:
-
-- **`current.main`** represents the effective **runtime** main model (resolved like
-  `triss coder run`: shell `TRISS_CODER_MODEL` → project `.triss.env` → global Triss
-  env → built-in default), **not** the config-only `opencode.json.model`.
-- **`config_main`** is an optional field that appears only for OpenCode when
-  `current.main` differs from the config-only `opencode.json.model` value. It
-  carries the same shape as `current.main` and documents the config-only value
-  for visibility and debugging. When `current.main` equals the config value, this
-  field is omitted.
-- **`current.small`** reports the actual configured small model from
-  `opencode.json.small_model`, `crush.json`, or OMP's effective
-  `TRISS_CODER_SMALL_MODEL` Triss env pin, with its source/scope.
-- Each role object carries exactly `value`, `scope`, `source_path`,
-  `availability`, `compatibility` — every one a string or `null`
-  (e.g. `source_path` is `null` for a run-only override or the built-in default;
-  `compatibility` is `null` when the catalogue could not be read).
-  `availability` ∈ `available` / `unavailable` / `not-verified`.
-- **`credential`** carries only `env` (the variable name) and `ready` (bool) —
-  **never** the secret value.
-- **`recommended`** is `{ main, small }` when a verified pair is known, else
-  `null`.
-- **`warnings[]`** items are `code`, `severity`, `message`, `scope`, with
-  `severity` exactly one of `info` / `warn` / `error`.
-- **`catalogue_status`** is exactly one of `ok`, `not-supported`,
-  `unauthenticated`, `timeout`, `http-error`, `parse-error`. A provider with no
-  catalogue API (crush; non-Z.AI providers without a list endpoint) uses
-  `not-supported`, never a fabricated `ok`.
-
-The human (non-`--json`) output is the same facts pretty-printed: it shows each
-model's `compatibility`, lists the main and small winning sources **separately**,
-and prints the credential-readiness and `catalogue_status` line.
+Live catalogue verification happens inside `triss coder init` and the setup
+wizard, not in a standalone command. For providers with a catalogue API the
+pin is checked against the provider's authoritative list: an authenticated,
+parseable response that does not contain the model id blocks the pin; a
+transient failure (network/timeout, HTTP 408/429/5xx) warns and continues
+best-effort with a setup re-run advised; auth failures and invalid responses
+fail closed. Crush and providers without a catalogue API report
+`not-supported` and proceed after credential and prefix validation. `triss
+status` never makes a network request — run a setup command when you need
+live verification.
 
 ### Persistent provider roles
 
@@ -305,9 +236,10 @@ engine configuration.
 If a configured model is **authoritatively `unavailable`** (e.g. a retired
 OpenCode Zen free id), the wizard shows an interactive recovery screen with live
 replacements before failing; non-interactively it prints the stale model, how
-availability was established, the recommended pair, any higher-precedence
-override, and one exact `triss coder model set ... --yes` command, then exits
-non-zero without mutating anything. See [opencode-zen.md](engines/opencode-zen.md) for
+availability was established, the recommended pair, and any higher-precedence
+override, then exits non-zero without mutating anything. The remedy is one
+exact `triss config set <PROVIDER>_MODEL <native-id>` (or a wizard rerun).
+See [opencode-zen.md](engines/opencode-zen.md) for
 the Zen-specific flow. GLM itself is never retired this way — it stays reachable
 through every engine (opencode, opencode2, or crush).
 

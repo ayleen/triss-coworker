@@ -11,6 +11,21 @@ on:
       - 'package.json'
       - 'README.md'
       - 'CHANGELOG.md'
+      # CLI/MCP/provider/engine contract inputs: the site renders reference
+      # data derived from them, so changes must rebuild and re-verify pages.
+      - 'bin/**'
+      - 'src/cli-program.js'
+      - 'src/provider-*.js'
+      - 'src/model-*.js'
+      - 'src/coder-engine-registry.js'
+      - 'src/coder-providers.js'
+      - 'src/mcp/**'
+      - 'src/setup/**'
+      - 'templates/**'
+      - 'docs/**'
+      - 'SECURITY.md'
+      - 'scripts/generate-public-reference.js'
+      - 'scripts/check-doc-examples.js'
   push:
     branches: [main]
     paths:
@@ -21,6 +36,21 @@ on:
       - 'package.json'
       - 'README.md'
       - 'CHANGELOG.md'
+      # CLI/MCP/provider/engine contract inputs: the site renders reference
+      # data derived from them, so changes must rebuild and re-verify pages.
+      - 'bin/**'
+      - 'src/cli-program.js'
+      - 'src/provider-*.js'
+      - 'src/model-*.js'
+      - 'src/coder-engine-registry.js'
+      - 'src/coder-providers.js'
+      - 'src/mcp/**'
+      - 'src/setup/**'
+      - 'templates/**'
+      - 'docs/**'
+      - 'SECURITY.md'
+      - 'scripts/generate-public-reference.js'
+      - 'scripts/check-doc-examples.js'
 
 permissions:
   contents: read
